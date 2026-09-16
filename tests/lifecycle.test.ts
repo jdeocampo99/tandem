@@ -1,0 +1,432 @@
+import { expect, test } from "bun:test";
+import type {
+  Endpoint,
+  InstructionChannels,
+  RepoPolicy,
+  ResolvedPolicy,
+  ReviewResult,
+  TaskRecord,
+  ValidationEvidence,
+  WorktreeLease,
+} from "../src/contracts.ts";
+import {
+  ALL_REVIEW_LENSES,
+  createTask,
+  isActiveTask,
+  notificationDigest,
+  pendingNotifications,
+  type TaskInput,
+  type TaskTransitionContext,
+  TaskTransitionError,
+  transitionTask,
+} from "../src/lifecycle.ts";
+
+const models: RepoPolicy["models"] = {
+  coordinator: { model: "coordinator-model", thinking: "high" },
+  scout: { model: "scout-model", thinking: "medium" },
+  implementer: { model: "implementer-model", thinking: "max" },
+  reviewer: { model: "reviewer-model", thinking: "max" },
+  verifier: { model: "verifier-model", thinking: "high" },
+  presentation: { model: "presentation-model", thinking: "low" },
+};
+
+const channels: InstructionChannels = {
+  implementation: [],
+  validation: [],
+  review: [],
+};
+
+const policy: ResolvedPolicy = {
+  config: {
+    version: 1,
+    models,
+    instructions: channels,
+    instructionFiles: channels,
+    validationCommands: [
+      { name: "check", argv: ["bun", "run", "check"], surfaces: ["source"], timeoutMs: 10_000 },
+    ],
+    maxWorkers: 3,
+    maxFixRounds: 1,
+  },
+  guidance: {
+    implementation: [],
+    validation: [],
+    review: [],
+  },
+};
+
+const implementationInput: TaskInput = {
+  id: "implementation-task",
+  repoPath: "/repo",
+  kind: "implementation",
+  objective: "Implement the requested behavior",
+  acceptanceCriteria: ["The behavior is durable"],
+  surfaces: ["service"],
+  policy,
+};
+
+const worktree: WorktreeLease = {
+  root: "/worktrees",
+  path: "/worktrees/implementation-task",
+  name: "implementation-task",
+  baseHead: "base-head",
+  branch: "tandem/implementation-task",
+  leaseId: "lease-1",
+  leaseHolder: "worker-1",
+  leasedAt: "2026-09-15T00:00:00.000Z",
+};
+
+function endpoint(generation: number): Endpoint {
+  return {
+    sessionId: "session-1",
+    workspaceId: "workspace-1",
+    tabId: "tab-1",
+    paneId: `pane-${generation}`,
+    role: "implementer",
+    generation,
+  };
+}
+
+let contextSequence = 0;
+function context(): TaskTransitionContext {
+  contextSequence += 1;
+  return {
+    now: `2026-09-15T00:00:${String(contextSequence).padStart(2, "0")}.000Z`,
+    notificationId: `notification-${contextSequence}`,
+  };
+}
+
+function startImplementation(): TaskRecord {
+  let task = createTask(implementationInput, "2026-09-15T00:00:00.000Z");
+  task = transitionTask(task, { type: "approve" }, context());
+  return transitionTask(
+    task,
+    { type: "start", worktree, endpoints: [endpoint(task.generation)] },
+    context(),
+  );
+}
+
+function implementationToReviewing(head = "head-1"): TaskRecord {
+  let task = startImplementation();
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head, generation: task.generation },
+    context(),
+  );
+  const evidence: ValidationEvidence = {
+    name: "check",
+    argv: ["bun", "run", "check"],
+    exitCode: 0,
+    stdout: "ok",
+    stderr: "",
+    head,
+  };
+  return transitionTask(
+    task,
+    { type: "validation-succeeded", head, generation: task.generation, evidence: [evidence] },
+    context(),
+  );
+}
+
+function review(
+  lens: ReviewResult["lens"],
+  pass = true,
+  head = "head-1",
+  generation = 0,
+): ReviewResult {
+  return {
+    lens,
+    head,
+    generation,
+    pass,
+    findings: [],
+    summary: pass ? `${lens} review passed` : `${lens} review found work`,
+  };
+}
+
+test("pins a complete resolved policy snapshot when creating a task", () => {
+  const implementerModel = { ...models.implementer };
+  const sourceModels = { ...models, implementer: implementerModel };
+  const sourceImplementationInstructions = ["inline implementation"];
+  const sourceValidationInstructions = ["inline validation"];
+  const sourceReviewInstructions = ["inline review"];
+  const sourceInstructions: InstructionChannels = {
+    implementation: sourceImplementationInstructions,
+    validation: sourceValidationInstructions,
+    review: sourceReviewInstructions,
+  };
+  const sourceImplementationFiles = ["implementation.md"];
+  const sourceValidationFiles = ["validation.md"];
+  const sourceReviewFiles = ["review.md"];
+  const sourceInstructionFiles: InstructionChannels = {
+    implementation: sourceImplementationFiles,
+    validation: sourceValidationFiles,
+    review: sourceReviewFiles,
+  };
+  const sourceCommands = [
+    { name: "check", argv: ["bun", "run", "check"], surfaces: ["source"], timeoutMs: 10_000 },
+  ];
+  const sourceImplementationGuidance = [
+    {
+      text: "implementation guidance",
+      provenance: { channel: "implementation" as const, source: "implementation-source" },
+    },
+  ];
+  const sourceValidationGuidance = [
+    {
+      text: "validation guidance",
+      provenance: { channel: "validation" as const, source: "validation-source" },
+    },
+  ];
+  const sourceReviewGuidance = [
+    {
+      text: "review guidance",
+      provenance: { channel: "review" as const, source: "review-source" },
+    },
+  ];
+  const sourcePolicy: ResolvedPolicy = {
+    config: {
+      ...policy.config,
+      models: sourceModels,
+      instructions: sourceInstructions,
+      instructionFiles: sourceInstructionFiles,
+      validationCommands: sourceCommands,
+    },
+    guidance: {
+      implementation: sourceImplementationGuidance,
+      validation: sourceValidationGuidance,
+      review: sourceReviewGuidance,
+    },
+  };
+
+  const task = createTask(
+    { ...implementationInput, id: "policy-snapshot", policy: sourcePolicy },
+    "2026-09-15T00:00:00.000Z",
+  );
+
+  implementerModel.model = "mutated-model";
+  sourceImplementationInstructions.push("mutated instruction");
+  sourceValidationFiles.push("mutated validation file");
+  const [sourceCommand] = sourceCommands;
+  const [implementationGuidance] = sourceImplementationGuidance;
+  const [validationGuidance] = sourceValidationGuidance;
+  if (
+    sourceCommand === undefined ||
+    implementationGuidance === undefined ||
+    validationGuidance === undefined
+  ) {
+    throw new Error("policy snapshot fixture is missing its nested mutation inputs");
+  }
+  sourceCommand.argv.push("mutated-argument");
+  sourceCommand.surfaces.push("mutated-surface");
+  implementationGuidance.provenance.source = "mutated-source";
+  validationGuidance.text = "mutated guidance";
+
+  expect(task.policy.config.models.implementer.model).toBe("implementer-model");
+  expect(task.policy.config.instructions.implementation).toEqual(["inline implementation"]);
+  expect(task.policy.config.instructionFiles.validation).toEqual(["validation.md"]);
+  expect(task.policy.config.validationCommands[0]?.argv).toEqual(["bun", "run", "check"]);
+  expect(task.policy.config.validationCommands[0]?.surfaces).toEqual(["source"]);
+  expect(task.policy.guidance.implementation[0]?.provenance.source).toBe("implementation-source");
+  expect(task.policy.guidance.validation[0]?.text).toBe("validation guidance");
+});
+
+test("keeps implementation behind explicit approval and binds starts to a worktree generation", () => {
+  const initial = createTask(implementationInput, "2026-09-15T00:00:00.000Z");
+  expect(initial.stage).toBe("awaiting-approval");
+  expect(() =>
+    transitionTask(initial, { type: "start", worktree, endpoints: [endpoint(0)] }, context()),
+  ).toThrow(TaskTransitionError);
+
+  const approved = transitionTask(initial, { type: "approve" }, context());
+  expect(approved.stage).toBe("queued");
+  expect(approved.scopeApproved).toBe(true);
+  expect(approved.revision).toBe(initial.revision + 1);
+  const started = transitionTask(
+    approved,
+    { type: "start", worktree, endpoints: [endpoint(approved.generation)] },
+    context(),
+  );
+  expect(started.stage).toBe("implementing");
+  expect(started.worktree?.path).toBe(worktree.path);
+  expect(started.endpoints?.[0]?.generation).toBe(started.generation);
+});
+
+test("requires current-head validation and all four current-generation lenses before ready", () => {
+  let task = implementationToReviewing();
+  expect(task.stage).toBe("reviewing");
+  expect(() =>
+    transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context()),
+  ).toThrow(TaskTransitionError);
+  expect(() =>
+    transitionTask(
+      task,
+      { type: "record-review", review: review("behavior", true, "old-head", 0) },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+
+  for (const lens of ALL_REVIEW_LENSES) {
+    task = transitionTask(task, { type: "record-review", review: review(lens) }, context());
+  }
+  expect(task.revision).toBe(8);
+  task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
+  expect(task.stage).toBe("ready");
+  expect(isActiveTask(task)).toBe(true);
+  expect(() =>
+    transitionTask(task, { type: "record-review", review: review("behavior") }, context()),
+  ).toThrow(TaskTransitionError);
+});
+
+test("rejects duplicate or stale review results and never treats blocking findings as a pass", () => {
+  let task = implementationToReviewing();
+  const blocking: ReviewResult = {
+    ...review("behavior"),
+    findings: [
+      {
+        id: "finding-1",
+        severity: "P1",
+        verdict: "confirmed",
+        description: "A blocking behavior defect",
+      },
+    ],
+  };
+  expect(() =>
+    transitionTask(task, { type: "record-review", review: blocking }, context()),
+  ).toThrow(TaskTransitionError);
+  task = transitionTask(task, { type: "record-review", review: review("behavior") }, context());
+  expect(() =>
+    transitionTask(task, { type: "record-review", review: review("behavior") }, context()),
+  ).toThrow(TaskTransitionError);
+  expect(() =>
+    transitionTask(
+      task,
+      { type: "record-review", review: review("design", true, "head-1", 99) },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+});
+
+test("records failed validation, bounds fix rounds, and invalidates old review acceptance", () => {
+  let task = startImplementation();
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head: "head-1", generation: 0 },
+    context(),
+  );
+  const failedEvidence: ValidationEvidence = {
+    name: "check",
+    argv: ["bun", "run", "check"],
+    exitCode: 1,
+    stdout: "",
+    stderr: "failure",
+    head: "head-1",
+  };
+  task = transitionTask(
+    task,
+    { type: "validation-failed", head: "head-1", generation: 0, evidence: [failedEvidence] },
+    context(),
+  );
+  expect(task.stage).toBe("awaiting-fixes");
+  expect(pendingNotifications(task)).toHaveLength(1);
+
+  task = transitionTask(task, { type: "begin-fixes", head: "head-1", generation: 0 }, context());
+  expect(task.stage).toBe("implementing");
+  expect(task.reviewRound).toBe(1);
+  expect(task.generation).toBe(1);
+  expect(task.reviewHead).toBeUndefined();
+  expect(task.validationEvidence).toHaveLength(0);
+  expect(() =>
+    transitionTask(task, { type: "begin-fixes", head: "head-1", generation: 1 }, context()),
+  ).toThrow(TaskTransitionError);
+});
+
+test("pause, resume, block, cancel, scout completion, and merge remain distinct", () => {
+  let task = startImplementation();
+  const paused = transitionTask(task, { type: "pause", reason: "waiting for input" }, context());
+  expect(paused.stage).toBe("paused");
+  expect(() =>
+    transitionTask(
+      paused,
+      { type: "implementation-complete", head: "head-1", generation: 0 },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+  task = transitionTask(paused, { type: "resume" }, context());
+  expect(task.stage).toBe("implementing");
+  const blocked = transitionTask(
+    task,
+    { type: "block", reason: "dependency unavailable" },
+    context(),
+  );
+  expect(blocked.stage).toBe("blocked");
+  task = transitionTask(blocked, { type: "resume" }, context());
+  task = transitionTask(task, { type: "cancel", reason: "no longer needed" }, context());
+  expect(task.stage).toBe("cancelled");
+  expect(task.worktree?.path).toBe(worktree.path);
+  expect(isActiveTask(task)).toBe(false);
+
+  let scout = createTask(
+    { ...implementationInput, id: "scout-task", kind: "scout" },
+    "2026-09-15T00:00:00.000Z",
+  );
+  scout = transitionTask(
+    scout,
+    { type: "start", worktree, endpoints: [{ ...endpoint(0), role: "scout" }] },
+    context(),
+  );
+  scout = transitionTask(
+    scout,
+    { type: "scout-report-complete", reportPath: "/reports/scout.md", generation: 0 },
+    context(),
+  );
+  expect(scout.stage).toBe("completed");
+  expect(scout.stage).not.toBe("ready");
+
+  let ready = implementationToReviewing();
+  for (const lens of ALL_REVIEW_LENSES) {
+    ready = transitionTask(ready, { type: "record-review", review: review(lens) }, context());
+  }
+  ready = transitionTask(
+    ready,
+    { type: "finish-review", head: "head-1", generation: 0 },
+    context(),
+  );
+  const merged = transitionTask(
+    ready,
+    {
+      type: "merge",
+      approved: true,
+      verified: true,
+      pullRequest: {
+        repository: "org/repo",
+        number: 42,
+        state: "merged",
+        head: "head-1",
+        base: "main",
+      },
+    },
+    context(),
+  );
+  expect(merged.stage).toBe("merged");
+});
+
+test("acknowledges notifications through a single revisioned mutation and exposes a digest", () => {
+  let task = startImplementation();
+  task = transitionTask(task, { type: "pause", reason: "operator requested" }, context());
+  expect(notificationDigest(task)).toContain("operator requested");
+  const acknowledged = transitionTask(
+    task,
+    { type: "acknowledge-notification", notificationId: task.notifications[0]?.id ?? "missing" },
+    context(),
+  );
+  expect(pendingNotifications(acknowledged)).toHaveLength(0);
+  expect(acknowledged.revision).toBe(task.revision + 1);
+  expect(() =>
+    transitionTask(
+      acknowledged,
+      { type: "acknowledge-notification", notificationId: task.notifications[0]?.id ?? "missing" },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+});

@@ -1,0 +1,10 @@
+retry:
+  modelFallback: false
+  usageAwareFallback: false
+  usageReservePolicy: fail-closed
+contextPromotion:
+  enabled: false
+compaction:
+  enabled: true
+prewalk:
+  enabled: false

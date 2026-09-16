@@ -1,0 +1,901 @@
+import { expect, test } from "bun:test";
+import {
+  AdapterProtocolError,
+  ApprovalRequiredError,
+  acquireWorktree,
+  buildOmpArgv,
+  closeEndpoint,
+  createReviewerEndpoint,
+  createTaskEndpoint,
+  destroyTreehouseWorktree,
+  EndpointOwnershipError,
+  inspectEndpoint,
+  inspectPoolWorktree,
+  LeaseSafetyError,
+  listenPresentation,
+  listOmpModels,
+  mergePullRequest,
+  openPresentation,
+  pollPresentation,
+  publishPullRequest,
+  readTreehousePoolStatus,
+  releaseWorktree,
+  sanitizeTaskBranchName,
+  sendCommand,
+  validateModel,
+} from "../src/adapters.ts";
+import type {
+  CommandRequest,
+  CommandResult,
+  CommandRunner,
+  Endpoint,
+  WorktreeLease,
+} from "../src/contracts.ts";
+
+function result(stdout = "", code = 0, stderr = ""): CommandResult {
+  return { code, stdout, stderr };
+}
+
+function scriptedRunner(results: readonly CommandResult[]): Readonly<{
+  readonly calls: CommandRequest[];
+  readonly run: CommandRunner;
+}> {
+  const calls: CommandRequest[] = [];
+  const remaining = [...results];
+  const run: CommandRunner = async (request) => {
+    calls.push(request);
+    const next = remaining.shift();
+    if (next === undefined) throw new Error(`unexpected command ${JSON.stringify(request.argv)}`);
+    return next;
+  };
+  return { calls, run };
+}
+
+function endpoint(): Endpoint {
+  return {
+    sessionId: "session-1",
+    workspaceId: "workspace-1",
+    tabId: "tab-1",
+    paneId: "pane-1",
+    role: "implementer",
+    generation: 2,
+  };
+}
+function panePayload(
+  value: Partial<{
+    paneId: string;
+    tabId: string;
+    workspaceId: string;
+    foregroundCwd: string;
+  }> = {},
+): string {
+  return JSON.stringify({
+    result: {
+      pane: {
+        pane_id: value.paneId ?? "pane-1",
+        tab_id: value.tabId ?? "tab-1",
+        workspace_id: value.workspaceId ?? "workspace-1",
+        foreground_cwd: value.foregroundCwd ?? "/tmp/worktree",
+      },
+    },
+  });
+}
+
+function processPayload(paneId = "pane-1", processes: readonly unknown[] = []): string {
+  return JSON.stringify({
+    result: { process_info: { pane_id: paneId, foreground_processes: processes } },
+  });
+}
+
+const lease: WorktreeLease = {
+  root: "/tmp/treehouse",
+  path: "/tmp/treehouse/worktree",
+  name: "Task/Test",
+  baseHead: "abc123",
+  branch: "tandem/Task-Test",
+  leaseId: "lease-1",
+  leaseHolder: "tandem-1",
+  leasedAt: "2030-01-02T03:04:05.000Z",
+};
+
+test("creates a reviewer in the same physical worktree through a path alias", async () => {
+  const runner = scriptedRunner([
+    result(panePayload({ foregroundCwd: "/private/tmp/worktree" })),
+    result(processPayload()),
+    result(panePayload({ paneId: "reviewer-1" })),
+  ]);
+  const reviewer = await createReviewerEndpoint(
+    runner.run,
+    { sessionId: "session-1", cwd: "/tmp/worktree", writer: endpoint(), generation: 2 },
+    { realpath: async (path) => path.replace(/^\/tmp\//u, "/private/tmp/") },
+  );
+  expect(reviewer.endpoint.paneId).toBe("reviewer-1");
+  expect(reviewer.endpoint.workspaceId).toBe(endpoint().workspaceId);
+  expect(reviewer.endpoint.role).toBe("reviewer");
+  expect(reviewer.warnings).toEqual([]);
+});
+
+test("refuses a reviewer in a different physical worktree", async () => {
+  const runner = scriptedRunner([
+    result(panePayload({ foregroundCwd: "/tmp/another-worktree" })),
+    result(processPayload()),
+  ]);
+  await expect(
+    createReviewerEndpoint(
+      runner.run,
+      { sessionId: "session-1", cwd: "/tmp/worktree", writer: endpoint(), generation: 2 },
+      { realpath: async (path) => path },
+    ),
+  ).rejects.toBeInstanceOf(EndpointOwnershipError);
+});
+
+test("sanitizes task branches and builds the exact OMP invocation", () => {
+  expect(sanitizeTaskBranchName("  Fix: pane / ownership  ")).toBe("tandem/Fix-pane-ownership");
+  expect(
+    buildOmpArgv({
+      model: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
+      prompt: "Implement the approved scope.",
+    }),
+  ).toEqual([
+    "omp",
+    "--model",
+    "openai-codex/gpt-5.6-luna",
+    "--thinking",
+    "max",
+    "--no-prewalk",
+    "--no-extensions",
+    "--no-title",
+    "Implement the approved scope.",
+  ]);
+});
+
+test("validates an exact OMP model selector and thinking level without fallback", async () => {
+  const runner = scriptedRunner([
+    result(
+      JSON.stringify({
+        models: [
+          {
+            selector: "openai-codex/gpt-5.6-luna",
+            id: "gpt-5.6-luna",
+            provider: "openai-codex",
+            thinking: ["medium", "max"],
+          },
+        ],
+      }),
+    ),
+  ]);
+
+  const model = await validateModel(runner.run, {
+    cwd: "/tmp/repo",
+    model: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
+  });
+  expect(model.provider).toBe("openai-codex");
+  expect(runner.calls[0]?.argv).toEqual(["omp", "models", "--json"]);
+
+  const mismatch = scriptedRunner([
+    result(
+      JSON.stringify({
+        models: [
+          {
+            selector: "openai-codex/gpt-5.5",
+            id: "gpt-5.5",
+            provider: "openai-codex",
+            thinking: ["max"],
+          },
+        ],
+      }),
+    ),
+  ]);
+  await expect(
+    validateModel(mismatch.run, {
+      cwd: "/tmp/repo",
+      model: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
+    }),
+  ).rejects.toBeInstanceOf(AdapterProtocolError);
+});
+test("lists available OMP models with conservative optional metadata", async () => {
+  const runner = scriptedRunner([
+    result(
+      JSON.stringify({
+        models: [
+          {
+            provider: "openai-codex",
+            id: "gpt-5.6-luna",
+            selector: "openai-codex/gpt-5.6-luna",
+            name: "GPT-5.6-Luna",
+            reasoning: true,
+            contextWindow: 272000,
+            thinking: ["low", "max"],
+            cost: { input: 0.2, output: 1.2, cacheRead: 0.02 },
+          },
+          {
+            provider: "openai-codex",
+            id: "gpt-5.5",
+            selector: "openai-codex/gpt-5.5",
+            thinking: ["low"],
+          },
+        ],
+      }),
+    ),
+  ]);
+
+  await expect(listOmpModels(runner.run, { cwd: "/tmp/repo" })).resolves.toEqual([
+    {
+      provider: "openai-codex",
+      id: "gpt-5.6-luna",
+      selector: "openai-codex/gpt-5.6-luna",
+      name: "GPT-5.6-Luna",
+      reasoning: true,
+      contextWindow: 272000,
+      thinking: ["low", "max"],
+      cost: { input: 0.2, output: 1.2 },
+    },
+    {
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      selector: "openai-codex/gpt-5.5",
+      thinking: ["low"],
+    },
+  ]);
+  expect(runner.calls).toHaveLength(1);
+  expect(runner.calls[0]?.argv).toEqual(["omp", "models", "--json"]);
+});
+
+test("refuses a Herdr endpoint whose pane identity changed", async () => {
+  const runner = scriptedRunner([result(panePayload({ workspaceId: "other-workspace" }))]);
+
+  await expect(
+    inspectEndpoint(runner.run, { endpoint: endpoint(), cwd: "/tmp/worktree" }),
+  ).rejects.toBeInstanceOf(EndpointOwnershipError);
+  expect(runner.calls).toHaveLength(1);
+});
+
+test("sends a hostile command as one quoted pane command after identity inspection", async () => {
+  const runner = scriptedRunner([result(panePayload()), result(processPayload()), result()]);
+  const command = ["printf", "$(touch /tmp/not-created)"];
+  const sent = await sendCommand(runner.run, {
+    endpoint: endpoint(),
+    cwd: "/tmp/worktree",
+    command,
+  });
+
+  expect(sent.command).toEqual(command);
+  expect(runner.calls[2]?.argv).toEqual([
+    "herdr",
+    "--session",
+    "session-1",
+    "pane",
+    "run",
+    "pane-1",
+    "'printf' '$(touch /tmp/not-created)'",
+  ]);
+});
+
+test("creates a task workspace and best-effort moves it directly after its parent", async () => {
+  const moved: { request: unknown }[] = [];
+  const runner = scriptedRunner([
+    result(
+      JSON.stringify({
+        result: {
+          workspace: { workspace_id: "workspace-child" },
+          tab: { tab_id: "tab-child" },
+          root_pane: { pane_id: "pane-child" },
+        },
+      }),
+    ),
+    result(
+      JSON.stringify({
+        server: { socket: "/tmp/herdr.sock", running: true, session: "session-1" },
+      }),
+    ),
+    result(
+      JSON.stringify({
+        result: {
+          workspaces: [{ workspace_id: "workspace-parent" }, { workspace_id: "workspace-child" }],
+        },
+      }),
+    ),
+  ]);
+
+  const created = await createTaskEndpoint(
+    runner.run,
+    {
+      sessionId: "session-1",
+      cwd: "/tmp/worktree",
+      taskName: "Implement child",
+      role: "implementer",
+      generation: 1,
+      parentWorkspaceId: "workspace-parent",
+    },
+    {
+      moveWorkspace: async (request) => {
+        moved.push({ request });
+        return {
+          result: {
+            type: "workspace_list",
+            workspaces: [{ workspace_id: "workspace-parent" }, { workspace_id: "workspace-child" }],
+          },
+        };
+      },
+    },
+  );
+
+  expect(created.endpoint.paneId).toBe("pane-child");
+  expect(created.warnings).toEqual([]);
+  expect(moved[0]?.request).toEqual({
+    socketPath: "/tmp/herdr.sock",
+    workspaceId: "workspace-child",
+    insertIndex: 1,
+  });
+});
+
+test("reports workspace-order warnings separately from the endpoint", async () => {
+  const runner = scriptedRunner([
+    result(
+      JSON.stringify({
+        result: {
+          workspace: { workspace_id: "workspace-child" },
+          tab: { tab_id: "tab-child" },
+          root_pane: { pane_id: "pane-child" },
+        },
+      }),
+    ),
+  ]);
+  const reportedWarnings: string[] = [];
+  const created = await createTaskEndpoint(
+    runner.run,
+    {
+      sessionId: "session-1",
+      cwd: "/tmp/worktree",
+      taskName: "Implement child",
+      role: "implementer",
+      generation: 1,
+      parentWorkspaceId: "workspace-child",
+    },
+    { warn: (message) => reportedWarnings.push(message) },
+  );
+
+  expect(created.endpoint.paneId).toBe("pane-child");
+  expect(created.warnings).toHaveLength(1);
+  expect(created.warnings).toEqual(reportedWarnings);
+  expect(Object.hasOwn(created.endpoint, "warnings")).toBe(false);
+});
+
+test("acquires a detached Treehouse checkout and returns it only after git safety checks", async () => {
+  const runner = scriptedRunner([
+    result("[]"),
+    result(
+      JSON.stringify({
+        path: "/tmp/treehouse/worktree",
+        lease_id: "lease-1",
+        lease_holder: "tandem-1",
+        leased_at: "2030-01-02T03:04:05.000Z",
+      }),
+    ),
+    result("/tmp/repo"),
+    result("/tmp/treehouse/worktree"),
+    result("abc123"),
+    result("main"),
+    result("abc123"),
+    result(""),
+    result("abc123"),
+    result(""),
+    result("tandem/Task-Test"),
+  ]);
+  const acquired = await acquireWorktree(
+    runner.run,
+    { repo: "/tmp/repo", root: "/tmp/treehouse", tandemId: "tandem-1", taskName: "Task/Test" },
+    { realpath: async (path) => path },
+  );
+
+  expect(acquired).toEqual(lease);
+  expect(runner.calls[1]?.argv).toEqual([
+    "treehouse",
+    "--root",
+    "/tmp/treehouse",
+    "get",
+    "--lease",
+    "--lease-holder",
+    "tandem-1",
+    "--no-fetch",
+    "--json",
+  ]);
+
+  const releaseRunner = scriptedRunner([
+    result(
+      JSON.stringify([
+        {
+          path: lease.path,
+          lease_id: lease.leaseId,
+          lease_holder: lease.leaseHolder,
+          leased_at: lease.leasedAt,
+        },
+      ]),
+    ),
+    result(lease.branch),
+    result(""),
+    result(""),
+    result(lease.baseHead),
+    result(lease.baseHead),
+    result(""),
+    result(""),
+  ]);
+  const released = await releaseWorktree(releaseRunner.run, {
+    repo: "/tmp/repo",
+    lease,
+    childWorkerStopped: true,
+  });
+  expect(released.released).toBe(true);
+  expect(releaseRunner.calls.at(-1)?.argv).toEqual([
+    "treehouse",
+    "--root",
+    lease.root,
+    "return",
+    lease.path,
+    "--if-lease-holder",
+    lease.leaseHolder,
+    "--if-lease-id",
+    lease.leaseId,
+  ]);
+});
+
+test("preserves acquired lease identity when post-acquire validation fails", async () => {
+  const runner = scriptedRunner([
+    result("[]"),
+    result(
+      JSON.stringify({
+        path: lease.path,
+        lease_id: lease.leaseId,
+        lease_holder: lease.leaseHolder,
+        leased_at: lease.leasedAt,
+      }),
+    ),
+    result("", 1, "not a git worktree"),
+  ]);
+
+  let caught: unknown;
+  try {
+    await acquireWorktree(
+      runner.run,
+      { repo: "/tmp/repo", root: lease.root, tandemId: lease.leaseHolder, taskName: lease.name },
+      { realpath: async (path) => path },
+    );
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(LeaseSafetyError);
+  if (caught instanceof LeaseSafetyError) {
+    expect(caught.lease.leaseId).toBe(lease.leaseId);
+  }
+});
+
+test("requires explicit approval before a destructive release or pull request merge", async () => {
+  const releaseRunner = scriptedRunner([]);
+  await expect(
+    releaseWorktree(releaseRunner.run, {
+      repo: "/tmp/repo",
+      lease,
+      childWorkerStopped: true,
+      discard: true,
+    }),
+  ).rejects.toBeInstanceOf(ApprovalRequiredError);
+  expect(releaseRunner.calls).toHaveLength(0);
+
+  const mergeRunner = scriptedRunner([]);
+  await expect(
+    mergePullRequest(mergeRunner.run, {
+      cwd: "/tmp/repo",
+      repository: "acme/repo",
+      number: 7,
+      expectedHead: "reviewed-head",
+      method: "squash",
+      approved: false,
+    }),
+  ).rejects.toBeInstanceOf(ApprovalRequiredError);
+  expect(mergeRunner.calls).toHaveLength(0);
+});
+
+test("refuses a pull request merge when the reviewed head is stale", async () => {
+  const runner = scriptedRunner([
+    result(
+      JSON.stringify({
+        number: 7,
+        state: "OPEN",
+        headRefOid: "changed-head",
+        isDraft: false,
+        baseRefName: "main",
+      }),
+    ),
+  ]);
+  let caught: unknown;
+  try {
+    await mergePullRequest(runner.run, {
+      cwd: "/tmp/repo",
+      repository: "acme/repo",
+      number: 7,
+      expectedHead: "reviewed-head",
+      method: "squash",
+      approved: true,
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toBeInstanceOf(AdapterProtocolError);
+  if (caught instanceof AdapterProtocolError) {
+    expect(caught.message).toContain("does not match expected head");
+  }
+  expect(runner.calls).toHaveLength(1);
+  expect(runner.calls[0]?.argv).toEqual([
+    "gh",
+    "pr",
+    "view",
+    "7",
+    "--repo",
+    "acme/repo",
+    "--json",
+    "number,url,state,isDraft,headRefOid,baseRefName,title",
+  ]);
+});
+
+test("pins the reviewed head and verifies the merged pull request response", async () => {
+  const runner = scriptedRunner([
+    result(
+      JSON.stringify({
+        number: 7,
+        state: "OPEN",
+        headRefOid: "reviewed-head",
+        isDraft: false,
+        baseRefName: "main",
+      }),
+    ),
+    result(),
+    result(
+      JSON.stringify({
+        number: 7,
+        state: "MERGED",
+        headRefOid: "reviewed-head",
+        isDraft: false,
+        baseRefName: "main",
+      }),
+    ),
+  ]);
+
+  const merged = await mergePullRequest(runner.run, {
+    cwd: "/tmp/repo",
+    repository: "acme/repo",
+    number: 7,
+    expectedHead: "reviewed-head",
+    method: "squash",
+    approved: true,
+  });
+
+  expect(merged.state).toBe("merged");
+  expect(runner.calls[1]?.argv).toEqual([
+    "gh",
+    "pr",
+    "merge",
+    "7",
+    "--repo",
+    "acme/repo",
+    "--squash",
+    "--match-head-commit",
+    "reviewed-head",
+  ]);
+});
+
+test("observes the published PR commit and distinguishes a draft from GitHub OPEN state", async () => {
+  const runner = scriptedRunner([
+    result("https://github.com/acme/repo/pull/7\n"),
+    result(
+      JSON.stringify({
+        number: 7,
+        url: "https://github.com/acme/repo/pull/7",
+        state: "OPEN",
+        headRefOid: "reviewed-head",
+        isDraft: true,
+        baseRefName: "main",
+        title: "Task",
+      }),
+    ),
+  ]);
+  const pullRequest = await publishPullRequest(runner.run, {
+    cwd: "/tmp/repo",
+    repository: "acme/repo",
+    title: "Task",
+    body: "# What\n- change\n\n# Why\n- reason\n\n# Validation\n- smoke",
+    base: "main",
+    head: "tandem/task",
+  });
+
+  expect(pullRequest).toEqual({
+    repository: "acme/repo",
+    number: 7,
+    url: "https://github.com/acme/repo/pull/7",
+    title: "Task",
+    state: "draft",
+    head: "reviewed-head",
+    base: "main",
+  });
+  expect(runner.calls[0]?.argv.slice(0, 4)).toEqual(["gh", "pr", "create", "--repo"]);
+});
+
+test("keeps Lavish feedback raw and marks ended sessions terminal", async () => {
+  const runner = scriptedRunner([
+    result(
+      [
+        "session:",
+        "  status: feedback",
+        "  session_ended: false",
+        "feedback[0]{message,kind}:",
+        "  message: Please review the artifact",
+      ].join("\n"),
+    ),
+    result("session:\n  status: ended\n  session_ended: true\n"),
+  ]);
+
+  const opened = await openPresentation(runner.run, "/tmp/artifact.html", "/tmp/repo");
+  expect(opened.status).toBe("feedback");
+  expect(opened.terminal).toBe(false);
+  expect(opened.rawFeedback).toContain("Please review the artifact");
+
+  const polled = await pollPresentation(runner.run, "/tmp/artifact.html", "/tmp/repo");
+  expect(polled.status).toBe("ended");
+  expect(polled.terminal).toBe(true);
+  expect(runner.calls[1]?.argv).toEqual([
+    "lavish-axi",
+    "poll",
+    "/tmp/artifact.html",
+    "--timeout-ms",
+    "1000",
+  ]);
+  expect(runner.calls[1]?.timeoutMs).toBe(5000);
+});
+test("extracts the native session URL from an opened presentation response", async () => {
+  const runner = scriptedRunner([
+    result(
+      [
+        "session:",
+        "  status: opened",
+        "  session_ended: false",
+        "  url: http://127.0.0.1:4567/presentation",
+      ].join("\n"),
+    ),
+  ]);
+  const observation = await openPresentation(runner.run, "/tmp/artifact.html", "/tmp/repo");
+  expect(observation.sessionUrl).toBe("http://127.0.0.1:4567/presentation");
+});
+
+test("continuous presentation listening leaves the native command without a timeout", async () => {
+  const runner = scriptedRunner([result("session:\n  status: waiting\n  session_ended: false\n")]);
+  const observation = await listenPresentation(runner.run, "/tmp/artifact.html", "/tmp/repo");
+  expect(observation.status).toBe("waiting");
+  expect(runner.calls[0]?.argv).toEqual(["lavish-axi", "poll", "/tmp/artifact.html"]);
+  expect(runner.calls[0]?.timeoutMs).toBeUndefined();
+});
+
+test("accepts native opened, ready, and user-ended sessions as nonterminal observations", async () => {
+  const statuses = ["opened", "ready", "user-ended"] as const;
+  const runner = scriptedRunner(
+    statuses.map((status) => result(`session:\n  status: ${status}\n  session_ended: false\n`)),
+  );
+
+  for (const status of statuses) {
+    const observation = await openPresentation(runner.run, "/tmp/artifact.html", "/tmp/repo");
+    expect(observation.status).toBe(status);
+    expect(observation.terminal).toBe(false);
+    expect(observation.sessionEnded).toBe(false);
+  }
+});
+
+test("keeps a disconnected Lavish session resumable without reopening it", async () => {
+  const runner = scriptedRunner([
+    result("session:\n  status: browser_disconnected\n  session_ended: false\n"),
+  ]);
+  const observation = await pollPresentation(runner.run, "/tmp/artifact.html", "/tmp/repo");
+  expect(observation.status).toBe("browser_disconnected");
+  expect(observation.terminal).toBe(false);
+  expect(observation.sessionEnded).toBe(false);
+  expect(runner.calls).toHaveLength(1);
+});
+
+test("close endpoint never closes a pane with an active worker", async () => {
+  const runner = scriptedRunner([
+    result(panePayload()),
+    result(
+      processPayload("pane-1", [
+        {
+          pid: 42,
+          name: "node",
+          argv: ["node", "worker.js"],
+          argv0: "node",
+          cmdline: "node worker.js",
+        },
+      ]),
+    ),
+  ]);
+
+  await expect(
+    closeEndpoint(runner.run, { endpoint: endpoint(), cwd: "/tmp/worktree" }),
+  ).rejects.toThrow("active foreground worker");
+  expect(runner.calls).toHaveLength(2);
+});
+
+test("confirms pane closure from Herdr's structured stderr response", async () => {
+  const runner = scriptedRunner([
+    result(panePayload()),
+    result(processPayload()),
+    result(),
+    result("", 1, JSON.stringify({ error: { code: "pane_not_found" } })),
+  ]);
+  const closed = await closeEndpoint(runner.run, { endpoint: endpoint(), cwd: "/tmp/worktree" });
+  expect(closed.closed).toBe(true);
+});
+
+test("closing an already absent owned pane is idempotent", async () => {
+  const runner = scriptedRunner([
+    result("", 1, JSON.stringify({ error: { code: "pane_not_found" } })),
+  ]);
+  const closed = await closeEndpoint(runner.run, { endpoint: endpoint(), cwd: "/tmp/worktree" });
+  expect(closed.closed).toBe(true);
+  expect(runner.calls).toHaveLength(1);
+});
+
+test("parses the strict Treehouse pool status envelope", async () => {
+  const runner = scriptedRunner([
+    result(
+      JSON.stringify([
+        {
+          name: "1",
+          path: "/tmp/treehouse/worktree",
+          status: "available",
+          flavor: "git",
+          lease_id: "",
+          lease_holder: "",
+          leased_at: null,
+          processes: [],
+        },
+      ]),
+    ),
+  ]);
+
+  const records = await readTreehousePoolStatus(runner.run, {
+    repo: "/tmp/repo",
+    root: "/tmp/treehouse",
+  });
+
+  expect(records).toEqual([
+    {
+      name: "1",
+      path: "/tmp/treehouse/worktree",
+      status: "available",
+      flavor: "git",
+      leaseId: "",
+      leaseHolder: "",
+      leasedAt: null,
+      processes: [],
+    },
+  ]);
+  expect(runner.calls[0]?.argv).toEqual([
+    "treehouse",
+    "--root",
+    "/tmp/treehouse",
+    "status",
+    "--json",
+  ]);
+});
+
+test("refuses malformed Treehouse pool metadata instead of guessing safety", async () => {
+  const runner = scriptedRunner([
+    result(
+      JSON.stringify([
+        {
+          name: "1",
+          path: "/tmp/treehouse/worktree",
+          status: "available",
+          flavor: "git",
+          lease_id: "",
+          lease_holder: "",
+          leased_at: null,
+        },
+      ]),
+    ),
+  ]);
+
+  await expect(
+    readTreehousePoolStatus(runner.run, {
+      repo: "/tmp/repo",
+      root: "/tmp/treehouse",
+    }),
+  ).rejects.toBeInstanceOf(AdapterProtocolError);
+});
+
+test("checks ignored content and merged ancestry before pool destruction", async () => {
+  const runner = scriptedRunner([
+    result(""),
+    result(""),
+    result("/tmp/treehouse/worktree"),
+    result("/tmp/repo"),
+    result("copy-head"),
+    result("primary-head"),
+    result(""),
+  ]);
+
+  const safety = await inspectPoolWorktree(
+    runner.run,
+    {
+      repo: "/tmp/repo",
+      path: "/tmp/treehouse/worktree",
+    },
+    { realpath: async (path) => path },
+  );
+
+  expect(safety).toEqual({ clean: true, ignored: false, unmerged: false, merged: true });
+  expect(runner.calls[0]?.argv).toEqual([
+    "git",
+    "-C",
+    "/tmp/treehouse/worktree",
+    "status",
+    "--porcelain=v1",
+    "--ignored",
+    "--untracked-files=all",
+  ]);
+});
+
+test("accepts a realpath alias when Git reports the same physical worktree", async () => {
+  const runner = scriptedRunner([
+    result(""),
+    result(""),
+    result("/private/tmp/treehouse/worktree"),
+    result("/private/tmp/repo"),
+    result("copy-head"),
+    result("primary-head"),
+    result(""),
+  ]);
+
+  const safety = await inspectPoolWorktree(
+    runner.run,
+    { repo: "/tmp/repo", path: "/tmp/treehouse/worktree" },
+    { realpath: async (path) => path.replace(/^\/tmp/u, "/private/tmp") },
+  );
+
+  expect(safety.merged).toBe(true);
+});
+
+test("rejects a clean path whose Git root is a different physical worktree", async () => {
+  const runner = scriptedRunner([
+    result(""),
+    result(""),
+    result("/private/tmp/treehouse/other-worktree"),
+    result("/private/tmp/repo"),
+  ]);
+
+  const safety = await inspectPoolWorktree(
+    runner.run,
+    { repo: "/tmp/repo", path: "/tmp/treehouse/worktree" },
+    { realpath: async (path) => path.replace(/^\/tmp/u, "/private/tmp") },
+  );
+
+  expect(safety).toEqual({ clean: true, ignored: false, unmerged: false, merged: false });
+  expect(runner.calls).toHaveLength(4);
+});
+
+test("destroys one exact Treehouse target with the safe confirmation flag", async () => {
+  const runner = scriptedRunner([result()]);
+
+  await expect(
+    destroyTreehouseWorktree(runner.run, {
+      repo: "/tmp/repo",
+      root: "/tmp/treehouse",
+      path: "/tmp/treehouse/worktree",
+    }),
+  ).resolves.toBe(true);
+  expect(runner.calls[0]?.argv).toEqual([
+    "treehouse",
+    "--root",
+    "/tmp/treehouse",
+    "destroy",
+    "/tmp/treehouse/worktree",
+    "--yes",
+  ]);
+});
