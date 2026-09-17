@@ -1,5 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
 import type { GitCheckpoint } from "../adapters/git.ts";
+import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import type { Endpoint, IsoTimestamp, ReviewLens, WorktreeLease } from "../contracts.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 
@@ -181,11 +182,7 @@ function parseEndpointLaunch(value: unknown, field: string): DurableEndpointLaun
     taskName: singleLine(value.taskName, `${field}.taskName`),
     workspaceLabel: singleLine(value.workspaceLabel, `${field}.workspaceLabel`),
     cwd: absolutePath(value.cwd, `${field}.cwd`),
-    role: enumValue(
-      value.role,
-      ["coordinator", "scout", "implementer", "reviewer", "verifier", "presentation"] as const,
-      `${field}.role`,
-    ),
+    role: enumValue(value.role, MODEL_ROLE_ORDER, `${field}.role`),
     generation: nonNegativeInteger(value.generation, `${field}.generation`),
     createdAt: singleLine(value.createdAt, `${field}.createdAt`),
     ...(parentWorkspaceId === undefined ? {} : { parentWorkspaceId }),
@@ -219,11 +216,7 @@ function parseJobConsumption(value: unknown, field: string): DurableJobConsumpti
 
 function endpoint(value: unknown, field: string): Endpoint {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  const role = enumValue(
-    value.role,
-    ["coordinator", "scout", "implementer", "reviewer", "verifier", "presentation"] as const,
-    `${field}.role`,
-  );
+  const role = enumValue(value.role, MODEL_ROLE_ORDER, `${field}.role`);
   return {
     sessionId: singleLine(value.sessionId, `${field}.sessionId`),
     workspaceId: singleLine(value.workspaceId, `${field}.workspaceId`),
