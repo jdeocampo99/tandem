@@ -250,8 +250,13 @@ central task-store lock, validates all selected roots before closing anything, r
 ownership and strictly idle status before each exact pane close, and verifies pane disappearance.
 Busy stages, live jobs or reservations, pending endpoint actions, presentations, or live worker
 endpoints cause a fail-closed refusal with no coordinator launch; unknown, foreign, legacy,
-malformed, or unsafe ownership also refuses. It does not stop a server, delete a workspace,
-clear a registry, mutate tasks, recover task work, or wipe settings, history, worktrees, or files.
+malformed, or unsafe ownership also refuses. Those refusals happen during the preflight, before any
+pane closes. If a selected coordinator instead changes state or a native close fails after earlier
+coordinators in the same batch have already closed, reset stops closing further panes and raises an
+error naming the coordinators already closed and the failure that stopped it; it does not force-close
+the affected pane, retry, or roll back the earlier closes. It does not stop a server, delete a
+workspace, clear a registry, mutate tasks, recover task work, or wipe settings, history, worktrees, or
+files.
 Unrelated Herdr terminals remain untouched because reset scopes exact selected Tandem coordinator
 records rather than stopping a server or tearing down the session.
 Run it from a separate normal terminal, and add `--continue` only when the fresh launch should

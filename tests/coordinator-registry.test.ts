@@ -762,6 +762,48 @@ test("treats stale and missing selected coordinators as no-ops", async () => {
   }
 });
 
+test("reports a partial close instead of hiding it when a later coordinator turns busy mid-reset", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    await saveCoordinatorRecord(values.home, values.recordB);
+    const runner = nativeResetRunner([
+      { record: values.recordA, agentStatus: "idle" },
+      { record: values.recordB, agentStatus: "idle" },
+    ]);
+    let flipped = false;
+    const run: CommandRunner = async (request) => {
+      const response = await runner.run(request);
+      if (
+        !flipped &&
+        request.argv[4] === "close" &&
+        request.argv[5] === values.recordA.endpoint.paneId &&
+        response.code === 0
+      ) {
+        flipped = true;
+        const paneB = runner.panes.get(values.recordB.endpoint.paneId);
+        if (paneB !== undefined) paneB.agentStatus = "working";
+      }
+      return response;
+    };
+
+    await expect(
+      resetCoordinators(run, {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA, values.repoB],
+      }),
+    ).rejects.toThrow(/closed 1 coordinator.*repo-a.*repo-b/su);
+    expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(false);
+    expect(runner.panes.get(values.recordB.endpoint.paneId)?.present).toBe(true);
+    await expect(
+      readFile(recordFile(values.home, "tandem", values.repoB), "utf8"),
+    ).resolves.toContain(values.recordB.repoPath);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
 test("surfaces a native coordinator close failure without mutating the registry", async () => {
   const values = await fixture();
   try {

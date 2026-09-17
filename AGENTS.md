@@ -32,7 +32,9 @@ Read [README.md](README.md) for the user-facing overview and the
 - `tandem --reset` is a launch-only maintenance flow: with no paths it selects every saved project,
   while explicit paths narrow the set. It preflights all roots, stops only idle coordinators with
   exact Tandem ownership, and then normal-launches them. Busy or unsafe work refuses before any pane
-  closes. It retains settings, history, task records, worktrees, and files; it never recovers tasks,
+  closes; a later failure after some panes already closed stops and reports the already-closed set
+  instead of claiming atomicity. It retains settings, history, task records, worktrees, and files; it
+  never recovers tasks,
   wipes state, stops a server, or deletes workspaces. Run it from a separate normal terminal, never
   from inside Herdr; add `--continue` only to resume saved conversations.
 - A launch may share one Herdr session across multiple projects; each project has its own clean

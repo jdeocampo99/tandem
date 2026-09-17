@@ -65,7 +65,9 @@ With no paths, `--reset` selects every valid saved project; pass explicit paths 
 subset. It preflights all selected roots, stops only idle coordinators that Tandem can prove it owns,
 and then performs the normal launch so each selected coordinator is recreated and attached once.
 Unrelated Herdr terminals are left untouched.
-Busy, unknown, foreign, or otherwise unsafe work refuses before any pane is closed. Reset retains
+Busy, unknown, foreign, or otherwise unsafe work refuses before any pane is closed; if a coordinator
+changes state or fails to close after earlier ones in the same run already closed, reset stops and
+reports exactly which coordinators it already closed. Reset retains
 settings, conversation history, task records, worktrees, and repository files; it is not task recovery,
 a factory reset, or data wiping. Add `--continue` only when you want the reopened coordinators to
 resume their saved conversations; without it they start fresh conversations. Never run `--reset` from

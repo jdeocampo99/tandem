@@ -1122,28 +1122,40 @@ async function resetCoordinatorsUnlocked(
 
   const stopped: CoordinatorRecord[] = [];
   for (const record of liveRecords) {
-    const latest = await findRunningCoordinator(run, {
-      home,
-      sessionId,
-      repoPath: record.repoPath,
-    });
-    if (latest === undefined) {
-      const latestSnapshot = await readSessionSnapshot(run, sessionId, record.worktree.path);
-      const pane = snapshotPaneForEndpoint(latestSnapshot, record.endpoint, "coordinator");
-      if (pane === undefined) continue;
-      throw ownershipFailure(
-        `coordinator pane ${JSON.stringify(record.endpoint.paneId)} no longer proves recorded ownership`,
+    try {
+      const latest = await findRunningCoordinator(run, {
+        home,
+        sessionId,
+        repoPath: record.repoPath,
+      });
+      if (latest === undefined) {
+        const latestSnapshot = await readSessionSnapshot(run, sessionId, record.worktree.path);
+        const pane = snapshotPaneForEndpoint(latestSnapshot, record.endpoint, "coordinator");
+        if (pane === undefined) continue;
+        throw ownershipFailure(
+          `coordinator pane ${JSON.stringify(record.endpoint.paneId)} no longer proves recorded ownership`,
+        );
+      }
+      if (!sameCoordinatorIdentity(latest, record)) {
+        throw ownershipFailure(
+          `coordinator record for ${JSON.stringify(record.repoPath)} changed before reset`,
+        );
+      }
+      const latestSnapshot = await readSessionSnapshot(run, sessionId, latest.worktree.path);
+      assertIdleCoordinatorPane(latestSnapshot, latest);
+      await closeCoordinatorPane(run, latest);
+      stopped.push(latest);
+    } catch (error) {
+      if (stopped.length === 0) throw error;
+      const stoppedRepos = stopped.map((entry) => entry.repoPath).join(", ");
+      const cause = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `reset closed ${stopped.length} coordinator(s) (${stoppedRepos}) before failing on ${JSON.stringify(
+          record.repoPath,
+        )}: ${cause}`,
+        { cause: error },
       );
     }
-    if (!sameCoordinatorIdentity(latest, record)) {
-      throw ownershipFailure(
-        `coordinator record for ${JSON.stringify(record.repoPath)} changed before reset`,
-      );
-    }
-    const latestSnapshot = await readSessionSnapshot(run, sessionId, latest.worktree.path);
-    assertIdleCoordinatorPane(latestSnapshot, latest);
-    await closeCoordinatorPane(run, latest);
-    stopped.push(latest);
   }
   return stopped;
 }
