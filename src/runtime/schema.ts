@@ -1,7 +1,7 @@
 import { isAbsolute, resolve } from "node:path";
 import type { GitCheckpoint } from "../adapters/git.ts";
-import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import type { Endpoint, IsoTimestamp, ReviewLens, WorktreeLease } from "../contracts.ts";
+import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 
 const RUNTIME_SCHEMA_VERSION = 1;

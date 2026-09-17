@@ -37,7 +37,6 @@ filesystem errors are unknown/failed, not empty.
 ## Communication receipts
 
 This skill reports the task list once; it does not perform a second communication read. In a
-
 managed coordinator, use the `messages` action (or `bun src/cli.ts messages --task TASK_ID`) when
 you need per-direction queued, received, or delivered receipts, a worker Question:, a
 Recommendation:, or activity metadata. Queued/received/delivered are communication states, not
