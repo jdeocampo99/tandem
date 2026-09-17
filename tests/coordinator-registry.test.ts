@@ -782,7 +782,8 @@ test("reports a partial close instead of hiding it when a later coordinator turn
       ) {
         flipped = true;
         const paneB = runner.panes.get(values.recordB.endpoint.paneId);
-        if (paneB !== undefined) paneB.agentStatus = "working";
+        if (paneB !== undefined)
+          runner.panes.set(values.recordB.endpoint.paneId, { ...paneB, agentStatus: "working" });
       }
       return response;
     };
