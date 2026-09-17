@@ -1,10 +1,26 @@
-export type AgentRole =
-  | "coordinator"
-  | "scout"
-  | "implementer"
-  | "reviewer"
-  | "verifier"
-  | "presentation";
+export const MODEL_ROLE_ORDER = [
+  "coordinator",
+  "scout",
+  "implementer",
+  "reviewer",
+  "verifier",
+  "presentation",
+] as const;
+
+export type AgentRole = (typeof MODEL_ROLE_ORDER)[number];
+
+export const MODEL_ROLE_LABELS: Readonly<Record<AgentRole, string>> = {
+  coordinator: "Planning",
+  scout: "Research",
+  implementer: "Coding",
+  reviewer: "Review",
+  verifier: "Final checks",
+  presentation: "Presentations",
+};
+
+export function isAgentRole(value: unknown): value is AgentRole {
+  return typeof value === "string" && MODEL_ROLE_ORDER.includes(value as AgentRole);
+}
 
 export type TaskKind = "scout" | "implementation";
 

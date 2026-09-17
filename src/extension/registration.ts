@@ -1,0 +1,246 @@
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { type AgentRole, MODEL_ROLE_ORDER } from "../contracts.ts";
+import type { TandemService } from "../service/controller.ts";
+import {
+  executeTandemAction,
+  parseTandemCommand,
+  type TandemAction,
+  type TandemActionResult,
+} from "./actions.ts";
+import {
+  ACTION_FULL_RESULT_MAX_CHARS,
+  ACTION_RESULT_MAX_CHARS,
+  boundedJson,
+  compactText,
+  summarizeTandemActionValue,
+} from "./summary.ts";
+
+export type TandemOmpRegistrationDependencies = Readonly<{
+  readonly getService: (ctx: ExtensionContext) => TandemService;
+  readonly reconcile: (ctx: ExtensionContext, runTick: boolean) => Promise<void>;
+  readonly postAction: (ctx: ExtensionContext) => Promise<void>;
+}>;
+
+type TandemToolDetails = Readonly<{
+  readonly action: TandemAction["action"];
+  readonly value?: unknown;
+  readonly approved?: boolean;
+  readonly detail?: "summary" | "full";
+}>;
+
+function renderActionResult(result: TandemActionResult): string {
+  if (result.detail === "full") return boundedJson(result.value, ACTION_FULL_RESULT_MAX_CHARS);
+  return summarizeTandemActionValue(result.action, result.value);
+}
+
+function toolResult(result: TandemActionResult): {
+  content: { type: "text"; text: string }[];
+  details: TandemToolDetails;
+} {
+  return {
+    content: [{ type: "text", text: renderActionResult(result) }],
+    details: {
+      action: result.action,
+      ...(result.value === undefined ? {} : { value: result.value }),
+      ...(result.approved === undefined ? {} : { approved: result.approved }),
+      ...(result.detail === undefined ? {} : { detail: result.detail }),
+    },
+  };
+}
+
+function toolError(
+  action: TandemAction["action"],
+  error: unknown,
+): {
+  content: { type: "text"; text: string }[];
+  details: TandemToolDetails;
+  isError: true;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Tandem ${action} failed: ${compactText(message, ACTION_RESULT_MAX_CHARS)}`,
+      },
+    ],
+    details: { action },
+    isError: true,
+  };
+}
+
+export function registerTandemOmp(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
+  const z = pi.zod;
+  const modelSpecSchema = z
+    .object({
+      model: z.string(),
+      thinking: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"]),
+    })
+    .strict();
+  const modelAssignmentsShape = Object.fromEntries(
+    MODEL_ROLE_ORDER.map((role) => [role, modelSpecSchema] as const),
+  ) as Record<AgentRole, typeof modelSpecSchema>;
+  const modelAssignmentsSchema = z.object(modelAssignmentsShape).strict();
+  const actionSchema = z.union([
+    z.object({ action: z.literal("onboard"), repoPath: z.string() }).strict(),
+    z.object({ action: z.literal("setup"), repoPath: z.string() }).strict(),
+    z.object({ action: z.literal("models"), repoPath: z.string() }).strict(),
+    z
+      .object({
+        action: z.literal("configure-models"),
+        repoPath: z.string(),
+        models: modelAssignmentsSchema,
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("create"),
+        repoPath: z.string(),
+        kind: z.enum(["scout", "implementation"]),
+        objective: z.string(),
+        acceptanceCriteria: z.array(z.string()),
+        surfaces: z.array(z.string()),
+      })
+      .strict(),
+    z.object({ action: z.literal("list") }).strict(),
+    z.object({ action: z.literal("presentations") }).strict(),
+    z
+      .object({
+        action: z.literal("show"),
+        taskId: z.string(),
+        detail: z.enum(["summary", "full"]).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("steer"),
+        taskId: z.string(),
+        text: z.string(),
+        supersedes: z.array(z.string()).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("answer"),
+        taskId: z.string(),
+        questionId: z.string(),
+        text: z.string(),
+      })
+      .strict(),
+    z.object({ action: z.literal("messages"), taskId: z.string() }).strict(),
+    z.object({ action: z.literal("approve"), taskId: z.string() }).strict(),
+    z.object({ action: z.literal("tick") }).strict(),
+    z
+      .object({ action: z.literal("pause"), taskId: z.string(), reason: z.string().optional() })
+      .strict(),
+    z.object({ action: z.literal("resume"), taskId: z.string() }).strict(),
+    z
+      .object({ action: z.literal("cancel"), taskId: z.string(), reason: z.string().optional() })
+      .strict(),
+    z
+      .object({
+        action: z.literal("present"),
+        taskId: z.string(),
+        objective: z.string(),
+        artifacts: z.array(z.string()),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("describe"),
+        taskId: z.string(),
+        summary: z
+          .object({
+            tldr: z.array(z.string()),
+            what: z.array(z.string()),
+            why: z.array(z.string()),
+          })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("publish"),
+        taskId: z.string(),
+        repository: z.string(),
+        title: z.string(),
+        base: z.string(),
+        summary: z
+          .object({
+            tldr: z.array(z.string()),
+            what: z.array(z.string()),
+            why: z.array(z.string()),
+          })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("merge"),
+        taskId: z.string(),
+        method: z.enum(["merge", "squash", "rebase"]),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("cleanup"),
+        taskId: z.string(),
+        discard: z.boolean().optional(),
+      })
+      .strict(),
+  ]);
+
+  const requestSchema = z.object({ request: actionSchema }).strict();
+
+  pi.registerTool({
+    name: "tandem",
+    label: "Tandem",
+    description:
+      "Inspect and control durable Tandem state with {request:{action:...}}, including bounded steer/answer/messages communication. Approval-bearing actions always require human confirmation; communication receipts never claim implementation completion.",
+    parameters: requestSchema,
+    strict: true,
+    approval: "write",
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const request = params.request;
+      try {
+        const result = await executeTandemAction(
+          request,
+          dependencies.getService(ctx),
+          ctx,
+          signal,
+        );
+        if (request.action === "tick") {
+          await dependencies.reconcile(ctx, false);
+        } else {
+          await dependencies.postAction(ctx);
+        }
+        return toolResult(result);
+      } catch (error) {
+        return toolError(request.action, error);
+      }
+    },
+  });
+
+  pi.registerCommand("tandem", {
+    description:
+      "Inspect or control Tandem: list, presentations, show, messages, models, onboard, setup, create, approve, steer, answer, tick, pause, resume, cancel, present, feedback, describe, publish, merge, cleanup.",
+    handler: async (args, ctx) => {
+      try {
+        const parsedAction = parseTandemCommand(args);
+        const action =
+          parsedAction.action === "models" && parsedAction.repoPath === "."
+            ? { ...parsedAction, repoPath: ctx.cwd }
+            : parsedAction;
+        const result = await executeTandemAction(action, dependencies.getService(ctx), ctx);
+        await dependencies.postAction(ctx);
+        ctx.ui.notify(renderActionResult(result), "info");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(`Tandem command failed: ${message}`, "error");
+      }
+    },
+  });
+}
