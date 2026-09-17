@@ -1,5 +1,4 @@
 import {
-  closeEndpoint,
   createTaskEndpoint,
   type HerdrEndpointResult,
   type HerdrPaneInspection,
@@ -39,6 +38,7 @@ import {
 import { recoverEndpointFromLaunch } from "../tasks/control.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import { readWorkerResult, type WorkerResult } from "../workers/jobs.ts";
+import { liveWorkerTerminal } from "../workers/terminal.ts";
 import type { PresentationFeedbackWorkflow } from "./feedback.ts";
 import { withPresentationLock } from "./lock.ts";
 import {
@@ -334,7 +334,14 @@ export class PresentationRuntimeWorkflow {
           }
           throw error;
         }
-        if (inspection.activeWorker) return;
+        const terminal = inspection.activeWorker
+          ? await liveWorkerTerminal(inspection, job)
+          : undefined;
+        if (
+          inspection.activeWorker &&
+          (terminal === undefined || (!terminal.completed && terminal.phase !== "paused"))
+        )
+          return;
         let result: WorkerResult;
         try {
           result = await readWorkerResult(job.resultPath, {
@@ -399,13 +406,6 @@ export class PresentationRuntimeWorkflow {
             };
           }
           return;
-        }
-        try {
-          await closeEndpoint(this.#deps.run, { endpoint, cwd: job.cwd });
-        } catch (error) {
-          if (!(error instanceof EndpointOwnershipError && error.reason === "missing")) {
-            await this.setPresentationError(runtime.id, describeError(error));
-          }
         }
         followUp = { runtime, record: completedWithNotification };
       });

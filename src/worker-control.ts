@@ -18,6 +18,7 @@ import {
   toolName,
   type WorkerControlConfig,
 } from "./workers/control-protocol.ts";
+import { registerWorkerTerminalExtension } from "./workers/terminal-extension.ts";
 
 export const WORKER_CONTROL_ENV = "TANDEM_WORKER_CONTROL";
 const POLL_INTERVAL_MS = 250;
@@ -53,11 +54,29 @@ function initialReceipt(config: WorkerControlConfig): WorkerReceipt {
     phase: "starting",
   };
 }
+function failClosed(pi: ExtensionAPI, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  pi.on("tool_call", () => ({ block: true, reason: `Worker initialization failed: ${message}` }));
+  pi.on("input", () => ({ handled: true }));
+  pi.on("session_start", (_event, ctx) => {
+    ctx.ui.notify(`Tandem worker initialization failed: ${message}`, "error");
+    ctx.abort();
+    ctx.shutdown();
+  });
+}
 
 export default async function workerControlExtension(pi: ExtensionAPI): Promise<void> {
+  try {
+    await registerWorkerCommunication(pi);
+    await registerWorkerTerminalExtension(pi);
+  } catch (error) {
+    failClosed(pi, error);
+  }
+}
+
+async function registerWorkerCommunication(pi: ExtensionAPI): Promise<void> {
   const config = parseWorkerControlConfig(process.env[WORKER_CONTROL_ENV]);
   if (config === undefined) return;
-
   await inboxFor(config);
   let receipt = initialReceipt(config);
   await writeWorkerReceipt(config.receiptPath, receipt);

@@ -258,12 +258,6 @@ export function currentWriter(runtime: RuntimeTaskState): Endpoint | undefined {
   return writer;
 }
 
-export function currentReviewer(runtime: RuntimeTaskState): Endpoint | undefined {
-  return runtime.endpoints.find(
-    (endpoint) => endpoint.role === "reviewer" || endpoint.role === "verifier",
-  );
-}
-
 export function reviewFindings(task: TaskRecord): readonly Finding[] {
   const findings: Finding[] = [];
   for (const review of task.reviews) {

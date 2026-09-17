@@ -41,6 +41,7 @@ import {
 import { taskInbox } from "../../src/tasks/communication-protocol.ts";
 import { type TaskEvent, transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
 
 const TIMESTAMP = "2030-01-01T00:00:00.000Z";
 const SOURCE_CHECKPOINT = {
@@ -96,12 +97,12 @@ const OMP_MODELS = [
 
 type FakeRunnerOptions = Readonly<{
   readonly active?: boolean;
+  readonly holdProof?: boolean;
   readonly checkoutHead?: string;
   readonly commonDirectory?: string;
   readonly dirty?: boolean;
   readonly unmerged?: boolean;
   readonly recovery?: boolean;
-  readonly holdProof?: boolean;
   readonly paneState?: "owned" | "missing" | "foreign";
   readonly presentationResponses?: readonly CommandResult[];
   readonly presentationOpenResponse?: CommandResult;
@@ -132,6 +133,7 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
   let launches = 0;
   let active = options.active ?? false;
   let panePresent = options.paneState !== "missing";
+  let splitPanePresent = false;
   let proofBlocked = false;
   let startProof = (): void => undefined;
   let releaseProof = (): void => undefined;
@@ -208,8 +210,9 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
         return commandResult(
           JSON.stringify({
             result: {
-              panes: panePresent
-                ? [
+              panes: !panePresent
+                ? []
+                : [
                     {
                       pane_id: "pane-1",
                       tab_id: options.paneState === "foreign" ? "tab-foreign" : "tab-1",
@@ -218,8 +221,18 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
                       cwd: request.cwd,
                       foreground_cwd: request.cwd,
                     },
-                  ]
-                : [],
+                    ...(splitPanePresent
+                      ? [
+                          {
+                            pane_id: "pane-2",
+                            tab_id: "tab-1",
+                            workspace_id: "workspace-1",
+                            cwd: request.cwd,
+                            foreground_cwd: request.cwd,
+                          },
+                        ]
+                      : []),
+                  ],
             },
           }),
         );
@@ -232,12 +245,26 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
           JSON.stringify({
             result: {
               pane: {
-                pane_id: "pane-1",
-                tab_id: options.paneState === "foreign" ? "tab-foreign" : "tab-1",
-                workspace_id: options.paneState === "foreign" ? "workspace-foreign" : "workspace-1",
+                pane_id: argv.includes("pane-2") ? "pane-2" : "pane-1",
+                tab_id:
+                  argv.includes("pane-2") || options.paneState !== "foreign"
+                    ? "tab-1"
+                    : "tab-foreign",
+                workspace_id:
+                  argv.includes("pane-2") || options.paneState !== "foreign"
+                    ? "workspace-1"
+                    : "workspace-foreign",
                 foreground_cwd: request.cwd,
               },
             },
+          }),
+        );
+      }
+      if (argv.includes("pane") && argv.includes("split")) {
+        splitPanePresent = true;
+        return commandResult(
+          JSON.stringify({
+            result: { pane: { pane_id: "pane-2", tab_id: "tab-1", workspace_id: "workspace-1" } },
           }),
         );
       }
@@ -251,7 +278,7 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
           JSON.stringify({
             result: {
               process_info: {
-                pane_id: "pane-1",
+                pane_id: argv.includes("pane-2") ? "pane-2" : "pane-1",
                 foreground_processes: active ? [{ pid: 100, name: "omp", argv: ["omp"] }] : [],
               },
             },
@@ -430,6 +457,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     });
   }
   const lease = leaseFor(home);
+  await mkdir(lease.path, { recursive: true });
   const endpoint = endpointFor(kind === "implementation" ? "implementer" : "scout");
   const runner = fakeRunner(options.runner);
   const runtime: RuntimeTaskState = {
@@ -882,9 +910,13 @@ test("concurrent controllers consume one completed presentation only once", asyn
           await Bun.file(join(home, "presentation-1-record.json")).text(),
         ).toHaveLength(1);
         const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-          readonly presentations: readonly { readonly job: { readonly phase: string } }[];
+          readonly presentations: readonly {
+            readonly job: { readonly phase: string };
+            readonly endpoint?: Endpoint;
+          }[];
         };
         expect(runtime.presentations[0]?.job.phase).toBe("consumed");
+        expect(runtime.presentations[0]?.endpoint?.paneId).toBe("pane-1");
         const record = JSON.parse(
           await Bun.file(join(home, "presentation-1-record.json")).text(),
         ) as {
@@ -1025,7 +1057,7 @@ test("two controllers serialize one worker dispatch and persist one active job",
     {
       kind: "scout",
       stage: "queued",
-      runner: { active: true },
+      runner: { active: false },
     },
     async ({ home, lease, endpoint, run, service, runnerState }) => {
       const seededStore = createTaskStore({
@@ -1377,7 +1409,7 @@ test("endpoint launch recovery adopts the exact Herdr pane without creating anot
     {
       kind: "scout",
       stage: "queued",
-      runner: { active: true },
+      runner: { active: false },
     },
     async ({ home, lease, service, runnerState }) => {
       const reservation = reservationFor("task-1", "endpoint");
@@ -2185,7 +2217,7 @@ test("resume consumes a stopped worker result once without relaunching the imple
   );
 });
 
-test("review result closes its reviewer pane with both task revisions serialized", async () => {
+test("review result retains its reviewer pane with durable task revisions", async () => {
   await withFixture(
     {
       kind: "implementation",
@@ -2225,9 +2257,116 @@ test("review result closes its reviewer pane with both task revisions serialized
       const current = await service.get("task-1");
       expect(current.stage).toBe("reviewing");
       expect(current.reviews).toHaveLength(1);
-      expect(current.endpoints ?? []).toHaveLength(0);
-      expect(current.revision).toBe(before.revision + 2);
+      expect(current.endpoints ?? []).toHaveLength(1);
+      expect(current.revision).toBe(before.revision + 1);
       expect(runnerState.launches).toBe(0);
+    },
+  );
+});
+
+test("consumes a completed interactive result before the OMP process exits", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      runner: { active: true, checkoutHead: "new-head" },
+    },
+    async ({ home, lease, service, runnerState }) => {
+      const endpoint = endpointFor("implementer");
+      const job = workerJob(home, endpoint, "implementer");
+      await seedTaskResources(home, lease, [endpoint], [job]);
+      await writeWorkerTerminal(job.jobPath, {
+        schemaVersion: 1,
+        jobId: job.id,
+        taskId: job.taskId,
+        generation: job.generation,
+        role: "implementer",
+        cwd: job.cwd,
+        pid: 100,
+        phase: "idle",
+        completed: true,
+        heartbeatAt: new Date().toISOString(),
+      });
+      await writeJsonAtomically(job.resultPath, {
+        id: job.id,
+        taskId: job.taskId,
+        generation: job.generation,
+        role: "implementer",
+        status: "completed",
+        text: "Implementation complete",
+        finishedAt: new Date().toISOString(),
+      });
+
+      await service.tick();
+
+      const current = await service.get("task-1");
+      expect(current.stage).toBe("validating");
+      expect(current.endpoints ?? []).toHaveLength(1);
+      expect(runnerState.active).toBe(true);
+    },
+  );
+});
+
+test("blocks an interactive worker whose foreground PID is not the recorded worker", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      runner: { active: true },
+    },
+    async ({ home, lease, service, runnerState }) => {
+      const endpoint = endpointFor("implementer");
+      const job = workerJob(home, endpoint, "implementer");
+      await seedTaskResources(home, lease, [endpoint], [job]);
+      await writeWorkerTerminal(job.jobPath, {
+        schemaVersion: 1,
+        jobId: job.id,
+        taskId: job.taskId,
+        generation: job.generation,
+        role: "implementer",
+        cwd: job.cwd,
+        pid: 999,
+        phase: "busy",
+        completed: false,
+        heartbeatAt: new Date().toISOString(),
+      });
+
+      await service.tick();
+
+      const current = await service.get("task-1");
+      expect(current.stage).toBe("blocked");
+      expect(runnerState.launches).toBe(0);
+    },
+  );
+});
+test("validation runs in a split non-model pane beside the retained writer", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "validating",
+      taskEdits: { reviewHead: "review-head" },
+      runner: { checkoutHead: "review-head" },
+    },
+    async ({ home, lease, endpoint, service, runnerState }) => {
+      await seedTaskResources(home, lease, [endpoint], []);
+
+      await service.tick();
+
+      const persisted = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
+        readonly tasks: readonly RuntimeTaskState[];
+      };
+      const runtime = persisted.tasks[0];
+      if (runtime === undefined) throw new Error("fixture runtime task missing");
+      const validationJob = runtime.jobs[0];
+      const writer = runtime.endpoints.find((candidate) => candidate.paneId === endpoint.paneId);
+      const validationEndpoint = runtime.endpoints.find(
+        (candidate) => candidate.paneId !== endpoint.paneId,
+      );
+      expect(validationJob?.kind).toBe("validation");
+      expect(validationJob?.endpoint?.paneId).toBe(validationEndpoint?.paneId);
+      expect(writer?.paneId).toBe(endpoint.paneId);
+      expect(validationEndpoint?.paneId).toBe("pane-2");
+      expect(runnerState.launches).toBe(1);
     },
   );
 });

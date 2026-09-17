@@ -1,11 +1,6 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
-import {
-  closeEndpoint,
-  type HerdrPaneInspection,
-  inspectEndpoint,
-  interruptEndpoint,
-} from "../adapters/herdr.ts";
+import { closeEndpoint, type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type { Clock, CommandRunner, Endpoint, IdFactory, TaskRecord } from "../contracts.ts";
 import { activeRuntimeJob, taskRuntime } from "../runtime/activity.ts";
@@ -31,6 +26,12 @@ import {
 import { taskSourcePath } from "../service/source.ts";
 import { readValidationResult } from "../validation-worker.ts";
 import { readWorkerResult } from "../workers/jobs.ts";
+import { workerDelegationStopped } from "../workers/terminal.ts";
+import {
+  pauseWorkerTerminal,
+  prepareWorkerTerminal,
+  workerJobForEndpoint,
+} from "../workers/terminal-control.ts";
 import { appendTaskMessage } from "./communication-protocol.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "./lifecycle.ts";
 import type { TaskStore } from "./store.ts";
@@ -383,9 +384,14 @@ export class TaskControlWorkflow {
       let stopFailure: string | undefined;
       for (const endpoint of runtime.endpoints) {
         try {
-          await interruptEndpoint(this.#deps.run, { endpoint, cwd });
+          const job = workerJobForEndpoint(runtime.jobs, endpoint);
+          await pauseWorkerTerminal(this.#deps.run, {
+            endpoint,
+            cwd,
+            ...(job === undefined ? {} : { job }),
+          });
           const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-          if (inspection.activeWorker) {
+          if (!(await workerDelegationStopped(inspection, job))) {
             stopFailure = `pane ${endpoint.paneId} still has an active worker`;
           }
         } catch (error) {
@@ -489,15 +495,19 @@ export class TaskControlWorkflow {
     return this.#deps.getTask(taskId);
   }
 
-  private async probeOwnedEndpoint(endpoint: Endpoint, cwd: string): Promise<OwnedEndpointProbe> {
+  private async probeOwnedEndpoint(
+    endpoint: Endpoint,
+    cwd: string,
+    job: DurableJob | undefined,
+  ): Promise<OwnedEndpointProbe> {
     try {
       const inspection: HerdrPaneInspection = await inspectEndpoint(this.#deps.run, {
         endpoint,
         cwd,
       });
-      return inspection.activeWorker
-        ? { status: "active", detail: `pane ${endpoint.paneId} still has an active worker` }
-        : { status: "stopped", detail: undefined };
+      return (await workerDelegationStopped(inspection, job))
+        ? { status: "stopped", detail: undefined }
+        : { status: "active", detail: `pane ${endpoint.paneId} still has an active worker` };
     } catch (error) {
       if (error instanceof EndpointOwnershipError && error.reason === "missing") {
         return { status: "missing", detail: `pane ${endpoint.paneId} is no longer present` };
@@ -557,7 +567,11 @@ export class TaskControlWorkflow {
     const probe = async (endpoint: Endpoint): Promise<OwnedEndpointProbe> => {
       const known = probes.get(endpoint.paneId);
       if (known !== undefined) return known;
-      const result = await this.probeOwnedEndpoint(endpoint, cwd);
+      const result = await this.probeOwnedEndpoint(
+        endpoint,
+        cwd,
+        workerJobForEndpoint(runtime.jobs, endpoint),
+      );
       probes.set(endpoint.paneId, result);
       return result;
     };
@@ -605,12 +619,17 @@ export class TaskControlWorkflow {
 
     for (const endpoint of runtime.endpoints) {
       try {
+        const job = workerJobForEndpoint(runtime.jobs, endpoint);
         let inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-        if (inspection.activeWorker) {
-          await interruptEndpoint(this.#deps.run, { endpoint, cwd });
+        if (!(await workerDelegationStopped(inspection, job))) {
+          await pauseWorkerTerminal(this.#deps.run, {
+            endpoint,
+            cwd,
+            ...(job === undefined ? {} : { job }),
+          });
           inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
         }
-        if (inspection.activeWorker) {
+        if (!(await workerDelegationStopped(inspection, job))) {
           await this.#deps.setRuntimeError(
             task.id,
             `stop request remains pending because pane ${endpoint.paneId} is still active`,
@@ -723,12 +742,17 @@ export class TaskControlWorkflow {
       let stopFailure: string | undefined;
       for (const endpoint of runtime.endpoints) {
         try {
+          const job = workerJobForEndpoint(runtime.jobs, endpoint);
           let inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-          if (inspection.activeWorker) {
-            await interruptEndpoint(this.#deps.run, { endpoint, cwd });
+          if (!(await workerDelegationStopped(inspection, job))) {
+            await pauseWorkerTerminal(this.#deps.run, {
+              endpoint,
+              cwd,
+              ...(job === undefined ? {} : { job }),
+            });
             inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
           }
-          if (inspection.activeWorker) {
+          if (!(await workerDelegationStopped(inspection, job))) {
             stopFailure = `pane ${endpoint.paneId} still has an active worker`;
             break;
           }
@@ -755,6 +779,12 @@ export class TaskControlWorkflow {
       );
       for (const endpoint of reviewers) {
         try {
+          const job = workerJobForEndpoint(runtime.jobs, endpoint);
+          await prepareWorkerTerminal(this.#deps.run, {
+            endpoint,
+            cwd,
+            ...(job === undefined ? {} : { job }),
+          });
           await closeEndpoint(this.#deps.run, { endpoint, cwd });
         } catch (error) {
           if (!isMissingEndpoint(error)) {

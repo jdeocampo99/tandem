@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { readCheckpoint } from "../adapters/git.ts";
-import { closeEndpoint, inspectEndpoint, inspectStopped } from "../adapters/herdr.ts";
+import { closeEndpoint, inspectEndpoint } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
@@ -64,6 +64,7 @@ import type {
 import { TaskControlWorkflow } from "../tasks/control.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { createTaskStore, type TaskStore, transitionStoredTask } from "../tasks/store.ts";
+import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { WorkerWorkflow } from "../workers/workflow.ts";
 import {
   absoluteDirectory,
@@ -568,16 +569,15 @@ class TandemController {
     if (runtime.jobs.some(activeRuntimeJob)) {
       throw new Error(`cannot clean task ${task.id} while a worker launch is in progress`);
     }
+    const cwd = taskSourcePath(task, runtime);
     for (const endpoint of runtime.endpoints) {
       try {
-        const stopped = await inspectStopped(
-          this.#deps.run,
+        const job = workerJobForEndpoint(runtime.jobs, endpoint);
+        await prepareWorkerTerminal(this.#deps.run, {
           endpoint,
-          taskSourcePath(task, runtime),
-        );
-        if (!stopped) {
-          throw new Error(`cannot clean task ${task.id} while pane ${endpoint.paneId} is running`);
-        }
+          cwd,
+          ...(job === undefined ? {} : { job }),
+        });
       } catch (error) {
         if (!isMissingEndpoint(error)) throw error;
       }
@@ -937,13 +937,7 @@ class TandemController {
     for (const endpoint of runtime.endpoints) {
       try {
         const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-        if (inspection.activeWorker) {
-          await this.setRuntimeError(
-            task.id,
-            `terminal cleanup deferred while pane ${endpoint.paneId} is active`,
-          );
-          return;
-        }
+        if (inspection.activeWorker) return;
         await closeEndpoint(this.#deps.run, { endpoint, cwd });
       } catch (error) {
         if (!isMissingEndpoint(error)) {
