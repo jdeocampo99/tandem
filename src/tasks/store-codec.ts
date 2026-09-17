@@ -1,0 +1,631 @@
+import {
+  type AgentRole,
+  type Endpoint,
+  type Finding,
+  type FindingSeverity,
+  type FindingVerdict,
+  type GuidanceProvenance,
+  type InstructionChannel,
+  MODEL_ROLE_ORDER,
+  type ModelSpec,
+  type Notification,
+  type PullRequestMetadata,
+  type RepoPolicy,
+  type ResolvedGuidance,
+  type ResolvedPolicy,
+  type ReviewLens,
+  type ReviewResult,
+  type TaskKind,
+  type TaskRecord,
+  type TaskStage,
+  type ValidationCommand,
+  type ValidationEvidence,
+  type WorktreeLease,
+} from "../contracts.ts";
+import { parseTaskCommunication } from "./communication-protocol.ts";
+import { isSafeTaskId } from "./lifecycle.ts";
+import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
+
+const TASK_STAGES: readonly TaskStage[] = [
+  "awaiting-approval",
+  "queued",
+  "scouting",
+  "implementing",
+  "validating",
+  "reviewing",
+  "awaiting-fixes",
+  "ready",
+  "paused",
+  "blocked",
+  "cancelled",
+  "completed",
+  "merged",
+];
+const TASK_KINDS: readonly TaskKind[] = ["scout", "implementation"];
+const INSTRUCTION_CHANNELS: readonly InstructionChannel[] = [
+  "implementation",
+  "validation",
+  "review",
+];
+const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "auto",
+] as const;
+const FINDING_SEVERITIES: readonly FindingSeverity[] = ["P0", "P1", "P2", "P3"];
+const FINDING_VERDICTS: readonly FindingVerdict[] = ["confirmed", "plausible"];
+const REVIEW_LENSES: readonly ReviewLens[] = ["behavior", "design", "coverage", "verification"];
+const TOP_LEVEL_KEYS = [
+  "schemaVersion",
+  "id",
+  "revision",
+  "repoPath",
+  "kind",
+  "objective",
+  "acceptanceCriteria",
+  "surfaces",
+  "stage",
+  "previousStage",
+  "scopeApproved",
+  "policy",
+  "createdAt",
+  "updatedAt",
+  "worktree",
+  "endpoints",
+  "generation",
+  "reviewRound",
+  "reviewHead",
+  "validationEvidence",
+  "reviews",
+  "reportPath",
+  "blockReason",
+  "notifications",
+  "communication",
+  "pullRequest",
+] as const;
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isOneOf<Value extends string>(value: unknown, values: readonly Value[]): value is Value {
+  return typeof value === "string" && values.some((candidate) => candidate === value);
+}
+
+function failState(source: string, message: string, cause?: unknown): never {
+  if (cause instanceof Error) {
+    throw new StateCorruptionError(source, message, { cause });
+  }
+  throw new StateCorruptionError(source, message);
+}
+
+function assertExactKeys(record: UnknownRecord, allowed: readonly string[], source: string): void {
+  for (const key of Object.keys(record)) {
+    if (!allowed.includes(key)) {
+      failState(source, `unexpected field ${key}`);
+    }
+  }
+}
+
+function requiredValue(record: UnknownRecord, key: string, source: string): unknown {
+  if (!Object.hasOwn(record, key)) {
+    failState(source, `missing field ${key}`);
+  }
+  const value = record[key];
+  if (value === undefined) {
+    failState(source, `field ${key} must not be undefined`);
+  }
+  return value;
+}
+
+function requiredText(record: UnknownRecord, key: string, source: string): string {
+  const value = requiredValue(record, key, source);
+  if (typeof value !== "string" || value.trim().length === 0) {
+    failState(source, `field ${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalText(record: UnknownRecord, key: string, source: string): string | undefined {
+  if (!Object.hasOwn(record, key)) {
+    return undefined;
+  }
+  const value = record[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    failState(source, `optional field ${key} must be a non-empty string when present`);
+  }
+  return value;
+}
+
+function requiredInteger(record: UnknownRecord, key: string, source: string, minimum = 0): number {
+  const value = requiredValue(record, key, source);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+    failState(source, `field ${key} must be an integer >= ${minimum}`);
+  }
+  return value;
+}
+
+function requiredBoolean(record: UnknownRecord, key: string, source: string): boolean {
+  const value = requiredValue(record, key, source);
+  if (typeof value !== "boolean") {
+    failState(source, `field ${key} must be a boolean`);
+  }
+  return value;
+}
+
+function requiredEnum<Value extends string>(
+  record: UnknownRecord,
+  key: string,
+  values: readonly Value[],
+  source: string,
+): Value {
+  const value = requiredValue(record, key, source);
+  if (!isOneOf(value, values)) {
+    failState(source, `field ${key} has unsupported value ${String(value)}`);
+  }
+  return value;
+}
+
+function requiredTextArray(record: UnknownRecord, key: string, source: string): readonly string[] {
+  const value = requiredValue(record, key, source);
+  if (!Array.isArray(value)) {
+    failState(source, `field ${key} must be an array of non-empty strings`);
+  }
+  const entries: readonly unknown[] = value;
+  if (!entries.every(isNonEmptyText)) {
+    failState(source, `field ${key} must be an array of non-empty strings`);
+  }
+  return entries.filter(isNonEmptyText);
+}
+
+function optionalInteger(
+  record: UnknownRecord,
+  key: string,
+  source: string,
+  minimum = 0,
+): number | undefined {
+  if (!Object.hasOwn(record, key)) {
+    return undefined;
+  }
+  const value = record[key];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+    failState(source, `optional field ${key} must be an integer >= ${minimum} when present`);
+  }
+  return value;
+}
+
+function parseModelSpec(value: unknown, source: string): ModelSpec {
+  if (!isRecord(value)) {
+    failState(source, "model specification must be an object");
+  }
+  assertExactKeys(value, ["model", "thinking"], source);
+  return {
+    model: requiredText(value, "model", source),
+    thinking: requiredEnum(value, "thinking", THINKING_LEVELS, source),
+  };
+}
+
+function parseInstructionChannels(
+  value: unknown,
+  source: string,
+): Readonly<Record<InstructionChannel, readonly string[]>> {
+  if (!isRecord(value)) {
+    failState(source, "instruction channels must be an object");
+  }
+  assertExactKeys(value, INSTRUCTION_CHANNELS, source);
+  const result: Record<InstructionChannel, readonly string[]> = {
+    implementation: requiredTextArray(value, "implementation", `${source}.implementation`),
+    validation: requiredTextArray(value, "validation", `${source}.validation`),
+    review: requiredTextArray(value, "review", `${source}.review`),
+  };
+  return result;
+}
+
+function parseValidationCommand(value: unknown, source: string): ValidationCommand {
+  if (!isRecord(value)) {
+    failState(source, "validation command must be an object");
+  }
+  assertExactKeys(value, ["name", "argv", "surfaces", "timeoutMs"], source);
+  const timeoutMs = requiredInteger(value, "timeoutMs", source, 1);
+  return {
+    name: requiredText(value, "name", source),
+    argv: requiredTextArray(value, "argv", source),
+    surfaces: requiredTextArray(value, "surfaces", source),
+    timeoutMs,
+  };
+}
+
+function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
+  if (!isRecord(value)) {
+    failState(source, "policy config must be an object");
+  }
+  assertExactKeys(
+    value,
+    [
+      "version",
+      "models",
+      "instructions",
+      "instructionFiles",
+      "validationCommands",
+      "maxWorkers",
+      "maxFixRounds",
+    ],
+    source,
+  );
+  const version = requiredInteger(value, "version", source, 1);
+  if (version !== 1) {
+    failState(source, `unsupported policy version ${version}`);
+  }
+  const modelsValue = requiredValue(value, "models", source);
+  if (!isRecord(modelsValue)) {
+    failState(`${source}.models`, "models must be an object");
+  }
+  assertExactKeys(modelsValue, MODEL_ROLE_ORDER, `${source}.models`);
+  const models: Record<AgentRole, ModelSpec> = {
+    coordinator: parseModelSpec(
+      requiredValue(modelsValue, "coordinator", `${source}.models`),
+      `${source}.models.coordinator`,
+    ),
+    scout: parseModelSpec(
+      requiredValue(modelsValue, "scout", `${source}.models`),
+      `${source}.models.scout`,
+    ),
+    implementer: parseModelSpec(
+      requiredValue(modelsValue, "implementer", `${source}.models`),
+      `${source}.models.implementer`,
+    ),
+    reviewer: parseModelSpec(
+      requiredValue(modelsValue, "reviewer", `${source}.models`),
+      `${source}.models.reviewer`,
+    ),
+    verifier: parseModelSpec(
+      requiredValue(modelsValue, "verifier", `${source}.models`),
+      `${source}.models.verifier`,
+    ),
+    presentation: parseModelSpec(
+      requiredValue(modelsValue, "presentation", `${source}.models`),
+      `${source}.models.presentation`,
+    ),
+  };
+  const validationCommandsValue = requiredValue(value, "validationCommands", source);
+  if (!Array.isArray(validationCommandsValue)) {
+    failState(`${source}.validationCommands`, "validationCommands must be an array");
+  }
+  const validationCommands: readonly unknown[] = validationCommandsValue;
+  return {
+    version: 1,
+    models,
+    instructions: parseInstructionChannels(
+      requiredValue(value, "instructions", source),
+      `${source}.instructions`,
+    ),
+    instructionFiles: parseInstructionChannels(
+      requiredValue(value, "instructionFiles", source),
+      `${source}.instructionFiles`,
+    ),
+    validationCommands: validationCommands.map((entry, index) =>
+      parseValidationCommand(entry, `${source}.validationCommands[${index}]`),
+    ),
+    maxWorkers: requiredInteger(value, "maxWorkers", source, 1),
+    maxFixRounds: requiredInteger(value, "maxFixRounds", source, 0),
+  };
+}
+
+function parseGuidance(
+  value: unknown,
+  source: string,
+): Readonly<Record<InstructionChannel, readonly ResolvedGuidance[]>> {
+  if (!isRecord(value)) {
+    failState(source, "guidance must be an object");
+  }
+  assertExactKeys(value, INSTRUCTION_CHANNELS, source);
+  const result: Record<InstructionChannel, readonly ResolvedGuidance[]> = {
+    implementation: parseGuidanceEntries(
+      requiredValue(value, "implementation", source),
+      `${source}.implementation`,
+    ),
+    validation: parseGuidanceEntries(
+      requiredValue(value, "validation", source),
+      `${source}.validation`,
+    ),
+    review: parseGuidanceEntries(requiredValue(value, "review", source), `${source}.review`),
+  };
+  return result;
+}
+function parseGuidanceEntries(value: unknown, source: string): readonly ResolvedGuidance[] {
+  if (!Array.isArray(value)) {
+    failState(source, "guidance entries must be an array");
+  }
+  const entries: readonly unknown[] = value;
+  return entries.map((entry, index) => {
+    const entrySource = `${source}[${index}]`;
+    if (!isRecord(entry)) {
+      failState(entrySource, "guidance entry must be an object");
+    }
+    assertExactKeys(entry, ["text", "provenance"], entrySource);
+    const provenanceValue = requiredValue(entry, "provenance", entrySource);
+    if (!isRecord(provenanceValue)) {
+      failState(`${entrySource}.provenance`, "provenance must be an object");
+    }
+    assertExactKeys(provenanceValue, ["channel", "source"], `${entrySource}.provenance`);
+    const channel = requiredEnum(
+      provenanceValue,
+      "channel",
+      INSTRUCTION_CHANNELS,
+      `${entrySource}.provenance`,
+    );
+    return {
+      text: requiredText(entry, "text", entrySource),
+      provenance: {
+        channel,
+        source: requiredText(provenanceValue, "source", `${entrySource}.provenance`),
+      } satisfies GuidanceProvenance,
+    } satisfies ResolvedGuidance;
+  });
+}
+
+function parseResolvedPolicy(value: unknown, source: string): ResolvedPolicy {
+  if (!isRecord(value)) {
+    failState(source, "resolved policy must be an object");
+  }
+  assertExactKeys(value, ["config", "guidance"], source);
+  return {
+    config: parseRepoPolicy(requiredValue(value, "config", source), `${source}.config`),
+    guidance: parseGuidance(requiredValue(value, "guidance", source), `${source}.guidance`),
+  };
+}
+
+function parseWorktree(value: unknown, source: string): WorktreeLease {
+  if (!isRecord(value)) {
+    failState(source, "worktree must be an object");
+  }
+  assertExactKeys(
+    value,
+    ["root", "path", "name", "baseHead", "branch", "leaseId", "leaseHolder", "leasedAt"],
+    source,
+  );
+  return {
+    root: requiredText(value, "root", source),
+    path: requiredText(value, "path", source),
+    name: requiredText(value, "name", source),
+    baseHead: requiredText(value, "baseHead", source),
+    branch: requiredText(value, "branch", source),
+    leaseId: requiredText(value, "leaseId", source),
+    leaseHolder: requiredText(value, "leaseHolder", source),
+    leasedAt: requiredText(value, "leasedAt", source),
+  };
+}
+
+function parseEndpoint(value: unknown, source: string): Endpoint {
+  if (!isRecord(value)) {
+    failState(source, "endpoint must be an object");
+  }
+  assertExactKeys(
+    value,
+    ["sessionId", "workspaceId", "tabId", "paneId", "role", "generation"],
+    source,
+  );
+  return {
+    sessionId: requiredText(value, "sessionId", source),
+    workspaceId: requiredText(value, "workspaceId", source),
+    tabId: requiredText(value, "tabId", source),
+    paneId: requiredText(value, "paneId", source),
+    role: requiredEnum(value, "role", MODEL_ROLE_ORDER, source),
+    generation: requiredInteger(value, "generation", source),
+  };
+}
+
+function parseFinding(value: unknown, source: string): Finding {
+  if (!isRecord(value)) {
+    failState(source, "finding must be an object");
+  }
+  assertExactKeys(value, ["id", "severity", "verdict", "file", "line", "description"], source);
+  const file = optionalText(value, "file", source);
+  const line = optionalInteger(value, "line", source, 1);
+  return {
+    id: requiredText(value, "id", source),
+    severity: requiredEnum(value, "severity", FINDING_SEVERITIES, source),
+    verdict: requiredEnum(value, "verdict", FINDING_VERDICTS, source),
+    description: requiredText(value, "description", source),
+    ...(file === undefined ? {} : { file }),
+    ...(line === undefined ? {} : { line }),
+  };
+}
+
+function parseReview(value: unknown, source: string): ReviewResult {
+  if (!isRecord(value)) {
+    failState(source, "review must be an object");
+  }
+  assertExactKeys(value, ["lens", "head", "generation", "pass", "findings", "summary"], source);
+  const findingsValue = requiredValue(value, "findings", source);
+  if (!Array.isArray(findingsValue)) {
+    failState(`${source}.findings`, "findings must be an array");
+  }
+  const findings: readonly unknown[] = findingsValue;
+  return {
+    lens: requiredEnum(value, "lens", REVIEW_LENSES, source),
+    head: requiredText(value, "head", source),
+    generation: requiredInteger(value, "generation", source),
+    pass: requiredBoolean(value, "pass", source),
+    findings: findings.map((entry, index) => parseFinding(entry, `${source}.findings[${index}]`)),
+    summary: requiredText(value, "summary", source),
+  };
+}
+
+function parseValidationEvidence(value: unknown, source: string): ValidationEvidence {
+  if (!isRecord(value)) {
+    failState(source, "validation evidence must be an object");
+  }
+  assertExactKeys(value, ["name", "argv", "exitCode", "stdout", "stderr", "head"], source);
+  const stdout = requiredValue(value, "stdout", source);
+  const stderr = requiredValue(value, "stderr", source);
+  if (typeof stdout !== "string" || typeof stderr !== "string") {
+    failState(source, "stdout and stderr must be strings");
+  }
+  return {
+    name: requiredText(value, "name", source),
+    argv: requiredTextArray(value, "argv", source),
+    exitCode: requiredInteger(value, "exitCode", source),
+    stdout,
+    stderr,
+    head: requiredText(value, "head", source),
+  };
+}
+
+function parseNotification(value: unknown, source: string): Notification {
+  if (!isRecord(value)) {
+    failState(source, "notification must be an object");
+  }
+  assertExactKeys(value, ["id", "message", "acknowledged", "kind"], source);
+  const kind =
+    value.kind === undefined
+      ? undefined
+      : requiredEnum(value, "kind", ["routine", "coordinator"] as const, source);
+  return {
+    id: requiredText(value, "id", source),
+    message: requiredText(value, "message", source),
+    acknowledged: requiredBoolean(value, "acknowledged", source),
+    ...(kind === undefined ? {} : { kind }),
+  };
+}
+
+function parsePullRequest(value: unknown, source: string): PullRequestMetadata {
+  if (!isRecord(value)) {
+    failState(source, "pull request metadata must be an object");
+  }
+  assertExactKeys(value, ["repository", "number", "url", "title", "state", "head", "base"], source);
+  const url = optionalText(value, "url", source);
+  const title = optionalText(value, "title", source);
+  return {
+    repository: requiredText(value, "repository", source),
+    number: requiredInteger(value, "number", source, 1),
+    state: requiredEnum(value, "state", ["draft", "open", "closed", "merged"], source),
+    head: requiredText(value, "head", source),
+    base: requiredText(value, "base", source),
+    ...(url === undefined ? {} : { url }),
+    ...(title === undefined ? {} : { title }),
+  };
+}
+
+export function parseTaskRecord(value: unknown, source = "task record"): TaskRecord {
+  if (!isRecord(value)) {
+    failState(source, "task record must be an object");
+  }
+  assertExactKeys(value, TOP_LEVEL_KEYS, source);
+  const endpointsValue = Object.hasOwn(value, "endpoints")
+    ? requiredValue(value, "endpoints", source)
+    : undefined;
+  const validationEvidenceValue = requiredValue(value, "validationEvidence", source);
+  const reviewsValue = requiredValue(value, "reviews", source);
+  const notificationsValue = requiredValue(value, "notifications", source);
+  if (endpointsValue !== undefined && !Array.isArray(endpointsValue)) {
+    failState(`${source}.endpoints`, "endpoints must be an array when present");
+  }
+  if (
+    !Array.isArray(validationEvidenceValue) ||
+    !Array.isArray(reviewsValue) ||
+    !Array.isArray(notificationsValue)
+  ) {
+    failState(source, "validationEvidence, reviews, and notifications must be arrays");
+  }
+  const validationEntries: readonly unknown[] = validationEvidenceValue;
+  const reviewEntries: readonly unknown[] = reviewsValue;
+  const notificationEntries: readonly unknown[] = notificationsValue;
+  const endpointEntries: readonly unknown[] = endpointsValue === undefined ? [] : endpointsValue;
+  const schemaVersion = requiredInteger(value, "schemaVersion", source, 1);
+  if (schemaVersion !== 1) {
+    failState(source, `unsupported schemaVersion ${schemaVersion}`);
+  }
+  const id = requiredText(value, "id", source);
+  if (!isSafeTaskId(id)) {
+    failState(source, `unsafe task id ${id}`);
+  }
+  const previousStage = optionalText(value, "previousStage", source);
+  if (previousStage !== undefined && !isOneOf(previousStage, TASK_STAGES)) {
+    failState(source, `unsupported previousStage ${previousStage}`);
+  }
+  const reportPath = optionalText(value, "reportPath", source);
+  const blockReason = optionalText(value, "blockReason", source);
+  const communicationValue = Object.hasOwn(value, "communication")
+    ? requiredValue(value, "communication", source)
+    : undefined;
+  let communication: TaskRecord["communication"] | undefined;
+  if (communicationValue !== undefined) {
+    try {
+      communication = parseTaskCommunication(communicationValue);
+    } catch (error) {
+      failState(`${source}.communication`, error instanceof Error ? error.message : String(error));
+    }
+  }
+  const reviewHead = optionalText(value, "reviewHead", source);
+  const pullRequestValue = Object.hasOwn(value, "pullRequest")
+    ? requiredValue(value, "pullRequest", source)
+    : undefined;
+  const worktreeValue = Object.hasOwn(value, "worktree")
+    ? requiredValue(value, "worktree", source)
+    : undefined;
+  const taskBase = {
+    schemaVersion: 1 as const,
+    id,
+    revision: requiredInteger(value, "revision", source),
+    repoPath: requiredText(value, "repoPath", source),
+    kind: requiredEnum(value, "kind", TASK_KINDS, source),
+    objective: requiredText(value, "objective", source),
+    acceptanceCriteria: requiredTextArray(value, "acceptanceCriteria", source),
+    surfaces: requiredTextArray(value, "surfaces", source),
+    stage: requiredEnum(value, "stage", TASK_STAGES, source),
+    scopeApproved: requiredBoolean(value, "scopeApproved", source),
+    policy: parseResolvedPolicy(requiredValue(value, "policy", source), `${source}.policy`),
+    createdAt: requiredText(value, "createdAt", source),
+    updatedAt: requiredText(value, "updatedAt", source),
+    generation: requiredInteger(value, "generation", source),
+    reviewRound: requiredInteger(value, "reviewRound", source),
+    validationEvidence: validationEntries.map((entry, index) =>
+      parseValidationEvidence(entry, `${source}.validationEvidence[${index}]`),
+    ),
+    reviews: reviewEntries.map((entry, index) => parseReview(entry, `${source}.reviews[${index}]`)),
+    notifications: notificationEntries.map((entry, index) =>
+      parseNotification(entry, `${source}.notifications[${index}]`),
+    ),
+  };
+  return {
+    ...taskBase,
+    ...(previousStage === undefined ? {} : { previousStage }),
+    ...(worktreeValue === undefined
+      ? {}
+      : { worktree: parseWorktree(worktreeValue, `${source}.worktree`) }),
+    ...(endpointEntries.length === 0 && endpointsValue === undefined
+      ? {}
+      : {
+          endpoints: endpointEntries.map((entry, index) =>
+            parseEndpoint(entry, `${source}.endpoints[${index}]`),
+          ),
+        }),
+    ...(reviewHead === undefined ? {} : { reviewHead }),
+    ...(reportPath === undefined ? {} : { reportPath }),
+    ...(blockReason === undefined ? {} : { blockReason }),
+    ...(communication === undefined ? {} : { communication }),
+    ...(pullRequestValue === undefined
+      ? {}
+      : { pullRequest: parsePullRequest(pullRequestValue, `${source}.pullRequest`) }),
+  };
+}
+
+export function serializeTaskRecord(task: TaskRecord): string {
+  const parsed = parseTaskRecord(task);
+  try {
+    return `${JSON.stringify(parsed)}\n`;
+  } catch (error) {
+    throw new StoreSerializationError("Could not serialize task record", { cause: error });
+  }
+}

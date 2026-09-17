@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import { runCommand } from "./commands.ts";
+import { runCommand } from "./adapters/commands.ts";
 import type { CommandRunner, ValidationCommand, ValidationEvidence } from "./contracts.ts";
-import { writeJsonAtomically } from "./runtime.ts";
-import { runValidation, ValidationConfigurationError } from "./validation.ts";
+import { writeJsonAtomically } from "./runtime/persistence.ts";
+import { runValidation, ValidationConfigurationError } from "./workers/validation.ts";
 
 export type ValidationJob = Readonly<{
   readonly schemaVersion: 1;

@@ -1,0 +1,704 @@
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { quoteShellCommand } from "../adapters/commands.ts";
+import { readCheckpoint } from "../adapters/git.ts";
+import { readHerdrStatus } from "../adapters/herdr.ts";
+import { acquireWorktree } from "../adapters/treehouse.ts";
+import type { TandemEnvironmentSource } from "../config/environment.ts";
+import type {
+  CommandRequest,
+  CommandResult,
+  CommandRunner,
+  ModelSpec,
+  WorktreeLease,
+} from "../contracts.ts";
+import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal/cli-arguments.ts";
+import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
+import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
+import { mergeInheritedEnvironment } from "../terminal/cli-process.ts";
+import { withCoordinatorLaunchLock } from "./lock.ts";
+import { findRunningCoordinator } from "./ownership.ts";
+import type { CoordinatorRecord } from "./record.ts";
+import { saveCoordinatorRecord } from "./registry.ts";
+
+const DEFAULT_COORDINATOR_CONFIG = "worker-config.yml";
+const HERDR_READY_ATTEMPTS = 40;
+const HERDR_READY_DELAY_MS = 250;
+const COORDINATOR_TOOLS = ["read", "grep", "glob", "ask", "tandem"] as const;
+
+export type CoordinatorLaunchInput = Readonly<{
+  readonly cwd: string;
+  readonly model: ModelSpec;
+  readonly configPath: string;
+  readonly extensionPath: string;
+  readonly continueSession?: boolean;
+  readonly sessionDirectory?: string;
+  readonly prompt?: string;
+}>;
+
+export type CoordinatorLaunchRequest = Readonly<{
+  readonly cwd: string;
+  readonly repo: string;
+  readonly sourceRepo?: string;
+  readonly home: string;
+  readonly poolRoot: string;
+  readonly sessionId: string;
+  readonly model: ModelSpec;
+  readonly configPath: string;
+  readonly extensionPath: string;
+  readonly continueSession: boolean;
+  readonly headless: boolean;
+  readonly noAttach: boolean;
+  readonly parentWorkspaceId?: string;
+  readonly prompt?: string;
+}>;
+
+export type CoordinatorLaunchResult = Readonly<{
+  readonly sessionId: string;
+  readonly repoPath: string;
+  readonly worktree: WorktreeLease;
+  readonly command: readonly string[];
+  readonly direct: boolean;
+  readonly workspaceId?: string;
+  readonly paneId?: string;
+  readonly tabId?: string;
+  readonly reused?: boolean;
+  readonly processExitCode?: number;
+}>;
+
+export type CoordinatorLaunchDependencies = Readonly<{
+  readonly run: CommandRunner;
+  readonly startPersistent: StartPersistent;
+  readonly runInteractive: RunInteractive;
+  readonly sleep: Sleep;
+  readonly processEnvironment: TandemEnvironmentSource;
+}>;
+export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly string[] {
+  const cwd = checkLaunchPath(input.cwd, "cwd");
+  const configPath = checkLaunchPath(input.configPath, "configPath");
+  const extensionPath = checkLaunchPath(input.extensionPath, "extensionPath");
+  const model = checkLaunchText(input.model.model, "model.model");
+  parseThinking(input.model.thinking);
+  const argv = [
+    "omp",
+    "--model",
+    model,
+    "--thinking",
+    input.model.thinking,
+    "--config",
+    configPath,
+    "--no-extensions",
+    "--extension",
+    extensionPath,
+    "--tools",
+    COORDINATOR_TOOLS.join(","),
+    "--cwd",
+    cwd,
+    "--no-prewalk",
+    "--no-title",
+  ];
+  if (input.continueSession === true) argv.push("--continue");
+  if (input.sessionDirectory !== undefined) {
+    argv.push("--session-dir", checkLaunchPath(input.sessionDirectory, "sessionDirectory"));
+  }
+  if (input.prompt !== undefined) argv.push(checkLaunchText(input.prompt, "prompt"));
+  return argv;
+}
+
+export function coordinatorFiles(
+  options: CliOptions,
+): Readonly<{ extensionPath: string; configPath: string }> {
+  const sourceDirectory = dirname(fileURLToPath(import.meta.url));
+  const defaultExtensionPath = join(sourceDirectory, "..", "extension.ts");
+  const defaultConfigPath = join(sourceDirectory, "..", DEFAULT_COORDINATOR_CONFIG);
+  const extensionPath = options.extensionPath ?? defaultExtensionPath;
+  const configPath = options.configPath ?? defaultConfigPath;
+  if (resolve(extensionPath) !== resolve(defaultExtensionPath)) {
+    throw new CliUsageError(
+      `coordinator extension must be Tandem's checked-in extension at ${defaultExtensionPath}`,
+    );
+  }
+  if (resolve(configPath) !== resolve(defaultConfigPath)) {
+    throw new CliUsageError(
+      `coordinator config must be the checked-in fallback-disabled config at ${defaultConfigPath}`,
+    );
+  }
+  return { extensionPath, configPath };
+}
+
+type CoordinatorPaths = Readonly<{
+  readonly home: string;
+  readonly poolRoot: string;
+  readonly repo: string;
+  readonly sessionDirectory: string;
+}>;
+
+function coordinatorPaths(request: CoordinatorLaunchRequest): CoordinatorPaths {
+  const home = resolve(request.home);
+  const poolRoot = resolve(request.poolRoot);
+  const repo = resolve(request.repo);
+  const repositoryKey = createHash("sha256").update(repo).digest("hex").slice(0, 24);
+  return {
+    home,
+    poolRoot,
+    repo,
+    sessionDirectory: join(home, "coordinator-sessions", repositoryKey),
+  };
+}
+
+type CoordinatorWorkspace = Readonly<{
+  readonly repoPath: string;
+  readonly worktree: WorktreeLease;
+}>;
+
+function coordinatorHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function coordinatorLeaseIdentity(
+  repoPath: string,
+  sessionId: string,
+  sourceHead: string,
+): Readonly<{ tandemId: string; taskName: string }> {
+  const repositoryKey = coordinatorHash(repoPath);
+  const sessionKey = coordinatorHash(sessionId);
+  const sourceKey = coordinatorHash(sourceHead);
+  return {
+    tandemId: `coordinator:${repositoryKey}:${sessionKey}:${sourceKey}`,
+    taskName: `coordinator-${repositoryKey}-${sessionKey}-${sourceKey}`,
+  };
+}
+
+async function sameCoordinatorPath(expected: string, actual: string): Promise<boolean> {
+  try {
+    const [expectedPath, actualPath] = await Promise.all([realpath(expected), realpath(actual)]);
+    return expectedPath === actualPath;
+  } catch {
+    return resolve(expected) === resolve(actual);
+  }
+}
+
+function validateCoordinatorCheckout(
+  path: string,
+  checkpoint: Readonly<{
+    readonly head: string;
+    readonly dirty: boolean;
+    readonly unmerged: boolean;
+  }>,
+  expectedHead: string,
+): void {
+  const reasons: string[] = [];
+  if (checkpoint.dirty) reasons.push("worktree is dirty");
+  if (checkpoint.unmerged) reasons.push("worktree has unmerged paths");
+  if (checkpoint.head !== expectedHead) {
+    reasons.push(`HEAD ${checkpoint.head} does not match captured source HEAD ${expectedHead}`);
+  }
+  if (reasons.length > 0) {
+    throw new Error(
+      `coordinator worktree ${JSON.stringify(path)} is unsafe: ${reasons.join("; ")}`,
+    );
+  }
+}
+
+async function validateBoundCoordinatorSource(
+  request: CoordinatorLaunchRequest,
+  dependencies: CoordinatorLaunchDependencies,
+  expectedHead: string,
+  context: HerdrContext | undefined,
+): Promise<string | undefined> {
+  const boundSourcePath =
+    request.sourceRepo === undefined && context === undefined
+      ? undefined
+      : (request.sourceRepo ?? dependencies.processEnvironment.TANDEM_SOURCE_REPO);
+  if (boundSourcePath === undefined) return undefined;
+  const normalizedBoundSourcePath = resolve(boundSourcePath);
+  const boundCheckpoint = await readCheckpoint(dependencies.run, {
+    repo: normalizedBoundSourcePath,
+  });
+  validateCoordinatorCheckout(normalizedBoundSourcePath, boundCheckpoint, expectedHead);
+  return normalizedBoundSourcePath;
+}
+
+async function readCommittedHead(run: CommandRunner, repo: string): Promise<string> {
+  const result = await runExternal(run, {
+    argv: ["git", "-C", repo, "rev-parse", "HEAD"],
+    cwd: repo,
+  });
+  return text(result.stdout.trim(), "git checkpoint HEAD");
+}
+
+async function acquireCoordinatorWorktree(
+  request: CoordinatorLaunchRequest,
+  paths: CoordinatorPaths,
+  dependencies: CoordinatorLaunchDependencies,
+  sourceHead: string,
+  normalizedBoundSourcePath: string | undefined,
+): Promise<CoordinatorWorkspace> {
+  const identity = coordinatorLeaseIdentity(paths.repo, request.sessionId, sourceHead);
+  const worktree = await acquireWorktree(dependencies.run, {
+    repo: paths.repo,
+    root: paths.poolRoot,
+    tandemId: identity.tandemId,
+    taskName: identity.taskName,
+  });
+  if (worktree.baseHead !== sourceHead) {
+    throw new Error(
+      `coordinator lease ${JSON.stringify(worktree.leaseId)} is pinned to ${worktree.baseHead}, expected captured source HEAD ${sourceHead}`,
+    );
+  }
+  if (await sameCoordinatorPath(paths.repo, worktree.path)) {
+    throw new Error(
+      `coordinator lease ${JSON.stringify(worktree.leaseId)} must be distinct from original repository ${JSON.stringify(paths.repo)}`,
+    );
+  }
+  const checkout = await readCheckpoint(dependencies.run, { repo: worktree.path });
+  validateCoordinatorCheckout(worktree.path, checkout, sourceHead);
+  if (
+    normalizedBoundSourcePath !== undefined &&
+    !(await sameCoordinatorPath(normalizedBoundSourcePath, worktree.path))
+  ) {
+    throw new Error(
+      `coordinator source ${JSON.stringify(normalizedBoundSourcePath)} does not match owned lease worktree ${JSON.stringify(worktree.path)}`,
+    );
+  }
+  return { repoPath: paths.repo, worktree };
+}
+
+function coordinatorEnvironmentOverrides(
+  paths: CoordinatorPaths,
+  request: CoordinatorLaunchRequest,
+  parentWorkspaceId: string | undefined,
+  sourceRepo: string,
+): Readonly<Record<string, string>> {
+  return {
+    TANDEM_HOME: paths.home,
+    TANDEM_POOL_ROOT: paths.poolRoot,
+    TANDEM_SESSION: request.sessionId,
+    TANDEM_REPO: paths.repo,
+    TANDEM_SOURCE_REPO: sourceRepo,
+    ...(parentWorkspaceId === undefined ? {} : { TANDEM_PARENT_WORKSPACE: parentWorkspaceId }),
+  };
+}
+
+function coordinatorPaneCommand(
+  argv: readonly string[],
+  environment: Readonly<Record<string, string>>,
+): string {
+  const assignments = Object.entries(environment).map(([key, value]) => `${key}=${value}`);
+  return quoteShellCommand(["env", ...assignments, ...argv]);
+}
+
+async function writeCoordinatorBootstrap(
+  paths: CoordinatorPaths,
+  request: CoordinatorLaunchRequest,
+  argv: readonly string[],
+  environment: Readonly<Record<string, string>>,
+): Promise<string> {
+  const directory = join(paths.home, "coordinator-scripts");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  const scriptPath = join(
+    directory,
+    `coordinator-${coordinatorHash(paths.repo)}-${coordinatorHash(request.sessionId)}-${coordinatorHash(argv.join("\0"))}.sh`,
+  );
+  const temporaryPath = `${scriptPath}.${process.pid}.${randomUUID()}.tmp`;
+  const script = `#!/bin/sh\nset -eu\nexec ${coordinatorPaneCommand(argv, environment)}\n`;
+  try {
+    await writeFile(temporaryPath, script, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o700,
+    });
+    await chmod(temporaryPath, 0o700);
+    await rename(temporaryPath, scriptPath);
+    await chmod(scriptPath, 0o700);
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+  return scriptPath;
+}
+
+type HerdrContext = Readonly<{
+  readonly sessionId: string;
+  readonly workspaceId: string;
+  readonly paneId: string;
+}>;
+
+function herdrContext(source: TandemEnvironmentSource): HerdrContext | undefined {
+  const contextKeys = [
+    source.HERDR_SESSION ?? source.HERDR_SESSION_NAME,
+    source.HERDR_WORKSPACE_ID,
+    source.HERDR_PANE_ID,
+  ];
+  const herdrActive = source.HERDR_ENV === "1" || source.HERDR_ENV === "true";
+  const hasAny = contextKeys.some((value) => value !== undefined);
+  if (!herdrActive) {
+    if (hasAny)
+      throw new Error(
+        "Herdr identity variables are present while HERDR_ENV is inactive; refusing to guess the active pane",
+      );
+    return undefined;
+  }
+  if (contextKeys.some((value) => value === undefined))
+    throw new Error(
+      "existing Herdr context is incomplete; require HERDR_SESSION, HERDR_WORKSPACE_ID, and HERDR_PANE_ID",
+    );
+  return {
+    sessionId: text(contextKeys[0], "HERDR_SESSION"),
+    workspaceId: text(contextKeys[1], "HERDR_WORKSPACE_ID"),
+    paneId: text(contextKeys[2], "HERDR_PANE_ID"),
+  };
+}
+
+function externalError(argv: readonly string[], result: CommandResult): Error {
+  const details = result.stderr.trim() || result.stdout.trim();
+  return new Error(
+    `${argv[0] ?? "command"} ${argv.slice(1).join(" ")} failed with exit code ${result.code}${details.length === 0 ? "" : `: ${details}`}`,
+  );
+}
+
+async function runExternal(run: CommandRunner, request: CommandRequest): Promise<CommandResult> {
+  const result = await run(request);
+  if (result.code !== 0) throw externalError(request.argv, result);
+  return result;
+}
+
+function parseCreatedWorkspace(
+  stdout: string,
+): Readonly<{ workspaceId: string; tabId: string; paneId: string }> {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(stdout) as unknown;
+  } catch (error) {
+    throw new Error(
+      `herdr workspace create returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload))
+    throw new Error("herdr workspace create returned a non-object response");
+  const root = payload as Record<string, unknown>;
+  const result = root.result;
+  if (result === null || typeof result !== "object" || Array.isArray(result))
+    throw new Error("herdr workspace create response omitted result");
+  const resultRecord = result as Record<string, unknown>;
+  const workspace = resultRecord.workspace;
+  const tab = resultRecord.tab;
+  const rootPane = resultRecord.root_pane;
+  if (
+    workspace === null ||
+    typeof workspace !== "object" ||
+    Array.isArray(workspace) ||
+    tab === null ||
+    typeof tab !== "object" ||
+    Array.isArray(tab) ||
+    rootPane === null ||
+    typeof rootPane !== "object" ||
+    Array.isArray(rootPane)
+  ) {
+    throw new Error(
+      "herdr workspace create response omitted workspace, tab, or root_pane identity",
+    );
+  }
+  const workspaceId = text(
+    (workspace as Record<string, unknown>).workspace_id,
+    "result.workspace.workspace_id",
+  );
+  const tabId = text((tab as Record<string, unknown>).tab_id, "result.tab.tab_id");
+  const paneId = text((rootPane as Record<string, unknown>).pane_id, "result.root_pane.pane_id");
+  return { workspaceId, tabId, paneId };
+}
+
+function coordinatorWorkspaceLabel(repoPath: string): string {
+  return `Tandem coordinator · ${basename(repoPath)}`;
+}
+
+function coordinatorResultFromRecord(record: CoordinatorRecord): CoordinatorLaunchResult {
+  return {
+    sessionId: record.endpoint.sessionId,
+    repoPath: record.repoPath,
+    worktree: record.worktree,
+    command: record.command,
+    direct: false,
+    workspaceId: record.endpoint.workspaceId,
+    tabId: record.endpoint.tabId,
+    paneId: record.endpoint.paneId,
+    reused: true,
+  };
+}
+
+async function readHerdrRunningState(
+  run: CommandRunner,
+  sessionId: string,
+  cwd: string,
+): Promise<boolean> {
+  const status = await readHerdrStatus(run, sessionId, cwd, true);
+  if (status.running === undefined) {
+    throw new Error(
+      `Herdr session ${JSON.stringify(sessionId)} status omitted explicit server.running state`,
+    );
+  }
+  return status.running;
+}
+
+async function probeHerdrSession(
+  run: CommandRunner,
+  sessionId: string,
+  cwd: string,
+): Promise<boolean> {
+  return readHerdrRunningState(run, sessionId, cwd);
+}
+
+async function waitForHerdr(
+  run: CommandRunner,
+  sleep: Sleep,
+  sessionId: string,
+  cwd: string,
+): Promise<void> {
+  let lastFailure = "Herdr status reported running=false";
+  for (let attempt = 0; attempt < HERDR_READY_ATTEMPTS; attempt += 1) {
+    if (await readHerdrRunningState(run, sessionId, cwd)) return;
+    lastFailure = "Herdr status reported running=false";
+    if (attempt + 1 < HERDR_READY_ATTEMPTS) await sleep(HERDR_READY_DELAY_MS);
+  }
+  throw new Error(
+    `Herdr session ${JSON.stringify(sessionId)} did not become ready: ${lastFailure}`,
+  );
+}
+
+async function waitForCoordinatorOwnership(
+  run: CommandRunner,
+  sleep: Sleep,
+  home: string,
+  sessionId: string,
+  repoPath: string,
+): Promise<CoordinatorRecord> {
+  let lastFailure = "no matching coordinator process";
+  for (let attempt = 0; attempt < HERDR_READY_ATTEMPTS; attempt += 1) {
+    try {
+      const record = await findRunningCoordinator(run, { home, sessionId, repoPath });
+      if (record !== undefined) return record;
+      lastFailure = "no matching coordinator process";
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !error.message.includes("does not match recorded OMP command")
+      ) {
+        throw error;
+      }
+      lastFailure = error.message;
+    }
+    if (attempt + 1 < HERDR_READY_ATTEMPTS) await sleep(HERDR_READY_DELAY_MS);
+  }
+  throw new Error(
+    `coordinator in Herdr session ${JSON.stringify(sessionId)} did not become owned: ${lastFailure}`,
+  );
+}
+
+async function launchCoordinatorUnlocked(
+  request: CoordinatorLaunchRequest,
+  dependencies: CoordinatorLaunchDependencies,
+): Promise<CoordinatorLaunchResult> {
+  const paths = coordinatorPaths(request);
+  const context = herdrContext(dependencies.processEnvironment);
+  if (context !== undefined && context.sessionId !== request.sessionId) {
+    throw new Error(
+      `explicit session ${JSON.stringify(request.sessionId)} does not match current Herdr session ${JSON.stringify(context.sessionId)}`,
+    );
+  }
+  const headless = request.headless || request.noAttach;
+  buildCoordinatorArgv({
+    cwd: request.cwd,
+    model: request.model,
+    configPath: request.configPath,
+    extensionPath: request.extensionPath,
+    continueSession: request.continueSession,
+    sessionDirectory: paths.sessionDirectory,
+    ...(request.prompt === undefined ? {} : { prompt: request.prompt }),
+  });
+  const sourceHead = await readCommittedHead(dependencies.run, paths.repo);
+  const running = await findRunningCoordinator(dependencies.run, {
+    home: paths.home,
+    sessionId: request.sessionId,
+    repoPath: paths.repo,
+  });
+  if (running !== undefined) {
+    const runningCheckpoint = await readCheckpoint(dependencies.run, {
+      repo: running.worktree.path,
+    });
+    validateCoordinatorCheckout(
+      running.worktree.path,
+      runningCheckpoint,
+      running.worktree.baseHead,
+    );
+    const boundSourcePath = await validateBoundCoordinatorSource(
+      request,
+      dependencies,
+      running.worktree.baseHead,
+      context,
+    );
+    if (
+      boundSourcePath !== undefined &&
+      !(await sameCoordinatorPath(boundSourcePath, running.worktree.path))
+    ) {
+      throw new Error(
+        `coordinator source ${JSON.stringify(boundSourcePath)} does not match running coordinator worktree ${JSON.stringify(running.worktree.path)}`,
+      );
+    }
+    return coordinatorResultFromRecord(running);
+  }
+  const boundSourcePath = await validateBoundCoordinatorSource(
+    request,
+    dependencies,
+    sourceHead,
+    context,
+  );
+  const coordinator = await acquireCoordinatorWorktree(
+    request,
+    paths,
+    dependencies,
+    sourceHead,
+    boundSourcePath,
+  );
+  const coordinatorCwd = coordinator.worktree.path;
+  const argv = buildCoordinatorArgv({
+    cwd: coordinatorCwd,
+    model: request.model,
+    configPath: request.configPath,
+    extensionPath: request.extensionPath,
+    continueSession: request.continueSession,
+    sessionDirectory: paths.sessionDirectory,
+    ...(request.prompt === undefined ? {} : { prompt: request.prompt }),
+  });
+  const sourceEnvironment = coordinatorEnvironmentOverrides(
+    paths,
+    request,
+    request.parentWorkspaceId ?? context?.workspaceId,
+    coordinatorCwd,
+  );
+  if (context !== undefined && !headless) {
+    const environment = mergeInheritedEnvironment(
+      dependencies.processEnvironment,
+      sourceEnvironment,
+    );
+    const processExitCode = await dependencies.runInteractive({
+      argv,
+      cwd: coordinatorCwd,
+      env: environment,
+    });
+    if (processExitCode !== 0) throw new Error(`coordinator exited with code ${processExitCode}`);
+    return {
+      sessionId: request.sessionId,
+      repoPath: coordinator.repoPath,
+      worktree: coordinator.worktree,
+      command: argv,
+      direct: true,
+      workspaceId: context.workspaceId,
+      paneId: context.paneId,
+      processExitCode,
+    };
+  }
+
+  const herdrLauncher = headless
+    ? ["herdr", "--session", request.sessionId, "server"]
+    : ["herdr", "--session", request.sessionId];
+  const serverEnvironment = mergeInheritedEnvironment(
+    dependencies.processEnvironment,
+    sourceEnvironment,
+  );
+  if (
+    context === undefined &&
+    !(await probeHerdrSession(dependencies.run, request.sessionId, coordinatorCwd))
+  ) {
+    await dependencies.startPersistent({
+      argv: herdrLauncher,
+      cwd: coordinatorCwd,
+      env: serverEnvironment,
+    });
+    await waitForHerdr(dependencies.run, dependencies.sleep, request.sessionId, coordinatorCwd);
+  }
+  const workspaceResult = await runExternal(dependencies.run, {
+    argv: [
+      "herdr",
+      "--session",
+      request.sessionId,
+      "workspace",
+      "create",
+      "--cwd",
+      coordinatorCwd,
+      "--label",
+      coordinatorWorkspaceLabel(paths.repo),
+      "--no-focus",
+    ],
+    cwd: coordinatorCwd,
+    env: serverEnvironment,
+  });
+  const workspace = parseCreatedWorkspace(workspaceResult.stdout);
+  const coordinatorEnvironment = coordinatorEnvironmentOverrides(
+    paths,
+    request,
+    request.parentWorkspaceId ?? workspace.workspaceId,
+    coordinatorCwd,
+  );
+  const bootstrapPath = await writeCoordinatorBootstrap(
+    paths,
+    request,
+    argv,
+    coordinatorEnvironment,
+  );
+  await runExternal(dependencies.run, {
+    argv: [
+      "herdr",
+      "--session",
+      request.sessionId,
+      "pane",
+      "run",
+      workspace.paneId,
+      quoteShellCommand(["/bin/sh", bootstrapPath]),
+    ],
+    cwd: coordinatorCwd,
+    env: mergeInheritedEnvironment(dependencies.processEnvironment, coordinatorEnvironment),
+  });
+  await saveCoordinatorRecord(paths.home, {
+    schemaVersion: 1,
+    repoPath: coordinator.repoPath,
+    endpoint: {
+      sessionId: request.sessionId,
+      workspaceId: workspace.workspaceId,
+      tabId: workspace.tabId,
+      paneId: workspace.paneId,
+      role: "coordinator",
+      generation: 0,
+    },
+    worktree: coordinator.worktree,
+    command: argv,
+  });
+  await waitForCoordinatorOwnership(
+    dependencies.run,
+    dependencies.sleep,
+    paths.home,
+    request.sessionId,
+    coordinator.repoPath,
+  );
+  return {
+    sessionId: request.sessionId,
+    repoPath: coordinator.repoPath,
+    worktree: coordinator.worktree,
+    command: argv,
+    direct: false,
+    workspaceId: workspace.workspaceId,
+    tabId: workspace.tabId,
+    paneId: workspace.paneId,
+  };
+}
+
+export async function launchCoordinator(
+  request: CoordinatorLaunchRequest,
+  dependencies: CoordinatorLaunchDependencies,
+): Promise<CoordinatorLaunchResult> {
+  const paths = coordinatorPaths(request);
+  return withCoordinatorLaunchLock(paths.home, request.sessionId, () =>
+    launchCoordinatorUnlocked(request, dependencies),
+  );
+}

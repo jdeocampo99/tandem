@@ -1,10 +1,4 @@
-export type AgentRole =
-  | "coordinator"
-  | "scout"
-  | "implementer"
-  | "reviewer"
-  | "verifier"
-  | "presentation";
+import { type AgentRole, isAgentRole } from "./contracts.ts";
 
 export type AgentBriefReview = Readonly<{
   readonly head: string;
@@ -62,6 +56,22 @@ Review is an independent, read-only stage: pause the implementer, use a fresh re
 Route to the lightweight presentation worker only when a visual artifact is useful. It has no worktree: give it a bounded brief and relevant artifact paths. The presentation worker may write only the supplied artifact path with its read-only inspection and file-edit tools; it cannot invoke bash, shell commands, or Lavish. The controller retrieves installed Lavish help/design/playbook guidance, verifies the exact artifact, owns opening it, and keeps one supervised continuous native feedback listener active for each open presentation without a client timeout. The public feedback action remains a bounded, cancellable check and may explicitly reconnect a browser-disconnected session; automatic listeners are tracked, serialized with completion and notification persistence, and aborted and awaited at shutdown. Ready, failure, feedback, and terminal presentation events are delivered to this conversation automatically. Never start a second unsafe background poll or reopen a user-ended or browser-disconnected session without the user's direction.
 
 Merge, deploy, and destructive actions require specific human approval. Never merge automatically. Do not use no-mistakes or create fleets, social relays, alternate terminal or harness backends, or compatibility paths. Prompts are workflow guidance, not a sandbox: runtime permissions and adapters enforce isolation and authorization, and agents must not claim that prompt text alone does so.`;
+
+export const COORDINATOR_TOOL_GUIDANCE = [
+  "Use the tandem tool for durable state and actions; call it with {request: {action: ...}} and do not claim a task transition from prose.",
+  "Tool text is a bounded action summary; full structured state remains in tool details and durable reports. Use show and report paths when deeper evidence is needed.",
+  "Research/scout work is automatic after task creation; implementation still needs explicit scope approval.",
+  "Within already approved scope, forward a clear user direction with steer without adding a redundant generic approval step; do not use it to widen scope or change pinned policy.",
+  "Keep steering messages as concise deltas, batch independent pending directions in order, and explicitly supersede obsolete directions. Query messages only when the user asks or before a dependent decision, not in a repeated model-driven polling loop.",
+  "Steer returns a queued receipt; let the child apply it at the next native safe boundary. Mechanical/UI receipt, heartbeat, and progress updates do not wake a model and do not require follow-up turns.",
+  "On blocked dispatch or when no worker report exists, expose the exact durable blocker and say that no worker report is available; prefer resolving an already-approved safe cause, otherwise ask the user for a decision and relay any Question and Recommendation before answering with the current questionId. Never replace delegated research with coordinator research without explicit user consent. Query durable state before claiming a worker or task is absent or complete; query answer receipts only when the user asks or before a dependent decision, and never claim work is finished from enqueue or context receipt.",
+  "Use present only for a useful visual artifact. The controller routes the brief and never authors HTML.",
+  "Routine scheduler notifications, receipts, progress, and heartbeats are shown in the UI/durable log without a model turn; actionable blockers, judgment-needed reports, and PR-ready delivery notices may wake the coordinator.",
+  "An undefined worker timeout has no default total-runtime kill; explicit positive limits, validation timeouts, and cancellation remain in force.",
+  "Approval-bearing actions are human-confirmed at runtime and fail closed without interactive UI; safe cleanup does not require approval, while discard does.",
+  "On first onboarding, inspect modelSettings.configured. If no choices are saved, call models once and present six separate role choices in order: Planning (coordinator), Research (scout), Coding (implementer), Review (reviewer), Final checks (verifier), and Presentations (presentation). For each role, show the suggested exact catalogue selector, supported thinking level, and short reason; require an explicit accept, adjust, or decline answer for every role. Never infer or group roles, and never treat built-in suggestions as approved. Before configure-models, recap all six exact model+thinking selections and ask for explicit human approval; configure-models is the only model write and setup is separately approved. If the user chooses Not now, pause without configure-models, project setup, or launch; do not fall through to built-in defaults.",
+  "On repeat onboarding, show every saved role's exact catalogue selector and thinking level, then offer Keep all, Change roles, or Not now. Keep all is read-only reuse and may continue separately approved project setup without forcing re-selection; Change roles asks explicitly for every role, including keep-current answers for untouched roles, preserves them, and recaps all six before configure-models approval. Not now pauses onboarding without changing saved choices. Never silently reuse choices or start a model questionnaire from setup's post-save result.",
+].join("\n");
 
 export const FUNCTION_REVIEW_PRINCIPLES = `# Function review principles
 
@@ -211,20 +221,6 @@ function readReviewContext(review: AgentBriefReview): AgentBriefReview {
   return findings === undefined
     ? { head, generation: review.generation, pass }
     : { head, generation: review.generation, pass, findings };
-}
-
-function isAgentRole(value: unknown): value is AgentRole {
-  switch (value) {
-    case "coordinator":
-    case "scout":
-    case "implementer":
-    case "reviewer":
-    case "verifier":
-    case "presentation":
-      return true;
-    default:
-      return false;
-  }
 }
 
 function formatBullets(entries: readonly string[]): string[] {

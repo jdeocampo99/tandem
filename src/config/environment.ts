@@ -1,0 +1,159 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+
+export type TandemBoundaryEnvironment = Readonly<{
+  readonly home: string;
+  readonly sessionId: string;
+  readonly parentWorkspaceId?: string;
+  readonly poolRoot: string;
+  readonly repo: string;
+  readonly sourceRepo?: string;
+}>;
+
+export type TandemEnvironmentDefaults = Readonly<{
+  readonly cwd: string;
+  readonly sessionId?: string;
+}>;
+
+export type TandemEnvironmentSource = Readonly<Record<string, string | undefined>>;
+
+export type TandemEnvironmentContextOptions = Readonly<{
+  readonly environment?: Partial<TandemBoundaryEnvironment>;
+  readonly processEnvironment?: TandemEnvironmentSource;
+}>;
+
+function readBoundaryText(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new TypeError(`${field} must be non-empty text`);
+  }
+  if (value.includes("\0")) throw new TypeError(`${field} must not contain NUL characters`);
+  return value.trim();
+}
+
+function hasPathControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f || code === 0x2028 || code === 0x2029) return true;
+  }
+  return false;
+}
+
+function readBoundaryPath(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new TypeError(`${field} must be non-empty path`);
+  }
+  if (value.includes("\0")) throw new TypeError(`${field} must not contain NUL characters`);
+  if (hasPathControlCharacter(value)) {
+    throw new TypeError(`${field} must not contain control characters`);
+  }
+  return value;
+}
+
+function optionalBoundaryText(value: string | undefined, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  return readBoundaryText(value, field);
+}
+
+export function processEnvironmentSnapshot(
+  source: TandemEnvironmentSource | undefined,
+): TandemEnvironmentSource {
+  if (source !== undefined) return source;
+  const values: Record<string, string | undefined> = {};
+  for (const key of [
+    "TANDEM_HOME",
+    "TANDEM_SESSION",
+    "TANDEM_PARENT_WORKSPACE",
+    "TANDEM_POOL_ROOT",
+    "TANDEM_REPO",
+    "TANDEM_SOURCE_REPO",
+    "HERDR_ENV",
+    "HERDR_SESSION",
+    "HERDR_SESSION_NAME",
+    "HERDR_WORKSPACE_ID",
+  ]) {
+    values[key] = process.env[key];
+  }
+  return values;
+}
+
+/** Resolve Tandem's process-boundary environment without leaking it into domain code. */
+export function resolveTandemEnvironment(
+  source: TandemEnvironmentSource,
+  defaults: TandemEnvironmentDefaults,
+  overrides: Partial<TandemBoundaryEnvironment> = {},
+): TandemBoundaryEnvironment {
+  const cwd = readBoundaryPath(defaults.cwd, "cwd");
+  const home = readBoundaryPath(
+    overrides.home ?? source.TANDEM_HOME ?? join(homedir(), ".tandem"),
+    "TANDEM_HOME",
+  );
+  const sessionId = readBoundaryText(
+    overrides.sessionId ??
+      source.TANDEM_SESSION ??
+      source.HERDR_SESSION ??
+      source.HERDR_SESSION_NAME ??
+      defaults.sessionId ??
+      "tandem",
+    "TANDEM_SESSION",
+  );
+  const parentWorkspaceId = optionalBoundaryText(
+    overrides.parentWorkspaceId ?? source.TANDEM_PARENT_WORKSPACE ?? source.HERDR_WORKSPACE_ID,
+    "TANDEM_PARENT_WORKSPACE",
+  );
+  const poolRoot = readBoundaryPath(
+    overrides.poolRoot ?? source.TANDEM_POOL_ROOT ?? join(home, "pool"),
+    "TANDEM_POOL_ROOT",
+  );
+  const repo = readBoundaryPath(overrides.repo ?? source.TANDEM_REPO ?? cwd, "TANDEM_REPO");
+  const sourceRepoValue = overrides.sourceRepo ?? source.TANDEM_SOURCE_REPO;
+  const sourceRepo =
+    sourceRepoValue === undefined
+      ? undefined
+      : readBoundaryPath(sourceRepoValue, "TANDEM_SOURCE_REPO");
+  return {
+    home,
+    sessionId,
+    ...(parentWorkspaceId === undefined ? {} : { parentWorkspaceId }),
+    poolRoot,
+    repo,
+    ...(sourceRepo === undefined ? {} : { sourceRepo }),
+  };
+}
+
+export function environmentForContext(
+  options: TandemEnvironmentContextOptions,
+  ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
+): TandemBoundaryEnvironment {
+  return resolveTandemEnvironment(
+    processEnvironmentSnapshot(options.processEnvironment),
+    { cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId() },
+    {
+      ...(options.environment?.home === undefined ? {} : { home: options.environment.home }),
+      ...(options.environment?.sessionId === undefined
+        ? {}
+        : { sessionId: options.environment.sessionId }),
+      ...(options.environment?.parentWorkspaceId === undefined
+        ? {}
+        : { parentWorkspaceId: options.environment.parentWorkspaceId }),
+      ...(options.environment?.poolRoot === undefined
+        ? {}
+        : { poolRoot: options.environment.poolRoot }),
+      ...(options.environment?.repo === undefined ? {} : { repo: options.environment.repo }),
+      ...(options.environment?.sourceRepo === undefined
+        ? {}
+        : { sourceRepo: options.environment.sourceRepo }),
+    },
+  );
+}
+
+export function coordinatorSourceGuidance(environment: TandemBoundaryEnvironment): string {
+  if (environment.sourceRepo === undefined) {
+    return `Tandem has no dedicated clean source binding; ${JSON.stringify(environment.repo)} is the original project identity and source checkout.`;
+  }
+  return [
+    `Tandem's clean committed coordinator checkout is ${JSON.stringify(environment.sourceRepo)} and is the current committed source scope for repository reads and delegated work.`,
+    `The original project identity is ${JSON.stringify(environment.repo)}; pass that identity when creating tasks so records, policy, and delivery remain attached to the original project.`,
+    "Do not edit or read delegated-work guidance from the original project checkout; it is identity only, not the execution source.",
+  ].join(" ");
+}
