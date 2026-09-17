@@ -10,6 +10,7 @@ import {
   resolveTandemEnvironment,
   summarizeTandemActionValue,
 } from "../src/extension.ts";
+import { transitionTask } from "../src/lifecycle.ts";
 import type { TandemService } from "../src/service.ts";
 
 const models: Readonly<
@@ -96,6 +97,7 @@ test("environment resolution applies explicit boundary values and ignores unrela
       TANDEM_PARENT_WORKSPACE: "env-parent",
       TANDEM_POOL_ROOT: "/env/pool",
       TANDEM_REPO: "/env/repo",
+      TANDEM_SOURCE_REPO: "/env/source-repo",
       PATH: "/usr/bin",
     },
     { cwd: "/cwd", sessionId: "default-session" },
@@ -108,7 +110,66 @@ test("environment resolution applies explicit boundary values and ignores unrela
     parentWorkspaceId: "env-parent",
     poolRoot: "/env/pool",
     repo: "/override/repo",
+    sourceRepo: "/env/source-repo",
   });
+});
+test("extension binds services to a clean source while preserving original identity", async () => {
+  type LifecycleHandler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
+  const handlers = new Map<string, LifecycleHandler>();
+  let sourceWorkspace: unknown;
+  let shutdownCalls = 0;
+  const service = {
+    list: async () => [],
+    shutdown: async () => {
+      shutdownCalls += 1;
+    },
+  } as unknown as TandemService;
+  const pi = {
+    zod,
+    on: (event: string, handler: LifecycleHandler) => {
+      handlers.set(event, handler);
+    },
+    registerTool: () => undefined,
+    registerCommand: () => undefined,
+    logger: { error: () => undefined },
+    sendMessage: () => undefined,
+    appendEntry: () => undefined,
+  } as unknown as ExtensionAPI;
+
+  createTandemExtension({
+    environment: {
+      home: "/tmp/tandem-home",
+      sessionId: "session-a",
+      poolRoot: "/tmp/tandem-pool",
+      repo: "/tmp/original-project",
+      sourceRepo: "/tmp/clean-coordinator",
+    },
+    createService: (options) => {
+      sourceWorkspace = options.sourceWorkspace;
+      return service;
+    },
+  })(pi);
+  const beforeAgentStart = handlers.get("before_agent_start");
+  const sessionShutdown = handlers.get("session_shutdown");
+  if (beforeAgentStart === undefined || sessionShutdown === undefined) {
+    throw new Error("extension lifecycle handlers were not registered");
+  }
+  const context = {
+    cwd: "/tmp/clean-coordinator",
+    sessionManager: { getSessionId: () => "session-a" },
+  } as unknown as ExtensionContext;
+  const result = (await beforeAgentStart({ systemPrompt: ["existing"] }, context)) as {
+    readonly systemPrompt: readonly string[];
+  };
+
+  expect(sourceWorkspace).toEqual({
+    repoPath: "/tmp/original-project",
+    path: "/tmp/clean-coordinator",
+  });
+  expect(result.systemPrompt.join("\n")).toContain("/tmp/clean-coordinator");
+  expect(result.systemPrompt.join("\n")).toContain("/tmp/original-project");
+  await sessionShutdown({}, context);
+  expect(shutdownCalls).toBe(1);
 });
 
 test("Tandem command parsing preserves quoted values and routes presentation feedback", () => {
@@ -378,6 +439,17 @@ test("model listing is read-only and model changes require approval", async () =
   expect(listing.approved).toBeUndefined();
   expect(listing.value).toBe(modelOptions);
   expect(modelCalls).toEqual(["/repo"]);
+  const listingSummary = summarizeTandemActionValue("models", modelOptions);
+  for (const role of [
+    "Planning (coordinator)",
+    "Research (scout)",
+    "Coding (implementer)",
+    "Review (reviewer)",
+    "Final checks (verifier)",
+    "Presentations (presentation)",
+  ] as const) {
+    expect(listingSummary).toContain(role);
+  }
 
   const denied = await executeTandemAction(
     { action: "configure-models", repoPath: "/repo", models },
@@ -414,6 +486,76 @@ test("model listing is read-only and model changes require approval", async () =
   expect(configured.approved).toBe(true);
   expect(configureCalls).toEqual([{ repoPath: "/repo", models }]);
   expect(configured.value).toBe(savedSettings);
+});
+test("onboard summaries render complete saved and pending role selections", () => {
+  const savedModels: RepoPolicy["models"] = {
+    coordinator: { model: "provider/planning", thinking: "high" },
+    scout: { model: "provider/research", thinking: "low" },
+    implementer: { model: "provider/coding", thinking: "max" },
+    reviewer: { model: "provider/review", thinking: "medium" },
+    verifier: { model: "provider/checks", thinking: "xhigh" },
+    presentation: { model: "provider/presentations", thinking: "minimal" },
+  };
+  const roleIdentities = [
+    "Planning (coordinator)",
+    "Research (scout)",
+    "Coding (implementer)",
+    "Review (reviewer)",
+    "Final checks (verifier)",
+    "Presentations (presentation)",
+  ] as const;
+
+  const savedSummary = summarizeTandemActionValue("onboard", {
+    repoPath: "/repo",
+    existingConfig: true,
+    written: false,
+    modelSettings: {
+      configPath: "/tandem-home/models.json",
+      configured: true,
+      models: savedModels,
+    },
+    unresolved: [],
+  });
+  for (const role of roleIdentities) expect(savedSummary).toContain(role);
+  for (const assignment of Object.values(savedModels)) {
+    expect(savedSummary).toContain(`${assignment.model} (thinking ${assignment.thinking})`);
+  }
+  expect(savedSummary).toContain("Keep all");
+  expect(savedSummary).toContain("Change roles");
+  expect(savedSummary).toContain("Not now");
+
+  const pendingSummary = summarizeTandemActionValue("onboard", {
+    repoPath: "/repo",
+    existingConfig: false,
+    written: false,
+    modelSettings: {
+      configPath: "/tandem-home/models.json",
+      configured: false,
+    },
+    proposedPolicy: { models: savedModels },
+    unresolved: [],
+  });
+  for (const role of roleIdentities) expect(pendingSummary).toContain(role);
+  for (const assignment of Object.values(savedModels)) {
+    expect(pendingSummary).not.toContain(assignment.model);
+    expect(pendingSummary).not.toContain(`thinking ${assignment.thinking}`);
+  }
+  expect(pendingSummary).toContain("Not now");
+  expect(pendingSummary).not.toContain("Keep all");
+
+  const setupSummary = summarizeTandemActionValue("setup", {
+    repoPath: "/repo",
+    existingConfig: false,
+    written: true,
+    modelSettings: {
+      configPath: "/tandem-home/models.json",
+      configured: false,
+    },
+    proposedPolicy: { models: savedModels },
+    unresolved: [],
+  });
+  expect(setupSummary).not.toContain("provider/planning");
+  expect(setupSummary).not.toContain("Keep all");
 });
 
 test("approval-bearing command syntax carries no model-controlled approval field", () => {
@@ -534,6 +676,51 @@ test("model-facing action summaries are bounded and retain current task evidence
   expect(summary).toContain("finding-visible/P0");
   expect(summary).toContain("head-current");
   expect(summary).not.toContain("maxFixRounds");
+});
+
+test("fresh block transitions wake the coordinator once through the bridge", async () => {
+  const sent: Array<{ readonly content: string; readonly options: unknown }> = [];
+  const notices: string[] = [];
+  const acknowledged: string[] = [];
+  let modelTurns = 0;
+  const service: Pick<TandemService, "acknowledge"> = {
+    acknowledge: async (taskId, notificationId) => {
+      acknowledged.push(`${taskId}:${notificationId}`);
+      return task({ id: taskId });
+    },
+  };
+  const sink = notificationSink(
+    (content, options) => {
+      sent.push({ content, options });
+      if (
+        options !== null &&
+        typeof options === "object" &&
+        "triggerTurn" in options &&
+        options.triggerTurn === true
+      ) {
+        modelTurns += 1;
+      }
+    },
+    () => undefined,
+  );
+  const context = notificationContext((message) => notices.push(message));
+  const blocked = transitionTask(
+    task({ id: "blocked", stage: "implementing" }),
+    { type: "block", reason: "worktree allocation failed before worker launch" },
+    { now: "2030-01-02T03:04:06.000Z", notificationId: "blocked-notification" },
+  );
+  const delivered = new Set<string>();
+
+  await deliverPendingNotifications(sink, service, [blocked], delivered, context);
+  await deliverPendingNotifications(sink, service, [blocked], delivered, context);
+
+  expect(blocked.stage).toBe("blocked");
+  expect(blocked.notifications.at(-1)?.kind).toBe("coordinator");
+  expect(sent).toHaveLength(1);
+  expect(sent[0]?.content).toContain("worktree allocation failed before worker launch");
+  expect(modelTurns).toBe(1);
+  expect(notices).toHaveLength(0);
+  expect(acknowledged).toEqual(["blocked:blocked-notification"]);
 });
 
 test("automatic review-fix handoffs stay visible without waking the coordinator", async () => {

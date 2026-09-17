@@ -13,7 +13,7 @@ workflow from chat.
 
 Tandem separates research, implementation, validation, review, presentation, and delivery:
 
-1. **Research is automatic.** A scout can start after task creation without implementation approval.
+1. **Research is automatic when delegated.** A scout can start after task creation without implementation approval. Queued or blocked delegation is not active or completed research; blockers are surfaced as actionable coordinator notifications, and direct research takeover requires explicit user authorization.
 2. **Implementation is approved scope.** The coordinator interviews for ambiguity and risk, records the concrete scope, and waits for explicit approval before dispatching an implementer.
 3. **Validation is runner-owned.** Configured argv commands run against the exact task HEAD and produce durable evidence. A worker must not claim a command ran when the runner did not record it.
 4. **Review is independent.** The implementer is stopped while a fresh read-only reviewer examines the same task worktree. Review results are tied to an exact HEAD and generation.
@@ -27,7 +27,7 @@ Prompts are workflow guidance, not a security boundary. Runtime checks, Herdr/Tr
 | Role | Workspace and tools | Responsibility |
 | --- | --- | --- |
 | Coordinator | OMP conversation; `read`, `grep`, `glob`, `ask`, `tandem` | Owns user communication, policy, lifecycle, approvals, and routing. It does not edit repository code or run shell commands. |
-| Scout | Isolated Treehouse worktree and child Herdr workspace; `read`, `grep`, `glob` | Read-only research. Returns findings, evidence, affected paths, risks, and open questions; does not write a report file or run project-wide gates. |
+| Scout | Isolated Treehouse worktree and child Herdr workspace; `read`, `grep`, `glob`, `web_search` | Read-only repository and web research. Use native `web_search` for discovery, prefer official or primary sources, use `read` for known URLs, cite sources, and separate verified facts from recommendations. If a capability is missing or a tool fails, report the exact failure rather than inventing findings; the scout does not write a report file or run project-wide gates. |
 | Implementer | Assigned task worktree and child Herdr workspace; `read`, `grep`, `glob`, `edit`, `write`, `bash` | Implements only approved scope and reports a commit checkpoint. It does not merge, deploy, perform destructive cleanup, or claim validation results. |
 | Reviewer | Fresh read-only pane in the task worktree; `read`, `grep`, `glob` | Reviews one lens at a time and returns evidence-bound `ReviewResult` data. It does not edit or write a report file. |
 | Verifier | Fresh read-only context; `read`, `grep`, `glob` | Independently verifies the exact reviewed HEAD and reports only runner-produced validation evidence. |
@@ -45,10 +45,15 @@ Install Bun locally using your normal approved macOS package manager or installe
 cd /path/to/tandem
 bun --version
 bun install
+bun link
+tandem --help
 ```
+
+Keep Bun's global bin directory on `PATH` when invoking `tandem` outside this checkout.
 
 The core workflow expects these executables to be installed and available on `PATH`:
 
+- `tandem`, linked with `bun link`, for the terminal front door;
 - `bun` for Tandem and worker processes;
 - `omp` for the coordinator and child OMP workers;
 - `herdr` for the named coordinator and child workspaces;
@@ -64,32 +69,78 @@ Tandem does not provide a login flow or copy credentials into another store. OMP
 
 ## Quick start
 
-Open a **fresh agent session** and ask:
+The linked `tandem` command is the primary front door. From any directory after `bun link`, a bare
+`tandem` opens or reconnects every valid saved project under `<home>/repositories` before consulting
+the current working directory, all in one shared Herdr session:
+
+```sh
+tandem
+tandem --continue
+```
+
+To deliberately cleanly reopen only Tandem-owned coordinators, run the reset launch from a separate
+normal terminal:
+
+```sh
+tandem --reset
+```
+
+With no paths this selects every valid saved project; explicit paths select only that subset. Reset
+preflights every selected root and stops only idle coordinators with exact Tandem ownership proof.
+Busy, unknown, foreign, or unsafe work refuses before any pane is closed. It preserves settings,
+conversation history, task records, worktrees, and repository files; it is not task recovery, a
+factory reset, or data wiping. Add `--continue` only to resume saved conversations after reopening;
+otherwise launches start fresh conversations. `--headless` and `--no-attach` remain supported.
+Never invoke reset from inside Herdr; use a separate normal terminal.
+
+When saved project records exist, this registry-first path uses only that registry; it does not crawl
+arbitrary disk repositories, auto-register projects, or show a project picker or path prompt. It
+works the same in a non-TTY and with `--headless` or `--no-attach`.
+
+To open only a subset of saved projects or explicitly add/open projects, pass one or more paths.
+Explicit paths override the saved registry and open only the supplied canonical Git projects. Multiple
+paths still use one shared Herdr session while keeping one clean coordinator and child-worker group
+per project:
+
+```sh
+tandem /absolute/path/to/repo
+tandem /absolute/path/to/first-repo /absolute/path/to/second-repo
+```
+
+If the saved registry is empty, bare `tandem` retains the first-run fallback: from a Git checkout it
+onboards and opens the current Git project; outside Git, the existing interactive project-selection
+fallback remains available for entering or adding a project path. The empty-registry fallback keeps
+its existing interactive-terminal requirements.
+
+To choose all six global role models without launching a coordinator:
+
+```sh
+tandem configure /absolute/path/to/repo
+```
+
+`configure` remains a single-project catalogue-anchor flow. With no path, it keeps its current-Git or
+existing interactive one-project anchor fallback; it never expands to all saved projects.
+
+Use `--home`, `--session`, and `--pool-root` consistently when reconnecting. `--headless` prepares
+coordinators without attaching Herdr; `--no-attach` also skips attachment. `--help` prints the
+terminal command's complete options.
+
+Each project in a launch set receives a coordinator conversation and dedicated clean Treehouse
+source worktree pinned to its original committed HEAD. The original checkout may be dirty and
+remains untouched; source reads and delegated execution use the clean snapshot, while durable
+settings, task records, and delivery retain the original project identity.
+
+Conversational skills are optional. In a fresh agent session, ask:
 
 > How do I use Tandem?
 
-The global `tandem` skill gives the short path without inspecting your filesystem or taking
-action. For an actual request, use natural language:
-
 > Onboard `/path/to/repo`.
->
+
 > What is the current state of my Tandem tasks?
->
-> Launch Tandem for `/path/to/repo`.
 
-These route to the three global skills:
-
-- `tandem` explains the workflow and the boundary between an ordinary agent session and a
-  Tandem-managed coordinator.
-- `tandem-onboard` performs read-only repository onboarding, followed by separately approved
-  setup and a separately requested launch.
-- `tandem-status` gives a bounded summary of recorded durable state and distinguishes it from
-  live worker/process confirmation.
-
-A how-to question is explanatory, not consent to inspect, onboard, launch, edit, validate,
-publish, or merge. If natural-language selection does not choose a skill, invoke the exact
-fallbacks `/skill:tandem`, `/skill:tandem-onboard`, or `/skill:tandem-status`. Start a fresh
-session after installing or updating skills.
+Use `/skill:tandem`, `/skill:tandem-onboard`, or `/skill:tandem-status` when you want those
+conversational flows. Low-level `src/cli.ts` commands remain an advanced fallback for exact
+automation and diagnostics; they are not the primary installation path.
 
 ### Install the global skills
 
@@ -130,18 +181,19 @@ for (const dir of roots) {
 '
 ```
 
-The command above installs for OMP/agents. Set `INSTALL_CLAUDE=1` before the command to install
-the same links under `.claude/skills` as well. If the checkout moves, the old links do not match;
-remove only links you own, then rerun the command. A copied skill can use `TANDEM_ROOT` pointing
-to the actual checkout. For the workflow and central-home rules, use the sections below; there is
-no global `tandem` executable.
+The command above installs optional conversational skills for OMP/agents. Set `INSTALL_CLAUDE=1`
+before the command to install the same links under `.claude/skills` as well. If the checkout moves,
+the old links do not match; remove only links you own, then rerun the command. The linked
+`tandem` executable remains the primary terminal front door.
 
-### Manual CLI fallback
+### Advanced low-level CLI fallback
 
-From this checkout:
+Use the low-level `src/cli.ts` entry point only for exact action commands, JSON automation, or
+diagnostics. Normal project selection, multi-project launch, model configuration, and reconnect
+use the installed `tandem` command:
 
 ```sh
-# Show the actual CLI help without starting a coordinator.
+# Show the advanced action CLI help without starting a coordinator.
 bun src/cli.ts --help
 
 # Inspect the target repository and propose validation surfaces.
@@ -150,42 +202,90 @@ bun src/cli.ts onboard --repo /absolute/path/to/repository
 # Inspect the local prerequisites without mutating the repository.
 bun src/cli.ts doctor --repo /absolute/path/to/repository
 
-# Launch the coordinator in a named Herdr session.
+# Launch one coordinator directly in a named Herdr session.
 bun src/cli.ts launch --repo /absolute/path/to/repository --session tandem
 ```
 
-The package script is equivalent to invoking the local CLI file; there is no `tandem` binary to install globally:
+The package development script invokes the same low-level entry point:
 
 ```sh
 bun run start -- --help
 bun run start -- launch --repo /absolute/path/to/repository
 ```
 
-With no command, the CLI defaults to `launch`. Use the same `--home` and `--session` values when restarting so the durable state and named Herdr context are reused.
+With no action, the low-level CLI defaults to `launch`. Use the same `--home`, `--session`, and
+`--pool-root` values when restarting so durable state and the named Herdr context are reused.
 
 ## Launching the coordinator
 
-The CLI resolves the process boundary in this order. A command-line option wins over the corresponding environment variable; otherwise the default is used.
+The installed `tandem` command uses the following terminal options and environment precedence:
 
-| Setting | Precedence and default |
+| Setting | Terminal resolution |
 | --- | --- |
 | Durable home | `--home` → `TANDEM_HOME` → `~/.tandem` |
-| Herdr/OMP session | `--session` → `TANDEM_SESSION` → `HERDR_SESSION` → `HERDR_SESSION_NAME` → `tandem` |
-| Parent workspace | `--parent-workspace` or `--parent` → `TANDEM_PARENT_WORKSPACE` → `HERDR_WORKSPACE_ID` → unset |
+| Shared Herdr/OMP session | `--session` → `TANDEM_SESSION` → `HERDR_SESSION` → `HERDR_SESSION_NAME` → `tandem` |
 | Treehouse pool root | `--pool-root` → `TANDEM_POOL_ROOT` → `<home>/pool` |
-| Subject repository | `--repo` → `TANDEM_REPO` → current working directory |
+| Project selection | Explicit positional `PATH ...` overrides the registry and opens only supplied canonical roots; with no paths, valid saved projects under `<home>/repositories` are used before cwd; if none are saved, current-Git onboarding or the outside-Git interactive fallback remains |
+| Conversation reconnect | Bare `tandem` opens or reconnects all saved projects; explicit `tandem PATH` opens or reconnects only that project; add `--continue` only when starting stopped coordinators and resuming saved conversations |
+| Herdr attachment | `--headless` or `--no-attach`; both prepare without attaching the Herdr terminal client |
+| Coordinator reset | `--reset`; preflight and reopen only selected idle Tandem-owned coordinators; launch-only and rejected inside Herdr |
 
-`HERDR_PANE_ID` is also used by the CLI when reusing an existing Herdr context. Direct reuse is allowed only when `HERDR_ENV` is `1` or `true` and `HERDR_SESSION` (or `HERDR_SESSION_NAME`), `HERDR_WORKSPACE_ID`, and `HERDR_PANE_ID` are all present. A partial identity, an inactive `HERDR_ENV` with identity variables set, or a session-name mismatch fails closed rather than guessing which pane is active.
+Explicit `PATH` values share the selected Herdr session, but each project receives its own
+coordinator workspace, clean source worktree, and child-worker group. When no paths are given and
+saved records exist, the launch set is those valid registry projects; when the registry is empty,
+selection follows the current-Git or outside-Git fallback above. Coordinators scope durable task
+operations to their original project identities, so one coordinator cannot claim another project's
+work. The saved-project path does not use arbitrary disk discovery or a project picker, including in
+non-TTY/headless launches.
 
-If there is no complete active context, `launch` starts the named Herdr session, waits for it to become ready, creates a labeled `Tandem coordinator` workspace, and runs OMP in its root pane. `--headless` starts `herdr --session <name> server`; `--no-attach` also selects server mode instead of launching a GUI. Resolved home, pool root, repository, session, and parent settings reach the actual OMP child in both direct and new-pane launches. Without an explicit parent, workers nest under the coordinator workspace.
+The terminal command attaches once after all selected coordinators are ready; `--headless` and
+`--no-attach` leave the shared session prepared without that attachment.
+The terminal front door releases its setup readline before this attachment, so Herdr is the sole
+terminal input owner while the interactive session is running.
 
-Coordinator conversations live under `<home>/coordinator-sessions/<repo-hash>`. `--continue` resumes within that repository-scoped session directory; it does not select an unrelated conversation from OMP's global session history. Durable task state remains authoritative even when the conversation is new or compacted.
+`--reset` runs after onboarding and after setup readline is released, before any normal coordinator
+launch or Herdr attachment. With no paths it applies to every saved project in the launch set; an
+explicit path list narrows the set. The reset operation uses one shared coordination lock and a
+central task-store lock, validates all selected roots before closing anything, rechecks native
+ownership and strictly idle status before each exact pane close, and verifies pane disappearance.
+Busy stages, live jobs or reservations, pending endpoint actions, presentations, or live worker
+endpoints cause a fail-closed refusal with no coordinator launch; unknown, foreign, legacy,
+malformed, or unsafe ownership also refuses. It does not stop a server, delete a workspace,
+clear a registry, mutate tasks, recover task work, or wipe settings, history, worktrees, or files.
+Unrelated Herdr terminals remain untouched because reset scopes exact selected Tandem coordinator
+records rather than stopping a server or tearing down the session.
+Run it from a separate normal terminal, and add `--continue` only when the fresh launch should
+resume the saved coordinator conversation.
 
-The coordinator uses Tandem's checked-in `src/extension.ts` and `src/worker-config.yml`. The CLI rejects alternate extension or config paths. The checked-in worker configuration disables model fallback, usage-aware fallback, context promotion, and prewalk, while enabling compaction. Before launch, the CLI validates the policy-pinned coordinator model with `omp models --json`; `--model` and `--thinking` cannot override a different pinned value.
+For each project, launch captures the original repository's committed `HEAD`, acquires a distinct
+clean Treehouse source worktree under the pool, and starts OMP from that clean checkout. The
+original checkout may be dirty and remains untouched; source reads and delegated execution use the
+clean snapshot, while settings, task records, and delivery retain the original identity. The
+coordinator receives the original identity as `TANDEM_REPO` and its owned source checkout as
+`TANDEM_SOURCE_REPO`; users normally do not set the latter themselves.
 
-`doctor` checks the regular checked-in extension and config files, the central repository policy
-record, the pinned OMP model, and the named Herdr status. It does not write repository or task
-state.
+An explicit `tandem PATH` opens or reconnects only that project after ownership checks. A bare
+`tandem` applies the same checks to every project in its launch set (all saved registry projects when
+records exist). For either form, `--continue` is needed only when no active coordinator remains and
+the new process should resume the saved repository-scoped conversation. The active coordinator stays
+pinned to its existing source `HEAD` even if the original project has advanced. Stop that coordinator
+in Herdr and relaunch (with `--continue` when the saved conversation should continue) to deliberately
+acquire a fresh source snapshot; prior pinned leases and snapshots are not reset or silently replaced.
+
+An old pre-registry coordinator without a clean lease record is never adopted or duplicated. Stop
+that coordinator manually, confirm its Herdr pane/process has exited, and relaunch `tandem` once.
+Relaunch does not automatically migrate existing task records; durable tasks remain attached to
+their original project identity and pinned source state until an explicit recovery decision.
+
+Launch succeeds only after Herdr reports a running server and native pane inspection verifies
+the expected OMP command and clean working directory. A private central bootstrap script keeps
+the initial terminal command short; a successful `pane run` response alone is not readiness.
+Child-workspace creation and ordering share the central store lock so concurrent project dispatch
+keeps each child group beneath its own coordinator.
+
+`doctor` is available through the advanced low-level CLI to check the checked-in extension and
+config files, central repository policy, pinned OMP model, and named Herdr status without writing
+repository or task state.
 
 ## Repository onboarding and central policy
 
@@ -285,15 +385,28 @@ Catalogue records retain `selector`, `id`, `provider`, and `thinking`, plus opti
 and one lookup per operation; do not parse private model configuration or invent names. Cost metadata
 is descriptive and does not guarantee account pricing or latency.
 
-On first onboarding, if `modelSettings.configured` is false, recommend from that catalogue: a strong
-planning model, a cheaper/faster research model, and capable coding, review, and final-check choices
-across all six roles. Present these as grouped human labels for planning, research, coding, review,
-final checks, and presentations, with actual proposed model names and thinking values. Explain the
-rationale briefly and let the user use, adjust, or decline. Empty or failed discovery stays visible;
-never silently substitute. Explain that approved choices apply to future work across projects and do
-not start work. After explicit approval, run `configure-models` once, then continue with normal project
-setup and separately requested launch. Reuse saved choices for later projects; an explicit “change
-Tandem models” request repeats this flow. No implicit configure occurs during read-only commands.
+On every onboarding, make model selection explicit for all six role identities and their human
+labels: **Planning** (`coordinator`), **Research** (`scout`), **Coding** (`implementer`), **Review**
+(`reviewer`), **Final checks** (`verifier`), and **Presentations** (`presentation`). If
+`modelSettings.configured` is false, run `models` once and use only its catalogue. For each role,
+show the suggested exact catalogue `selector` and the thinking levels that selector supports, then
+collect an explicit selector and supported thinking level. Offer **Not now** as an explicit pause:
+it stops onboarding before `configure-models`, `setup`, or `launch` and never falls through to
+built-in defaults. One response may answer all six roles; never infer omitted roles, combine roles,
+or treat recommendation approval as consent.
+
+When saved choices exist, show all six current exact catalogue selectors and thinking levels on every
+onboarding and offer **Keep all**, **Change roles**, or **Not now**. **Keep all** reuses the displayed
+choices, requires no new role answers, and is read-only; it may continue the existing project-setting
+approval flow without calling `configure-models`. **Not now** pauses onboarding, leaves choices
+unchanged, and does not run `configure-models`, `setup`, or `launch` or fall through to built-in
+defaults. **Change roles** reruns `models` and requires an explicit choice or explicit keep-current
+answer for each role. Preserve untouched roles and show the complete six-role recap before any save.
+Recommendations are suggestions only; empty or failed discovery remains visible and never falls back.
+Explain that approved choices apply to future work across projects and do not start work. After
+explicit approval of the complete recap (never **Not now**), run `configure-models` once, then
+continue with normal project setup and separately requested launch. No implicit configure occurs
+during read-only commands.
 
 `configure-models` accepts a temporary JSON object mapping all six roles directly to
 `{ "model": "...", "thinking": "..." }`, not the storage envelope, and accepts no model-controlled
@@ -317,8 +430,11 @@ private new directories use `0700`, and no application or project files are writ
 Model resolution precedence is **built-in defaults < saved global role choices < explicitly injected
 `globalPolicy` < per-project policy overrides**. `resolveRepoPolicy` and `onboardRepo` apply the same
 order. Built-in defaults remain available to direct APIs without saved preferences; onboarding must
-offer first-time selection before setup or launch. Saved choices are reused across projects; changing
-them affects future resolutions and new tasks only, and never rewrites existing task policy snapshots.
+offer first-time explicit six-role selection before setup or launch. Choosing **Not now** stops that
+onboarding before setup/launch and never falls through to built-in defaults. For configured homes, each
+onboarding displays all six saved choices before any reuse; **Keep all** is the explicit, read-only
+reuse path. Changing choices affects future resolutions and new tasks only, and never rewrites
+existing task policy snapshots.
 Changing the main conversation model takes effect on the next Tandem launch; it never hot-swaps an
 already-running OMP conversation.
 
@@ -392,10 +508,13 @@ Policy resolution builds a pinned guidance snapshot for each channel in this ord
 
 Identical text is de-duplicated while preserving the first source. The resolved entries retain
 both channel and source, and the task stores the resolved policy snapshot at creation time;
-changing a guidance file later does not silently rewrite an existing task's instructions. The
-default reader rejects absolute paths, Windows separators, traversal, missing configured files,
-and symlinks that resolve outside the target repository. Root guidance files are optional;
-configured instruction files are required.
+changing a guidance file later does not silently rewrite an existing task's instructions. For a
+clean-bound coordinator, the original `TANDEM_REPO` remains the central policy and task identity,
+while `TANDEM_SOURCE_REPO` supplies the committed checkout for package, root guidance, and
+repository-relative `instructionFiles` reads. The original checkout is identity-only for that
+coordinator and its dirty guidance is never silently read. The default reader rejects absolute paths,
+Windows separators, traversal, missing configured files, and symlinks that resolve outside the selected
+guidance checkout. Root guidance files are optional; configured instruction files are required.
 
 The three channels are `implementation`, `validation`, and `review`. Implementation and review
 briefs include the relevant pinned entries with their source labels. The task snapshot retains
@@ -421,8 +540,13 @@ bun src/cli.ts create \
 ```sh
 bun src/cli.ts create --input '{"repoPath":"/absolute/path/to/repository","kind":"scout","objective":"Map the authentication boundary","acceptanceCriteria":["Report entry points"],"surfaces":["backend"]}'
 ```
+For a clean-bound coordinator, task creation accepts either the original repository path or its
+configured clean source checkout and normalizes the record to the original canonical identity.
+The two checkouts must be distinct worktrees of the same Git common directory; unrelated paths are
+rejected. Prefer the original `TANDEM_REPO` path in task requests so task records, policy, and
+delivery remain visibly attached to the project the user selected.
 
-A scout is created queued and scope-approved. An implementation is created in `awaiting-approval` with `scopeApproved: false`; creation does not approve it. Approve the recorded scope explicitly before dispatch:
+A scout is created in `queued` and scope-approved. This records requested work but does not prove that a worker has started or that research is complete. If delegation is blocked, the coordinator discloses the durable blocker as actionable state; direct research requires explicit user authorization. An implementation is created in `awaiting-approval` with `scopeApproved: false`; creation does not approve it. Approve the recorded scope explicitly before dispatch:
 
 ```sh
 bun src/cli.ts approve TASK_ID --yes
@@ -433,15 +557,15 @@ The durable stages are:
 | Stage | Meaning |
 | --- | --- |
 | `awaiting-approval` | Implementation scope exists but has not been approved. |
-| `queued` | Approved work is waiting for scheduler capacity. |
+| `queued` | Approved work is waiting for scheduler capacity; it is not proof of an active worker or completed research. |
 | `scouting` / `implementing` | A worker is active in its owned workspace. |
 | `validating` | Implementation has produced a checkpoint and the runner is checking that exact HEAD. |
 | `reviewing` | Validation succeeded; fresh reviewers are recording the required lenses. |
 | `awaiting-fixes` | Validation or review found a failure; a bounded fix round may be started. |
 | `ready` | Current validation and all required review lenses pass. |
 | `paused` | Work is stopped with a resumable previous stage. |
-| `blocked` | Work cannot safely proceed; a reason is durable and requires coordinator judgment. |
-| `cancelled` / `completed` / `merged` | Terminal states. Scouts complete with a report; implementation reaches `merged` only after verified delivery. |
+| `blocked` | Work cannot safely proceed; a reason is durable, requires coordinator judgment, and is surfaced as an actionable blocker. |
+| `cancelled` / `completed` / `merged` | Terminal states. A scout is research-complete only in durable `completed` state with its report; implementation reaches `merged` only after verified delivery. |
 
 For implementation, each completion and fix cycle is bound to the current generation and HEAD. A fix cycle increments the generation, clears stale review/validation evidence, and returns to `implementing`. The default `maxFixRounds` is three; once exhausted, the task remains unresolved rather than looping indefinitely.
 
@@ -470,6 +594,8 @@ bun src/cli.ts show TASK_ID --full
 ```
 
 The summary is bounded for model-facing output; `--full` requests the larger structured view. A full task record includes the task identity and revision, repository, kind, objective, acceptance criteria and surfaces, stage, approval state, pinned policy, worktree and endpoint identities, generation and review round, reviewed HEAD, validation evidence, review results, report path, blocker, notifications, and pull-request metadata when present.
+
+Coordinator task counts and stage claims come from durable task state; do not infer them from worker or process observations, receipts, or notifications.
 
 Advance the scheduler explicitly or watch it:
 
@@ -642,9 +768,9 @@ The extension also registers `/tandem`. Arguments use shell-style quoting for pa
 
 The extension scheduler starts at session start with a 2,000 ms default interval and reconciles once immediately. It refreshes the durable digest before an agent turn, during OMP-native compaction, and after compaction. Routine notices, receipts, heartbeats, and passive progress are shown with `ctx.ui.notify` and appended to the durable UI log without a model turn. The newest actionable notices in one delivery batch are coalesced into at most one follow-up/model wake; routine backlog is excluded from that wake. Current blocked tasks, completed scout reports, and PR-ready coordinator notices are the judgment-needed cases. Progress is not death: after roughly five minutes without meaningful activity, or about 60 seconds without a startup heartbeat, Tandem emits one actionable inspection warning per inactivity episode and resets the episode when progress resumes; it does not kill a worker merely because time elapsed. Actual process exit or error still follows the existing failed/blocked path.
 
-## Worktrees, cleanup, and disk pressure
+A scout is completed research only when durable state records its `completed` stage and report; queued or blocked scout work is not completion.
 
-Treehouse worktrees are acquired under the configured pool root and tied to the source/base HEAD, lease holder, lease ID, task branch, and task generation. Branches use the `tandem/<safe-task-name>` form. Runtime passes every owned task worktree as protected to pool maintenance.
+Treehouse worktrees are acquired under the configured pool root and tied to the source/base HEAD, lease holder, lease ID, task branch, and task generation. A launched coordinator first owns a distinct clean source worktree pinned to the original committed HEAD; that source lease is separate from each task worktree. Branches use the `tandem/<safe-task-name>` form. Runtime passes every owned task worktree as protected to pool maintenance.
 
 ### Safe automatic maintenance
 
@@ -722,6 +848,8 @@ are Tandem-owned state, not files in target repositories:
 | --- | --- |
 | `<home>/models.json` | Strict global model preference envelope for all six roles; approved updates atomically replace it with mode `0600`. |
 | `<home>/repositories/<key>/config.json` | Private central policy envelope for the canonical repository root; `<key>` is the first 24 hex characters of its SHA-256 realpath digest. |
+| `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. |
+| `<home>/coordinator-scripts/*.sh` | Atomically written `0700` launch scripts containing the coordinator command and scoped environment overrides; kept outside project checkouts. |
 | `<home>/tasks/<task-id>.json` | Versioned task record, policy snapshot, lifecycle state, evidence, reviews, notifications, and delivery metadata. |
 | `<home>/communications/<safe-task-id>/inbox.json` | Derived bounded task-message projection; canonical communication remains in the task record. |
 | `<home>/runtime.json` | Versioned runtime state for reservations, endpoint identities, durable jobs, stop requests, and presentations. |
@@ -766,7 +894,7 @@ automatic kills.
 
 Ordinary non-presentation worker briefs fail closed above 64 KiB (65,536 bytes) of UTF-8. The error identifies the limit and asks for the objective, acceptance criteria, instructions, or artifact references to be shortened; Tandem does not silently truncate an ordinary brief. Presentation keeps its tighter existing 32,000-character prompt bound and its own per-field/list limits.
 
-## CLI reference
+## Advanced low-level CLI reference
 
 The CLI help returned by `bun src/cli.ts --help` is:
 
@@ -816,7 +944,7 @@ All parser-supported options are global; use only the ones relevant to the comma
 | `--session ID` | Named Herdr/OMP session. |
 | `--parent-workspace ID`, `--parent ID` | Parent Herdr workspace. |
 | `--pool-root PATH` | Treehouse pool root. |
-| `--repo PATH` | Subject repository; otherwise current directory. |
+| `--repo PATH` | Original subject repository identity; otherwise current directory. Launch derives the clean coordinator checkout separately. |
 | `--model PROVIDER/MODEL` | Coordinator model pin; a different policy value is rejected. |
 | `--thinking LEVEL` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `auto`; a different policy value is rejected. |
 | `--extension PATH` | Launch option only; must be Tandem's checked-in extension. |

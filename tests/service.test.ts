@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readTaskInbox, taskInbox, taskInboxPath, writeTaskInbox } from "../src/communication.ts";
@@ -82,6 +91,9 @@ const OMP_MODELS = [
 type FakeRunnerOptions = Readonly<{
   readonly active?: boolean;
   readonly checkoutHead?: string;
+  readonly commonDirectory?: string;
+  readonly dirty?: boolean;
+  readonly unmerged?: boolean;
   readonly recovery?: boolean;
   readonly holdProof?: boolean;
   readonly paneState?: "owned" | "missing" | "foreign";
@@ -272,6 +284,7 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
       if (argv.includes("rev-parse")) {
         const target = argv.at(-1);
         if (target === "HEAD") return commandResult(options.checkoutHead ?? "source-head");
+        if (target === "--git-common-dir") return commandResult(options.commonDirectory ?? path);
         if (target === "source-head" || target?.startsWith("refs/heads/"))
           return commandResult("source-head");
         if (target === "--show-toplevel") return commandResult(path);
@@ -279,7 +292,11 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
       if (argv.includes("symbolic-ref")) return commandResult("main");
       if (argv.includes("branch") && argv.includes("--show-current"))
         return commandResult("tandem-task-1");
-      if (argv.includes("status") || argv.includes("diff")) return commandResult();
+      if (argv.includes("status"))
+        return commandResult(options.dirty === true ? " M dirty.txt\n" : "");
+      if (argv.includes("--diff-filter=U"))
+        return commandResult(options.unmerged === true ? "conflict.txt\n" : "");
+      if (argv.includes("diff")) return commandResult();
       if (argv.includes("merge-base")) return commandResult();
     }
     throw new Error(`unexpected fake command ${JSON.stringify(argv)}`);
@@ -454,6 +471,98 @@ async function withFixture(
     await rm(created.home, { recursive: true, force: true });
   }
 }
+test("bound coordinators scope tasks by physical original identity and reject foreign projects", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-service-scope-"));
+  const home = join(root, "home");
+  const original = join(root, "original");
+  const source = join(root, "clean-source");
+  const other = join(root, "other");
+  const originalAlias = join(root, "original-alias");
+  await Promise.all([mkdir(original), mkdir(source), mkdir(other)]);
+  await symlink(original, originalAlias);
+  const clock = (): string => TIMESTAMP;
+  const store = createTaskStore({
+    directory: join(home, "tasks"),
+    clock,
+    idFactory: () => "store-id",
+  });
+  const taskA = await store.create({
+    id: "task-a",
+    repoPath: originalAlias,
+    kind: "scout",
+    objective: "Inspect project A",
+    acceptanceCriteria: ["Report project A"],
+    surfaces: ["src"],
+    policy,
+  });
+  await store.create({
+    id: "task-b",
+    repoPath: other,
+    kind: "scout",
+    objective: "Inspect project B",
+    acceptanceCriteria: ["Report project B"],
+    surfaces: ["src"],
+    policy,
+  });
+  const service = createTandemService({
+    home,
+    sessionId: "session-a",
+    poolRoot: join(root, "pool"),
+    sourceWorkspace: { repoPath: original, path: source },
+    run: async () => commandResult(),
+    clock,
+    idFactory: () => "service-id",
+  });
+  try {
+    expect(await service.list()).toEqual([taskA]);
+    expect(await service.get("task-a")).toEqual(taskA);
+    await unlink(originalAlias);
+    await symlink(other, originalAlias);
+    expect(await service.list()).toEqual([]);
+    await expect(service.get("task-a")).rejects.toThrow("Task task-a was not found");
+    await expect(service.cancel("task-a")).rejects.toThrow("task task-a is missing");
+    await expect(service.get("task-b")).rejects.toThrow("Task task-b was not found");
+    await expect(service.cancel("task-b")).rejects.toThrow("task task-b is missing");
+  } finally {
+    await service.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("bound task creation normalizes clean input to the original identity and persists its source", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-service-source-"));
+  const home = join(root, "home");
+  const original = join(root, "original");
+  const source = join(root, "clean-source");
+  const common = join(root, "git-common");
+  await Promise.all([mkdir(original), mkdir(source), mkdir(common)]);
+  const runner = fakeRunner({ commonDirectory: common });
+  const service = createTandemService({
+    home,
+    sessionId: "session-a",
+    poolRoot: join(root, "pool"),
+    sourceWorkspace: { repoPath: original, path: source },
+    run: runner.run,
+    clock: () => TIMESTAMP,
+    idFactory: () => "task-a",
+  });
+  try {
+    const created = await service.create({
+      repoPath: source,
+      kind: "scout",
+      objective: "Inspect the clean source",
+      acceptanceCriteria: ["Persist original identity"],
+      surfaces: ["src"],
+    });
+    expect(created.repoPath).toBe(await realpath(original));
+    const runtime = JSON.parse(await readFile(runtimeFile(home), "utf8")) as {
+      readonly tasks: readonly RuntimeTaskState[];
+    };
+    expect(runtime.tasks[0]?.sourceRepoPath).toBe(await realpath(source));
+  } finally {
+    await service.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("service resolves task policy from Tandem home and leaves repository-local config untouched", async () => {
   await withFixture({}, async ({ home, service }) => {
@@ -1099,6 +1208,22 @@ test("pre-job validation blocker can resume without retaining a reservation", as
       };
       expect(runtime.tasks[0]?.reservation?.phase).toBe("released");
       expect(runtime.tasks[0]?.jobs).toHaveLength(0);
+    },
+  );
+});
+
+test("source checkpoint diagnostics distinguish dirty worktrees from changed HEADs", async () => {
+  await withFixture({ kind: "implementation", runner: { dirty: true } }, async ({ service }) => {
+    await expect(service.approve("task-1")).rejects.toThrow(
+      "source checkpoint is unsafe: current worktree is dirty",
+    );
+  });
+  await withFixture(
+    { kind: "implementation", runner: { checkoutHead: "changed-head" } },
+    async ({ service }) => {
+      await expect(service.approve("task-1")).rejects.toThrow(
+        "source checkpoint is unsafe: HEAD changed from source-head to changed-head",
+      );
     },
   );
 });

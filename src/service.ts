@@ -139,6 +139,10 @@ export type TandemServiceOptions = Readonly<{
   readonly sessionId: string;
   readonly parentWorkspaceId?: string;
   readonly poolRoot?: string;
+  readonly sourceWorkspace?: Readonly<{
+    readonly repoPath: string;
+    readonly path: string;
+  }>;
   readonly workerTimeoutMs?: number;
   readonly run?: CommandRunner;
   readonly clock?: Clock;
@@ -199,6 +203,12 @@ type ServiceDependencies = Readonly<{
   sessionId: string;
   parentWorkspaceId: string | undefined;
   poolRoot: string;
+  sourceWorkspace:
+    | Readonly<{
+        repoPath: string;
+        path: string;
+      }>
+    | undefined;
   workerTimeoutMs: number | undefined;
   run: CommandRunner;
   clock: Clock;
@@ -790,6 +800,70 @@ function taskInputFor(
     policy,
   };
 }
+type TaskSource = Readonly<{
+  readonly repoPath: string;
+  readonly sourceRepoPath?: string;
+  readonly checkoutPath: string;
+}>;
+
+async function gitCommonDirectory(run: CommandRunner, repoPath: string): Promise<string> {
+  const result = await run({
+    argv: ["git", "-C", repoPath, "rev-parse", "--git-common-dir"],
+    cwd: repoPath,
+  });
+  if (result.code !== 0) {
+    const detail = result.stderr.trim() || result.stdout.trim();
+    throw new Error(
+      `git common directory lookup failed with exit code ${result.code}${
+        detail.length === 0 ? "" : `: ${detail}`
+      }`,
+    );
+  }
+  const commonPath = result.stdout.trim();
+  if (commonPath.length === 0) throw new Error("git common directory lookup returned no path");
+  return realpath(resolve(repoPath, commonPath));
+}
+async function mapTaskSource(
+  run: CommandRunner,
+  repoPath: string,
+  sourceWorkspace: TandemServiceOptions["sourceWorkspace"],
+): Promise<TaskSource> {
+  const requestedPath = pathText(repoPath, "repoPath");
+  if (sourceWorkspace === undefined) {
+    return { repoPath: requestedPath, checkoutPath: resolve(requestedPath) };
+  }
+  const [originalRoot, sourceRoot, requestedRoot] = await Promise.all([
+    realpath(sourceWorkspace.repoPath),
+    realpath(sourceWorkspace.path),
+    realpath(resolve(requestedPath)),
+  ]);
+  if (originalRoot === sourceRoot) {
+    throw new Error("sourceWorkspace must identify a distinct clean checkout");
+  }
+  const [originalCommon, sourceCommon] = await Promise.all([
+    gitCommonDirectory(run, originalRoot),
+    gitCommonDirectory(run, sourceRoot),
+  ]);
+  if (originalCommon !== sourceCommon) {
+    throw new Error(
+      `sourceWorkspace original ${JSON.stringify(originalRoot)} and clean checkout ${JSON.stringify(sourceRoot)} do not share a Git common directory`,
+    );
+  }
+  if (requestedRoot !== originalRoot && requestedRoot !== sourceRoot) {
+    throw new Error(
+      `repoPath ${JSON.stringify(requestedPath)} is not the configured original project or clean source checkout`,
+    );
+  }
+  return {
+    repoPath: originalRoot,
+    sourceRepoPath: sourceRoot,
+    checkoutPath: sourceRoot,
+  };
+}
+
+function taskSourcePath(task: TaskRecord, runtime?: RuntimeTaskState): string {
+  return runtime?.sourceRepoPath ?? task.repoPath;
+}
 
 function assertTaskId(id: unknown): string {
   return singleLine(id, "task id");
@@ -1206,6 +1280,7 @@ function waitForPresentationFeedback(
 class TandemController {
   readonly #deps: ServiceDependencies;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
+  #scopeRepoPathPromise: Promise<string | undefined> | undefined;
   readonly #presentationPolls = new Map<string, PresentationPollState>();
   #shuttingDown = false;
   #shutdownPromise: Promise<void> | undefined;
@@ -1242,19 +1317,21 @@ class TandemController {
   }
 
   async onboard(repoPath: string, write = false): Promise<OnboardRepoResult> {
+    const source = await mapTaskSource(this.#deps.run, repoPath, this.#deps.sourceWorkspace);
     return onboardRepo({
-      repoPath: absoluteDirectory(repoPath, "repoPath"),
+      repoPath: source.repoPath,
       home: this.#deps.home,
       write,
+      ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
     });
   }
   async models(repoPath: string): Promise<ModelOptionsResult> {
-    const root = absoluteDirectory(repoPath, "repoPath");
+    const source = await mapTaskSource(this.#deps.run, repoPath, this.#deps.sourceWorkspace);
     const modelSettings = await readModelSettings({
-      repoPath: root,
+      repoPath: source.repoPath,
       home: this.#deps.home,
     });
-    const availableModels = await listOmpModels(this.#deps.run, { cwd: root });
+    const availableModels = await listOmpModels(this.#deps.run, { cwd: source.checkoutPath });
     return { modelSettings, availableModels };
   }
 
@@ -1265,12 +1342,12 @@ class TandemController {
     }>,
   ): Promise<ModelSettings> {
     if (!isRecord(input)) throw new TypeError("configureModels input must be an object");
-    const repoPath = absoluteDirectory(input.repoPath, "repoPath");
+    const source = await mapTaskSource(this.#deps.run, input.repoPath, this.#deps.sourceWorkspace);
     const models = parseModelAssignments(input.models);
-    const availableModels = await listOmpModels(this.#deps.run, { cwd: repoPath });
+    const availableModels = await listOmpModels(this.#deps.run, { cwd: source.checkoutPath });
     validateModelAssignments(models, availableModels);
     return writeModelSettings({
-      repoPath,
+      repoPath: source.repoPath,
       home: this.#deps.home,
       models,
     });
@@ -1278,10 +1355,14 @@ class TandemController {
 
   async create(input: CreateTaskRequest): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("create input must be an object");
-    const repoPath = absoluteDirectory(input.repoPath, "repoPath");
-    const policy = await resolveRepoPolicy({ repoPath, home: this.#deps.home });
-    const checkpoint = await readCheckpoint(this.#deps.run, { repo: repoPath });
-    const taskInput = taskInputFor(input, repoPath, policy);
+    const source = await mapTaskSource(this.#deps.run, input.repoPath, this.#deps.sourceWorkspace);
+    const policy = await resolveRepoPolicy({
+      repoPath: source.repoPath,
+      home: this.#deps.home,
+      ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
+    });
+    const checkpoint = await readCheckpoint(this.#deps.run, { repo: source.checkoutPath });
+    const taskInput = taskInputFor(input, source.repoPath, policy);
     const id = singleLine(this.#deps.idFactory(), "task id");
     const task = await this.#deps.store.exclusive(async (store) => {
       const created = await store.create({ ...taskInput, id });
@@ -1293,6 +1374,7 @@ class TandemController {
         taskName: taskNameFor(created),
         endpoints: [],
         jobs: [],
+        ...(source.sourceRepoPath === undefined ? {} : { sourceRepoPath: source.sourceRepoPath }),
         ...(created.kind === "implementation"
           ? { sessionDirectory: taskSessionDirectory(this.#deps.home, created.id) }
           : {}),
@@ -1310,13 +1392,15 @@ class TandemController {
   }
 
   async list(): Promise<readonly TaskRecord[]> {
-    return this.#deps.store.list();
+    return this.scopedTasks();
   }
 
   async get(id: string): Promise<TaskRecord> {
     const taskId = assertTaskId(id);
     const task = await this.#deps.store.read(taskId);
-    if (task === undefined) throw new Error(`Task ${taskId} was not found`);
+    if (task === undefined || !(await this.taskInScope(task))) {
+      throw new Error(`Task ${taskId} was not found`);
+    }
     return task;
   }
 
@@ -1325,7 +1409,9 @@ class TandemController {
     if (task.kind === "implementation") {
       const runtime = await this.runtimeFor(task.id);
       if (runtime === undefined) throw new Error(`Task ${task.id} has no durable runtime metadata`);
-      const current = await readCheckpoint(this.#deps.run, { repo: task.repoPath });
+      const current = await readCheckpoint(this.#deps.run, {
+        repo: taskSourcePath(task, runtime),
+      });
       this.assertSourceUnchanged(runtime.sourceCheckpoint, current);
     }
     return this.transition(task.id, { type: "approve" });
@@ -1400,6 +1486,7 @@ class TandemController {
 
   async messages(taskId: string): Promise<TaskCommunicationView> {
     const id = assertTaskId(taskId);
+    await this.get(id);
     try {
       await this.repairTaskInbox(id);
     } catch {
@@ -1426,7 +1513,9 @@ class TandemController {
     if (!isRecord(input)) throw new TypeError("publish input must be an object");
     return this.#deps.store.exclusive(async (store) => {
       const task = await store.read(id);
-      if (task === undefined) throw new Error(`Task ${id} was not found`);
+      if (task === undefined || !(await this.taskInScope(task))) {
+        throw new Error(`Task ${id} was not found`);
+      }
       const metadata = await publishReviewedTask({
         task,
         summary: input.summary,
@@ -1488,7 +1577,7 @@ class TandemController {
         const stopped = await inspectStopped(
           this.#deps.run,
           endpoint,
-          runtime.worktree?.path ?? task.repoPath,
+          taskSourcePath(task, runtime),
         );
         if (!stopped) {
           throw new Error(`cannot clean task ${task.id} while pane ${endpoint.paneId} is running`);
@@ -1501,7 +1590,7 @@ class TandemController {
       try {
         await closeEndpoint(this.#deps.run, {
           endpoint,
-          cwd: runtime.worktree?.path ?? task.repoPath,
+          cwd: taskSourcePath(task, runtime),
         });
       } catch (error) {
         if (!isMissingEndpoint(error)) throw error;
@@ -1574,9 +1663,12 @@ class TandemController {
 
   async presentations(): Promise<readonly PresentationRecord[]> {
     const state = await this.readState();
+    const taskIds = new Set((await this.scopedTasks()).map((task) => task.id));
     const records: PresentationRecord[] = [];
-    for (const entry of state.presentations)
+    for (const entry of state.presentations) {
+      if (!taskIds.has(entry.taskId)) continue;
       records.push(await readPresentationRecord(entry.recordPath));
+    }
     return records;
   }
 
@@ -1629,7 +1721,9 @@ class TandemController {
             const pending = presentationPendingNotifications(current)[0];
             if (pending === undefined) return current;
             const task = await store.read(current.taskId);
-            if (task === undefined) throw new Error(`task ${current.taskId} is missing`);
+            if (task === undefined || !(await this.taskInScope(task))) {
+              throw new Error(`task ${current.taskId} is missing`);
+            }
             const existing = task.notifications.find((entry) => entry.id === pending.id);
             if (existing === undefined) {
               await store.update(current.taskId, task.revision, (updated) => ({
@@ -1824,6 +1918,7 @@ class TandemController {
     const state = await this.readState();
     const runtime = presentationRuntime(state, id);
     if (runtime === undefined) throw new Error(`Presentation ${id} was not found`);
+    await this.get(runtime.taskId);
     const record = await readPresentationRecord(runtime.recordPath);
     return this.beginPresentationFeedback(runtime, record, signal, false, true);
   }
@@ -1841,7 +1936,7 @@ class TandemController {
   }
 
   private async advance(): Promise<readonly TaskRecord[]> {
-    const tasks = await this.#deps.store.list();
+    const tasks = await this.scopedTasks();
     for (const task of tasks) {
       try {
         await this.reconcileTask(task);
@@ -1856,7 +1951,9 @@ class TandemController {
       }
     }
     const state = await this.readState();
+    const scopedTaskIds = new Set(tasks.map((task) => task.id));
     for (const presentation of state.presentations) {
+      if (!scopedTaskIds.has(presentation.taskId)) continue;
       try {
         await this.reconcilePresentation(presentation);
       } catch (error) {
@@ -1868,7 +1965,7 @@ class TandemController {
         );
       }
     }
-    return this.#deps.store.list();
+    return this.scopedTasks();
   }
 
   private async reconcileTask(task: TaskRecord): Promise<void> {
@@ -2407,7 +2504,7 @@ class TandemController {
     try {
       await closeEndpoint(this.#deps.run, {
         endpoint,
-        cwd: runtime.worktree?.path ?? task.repoPath,
+        cwd: taskSourcePath(task, runtime),
       });
     } catch (error) {
       if (!isMissingEndpoint(error)) {
@@ -2474,7 +2571,9 @@ class TandemController {
       const job = runtime.jobs.find((entry) => entry.id === jobId);
       if (job === undefined) throw new Error(`runtime job ${jobId} is missing`);
       const task = await store.read(taskId);
-      if (task === undefined) throw new Error(`task ${taskId} is missing`);
+      if (task === undefined || !(await this.taskInScope(task))) {
+        throw new Error(`task ${taskId} is missing`);
+      }
       try {
         if (
           job.kind === "worker" &&
@@ -2674,7 +2773,7 @@ class TandemController {
     const admissionNotice = admissionKey === undefined ? undefined : poolAdmissionNotice(result);
     await this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
-      if (task === undefined) return;
+      if (task === undefined || !(await this.taskInScope(task))) return;
       const state = await readRuntimeState(this.#deps.runtimePath);
       const runtime = taskRuntime(state, taskId);
       const previousKey = runtime?.poolAdmissionKey;
@@ -2747,9 +2846,9 @@ class TandemController {
       if (runtime !== undefined) await writeRuntimeState(this.#deps.runtimePath, nextRuntime);
     });
   }
-
   private async maintainPoolForAllocation(task: TaskRecord): Promise<boolean> {
     const [state, tasks] = await Promise.all([this.readState(), this.#deps.store.list()]);
+    const sourceRepoPath = taskRuntime(state, task.id)?.sourceRepoPath ?? task.repoPath;
     const managedPaths = tasks.flatMap((entry) =>
       entry.worktree === undefined ? [] : [entry.worktree.path],
     );
@@ -2759,7 +2858,7 @@ class TandemController {
     let result: PoolMaintenanceResult;
     try {
       result = await maintainPool(this.#deps.run, {
-        repo: task.repoPath,
+        repo: sourceRepoPath,
         root: this.#deps.poolRoot,
         managedPaths,
         protectedPaths,
@@ -2784,7 +2883,7 @@ class TandemController {
     const runtime = await this.runtimeFor(task.id);
     if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) return;
     if (runtime.endpointLaunch !== undefined || runtime.jobs.some(activeRuntimeJob)) return;
-    const cwd = runtime.worktree?.path ?? task.repoPath;
+    const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
     for (const endpoint of runtime.endpoints) {
       try {
         const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
@@ -2837,10 +2936,12 @@ class TandemController {
     let lease = runtime.worktree;
     if (lease === undefined) {
       try {
-        const source = await readCheckpoint(this.#deps.run, { repo: task.repoPath });
+        const source = await readCheckpoint(this.#deps.run, {
+          repo: taskSourcePath(task, runtime),
+        });
         this.assertSourceUnchanged(runtime.sourceCheckpoint, source);
         lease = await acquireWorktree(this.#deps.run, {
-          repo: task.repoPath,
+          repo: taskSourcePath(task, runtime),
           root: this.#deps.poolRoot,
           tandemId: `${this.#deps.sessionId}:${task.id}`,
           taskName: runtime.taskName,
@@ -2892,16 +2993,18 @@ class TandemController {
       }
       let created: HerdrEndpointResult;
       try {
-        created = await createTaskEndpoint(this.#deps.run, {
-          sessionId: this.#deps.sessionId,
-          cwd: lease.path,
-          taskName: runtime.taskName,
-          role,
-          generation: task.generation,
-          ...(this.#deps.parentWorkspaceId === undefined
-            ? {}
-            : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
-        });
+        created = await this.#deps.store.exclusive(() =>
+          createTaskEndpoint(this.#deps.run, {
+            sessionId: this.#deps.sessionId,
+            cwd: lease.path,
+            taskName: runtime.taskName,
+            role,
+            generation: task.generation,
+            ...(this.#deps.parentWorkspaceId === undefined
+              ? {}
+              : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
+          }),
+        );
       } catch (error) {
         await this.blockTask(task.id, `worker pane allocation failed: ${describeError(error)}`);
         return;
@@ -3366,7 +3469,7 @@ class TandemController {
       taskId: task.id,
       generation: task.generation,
       role,
-      cwd: task.worktree?.path ?? task.repoPath,
+      cwd: runtime.worktree?.path ?? taskSourcePath(task, runtime),
       model: task.policy.config.models[role],
       prompt,
       resultPath: paths.resultPath,
@@ -3422,7 +3525,9 @@ class TandemController {
       const runtime = taskRuntime(state, taskId);
       if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
       const task = await store.read(taskId);
-      if (task === undefined) throw new Error(`task ${taskId} is missing`);
+      if (task === undefined || !(await this.taskInScope(task))) {
+        throw new Error(`task ${taskId} is missing`);
+      }
       const job = runtime.jobs.find((entry) => entry.id === jobId);
       if (job === undefined) throw new Error(`runtime job ${jobId} is missing`);
       if (job.phase !== "reserved" || job.launchAttempted) return;
@@ -3645,16 +3750,18 @@ class TandemController {
     }
     let endpointResult: HerdrEndpointResult;
     try {
-      endpointResult = await createTaskEndpoint(this.#deps.run, {
-        sessionId: this.#deps.sessionId,
-        cwd: runtime.job.cwd,
-        taskName,
-        role: "presentation",
-        generation: runtime.job.generation,
-        ...(this.#deps.parentWorkspaceId === undefined
-          ? {}
-          : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
-      });
+      endpointResult = await this.#deps.store.exclusive(() =>
+        createTaskEndpoint(this.#deps.run, {
+          sessionId: this.#deps.sessionId,
+          cwd: runtime.job.cwd,
+          taskName,
+          role: "presentation",
+          generation: runtime.job.generation,
+          ...(this.#deps.parentWorkspaceId === undefined
+            ? {}
+            : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
+        }),
+      );
     } catch (error) {
       await this.failPresentation(
         id,
@@ -3919,7 +4026,9 @@ class TandemController {
   ): Promise<ReservationResult | undefined> {
     return this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
-      if (task === undefined) throw new Error(`task ${taskId} is missing`);
+      if (task === undefined || !(await this.taskInScope(task))) {
+        throw new Error(`task ${taskId} is missing`);
+      }
       const stageAllowed =
         role === "validation"
           ? task.stage === "validating"
@@ -3962,7 +4071,9 @@ class TandemController {
       if (runtime.reservation !== undefined && runtime.reservation.phase !== "released")
         return false;
       const task = await store.read(runtime.taskId);
-      if (task === undefined) throw new Error(`task ${runtime.taskId} is missing`);
+      if (task === undefined || !(await this.taskInScope(task))) {
+        throw new Error(`task ${runtime.taskId} is missing`);
+      }
       if (activeReservations(state) >= task.policy.config.maxWorkers) return false;
       const reservation = runtimeReservation(
         singleLine(this.#deps.idFactory(), "presentation reservation id"),
@@ -4258,7 +4369,9 @@ class TandemController {
   ): Promise<TaskRecord> {
     return this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
-      if (task === undefined) throw new Error(`task ${taskId} is missing`);
+      if (task === undefined || !(await this.taskInScope(task))) {
+        throw new Error(`task ${taskId} is missing`);
+      }
       const terminal =
         task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged";
       const state = await readRuntimeState(this.#deps.runtimePath);
@@ -4297,7 +4410,7 @@ class TandemController {
       }));
       await writeRuntimeState(this.#deps.runtimePath, requested);
 
-      const cwd = runtime.worktree?.path ?? task.repoPath;
+      const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
       let stopFailure: string | undefined;
       for (const endpoint of runtime.endpoints) {
         try {
@@ -4335,7 +4448,9 @@ class TandemController {
   private async resumeTask(taskId: string): Promise<TaskRecord> {
     const outcome = await this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
-      if (task === undefined) throw new Error(`task ${taskId} is missing`);
+      if (task === undefined || !(await this.taskInScope(task))) {
+        throw new Error(`task ${taskId} is missing`);
+      }
       if (task.stage !== "paused" && task.stage !== "blocked") {
         return { task, resumed: false };
       }
@@ -4464,7 +4579,7 @@ class TandemController {
     if (runtime.endpointLaunch !== undefined) {
       return empty("an endpoint launch identity is unresolved");
     }
-    const cwd = runtime.worktree?.path ?? task.repoPath;
+    const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
     const activeJobs = runtime.jobs.filter(activeRuntimeJob);
     const dependentPanes = new Set(
       activeJobs.flatMap((job) => (job.endpoint === undefined ? [] : [job.endpoint.paneId])),
@@ -4516,7 +4631,7 @@ class TandemController {
     return { failure: undefined, abandonedJobIds, terminalJobIds };
   }
   private async reconcileStopRequest(task: TaskRecord, runtime: RuntimeTaskState): Promise<void> {
-    const cwd = runtime.worktree?.path ?? task.repoPath;
+    const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
 
     for (const endpoint of runtime.endpoints) {
       try {
@@ -4573,7 +4688,9 @@ class TandemController {
   ): Promise<TaskRecord> {
     return this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
-      if (task === undefined) throw new Error(`task ${taskId} is missing`);
+      if (task === undefined || !(await this.taskInScope(task))) {
+        throw new Error(`task ${taskId} is missing`);
+      }
       if (task.stage === "cancelled" || task.stage === "merged") {
         throw new Error(`Task ${taskId} cannot be steered while it is ${task.stage}`);
       }
@@ -4620,7 +4737,7 @@ class TandemController {
       const state = await readRuntimeState(this.#deps.runtimePath);
       const runtime = taskRuntime(state, taskId);
       if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
-      const cwd = runtime.worktree?.path ?? task.repoPath;
+      const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
       const requested = replaceRuntimeTask(state, taskId, (current) => ({
         ...current,
         stopRequest: {
@@ -4749,16 +4866,30 @@ class TandemController {
 
   private assertSourceUnchanged(pinned: GitCheckpoint, current: GitCheckpoint): void {
     if (
-      pinned.head !== current.head ||
-      pinned.dirty !== current.dirty ||
-      pinned.unmerged !== current.unmerged ||
-      current.dirty ||
-      current.unmerged
+      pinned.head === current.head &&
+      pinned.dirty === current.dirty &&
+      pinned.unmerged === current.unmerged &&
+      !current.dirty &&
+      !current.unmerged
     ) {
-      throw new Error(
-        `source checkpoint changed from ${pinned.head} to ${current.head} or is dirty`,
-      );
+      return;
     }
+    const reasons = [
+      pinned.head !== current.head
+        ? `HEAD changed from ${pinned.head} to ${current.head}`
+        : undefined,
+      current.dirty
+        ? "current worktree is dirty"
+        : pinned.dirty !== current.dirty
+          ? `dirty state changed from ${String(pinned.dirty)} to ${String(current.dirty)}`
+          : undefined,
+      current.unmerged
+        ? "current checkout has unmerged paths"
+        : pinned.unmerged !== current.unmerged
+          ? `unmerged state changed from ${String(pinned.unmerged)} to ${String(current.unmerged)}`
+          : undefined,
+    ].filter((reason): reason is string => reason !== undefined);
+    throw new Error(`source checkpoint is unsafe: ${reasons.join("; ")}`);
   }
 
   private async appendAnswer(
@@ -4769,7 +4900,9 @@ class TandemController {
     let result: { readonly task: TaskRecord; readonly resumed: boolean } | undefined;
     await this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
-      if (task === undefined) throw new Error(`task ${taskId} is missing`);
+      if (task === undefined || !(await this.taskInScope(task))) {
+        throw new Error(`task ${taskId} is missing`);
+      }
       if (task.stage === "cancelled" || task.stage === "merged") {
         throw new Error(`Task ${taskId} cannot be answered while it is ${task.stage}`);
       }
@@ -4818,7 +4951,13 @@ class TandemController {
   private async repairTaskInbox(taskId: string): Promise<void> {
     await this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
-      if (task === undefined || task.communication === undefined) return;
+      if (
+        task === undefined ||
+        !(await this.taskInScope(task)) ||
+        task.communication === undefined
+      ) {
+        return;
+      }
       const path = taskInboxPath(this.#deps.home, task.id);
       const expected = taskInbox(task.id, task.communication);
       try {
@@ -4912,6 +5051,44 @@ class TandemController {
     return this.transition(taskId, { type: "block", reason: text(reason, "block reason") });
   }
 
+  private async repositoryScope(): Promise<string | undefined> {
+    if (this.#scopeRepoPathPromise === undefined) {
+      const requested = this.#deps.sourceWorkspace?.repoPath;
+      this.#scopeRepoPathPromise =
+        requested === undefined ? Promise.resolve(undefined) : realpath(requested);
+    }
+    return this.#scopeRepoPathPromise;
+  }
+
+  private async taskInScope(task: TaskRecord, scopeOverride?: string): Promise<boolean> {
+    const scope = scopeOverride ?? (await this.repositoryScope());
+    if (scope === undefined) return true;
+    return (await this.taskRepositoryPath(task.repoPath)) === scope;
+  }
+
+  private taskRepositoryPath(repoPath: string): Promise<string | undefined> {
+    return realpath(repoPath).catch((error: unknown) => {
+      if (isMissing(error)) return undefined;
+      throw error;
+    });
+  }
+
+  private async scopedTasks(): Promise<readonly TaskRecord[]> {
+    const tasks = await this.#deps.store.list();
+    const scope = await this.repositoryScope();
+    if (scope === undefined) return tasks;
+    const resolvedByRepoPath = new Map<string, Promise<string | undefined>>();
+    const scoped: TaskRecord[] = [];
+    for (const task of tasks) {
+      let taskPath = resolvedByRepoPath.get(task.repoPath);
+      if (taskPath === undefined) {
+        taskPath = this.taskRepositoryPath(task.repoPath);
+        resolvedByRepoPath.set(task.repoPath, taskPath);
+      }
+      if ((await taskPath) === scope) scoped.push(task);
+    }
+    return scoped;
+  }
   private async runtimeFor(taskId: string): Promise<RuntimeTaskState | undefined> {
     const state = await this.readState();
     return taskRuntime(state, taskId);
@@ -4976,6 +5153,23 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     options.poolRoot === undefined
       ? join(home, "pool")
       : absoluteDirectory(options.poolRoot, "poolRoot");
+  const sourceWorkspace =
+    options.sourceWorkspace === undefined
+      ? undefined
+      : (() => {
+          if (!isRecord(options.sourceWorkspace)) {
+            throw new TypeError("sourceWorkspace must be an object");
+          }
+          const repoPath = absoluteDirectory(
+            options.sourceWorkspace.repoPath,
+            "sourceWorkspace.repoPath",
+          );
+          const path = absoluteDirectory(options.sourceWorkspace.path, "sourceWorkspace.path");
+          if (repoPath === path) {
+            throw new TypeError("sourceWorkspace must identify a distinct clean checkout");
+          }
+          return { repoPath, path };
+        })();
   const workerTimeoutMs =
     options.workerTimeoutMs === undefined
       ? undefined
@@ -4994,6 +5188,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
         ? undefined
         : singleLine(options.parentWorkspaceId, "parentWorkspaceId"),
     poolRoot,
+    sourceWorkspace,
     workerTimeoutMs,
     run,
     clock,
