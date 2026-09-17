@@ -27,16 +27,102 @@ bun install -g @oh-my-pi/pi-coding-agent
 
 # Install Tandem's dependencies from this checkout
 bun install
+# Link Tandem's terminal front door from this checkout
+bun link
 ```
+
+Confirm the installation:
+
+```sh
+tandem --help
+```
+
+The Bun global bin directory must be on `PATH` for `tandem` to work outside this checkout.
 
 If `git` is missing, run `xcode-select --install` and wait for Apple's installer to finish
 before continuing. Then follow the [global skill installation](docs/agent-reference.md#install-the-global-skills)
 for the three Tandem skills.
 Tandem uses your local tools and credentials; it is not a security sandbox.
 
-## Use Tandem conversationally
+## Use Tandem from the terminal
 
-In a fresh agent session, start with:
+The installed `tandem` command is the primary front door. From any directory after `bun link`, run
+bare `tandem` to open or reconnect every valid saved project under the selected Tandem home in one
+shared Herdr session:
+
+```sh
+tandem
+```
+
+To cleanly reopen only Tandem-owned coordinators, use the reset launch from a separate normal
+terminal:
+
+```sh
+tandem --reset
+```
+
+With no paths, `--reset` selects every valid saved project; pass explicit paths to reset only that
+subset. It preflights all selected roots, stops only idle coordinators that Tandem can prove it owns,
+and then performs the normal launch so each selected coordinator is recreated and attached once.
+Unrelated Herdr terminals are left untouched.
+Busy, unknown, foreign, or otherwise unsafe work refuses before any pane is closed; if a coordinator
+changes state or fails to close after earlier ones in the same run already closed, reset stops and
+reports exactly which coordinators it already closed. Reset retains
+settings, conversation history, task records, worktrees, and repository files; it is not task recovery,
+a factory reset, or data wiping. Add `--continue` only when you want the reopened coordinators to
+resume their saved conversations; without it they start fresh conversations. Never run `--reset` from
+inside Herdr, because Tandem refuses that unsafe context.
+
+Bare `tandem` uses only saved project records under `<home>/repositories`; it does not scan arbitrary
+disk repositories, auto-register projects, show a project picker, or request a path. Saved-project
+selection takes precedence over the current working directory and needs no project-selection prompt,
+including in a non-TTY or `--headless`/`--no-attach` launch.
+
+To open only a subset of saved projects or explicitly add/open projects, pass one or more paths.
+Explicit paths override the saved registry and open only the supplied canonical Git projects. Multiple
+paths share one Herdr session while keeping one clean coordinator and child-worker group per project:
+
+```sh
+tandem /absolute/path/to/repo
+tandem /absolute/path/to/first-repo /absolute/path/to/second-repo
+```
+
+If the saved registry is empty, bare `tandem` retains the first-run fallback: from a Git checkout it
+onboards and opens the current Git project; outside Git, the existing interactive project-selection
+fallback lets you enter or add a project path. The empty-registry fallback keeps its existing
+interactive-terminal requirements.
+
+Use the same `--home`, `--session`, and `--pool-root` values when reconnecting:
+
+```sh
+tandem --continue /absolute/path/to/repo
+tandem configure /absolute/path/to/repo
+```
+
+`configure` remains a single-project catalogue-anchor flow: it asks for and saves all six global role
+choices (Planning, Research, Coding, Review, Final checks, and Presentations) without launching a
+coordinator. With no path, it keeps its current-Git or existing interactive one-project anchor
+fallback; it never expands to all saved projects. `--headless` prepares coordinators without
+attaching Herdr, and `--no-attach` also skips the GUI attachment. `--help` shows the terminal
+command's complete options. Home, session, and pool defaults come from `TANDEM_HOME`,
+`TANDEM_SESSION` (then Herdr's session variables), and `TANDEM_POOL_ROOT`.
+
+Each project in a launch set gets its own coordinator conversation and dedicated clean Treehouse
+source worktree pinned to that project's committed HEAD. Multiple projects share one Herdr session,
+but coordinators and child-worker groups remain scoped to their original project identities. The
+original checkout may be dirty and remains untouched; coordinator source reads and delegated
+execution use the clean snapshot, while durable settings, task records, and delivery retain the
+original project identity. When several projects are opened, Tandem attaches to the shared Herdr
+session once every coordinator is ready.
+
+An explicit `tandem PATH` opens or reconnects only that project after ownership checks. Add
+`--continue` only when starting a stopped coordinator and resuming its saved conversation. An active
+coordinator remains pinned to its existing clean source even if the original project's HEAD has
+advanced; stop that coordinator and relaunch when you deliberately want a fresh source snapshot.
+
+## Use Tandem conversationally (optional)
+
+Conversational skills are optional. In a fresh agent session, start with:
 
 > How do I use Tandem?
 
@@ -47,21 +133,24 @@ Then ask for the action you want:
 > What is the current state of my Tandem tasks?
 >
 > Launch Tandem for `/path/to/repo`.
->
-> Add password reset to this app. Propose a plan first.
 
-Use `tandem` for help, `tandem-onboard` to set up a project, and `tandem-status` for a short
-progress summary. Status uses saved task information; it does not check whether AI assistants
-are still running. You can also invoke `/skill:tandem`, `/skill:tandem-onboard`, or
-`/skill:tandem-status` directly.
-On your first project onboarding, Tandem recommends available models for planning, research, coding,
-review, and final checks. After you approve, it saves your choices on this computer and reuses them
-for later projects; say “Change Tandem models” any time to update them. A main-model change takes
+Use `/skill:tandem`, `/skill:tandem-onboard`, or `/skill:tandem-status` when you want the
+conversational flows. They do not replace the installed terminal command or start work merely
+because Tandem is mentioned. Low-level `src/cli.ts` commands remain an advanced fallback for
+exact automation and diagnostics.
+
+Onboarding always covers all six role choices: **Planning** (`coordinator`), **Research** (`scout`),
+**Coding** (`implementer`), **Review** (`reviewer`), **Final checks** (`verifier`), and
+**Presentations** (`presentation`). For each role, explicitly choose or accept the exact catalogue
+model `selector` and a supported thinking level; recommendations never fill omitted roles, and a
+complete six-role recap appears before saving. **Not now** pauses first-time onboarding before
+`configure-models`, project setup, or launch, with no fallthrough to built-in defaults. Returning
+onboarding shows all six saved exact selector/thinking pairs and offers **Keep all** (read-only, no
+new role answers; it may continue the existing project-setting flow), **Change roles** (explicitly
+choose or keep each role, with untouched roles preserved in the recap), or **Not now** (pause with
+choices unchanged, without setup or launch). The existing `configure-models` approval is required
+to save changes. Approved choices apply to future work across projects; a main-model change takes
 effect on the next Tandem launch, not in an already-running conversation.
-
-Launching Tandem opens a separate conversation for the project you choose. Asking about Tandem
-in an ordinary chat does not start it. Settings and saved progress stay outside your project,
-normally in `~/.tandem`.
 
 For an approved task, a clear follow-up direction can be sent with the coordinator's `steer`
 action without a redundant generic approval prompt; `steer` queues it for the next safe boundary.
@@ -77,6 +166,8 @@ Tandem first inspects your project without changing it. Saving settings, startin
 approving a coding plan, publishing a pull request, merging, and deleting unfinished work each
 need your approval. Research can start before you approve code changes; coding waits for your
 approved plan, followed by checks and a separate review. Tandem never merges automatically.
+
+Delegated scouts use read-only repository tools and native `web_search`: they prefer official or primary sources, use `read` for known URLs, cite sources, and separate verified facts from recommendations. Queued or blocked delegation is actionable state, not a running or completed research effort; the coordinator must disclose it and never silently take over research without explicit user authorization. Recorded task counts and statuses come from saved durable task state, not receipts or process observations.
 Asking how it works does not give it permission to inspect files or take action.
 
 ## References

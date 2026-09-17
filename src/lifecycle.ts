@@ -973,6 +973,7 @@ export function transitionTask(
         context,
         { stage: "blocked", previousStage: task.stage, blockReason: event.reason },
         `Task ${task.id} blocked: ${event.reason}`,
+        "coordinator",
       );
     }
     case "merge": {

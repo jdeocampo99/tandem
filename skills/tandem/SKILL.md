@@ -22,21 +22,84 @@ An ordinary agent session is just the current conversation. It can explain or re
 asked, but it does not become Tandem because someone mentioned it. A managed coordinator is a
 separate Tandem launch that the user has specifically requested.
 
-Each project gets its own coordinator conversation. Tandem keeps its settings and progress in
-a local home (normally `~/.tandem`, or a home the user selects), not in the project itself.
+The installed `tandem` command is the primary terminal front door. A bare invocation opens or
+reconnects every valid saved project under the selected Tandem home from any directory; explicit
+paths override that registry and open only the supplied subset or add/open projects. All projects in
+one invocation share one Herdr session, while each gets its own coordinator conversation, clean
+Treehouse source worktree, and child-worker group. Tandem keeps settings and progress in a local
+home (normally `~/.tandem`, or a home the user selects), not in the project itself. The original
+checkout may be dirty and remains untouched: source reads and delegated execution use each project's
+clean committed snapshot, while task records and delivery retain the original project identity.
+
+## Terminal front door
+
+From the Tandem checkout, run `bun install` and `bun link` once, then use:
+
+```sh
+tandem
+tandem /absolute/path/to/repo
+tandem /absolute/path/to/first-repo /absolute/path/to/second-repo
+tandem --continue /absolute/path/to/repo
+tandem configure /absolute/path/to/repo
+tandem --reset
+```
+
+With no path, Tandem opens or reconnects every valid saved project under the selected home before
+consulting the current working directory. It uses only saved registry records, not arbitrary disk
+repositories, and does not show a project picker or request a path when the registry is non-empty,
+including in non-TTY or `--headless`/`--no-attach` launches. If the registry is empty, a Git cwd
+retains current-Git first-run onboarding and outside Git retains the existing interactive
+project-path fallback. Explicit paths override the registry and select only the supplied project
+subset or add/open paths.
+Multiple paths share one Herdr session but remain separate project scopes.
+`configure` remains a single-project catalogue-anchor flow: its current-Git or interactive fallback
+never expands to all saved projects. It saves explicit choices for all six global roles without
+launching. `--headless` and `--no-attach` prepare coordinators without attaching a GUI. `TANDEM_HOME`,
+`TANDEM_SESSION` (then Herdr's session variables), and `TANDEM_POOL_ROOT` provide the corresponding
+defaults.
+
+Use `tandem --reset` from a separate normal terminal when you deliberately need a clean reopen of
+Tandem coordinators. With no paths it selects every valid saved project; explicit paths select only
+that subset. Reset stops only idle coordinators with exact Tandem ownership, refuses busy, foreign,
+unknown, or unsafe work before closing any pane, and then runs the normal launch/one-attach flow.
+It preserves settings, conversation history, task records, worktrees, and repository files: reset is
+not task recovery, a factory reset, or data wiping. Add `--continue` only to resume saved
+conversations; otherwise the reopened coordinators start fresh. Never run reset from inside Herdr.
+
+An explicit `tandem PATH` opens or reconnects only that project after ownership checks. A bare
+`tandem` applies the same checks to every project in its launch set (all saved projects when the
+registry is non-empty). Add `--continue` only when starting a stopped coordinator and resuming its
+saved conversation. An active coordinator stays pinned to its clean source `HEAD` even if the
+original project advances; stop and relaunch when a fresh source snapshot is wanted. If an old
+pre-registry coordinator is detected, stop its Herdr pane/process once, confirm it exited, and
+relaunch. Tandem never adopts or duplicates it and never migrates existing tasks automatically.
 
 ## The usual path
 
 1. **Get oriented** — read-only onboarding checks the project and suggests settings. On first
-   onboarding, Tandem recommends available models for planning, research, coding, review, and final
-   checks; after you approve, it saves those choices on this computer for reuse across projects. Ask
-   to “change Tandem models” later to update them; a main-model change takes effect on the next
-   Tandem launch, not in an already-running conversation. For an onboarding request, delegate to
-   `tandem-onboard`; for a current-state request, delegate to `tandem-status`. Onboarding approval
-   does not approve code changes or launch.
-2. **Launch** — only after a separate request, start the Tandem-managed coordinator.
+   onboarding, Tandem presents all six roles—**Planning** (`coordinator`), **Research** (`scout`),
+   **Coding** (`implementer`), **Review** (`reviewer`), **Final checks** (`verifier`), and
+   **Presentations** (`presentation`)—with an exact catalogue model `selector` and supported
+   thinking levels for each. Explicitly choose or accept a model-and-thinking pair for every role;
+   recommendations never fill omitted roles, and a complete six-role recap appears before saving.
+   **Not now** is an explicit pause: it performs no `configure-models`, project setup, or launch and
+   never falls through to built-in defaults. When choices already exist, every onboarding shows all
+   six saved exact selector/thinking pairs and offers **Keep all** (read-only, no new role answers;
+   it may continue the existing project-setting flow), **Change roles** (explicitly choose or keep
+   each role; untouched roles remain in the recap), or **Not now** (pause with choices unchanged,
+   without setup or launch). The existing `configure-models` approval is required to save changes.
+   Approved choices apply to future work across projects; use **Change roles** or say “Change Tandem
+   models” to update them. A main-model change takes effect on the next Tandem launch, not in an
+   already-running conversation. For an onboarding request, delegate to `tandem-onboard`; for a
+   current-state request, delegate to `tandem-status`. Onboarding approval does not approve code
+   changes or launch.
+2. **Launch** — only after a separate request, acquire the clean committed coordinator snapshot and
+   start the Tandem-managed coordinator; the original project path remains the durable identity for
+   task creation and delivery.
 3. **Agree on the work** — record what should change, how success will be recognized, and which
    part of the project is involved. Research may start automatically; coding waits for approval.
+
+Delegated scouts have read-only repository tools plus native `web_search`: they prefer official or primary sources, use `read` for known URLs, cite sources, and separate verified facts from recommendations. Missing capabilities or tool failures must be reported explicitly rather than replaced with invented findings. Queued or blocked delegation is actionable state, not running or completed research; the coordinator discloses it and never silently takes over research without explicit user authorization. Task counts and statuses come from durable state, not receipts or process observations.
 4. **Code, test, and review** — a worker makes the approved change, Tandem runs the configured
    checks, and a fresh reviewer examines the same change.
 5. **Deliver deliberately** — publishing, merging, or destructive cleanup each needs its own
@@ -69,10 +132,11 @@ safeguards still apply.
 - “Onboard `/path/to/repo`.” — use `tandem-onboard` (or `/skill:tandem-onboard`).
 - “What is the current state of my Tandem tasks?” — use `tandem-status` (or
   `/skill:tandem-status`).
-- “Launch Tandem for `/path/to/repo`.” — after the explicit request, discover the target and
-  installation, then follow the launch workflow.
+- “Launch Tandem for `/path/to/repo`.” — after the explicit request, use the installed
+  `tandem /path/to/repo` command; the conversational flow is optional.
 
-When execution is requested, resolve a validated `TANDEM_ROOT` or the real shipped skill path
-and ascend two levels (`../../`) to Tandem's root. Use `docs/agent-reference.md`'s launch section or run
-`bun "<TANDEM_ROOT>/src/cli.ts" --help`; never invent a global `tandem` binary. Do not resolve
-these paths for explanation-only questions.
+When execution is requested, use the installed `tandem` command (`tandem [PATH ...]`, or
+`tandem configure [PATH]`). If it is unavailable, resolve a validated `TANDEM_ROOT` or the real
+shipped skill path and ascend two levels (`../../`) to Tandem's root, then use
+`bun "<TANDEM_ROOT>/src/cli.ts" --help` as the advanced low-level fallback. Do not resolve these
+paths for explanation-only questions.

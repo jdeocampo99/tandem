@@ -12,9 +12,18 @@ Read durable state once; do not advance work.
 
 ## Resolve scope without guessing
 
-Resolve the checkout independently: use validated `TANDEM_ROOT`, else this skill's real path plus
-`../../`. If unavailable, ask where Tandem is installed. Never assume `Coding_Projects`, invent a
-global binary, or run setup.
+The installed `tandem` command is the primary launch/reconnect front door: bare `tandem` opens or
+reconnects every valid saved project under the selected home from any cwd, while explicit paths
+select only a subset or add/open projects. This status skill is optional and uses the advanced
+low-level `src/cli.ts status` action for an evidence-only durable read. Resolve the checkout
+independently: use validated `TANDEM_ROOT`, else this skill's real path plus `../../`. If unavailable,
+ask where Tandem is installed; never assume `Coding_Projects` or run setup.
+
+This status skill never performs a reset or launch. If a user explicitly asks to cleanly reopen
+coordinators, explain that `tandem --reset` is the separate terminal front door: it targets only
+selected idle Tandem-owned coordinators, refuses busy or unsafe work before closing panes, and
+preserves durable settings, history, tasks, worktrees, and files. It must be run outside Herdr;
+`--continue` is optional for resuming saved conversations.
 
 For repository scope, canonicalize an explicit target or cwd to its Git top-level (expand `~`,
 resolve relative paths, preserve symlink identity). If unresolved, ask briefly. Explicit all-project
@@ -28,12 +37,15 @@ filesystem errors are unknown/failed, not empty.
 ## Communication receipts
 
 This skill reports the task list once; it does not perform a second communication read. In a
+
 managed coordinator, use the `messages` action (or `bun src/cli.ts messages --task TASK_ID`) when
 you need per-direction queued, received, or delivered receipts, a worker Question:, a
 Recommendation:, or activity metadata. Queued/received/delivered are communication states, not
 proof that code changed, and this summary never treats a recorded stage or passive progress as
 proof that a live worker is running. Elapsed time alone does not kill a worker; explicit limits and
 cancellation remain the controls.
+
+Any task count or stage claim in this summary comes only from that durable read; queued/received/delivered receipts and live activity never establish a running or completed scout.
 
 ## Perform one read
 

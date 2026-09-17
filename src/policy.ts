@@ -95,6 +95,7 @@ export type PolicyTextWriter = (absolutePath: string, text: string) => Promise<v
 /** Inputs for resolving global policy plus a Tandem-owned central repository override. */
 export type PolicyResolutionOptions = Readonly<{
   repoPath: string;
+  checkoutPath?: string;
   home: string;
   globalPolicy?: unknown;
   readText?: PolicyTextReader;
@@ -103,6 +104,7 @@ export type PolicyResolutionOptions = Readonly<{
 /** Inputs for discovery; write=true is the explicit setup approval that creates a missing central policy. */
 export type OnboardRepoOptions = Readonly<{
   repoPath: string;
+  checkoutPath?: string;
   home: string;
   globalPolicy?: unknown;
   readText?: PolicyTextReader;
@@ -1050,9 +1052,11 @@ async function resolveGuidance(
   return guidance;
 }
 
-/** Resolves global and Tandem-owned central policy, then pins inline and file guidance with provenance. */
+/** Resolves central policy by canonical repository identity and pins guidance from the requested checkout. */
 export async function resolveRepoPolicy(options: PolicyResolutionOptions): Promise<ResolvedPolicy> {
   const root = await repositoryRoot(options.repoPath);
+  const guidanceRoot =
+    options.checkoutPath === undefined ? root : await repositoryRoot(options.checkoutPath);
   const home = await configuredHome(options.home);
   const paths = centralPaths(root, home);
   const readText = options.readText;
@@ -1063,7 +1067,7 @@ export async function resolveRepoPolicy(options: PolicyResolutionOptions): Promi
   const localInput = await readCentralPolicy(paths, root, readText);
   const config =
     localInput === undefined ? copyPolicy(global) : parsePolicyOverride(localInput, global);
-  const guidance = await resolveGuidance(root, config, readText);
+  const guidance = await resolveGuidance(guidanceRoot, config, readText);
   return { config: copyPolicy(config), guidance };
 }
 
@@ -1207,9 +1211,11 @@ function serializeCentralConfig(root: string, commands: readonly ValidationComma
 `;
 }
 
-/** Discovers package scripts without executing them; write=true creates only a missing central policy. */
+/** Discovers package scripts from the requested checkout without executing them; write=true creates only a missing central policy. */
 export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardRepoResult> {
   const root = await repositoryRoot(options.repoPath);
+  const checkoutRoot =
+    options.checkoutPath === undefined ? root : await repositoryRoot(options.checkoutPath);
   const home = await configuredHome(options.home);
   const paths = centralPaths(root, home);
   const modelSettings = await readModelSettingsAt(root, home, options.readText);
@@ -1225,7 +1231,12 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     throw centralOverwriteError(paths.config);
   }
 
-  const packageText = await readRepositoryFile(root, "package.json", options.readText, false);
+  const packageText = await readRepositoryFile(
+    checkoutRoot,
+    "package.json",
+    options.readText,
+    false,
+  );
   const proposal = proposeValidationCommands(packageText);
   const proposedPolicy = existingConfig
     ? copyPolicy(currentPolicy)

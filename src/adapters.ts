@@ -95,7 +95,7 @@ type HerdrPaneIdentity = Readonly<{
   foregroundCwd: string | undefined;
 }>;
 type HerdrWorkspace = Readonly<{ workspaceId: string }>;
-type HerdrSessionStatus = Readonly<{ socketPath: string; running: boolean | undefined }>;
+export type HerdrSessionStatus = Readonly<{ socketPath: string; running: boolean | undefined }>;
 type HerdrWorkspaceMoveResponse = Readonly<{
   type: "workspace_list";
   workspaces: readonly HerdrWorkspace[];
@@ -1345,10 +1345,13 @@ function readProcessInfo(
       `process-info described pane ${JSON.stringify(paneId)} instead of ${JSON.stringify(endpoint.paneId)}`,
     );
   }
-  if (!Array.isArray(processInfo.foreground_processes)) {
+  // Herdr omits this optional array when no foreground processes are reported.
+  const processes =
+    processInfo.foreground_processes === undefined ? [] : processInfo.foreground_processes;
+  if (!Array.isArray(processes)) {
     throw new AdapterProtocolError(operation, "foreground_processes must be an array", response);
   }
-  const foregroundProcesses = processInfo.foreground_processes.map((entry, index) =>
+  const foregroundProcesses = processes.map((entry, index) =>
     readProcess(entry, index, operation, response),
   );
   const shellPid = optionalInteger(
@@ -1503,6 +1506,7 @@ function parseHerdrStatus(
   sessionId: string,
   operation: string,
   response: string,
+  allowNotRunning = false,
 ): HerdrSessionStatus {
   const root = requiredRecord(payload, "response", operation, response);
   const server = requiredRecord(root.server, "server", operation, response);
@@ -1522,7 +1526,7 @@ function parseHerdrStatus(
       response,
     );
   }
-  if (runningValue === false) {
+  if (runningValue === false && !allowNotRunning) {
     throw new AdapterProtocolError(
       operation,
       `Herdr session ${sessionId} is not running`,
@@ -1549,10 +1553,11 @@ function parseHerdrStatus(
   return { socketPath, running: runningValue };
 }
 
-async function readHerdrStatus(
+export async function readHerdrStatus(
   run: CommandRunner,
   sessionId: string,
   cwd: string,
+  allowNotRunning = false,
 ): Promise<HerdrSessionStatus> {
   const request = herdrRequest(sessionId, cwd, ["status", "--json"]);
   const result = await runChecked(run, request, "herdr status");
@@ -1561,6 +1566,7 @@ async function readHerdrStatus(
     sessionId,
     "herdr status",
     result.stdout,
+    allowNotRunning,
   );
 }
 

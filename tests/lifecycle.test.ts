@@ -360,6 +360,7 @@ test("pause, resume, block, cancel, scout completion, and merge remain distinct"
     context(),
   );
   expect(blocked.stage).toBe("blocked");
+  expect(blocked.notifications.at(-1)?.kind).toBe("coordinator");
   task = transitionTask(blocked, { type: "resume" }, context());
   task = transitionTask(task, { type: "cancel", reason: "no longer needed" }, context());
   expect(task.stage).toBe("cancelled");

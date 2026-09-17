@@ -64,6 +64,7 @@ test("runtime state preserves a clean source checkpoint with an empty diff", () 
         schemaVersion: 1,
         taskId: "task-1",
         sourceCheckpoint: checkpoint,
+        sourceRepoPath: "/tmp/tandem-clean-source",
         taskName: "tandem-task-1",
         endpoints: [],
         jobs: [],
@@ -73,6 +74,7 @@ test("runtime state preserves a clean source checkpoint with an empty diff", () 
   });
 
   expect(state.tasks[0]?.sourceCheckpoint.diff).toBe("");
+  expect(state.tasks[0]?.sourceRepoPath).toBe("/tmp/tandem-clean-source");
 });
 
 test("active reservations count task and presentation capacity but ignore released entries", () => {

@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "tandem": "./src/main.ts"
+  },
   "scripts": {
     "check": "tsc --noEmit",
     "test": "bun test",

@@ -39,6 +39,7 @@ type ParsedOmpOutput = Readonly<{
   readonly text: string;
 }>;
 
+const SCOUT_TOOLS = ["read", "grep", "glob", "web_search"] as const;
 const READ_ONLY_TOOLS = ["read", "grep", "glob"] as const;
 const IMPLEMENTER_TOOLS = ["read", "grep", "glob", "edit", "write", "bash"] as const;
 const PRESENTATION_TOOLS = ["read", "grep", "glob", "write", "edit"] as const;
@@ -171,6 +172,9 @@ function modelMismatchReason(event: JsonObject, expected: ExpectedModel): string
 }
 
 function toolsForRole(role: WorkerRole): string {
+  if (role === "scout") {
+    return SCOUT_TOOLS.join(",");
+  }
   if (role === "implementer") {
     return IMPLEMENTER_TOOLS.join(",");
   }

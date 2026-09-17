@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +14,7 @@ import {
   runCli,
 } from "../src/cli.ts";
 import { quoteShellArgument, runCommand } from "../src/commands.ts";
-import type { TaskRecord } from "../src/contracts.ts";
+import type { CommandRequest, CommandRunner, TaskRecord } from "../src/contracts.ts";
 import { defaultPolicy } from "../src/policy.ts";
 import { createTandemService, type TandemService } from "../src/service.ts";
 
@@ -21,6 +22,7 @@ async function writeOmpProbe(root: string, exitCode = 0): Promise<string> {
   const outputPath = join(root, "omp-probe-output.txt");
   const script = `#!/bin/sh
 {
+  printf 'PWD=%s\n' "$(pwd)"
   printf 'AUTH_TOKEN=%s\n' "$AUTH_TOKEN"
   printf 'HERDR_ENV=%s\n' "$HERDR_ENV"
   printf 'HERDR_SESSION=%s\n' "$HERDR_SESSION"
@@ -30,6 +32,7 @@ async function writeOmpProbe(root: string, exitCode = 0): Promise<string> {
   printf 'TANDEM_POOL_ROOT=%s\n' "$TANDEM_POOL_ROOT"
   printf 'TANDEM_SESSION=%s\n' "$TANDEM_SESSION"
   printf 'TANDEM_REPO=%s\n' "$TANDEM_REPO"
+  printf 'TANDEM_SOURCE_REPO=%s\n' "$TANDEM_SOURCE_REPO"
   printf 'TANDEM_PARENT_WORKSPACE=%s\n' "$TANDEM_PARENT_WORKSPACE"
   index=0
   for arg in "$@"; do
@@ -72,6 +75,205 @@ async function withProcessEnvironment<T>(
     }
     release();
   }
+}
+
+type CoordinatorRunnerInput = Readonly<{
+  readonly repo: string;
+  readonly poolRoot: string;
+  readonly cleanRepo: string;
+  readonly model: Readonly<{ readonly model: string; readonly thinking: string }>;
+  readonly sourceHead?: string;
+  readonly originalDirty?: boolean;
+  readonly cleanDirty?: boolean;
+  readonly cleanHead?: string;
+  readonly startServer?: boolean;
+  readonly existingLease?: Readonly<{ readonly leaseHolder: string; readonly branch: string }>;
+  readonly recordedCommand?: readonly string[];
+  readonly startupTransitionCount?: number;
+  readonly herdrEnvironment?: Readonly<Record<string, string>>;
+}>;
+
+function coordinatorRunner(input: CoordinatorRunnerInput): Readonly<{
+  readonly calls: readonly CommandRequest[];
+  readonly run: CommandRunner;
+}> {
+  const calls: CommandRequest[] = [];
+  const sourceHead = input.sourceHead ?? "source-head";
+  const cleanHead = input.cleanHead ?? sourceHead;
+  let branch = input.existingLease?.branch ?? "";
+  let processInfoCalls = 0;
+  let herdrStatusCalls = 0;
+  const run: CommandRunner = async (request) => {
+    calls.push(request);
+    const [program] = request.argv;
+    if (program === "omp" && request.argv[1] === "models") {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          models: [
+            {
+              selector: input.model.model,
+              id: "model-id",
+              provider: "openai",
+              thinking: [input.model.thinking],
+            },
+          ],
+        }),
+        stderr: "",
+      };
+    }
+    if (program === "herdr") {
+      if (request.argv.includes("api") && request.argv.includes("snapshot")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({ result: { type: "session_snapshot", snapshot: { panes: [] } } }),
+          stderr: "",
+        };
+      }
+      if (request.argv.includes("pane") && request.argv.includes("get")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            result: {
+              pane: {
+                pane_id: "pane-2",
+                tab_id: "tab-2",
+                workspace_id: "workspace-2",
+                foreground_cwd: input.cleanRepo,
+              },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (request.argv.includes("pane") && request.argv.includes("process-info")) {
+        processInfoCalls += 1;
+        const inStartupTransition =
+          input.startupTransitionCount !== undefined &&
+          processInfoCalls <= input.startupTransitionCount;
+        const processName = inStartupTransition ? "env" : "omp";
+        const processCommand = inStartupTransition ? ["env"] : (input.recordedCommand ?? ["omp"]);
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            result: {
+              process_info: {
+                pane_id: "pane-2",
+                foreground_processes: [{ pid: 123, name: processName, argv: processCommand }],
+              },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (request.argv.includes("status")) {
+        const running = input.startServer !== true || herdrStatusCalls > 0;
+        herdrStatusCalls += 1;
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            server: {
+              socket: "/tmp/herdr.sock",
+              running,
+              session: request.argv[2],
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (request.argv.includes("workspace") && request.argv.includes("create")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            result: {
+              workspace: { workspace_id: "workspace-2" },
+              tab: { tab_id: "tab-2" },
+              root_pane: { pane_id: "pane-2" },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (request.argv.includes("pane") && request.argv.includes("run")) {
+        const shellCommand = request.argv.at(-1);
+        if (shellCommand === undefined)
+          throw new Error("pane run command omitted generated shell command");
+        return runCommand({
+          argv: ["/bin/sh", "-c", shellCommand],
+          cwd: request.cwd,
+          env: { ...(request.env ?? {}), ...(input.herdrEnvironment ?? {}) },
+        });
+      }
+    }
+    if (program === "treehouse") {
+      if (request.argv.includes("status")) {
+        const record = input.existingLease;
+        return {
+          code: 0,
+          stdout:
+            record === undefined
+              ? "[]"
+              : JSON.stringify([
+                  {
+                    path: input.cleanRepo,
+                    lease_id: "lease-coordinator",
+                    lease_holder: record.leaseHolder,
+                    leased_at: "2030-01-02T03:04:05.000Z",
+                  },
+                ]),
+          stderr: "",
+        };
+      }
+      if (request.argv.includes("get")) {
+        const holderIndex = request.argv.indexOf("--lease-holder");
+        const holder = request.argv[holderIndex + 1] ?? "coordinator-fixture";
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            path: input.cleanRepo,
+            lease_id: "lease-coordinator",
+            lease_holder: holder,
+            leased_at: "2030-01-02T03:04:05.000Z",
+          }),
+          stderr: "",
+        };
+      }
+    }
+    if (program === "git") {
+      const pathIndex = request.argv.indexOf("-C");
+      const gitPath = pathIndex === -1 ? request.cwd : request.argv[pathIndex + 1];
+      if (request.argv.includes("--show-toplevel")) {
+        return { code: 0, stdout: `${gitPath}\n`, stderr: "" };
+      }
+      if (request.argv.includes("symbolic-ref")) return { code: 0, stdout: "main\n", stderr: "" };
+      if (request.argv.includes("switch") && request.argv.includes("-c")) {
+        branch = request.argv.at(-1) ?? "";
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (request.argv.includes("branch") && request.argv.includes("--show-current")) {
+        return { code: 0, stdout: `${branch}\n`, stderr: "" };
+      }
+      if (request.argv.includes("refs/heads/main")) {
+        return { code: 0, stdout: `${sourceHead}\n`, stderr: "" };
+      }
+      if (request.argv.includes("rev-parse") && request.argv.includes("HEAD")) {
+        return {
+          code: 0,
+          stdout: `${gitPath === input.repo ? sourceHead : cleanHead}\n`,
+          stderr: "",
+        };
+      }
+      if (request.argv.includes("diff")) return { code: 0, stdout: "", stderr: "" };
+      if (request.argv.includes("status")) {
+        const dirty =
+          gitPath === input.repo ? input.originalDirty !== false : input.cleanDirty === true;
+        return { code: 0, stdout: dirty ? " M user-source.txt\n" : "", stderr: "" };
+      }
+      if (request.argv.includes("diff-filter=U")) return { code: 0, stdout: "", stderr: "" };
+    }
+    throw new Error(`unexpected command ${request.argv.join(" ")}`);
+  };
+  return { calls, run };
 }
 
 function cancelledTask(): TaskRecord {
@@ -334,15 +536,21 @@ test("CLI preserves trailing-space repository and home paths for central setup",
   }
 });
 
-test("CLI launch exposes resolved environment and session isolation to a real coordinator child", async () => {
+test("CLI launches a clean coordinator while preserving dirty original source identity", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-cli-launch-"));
   try {
     const repo = join(root, "repo");
     const home = join(root, "coordinator-home");
     const poolRoot = join(root, "coordinator-pool");
+    const cleanRepo = join(poolRoot, "coordinator-worktree");
+    const userSource = join(repo, "user-source.txt");
     await mkdir(repo, { recursive: true });
+    await mkdir(cleanRepo, { recursive: true });
+    const expectedCleanRepo = await realpath(cleanRepo);
+    await writeFile(userSource, "keep this edit\n", "utf8");
     const outputPath = await writeOmpProbe(root);
     const model = defaultPolicy().models.coordinator;
+    const runner = coordinatorRunner({ repo, poolRoot, cleanRepo, model });
     const application = createCliApplication({
       cwd: root,
       service: createTandemService({ home, poolRoot, sessionId: "tandem-session" }),
@@ -357,20 +565,7 @@ test("CLI launch exposes resolved environment and session isolation to a real co
         isFile: () => true,
         isSymbolicLink: () => false,
       }),
-      run: async () => ({
-        code: 0,
-        stdout: JSON.stringify({
-          models: [
-            {
-              selector: model.model,
-              id: "model-id",
-              provider: "openai",
-              thinking: [model.thinking],
-            },
-          ],
-        }),
-        stderr: "",
-      }),
+      run: runner.run,
       startPersistent: async () => {
         throw new Error("must not start a second Herdr session in the owned pane");
       },
@@ -384,6 +579,7 @@ test("CLI launch exposes resolved environment and session isolation to a real co
         HERDR_SESSION_NAME: undefined,
         HERDR_WORKSPACE_ID: undefined,
         HERDR_PANE_ID: undefined,
+        TANDEM_SOURCE_REPO: undefined,
         PATH: path,
       },
       () =>
@@ -407,10 +603,13 @@ test("CLI launch exposes resolved environment and session isolation to a real co
     expect(result.command).toBe("launch");
     expect(result.value).toMatchObject({
       direct: true,
+      repoPath: repo,
+      worktree: { path: cleanRepo, baseHead: "source-head" },
       workspaceId: "workspace-1",
       paneId: "pane-1",
     });
     const observed = await readFile(outputPath, "utf8");
+    expect(observed).toContain(`PWD=${expectedCleanRepo}\n`);
     expect(observed).toContain("AUTH_TOKEN=preserve-me\n");
     expect(observed).toContain("HERDR_ENV=1\n");
     expect(observed).toContain("HERDR_SESSION=tandem-session\n");
@@ -420,12 +619,14 @@ test("CLI launch exposes resolved environment and session isolation to a real co
     expect(observed).toContain(`TANDEM_POOL_ROOT=${poolRoot}\n`);
     expect(observed).toContain("TANDEM_SESSION=tandem-session\n");
     expect(observed).toContain(`TANDEM_REPO=${repo}\n`);
+    expect(observed).toContain(`TANDEM_SOURCE_REPO=${cleanRepo}\n`);
     expect(observed).toContain("TANDEM_PARENT_WORKSPACE=explicit-parent\n");
     const sessionArgument = observed
       .split("\n")
       .find((line) => line.startsWith("ARG_") && line.includes("/coordinator-sessions/"));
     expect(sessionArgument).toContain(`${home}/coordinator-sessions/`);
     expect(sessionArgument).toMatch(/[a-f0-9]{24}$/u);
+    expect(await readFile(userSource, "utf8")).toBe("keep this edit\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -437,9 +638,18 @@ test("CLI reports a failed direct coordinator child as a nonzero outcome", async
     const repo = join(root, "repo");
     const home = join(root, "coordinator-home");
     const poolRoot = join(root, "coordinator-pool");
+    const cleanRepo = join(poolRoot, "coordinator-worktree");
     await mkdir(repo, { recursive: true });
+    await mkdir(cleanRepo, { recursive: true });
+    const expectedCleanRepo = await realpath(cleanRepo);
     const outputPath = await writeOmpProbe(root, 7);
     const model = defaultPolicy().models.coordinator;
+    const runner = coordinatorRunner({
+      repo,
+      poolRoot,
+      cleanRepo,
+      model,
+    });
     const stdout: string[] = [];
     const stderr: string[] = [];
     const path = `${root}:/usr/bin:/bin`;
@@ -450,6 +660,7 @@ test("CLI reports a failed direct coordinator child as a nonzero outcome", async
         HERDR_SESSION: "tandem-session",
         HERDR_WORKSPACE_ID: "workspace-1",
         HERDR_PANE_ID: "pane-1",
+        TANDEM_SOURCE_REPO: undefined,
         PATH: path,
       },
       () =>
@@ -481,20 +692,7 @@ test("CLI reports a failed direct coordinator child as a nonzero outcome", async
               isFile: () => true,
               isSymbolicLink: () => false,
             }),
-            run: async () => ({
-              code: 0,
-              stdout: JSON.stringify({
-                models: [
-                  {
-                    selector: model.model,
-                    id: "model-id",
-                    provider: "openai",
-                    thinking: [model.thinking],
-                  },
-                ],
-              }),
-              stderr: "",
-            }),
+            run: runner.run,
             stdout: (value) => stdout.push(value),
             stderr: (value) => stderr.push(value),
           },
@@ -507,19 +705,23 @@ test("CLI reports a failed direct coordinator child as a nonzero outcome", async
     expect(JSON.parse(stderr.join(""))).toMatchObject({
       error: { message: "coordinator exited with code 7" },
     });
-    expect(await readFile(outputPath, "utf8")).toContain("TANDEM_SESSION=tandem-session\n");
+    expect(await readFile(outputPath, "utf8")).toContain(`PWD=${expectedCleanRepo}\n`);
+    expect(await readFile(outputPath, "utf8")).toContain(`TANDEM_SOURCE_REPO=${cleanRepo}\n`);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("launchCoordinator executes the generated quoted command in a new Herdr pane", async () => {
+test("launchCoordinator executes the generated quoted command from a clean checkout in a new Herdr pane", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-cli-pane-"));
   try {
     const repo = join(root, "repo");
     const home = join(root, "coordinator home");
     const poolRoot = join(root, "coordinator pool");
+    const cleanRepo = join(poolRoot, "coordinator-worktree");
     await mkdir(repo, { recursive: true });
+    await mkdir(cleanRepo, { recursive: true });
+    const expectedCleanRepo = await realpath(cleanRepo);
     const outputPath = await writeOmpProbe(root);
     const request: CoordinatorLaunchRequest = {
       cwd: repo,
@@ -535,6 +737,15 @@ test("launchCoordinator executes the generated quoted command in a new Herdr pan
       noAttach: false,
       parentWorkspaceId: "explicit-parent",
     };
+    const sessionKey = createHash("sha256").update(repo).digest("hex").slice(0, 24);
+    const recordedCommand = buildCoordinatorArgv({
+      cwd: cleanRepo,
+      model: request.model,
+      configPath: request.configPath,
+      extensionPath: request.extensionPath,
+      continueSession: request.continueSession,
+      sessionDirectory: join(home, "coordinator-sessions", sessionKey),
+    });
     const path = `${root}:/usr/bin:/bin`;
     const herdrEnvironment = {
       HERDR_ENV: "1",
@@ -542,6 +753,17 @@ test("launchCoordinator executes the generated quoted command in a new Herdr pan
       HERDR_WORKSPACE_ID: "herdr-workspace",
       HERDR_PANE_ID: "herdr-pane",
     } as const;
+    const runner = coordinatorRunner({
+      repo,
+      recordedCommand,
+      poolRoot,
+      cleanRepo,
+      model: request.model,
+      startServer: true,
+      startupTransitionCount: 1,
+      herdrEnvironment,
+    });
+    let startPersistentCalls = 0;
     const result = await withProcessEnvironment(
       {
         AUTH_TOKEN: "preserve-me",
@@ -549,35 +771,11 @@ test("launchCoordinator executes the generated quoted command in a new Herdr pan
       },
       () =>
         launchCoordinator(request, {
-          run: async (command) => {
-            if (command.argv.includes("status")) {
-              return { code: 0, stdout: "", stderr: "" };
-            }
-            if (command.argv.includes("workspace") && command.argv.includes("create")) {
-              return {
-                code: 0,
-                stdout: JSON.stringify({
-                  result: {
-                    workspace: { workspace_id: "workspace-2" },
-                    root_pane: { pane_id: "pane-2" },
-                  },
-                }),
-                stderr: "",
-              };
-            }
-            if (command.argv.includes("pane") && command.argv.includes("run")) {
-              const shellCommand = command.argv.at(-1);
-              if (shellCommand === undefined)
-                throw new Error("pane run command omitted generated shell command");
-              return runCommand({
-                argv: ["/bin/sh", "-c", shellCommand],
-                cwd: command.cwd,
-                env: { ...(command.env ?? {}), ...herdrEnvironment },
-              });
-            }
-            throw new Error(`unexpected Herdr command: ${command.argv.join(" ")}`);
+          run: runner.run,
+          startPersistent: async () => {
+            startPersistentCalls += 1;
+            return undefined;
           },
-          startPersistent: async () => undefined,
           runInteractive: async () => {
             throw new Error("new-pane launch must not start OMP in the parent process");
           },
@@ -585,11 +783,16 @@ test("launchCoordinator executes the generated quoted command in a new Herdr pan
           processEnvironment: { AUTH_TOKEN: "preserve-me" },
         }),
     );
+    expect(startPersistentCalls).toBe(1);
 
     expect(result.direct).toBe(false);
+    expect(result.repoPath).toBe(repo);
+    expect(result.worktree.path).toBe(cleanRepo);
     expect(result.workspaceId).toBe("workspace-2");
+    expect(result.tabId).toBe("tab-2");
     expect(result.paneId).toBe("pane-2");
     const observed = await readFile(outputPath, "utf8");
+    expect(observed).toContain(`PWD=${expectedCleanRepo}\n`);
     expect(observed).toContain("HERDR_SESSION=herdr-session\n");
     expect(observed).toContain("AUTH_TOKEN=preserve-me\n");
     expect(observed).toContain("HERDR_ENV=1\n");
@@ -599,12 +802,165 @@ test("launchCoordinator executes the generated quoted command in a new Herdr pan
     expect(observed).toContain(`TANDEM_POOL_ROOT=${poolRoot}\n`);
     expect(observed).toContain("TANDEM_SESSION=pane-session\n");
     expect(observed).toContain(`TANDEM_REPO=${repo}\n`);
+    expect(observed).toContain(`TANDEM_SOURCE_REPO=${cleanRepo}\n`);
     expect(observed).toContain("TANDEM_PARENT_WORKSPACE=explicit-parent\n");
     const sessionArgument = observed
       .split("\n")
       .find((line) => line.startsWith("ARG_") && line.includes("/coordinator-sessions/"));
     expect(sessionArgument).toContain(`${home}/coordinator-sessions/`);
     expect(sessionArgument).toMatch(/[a-f0-9]{24}$/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("launchCoordinator reconnects to the pinned coordinator after the original HEAD advances", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-cli-reconnect-")));
+  try {
+    const repo = join(root, "repo");
+    const home = join(root, "coordinator-home");
+    const poolRoot = join(root, "coordinator-pool");
+    const cleanRepo = join(poolRoot, "coordinator-worktree");
+    await mkdir(repo, { recursive: true });
+    await mkdir(cleanRepo, { recursive: true });
+    await writeOmpProbe(root);
+    const fixturePath = `${root}:/usr/bin:/bin`;
+    const model = defaultPolicy().models.coordinator;
+    const request: CoordinatorLaunchRequest = {
+      cwd: repo,
+      repo,
+      sourceRepo: cleanRepo,
+      home,
+      poolRoot,
+      sessionId: "reconnect-session",
+      model,
+      configPath: "/tandem/src/worker-config.yml",
+      extensionPath: "/tandem/src/extension.ts",
+      continueSession: true,
+      headless: true,
+      noAttach: false,
+    };
+    const sessionKey = createHash("sha256").update(repo).digest("hex").slice(0, 24);
+    const recordedCommand = buildCoordinatorArgv({
+      cwd: cleanRepo,
+      model,
+      configPath: "/tandem/src/worker-config.yml",
+      extensionPath: "/tandem/src/extension.ts",
+      continueSession: true,
+      sessionDirectory: join(home, "coordinator-sessions", sessionKey),
+    });
+    const firstRunner = coordinatorRunner({
+      repo,
+      poolRoot,
+      cleanRepo,
+      model,
+      sourceHead: "head-1",
+      cleanHead: "head-1",
+      recordedCommand,
+      herdrEnvironment: { PATH: fixturePath },
+      startServer: true,
+    });
+    const first = await launchCoordinator(request, {
+      run: firstRunner.run,
+      startPersistent: async () => undefined,
+      runInteractive: async () => {
+        throw new Error("first launch should use a Herdr workspace");
+      },
+      sleep: async () => undefined,
+      processEnvironment: {},
+    });
+    expect(first.direct).toBe(false);
+    expect(first.worktree.baseHead).toBe("head-1");
+
+    const secondRunner = coordinatorRunner({
+      repo,
+      poolRoot,
+      cleanRepo,
+      model,
+      sourceHead: "head-2",
+      cleanHead: "head-1",
+      recordedCommand,
+      herdrEnvironment: { PATH: fixturePath },
+    });
+    const second = await launchCoordinator(request, {
+      run: secondRunner.run,
+      startPersistent: async () => {
+        throw new Error("reconnect must not start another Herdr server");
+      },
+      runInteractive: async () => {
+        throw new Error("reconnect must not launch a second coordinator");
+      },
+      sleep: async () => undefined,
+      processEnvironment: {},
+    });
+    expect(second.reused).toBe(true);
+    expect(second.repoPath).toBe(repo);
+    expect(second.worktree.path).toBe(cleanRepo);
+    expect(second.worktree.baseHead).toBe("head-1");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("launchCoordinator rejects an unsafe reused coordinator lease without cleanup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-cli-unsafe-reuse-"));
+  try {
+    const repo = join(root, "repo");
+    const home = join(root, "coordinator-home");
+    const poolRoot = join(root, "coordinator-pool");
+    const cleanRepo = join(poolRoot, "coordinator-worktree");
+    await mkdir(repo, { recursive: true });
+    await mkdir(cleanRepo, { recursive: true });
+    const sessionId = "unsafe-session";
+    const sourceHead = "source-head";
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
+    const repositoryKey = hash(repo);
+    const sessionKey = hash(sessionId);
+    const sourceKey = hash(sourceHead);
+    const taskName = `coordinator-${repositoryKey}-${sessionKey}-${sourceKey}`;
+    const runner = coordinatorRunner({
+      repo,
+      poolRoot,
+      cleanRepo,
+      model: defaultPolicy().models.coordinator,
+      sourceHead,
+      originalDirty: true,
+      cleanDirty: true,
+      existingLease: {
+        leaseHolder: `coordinator:${repositoryKey}:${sessionKey}:${sourceKey}`,
+        branch: `tandem/${taskName}`,
+      },
+    });
+
+    await expect(
+      launchCoordinator(
+        {
+          cwd: repo,
+          repo,
+          home,
+          poolRoot,
+          sessionId,
+          model: defaultPolicy().models.coordinator,
+          configPath: "/tandem/src/worker-config.yml",
+          extensionPath: "/tandem/src/extension.ts",
+          continueSession: false,
+          headless: true,
+          noAttach: false,
+        },
+        {
+          run: runner.run,
+          startPersistent: async () => undefined,
+          runInteractive: async () => {
+            throw new Error("unsafe reuse must fail before launching");
+          },
+          sleep: async () => undefined,
+          processEnvironment: {},
+        },
+      ),
+    ).rejects.toThrow(/worktree is dirty/u);
+
+    expect(
+      runner.calls.some((call) => call.argv.includes("return") || call.argv.includes("destroy")),
+    ).toBe(false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

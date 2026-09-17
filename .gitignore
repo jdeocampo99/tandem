@@ -1,6 +1,7 @@
 node_modules/
 .tandem/
 .lavish/
+/.serena/
 .env
 .env.*
 !.env.example

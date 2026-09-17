@@ -55,7 +55,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   answer: { min: 4, max: Number.POSITIVE_INFINITY },
   messages: { min: 2, max: 2 },
 };
-const MODEL_ROLE_ORDER = [
+export const MODEL_ROLE_ORDER = [
   "coordinator",
   "scout",
   "implementer",
@@ -63,13 +63,13 @@ const MODEL_ROLE_ORDER = [
   "verifier",
   "presentation",
 ] as const satisfies readonly AgentRole[];
-const MODEL_ROLE_LABELS: Readonly<Record<AgentRole, string>> = {
+export const MODEL_ROLE_LABELS: Readonly<Record<AgentRole, string>> = {
   coordinator: "Planning",
   scout: "Research",
   implementer: "Coding",
-  reviewer: "Code review",
+  reviewer: "Review",
   verifier: "Final checks",
-  presentation: "Visual presentation",
+  presentation: "Presentations",
 };
 
 export type TandemBoundaryEnvironment = Readonly<{
@@ -78,6 +78,7 @@ export type TandemBoundaryEnvironment = Readonly<{
   readonly parentWorkspaceId?: string;
   readonly poolRoot: string;
   readonly repo: string;
+  readonly sourceRepo?: string;
 }>;
 
 export type TandemEnvironmentDefaults = Readonly<{
@@ -236,6 +237,7 @@ function processEnvironmentSnapshot(
     "TANDEM_PARENT_WORKSPACE",
     "TANDEM_POOL_ROOT",
     "TANDEM_REPO",
+    "TANDEM_SOURCE_REPO",
     "HERDR_ENV",
     "HERDR_SESSION",
     "HERDR_SESSION_NAME",
@@ -275,12 +277,18 @@ export function resolveTandemEnvironment(
     "TANDEM_POOL_ROOT",
   );
   const repo = readBoundaryPath(overrides.repo ?? source.TANDEM_REPO ?? cwd, "TANDEM_REPO");
+  const sourceRepoValue = overrides.sourceRepo ?? source.TANDEM_SOURCE_REPO;
+  const sourceRepo =
+    sourceRepoValue === undefined
+      ? undefined
+      : readBoundaryPath(sourceRepoValue, "TANDEM_SOURCE_REPO");
   return {
     home,
     sessionId,
     ...(parentWorkspaceId === undefined ? {} : { parentWorkspaceId }),
     poolRoot,
     repo,
+    ...(sourceRepo === undefined ? {} : { sourceRepo }),
   };
 }
 
@@ -495,7 +503,7 @@ function recordText(value: Record<string, unknown>, key: string): string | undef
   return typeof candidate === "string" ? candidate : undefined;
 }
 
-function summarizeOnboard(value: unknown): string {
+function summarizeOnboard(value: unknown, action: "onboard" | "setup"): string {
   const record = summaryRecord(value);
   if (record === undefined) return boundedJson(value, ACTION_RESULT_MAX_CHARS);
   const repoPath = recordText(record, "repoPath") ?? "unknown project";
@@ -513,9 +521,37 @@ function summarizeOnboard(value: unknown): string {
   const modelSettings = summaryRecord(record.modelSettings);
   const lines = [status];
   if (modelSettings?.configured === false) {
-    lines.push("No saved model choices yet; choose models before project setup.");
+    if (action === "setup") {
+      lines.push(
+        written
+          ? "No saved model choices were changed; setup saved project settings only."
+          : "No saved model choices are configured; setup does not choose models.",
+      );
+    } else {
+      lines.push("No saved model choices yet; no role has a selected, approved, or saved model.");
+      lines.push("Pending role choices (all six roles are unselected until explicit answers):");
+      lines.push(...summarizeModelAssignments(undefined, true).map((entry) => `- ${entry}`));
+      lines.push(
+        "Fetch the available OMP models catalogue, then choose or adjust every role explicitly, or choose Not now to pause without configure-models, project setup, or launch.",
+      );
+    }
   } else if (modelSettings?.configured === true) {
-    lines.push("Saved model choices will be reused for this project.");
+    lines.push(
+      action === "setup"
+        ? "Saved model choices remain configured; setup did not change them."
+        : "Saved model choices are configured for future projects (all six roles):",
+    );
+    const current = summarizeModelAssignments(
+      modelSettings.models ?? summaryRecord(record.policy)?.models,
+      true,
+    );
+    lines.push(...current.map((entry) => `- ${entry}`));
+    if (action === "onboard") {
+      lines.push("Choose one: Keep all (read-only), Change roles, or Not now.");
+      lines.push(
+        "Keep all does not write or force re-selection. Change roles asks explicitly for every role, records keep-current answers for untouched roles, preserves those assignments, and recaps all six before configure-models approval. Not now pauses onboarding without configure-models, project setup, launch, or changing saved choices.",
+      );
+    }
   }
   lines.push("This did not change the app or start any work.");
   if (unresolved.length > 0)
@@ -536,17 +572,30 @@ function summarizeThinking(value: unknown): string | undefined {
   return undefined;
 }
 
-function summarizeModelAssignments(value: unknown): readonly string[] {
+function summarizeModelAssignments(value: unknown, includeMissing = false): readonly string[] {
   const record = summaryRecord(value);
-  if (record === undefined) return [];
+  if (record === undefined) {
+    return includeMissing
+      ? MODEL_ROLE_ORDER.map(
+          (role) =>
+            `${MODEL_ROLE_LABELS[role]} (${role}): no exact catalogue selector or thinking level selected`,
+        )
+      : [];
+  }
   const lines: string[] = [];
   for (const role of MODEL_ROLE_ORDER) {
     const spec = summaryRecord(record[role]);
-    if (spec === undefined) continue;
+    if (spec === undefined) {
+      if (includeMissing)
+        lines.push(
+          `${MODEL_ROLE_LABELS[role]} (${role}): no exact catalogue selector or thinking level selected`,
+        );
+      continue;
+    }
     const model = recordText(spec, "model") ?? "model unavailable";
     const thinking = summarizeThinking(spec.thinking);
     lines.push(
-      `${MODEL_ROLE_LABELS[role]}: ${compactText(model, ACTION_SUMMARY_MAX_TEXT)}${
+      `${MODEL_ROLE_LABELS[role]} (${role}): ${compactText(model, ACTION_SUMMARY_MAX_TEXT)}${
         thinking === undefined ? "" : ` (thinking ${compactText(thinking, 40)})`
       }`,
     );
@@ -594,14 +643,19 @@ function summarizeModels(value: unknown): string {
   const available = record.availableModels;
   const lines: string[] = [];
   if (settings?.configured === true) {
-    lines.push("Saved model choices will be reused for future projects.");
-    const current = summarizeModelAssignments(settings.models);
+    lines.push("Saved model choices are configured for future projects.");
+    const current = summarizeModelAssignments(settings.models, true);
     if (current.length > 0) {
       lines.push("Current choices:");
       lines.push(...current.map((entry) => `- ${entry}`));
     }
   } else if (settings?.configured === false) {
-    lines.push("No saved model choices yet; choose models before project setup.");
+    lines.push("No saved model choices yet.");
+    lines.push(
+      "Choose an exact catalogue selector and a supported thinking level explicitly for each role; no role is pre-approved:",
+    );
+    for (const role of MODEL_ROLE_ORDER)
+      lines.push(`- ${MODEL_ROLE_LABELS[role]} (${role}): choose a model and thinking level`);
   } else {
     lines.push("Current model choices are unavailable.");
   }
@@ -901,7 +955,7 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
       ? summarizeTaskList(action, value)
       : boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
-  if (action === "onboard" || action === "setup") return summarizeOnboard(value);
+  if (action === "onboard" || action === "setup") return summarizeOnboard(value, action);
   if (action === "models") return summarizeModels(value);
   if (action === "configure-models") return summarizeConfiguredModels(value);
   if (action === "steer" || action === "answer") return summarizeCommunication(value, "latest");
@@ -978,12 +1032,13 @@ export const COORDINATOR_TOOL_GUIDANCE = [
   "Within already approved scope, forward a clear user direction with steer without adding a redundant generic approval step; do not use it to widen scope or change pinned policy.",
   "Keep steering messages as concise deltas, batch independent pending directions in order, and explicitly supersede obsolete directions. Query messages only when the user asks or before a dependent decision, not in a repeated model-driven polling loop.",
   "Steer returns a queued receipt; let the child apply it at the next native safe boundary. Mechanical/UI receipt, heartbeat, and progress updates do not wake a model and do not require follow-up turns.",
-  "If messages exposes a blocker, relay its Question and Recommendation, ask the user for a decision, then send answer with the current questionId. Query for the answer receipt only when the user asks or before a dependent decision; never claim the work is finished from enqueue or context receipt.",
+  "On blocked dispatch or when no worker report exists, expose the exact durable blocker and say that no worker report is available; prefer resolving an already-approved safe cause, otherwise ask the user for a decision and relay any Question and Recommendation before answering with the current questionId. Never replace delegated research with coordinator research without explicit user consent. Query durable state before claiming a worker or task is absent or complete; query answer receipts only when the user asks or before a dependent decision, and never claim work is finished from enqueue or context receipt.",
   "Use present only for a useful visual artifact. The controller routes the brief and never authors HTML.",
   "Routine scheduler notifications, receipts, progress, and heartbeats are shown in the UI/durable log without a model turn; actionable blockers, judgment-needed reports, and PR-ready delivery notices may wake the coordinator.",
   "An undefined worker timeout has no default total-runtime kill; explicit positive limits, validation timeouts, and cancellation remain in force.",
   "Approval-bearing actions are human-confirmed at runtime and fail closed without interactive UI; safe cleanup does not require approval, while discard does.",
-  "On first onboarding, inspect modelSettings.configured. If no choices are saved, call models, recommend one model for each job with a short reason, ask whether to use, adjust, or decline, then call configure-models only after approval and set up the project separately. Reuse saved choices on later projects; use models and configure-models for explicit updates.",
+  "On first onboarding, inspect modelSettings.configured. If no choices are saved, call models once and present six separate role choices in order: Planning (coordinator), Research (scout), Coding (implementer), Review (reviewer), Final checks (verifier), and Presentations (presentation). For each role, show the suggested exact catalogue selector, supported thinking level, and short reason; require an explicit accept, adjust, or decline answer for every role. Never infer or group roles, and never treat built-in suggestions as approved. Before configure-models, recap all six exact model+thinking selections and ask for explicit human approval; configure-models is the only model write and setup is separately approved. If the user chooses Not now, pause without configure-models, project setup, or launch; do not fall through to built-in defaults.",
+  "On repeat onboarding, show every saved role's exact catalogue selector and thinking level, then offer Keep all, Change roles, or Not now. Keep all is read-only reuse and may continue separately approved project setup without forcing re-selection; Change roles asks explicitly for every role, including keep-current answers for untouched roles, preserves them, and recaps all six before configure-models approval. Not now pauses onboarding without changing saved choices. Never silently reuse choices or start a model questionnaire from setup's post-save result.",
 ].join("\n");
 
 function textResult(
@@ -1587,9 +1642,11 @@ export function parseTandemCommand(input: string): TandemAction {
   }
 }
 
-function serviceForContext(options: TandemExtensionOptions, ctx: ExtensionContext): TandemService {
-  if (options.service !== undefined) return options.service;
-  const environment = resolveTandemEnvironment(
+function environmentForContext(
+  options: TandemExtensionOptions,
+  ctx: ExtensionContext,
+): TandemBoundaryEnvironment {
+  return resolveTandemEnvironment(
     processEnvironmentSnapshot(options.processEnvironment),
     { cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId() },
     {
@@ -1604,8 +1661,31 @@ function serviceForContext(options: TandemExtensionOptions, ctx: ExtensionContex
         ? {}
         : { poolRoot: options.environment.poolRoot }),
       ...(options.environment?.repo === undefined ? {} : { repo: options.environment.repo }),
+      ...(options.environment?.sourceRepo === undefined
+        ? {}
+        : { sourceRepo: options.environment.sourceRepo }),
     },
   );
+}
+
+function coordinatorSourceGuidance(environment: TandemBoundaryEnvironment): string {
+  if (environment.sourceRepo === undefined) {
+    return `Tandem has no dedicated clean source binding; ${JSON.stringify(environment.repo)} is the original project identity and source checkout.`;
+  }
+  return [
+    `Tandem's clean committed coordinator checkout is ${JSON.stringify(environment.sourceRepo)} and is the current committed source scope for repository reads and delegated work.`,
+    `The original project identity is ${JSON.stringify(environment.repo)}; pass that identity when creating tasks so records, policy, and delivery remain attached to the original project.`,
+    "Do not edit or read delegated-work guidance from the original project checkout; it is identity only, not the execution source.",
+  ].join(" ");
+}
+
+function serviceForContext(
+  options: TandemExtensionOptions,
+  ctx: ExtensionContext,
+  resolvedEnvironment?: TandemBoundaryEnvironment,
+): TandemService {
+  if (options.service !== undefined) return options.service;
+  const environment = resolvedEnvironment ?? environmentForContext(options, ctx);
   const createService = options.createService ?? createTandemService;
   return createService({
     home: environment.home,
@@ -1614,6 +1694,14 @@ function serviceForContext(options: TandemExtensionOptions, ctx: ExtensionContex
       ? {}
       : { parentWorkspaceId: environment.parentWorkspaceId }),
     poolRoot: environment.poolRoot,
+    ...(environment.sourceRepo === undefined
+      ? {}
+      : {
+          sourceWorkspace: {
+            repoPath: environment.repo,
+            path: environment.sourceRepo,
+          },
+        }),
   });
 }
 
@@ -1632,12 +1720,18 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
   return (pi: ExtensionAPI): void => {
     const z = pi.zod;
     let service: TandemService | undefined;
+    let boundaryEnvironment: TandemBoundaryEnvironment | undefined;
+    const getEnvironment = (ctx: ExtensionContext): TandemBoundaryEnvironment => {
+      if (boundaryEnvironment === undefined)
+        boundaryEnvironment = environmentForContext(options, ctx);
+      return boundaryEnvironment;
+    };
     let tickTimer: Timer | undefined;
     let tickInFlight: Promise<void> | undefined;
     let shuttingDown = false;
     const deliveredNotifications = new Set<string>();
     const getService = (ctx: ExtensionContext): TandemService => {
-      if (service === undefined) service = serviceForContext(options, ctx);
+      if (service === undefined) service = serviceForContext(options, ctx, getEnvironment(ctx));
       return service;
     };
     const reconcile = async (ctx: ExtensionContext, runTick: boolean): Promise<void> => {
@@ -1839,6 +1933,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
           ...event.systemPrompt,
           COORDINATOR_INSTRUCTIONS,
           COORDINATOR_TOOL_GUIDANCE,
+          coordinatorSourceGuidance(getEnvironment(ctx)),
           digest,
         ],
       };
@@ -1860,7 +1955,12 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     pi.on("session.compacting", async (_event, ctx) => {
       const digest = await refreshDigest(getService(ctx));
       return {
-        context: [COORDINATOR_INSTRUCTIONS, COORDINATOR_TOOL_GUIDANCE, digest],
+        context: [
+          COORDINATOR_INSTRUCTIONS,
+          COORDINATOR_TOOL_GUIDANCE,
+          coordinatorSourceGuidance(getEnvironment(ctx)),
+          digest,
+        ],
         preserveData: { tandemDigest: digest },
       };
     });

@@ -250,6 +250,32 @@ test("refuses a Herdr endpoint whose pane identity changed", async () => {
   expect(runner.calls).toHaveLength(1);
 });
 
+test("accepts omitted foreground processes on native worker exit", async () => {
+  const runner = scriptedRunner([
+    result(panePayload()),
+    result(JSON.stringify({ result: { process_info: { pane_id: endpoint().paneId } } })),
+  ]);
+  const inspection = await inspectEndpoint(runner.run, {
+    endpoint: endpoint(),
+    cwd: "/tmp/worktree",
+  });
+  expect(inspection.activeWorker).toBe(false);
+});
+
+test("rejects malformed foreground processes rather than treating them as idle", async () => {
+  const runner = scriptedRunner([
+    result(panePayload()),
+    result(
+      JSON.stringify({
+        result: { process_info: { pane_id: endpoint().paneId, foreground_processes: null } },
+      }),
+    ),
+  ]);
+  await expect(
+    inspectEndpoint(runner.run, { endpoint: endpoint(), cwd: "/tmp/worktree" }),
+  ).rejects.toBeInstanceOf(AdapterProtocolError);
+});
+
 test("sends a hostile command as one quoted pane command after identity inspection", async () => {
   const runner = scriptedRunner([result(panePayload()), result(processPayload()), result()]);
   const command = ["printf", "$(touch /tmp/not-created)"];

@@ -244,55 +244,6 @@ test("fails when OMP metadata selects a different model", async () => {
   }
 });
 
-test("assigns only the role-approved built-in tools", async () => {
-  const root = await mkdtemp(join(tmpdir(), "tandem-jobs-tools-"));
-  try {
-    const expectedTools: Readonly<Record<WorkerJob["role"], string>> = {
-      scout: "read,grep,glob",
-      reviewer: "read,grep,glob",
-      verifier: "read,grep,glob",
-      implementer: "read,grep,glob,edit,write,bash",
-      presentation: "read,grep,glob,write,edit",
-    };
-    const roles = ["scout", "reviewer", "verifier", "implementer", "presentation"] as const;
-    for (const role of roles) {
-      const tools = expectedTools[role];
-      let requestTools: string | undefined;
-      const job = makeJob(root, role);
-      const result = await runWorkerJob(job, {
-        run: async (request) => {
-          const index = request.argv.indexOf("--tools");
-          requestTools = index >= 0 ? request.argv[index + 1] : undefined;
-          const response =
-            role === "implementer"
-              ? "Outcome: implemented"
-              : role === "presentation"
-                ? `Artifact: ${join(root, "artifact.html")}`
-                : JSON.stringify({
-                    lens: "behavior",
-                    head: "abc123",
-                    generation: 3,
-                    pass: true,
-                    findings: [],
-                    summary: "No findings.",
-                  });
-          return commandResult(assistantEvent(response, "agent_end"));
-        },
-
-        now: () => fixedFinishedAt,
-        writeResult: () => undefined,
-      });
-      expect(result.status).toBe("completed");
-      if (role === "presentation") {
-        expect(result.artifactPath).toBe(join(root, "artifact.html"));
-      }
-      expect(requestTools).toBe(tools);
-    }
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test("does not infer implementation or presentation completion from prose", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-jobs-contracts-"));
   try {

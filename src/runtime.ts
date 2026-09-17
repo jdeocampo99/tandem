@@ -90,6 +90,7 @@ export type RuntimeTaskState = Readonly<{
   readonly schemaVersion: 1;
   readonly taskId: string;
   readonly sourceCheckpoint: GitCheckpoint;
+  readonly sourceRepoPath?: string;
   readonly taskName: string;
   readonly reservation?: DurableReservation;
   readonly endpointLaunch?: DurableEndpointLaunch;
@@ -398,6 +399,10 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
     endpoint(entry, `${field}.endpoints[${index}]`),
   );
   const jobs = value.jobs.map((entry, index) => parseJob(entry, `${field}.jobs[${index}]`));
+  const sourceRepoPath =
+    value.sourceRepoPath === undefined
+      ? undefined
+      : absolutePath(value.sourceRepoPath, `${field}.sourceRepoPath`);
   const sessionDirectory =
     value.sessionDirectory === undefined
       ? undefined
@@ -422,6 +427,7 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
     schemaVersion: 1,
     taskId: singleLine(value.taskId, `${field}.taskId`),
     sourceCheckpoint: checkpoint(value.sourceCheckpoint, `${field}.sourceCheckpoint`),
+    ...(sourceRepoPath === undefined ? {} : { sourceRepoPath }),
     taskName: singleLine(value.taskName, `${field}.taskName`),
     ...(reservation === undefined ? {} : { reservation }),
     ...(endpointLaunch === undefined ? {} : { endpointLaunch }),

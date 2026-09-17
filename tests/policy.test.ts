@@ -124,6 +124,38 @@ test("resolveRepoPolicy inherits global values, appends guidance, and snapshots 
     expect(resolved.guidance.implementation[3]?.text).toBe("pinned file guidance");
   });
 });
+test("clean-bound policy reads guidance and onboarding metadata from the checkout", async () => {
+  await withFixture("clean-bound-repo", async ({ root, repo, home }) => {
+    const clean = join(root, "clean-source");
+    await mkdir(join(clean, "docs"), { recursive: true });
+    await writeFile(join(repo, "AGENTS.md"), "dirty original guidance", "utf8");
+    await writeFile(join(clean, "AGENTS.md"), "committed clean guidance", "utf8");
+    await writeFile(join(clean, "docs", "implementation.md"), "clean file guidance", "utf8");
+    await writeFile(
+      join(clean, "package.json"),
+      JSON.stringify({ scripts: { test: "bun test" } }),
+      "utf8",
+    );
+
+    const preview = await onboardRepo({ repoPath: repo, checkoutPath: clean, home });
+    expect(preview.validationCommands.map((command) => command.argv)).toEqual([
+      ["bun", "run", "test"],
+    ]);
+    await writeCentralEnvelope(preview.configPath, repo, {
+      instructionFiles: { implementation: ["docs/implementation.md"] },
+    });
+
+    const resolved = await resolveRepoPolicy({
+      repoPath: repo,
+      checkoutPath: clean,
+      home,
+    });
+    expect(resolved.guidance.implementation.map((entry) => entry.text)).toEqual([
+      "committed clean guidance",
+      "clean file guidance",
+    ]);
+  });
+});
 
 test("parsePolicy accepts exact custom provider selectors but rejects fuzzy aliases", () => {
   const parsed = parsePolicy({
