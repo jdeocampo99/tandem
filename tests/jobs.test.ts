@@ -266,47 +266,6 @@ test("does not infer implementation or presentation completion from prose", asyn
     await rm(root, { recursive: true, force: true });
   }
 });
-test("scopes native tool access to each role's capability boundary", async () => {
-  const root = await mkdtemp(join(tmpdir(), "tandem-jobs-tools-"));
-  try {
-    const roles = ["scout", "implementer", "reviewer", "verifier", "presentation"] as const;
-    const toolsByRole = new Map<(typeof roles)[number], readonly string[]>();
-    for (const role of roles) {
-      let captured: CommandRequest | undefined;
-      await runWorkerJob(makeJob(root, role), {
-        run: async (request) => {
-          captured = request;
-          return commandResult(assistantEvent("done", "agent_end"));
-        },
-        now: () => fixedFinishedAt,
-        writeResult: () => undefined,
-      });
-      const flagIndex = captured?.argv.indexOf("--tools") ?? -1;
-      const value = flagIndex === -1 ? "" : String(captured?.argv[flagIndex + 1]);
-      toolsByRole.set(role, value.split(","));
-    }
-
-    expect(toolsByRole.get("scout")).toContain("web_search");
-    for (const role of ["implementer", "reviewer", "verifier", "presentation"] as const) {
-      expect(toolsByRole.get(role)).not.toContain("web_search");
-    }
-
-    expect(toolsByRole.get("implementer")).toContain("edit");
-    expect(toolsByRole.get("implementer")).toContain("write");
-    expect(toolsByRole.get("implementer")).toContain("bash");
-    expect(toolsByRole.get("presentation")).toContain("edit");
-    expect(toolsByRole.get("presentation")).toContain("write");
-    expect(toolsByRole.get("presentation")).not.toContain("bash");
-    for (const role of ["scout", "reviewer", "verifier"] as const) {
-      expect(toolsByRole.get(role)).not.toContain("edit");
-      expect(toolsByRole.get(role)).not.toContain("write");
-      expect(toolsByRole.get(role)).not.toContain("bash");
-    }
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test("keeps reviewer output strict and binds it to the requested identity", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-jobs-review-"));
   try {

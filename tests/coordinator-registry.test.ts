@@ -787,13 +787,24 @@ test("reports a partial close instead of hiding it when a later coordinator turn
       return response;
     };
 
-    await expect(
-      resetCoordinators(run, {
+    let caught: unknown;
+    try {
+      await resetCoordinators(run, {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA, values.repoB],
-      }),
-    ).rejects.toThrow(/closed 1 coordinator.*repo-a.*repo-b/su);
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    const err = caught as Error;
+    expect(err.message).toContain(values.recordA.repoPath);
+    expect(err.message).toContain(values.recordB.repoPath);
+    expect(err.cause).toBeInstanceOf(Error);
+    expect((err.cause as Error).message).toContain("working");
+
     expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(false);
     expect(runner.panes.get(values.recordB.endpoint.paneId)?.present).toBe(true);
     await expect(
