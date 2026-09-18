@@ -589,6 +589,28 @@ Validation commands are argv-only and execute in declaration order. A command ru
 
 Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. The implementer must report exactly one final `Outcome: implemented|needs-decision|failed` line and is expected to provide a commit checkpoint before `implemented`. For `Outcome: needs-decision`, emit one bounded single-line `Question: ...` and an optional bounded single-line `Recommendation: ...` (each no more than 1,000 characters); point to the report for full evidence instead of dumping logs or transcript text.
 
+### Interactive child terminals
+
+Scouts, implementers, reviewers, verifiers, and presentation workers launch interactive OMP with
+inherited terminal input and output. They do not use `-p` or `--mode json`. Open the child's Herdr
+subtree to inspect its conversation or send a message directly.
+
+The worker extension writes the existing private result file from the final native `agent_end`
+event. Continuing events are not completion, and later human conversation never overwrites that
+delegated result. Terminal output is display only; large reports do not pass through a captured
+JSONL stream. The scheduler can consume a result while OMP remains open, after checking the
+job identity, generation, native PID, physical checkout, and fresh terminal heartbeat.
+
+After completion or pause, follow-up model turns are read-only: read, grep, glob, and web search
+remain eligible where the role allows them, while mutating tools are blocked. Request additional
+implementation through the coordinator. Validation runs in its own non-model pane, and completed
+reviewer and presentation conversations remain open rather than being closed on result consumption.
+
+A later writer job may reuse its pane only after the previous delegated turn has finished or
+paused and the interactive session is idle with no queued messages or editor draft. Cooperative
+close freezes new input, requests native terminal exit, and verifies process exit before reuse.
+Busy, foreign, stale, or otherwise unproven terminals are retained instead of interrupted.
+
 ## Inspecting and controlling work
 
 ```sh
@@ -788,7 +810,7 @@ Normal users do not need to tune a pool cap or approve routine safe cleanup. The
 - active or otherwise protected task paths are never pruned;
 - ambiguous metadata, missing physical identity, failed safety checks, ignored files, dirty files, unmerged paths, and non-ancestor work are retained with warnings.
 
-Safe terminal cleanup closes stopped owned endpoints and attempts a lease-checked Treehouse return for `cancelled`, `completed`, or `merged` tasks. It requires the child worker to be stopped, exact lease metadata, the expected task branch, a clean/unmerged-free checkout, and task HEAD ancestry. If proof fails, Tandem retains the worktree and records the problem instead of deleting it.
+Automatic terminal cleanup closes stopped owned endpoints and attempts a lease-checked Treehouse return for `cancelled`, `completed`, or `merged` tasks. Live interactive child terminals and their checkouts are retained for inspection and follow-up. Explicit cleanup can cooperatively close an idle completed or paused child, but refuses busy conversations, queued input, editor drafts, and unproven ownership. Worktree return still requires stopped processes, exact lease metadata, the expected task branch, a clean/unmerged-free checkout, and task HEAD ancestry. If proof fails, Tandem retains the worktree instead of deleting it.
 
 Pool housekeeping keeps the policy-derived idle set and removes only additional proven-disposable copies. This is safe pool maintenance, not an automatic destructive discard of user work. Explicit discard is the only path that bypasses the Git safety proof.
 
@@ -858,9 +880,9 @@ are Tandem-owned state, not files in target repositories:
 | `<home>/tasks/<task-id>.json` | Versioned task record, policy snapshot, lifecycle state, evidence, reviews, notifications, and delivery metadata. |
 | `<home>/communications/<safe-task-id>/inbox.json` | Derived bounded task-message projection; canonical communication remains in the task record. |
 | `<home>/runtime.json` | Versioned runtime state for reservations, endpoint identities, durable jobs, stop requests, and presentations. |
-| `<home>/jobs/<task-id>/...` | Worker/validation job inputs, result files, and persisted reports. |
+| `<home>/jobs/<task-id>/...` | Worker/validation job inputs, private result files, persisted reports, `job.json.terminal.json` lifecycle/heartbeat state, and short-lived `job.json.terminal.json.command` pause/close requests. |
 | `<home>/sessions/<task-id>/` | Implementer OMP session directories when continuation is needed. Scouts do not receive a session directory. |
-| `<home>/presentations/<presentation-id>/` | Private presentation job, result, artifact, and `feedback/<event-id>.json` evidence files. |
+| `<home>/presentations/<presentation-id>/` | Private presentation job, result, artifact, interactive terminal state/control, and `feedback/<event-id>.json` evidence files. |
 | `<home>/pool/` | Default Treehouse pool root unless overridden. |
 
 The central record's validated `repoPath` may be reused as an already-known project index when
@@ -892,10 +914,12 @@ OMP-native compaction and the durable store work together:
 
 The aggregate durable digest is bounded to 8,000 characters and may omit older task detail; the task files and reports remain authoritative. Model-facing action summaries are bounded separately, while `show --full` retains more structured detail.
 
-An undefined worker timeout means no default total-runtime deadline: Tandem omits OMP `--max-time`
-and command request timeouts for that worker. Explicit positive worker limits remain honored, as do
-validation-command timeouts and cancellation. Passive progress warnings are inspection events, not
-automatic kills.
+An undefined worker timeout means no default deadline for the delegated turn. An explicit positive
+worker limit is enforced by the interactive extension: it aborts the delegated turn and records
+failure after the active turn settles, while leaving the terminal available for read-only follow-up.
+The limit ends with the delegated result and does not time out later human conversation.
+Validation-command timeouts and cancellation remain enforced. Passive progress warnings are
+inspection events, not automatic kills.
 
 Ordinary non-presentation worker briefs fail closed above 64 KiB (65,536 bytes) of UTF-8. The error identifies the limit and asks for the objective, acceptance criteria, instructions, or artifact references to be shortened; Tandem does not silently truncate an ordinary brief. Presentation keeps its tighter existing 32,000-character prompt bound and its own per-field/list limits.
 

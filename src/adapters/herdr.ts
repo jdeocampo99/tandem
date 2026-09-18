@@ -8,6 +8,7 @@ import {
   type Endpoint,
   isAgentRole,
 } from "../contracts.ts";
+import { type WorkerTerminalJob, workerDelegationStopped } from "../workers/terminal.ts";
 import { quoteShellCommand } from "./commands.ts";
 import {
   AdapterCommandError,
@@ -80,6 +81,7 @@ export type CreateReviewerEndpointInput = Readonly<{
   cwd: string;
   writer: Endpoint;
   generation: number;
+  writerJob?: WorkerTerminalJob;
 }>;
 
 export type HerdrEndpointResult = Readonly<{
@@ -797,7 +799,11 @@ export async function createReviewerEndpoint(
     );
   }
   const writerInspection = await inspectEndpoint(run, { endpoint: input.writer, cwd: input.cwd });
-  if (writerInspection.activeWorker) throw new EndpointBusyError(input.writer);
+  const writerStopped =
+    input.writerJob === undefined
+      ? !writerInspection.activeWorker
+      : await workerDelegationStopped(writerInspection, input.writerJob);
+  if (!writerStopped) throw new EndpointBusyError(input.writer);
   const writerPane = writerInspection.pane;
   if (writerPane.foregroundCwd === undefined) {
     throw new EndpointOwnershipError(input.writer, "writer working directory is unavailable");
@@ -850,6 +856,20 @@ export async function sendCommand(
   ]);
   const result = await runChecked(run, request, "herdr pane run");
   return { endpoint: input.endpoint, command: input.command, result };
+}
+
+export async function sendExitKey(run: CommandRunner, input: CloseEndpointInput): Promise<void> {
+  validateEndpoint(input.endpoint);
+  await runChecked(
+    run,
+    herdrRequest(input.endpoint.sessionId, input.cwd, [
+      "pane",
+      "send-keys",
+      input.endpoint.paneId,
+      "ctrl+d",
+    ]),
+    "herdr pane graceful exit",
+  );
 }
 
 export async function interruptEndpoint(

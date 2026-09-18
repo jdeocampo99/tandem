@@ -1,5 +1,5 @@
 import { isAbsolute } from "node:path";
-import type { CommandResult, ReviewResult } from "../contracts.ts";
+import type { ReviewResult } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import {
   parseReviewResult,
@@ -201,90 +201,59 @@ function finalAssistantText(messages: unknown): string | undefined {
   return assistantMessageText(finalMessage);
 }
 
-function parseJsonLines(stdout: string): readonly JsonObject[] {
-  if (typeof stdout !== "string") {
-    throw new WorkerOutputError("OMP stdout is not text");
+export type NativeAgentEnd = Readonly<{
+  readonly type: "agent_end";
+  readonly messages: readonly unknown[];
+  readonly willContinue?: boolean;
+}>;
+
+function nativeAgentEnd(value: unknown): NativeAgentEnd {
+  if (!isJsonObject(value) || value.type !== "agent_end" || !Array.isArray(value.messages)) {
+    throw new WorkerOutputError("OMP emitted a malformed agent_end event");
   }
-  const events: JsonObject[] = [];
-  const lines = stdout.split(/\r?\n/u);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (line === undefined || line.trim().length === 0) {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line) as unknown;
-    } catch (error) {
-      throw new WorkerOutputError(
-        `OMP JSONL line ${index + 1} is malformed: ${error instanceof Error ? error.message : "parse failure"}`,
-      );
-    }
-    if (!isJsonObject(parsed)) {
-      throw new WorkerOutputError(`OMP JSONL line ${index + 1} must be an object`);
-    }
-    events.push(parsed);
-  }
-  if (events.length === 0) {
-    throw new WorkerOutputError("OMP returned no JSON events");
-  }
-  return events;
+  return {
+    type: "agent_end",
+    messages: value.messages,
+    ...(value.willContinue === undefined ? {} : { willContinue: value.willContinue === true }),
+  };
 }
 
-export function parseOmpOutput(stdout: string, expectedModel: ExpectedModel): ParsedOmpOutput {
-  const events = parseJsonLines(stdout);
-  let terminalText: string | undefined;
-  let terminalSeen = false;
-  let nonTerminalFailure: string | undefined;
-  for (const event of events) {
-    const terminalEvent = event.type === "agent_end" && event.willContinue !== true;
-    const mismatch = modelMismatchReason(event, expectedModel);
-    if (mismatch !== undefined) {
-      throw new WorkerOutputError(mismatch);
-    }
-    const failure = readEventFailure(event);
-    if (!terminalEvent) {
-      if (failure !== undefined && nonTerminalFailure === undefined) {
-        nonTerminalFailure = failure;
-      }
-      continue;
-    }
-    if (failure !== undefined) {
-      throw new WorkerOutputError(failure);
-    }
-    const terminalCandidate = finalAssistantText(event.messages);
-    terminalSeen = true;
-    if (terminalCandidate === undefined || terminalCandidate.trim().length === 0) {
-      throw new WorkerOutputError("OMP terminal agent_end has no final assistant text");
-    }
-    terminalText = terminalCandidate;
+/**
+ * Parse the native extension event rather than the OMP process's terminal output.
+ *
+ * The interactive process owns stdout/stderr, so treating either stream as a
+ * transport would corrupt the user's TUI and impose an arbitrary capture cap.
+ */
+export function parseNativeAgentEnd(
+  value: unknown,
+  expectedModel: ExpectedModel,
+  selectedModel: unknown,
+): ParsedOmpOutput {
+  const event = nativeAgentEnd(value);
+  const eventMismatch = modelMismatchReason(event, expectedModel);
+  if (eventMismatch !== undefined) throw new WorkerOutputError(eventMismatch);
+  const mismatch = modelMismatchReason({ model: selectedModel }, expectedModel);
+  if (mismatch !== undefined) throw new WorkerOutputError(mismatch);
+  if (!isJsonObject(selectedModel)) {
+    throw new WorkerOutputError("OMP did not expose the selected model");
   }
-  if (!terminalSeen) {
-    if (nonTerminalFailure !== undefined) {
-      throw new WorkerOutputError(nonTerminalFailure);
-    }
-    throw new WorkerOutputError("OMP output did not include a terminal agent_end event");
+  const selected = modelObservation({ model: selectedModel });
+  if (selected === undefined || selected.provider === undefined || selected.model === undefined) {
+    throw new WorkerOutputError("OMP did not expose complete selected model metadata");
   }
-  if (terminalText === undefined) {
+  const terminalCandidate = finalAssistantText(event.messages);
+  if (terminalCandidate === undefined || terminalCandidate.trim().length === 0) {
     throw new WorkerOutputError("OMP terminal agent_end has no final assistant text");
   }
-  return { text: terminalText };
+  return { text: terminalCandidate };
 }
 
-export function readCommandResult(value: unknown): CommandResult {
-  if (!isJsonObject(value)) {
-    throw new WorkerOutputError("command runner returned a malformed result");
-  }
-  if (typeof value.code !== "number" || !Number.isInteger(value.code)) {
-    throw new WorkerOutputError("command runner result has an invalid exit code");
-  }
-  if (typeof value.stdout !== "string" || typeof value.stderr !== "string") {
-    throw new WorkerOutputError("command runner result has invalid output fields");
-  }
-  if (value.code !== 0) {
-    throw new WorkerOutputError(`OMP exited with code ${value.code}`);
-  }
-  return { code: value.code, stdout: value.stdout, stderr: value.stderr };
+export function nativeAgentEndWillContinue(value: unknown): boolean {
+  return nativeAgentEnd(value).willContinue === true;
+}
+
+export function readNativeEventFailure(value: unknown): string | undefined {
+  return isJsonObject(value) ? readEventFailure(value) : "OMP emitted a malformed lifecycle event";
 }
 
 export function parseReviewWorkerText(job: WorkerJob, text: string): ReviewResult {

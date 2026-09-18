@@ -7,7 +7,7 @@ Read [README.md](README.md) for the user-facing overview and the
 
 - Tandem is a local, OMP-first agent distro. Keep the lifecycle core small and durable; put policy, prompts, and configuration at its boundary.
 - Use command-based adapters for Treehouse, Herdr, OMP, Lavish, and GitHub. The coordinating service and CLI own orchestration; the OMP extension owns OMP integration.
-- Main conversation orchestration is authoritative. Scout and reviewer/implementer workers use isolated workspaces as configured by the runtime. Reviewers are fresh OMP instances or panes in the task worktree, and the writer is paused during review.
+- Main conversation orchestration is authoritative. Every child OMP agent runs in an interactive terminal. Its extension publishes the delegated result independently of stdout; completed terminals remain available for read-only follow-up. Reviewers are fresh OMP instances in the task worktree, and implementer mutation is disabled during validation and review. Validation uses a separate non-model pane.
 - A launched coordinator owns a distinct clean Treehouse source worktree pinned to the original
   committed HEAD. The original checkout may be dirty and remains untouched; keep its canonical
   repository identity for task records, policy, and delivery while source reads and delegated

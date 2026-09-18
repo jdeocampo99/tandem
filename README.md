@@ -115,6 +115,13 @@ execution use the clean snapshot, while durable settings, task records, and deli
 original project identity. When several projects are opened, Tandem attaches to the shared Herdr
 session once every coordinator is ready.
 
+Child agents run in real interactive OMP terminals, not JSON-log panes. Open their Herdr subtree
+to watch the work or chat directly. Completed agents stay open for read-only follow-up; their
+delegated result is recorded independently of terminal output. Further implementation goes through
+the coordinator so validation and review keep exclusive access to the checkout. Validation runs
+in a separate non-model pane. Explicit cleanup can close idle completed agents, but preserves
+busy conversations, pending editor drafts, and terminals whose ownership cannot be proven.
+
 An explicit `tandem PATH` opens or reconnects only that project after ownership checks. Add
 `--continue` only when starting a stopped coordinator and resuming its saved conversation. An active
 coordinator remains pinned to its existing clean source even if the original project's HEAD has

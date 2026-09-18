@@ -8,7 +8,6 @@ import {
   type HerdrEndpointResult,
   type HerdrPaneInspection,
   inspectEndpoint,
-  inspectStopped,
   sendCommand,
 } from "../adapters/herdr.ts";
 import { EndpointOwnershipError, LeaseSafetyError } from "../adapters/primitives.ts";
@@ -46,7 +45,6 @@ import type {
 import {
   appendTaskJob,
   buildPrompt,
-  currentReviewer,
   currentWriter,
   DEFAULT_STARTUP_GRACE_MS,
   describeError,
@@ -98,6 +96,8 @@ import {
   type WorkerResult,
   type WorkerRole,
 } from "./jobs.ts";
+import { liveWorkerTerminal, workerDelegationStopped } from "./terminal.ts";
+import { prepareWorkerTerminal, workerJobForEndpoint } from "./terminal-control.ts";
 
 const DEFAULT_STALL_WARNING_MS = 5 * 60 * 1000;
 const DEFAULT_HEARTBEAT_GRACE_MS = 60 * 1000;
@@ -179,9 +179,12 @@ export class WorkerWorkflow {
     }
     if (inspection.activeWorker) {
       await this.observeWorkerProgress(task, job);
-      if (job.phase !== "running")
-        await this.updateJob(job.taskId, job.id, (current) => ({ ...current, phase: "running" }));
-      return;
+      const terminal = await liveWorkerTerminal(inspection, job);
+      if (terminal === undefined || (!terminal.completed && terminal.phase !== "paused")) {
+        if (job.phase !== "running")
+          await this.updateJob(job.taskId, job.id, (current) => ({ ...current, phase: "running" }));
+        return;
+      }
     }
     if (job.kind === "worker") {
       let result: WorkerResult;
@@ -503,7 +506,6 @@ export class WorkerWorkflow {
       { type: "record-review", review },
       instructionOptions(result.instructionRevision),
     );
-    await this.closeReviewerAfterResult(task.id, job.endpoint);
   }
 
   private async consumeValidationResult(
@@ -554,6 +556,7 @@ export class WorkerWorkflow {
         },
         instructionOptions(job.instructionRevision),
       );
+      await this.closeValidationAfterResult(task.id, job.endpoint);
       return;
     }
     const event: TaskEvent =
@@ -573,9 +576,9 @@ export class WorkerWorkflow {
     await this.consumeJob(task.id, job.id, event, {
       ...instructionOptions(job.instructionRevision),
     });
+    await this.closeValidationAfterResult(task.id, job.endpoint);
   }
-
-  private async closeReviewerAfterResult(
+  private async closeValidationAfterResult(
     taskId: string,
     endpoint: Endpoint | undefined,
   ): Promise<void> {
@@ -592,25 +595,12 @@ export class WorkerWorkflow {
       if (!isMissingEndpoint(error)) {
         await this.#deps.setRuntimeError(
           taskId,
-          `reviewer pane ${endpoint.paneId} could not close: ${describeError(error)}`,
+          `validation pane ${endpoint.paneId} could not close: ${describeError(error)}`,
         );
         return;
       }
     }
-    await this.#deps.updateTask(taskId, (current) => ({
-      ...current,
-      revision: current.revision + 1,
-      updatedAt: this.#deps.clock(),
-      endpoints: (current.endpoints ?? []).filter(
-        (candidate) => candidate.paneId !== endpoint.paneId,
-      ),
-    }));
-    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
-      replaceRuntimeTask(state, taskId, (current) => ({
-        ...current,
-        endpoints: current.endpoints.filter((candidate) => candidate.paneId !== endpoint.paneId),
-      })),
-    );
+    await this.#deps.removeEndpoint(taskId, endpoint.paneId);
   }
 
   private async failJob(
@@ -1157,6 +1147,35 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, "validation has no owned implementer pane");
       return;
     }
+    const writerJob = workerJobForEndpoint(runtime.jobs, writer);
+    let validationEndpointResult: HerdrEndpointResult;
+    try {
+      validationEndpointResult = await createReviewerEndpoint(this.#deps.run, {
+        sessionId: this.#deps.sessionId,
+        cwd: runtime.worktree.path,
+        writer,
+        generation: task.generation,
+        ...(writerJob === undefined ? {} : { writerJob }),
+      });
+    } catch (error) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
+      await this.#deps.blockTask(
+        task.id,
+        `validation pane allocation failed: ${describeError(error)}`,
+      );
+      return;
+    }
+    const validationEndpoint = validationEndpointResult.endpoint;
+    try {
+      await this.saveEndpoint(task.id, validationEndpoint);
+    } catch (error) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
+      await this.#deps.blockTask(
+        task.id,
+        `validation pane identity could not be persisted: ${describeError(error)}`,
+      );
+      return;
+    }
     let durableJob: DurableJob;
     try {
       const jobId = singleLine(this.#deps.idFactory(), "validation job id");
@@ -1188,7 +1207,7 @@ export class WorkerWorkflow {
         phase: "reserved",
         launchAttempted: false,
         createdAt: this.#deps.clock(),
-        endpoint: writer,
+        endpoint: validationEndpoint,
         head: task.reviewHead,
         ...(task.communication === undefined
           ? {}
@@ -1206,7 +1225,7 @@ export class WorkerWorkflow {
     await this.launchJob(
       task.id,
       durableJob.id,
-      writer,
+      validationEndpoint,
       runtime.worktree.path,
       workerCommand(this.#deps.validationWorkerPath, durableJob.jobPath),
     );
@@ -1222,18 +1241,22 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, "review has no durable runtime metadata");
       return;
     }
-    const staleReviewer = currentReviewer(runtime);
-    if (staleReviewer !== undefined) {
+    for (const reviewer of runtime.endpoints) {
+      if (reviewer.role !== "reviewer" && reviewer.role !== "verifier") continue;
       try {
-        const stopped = await inspectStopped(this.#deps.run, staleReviewer, task.worktree.path);
-        if (!stopped) return;
-        await closeEndpoint(this.#deps.run, { endpoint: staleReviewer, cwd: task.worktree.path });
-        await this.#deps.removeEndpoint(task.id, staleReviewer.paneId);
+        const inspection = await inspectEndpoint(this.#deps.run, {
+          endpoint: reviewer,
+          cwd: task.worktree.path,
+        });
+        if (
+          !(await workerDelegationStopped(inspection, workerJobForEndpoint(runtime.jobs, reviewer)))
+        )
+          return;
       } catch (error) {
         if (!isMissingEndpoint(error)) throw error;
-        await this.#deps.removeEndpoint(task.id, staleReviewer.paneId);
+        await this.#deps.removeEndpoint(task.id, reviewer.paneId);
+        return;
       }
-      return;
     }
     const currentCheckout = await readCheckpoint(this.#deps.run, {
       repo: task.worktree.path,
@@ -1274,12 +1297,14 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, "review has no writer endpoint");
       return;
     }
+    const writerJob = workerJobForEndpoint(reservedRuntime.jobs, writer);
     let endpointResult: HerdrEndpointResult;
     try {
       endpointResult = await createReviewerEndpoint(this.#deps.run, {
         sessionId: this.#deps.sessionId,
         cwd: task.worktree.path,
         writer,
+        ...(writerJob === undefined ? {} : { writerJob }),
         generation: task.generation,
       });
     } catch (error) {
@@ -1528,6 +1553,15 @@ export class WorkerWorkflow {
       );
       await writeRuntimeState(this.#deps.runtimePath, launching);
       try {
+        const previousJob = workerJobForEndpoint(
+          runtime.jobs.filter((entry) => entry.id !== jobId),
+          endpoint,
+        );
+        await prepareWorkerTerminal(this.#deps.run, {
+          endpoint,
+          cwd,
+          ...(previousJob === undefined ? {} : { job: previousJob }),
+        });
         await sendCommand(this.#deps.run, { endpoint, cwd, command });
         await this.proveWorkerStartup(job, endpoint, cwd);
       } catch (error) {
