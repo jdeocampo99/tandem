@@ -478,9 +478,10 @@ async function waitForCoordinatorOwnership(
       if (record !== undefined) return record;
       lastFailure = "no matching coordinator process";
     } catch (error) {
+      // The fresh pane can briefly look unrecorded or mismatched before its OMP foreground settles.
       if (
         !(error instanceof Error) ||
-        !error.message.includes("does not match recorded OMP command")
+        !/does not match recorded OMP command|pre-registry Tandem coordinator/.test(error.message)
       ) {
         throw error;
       }
