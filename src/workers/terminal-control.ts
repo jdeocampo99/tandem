@@ -9,6 +9,8 @@ import {
   type WorkerTerminalJob,
 } from "./terminal.ts";
 
+const FRESH_PANE_SETTLE_MS = 5_000;
+
 export type WorkerTerminalInput = Readonly<{
   endpoint: Endpoint;
   cwd: string;
@@ -35,7 +37,15 @@ export async function prepareWorkerTerminal(
   run: CommandRunner,
   input: WorkerTerminalInput,
 ): Promise<void> {
-  const inspection = await inspectEndpoint(run, input);
+  let inspection = await inspectEndpoint(run, input);
+  // A fresh pane has no prior job; its shell startup can briefly hold the foreground.
+  if (input.job === undefined) {
+    const deadline = Date.now() + FRESH_PANE_SETTLE_MS;
+    while (inspection.activeWorker && Date.now() < deadline) {
+      await Bun.sleep(50);
+      inspection = await inspectEndpoint(run, input);
+    }
+  }
   if (!inspection.activeWorker) return;
   const terminal =
     input.job === undefined ? undefined : await liveWorkerTerminal(inspection, input.job);
