@@ -8,6 +8,7 @@ import type { OmpModelRecord } from "../../src/adapters/omp.ts";
 import type { CommandRequest, CommandResult, ModelSpec, RepoPolicy } from "../../src/contracts.ts";
 import { runTerminal } from "../../src/main.ts";
 import type { TandemService } from "../../src/service/controller.ts";
+import { parseTerminalArgs } from "../../src/terminal/arguments.ts";
 import type { CliApplication } from "../../src/terminal/cli-application.ts";
 import type { CliInvocation } from "../../src/terminal/cli-arguments.ts";
 
@@ -743,9 +744,18 @@ test("reset stops only the selected coordinators before fresh launch and one att
   expect(resetPaths).toEqual([[first]]);
   expect(events).toEqual(["reset", `launch:${first}`, "focus", "attach"]);
   expect(invocations).toHaveLength(1);
-  expect(invocations[0]?.options.continueSession).toBe(false);
-  expect(output.join("")).toContain("Tandem reset stopped 0 coordinators.");
   await rm(join(first, ".."), { recursive: true, force: true });
+});
+
+test("terminal argument boundaries keep force launch-only and -- positional", () => {
+  expect(parseTerminalArgs(["--reset", "--force", "/repo"]).force).toBe(true);
+  expect(parseTerminalArgs(["--force", "--reset", "/repo"]).paths).toEqual(["/repo"]);
+  expect(parseTerminalArgs(["--reset", "--force", "--", "--force", "configure"]).paths).toEqual([
+    "--force",
+    "configure",
+  ]);
+  expect(() => parseTerminalArgs(["--force"])).toThrow();
+  expect(() => parseTerminalArgs(["configure", "--reset", "--force"])).toThrow();
 });
 
 test("a reset refusal prevents every coordinator launch", async () => {

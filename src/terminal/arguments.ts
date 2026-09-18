@@ -11,6 +11,7 @@ export type TerminalInvocation = Readonly<{
   readonly headless: boolean;
   readonly noAttach: boolean;
   readonly reset: boolean;
+  readonly force: boolean;
 }>;
 export type TerminalRunResult = Readonly<{
   readonly exitCode: number;
@@ -49,6 +50,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   let poolRoot: string | undefined;
   let continueSession = false;
   let reset = false;
+  let force = false;
   let headless = false;
   let noAttach = false;
   const paths: string[] = [];
@@ -71,6 +73,10 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     }
     if (parseOptions && token === "--reset") {
       reset = true;
+      continue;
+    }
+    if (parseOptions && token === "--force") {
+      force = true;
       continue;
     }
     if (parseOptions && token === "--headless") {
@@ -102,7 +108,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     if (parseOptions && token.startsWith("-")) {
       throw new Error(`unknown option ${JSON.stringify(token)}; run tandem --help`);
     }
-    if (command === undefined && token === "configure") {
+    if (parseOptions && command === undefined && token === "configure") {
       command = "configure";
       continue;
     }
@@ -113,6 +119,9 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   const resolvedCommand = command ?? "launch";
   if (resolvedCommand === "configure" && paths.length > 1) {
     throw new Error("tandem configure accepts at most one project path");
+  }
+  if (force && !reset) {
+    throw new Error("tandem --force requires --reset");
   }
   if (resolvedCommand === "configure" && reset) {
     throw new Error("tandem --reset is launch-only; it cannot be combined with configure");
@@ -126,6 +135,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     ...(poolRoot === undefined ? {} : { poolRoot }),
     continueSession,
     reset,
+    force,
     headless,
     noAttach,
   };
