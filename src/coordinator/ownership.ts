@@ -311,6 +311,21 @@ export async function findRunningCoordinator(
   run: CommandRunner,
   input: FindRunningCoordinatorInput,
 ): Promise<CoordinatorRecord | undefined> {
+  return findOwnedCoordinator(run, input, false);
+}
+
+export async function findResetCoordinator(
+  run: CommandRunner,
+  input: FindRunningCoordinatorInput,
+): Promise<CoordinatorRecord | undefined> {
+  return findOwnedCoordinator(run, input, true);
+}
+
+async function findOwnedCoordinator(
+  run: CommandRunner,
+  input: FindRunningCoordinatorInput,
+  includeStopped: boolean,
+): Promise<CoordinatorRecord | undefined> {
   if (typeof run !== "function") throw new TypeError("run must be an argv command runner");
   const home = await canonicalHome(input.home);
   const sessionId = sessionText(input.sessionId);
@@ -366,12 +381,14 @@ export async function findRunningCoordinator(
     );
   }
   if (matchingProcesses.length === 0) {
-    if (!inspection.activeWorker) {
-      return findUnrecordedCoordinator(run, home, sessionId, repoPath);
+    if (inspection.activeWorker) {
+      throw ownershipFailure(
+        `foreground process in pane ${record.endpoint.paneId} does not match recorded OMP command (${describeFailure(record.command)})`,
+      );
     }
-    throw ownershipFailure(
-      `foreground process in pane ${record.endpoint.paneId} does not match recorded OMP command (${describeFailure(record.command)})`,
-    );
+    await findUnrecordedCoordinator(run, home, sessionId, repoPath);
+    if (!includeStopped) return undefined;
+    assertStoppedCoordinatorShell(inspection);
   }
 
   const foregroundCwd = inspection.pane.foregroundCwd;
@@ -386,6 +403,19 @@ export async function findRunningCoordinator(
   }
   return record;
 }
+
+export function assertStoppedCoordinatorShell(inspection: HerdrPaneInspection): void {
+  const { shellPid, foregroundProcesses } = inspection.processInfo;
+  if (
+    inspection.activeWorker ||
+    shellPid === undefined ||
+    foregroundProcesses.length !== 1 ||
+    foregroundProcesses[0]?.pid !== shellPid
+  ) {
+    throw ownershipFailure("stopped coordinator pane does not prove its original terminal shell");
+  }
+}
+
 export async function readSessionSnapshot(
   run: CommandRunner,
   sessionId: string,

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   CommandRequest,
@@ -16,9 +16,10 @@ import { findRunningCoordinator } from "../../src/coordinator/ownership.ts";
 import type { CoordinatorRecord } from "../../src/coordinator/record.ts";
 import { listCoordinatorRecords, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { resetCoordinators } from "../../src/coordinator/reset.ts";
-import { runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
+import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { RuntimeTaskState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
 
 function result(stdout = "", code = 0, stderr = ""): CommandResult {
   return { stdout, code, stderr };
@@ -86,6 +87,7 @@ function processPayload(
     result: {
       process_info: {
         pane_id: record.endpoint.paneId,
+        shell_pid: 1234,
         foreground_processes: processes,
       },
     },
@@ -112,6 +114,9 @@ type ResetPaneInput = Readonly<{
   readonly record: CoordinatorRecord;
   readonly agentStatus: ResetPaneStatus;
   readonly closeResult?: CommandResult;
+  readonly processes?: readonly unknown[];
+  readonly foregroundCwd?: string;
+  readonly workspaceLabel?: string;
 }>;
 
 type ResetPaneState = ResetPaneInput & {
@@ -122,12 +127,19 @@ function nativeResetRunner(inputs: readonly ResetPaneInput[]): Readonly<{
   readonly calls: readonly CommandRequest[];
   readonly panes: Map<string, ResetPaneState>;
   readonly run: CommandRunner;
+  readonly workspaces: Map<string, string>;
 }> {
   const calls: CommandRequest[] = [];
   const panes = new Map<string, ResetPaneState>(
     inputs.map((input): [string, ResetPaneState] => [
       input.record.endpoint.paneId,
       { ...input, present: true },
+    ]),
+  );
+  const workspaces = new Map(
+    inputs.map((input) => [
+      input.record.endpoint.workspaceId,
+      input.workspaceLabel ?? `Tandem coordinator · ${basename(input.record.repoPath)}`,
     ]),
   );
   const missingPane = (): CommandResult =>
@@ -155,6 +167,22 @@ function nativeResetRunner(inputs: readonly ResetPaneInput[]): Readonly<{
         ),
       );
     }
+    if (resource === "workspace") {
+      const workspaceId = request.argv[5] ?? "";
+      if (!workspaces.has(workspaceId)) {
+        return result("", 1, JSON.stringify({ error: { code: "workspace_not_found" } }));
+      }
+      if (action === "rename") workspaces.set(workspaceId, request.argv[6] ?? "");
+      else if (action !== "get") throw new Error(`unexpected workspace action ${action}`);
+      return result(
+        JSON.stringify({
+          result: {
+            type: "workspace_info",
+            workspace: { workspace_id: workspaceId, label: workspaces.get(workspaceId) },
+          },
+        }),
+      );
+    }
     if (resource !== "pane" || action === undefined) {
       throw new Error(`unexpected command ${JSON.stringify(request.argv)}`);
     }
@@ -164,11 +192,19 @@ function nativeResetRunner(inputs: readonly ResetPaneInput[]): Readonly<{
     }
     const pane = panes.get(paneId);
     if (pane === undefined || !pane.present) return missingPane();
-    if (action === "get") return result(panePayload(pane.record));
-    if (action === "process-info") return result(processPayload(pane.record));
+    if (action === "get") return result(panePayload(pane.record, pane.foregroundCwd));
+    if (action === "process-info") return result(processPayload(pane.record, pane.processes));
     if (action === "close") {
       if (pane.closeResult !== undefined) return pane.closeResult;
       pane.present = false;
+      if (
+        ![...panes.values()].some(
+          (other) =>
+            other.present && other.record.endpoint.workspaceId === pane.record.endpoint.workspaceId,
+        )
+      ) {
+        workspaces.delete(pane.record.endpoint.workspaceId);
+      }
       return result(
         JSON.stringify({
           id: "cli:pane:close",
@@ -178,7 +214,7 @@ function nativeResetRunner(inputs: readonly ResetPaneInput[]): Readonly<{
     }
     throw new Error(`unexpected command ${JSON.stringify(request.argv)}`);
   };
-  return { calls, panes, run };
+  return { calls, panes, workspaces, run };
 }
 
 const resetChannels: InstructionChannels = {
@@ -623,6 +659,124 @@ test("resets selected owned idle and done coordinators without touching unrelate
   }
 });
 
+for (const force of [false, true]) {
+  test(`reset closes a stopped recorded coordinator shell and leaves unrelated terminals (force=${force})`, async () => {
+    const values = await fixture();
+    try {
+      await saveCoordinatorRecord(values.home, values.recordA);
+      const shell = [{ pid: 1234, name: "zsh", argv: ["-zsh"], argv0: "-zsh", cmdline: "-zsh" }];
+      const unrelated = { ...values.recordA, endpoint: endpoint("tandem", "unrelated-shell") };
+      const runner = nativeResetRunner([
+        { record: values.recordA, agentStatus: "unknown", processes: shell },
+        { record: unrelated, agentStatus: "unknown", processes: shell },
+      ]);
+      const request = { home: values.home, sessionId: "tandem", repoPaths: [values.repoA], force };
+
+      expect(
+        (await resetCoordinators(runner.run, request)).map((record) => record.repoPath),
+      ).toEqual([values.repoA]);
+      expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(false);
+      expect(runner.workspaces.has(values.recordA.endpoint.workspaceId)).toBe(false);
+      expect(runner.panes.get(unrelated.endpoint.paneId)?.present).toBe(true);
+      expect(await resetCoordinators(runner.run, request)).toEqual([]);
+      expect([...runner.workspaces.keys()]).toEqual([unrelated.endpoint.workspaceId]);
+    } finally {
+      await cleanup(values.root);
+    }
+  });
+}
+
+for (const label of ["Tandem coordinator · repo-a", "My scratch terminal"]) {
+  test(`reset preserves extra panes and only retires its own generated workspace label: ${label}`, async () => {
+    const values = await fixture();
+    try {
+      await saveCoordinatorRecord(values.home, values.recordA);
+      const extra = {
+        ...values.recordA,
+        endpoint: { ...values.recordA.endpoint, paneId: "unrelated-omp" },
+        command: ["omp"],
+      };
+      const runner = nativeResetRunner([
+        { record: values.recordA, agentStatus: "idle", workspaceLabel: label },
+        { record: extra, agentStatus: "working", workspaceLabel: label },
+      ]);
+
+      await resetCoordinators(runner.run, {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA],
+      });
+
+      expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(false);
+      expect(runner.panes.get(extra.endpoint.paneId)?.present).toBe(true);
+      expect(runner.workspaces.get(values.recordA.endpoint.workspaceId)).toBe(
+        label === "My scratch terminal" ? label : "Retained terminals · repo-a",
+      );
+    } finally {
+      await cleanup(values.root);
+    }
+  });
+}
+
+test("force reset refuses a stopped recorded pane that has moved outside its coordinator worktree", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    const runner = nativeResetRunner([
+      {
+        record: values.recordA,
+        agentStatus: "unknown",
+        foregroundCwd: values.repoB,
+        processes: [{ pid: 1234, name: "zsh", argv: ["-zsh"], argv0: "-zsh", cmdline: "-zsh" }],
+      },
+    ]);
+    await expect(
+      resetCoordinators(runner.run, {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA],
+        force: true,
+      }),
+    ).rejects.toThrow("does not match lease");
+    expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("force reset does not mistake another foreground shell process for the stopped coordinator's terminal shell", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    const runner = nativeResetRunner([
+      {
+        record: values.recordA,
+        agentStatus: "unknown",
+        processes: [
+          {
+            pid: 5678,
+            name: "zsh",
+            argv: ["zsh", "work.sh"],
+            argv0: "zsh",
+            cmdline: "zsh work.sh",
+          },
+        ],
+      },
+    ]);
+    await expect(
+      resetCoordinators(runner.run, {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA],
+        force: true,
+      }),
+    ).rejects.toThrow("does not prove its original terminal shell");
+    expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
 test("allows reset when historical worker endpoints are no longer live", async () => {
   const values = await fixture();
   try {
@@ -845,3 +999,579 @@ test("surfaces a native coordinator close failure without mutating the registry"
     await cleanup(values.root);
   }
 });
+
+test("force reset cancels stale scouting work while preserving files and unselected projects", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    await saveCoordinatorRecord(values.home, values.recordB);
+    const worker: Endpoint = { ...endpoint("tandem", "missing-worker"), role: "scout" };
+    await seedTask(values.home, values.repoA, "scout", [worker]);
+    const store = createTaskStore({
+      directory: join(values.home, "tasks"),
+      clock: () => new Date().toISOString(),
+      idFactory: () => "unselected-task",
+    });
+    const selected = await store.read("reset-task");
+    if (selected === undefined) throw new Error("missing fixture task");
+    await store.update(selected.id, selected.revision, (task) => ({
+      ...task,
+      stage: "scouting",
+      revision: task.revision + 1,
+    }));
+    const unselected = await store.create({
+      repoPath: values.repoB,
+      kind: "scout",
+      objective: "Keep this unrelated project running",
+      acceptanceCriteria: ["Reset of another project leaves this task alone"],
+      surfaces: ["example.ts"],
+      policy: resetPolicy,
+    });
+    const awaitingApproval = await store.create({
+      ...unselected,
+      id: "awaiting-approval",
+      repoPath: values.repoA,
+      kind: "implementation",
+    });
+    await writeRuntimeState(runtimeFile(values.home), {
+      schemaVersion: 1,
+      tasks: [
+        {
+          ...runtimeTask(values),
+          worktree: values.recordA.worktree,
+          endpoints: [worker],
+          jobs: [{ ...runtimeWorkerJob(values), role: "scout", endpoint: worker }],
+          reservation: {
+            schemaVersion: 1,
+            id: "reset-reservation",
+            taskId: selected.id,
+            ownerSessionId: "tandem",
+            phase: "endpoint",
+            createdAt: "2030-01-02T03:04:05.000Z",
+          },
+        },
+      ],
+      presentations: [],
+    });
+    const originalFile = join(values.repoA, "uncommitted.txt");
+    const worktreeFile = join(values.worktreeA, "unmerged.txt");
+    await writeFile(originalFile, "original work");
+    await writeFile(worktreeFile, "worktree work");
+    const runner = nativeResetRunner([
+      { record: values.recordA, agentStatus: "working" },
+      { record: values.recordB, agentStatus: "working" },
+    ]);
+
+    await resetCoordinators(runner.run, {
+      home: values.home,
+      sessionId: "tandem",
+      repoPaths: [values.repoA],
+      force: true,
+    });
+
+    expect((await store.read(selected.id))?.stage).toBe("cancelled");
+    expect(await store.read(unselected.id)).toEqual(unselected);
+    expect(await store.read(awaitingApproval.id)).toEqual(awaitingApproval);
+    const runtime = (await readRuntimeState(runtimeFile(values.home))).tasks[0];
+    expect(runtime?.jobs[0]?.phase).toBe("failed");
+    expect(runtime?.reservation?.phase).toBe("released");
+    expect(runtime?.stopRequest).toBeUndefined();
+    expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(false);
+    expect(runner.panes.get(values.recordB.endpoint.paneId)?.present).toBe(true);
+    expect(await readFile(originalFile, "utf8")).toBe("original work");
+    expect(await readFile(worktreeFile, "utf8")).toBe("worktree work");
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("force reset refuses a foreign coordinator before cancelling tasks or closing owned panes", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    await saveCoordinatorRecord(values.home, values.recordB);
+    await seedTask(values.home, values.repoA, "scout");
+    const taskPath = join(values.home, "tasks", "reset-task.json");
+    const before = await readFile(taskPath, "utf8");
+    const runner = nativeResetRunner([
+      { record: values.recordA, agentStatus: "working" },
+      { record: values.recordB, agentStatus: "working" },
+    ]);
+    const run: CommandRunner = (request) =>
+      request.argv[4] === "process-info" && request.argv[6] === values.recordB.endpoint.paneId
+        ? Promise.resolve(
+            result(
+              processPayload(values.recordB, [
+                { pid: 1234, name: "vim", argv: ["vim", "notes"], argv0: "vim" },
+              ]),
+            ),
+          )
+        : runner.run(request);
+
+    await expect(
+      resetCoordinators(run, {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA, values.repoB],
+        force: true,
+      }),
+    ).rejects.toThrow();
+
+    expect(await readFile(taskPath, "utf8")).toBe(before);
+    expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
+    expect(runner.panes.get(values.recordB.endpoint.paneId)?.present).toBe(true);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("force reset refuses a foreign process in a recorded worker pane", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    const worker: Endpoint = { ...endpoint("tandem", "worker-pane"), role: "scout" };
+    await seedTask(values.home, values.repoA, "scout", [worker]);
+    const taskPath = join(values.home, "tasks", "reset-task.json");
+    const before = await readFile(taskPath, "utf8");
+    await writeRuntimeState(runtimeFile(values.home), {
+      schemaVersion: 1,
+      tasks: [
+        {
+          ...runtimeTask(values),
+          endpoints: [worker],
+          jobs: [{ ...runtimeWorkerJob(values), role: "scout", endpoint: worker }],
+        },
+      ],
+      presentations: [],
+    });
+    const foreign = { ...values.recordA, endpoint: worker, command: ["vim", "notes"] };
+    const runner = nativeResetRunner([
+      { record: values.recordA, agentStatus: "working" },
+      { record: foreign, agentStatus: "working" },
+    ]);
+    const run: CommandRunner = (request) =>
+      request.argv[4] === "process-info" && request.argv[6] === worker.paneId
+        ? Promise.resolve(
+            result(
+              processPayload(foreign, [
+                { pid: 1234, name: "vim", argv: ["vim", "notes"], argv0: "vim" },
+              ]),
+            ),
+          )
+        : runner.run(request);
+
+    await expect(
+      resetCoordinators(run, {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA],
+        force: true,
+      }),
+    ).rejects.toThrow();
+
+    expect(await readFile(taskPath, "utf8")).toBe(before);
+    expect(runner.panes.get(worker.paneId)?.present).toBe(true);
+    expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("force reset can retry a partial coordinator close without reviving cancelled work", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    await saveCoordinatorRecord(values.home, values.recordB);
+    await seedTask(values.home, values.repoA, "scout");
+    const runner = nativeResetRunner([
+      { record: values.recordA, agentStatus: "working" },
+      {
+        record: values.recordB,
+        agentStatus: "working",
+        closeResult: result("", 1, "native close failed"),
+      },
+    ]);
+    const input = {
+      home: values.home,
+      sessionId: "tandem",
+      repoPaths: [values.repoA, values.repoB],
+      force: true,
+    };
+
+    await expect(resetCoordinators(runner.run, input)).rejects.toThrow();
+    expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(false);
+    expect(runner.panes.get(values.recordB.endpoint.paneId)?.present).toBe(true);
+    runner.panes.set(values.recordB.endpoint.paneId, {
+      record: values.recordB,
+      agentStatus: "working",
+      present: true,
+    });
+    await resetCoordinators(runner.run, input);
+
+    expect(runner.panes.get(values.recordB.endpoint.paneId)?.present).toBe(false);
+    const task = JSON.parse(await readFile(join(values.home, "tasks", "reset-task.json"), "utf8"));
+    expect(task.stage).toBe("cancelled");
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("force reset refuses work reserved by a different session", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    await seedTask(values.home, values.repoA, "scout");
+    const state = {
+      schemaVersion: 1 as const,
+      tasks: [
+        {
+          ...runtimeTask(values),
+          reservation: {
+            schemaVersion: 1 as const,
+            id: "other-reservation",
+            taskId: "reset-task",
+            ownerSessionId: "other-session",
+            phase: "reserved" as const,
+            createdAt: "2030-01-02T03:04:05.000Z",
+          },
+        },
+      ],
+      presentations: [],
+    };
+    await writeRuntimeState(runtimeFile(values.home), state);
+    const taskPath = join(values.home, "tasks", "reset-task.json");
+    const before = await readFile(taskPath, "utf8");
+    const runner = nativeResetRunner([{ record: values.recordA, agentStatus: "working" }]);
+
+    await expect(
+      resetCoordinators(runner.run, {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA],
+        force: true,
+      }),
+    ).rejects.toThrow();
+
+    expect(await readFile(taskPath, "utf8")).toBe(before);
+    expect(await readRuntimeState(runtimeFile(values.home))).toEqual(state);
+    expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("force reset closes the latest retained worker generation without cancelling completed work", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    const oldEndpoint: Endpoint = { ...endpoint("tandem", "retained-worker"), role: "scout" };
+    const currentEndpoint = { ...oldEndpoint, generation: 1 };
+    await seedTask(values.home, values.repoA, "scout", [oldEndpoint, currentEndpoint]);
+    const store = createTaskStore({
+      directory: join(values.home, "tasks"),
+      clock: () => new Date().toISOString(),
+      idFactory: () => "reset-task",
+    });
+    const task = await store.read("reset-task");
+    if (task === undefined) throw new Error("missing fixture task");
+    const completed = await store.update(task.id, task.revision, (current) => ({
+      ...current,
+      generation: 1,
+      stage: "completed",
+      revision: current.revision + 1,
+    }));
+    const oldJob = {
+      ...runtimeWorkerJob(values),
+      role: "scout" as const,
+      endpoint: oldEndpoint,
+      phase: "consumed" as const,
+    };
+    const currentJob = {
+      ...oldJob,
+      id: "new-job",
+      generation: 1,
+      endpoint: currentEndpoint,
+      jobPath: join(values.home, "jobs", "new-job.json"),
+    };
+    await mkdir(dirname(currentJob.jobPath), { recursive: true });
+    await writeWorkerTerminal(currentJob.jobPath, {
+      schemaVersion: 1,
+      jobId: currentJob.id,
+      taskId: task.id,
+      generation: 1,
+      role: "scout",
+      cwd: values.worktreeA,
+      pid: 1234,
+      phase: "busy",
+      completed: true,
+      heartbeatAt: new Date().toISOString(),
+    });
+    await writeRuntimeState(runtimeFile(values.home), {
+      schemaVersion: 1,
+      tasks: [
+        {
+          ...runtimeTask(values),
+          worktree: values.recordA.worktree,
+          endpoints: [oldEndpoint, currentEndpoint],
+          jobs: [oldJob, currentJob],
+        },
+      ],
+      presentations: [],
+    });
+    const worker = { ...values.recordA, endpoint: currentEndpoint };
+    const runner = nativeResetRunner([
+      { record: values.recordA, agentStatus: "working" },
+      { record: worker, agentStatus: "working" },
+    ]);
+
+    await resetCoordinators(runner.run, {
+      home: values.home,
+      sessionId: "tandem",
+      repoPaths: [values.repoA],
+      force: true,
+    });
+
+    expect(runner.panes.get(currentEndpoint.paneId)?.present).toBe(false);
+    expect(await store.read(task.id)).toEqual(completed);
+    expect((await readRuntimeState(runtimeFile(values.home))).tasks[0]?.endpoints).toEqual([]);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("force reset does not treat a job path argument as validation process ownership", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    const worker: Endpoint = { ...endpoint("tandem", "validation-pane"), role: "implementer" };
+    await seedTask(values.home, values.repoA, "scout", [worker]);
+    const job = {
+      ...runtimeWorkerJob(values),
+      kind: "validation" as const,
+      role: "validation" as const,
+      endpoint: worker,
+    };
+    await writeRuntimeState(runtimeFile(values.home), {
+      schemaVersion: 1,
+      tasks: [{ ...runtimeTask(values), endpoints: [worker], jobs: [job] }],
+      presentations: [],
+    });
+    const foreign = { ...values.recordA, endpoint: worker };
+    const runner = nativeResetRunner([
+      { record: values.recordA, agentStatus: "working" },
+      { record: foreign, agentStatus: "working" },
+    ]);
+    const run: CommandRunner = (request) =>
+      request.argv[4] === "process-info" && request.argv[6] === worker.paneId
+        ? Promise.resolve(
+            result(
+              processPayload(foreign, [
+                { pid: 1234, name: "vim", argv: ["vim", job.jobPath], argv0: "vim" },
+              ]),
+            ),
+          )
+        : runner.run(request);
+
+    await expect(
+      resetCoordinators(run, {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA],
+        force: true,
+      }),
+    ).rejects.toThrow();
+
+    expect(runner.panes.get(worker.paneId)?.present).toBe(true);
+    expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("force reset ends stale presentations while preserving their artifacts", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    await seedTask(values.home, values.repoA, "scout");
+    const cwd = join(values.home, "presentations", "reset-presentation");
+    await mkdir(cwd, { recursive: true });
+    const recordPath = join(cwd, "record.json");
+    const artifactPath = join(cwd, "artifact.html");
+    const worker: Endpoint = {
+      ...endpoint("tandem", "missing-presentation"),
+      role: "presentation",
+    };
+    const job = {
+      ...runtimeWorkerJob(values),
+      role: "presentation" as const,
+      cwd,
+      jobPath: join(cwd, "job.json"),
+      resultPath: join(cwd, "result.json"),
+      endpoint: worker,
+    };
+    await writeFile(
+      recordPath,
+      JSON.stringify({
+        id: "reset-presentation",
+        taskId: "reset-task",
+        generation: 0,
+        cwd,
+        artifactPath,
+        jobPath: job.jobPath,
+        resultPath: job.resultPath,
+        status: "running",
+        endpoint: worker,
+        createdAt: "2030-01-02T03:04:05.000Z",
+        updatedAt: "2030-01-02T03:04:05.000Z",
+      }),
+    );
+    await writeFile(artifactPath, "<main>keep this presentation</main>");
+    await writeRuntimeState(runtimeFile(values.home), {
+      schemaVersion: 1,
+      tasks: [runtimeTask(values)],
+      presentations: [
+        {
+          schemaVersion: 1,
+          id: "reset-presentation",
+          taskId: "reset-task",
+          recordPath,
+          job,
+          endpoint: worker,
+        },
+      ],
+    });
+    const runner = nativeResetRunner([{ record: values.recordA, agentStatus: "working" }]);
+
+    await resetCoordinators(runner.run, {
+      home: values.home,
+      sessionId: "tandem",
+      repoPaths: [values.repoA],
+      force: true,
+    });
+
+    expect(JSON.parse(await readFile(recordPath, "utf8")).status).toBe("failed");
+    expect((await readRuntimeState(runtimeFile(values.home))).presentations[0]?.job.phase).toBe(
+      "failed",
+    );
+    expect(await readFile(artifactPath, "utf8")).toBe("<main>keep this presentation</main>");
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("force reset reaps detached validation commands before closing their pane", async () => {
+  const values = await fixture();
+  let process: Bun.Subprocess | undefined;
+  let commandPid: number | undefined;
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    const worker: Endpoint = { ...endpoint("tandem", "validation-pane"), role: "implementer" };
+    await seedTask(values.home, values.repoA, "scout", [worker]);
+    const job = {
+      ...runtimeWorkerJob(values),
+      kind: "validation" as const,
+      role: "validation" as const,
+      endpoint: worker,
+      head: "abc123",
+    };
+    await mkdir(dirname(job.jobPath), { recursive: true });
+    const pidPath = join(dirname(job.jobPath), "command.pid");
+    await writeFile(
+      job.jobPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: job.id,
+        taskId: job.taskId,
+        generation: 0,
+        repoPath: job.cwd,
+        head: job.head,
+        surfaces: ["example.ts"],
+        resultPath: job.resultPath,
+        commands: [
+          {
+            name: "owned validation command",
+            surfaces: ["example.ts"],
+            timeoutMs: 30_000,
+            argv: [
+              "bun",
+              "-e",
+              `await Bun.write(${JSON.stringify(pidPath)}, String(process.pid)); await Bun.sleep(30000);`,
+            ],
+          },
+        ],
+      }),
+    );
+    await writeRuntimeState(runtimeFile(values.home), {
+      schemaVersion: 1,
+      tasks: [{ ...runtimeTask(values), endpoints: [worker], jobs: [job] }],
+      presentations: [],
+    });
+    const workerPath = fileURLToPath(new URL("../../src/validation-worker.ts", import.meta.url));
+    const argv = ["bun", workerPath, job.jobPath];
+    const validation = Bun.spawn(argv, {
+      cwd: job.cwd,
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    process = validation;
+    const deadline = Date.now() + 5_000;
+    while (!(await Bun.file(pidPath).exists()) && Date.now() < deadline) await Bun.sleep(10);
+    commandPid = Number(await readFile(pidPath, "utf8"));
+    if (!Number.isSafeInteger(commandPid) || commandPid <= 0)
+      throw new Error("invalid owned command PID");
+    globalThis.process.kill(commandPid, 0);
+    const workerRecord = { ...values.recordA, endpoint: worker };
+    const runner = nativeResetRunner([
+      { record: values.recordA, agentStatus: "working" },
+      { record: workerRecord, agentStatus: "working" },
+    ]);
+    const run: CommandRunner = async (request) => {
+      if (request.argv[4] === "process-info" && request.argv[6] === worker.paneId) {
+        return result(
+          processPayload(
+            workerRecord,
+            validation.exitCode === null
+              ? [{ pid: validation.pid, name: "bun", argv, argv0: "bun" }]
+              : [{ pid: validation.pid, name: "zsh", argv: ["-zsh"], argv0: "zsh" }],
+          ),
+        );
+      }
+      if (request.argv[5] === worker.paneId) {
+        if (request.argv[4] === "send-keys") {
+          validation.kill("SIGINT");
+          return result(JSON.stringify({ result: { type: "ok" } }));
+        }
+        if (request.argv[4] === "close" && validation.exitCode === null) {
+          validation.kill("SIGKILL");
+        }
+      }
+      return runner.run(request);
+    };
+
+    await resetCoordinators(run, {
+      home: values.home,
+      sessionId: "tandem",
+      repoPaths: [values.repoA],
+      force: true,
+    });
+    await validation.exited;
+
+    expect(() => globalThis.process.kill(commandPid as number, 0)).toThrow();
+    commandPid = undefined;
+    expect(runner.panes.get(worker.paneId)?.present).toBe(false);
+  } finally {
+    if (process !== undefined) {
+      if (process.exitCode === null) process.kill("SIGKILL");
+      await process.exited;
+    }
+    if (commandPid !== undefined) {
+      try {
+        globalThis.process.kill(-commandPid, "SIGKILL");
+      } catch (error) {
+        expect(error).toHaveProperty("code", "ESRCH");
+      }
+    }
+    await cleanup(values.root);
+  }
+}, 10_000);

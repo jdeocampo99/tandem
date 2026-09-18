@@ -28,6 +28,12 @@ Tandem-owned coordinators after a fail-closed preflight, then normal-launches th
 Busy or unsafe work refuses before any pane closes. It preserves settings, history, task records,
 worktrees, and files; it is not task recovery or data wiping. Add `--continue` only to resume saved
 conversations, and never invoke reset from inside Herdr.
+Reset also closes recorded coordinator shells after verifying native identity and worktree. Empty
+workspaces disappear when their last pane closes; extra panes and custom labels remain. Generated
+old coordinator labels are retired so retained terminals do not look like current coordinators.
+For deliberate cancellation during testing, add `--force`: `tandem --reset --force [PATH ...]`.
+This stops selected active owned work and cancels its tasks before reopening coordinators, while
+preserving files and worktrees. It does not bypass ownership or coordinator source-safety checks.
 
 This conversational skill is optional. For exact structured discovery or automation, resolve a
 validated `TANDEM_ROOT` independently of every target repository and use the advanced

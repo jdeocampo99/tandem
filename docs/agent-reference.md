@@ -87,11 +87,17 @@ tandem --reset
 
 With no paths this selects every valid saved project; explicit paths select only that subset. Reset
 preflights every selected root and stops only idle coordinators with exact Tandem ownership proof.
+Recorded coordinator panes that returned to their verified terminal shell are also closed.
 Busy, unknown, foreign, or unsafe work refuses before any pane is closed. It preserves settings,
 conversation history, task records, worktrees, and repository files; it is not task recovery, a
 factory reset, or data wiping. Add `--continue` only to resume saved conversations after reopening;
 otherwise launches start fresh conversations. `--headless` and `--no-attach` remain supported.
 Never invoke reset from inside Herdr; use a separate normal terminal.
+
+For deliberate interruption during testing, use `tandem --reset --force [PATH ...]`. It cancels
+selected active tasks, stops their owned worker, validation, and presentation terminals, and
+reopens busy coordinators. No paths still means every saved project. Files, worktrees, uncommitted
+changes, and task history remain intact; ownership and coordinator source-safety checks still apply.
 
 When saved project records exist, this registry-first path uses only that registry; it does not crawl
 arbitrary disk repositories, auto-register projects, or show a project picker or path prompt. It
@@ -229,6 +235,7 @@ The installed `tandem` command uses the following terminal options and environme
 | Conversation reconnect | Bare `tandem` opens or reconnects all saved projects; explicit `tandem PATH` opens or reconnects only that project; add `--continue` only when starting stopped coordinators and resuming saved conversations |
 | Herdr attachment | `--headless` or `--no-attach`; both prepare without attaching the Herdr terminal client |
 | Coordinator reset | `--reset`; preflight and reopen only selected idle Tandem-owned coordinators; launch-only and rejected inside Herdr |
+| Forced cancellation | `--reset --force`; cancel selected active work, stop owned terminals, and reopen coordinators while preserving files/worktrees |
 
 Explicit `PATH` values share the selected Herdr session, but each project receives its own
 coordinator workspace, clean source worktree, and child-worker group. When no paths are given and
@@ -247,20 +254,40 @@ terminal input owner while the interactive session is running.
 launch or Herdr attachment. With no paths it applies to every saved project in the launch set; an
 explicit path list narrows the set. The reset operation uses one shared coordination lock and a
 central task-store lock, validates all selected roots before closing anything, rechecks native
-ownership and strictly idle status before each exact pane close, and verifies pane disappearance.
+ownership and strictly idle status for running coordinators before each exact pane close, and
+verifies pane disappearance. Recorded coordinator shells are eligible only when native pane identity,
+terminal-shell process identity, and foreground worktree still match the record.
 Busy stages, live jobs or reservations, pending endpoint actions, presentations, or live worker
 endpoints cause a fail-closed refusal with no coordinator launch; unknown, foreign, legacy,
 malformed, or unsafe ownership also refuses. Those refusals happen during the preflight, before any
 pane closes. If a selected coordinator instead changes state or a native close fails after earlier
 coordinators in the same batch have already closed, reset stops closing further panes and raises an
 error naming the coordinators already closed and the failure that stopped it; it does not force-close
-the affected pane, retry, or roll back the earlier closes. It does not stop a server, delete a
-workspace, clear a registry, mutate tasks, recover task work, or wipe settings, history, worktrees, or
-files.
-Unrelated Herdr terminals remain untouched because reset scopes exact selected Tandem coordinator
-records rather than stopping a server or tearing down the session.
+the affected pane, retry, or roll back the earlier closes. It does not stop a server, clear a registry,
+mutate tasks, recover task work, or wipe settings, history, worktrees, or files.
+Herdr removes a workspace when its last pane closes. Extra panes are never closed merely because
+they share the coordinator workspace: they remain open, and only Tandem's generated coordinator label
+is changed to `Retained terminals`. Custom labels remain unchanged. A normal launch without reset
+also retires the old generated label when replacing a stopped coordinator, but retains its shell.
+Workspace labels alone never prove ownership or authorize terminal deletion.
 Run it from a separate normal terminal, and add `--continue` only when the fresh launch should
 resume the saved coordinator conversation.
+
+`--reset --force` is the explicit interruption mode; `--force` alone and `configure --force` are
+invalid. It preflights selected task and presentation endpoints, including retained terminals,
+against durable job identities and native process state. Unknown ownership, foreign-session work,
+ambiguous pending launches, or an unsafe coordinator source still refuse before effects.
+Presentation feedback locks are acquired before the task-store lock and the selected set is
+rechecked afterward, so presentation completion cannot race cancellation.
+
+Before closing panes, force reset persists cancellation intent for active tasks. Interactive workers
+are closed without requiring idle prompts; validation is interrupted through its runner first so
+detached validation commands are terminated and reaped. Stopped jobs and released reservations are
+persisted, affected active tasks become cancelled, and selected presentations are marked failed.
+Completed task history and tasks still awaiting approval are retained. Exact owned coordinator
+panes are then closed and normal launch resumes. A failure reports already-cancelled tasks and
+stopped panes/coordinators; retrying does not resurrect interrupted work. Neither mode discards
+repository files, uncommitted task work, worktrees, settings, or conversation history.
 
 For each project, launch captures the original repository's committed `HEAD`, acquires a distinct
 clean Treehouse source worktree under the pool, and starts OMP from that clean checkout. The

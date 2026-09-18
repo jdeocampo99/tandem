@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { quoteShellCommand } from "../adapters/commands.ts";
 import { readCheckpoint } from "../adapters/git.ts";
@@ -20,8 +20,9 @@ import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-pro
 import { mergeInheritedEnvironment } from "../terminal/cli-process.ts";
 import { withCoordinatorLaunchLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
-import type { CoordinatorRecord } from "./record.ts";
-import { saveCoordinatorRecord } from "./registry.ts";
+import { type CoordinatorRecord, recordPath } from "./record.ts";
+import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
+import { coordinatorWorkspaceLabel, retireCoordinatorWorkspace } from "./workspace.ts";
 
 const DEFAULT_COORDINATOR_CONFIG = "worker-config.yml";
 const HERDR_READY_ATTEMPTS = 40;
@@ -410,10 +411,6 @@ function parseCreatedWorkspace(
   return { workspaceId, tabId, paneId };
 }
 
-function coordinatorWorkspaceLabel(repoPath: string): string {
-  return `Tandem coordinator · ${basename(repoPath)}`;
-}
-
 function coordinatorResultFromRecord(record: CoordinatorRecord): CoordinatorLaunchResult {
   return {
     sessionId: record.endpoint.sessionId,
@@ -618,6 +615,9 @@ async function launchCoordinatorUnlocked(
     });
     await waitForHerdr(dependencies.run, dependencies.sleep, request.sessionId, coordinatorCwd);
   }
+  const previous = await readCoordinatorRecord(
+    recordPath(paths.home, request.sessionId, paths.repo),
+  );
   const workspaceResult = await runExternal(dependencies.run, {
     argv: [
       "herdr",
@@ -681,6 +681,9 @@ async function launchCoordinatorUnlocked(
     request.sessionId,
     coordinator.repoPath,
   );
+  if (previous !== undefined && previous.endpoint.workspaceId !== workspace.workspaceId) {
+    await retireCoordinatorWorkspace(dependencies.run, previous);
+  }
   return {
     sessionId: request.sessionId,
     repoPath: coordinator.repoPath,

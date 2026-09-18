@@ -24,6 +24,12 @@ coordinators, explain that `tandem --reset` is the separate terminal front door:
 selected idle Tandem-owned coordinators, refuses busy or unsafe work before closing panes, and
 preserves durable settings, history, tasks, worktrees, and files. It must be run outside Herdr;
 `--continue` is optional for resuming saved conversations.
+It also handles recorded coordinators that exited to their verified terminal shell. Extra panes stay
+open and generated old coordinator labels are retired; custom labels are preserved. Never infer
+terminal ownership or permission to close a workspace from its displayed label.
+If the user explicitly wants to interrupt active work, explain `tandem --reset --force [PATH ...]`:
+it cancels selected active tasks and stops owned terminals while preserving files and worktrees.
+Without paths it targets all saved projects; ownership and coordinator source-safety checks remain.
 
 For repository scope, canonicalize an explicit target or cwd to its Git top-level (expand `~`,
 resolve relative paths, preserve symlink identity). If unresolved, ask briefly. Explicit all-project

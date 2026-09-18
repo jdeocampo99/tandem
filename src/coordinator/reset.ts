@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readCheckpoint } from "../adapters/git.ts";
-import { AdapterCommandError } from "../adapters/primitives.ts";
+import { type HerdrPaneInspection, inspectEndpoint, interruptEndpoint } from "../adapters/herdr.ts";
+import { AdapterCommandError, EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
   CommandRequest,
   CommandResult,
@@ -9,16 +11,34 @@ import type {
   Endpoint,
   TaskRecord,
 } from "../contracts.ts";
+import { withPresentationLock } from "../presentations/lock.ts";
+import { readPresentationRecord } from "../presentations/records.ts";
 import { activeRuntimeJob, unreleasedReservation } from "../runtime/activity.ts";
-import { readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
-import type { RuntimePresentation, RuntimeState, RuntimeTaskState } from "../runtime/schema.ts";
-import { createTaskStore, type TaskStoreTransaction } from "../tasks/store.ts";
+import {
+  readRuntimeState,
+  runtimeFile,
+  writeJsonAtomically,
+  writeRuntimeState,
+} from "../runtime/persistence.ts";
+import type {
+  DurableJob,
+  RuntimePresentation,
+  RuntimeState,
+  RuntimeTaskState,
+} from "../runtime/schema.ts";
+import { replaceRuntimePresentation, replaceRuntimeTask } from "../service/records.ts";
+import { recoverEndpointFromLaunch } from "../tasks/control.ts";
+import { type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
+import { createTaskStore, type TaskStore, type TaskStoreTransaction } from "../tasks/store.ts";
+import { liveWorkerTerminal } from "../workers/terminal.ts";
+import { workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { withCoordinatorLaunchLock } from "./lock.ts";
 import type { SnapshotPane } from "./ownership.ts";
 import {
   assertIdleCoordinatorPane,
+  assertStoppedCoordinatorShell,
   commandErrorCode,
-  findRunningCoordinator,
+  findResetCoordinator,
   parseJson,
   readSessionSnapshot,
   sameCommand,
@@ -34,6 +54,7 @@ import {
   sessionText,
 } from "./record.ts";
 import { listCoordinatorRecords } from "./registry.ts";
+import { retireCoordinatorWorkspace } from "./workspace.ts";
 
 const RESET_ACTIVE_TASK_STAGES: readonly TaskRecord["stage"][] = [
   "queued",
@@ -126,6 +147,36 @@ function assertCloseAcknowledgement(result: CommandResult): void {
   }
 }
 
+async function assertIdleResetCoordinator(
+  run: CommandRunner,
+  panes: readonly SnapshotPane[],
+  record: CoordinatorRecord,
+): Promise<void> {
+  const inspection = await inspectEndpoint(run, {
+    endpoint: record.endpoint,
+    cwd: record.worktree.path,
+  });
+  if (inspection.activeWorker) {
+    if (
+      inspection.processInfo.foregroundProcesses.filter((process) =>
+        sameCommand(process.argv, record.command),
+      ).length !== 1
+    ) {
+      throw ownershipFailure("coordinator foreground process changed before reset");
+    }
+    assertIdleCoordinatorPane(panes, record);
+  } else {
+    assertStoppedCoordinatorShell(inspection);
+    if (
+      inspection.pane.foregroundCwd === undefined ||
+      (await canonicalPath(inspection.pane.foregroundCwd, "foreground cwd")) !==
+        record.worktree.path
+    ) {
+      throw ownershipFailure("stopped coordinator pane no longer occupies its recorded worktree");
+    }
+  }
+}
+
 async function closeCoordinatorPane(run: CommandRunner, record: CoordinatorRecord): Promise<void> {
   const closeRequest: CommandRequest = {
     argv: [
@@ -177,6 +228,499 @@ function assertNoLiveSelectedEndpoint(
     );
   }
 }
+type ForceEndpoint = Readonly<{
+  readonly endpoint: Endpoint;
+  readonly cwd: string;
+  readonly job?: DurableJob;
+  readonly kind: "task" | "presentation";
+}>;
+
+function endpointKey(endpoint: Endpoint): string {
+  return [endpoint.sessionId, endpoint.workspaceId, endpoint.tabId, endpoint.paneId].join("\0");
+}
+
+function activeJobEndpoint(
+  endpoint: Endpoint | undefined,
+  job: DurableJob,
+  sessionId: string,
+  description: string,
+): Endpoint {
+  if (endpoint === undefined) {
+    throw ownershipFailure(
+      `active ${description} job ${JSON.stringify(job.id)} has no durable endpoint identity`,
+    );
+  }
+  if (endpoint.sessionId !== sessionId) {
+    throw ownershipFailure(
+      `active ${description} endpoint ${JSON.stringify(endpoint.paneId)} belongs to session ${JSON.stringify(endpoint.sessionId)}`,
+    );
+  }
+  return endpoint;
+}
+
+function forceTaskContext(): TaskTransitionContext {
+  return {
+    now: new Date().toISOString(),
+    notificationId: randomUUID(),
+  };
+}
+
+async function proveForceEndpoint(run: CommandRunner, entry: ForceEndpoint): Promise<boolean> {
+  let inspection: HerdrPaneInspection;
+  try {
+    inspection = await inspectEndpoint(run, { endpoint: entry.endpoint, cwd: entry.cwd });
+  } catch (error) {
+    if (
+      (error instanceof EndpointOwnershipError && error.reason === "missing") ||
+      (error instanceof AdapterCommandError && isMissingPaneResult(error.result))
+    )
+      return false;
+    throw error;
+  }
+  if (
+    inspection.pane.foregroundCwd === undefined ||
+    (await canonicalPath(inspection.pane.foregroundCwd, "pane cwd")) !==
+      (await canonicalPath(entry.cwd, "job cwd"))
+  ) {
+    throw ownershipFailure(
+      `pane ${JSON.stringify(entry.endpoint.paneId)} no longer has its recorded working directory`,
+    );
+  }
+  if (!inspection.activeWorker) return true;
+  const job = entry.job;
+  if (job === undefined) {
+    throw ownershipFailure(
+      `live ${entry.kind} endpoint ${JSON.stringify(entry.endpoint.paneId)} has no matching durable job`,
+    );
+  }
+  if (job.role === "validation") {
+    const ownsProcess = inspection.processInfo.foregroundProcesses.some(
+      (process) =>
+        basename(process.argv[0] ?? "") === "bun" &&
+        process.argv[1] === fileURLToPath(new URL("../validation-worker.ts", import.meta.url)) &&
+        process.argv[2] === job.jobPath,
+    );
+    if (!ownsProcess) {
+      throw ownershipFailure(
+        `live validation endpoint ${JSON.stringify(entry.endpoint.paneId)} does not identify durable job ${JSON.stringify(job.id)}`,
+      );
+    }
+    return true;
+  }
+  try {
+    const terminal = await liveWorkerTerminal(inspection, job);
+    if (terminal === undefined) {
+      throw new Error("interactive worker terminal identity is unavailable");
+    }
+  } catch (error) {
+    throw ownershipFailure(
+      `live ${entry.kind} endpoint ${JSON.stringify(entry.endpoint.paneId)} could not prove worker identity: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  return true;
+}
+
+async function forceCloseEndpoint(run: CommandRunner, entry: ForceEndpoint): Promise<void> {
+  if (!(await proveForceEndpoint(run, entry))) return;
+  if (entry.job?.kind === "validation") {
+    // The validation runner owns detached command groups and reaps them on interrupt.
+    await interruptEndpoint(run, { endpoint: entry.endpoint, cwd: entry.cwd });
+  }
+  const request: CommandRequest = {
+    argv: ["herdr", "--session", entry.endpoint.sessionId, "pane", "close", entry.endpoint.paneId],
+    cwd: entry.cwd,
+  };
+  const result = await run(request);
+  if (isMissingPaneResult(result)) return;
+  if (result.code !== 0) throw new AdapterCommandError("herdr pane close", request, result);
+  assertCloseAcknowledgement(result);
+  const verify: CommandRequest = {
+    argv: ["herdr", "--session", entry.endpoint.sessionId, "pane", "get", entry.endpoint.paneId],
+    cwd: entry.cwd,
+  };
+  const verification = await run(verify);
+  if (verification.code === 0) {
+    throw new Error(
+      `force reset closed pane ${JSON.stringify(entry.endpoint.paneId)} but it remains present`,
+    );
+  }
+  if (!isMissingPaneResult(verification)) {
+    throw new AdapterCommandError("herdr pane close verification", verify, verification);
+  }
+}
+
+function markForceTaskRuntime(
+  state: RuntimeState,
+  task: TaskRecord,
+  stoppedEndpointKeys: ReadonlySet<string>,
+  clock: () => string,
+): RuntimeState {
+  return replaceRuntimeTask(state, task.id, (current) => {
+    const jobs = current.jobs.map((job) => {
+      if (!activeRuntimeJob(job)) return job;
+      const endpoint = job.endpoint;
+      if (endpoint !== undefined && !stoppedEndpointKeys.has(endpointKey(endpoint))) return job;
+      return { ...job, phase: "failed" as const, error: "cancelled by force reset" };
+    });
+    const endpoints = current.endpoints.filter(
+      (endpoint) => !stoppedEndpointKeys.has(endpointKey(endpoint)),
+    );
+    const reservation =
+      current.reservation === undefined
+        ? undefined
+        : {
+            ...current.reservation,
+            phase: "released" as const,
+            releasedAt: clock(),
+          };
+    const {
+      endpointLaunch: _endpointLaunch,
+      stopRequest: _stopRequest,
+      reservation: _currentReservation,
+      poolAdmissionKey: _poolAdmissionKey,
+      poolNotice: _poolNotice,
+      ...withoutTransient
+    } = current;
+    return {
+      ...withoutTransient,
+      ...(reservation === undefined ? {} : { reservation }),
+      endpoints,
+      jobs,
+      lastError: "cancelled by force reset",
+    };
+  });
+}
+
+async function forceResetCoordinators(
+  run: CommandRunner,
+  home: string,
+  sessionId: string,
+  repoPaths: readonly string[],
+  store: TaskStoreTransaction,
+  tasks: readonly TaskRecord[],
+  runtimeByTaskId: ReadonlyMap<string, RuntimeTaskState>,
+  selectedTaskIds: ReadonlySet<string>,
+  state: RuntimeState,
+  lockedPresentationPaths: ReadonlySet<string> | undefined,
+): Promise<readonly CoordinatorRecord[]> {
+  const selectedPresentations: RuntimePresentation[] = [];
+  for (const presentation of state.presentations) {
+    const task = tasks.find((entry) => entry.id === presentation.taskId);
+    if (task === undefined) {
+      if (runtimePresentationHasActiveState(presentation, sessionId)) {
+        throw ownershipFailure(
+          `active presentation ${JSON.stringify(presentation.id)} has no durable task`,
+        );
+      }
+      continue;
+    }
+    if (!selectedTaskIds.has(task.id)) continue;
+    if (!lockedPresentationPaths?.has(presentation.recordPath)) {
+      throw new Error("selected presentations changed while acquiring reset locks; retry reset");
+    }
+    const record = await readPresentationRecord(presentation.recordPath);
+    if (record.id !== presentation.id || record.taskId !== task.id) {
+      throw ownershipFailure(
+        `presentation ${JSON.stringify(presentation.id)} record identity changed`,
+      );
+    }
+    if (
+      presentation.reservation !== undefined &&
+      presentation.reservation.phase !== "released" &&
+      presentation.reservation.ownerSessionId !== sessionId
+    ) {
+      throw ownershipFailure(
+        `presentation ${JSON.stringify(presentation.id)} reservation belongs to another session`,
+      );
+    }
+    selectedPresentations.push(presentation);
+  }
+
+  const liveRecords: CoordinatorRecord[] = [];
+  for (const repoPath of repoPaths) {
+    const record = await findResetCoordinator(run, { home, sessionId, repoPath });
+    if (record !== undefined) liveRecords.push(record);
+  }
+  for (const record of liveRecords) {
+    const checkpoint = await readCheckpoint(run, { repo: record.worktree.path });
+    if (checkpoint.dirty || checkpoint.unmerged) {
+      throw new Error(
+        `coordinator source worktree ${JSON.stringify(record.worktree.path)} is not clean`,
+      );
+    }
+    if (checkpoint.head !== record.worktree.baseHead) {
+      throw new Error(
+        `coordinator source worktree ${JSON.stringify(record.worktree.path)} HEAD ${JSON.stringify(
+          checkpoint.head,
+        )} does not match lease base HEAD ${JSON.stringify(record.worktree.baseHead)}`,
+      );
+    }
+  }
+
+  const endpointEntries = new Map<string, ForceEndpoint>();
+  const taskIdsToCancel = new Set<string>();
+  const addEndpoint = (
+    endpoint: Endpoint,
+    cwd: string,
+    job: DurableJob | undefined,
+    kind: ForceEndpoint["kind"],
+  ): void => {
+    if (endpoint.sessionId !== sessionId) {
+      throw ownershipFailure(
+        `${kind} endpoint ${JSON.stringify(endpoint.paneId)} belongs to session ${JSON.stringify(endpoint.sessionId)}`,
+      );
+    }
+    endpointEntries.set(endpointKey(endpoint), {
+      endpoint,
+      cwd,
+      ...(job === undefined ? {} : { job }),
+      kind,
+    });
+  };
+  for (const task of tasks) {
+    if (!selectedTaskIds.has(task.id)) continue;
+    const runtime = runtimeByTaskId.get(task.id);
+    if (
+      task.stage !== "cancelled" &&
+      task.stage !== "completed" &&
+      task.stage !== "merged" &&
+      (RESET_ACTIVE_TASK_STAGES.includes(task.stage) ||
+        (runtime !== undefined &&
+          (runtime.jobs.some(activeRuntimeJob) ||
+            unreleasedReservation(runtime.reservation) ||
+            runtime.endpointLaunch !== undefined ||
+            runtime.stopRequest !== undefined)))
+    )
+      taskIdsToCancel.add(task.id);
+    if (runtime === undefined) {
+      for (const endpoint of task.endpoints ?? []) {
+        addEndpoint(endpoint, task.worktree?.path ?? task.repoPath, undefined, "task");
+      }
+      continue;
+    }
+    const cwd = runtime.worktree?.path ?? task.worktree?.path ?? task.repoPath;
+    let launchEndpoint: Endpoint | undefined;
+    if (runtime.endpointLaunch !== undefined) {
+      if (runtime.reservation !== undefined && runtime.reservation.ownerSessionId !== sessionId) {
+        throw ownershipFailure(`task ${JSON.stringify(task.id)} has a foreign endpoint launch`);
+      }
+      const recovered = await recoverEndpointFromLaunch(run, runtime.endpointLaunch);
+      if (recovered.status !== "recovered") {
+        throw ownershipFailure(
+          `task ${JSON.stringify(task.id)} endpoint launch could not be recovered: ${recovered.detail}`,
+        );
+      }
+      launchEndpoint = recovered.endpoint;
+      addEndpoint(launchEndpoint, cwd, undefined, "task");
+    }
+    for (const endpoint of runtime.endpoints) {
+      addEndpoint(endpoint, cwd, workerJobForEndpoint(runtime.jobs, endpoint), "task");
+    }
+    for (const endpoint of task.endpoints ?? []) {
+      addEndpoint(endpoint, cwd, workerJobForEndpoint(runtime.jobs, endpoint), "task");
+    }
+    for (const job of runtime.jobs) {
+      if (!activeRuntimeJob(job) && job.endpoint === undefined) continue;
+      const endpoint = activeJobEndpoint(job.endpoint ?? launchEndpoint, job, sessionId, "worker");
+      addEndpoint(endpoint, job.cwd, job, "task");
+    }
+    if (
+      runtime.reservation !== undefined &&
+      runtime.reservation.phase !== "released" &&
+      runtime.reservation.ownerSessionId !== sessionId
+    ) {
+      throw ownershipFailure(
+        `task ${JSON.stringify(task.id)} reservation belongs to another session`,
+      );
+    }
+  }
+  for (const presentation of selectedPresentations) {
+    const endpoint = presentation.endpoint ?? presentation.job.endpoint;
+    if (endpoint !== undefined) {
+      addEndpoint(endpoint, presentation.job.cwd, presentation.job, "presentation");
+    }
+    if (presentation.endpoint === undefined && presentation.endpointLaunch !== undefined) {
+      const recovered = await recoverEndpointFromLaunch(run, presentation.endpointLaunch);
+      if (recovered.status !== "recovered") {
+        throw ownershipFailure(
+          `presentation ${JSON.stringify(presentation.id)} endpoint launch could not be recovered: ${recovered.detail}`,
+        );
+      }
+      addEndpoint(recovered.endpoint, presentation.job.cwd, presentation.job, "presentation");
+    }
+  }
+
+  for (const entry of endpointEntries.values()) await proveForceEndpoint(run, entry);
+
+  let currentState: RuntimeState = {
+    ...state,
+    tasks: state.tasks.map((runtime) => {
+      const task = tasks.find((entry) => entry.id === runtime.taskId);
+      if (task === undefined || !taskIdsToCancel.has(task.id)) return runtime;
+      return {
+        ...runtime,
+        stopRequest: {
+          schemaVersion: 1 as const,
+          action: "cancel" as const,
+          generation: task.generation,
+          requestedAt: new Date().toISOString(),
+        },
+        lastError: "force reset requested",
+      };
+    }),
+  };
+  await writeRuntimeState(runtimeFile(home), currentState);
+
+  const stoppedEndpointKeys = new Set<string>();
+  const stopped: CoordinatorRecord[] = [];
+  const cancelledTaskIds: string[] = [];
+  try {
+    for (const entry of endpointEntries.values()) {
+      await forceCloseEndpoint(run, entry);
+      const key = endpointKey(entry.endpoint);
+      stoppedEndpointKeys.add(key);
+      const task = tasks.find((candidate) => candidate.id === entry.job?.taskId);
+      if (task !== undefined) {
+        currentState = replaceRuntimeTask(currentState, task.id, (current) => ({
+          ...current,
+          endpoints: current.endpoints.filter((endpoint) => endpointKey(endpoint) !== key),
+          jobs: current.jobs.map((job) =>
+            activeRuntimeJob(job) && job.endpoint !== undefined && endpointKey(job.endpoint) === key
+              ? { ...job, phase: "failed" as const, error: "cancelled by force reset" }
+              : job,
+          ),
+        }));
+      }
+      const presentation = selectedPresentations.find(
+        (candidate) => candidate.job.id === entry.job?.id,
+      );
+      if (presentation !== undefined) {
+        currentState = replaceRuntimePresentation(currentState, presentation.id, (current) => {
+          const { endpoint: _endpoint, ...withoutEndpoint } = current;
+          const { endpoint: _jobEndpoint, ...withoutJobEndpoint } = current.job;
+          return {
+            ...withoutEndpoint,
+            job: {
+              ...withoutJobEndpoint,
+              phase: "failed" as const,
+              error: "cancelled by force reset",
+            },
+            lastError: "cancelled by force reset",
+          };
+        });
+        const record = await readPresentationRecord(presentation.recordPath);
+        if (record.status !== "ended" && record.status !== "failed") {
+          await writeJsonAtomically(presentation.recordPath, {
+            ...record,
+            status: "failed",
+            error: "cancelled by force reset",
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+      await writeRuntimeState(runtimeFile(home), currentState);
+    }
+
+    const clock = () => new Date().toISOString();
+    for (const task of tasks) {
+      if (!selectedTaskIds.has(task.id)) continue;
+      const runtime = runtimeByTaskId.get(task.id);
+      if (taskIdsToCancel.has(task.id)) {
+        const nextTask = transitionTask(
+          task,
+          { type: "cancel", reason: "force reset" },
+          forceTaskContext(),
+        );
+        await store.update(task.id, task.revision, () => nextTask);
+        cancelledTaskIds.push(task.id);
+      }
+      if (runtime !== undefined) {
+        currentState = markForceTaskRuntime(currentState, task, stoppedEndpointKeys, clock);
+      }
+    }
+    for (const presentation of selectedPresentations) {
+      currentState = replaceRuntimePresentation(currentState, presentation.id, (current) => {
+        const {
+          endpoint: _endpoint,
+          endpointLaunch: _endpointLaunch,
+          ...withoutTransient
+        } = current;
+        const reservation =
+          current.reservation === undefined
+            ? undefined
+            : { ...current.reservation, phase: "released" as const, releasedAt: clock() };
+        const job =
+          current.job.phase === "reserved" ||
+          current.job.phase === "launching" ||
+          current.job.phase === "running"
+            ? (() => {
+                const { endpoint: _jobEndpoint, ...withoutEndpoint } = current.job;
+                return {
+                  ...withoutEndpoint,
+                  phase: "failed" as const,
+                  error: "cancelled by force reset",
+                };
+              })()
+            : current.job;
+        return {
+          ...withoutTransient,
+          ...(reservation === undefined ? {} : { reservation }),
+          job,
+          lastError: "cancelled by force reset",
+        };
+      });
+      const record = await readPresentationRecord(presentation.recordPath);
+      if (record.status !== "ended" && record.status !== "failed") {
+        await writeJsonAtomically(presentation.recordPath, {
+          ...record,
+          status: "failed",
+          error: "cancelled by force reset",
+          updatedAt: clock(),
+        });
+      }
+    }
+    await writeRuntimeState(runtimeFile(home), currentState);
+
+    for (const record of liveRecords) {
+      const latest = await findResetCoordinator(run, {
+        home,
+        sessionId,
+        repoPath: record.repoPath,
+      });
+      if (latest === undefined) {
+        const snapshot = await readSessionSnapshot(run, sessionId, record.worktree.path);
+        if (snapshotPaneForEndpoint(snapshot, record.endpoint, "coordinator") !== undefined) {
+          throw ownershipFailure(
+            `coordinator ${JSON.stringify(record.repoPath)} lost its recorded identity`,
+          );
+        }
+        continue;
+      }
+      if (!sameCoordinatorIdentity(latest, record)) {
+        throw ownershipFailure(
+          `coordinator record for ${JSON.stringify(record.repoPath)} changed before force reset`,
+        );
+      }
+      await closeCoordinatorPane(run, latest);
+      stopped.push(latest);
+      await retireCoordinatorWorkspace(run, latest);
+    }
+  } catch (error) {
+    if (stoppedEndpointKeys.size === 0 && stopped.length === 0 && cancelledTaskIds.length === 0)
+      throw error;
+    const endpoints = [...stoppedEndpointKeys].map(
+      (key) => endpointEntries.get(key)?.endpoint.paneId,
+    );
+    const cause = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `force reset partially completed: cancelled tasks ${JSON.stringify(cancelledTaskIds)}, stopped worker/presentation panes ${JSON.stringify(endpoints)}, closed coordinators ${JSON.stringify(stopped.map((record) => record.repoPath))}; ${cause}`,
+      { cause: error },
+    );
+  }
+  return stopped;
+}
 
 async function resetCoordinatorsUnlocked(
   run: CommandRunner,
@@ -184,6 +728,8 @@ async function resetCoordinatorsUnlocked(
   sessionId: string,
   repoPaths: readonly string[],
   store: TaskStoreTransaction,
+  force: boolean,
+  lockedPresentationPaths?: ReadonlySet<string>,
 ): Promise<readonly CoordinatorRecord[]> {
   await listCoordinatorRecords(home, sessionId);
   const tasks = await store.list();
@@ -214,10 +760,26 @@ async function resetCoordinatorsUnlocked(
       );
     }
   }
-  for (const task of tasks) {
-    if (selectedTaskIds.has(task.id)) {
-      assertSafeTaskState(task, runtimeByTaskId.get(task.id));
+  if (!force) {
+    for (const task of tasks) {
+      if (selectedTaskIds.has(task.id)) {
+        assertSafeTaskState(task, runtimeByTaskId.get(task.id));
+      }
     }
+  }
+  if (force) {
+    return forceResetCoordinators(
+      run,
+      home,
+      sessionId,
+      repoPaths,
+      store,
+      tasks,
+      runtimeByTaskId,
+      selectedTaskIds,
+      state,
+      lockedPresentationPaths,
+    );
   }
 
   const selectedPresentations: RuntimePresentation[] = [];
@@ -252,7 +814,7 @@ async function resetCoordinatorsUnlocked(
 
   const liveRecords: CoordinatorRecord[] = [];
   for (const repoPath of repoPaths) {
-    const record = await findRunningCoordinator(run, { home, sessionId, repoPath });
+    const record = await findResetCoordinator(run, { home, sessionId, repoPath });
     if (record !== undefined) liveRecords.push(record);
   }
 
@@ -262,7 +824,7 @@ async function resetCoordinatorsUnlocked(
     if (first === undefined) throw new Error("reset discovered an invalid coordinator record set");
     snapshot = await readSessionSnapshot(run, sessionId, first.worktree.path);
     for (const record of liveRecords) {
-      assertIdleCoordinatorPane(snapshot, record);
+      await assertIdleResetCoordinator(run, snapshot, record);
       const checkpoint = await readCheckpoint(run, { repo: record.worktree.path });
       if (checkpoint.dirty || checkpoint.unmerged) {
         throw new Error(
@@ -315,7 +877,7 @@ async function resetCoordinatorsUnlocked(
   const stopped: CoordinatorRecord[] = [];
   for (const record of liveRecords) {
     try {
-      const latest = await findRunningCoordinator(run, {
+      const latest = await findResetCoordinator(run, {
         home,
         sessionId,
         repoPath: record.repoPath,
@@ -334,9 +896,10 @@ async function resetCoordinatorsUnlocked(
         );
       }
       const latestSnapshot = await readSessionSnapshot(run, sessionId, latest.worktree.path);
-      assertIdleCoordinatorPane(latestSnapshot, latest);
+      await assertIdleResetCoordinator(run, latestSnapshot, latest);
       await closeCoordinatorPane(run, latest);
       stopped.push(latest);
+      await retireCoordinatorWorkspace(run, latest);
     } catch (error) {
       if (stopped.length === 0) throw error;
       const stoppedRepos = stopped.map((entry) => entry.repoPath).join(", ");
@@ -352,18 +915,54 @@ async function resetCoordinatorsUnlocked(
   return stopped;
 }
 
+async function withForcePresentationLocks<Result>(
+  home: string,
+  repoPaths: readonly string[],
+  store: TaskStore,
+  operation: (paths: ReadonlySet<string>) => Promise<Result>,
+): Promise<Result> {
+  const paths = await store.exclusive(async (transaction) => {
+    const selected = new Set<string>();
+    for (const task of await transaction.list()) {
+      if (repoPaths.includes(await canonicalPath(task.repoPath, "task.repoPath")))
+        selected.add(task.id);
+    }
+    const state = await readRuntimeState(runtimeFile(home));
+    return [
+      ...new Set(
+        state.presentations
+          .filter((presentation) => selected.has(presentation.taskId))
+          .map((presentation) => presentation.recordPath),
+      ),
+    ].sort();
+  });
+  const lockedPaths = new Set(paths);
+  const acquire = (index: number): Promise<Result> => {
+    const path = paths[index];
+    return path === undefined
+      ? operation(lockedPaths)
+      : withPresentationLock(path, undefined, () => acquire(index + 1));
+  };
+  // Presentation workflows acquire this lock before the task store lock.
+  return acquire(0);
+}
+
 export async function resetCoordinators(
   run: CommandRunner,
   input: Readonly<{
     readonly home: string;
     readonly sessionId: string;
     readonly repoPaths: readonly string[];
+    readonly force?: boolean;
   }>,
 ): Promise<readonly CoordinatorRecord[]> {
   if (typeof run !== "function") throw new TypeError("run must be an argv command runner");
   if (!input || typeof input !== "object") throw new TypeError("reset input must be an object");
   if (!Array.isArray(input.repoPaths)) throw new TypeError("repoPaths must be an array");
   const home = await canonicalHome(input.home);
+  if (input.force !== undefined && typeof input.force !== "boolean") {
+    throw new TypeError("force must be boolean when provided");
+  }
   const sessionId = sessionText(input.sessionId);
   const repoPaths: string[] = [];
   const seen = new Set<string>();
@@ -382,8 +981,15 @@ export async function resetCoordinators(
       clock: () => new Date().toISOString(),
       idFactory: randomUUID,
     });
+    if (input.force === true) {
+      return withForcePresentationLocks(home, repoPaths, store, (paths) =>
+        store.exclusive((transaction) =>
+          resetCoordinatorsUnlocked(run, home, sessionId, repoPaths, transaction, true, paths),
+        ),
+      );
+    }
     return store.exclusive((transaction) =>
-      resetCoordinatorsUnlocked(run, home, sessionId, repoPaths, transaction),
+      resetCoordinatorsUnlocked(run, home, sessionId, repoPaths, transaction, false),
     );
   });
 }

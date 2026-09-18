@@ -65,6 +65,11 @@ With no paths, `--reset` selects every valid saved project; pass explicit paths 
 subset. It preflights all selected roots, stops only idle coordinators that Tandem can prove it owns,
 and then performs the normal launch so each selected coordinator is recreated and attached once.
 Unrelated Herdr terminals are left untouched.
+Reset also closes a recorded coordinator pane that has returned to its shell, provided its native
+identity and worktree still match. Herdr removes a workspace when its last pane closes. Extra panes
+remain open; Tandem changes only its generated old coordinator label to `Retained terminals`.
+Custom labels are preserved. A normal relaunch without reset keeps the old shell and retires its
+coordinator label instead. Labels alone never authorize closing a workspace or pane.
 Busy, unknown, foreign, or otherwise unsafe work refuses before any pane is closed; if a coordinator
 changes state or fails to close after earlier ones in the same run already closed, reset stops and
 reports exactly which coordinators it already closed. Reset retains
@@ -72,6 +77,20 @@ settings, conversation history, task records, worktrees, and repository files; i
 a factory reset, or data wiping. Add `--continue` only when you want the reopened coordinators to
 resume their saved conversations; without it they start fresh conversations. Never run `--reset` from
 inside Herdr, because Tandem refuses that unsafe context.
+
+For testing, or when you deliberately want to cancel active work and start fresh:
+
+```sh
+tandem --reset --force
+# Or limit the reset to one project:
+tandem --reset --force /absolute/path/to/repo
+```
+
+Force reset cancels selected active tasks, stops their owned worker, validation, and presentation
+terminals, and reopens their coordinators even when busy. Completed retained task terminals are closed
+without erasing completed task history. Files, worktrees, and uncommitted changes are preserved.
+Without paths it still selects **all saved projects**. Force does not bypass ownership checks or
+the clean-source requirement for coordinator worktrees, and must also run outside Herdr.
 
 Bare `tandem` uses only saved project records under `<home>/repositories`; it does not scan arbitrary
 disk repositories, auto-register projects, show a project picker, or request a path. Saved-project

@@ -42,6 +42,7 @@ tandem /absolute/path/to/first-repo /absolute/path/to/second-repo
 tandem --continue /absolute/path/to/repo
 tandem configure /absolute/path/to/repo
 tandem --reset
+tandem --reset --force
 ```
 
 With no path, Tandem opens or reconnects every valid saved project under the selected home before
@@ -65,6 +66,15 @@ unknown, or unsafe work before closing any pane, and then runs the normal launch
 It preserves settings, conversation history, task records, worktrees, and repository files: reset is
 not task recovery, a factory reset, or data wiping. Add `--continue` only to resume saved
 conversations; otherwise the reopened coordinators start fresh. Never run reset from inside Herdr.
+Recorded coordinator panes left at their verified terminal shell are also closed by reset. Herdr
+removes empty workspaces after the last pane closes; extra panes stay open. Only generated old
+coordinator labels are retired, not custom labels. Labels never authorize closing unrelated terminals.
+
+For deliberate interruption during testing, use `tandem --reset --force [PATH ...]`. It cancels
+selected active tasks, closes owned worker/validation/presentation terminals and busy coordinators,
+then performs the normal relaunch. Without paths it affects all saved projects. Files, dirty task
+worktrees, completed task history, and settings remain intact. Foreign or ambiguous ownership and
+unsafe coordinator sources still refuse; this is not permission to wipe state or discard changes.
 
 An explicit `tandem PATH` opens or reconnects only that project after ownership checks. A bare
 `tandem` applies the same checks to every project in its launch set (all saved projects when the
