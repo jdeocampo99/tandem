@@ -3,6 +3,8 @@ import type {
   ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { matchesKey } from "@oh-my-pi/pi-tui";
+import { runCommand } from "../adapters/commands.ts";
+import { createHerdrStatusReporter, type HerdrAgentState } from "../adapters/herdr-status.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import {
   parseWorkerJob,
@@ -147,6 +149,10 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   if (jobPath === undefined || jobPath.trim().length === 0) return;
   const job = await readJob(jobPath);
   const identity = workerIdentity(job, jobPath);
+  const statusReporter = createHerdrStatusReporter(runCommand, {
+    cwd: job.cwd,
+    agentLabel: `tandem-${job.role}-${job.taskId.slice(0, 8)}`,
+  });
   await writeWorkerTerminal(jobPath, terminalState(identity, "starting", false));
 
   let closed = false;
@@ -158,7 +164,18 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   let writeQueue = Promise.resolve();
   let currentState: WorkerTerminalState = terminalState(identity, "starting", false);
   let timeoutTimer: Timer | undefined;
-
+  let agentActive = false;
+  let settledStatus: HerdrAgentState = "idle";
+  let statusMessage: string | undefined;
+  const waitingInputs = new Set<string>();
+  const reportStatus = (): Promise<void> | undefined => {
+    if (pauseCommand !== undefined) return statusReporter?.report("blocked", "Worker paused");
+    if (waitingInputs.size > 0) return statusReporter?.report("blocked", "Waiting for your answer");
+    return statusReporter?.report(
+      agentActive ? "working" : settledStatus,
+      agentActive ? undefined : statusMessage,
+    );
+  };
   const persistState = async (
     phase: WorkerTerminalState["phase"],
     completed = currentState.completed,
@@ -172,16 +189,28 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     await write;
   };
   const persistResult = async (result: WorkerResult): Promise<void> => {
+    agentActive = false;
+    settledStatus = result.status === "completed" ? "idle" : "blocked";
+    statusMessage = result.error ?? result.question?.text;
     try {
       await persistWorkerResult(job.resultPath, result);
+    } catch (error) {
+      settledStatus = "blocked";
+      statusMessage = error instanceof Error ? error.message : String(error);
+      throw error;
     } finally {
-      await persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id);
+      try {
+        await persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id);
+      } finally {
+        await reportStatus();
+      }
     }
   };
   const publish = async (event: unknown, ctx: ExtensionContext): Promise<void> => {
     if (resultPublished || nativeAgentEndWillContinue(event)) return;
     if (pauseCommand !== undefined) {
       await persistState("paused", currentState.completed, pauseCommand.id);
+      await reportStatus();
       return;
     }
     if (timeoutRequested) {
@@ -268,7 +297,10 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
         timeoutTimer = undefined;
       }
       if (!ctx.isIdle()) ctx.abort();
-      else await finishPause();
+      else {
+        await finishPause();
+        await reportStatus();
+      }
       return;
     }
     if (currentState.phase !== "paused" && !currentState.completed) return;
@@ -308,11 +340,14 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       closingCommand !== undefined && !matchesKey(data, "ctrl+d") ? { consume: true } : undefined,
     );
     await persistState("busy", false);
+    agentActive = true;
+    void reportStatus();
     ctx.setInterval(() => {
       void pollControl(ctx).catch(() => ctx.abort());
     }, TERMINAL_POLL_MS);
     ctx.setInterval(() => {
       void persistState(currentState.phase, currentState.completed).catch(() => ctx.abort());
+      void reportStatus();
     }, TERMINAL_HEARTBEAT_MS);
     if (job.timeoutMs !== undefined) {
       timeoutTimer = ctx.setTimeout(() => {
@@ -320,29 +355,40 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       }, job.timeoutMs);
     }
   });
-
   pi.on("agent_start", (_event, ctx) => {
     void persistState("busy", currentState.completed).catch(() => ctx.abort());
+    agentActive = true;
+    void reportStatus();
   });
   pi.on("turn_start", (_event, ctx) => {
     void persistState("busy", currentState.completed).catch(() => ctx.abort());
+    agentActive = true;
+    void reportStatus();
   });
-  pi.on("tool_execution_start", (_event, ctx) => {
+  pi.on("tool_execution_start", (event, ctx) => {
     void persistState("busy", currentState.completed).catch(() => ctx.abort());
+    agentActive = true;
+    if (event.toolName === "ask") waitingInputs.add(event.toolCallId);
+    void reportStatus();
   });
-  pi.on("tool_execution_end", (_event, ctx) => {
+  pi.on("tool_execution_end", (event, ctx) => {
     void persistState("busy", currentState.completed).catch(() => ctx.abort());
+    waitingInputs.delete(event.toolCallId);
+    void reportStatus();
   });
   pi.on("turn_end", (_event, ctx) => {
     void persistState("idle", currentState.completed).catch(() => ctx.abort());
   });
   pi.on("agent_end", async (event, ctx) => {
+    agentActive = event.willContinue === true;
     if (event.willContinue === true) {
       await persistState("busy", currentState.completed);
+      await reportStatus();
       return;
     }
     if (resultPublished) {
       await persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id);
+      await reportStatus();
       return;
     }
     await publish(event, ctx);
@@ -351,6 +397,10 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   pi.on("session_shutdown", async () => {
     closed = true;
     if (timeoutTimer !== undefined) timeoutTimer = undefined;
-    await persistState("closed", currentState.completed, closingCommand?.id);
+    try {
+      await persistState("closed", currentState.completed, closingCommand?.id);
+    } finally {
+      await statusReporter?.release();
+    }
   });
 }

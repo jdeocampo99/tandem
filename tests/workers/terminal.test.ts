@@ -203,3 +203,23 @@ test("unacknowledged terminal control expires without leaving a deferred close r
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a fresh pane still starting its shell is awaited before launch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-interactive-fresh-"));
+  try {
+    const { endpoint, inspection } = fixture(root);
+    let calls = 0;
+    const settled = {
+      ...inspection,
+      processInfo: { ...inspection.processInfo, foregroundProcesses: [] },
+    };
+    const runner = nativeRunner(inspection);
+    const settledRunner = nativeRunner(settled);
+    const run: typeof runner = (request) =>
+      ++calls < 3 ? runner(request) : settledRunner(request);
+    await prepareWorkerTerminal(run, { endpoint, cwd: root });
+    expect(calls).toBeGreaterThan(2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

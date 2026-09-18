@@ -640,6 +640,31 @@ paused and the interactive session is idle with no queued messages or editor dra
 close freezes new input, requests native terminal exit, and verifies process exit before reuse.
 Busy, foreign, stale, or otherwise unproven terminals are retained instead of interrupted.
 
+### Herdr workspace labels and status
+
+New task workspaces are named `└ <task objective> · <short identity> · <role>`. Presentation
+workspaces use their bound task's objective and a `presentation` role cue. Labels normalize
+control characters, whitespace, and Unicode, and stay within 96 UTF-16 code units without splitting
+graphemes. The exact label is persisted before native creation and reused for launch recovery;
+recovery never recomputes a label from a changed objective. Technical task names, worktree names,
+branches, existing labels, and custom labels are unchanged. A label is never ownership proof.
+
+The coordinator and interactive worker extensions publish Herdr's native agent lifecycle states:
+active/continuing turns are `working`; open question dialogs and paused workers are `blocked`;
+completed turns are `idle`, which Herdr may render as `done`. Failed or needs-decision worker
+results remain blocked. Read-only follow-up turns return to their settled state afterward.
+When the coordinator itself is idle, its bubble reflects tasks belonging to the physical original
+project: pending approval, pause, and blockers take precedence over active queued/running work.
+Ready and terminal tasks do not keep that aggregate working. Validation publishes working while
+commands execute and releases its status authority on exit; its pane is closed on result consumption.
+
+Reporting is disabled outside an exact Herdr pane context. Reports are serialized and deduplicated,
+failed reports remain eligible for the next lifecycle/heartbeat update, and shutdown releases
+authority even if durable shutdown fails. Each reporter instance uses a fresh source identity because
+Herdr retains sequence watermarks after release. Reporting failures never authorize or interrupt
+durable work. Status, display labels, and terminal output are not job-completion or ownership evidence.
+Restart an existing coordinator to load the updated extension; existing workspaces are not renamed.
+
 ## Inspecting and controlling work
 
 ```sh

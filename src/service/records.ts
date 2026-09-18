@@ -1,5 +1,4 @@
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { taskWorkspaceLabel } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
@@ -341,6 +340,7 @@ export function endpointLaunchFor(
   reservation: DurableReservation,
   sessionId: string,
   taskName: string,
+  workspaceLabel: string,
   cwd: string,
   role: Endpoint["role"],
   generation: number,
@@ -352,7 +352,7 @@ export function endpointLaunchFor(
     reservationId: reservation.id,
     sessionId,
     taskName,
-    workspaceLabel: taskWorkspaceLabel(taskName),
+    workspaceLabel: singleLine(workspaceLabel, "workspaceLabel"),
     cwd,
     role,
     generation,
