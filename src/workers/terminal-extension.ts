@@ -289,6 +289,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     }
     const command = await readWorkerTerminalCommand(jobPath, identity);
     if (command === undefined) return;
+    if (command.id === currentState.commandId || command.id === pauseCommand?.id) return;
     if (command.action === "pause") {
       pauseCommand = command;
       if (timeoutTimer !== undefined) {
