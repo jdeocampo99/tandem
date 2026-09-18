@@ -618,6 +618,9 @@ async function launchCoordinatorUnlocked(
   const previous = await readCoordinatorRecord(
     recordPath(paths.home, request.sessionId, paths.repo),
   );
+  if (previous !== undefined) {
+    await retireCoordinatorWorkspace(dependencies.run, previous);
+  }
   const workspaceResult = await runExternal(dependencies.run, {
     argv: [
       "herdr",
@@ -681,9 +684,6 @@ async function launchCoordinatorUnlocked(
     request.sessionId,
     coordinator.repoPath,
   );
-  if (previous !== undefined && previous.endpoint.workspaceId !== workspace.workspaceId) {
-    await retireCoordinatorWorkspace(dependencies.run, previous);
-  }
   return {
     sessionId: request.sessionId,
     repoPath: coordinator.repoPath,

@@ -12,6 +12,8 @@ import {
   type CoordinatorLaunchRequest,
   launchCoordinator,
 } from "../../src/coordinator/launch.ts";
+import { recordPath } from "../../src/coordinator/record.ts";
+import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import {
   type CliApplication,
@@ -898,6 +900,149 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
     expect(second.repoPath).toBe(repo);
     expect(second.worktree.path).toBe(cleanRepo);
     expect(second.worktree.baseHead).toBe("head-1");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("launchCoordinator retires the old generated workspace label before replacing it and retries after a rename failure", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-cli-retire-")));
+  try {
+    const repo = join(root, "repo");
+    const home = join(root, "coordinator-home");
+    const poolRoot = join(root, "coordinator-pool");
+    const cleanRepo = join(poolRoot, "coordinator-worktree");
+    await mkdir(repo, { recursive: true });
+    await mkdir(cleanRepo, { recursive: true });
+    await writeOmpProbe(root);
+    const model = defaultPolicy().models.coordinator;
+    const request: CoordinatorLaunchRequest = {
+      cwd: repo,
+      repo,
+      sourceRepo: cleanRepo,
+      home,
+      poolRoot,
+      sessionId: "retire-session",
+      model,
+      configPath: "/tandem/src/worker-config.yml",
+      extensionPath: "/tandem/src/extension.ts",
+      continueSession: true,
+      headless: true,
+      noAttach: false,
+    };
+    const sessionKey = createHash("sha256").update(repo).digest("hex").slice(0, 24);
+    const recordedCommand = buildCoordinatorArgv({
+      cwd: cleanRepo,
+      model,
+      configPath: request.configPath,
+      extensionPath: request.extensionPath,
+      continueSession: true,
+      sessionDirectory: join(home, "coordinator-sessions", sessionKey),
+    });
+    const inner = () =>
+      coordinatorRunner({
+        repo,
+        poolRoot,
+        cleanRepo,
+        model,
+        recordedCommand,
+        herdrEnvironment: { PATH: `${root}:/usr/bin:/bin` },
+      });
+    const first = await launchCoordinator(request, {
+      run: inner().run,
+      startPersistent: async () => undefined,
+      runInteractive: async () => {
+        throw new Error("launch should use a Herdr workspace");
+      },
+      sleep: async () => undefined,
+      processEnvironment: {},
+    });
+    const recordFile = recordPath(home, "retire-session", repo);
+    const stale = await readCoordinatorRecord(recordFile);
+    if (stale === undefined) throw new Error("first launch did not record a coordinator");
+    const oldRecord = {
+      ...stale,
+      endpoint: { ...stale.endpoint, workspaceId: "old-workspace", paneId: "old-pane" },
+      worktree: { ...stale.worktree, path: join(stale.worktree.root, "gone") },
+    };
+    await saveCoordinatorRecord(home, oldRecord);
+    expect(first.workspaceId).toBe("workspace-2");
+
+    let renameFails = true;
+    let renames = 0;
+    let creates = 0;
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
+    const holderKey = `${hash(repo)}-${hash("retire-session")}-${hash("source-head")}`;
+    const base = coordinatorRunner({
+      repo,
+      poolRoot,
+      cleanRepo,
+      model,
+      recordedCommand,
+      herdrEnvironment: { PATH: `${root}:/usr/bin:/bin` },
+      existingLease: {
+        leaseHolder: `coordinator:${holderKey.replaceAll("-", ":")}`,
+        branch: `tandem/coordinator-${holderKey}`,
+      },
+    }).run;
+    const run: CommandRunner = async (call) => {
+      const argv = call.argv;
+      if (argv[0] === "herdr" && argv.includes("workspace")) {
+        if (argv.includes("get") && argv.at(-1) === "old-workspace") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                type: "workspace_info",
+                workspace: {
+                  workspace_id: "old-workspace",
+                  label: `Tandem coordinator · repo`,
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (argv.includes("rename")) {
+          renames += 1;
+          if (argv[argv.indexOf("rename") + 1] !== "old-workspace") {
+            throw new Error("renamed a workspace other than the previous coordinator");
+          }
+          if (renameFails) return { code: 1, stdout: "", stderr: "rename failed" };
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                type: "workspace_info",
+                workspace: { workspace_id: "old-workspace", label: argv.at(-1) },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (argv.includes("create")) creates += 1;
+      }
+      return base(call);
+    };
+    const dependencies = {
+      run,
+      startPersistent: async () => undefined,
+      runInteractive: async () => {
+        throw new Error("launch should use a Herdr workspace");
+      },
+      sleep: async () => undefined,
+      processEnvironment: {},
+    };
+
+    await expect(launchCoordinator(request, dependencies)).rejects.toThrow();
+    expect(creates).toBe(0);
+    expect((await readCoordinatorRecord(recordFile))?.endpoint.workspaceId).toBe("old-workspace");
+
+    renameFails = false;
+    const retried = await launchCoordinator(request, dependencies);
+    expect(retried.reused).toBeUndefined();
+    expect(creates).toBe(1);
+    expect(renames).toBe(2);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

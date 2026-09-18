@@ -269,6 +269,8 @@ Herdr removes a workspace when its last pane closes. Extra panes are never close
 they share the coordinator workspace: they remain open, and only Tandem's generated coordinator label
 is changed to `Retained terminals`. Custom labels remain unchanged. A normal launch without reset
 also retires the old generated label when replacing a stopped coordinator, but retains its shell.
+Retirement happens before the replacement workspace is created or the record is overwritten; if it
+fails, the launch rejects, the old record and terminals stay, and the next launch retries it.
 Workspace labels alone never prove ownership or authorize terminal deletion.
 Run it from a separate normal terminal, and add `--continue` only when the fresh launch should
 resume the saved coordinator conversation.
