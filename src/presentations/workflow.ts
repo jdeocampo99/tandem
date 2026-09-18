@@ -4,6 +4,7 @@ import {
   type HerdrPaneInspection,
   inspectEndpoint,
   sendCommand,
+  taskWorkspaceLabel,
 } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type { Clock, CommandRunner, Endpoint, IdFactory, TaskRecord } from "../contracts.ts";
@@ -58,6 +59,7 @@ export type PresentationRuntimeDependencies = Readonly<{
   readonly store: TaskStore;
   readonly runtimePath: string;
   readonly readState: () => Promise<RuntimeState>;
+  readonly readTask: (taskId: string) => Promise<TaskRecord>;
   readonly taskInScope: (task: TaskRecord) => Promise<boolean>;
   readonly feedback: PresentationFeedbackWorkflow;
 }>;
@@ -178,6 +180,7 @@ export class PresentationRuntimeWorkflow {
       );
       return;
     }
+    const task = await this.#deps.readTask(runtime.taskId);
     const capacity = await this.reservePresentation(id);
     if (!capacity) return;
     state = await this.#deps.readState();
@@ -186,10 +189,12 @@ export class PresentationRuntimeWorkflow {
       throw new Error(`presentation ${id} lost its durable reservation`);
     }
     const taskName = `presentation-${id}`;
+    const workspaceLabel = taskWorkspaceLabel(taskName, task.objective, "presentation");
     const endpointLaunch = endpointLaunchFor(
       runtime.reservation,
       this.#deps.sessionId,
       taskName,
+      workspaceLabel,
       runtime.job.cwd,
       "presentation",
       runtime.job.generation,
@@ -214,6 +219,7 @@ export class PresentationRuntimeWorkflow {
           sessionId: this.#deps.sessionId,
           cwd: runtime.job.cwd,
           taskName,
+          workspaceLabel: endpointLaunch.workspaceLabel,
           role: "presentation",
           generation: runtime.job.generation,
           ...(this.#deps.parentWorkspaceId === undefined

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { runCommand } from "./adapters/commands.ts";
+import { createHerdrStatusReporter } from "./adapters/herdr-status.ts";
 import type { CommandRunner, ValidationCommand, ValidationEvidence } from "./contracts.ts";
 import { writeJsonAtomically } from "./runtime/persistence.ts";
 import { runValidation, ValidationConfigurationError } from "./workers/validation.ts";
@@ -257,49 +258,64 @@ export async function runValidationJob(
   const run = options.run ?? runCommand;
   const now = options.now ?? (() => new Date().toISOString());
   const writeResult = options.writeResult ?? writeJsonAtomically;
-  let result: ValidationResult;
+  const statusReporter = createHerdrStatusReporter(runCommand, {
+    cwd: job.repoPath,
+    agentLabel: `tandem-validation-${job.taskId.slice(0, 8)}`,
+  });
+  await statusReporter?.report("working");
   try {
-    const evidence = await runValidation({
-      repoPath: job.repoPath,
-      head: job.head,
-      surfaces: job.surfaces,
-      commands: job.commands,
-      run,
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-    });
-    const status: ValidationResultStatus =
-      evidence.length > 0 && evidence.every((entry) => entry.exitCode === 0)
-        ? "completed"
-        : "failed";
-    result = resultFor(
-      job,
-      now,
-      status,
-      evidence,
-      status === "failed" ? "validation command failed" : undefined,
+    let result: ValidationResult;
+    try {
+      const evidence = await runValidation({
+        repoPath: job.repoPath,
+        head: job.head,
+        surfaces: job.surfaces,
+        commands: job.commands,
+        run,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      const status: ValidationResultStatus =
+        evidence.length > 0 && evidence.every((entry) => entry.exitCode === 0)
+          ? "completed"
+          : "failed";
+      result = resultFor(
+        job,
+        now,
+        status,
+        evidence,
+        status === "failed" ? "validation command failed" : undefined,
+      );
+    } catch (error) {
+      const message = describeError(error);
+      const evidence = failureEvidence(
+        job,
+        message,
+        error instanceof ValidationConfigurationError ? 78 : 127,
+      );
+      result = resultFor(job, now, "failed", [evidence], message);
+    }
+    const validated = validateResult(result);
+    if (
+      validated.id !== job.id ||
+      validated.taskId !== job.taskId ||
+      validated.generation !== job.generation ||
+      validated.head !== job.head
+    ) {
+      throw new Error("validation worker produced an identity mismatch");
+    }
+    await writeResult(job.resultPath, validated);
+    await statusReporter?.report(
+      validated.status === "completed" ? "idle" : "blocked",
+      validated.error,
     );
+    return validated;
   } catch (error) {
-    const message = describeError(error);
-    const evidence = failureEvidence(
-      job,
-      message,
-      error instanceof ValidationConfigurationError ? 78 : 127,
-    );
-    result = resultFor(job, now, "failed", [evidence], message);
+    await statusReporter?.report("blocked", describeError(error));
+    throw error;
+  } finally {
+    await statusReporter?.release();
   }
-  const validated = validateResult(result);
-  if (
-    validated.id !== job.id ||
-    validated.taskId !== job.taskId ||
-    validated.generation !== job.generation ||
-    validated.head !== job.head
-  ) {
-    throw new Error("validation worker produced an identity mismatch");
-  }
-  await writeResult(job.resultPath, validated);
-  return validated;
 }
-
 async function readJobFile(path: string): Promise<ValidationJob> {
   const jobPath = absolute(path, "jobPath");
   const contents = await readFile(jobPath, "utf8");

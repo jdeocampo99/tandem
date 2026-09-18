@@ -104,12 +104,3 @@ export async function deliverPendingNotifications(
     throw error;
   }
 }
-
-export async function listAndDeliverPendingNotifications(
-  pi: NotificationMessageSink,
-  service: Pick<TandemService, "list" | "acknowledge">,
-  delivered: Set<string>,
-  ctx: NotificationUi,
-): Promise<void> {
-  await deliverPendingNotifications(pi, service, await service.list(), delivered, ctx);
-}

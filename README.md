@@ -141,6 +141,15 @@ the coordinator so validation and review keep exclusive access to the checkout. 
 in a separate non-model pane. Explicit cleanup can close idle completed agents, but preserves
 busy conversations, pending editor drafts, and terminals whose ownership cannot be proven.
 
+New task workspaces use the task objective, a short identity suffix, and a role cue instead of an
+opaque technical name. Presentation workspaces use the same convention. Existing/custom labels,
+task IDs, and worktree names are not renamed.
+
+Herdr's status bubbles show active agents and validation as working, questions and paused workers
+as blocked, and completed turns as idle (which Herdr may display as done). An idle coordinator
+also reflects its project's pending work and approval/blocking states. These are display hints,
+not ownership or completion evidence; durable task records remain authoritative.
+
 An explicit `tandem PATH` opens or reconnects only that project after ownership checks. Add
 `--continue` only when starting a stopped coordinator and resuming its saved conversation. An active
 coordinator remains pinned to its existing clean source even if the original project's HEAD has

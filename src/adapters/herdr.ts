@@ -39,6 +39,45 @@ const SHELL_PROCESS_NAMES: Readonly<Record<string, true>> = {
   fish: true,
 };
 const SOCKET_RESPONSE_LIMIT = 4 * 1024 * 1024;
+const MAX_TASK_WORKSPACE_LABEL_LENGTH = 96;
+const TASK_WORKSPACE_IDENTITY_LENGTH = 12;
+const workspaceGraphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
+const TASK_ROLE_CUES: Readonly<Partial<Record<AgentRole, string>>> = {
+  scout: "scout",
+  implementer: "impl",
+};
+
+function normalizeWorkspaceText(value: string): string {
+  return value
+    .normalize("NFC")
+    .replace(/\p{Cc}/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function truncateWorkspaceText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const suffix = "…";
+  const available = Math.max(0, maxLength - suffix.length);
+  let output = "";
+  for (const segment of workspaceGraphemes.segment(value)) {
+    if (output.length + segment.segment.length > available) break;
+    output += segment.segment;
+  }
+  return `${output}${suffix}`;
+}
+function compactTaskIdentity(taskName: string): string {
+  const withoutPrefix = taskName.startsWith("tandem-")
+    ? taskName.slice("tandem-".length)
+    : taskName;
+  const start = Math.max(0, withoutPrefix.length - TASK_WORKSPACE_IDENTITY_LENGTH);
+  const segment = workspaceGraphemes.segment(withoutPrefix).containing(start);
+  return withoutPrefix.slice(
+    segment === undefined || segment.index === start
+      ? start
+      : segment.index + segment.segment.length,
+  );
+}
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 5_000;
 const DEFAULT_INTERRUPT_POLL_MS = 100;
 type HerdrPaneIdentity = Readonly<{
@@ -70,6 +109,7 @@ export type CreateTaskEndpointInput = Readonly<{
   sessionId: string;
   cwd: string;
   taskName: string;
+  workspaceLabel: string;
   role: AgentRole;
   generation: number;
   parentWorkspaceId?: string;
@@ -754,8 +794,18 @@ async function orderTaskWorkspace(
   return warnings;
 }
 
-export function taskWorkspaceLabel(taskName: string): string {
-  return `└ ${checkedText(taskName, "taskName")}`;
+export function taskWorkspaceLabel(taskName: string, objective: string, role: AgentRole): string {
+  const normalizedTaskName = normalizeWorkspaceText(checkedText(taskName, "taskName"));
+  if (typeof objective !== "string" || objective.length === 0) {
+    throw new TypeError("objective must be non-empty text");
+  }
+  const normalizedObjective = normalizeWorkspaceText(objective);
+  const title = normalizedObjective.length === 0 ? normalizedTaskName : normalizedObjective;
+  const identity = compactTaskIdentity(normalizedTaskName);
+  const roleCue = TASK_ROLE_CUES[role] ?? role;
+  const cue = ` · ${identity} · ${roleCue}`;
+  const titleLimit = Math.max(1, MAX_TASK_WORKSPACE_LABEL_LENGTH - 2 - cue.length);
+  return `└ ${truncateWorkspaceText(title, titleLimit)}${cue}`;
 }
 
 export async function createTaskEndpoint(
@@ -763,7 +813,7 @@ export async function createTaskEndpoint(
   input: CreateTaskEndpointInput,
   options: HerdrAdapterOptions = {},
 ): Promise<HerdrEndpointResult> {
-  const label = taskWorkspaceLabel(input.taskName);
+  const label = checkedText(input.workspaceLabel, "workspaceLabel");
   const request = herdrRequest(input.sessionId, input.cwd, [
     "workspace",
     "create",

@@ -234,6 +234,7 @@ class TandemController {
       store: deps.store,
       runtimePath: deps.runtimePath,
       readState: () => this.readState(),
+      readTask: (taskId) => this.get(taskId),
       taskInScope: (task) => this.#source.taskInScope(task),
       feedback: this.#presentationFeedback,
     });

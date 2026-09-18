@@ -1,14 +1,18 @@
+import { realpath } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@oh-my-pi/pi-coding-agent";
+import { runCommand } from "./adapters/commands.ts";
+import {
+  createHerdrStatusReporter,
+  type HerdrAgentState,
+  type HerdrStatusReporter,
+} from "./adapters/herdr-status.ts";
 import {
   coordinatorSourceGuidance,
   environmentForContext,
   type TandemBoundaryEnvironment,
   type TandemEnvironmentSource,
 } from "./config/environment.ts";
-import {
-  deliverPendingNotifications,
-  listAndDeliverPendingNotifications,
-} from "./extension/notifications.ts";
+import { deliverPendingNotifications } from "./extension/notifications.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { buildDurableDigest } from "./extension/summary.ts";
 import { COORDINATOR_INSTRUCTIONS, COORDINATOR_TOOL_GUIDANCE } from "./instructions.ts";
@@ -17,6 +21,7 @@ import {
   type TandemService,
   type TandemServiceOptions,
 } from "./service/controller.ts";
+import { isMissing, isTerminalTask } from "./service/records.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
 
@@ -77,6 +82,20 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     let tickTimer: Timer | undefined;
     let tickInFlight: Promise<void> | undefined;
     let shuttingDown = false;
+    let statusReporter: HerdrStatusReporter | undefined;
+    let agentActive = false;
+    let taskState: HerdrAgentState = "idle";
+    let taskMessage: string | undefined;
+    const waitingInputs = new Set<string>();
+    const reportStatus = (): void => {
+      if (waitingInputs.size > 0) {
+        void statusReporter?.report("blocked", "Waiting for your answer");
+      } else if (agentActive) {
+        void statusReporter?.report("working");
+      } else {
+        void statusReporter?.report(taskState, taskMessage);
+      }
+    };
     const deliveredNotifications = new Set<string>();
     const getService = (ctx: ExtensionContext): TandemService => {
       if (service === undefined) service = serviceForContext(options, ctx, getEnvironment(ctx));
@@ -86,20 +105,56 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       if (shuttingDown) return;
       if (tickInFlight !== undefined) return tickInFlight;
       tickInFlight = (async (): Promise<void> => {
-        const current = getService(ctx);
-        const tasks = runTick ? await current.tick() : await current.list();
-        await deliverPendingNotifications(pi, current, tasks, deliveredNotifications, ctx);
+        try {
+          const current = getService(ctx);
+          const tasks = runTick ? await current.tick() : await current.list();
+          if (statusReporter !== undefined) {
+            const repo = await realpath(getEnvironment(ctx).repo);
+            taskState = "idle";
+            taskMessage = undefined;
+            for (const task of tasks) {
+              if (isTerminalTask(task) || task.stage === "ready") continue;
+              const taskRepo =
+                task.repoPath === repo
+                  ? repo
+                  : await realpath(task.repoPath).catch((error: unknown) => {
+                      if (isMissing(error)) return undefined;
+                      throw error;
+                    });
+              if (taskRepo !== repo) continue;
+              if (
+                task.stage === "blocked" ||
+                task.stage === "paused" ||
+                task.stage === "awaiting-approval"
+              ) {
+                taskState = "blocked";
+                taskMessage = task.blockReason ?? `${task.stage}: ${task.objective}`;
+                break;
+              }
+              taskState = "working";
+            }
+            reportStatus();
+          }
+          await deliverPendingNotifications(pi, current, tasks, deliveredNotifications, ctx);
+        } catch (error) {
+          taskState = "blocked";
+          taskMessage = error instanceof Error ? error.message : String(error);
+          reportStatus();
+          throw error;
+        }
       })().finally(() => {
         tickInFlight = undefined;
       });
       return tickInFlight;
     };
     const postAction = async (ctx: ExtensionContext): Promise<void> => {
-      await listAndDeliverPendingNotifications(pi, getService(ctx), deliveredNotifications, ctx);
+      await reconcile(ctx, false);
     };
     registerTandemOmp(pi, { getService, reconcile, postAction });
 
     pi.on("before_agent_start", async (event, ctx) => {
+      agentActive = true;
+      reportStatus();
       const digest = await refreshDigest(getService(ctx));
       return {
         systemPrompt: [
@@ -114,6 +169,14 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
 
     pi.on("session_start", async (_event, ctx) => {
       if (shuttingDown) return;
+      statusReporter ??= createHerdrStatusReporter(runCommand, {
+        cwd: ctx.cwd,
+        agentLabel: "tandem-coordinator",
+        ...(options.processEnvironment === undefined
+          ? {}
+          : { environment: options.processEnvironment }),
+      });
+      reportStatus();
       if (tickTimer === undefined) {
         const interval = options.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS;
         if (!Number.isFinite(interval) || interval <= 0)
@@ -123,6 +186,24 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
         }, interval);
       }
       await reconcile(ctx, true);
+    });
+    pi.on("turn_start", () => {
+      agentActive = true;
+      reportStatus();
+    });
+    pi.on("tool_execution_start", (event) => {
+      agentActive = true;
+      if (event.toolName === "ask") waitingInputs.add(event.toolCallId);
+      reportStatus();
+    });
+    pi.on("tool_execution_end", (event) => {
+      waitingInputs.delete(event.toolCallId);
+      reportStatus();
+    });
+    pi.on("agent_end", async (event, ctx) => {
+      agentActive = event.willContinue === true;
+      reportStatus();
+      if (!agentActive) await reconcile(ctx, false);
     });
 
     pi.on("session.compacting", async (_event, ctx) => {
@@ -152,7 +233,11 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       try {
         if (service !== undefined) await service.shutdown();
       } finally {
-        if (inFlight !== undefined) await inFlight;
+        try {
+          if (inFlight !== undefined) await inFlight;
+        } finally {
+          await statusReporter?.release();
+        }
       }
     });
   };

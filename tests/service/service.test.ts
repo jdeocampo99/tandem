@@ -104,6 +104,7 @@ type FakeRunnerOptions = Readonly<{
   readonly unmerged?: boolean;
   readonly recovery?: boolean;
   readonly paneState?: "owned" | "missing" | "foreign";
+  readonly workspaceLabel?: string;
   readonly presentationResponses?: readonly CommandResult[];
   readonly presentationOpenResponse?: CommandResult;
   readonly ompModels?: readonly unknown[];
@@ -199,7 +200,7 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
                 {
                   workspace_id: "workspace-1",
                   active_tab_id: "tab-1",
-                  label: "└ tandem-task-1",
+                  label: options.workspaceLabel ?? "└ tandem-task-1",
                 },
               ],
             },
@@ -1048,6 +1049,12 @@ test("approved task allocates a fresh endpoint and dispatches one worker", async
     expect(started.endpoints).toHaveLength(1);
     expect(started.endpoints?.[0]?.paneId).toBe("pane-1");
     expect(runnerState.launches).toBe(1);
+    const workspaceCreate = runnerState.calls.find(
+      (request) => request.argv.includes("workspace") && request.argv.includes("create"),
+    );
+    expect(workspaceCreate?.argv).toContain("└ exercise a durable service path · task-1 · impl");
+    expect(persisted.tasks[0]?.taskName).toBe("tandem-task-1");
+    expect(persisted.tasks[0]?.worktree?.name).toBe("tandem-task-1");
     expect(persisted.tasks[0]?.jobs[0]?.phase).toBe("running");
   });
 });
@@ -1409,7 +1416,7 @@ test("endpoint launch recovery adopts the exact Herdr pane without creating anot
     {
       kind: "scout",
       stage: "queued",
-      runner: { active: false },
+      runner: { active: false, workspaceLabel: "└ Saved recovery label · task-1 · scout" },
     },
     async ({ home, lease, service, runnerState }) => {
       const reservation = reservationFor("task-1", "endpoint");
@@ -1418,7 +1425,7 @@ test("endpoint launch recovery adopts the exact Herdr pane without creating anot
         reservationId: reservation.id,
         sessionId: "session-1",
         taskName: "tandem-task-1",
-        workspaceLabel: "└ tandem-task-1",
+        workspaceLabel: "└ Saved recovery label · task-1 · scout",
         cwd: lease.path,
         role: "scout" as const,
         generation: 0,

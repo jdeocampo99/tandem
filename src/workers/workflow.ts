@@ -9,6 +9,7 @@ import {
   type HerdrPaneInspection,
   inspectEndpoint,
   sendCommand,
+  taskWorkspaceLabel,
 } from "../adapters/herdr.ts";
 import { EndpointOwnershipError, LeaseSafetyError } from "../adapters/primitives.ts";
 import { acquireWorktree } from "../adapters/treehouse.ts";
@@ -897,21 +898,21 @@ export class WorkerWorkflow {
     }
     const endpoint = currentWriter({ ...runtime, worktree: lease });
     if (endpoint === undefined) {
+      const workspaceLabel = taskWorkspaceLabel(runtime.taskName, task.objective, role);
+      const endpointLaunch = endpointLaunchFor(
+        reservation.reservation,
+        this.#deps.sessionId,
+        runtime.taskName,
+        workspaceLabel,
+        lease.path,
+        role,
+        task.generation,
+        this.#deps.clock(),
+        this.#deps.parentWorkspaceId,
+      );
       try {
         await this.setReservationPhase(task.id, "endpoint");
-        const claimed = await this.saveEndpointLaunch(
-          task.id,
-          endpointLaunchFor(
-            reservation.reservation,
-            this.#deps.sessionId,
-            runtime.taskName,
-            lease.path,
-            role,
-            task.generation,
-            this.#deps.clock(),
-            this.#deps.parentWorkspaceId,
-          ),
-        );
+        const claimed = await this.saveEndpointLaunch(task.id, endpointLaunch);
         if (!claimed) return;
       } catch (error) {
         await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
@@ -928,6 +929,7 @@ export class WorkerWorkflow {
             sessionId: this.#deps.sessionId,
             cwd: lease.path,
             taskName: runtime.taskName,
+            workspaceLabel: endpointLaunch.workspaceLabel,
             role,
             generation: task.generation,
             ...(this.#deps.parentWorkspaceId === undefined
