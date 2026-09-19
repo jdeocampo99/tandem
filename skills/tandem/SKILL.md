@@ -27,7 +27,7 @@ reconnects every valid saved project under the selected Tandem home from any dir
 paths override that registry and open only the supplied subset or add/open projects. All projects in
 one invocation share one Herdr session, while each gets its own coordinator conversation, clean
 Treehouse source worktree, and child-worker group. Tandem keeps settings and progress in a local
-home (normally `~/.tandem`, or a home the user selects), not in the project itself. The original
+home (the remembered setup, an explicit override, or `~/.tandem`), not in the project itself. The original
 checkout may be dirty and remains untouched: source reads and delegated execution use each project's
 clean committed snapshot, while task records and delivery retain the original project identity.
 
@@ -55,9 +55,12 @@ subset or add/open paths.
 Multiple paths share one Herdr session but remain separate project scopes.
 `configure` remains a single-project catalogue-anchor flow: its current-Git or interactive fallback
 never expands to all saved projects. It saves explicit choices for all six global roles without
-launching. `--headless` and `--no-attach` prepare coordinators without attaching a GUI. `TANDEM_HOME`,
-`TANDEM_SESSION` (then Herdr's session variables), and `TANDEM_POOL_ROOT` provide the corresponding
-defaults.
+launching. `--headless` and `--no-attach` prepare coordinators without attaching a GUI.
+Ordinary use needs only the repository path: CLI and agent integration reuse the optional
+`$XDG_CONFIG_HOME/tandem/config.json` preference (default `~/.config/tandem/config.json`).
+Explicit home, session, and pool flags or environment values remain advanced overrides; an explicit
+home bypasses the remembered home/session pair, and the pool defaults to `<selected-home>/pool`.
+Normal launches never overwrite the remembered setup.
 
 Use `tandem --reset` from a separate normal terminal when you deliberately need a clean reopen of
 Tandem coordinators. With no paths it selects every valid saved project; explicit paths select only

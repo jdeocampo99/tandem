@@ -71,6 +71,7 @@ export type CliDependencies = Readonly<{
 
 function environmentSource(): TandemEnvironmentSource {
   const keys = [
+    "XDG_CONFIG_HOME",
     "TANDEM_HOME",
     "TANDEM_SESSION",
     "TANDEM_PARENT_WORKSPACE",

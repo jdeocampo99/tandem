@@ -35,7 +35,11 @@ For repository scope, canonicalize an explicit target or cwd to its Git top-leve
 resolve relative paths, preserve symlink identity). If unresolved, ask briefly. Explicit all-project
 scope skips Git-root resolution and `--repo`.
 
-Home precedence is `--home` > `TANDEM_HOME` > `~/.tandem`; keep it absolute and consistent.
+Home precedence is `--home` > `TANDEM_HOME` > remembered setup > `~/.tandem`.
+When neither explicit home source is set, inspect `$XDG_CONFIG_HOME/tandem/config.json` (default
+`~/.config/tandem/config.json`) if present: require schema version 1, an absolute `home`, and a
+non-empty `sessionId`. Malformed preferences fail closed; do not guess or fall back to old state.
+An explicit home bypasses that remembered pair. Keep the resolved home absolute and consistent.
 `<home>/state.sqlite` is the canonical task/runtime store. Existence-check the home and this
 database before invoking status, without creating either. Missing means one sentence: no canonical
 durable store and no read attempted. If legacy `runtime.json` or `tasks/*.json` exists without the

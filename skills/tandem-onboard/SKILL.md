@@ -45,7 +45,11 @@ locating the checkout.
 
 ## 2. Use the advanced CLI for exact discovery, model setup, approval, and readiness
 
-Resolve Tandem's local home separately: `--home` wins, then `TANDEM_HOME`, then `~/.tandem`.
+Resolve Tandem's local home separately: `--home` wins, then `TANDEM_HOME`, then the remembered setup
+in `$XDG_CONFIG_HOME/tandem/config.json` (default `~/.config/tandem/config.json`), then `~/.tandem`.
+Normal CLI and agent integration read this preference automatically; do not require users to repeat
+home, pool, or session flags. An explicit home bypasses the remembered home/session pair.
+Never overwrite the preference merely because onboarding used a different home.
 Use the same home for each command. It owns model preferences, policy records, and durable state;
 target repositories are not written and need not check Tandem configuration into Git. Keep `configPath`,
 and the exact proposal in structured state; expose them only on request or when needed to resolve

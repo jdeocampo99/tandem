@@ -1,6 +1,9 @@
+import { lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { isNotFoundError } from "./storage.ts";
+import { assertKnownKeys, isRecord, parseJson } from "./values.ts";
 
 export type TandemBoundaryEnvironment = Readonly<{
   readonly home: string;
@@ -55,12 +58,43 @@ function optionalBoundaryText(value: string | undefined, field: string): string 
   return readBoundaryText(value, field);
 }
 
+type RememberedSetup = Readonly<{ home: string; sessionId: string }>;
+
+function readRememberedSetup(source: TandemEnvironmentSource): RememberedSetup | undefined {
+  const configRoot = readBoundaryPath(
+    source.XDG_CONFIG_HOME ?? join(homedir(), ".config"),
+    "XDG_CONFIG_HOME",
+  );
+  if (!isAbsolute(configRoot)) throw new TypeError("XDG_CONFIG_HOME must be an absolute path");
+  const path = join(configRoot, "tandem", "config.json");
+  let text: string;
+  try {
+    if (!lstatSync(path).isFile()) throw new TypeError(`${path} must be a regular file`);
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if (isNotFoundError(error)) return undefined;
+    throw error;
+  }
+  const value = parseJson(text, path);
+  if (!isRecord(value)) throw new TypeError(`${path} must contain an object`);
+  assertKnownKeys(value, { schemaVersion: true, home: true, sessionId: true }, path);
+  if (value.schemaVersion !== 1) throw new TypeError(`${path} has an unsupported schemaVersion`);
+  const home = readBoundaryPath(value.home, `${path} home`);
+  if (!isAbsolute(home)) throw new TypeError(`${path} home must be an absolute path`);
+  const sessionId = readBoundaryText(value.sessionId, `${path} sessionId`);
+  if (hasPathControlCharacter(sessionId)) {
+    throw new TypeError(`${path} sessionId must not contain control characters`);
+  }
+  return { home, sessionId };
+}
+
 export function processEnvironmentSnapshot(
   source: TandemEnvironmentSource | undefined,
 ): TandemEnvironmentSource {
   if (source !== undefined) return source;
   const values: Record<string, string | undefined> = {};
   for (const key of [
+    "XDG_CONFIG_HOME",
     "TANDEM_HOME",
     "TANDEM_SESSION",
     "TANDEM_PARENT_WORKSPACE",
@@ -84,8 +118,11 @@ export function resolveTandemEnvironment(
   overrides: Partial<TandemBoundaryEnvironment> = {},
 ): TandemBoundaryEnvironment {
   const cwd = readBoundaryPath(defaults.cwd, "cwd");
+  const explicitHome = overrides.home ?? source.TANDEM_HOME;
+  // An explicitly selected home is a separate setup, not a change to the remembered one.
+  const remembered = explicitHome === undefined ? readRememberedSetup(source) : undefined;
   const home = readBoundaryPath(
-    overrides.home ?? source.TANDEM_HOME ?? join(homedir(), ".tandem"),
+    explicitHome ?? remembered?.home ?? join(homedir(), ".tandem"),
     "TANDEM_HOME",
   );
   const sessionId = readBoundaryText(
@@ -93,6 +130,7 @@ export function resolveTandemEnvironment(
       source.TANDEM_SESSION ??
       source.HERDR_SESSION ??
       source.HERDR_SESSION_NAME ??
+      remembered?.sessionId ??
       defaults.sessionId ??
       "tandem",
     "TANDEM_SESSION",

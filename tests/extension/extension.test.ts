@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-coding-agent";
@@ -113,6 +113,66 @@ test("environment resolution applies explicit boundary values and ignores unrela
     sourceRepo: "/env/source-repo",
   });
 });
+
+test("remembered setup keeps home, session, and derived pool together without leaking into explicit homes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-remembered-setup-"));
+  const configRoot = join(root, "config");
+  const home = join(root, "saved-home");
+  const source = { XDG_CONFIG_HOME: configRoot };
+  const fallback = { cwd: "/repo", sessionId: "fallback-session" };
+  await mkdir(join(configRoot, "tandem"), { recursive: true });
+  try {
+    await writeFile(
+      join(configRoot, "tandem", "config.json"),
+      JSON.stringify({ schemaVersion: 1, home, sessionId: "saved-session" }),
+    );
+    expect(resolveTandemEnvironment(source, fallback)).toEqual({
+      home,
+      sessionId: "saved-session",
+      poolRoot: join(home, "pool"),
+      repo: "/repo",
+    });
+    expect(
+      resolveTandemEnvironment(
+        { ...source, TANDEM_SESSION: "selected-session", TANDEM_POOL_ROOT: "/selected-pool" },
+        fallback,
+      ),
+    ).toEqual({ home, sessionId: "selected-session", poolRoot: "/selected-pool", repo: "/repo" });
+    expect(resolveTandemEnvironment(source, fallback, { home: "/other-home" })).toEqual({
+      home: "/other-home",
+      sessionId: "fallback-session",
+      poolRoot: "/other-home/pool",
+      repo: "/repo",
+    });
+    expect(resolveTandemEnvironment({ ...source, TANDEM_HOME: "/env-home" }, fallback)).toEqual({
+      home: "/env-home",
+      sessionId: "fallback-session",
+      poolRoot: "/env-home/pool",
+      repo: "/repo",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("invalid remembered setup fails closed but explicit homes remain accessible", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-invalid-setup-"));
+  const source = { XDG_CONFIG_HOME: root };
+  await mkdir(join(root, "tandem"));
+  try {
+    await writeFile(
+      join(root, "tandem", "config.json"),
+      JSON.stringify({ schemaVersion: 1, home: "/saved-home" }),
+    );
+    expect(() => resolveTandemEnvironment(source, { cwd: "/repo" })).toThrow(TypeError);
+    expect(resolveTandemEnvironment(source, { cwd: "/repo" }, { home: "/rescue-home" }).home).toBe(
+      "/rescue-home",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("extension binds services to a clean source while preserving original identity", async () => {
   type LifecycleHandler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
   const handlers = new Map<string, LifecycleHandler>();

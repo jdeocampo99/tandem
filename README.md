@@ -47,8 +47,7 @@ Tandem uses your local tools and credentials; it is not a security sandbox.
 ## Use Tandem from the terminal
 
 The installed `tandem` command is the primary front door. From any directory after `bun link`, run
-bare `tandem` to open or reconnect every valid saved project under the selected Tandem home in one
-shared Herdr session:
+bare `tandem` to open or reconnect all saved projects using your remembered setup:
 
 ```sh
 tandem
@@ -140,7 +139,7 @@ onboards and opens the current Git project; outside Git, the existing interactiv
 fallback lets you enter or add a project path. The empty-registry fallback keeps its existing
 interactive-terminal requirements.
 
-Use the same `--home`, `--session`, and `--pool-root` values when reconnecting:
+Tandem reuses your remembered setup when reconnecting or configuring models:
 
 ```sh
 tandem --continue /absolute/path/to/repo
@@ -152,8 +151,11 @@ choices (Planning, Research, Coding, Review, Final checks, and Presentations) wi
 coordinator. With no path, it keeps its current-Git or existing interactive one-project anchor
 fallback; it never expands to all saved projects. `--headless` prepares coordinators without
 attaching Herdr, and `--no-attach` also skips the GUI attachment. `--help` shows the terminal
-command's complete options. Home, session, and pool defaults come from `TANDEM_HOME`,
-`TANDEM_SESSION` (then Herdr's session variables), and `TANDEM_POOL_ROOT`.
+command's complete options. Ordinary use needs only a repository path. Advanced overrides remain
+available through flags and `TANDEM_HOME`, `TANDEM_SESSION`, and `TANDEM_POOL_ROOT`; otherwise
+Tandem reads the optional remembered setup in `~/.config/tandem/config.json` (or under
+`XDG_CONFIG_HOME`). The pool is derived automatically from the selected home. See
+[remembered setup](docs/agent-reference.md#remembered-setup) for configuration and precedence.
 
 Each project in a launch set gets its own coordinator conversation and dedicated clean Treehouse
 source worktree. Fresh launches and restarts fetch and capture `origin/main`; repositories without
@@ -188,8 +190,8 @@ Use `--restart` to reload the extension and refresh source without resetting chi
 
 ### Migrate legacy state (offline only)
 
-Current Tandem state is authoritative in `<home>/state.sqlite` (the default home is
-`~/.tandem`). Older homes may instead contain `<home>/runtime.json` and
+Current Tandem state is authoritative in `<home>/state.sqlite` (the remembered home, or
+`~/.tandem` without a remembered setup or explicit override). Older homes may instead contain `<home>/runtime.json` and
 `<home>/tasks/*.json`; normal SQLite startup refuses to use that legacy state until it
 has been explicitly migrated. Do not run this procedure while any Tandem coordinator,
 worker, validation job, presentation, or legacy writer may still be active.
@@ -295,7 +297,7 @@ coordinator, set `TANDEM_JEV_MODE=shadow` and `TYPESAFE_API_KEY` before launchin
 alone does not enable it. The pinned endpoint/model is Jev `1.13.0`. An optional
 `TANDEM_JEV_TIMEOUT_MS` sets a bounded 1–10,000ms timeout (default 2,000ms).
 
-Candidate alternatives are configured in `<home>/jev.json` (normally `~/.tandem/jev.json`), not the repository:
+Candidate alternatives are configured in the selected home's `<home>/jev.json`, not the repository:
 
 ```json
 {

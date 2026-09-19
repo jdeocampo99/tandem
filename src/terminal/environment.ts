@@ -31,25 +31,20 @@ export function resolveTerminalEnvironment(
 ): TerminalEnvironment {
   const source = terminalProcessEnvironmentSnapshot(dependencies.processEnvironment);
   const cwd = resolve(dependencies.cwd ?? process.cwd());
-  const sessionId =
-    invocation.sessionId ??
-    source.TANDEM_SESSION ??
-    source.HERDR_SESSION ??
-    source.HERDR_SESSION_NAME ??
-    DEFAULT_TERMINAL_SESSION_ID;
-  if (sessionId.trim().length === 0 || /[\r\n\u2028\u2029]/u.test(sessionId)) {
-    throw new Error("session id must be non-empty single-line text");
-  }
   const resolved = resolveTandemEnvironment(
     source,
     { cwd, sessionId: DEFAULT_TERMINAL_SESSION_ID },
     {
       repo: cwd,
-      sessionId,
+      ...(invocation.sessionId === undefined ? {} : { sessionId: invocation.sessionId }),
       ...(invocation.home === undefined ? {} : { home: invocation.home }),
       ...(invocation.poolRoot === undefined ? {} : { poolRoot: invocation.poolRoot }),
     },
   );
+  const sessionId = resolved.sessionId;
+  if (sessionId.trim().length === 0 || /[\r\n\u2028\u2029]/u.test(sessionId)) {
+    throw new Error("session id must be non-empty single-line text");
+  }
   return {
     cwd,
     home: resolve(resolved.home),

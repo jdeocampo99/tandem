@@ -219,9 +219,9 @@ bun run start -- --help
 bun run start -- launch --repo /absolute/path/to/repository
 ```
 
-With no action, the low-level CLI defaults to `launch`. Use the same `--home`, `--session`, and
-`--pool-root` values when reconnecting or restarting so durable state and the named Herdr context
-are reused.
+With no action, the low-level CLI defaults to `launch`. It uses the same remembered setup as the
+normal terminal command and agent integration. Explicit overrides must remain consistent when
+reconnecting or restarting so durable state and the named Herdr context are reused.
 
 `--restart` is the non-destructive coordinator replacement surface. From a separate normal
 terminal, `tandem --restart PATH` verifies exact recorded coordinator ownership, revalidates the
@@ -245,8 +245,8 @@ The installed `tandem` command uses the following terminal options and environme
 
 | Setting | Terminal resolution |
 | --- | --- |
-| Durable home | `--home` → `TANDEM_HOME` → `~/.tandem` |
-| Shared Herdr/OMP session | `--session` → `TANDEM_SESSION` → `HERDR_SESSION` → `HERDR_SESSION_NAME` → `tandem` |
+| Durable home | `--home` → `TANDEM_HOME` → remembered setup → `~/.tandem` |
+| Shared Herdr/OMP session | `--session` → `TANDEM_SESSION` → `HERDR_SESSION` → `HERDR_SESSION_NAME` → remembered setup → `tandem` |
 | Treehouse pool root | `--pool-root` → `TANDEM_POOL_ROOT` → `<home>/pool` |
 | Project selection | Explicit positional `PATH ...` overrides the registry and opens only supplied canonical roots; with no paths, valid saved projects under `<home>/repositories` are used before cwd; if none are saved, current-Git onboarding or the outside-Git interactive fallback remains |
 | Conversation reconnect | Bare `tandem` opens or reconnects all saved projects; explicit `tandem PATH` opens or reconnects only that project; add `--continue` only when starting stopped coordinators and resuming saved conversations |
@@ -254,6 +254,32 @@ The installed `tandem` command uses the following terminal options and environme
 | Coordinator reset | `--reset`; preflight and reopen only selected idle Tandem-owned coordinators; launch-only and rejected inside Herdr |
 | Coordinator restart | `--restart`; replace only the owned coordinator while preserving tasks, generations, conversations, questions/messages, reports, worktrees, leases, and child panes |
 | Forced cancellation | `--reset --force`; cancel selected active work, stop owned terminals, and reopen coordinators while preserving files/worktrees |
+
+### Remembered setup
+
+The optional user preference `$XDG_CONFIG_HOME/tandem/config.json` (default
+`~/.config/tandem/config.json`) selects a home and session together:
+
+```json
+{
+  "schemaVersion": 1,
+  "home": "/absolute/path/to/tandem-home",
+  "sessionId": "tandem"
+}
+```
+
+The file must be a regular file with exactly these fields; the home must be absolute. Unknown
+versions, malformed settings, and symlinks fail visibly rather than silently selecting old state.
+Keep the file private. Reads and normal launches never create or change this preference; changing
+the default is a separate, explicit user configuration action. It does not move, migrate, delete,
+or modify either home's existing records.
+
+An explicit `--home` or `TANDEM_HOME` selects a separate setup and bypasses the remembered pair,
+including its session. Other flags and environment values keep the precedence above; the pool
+still defaults to `<selected-home>/pool`. Thus temporary homes never silently inherit the remembered
+session or replace the default. Without a preference, existing built-in behavior is unchanged.
+
+### Project selection
 
 Explicit `PATH` values share the selected Herdr session, but each project receives its own
 coordinator workspace, clean source worktree, and child-worker group. When no paths are given and
@@ -343,8 +369,8 @@ repository or task state.
 ### Inspect first, write once
 
 Per-repository policy is Tandem-owned local state. Resolve the home independently from the
-target repository: `--home` takes precedence over `TANDEM_HOME`, which takes precedence over
-`~/.tandem`. A configured home is valid only when its central destination remains outside the
+target repository: `--home` takes precedence over `TANDEM_HOME`, then the remembered setup,
+then `~/.tandem`. A configured home is valid only when its central destination remains outside the
 target repository. Onboarding reads only `package.json` and the central policy record for
 read-only package discovery; it does not execute scripts or inspect CI. Repository guidance and
 relative `instructionFiles` are loaded later for task policy resolution and remain target-rooted;
@@ -1011,8 +1037,8 @@ The controller verifies the artifact before opening it with Lavish. Each open pr
 
 ## Recovery, durable state, and compaction
 
-The default durable home is `~/.tandem`; `--home PATH` or `TANDEM_HOME` selects another local
-Tandem-home namespace. Global model preferences, repository policy records, and all other paths below
+The durable home comes from the remembered setup, falling back to `~/.tandem`; `--home PATH` or
+`TANDEM_HOME` explicitly selects another local namespace. Global model preferences, repository policy records, and all other paths below
 are Tandem-owned state, not files in target repositories:
 
 | Path | Contents |
@@ -1038,8 +1064,8 @@ contains legacy JSON is refused by normal SQLite startup until migration complet
 Migration is an explicit offline cutover; do not use it while any Tandem coordinator,
 worker, validation job, presentation, or legacy writer may be running.
 
-Use the same home that the coordinator uses (`--home PATH`, then `TANDEM_HOME`, otherwise
-`~/.tandem`) and follow this sequence:
+Use the same home that the coordinator uses (`--home PATH`, then `TANDEM_HOME`, then the
+remembered setup, otherwise `~/.tandem`) and follow this sequence:
 
 1. Stop all Tandem/Herdr activity for that home. Resolve every live or ambiguous
    coordinator, active worker or validation job, and unresolved endpoint launch before
@@ -1212,7 +1238,7 @@ All parser-supported options are global; use only the ones relevant to the comma
 
 | Option | Accepted value |
 | --- | --- |
-| `--home PATH` | Tandem durable home for task state, global model preferences, and central repository policy records; default `~/.tandem` or `TANDEM_HOME`. |
+| `--home PATH` | Explicit Tandem durable home for task state, model preferences, and repository policy; bypasses the remembered setup. Otherwise `TANDEM_HOME`, the remembered setup, then `~/.tandem`. |
 | `--session ID` | Named Herdr/OMP session. |
 | `--parent-workspace ID`, `--parent ID` | Parent Herdr workspace. |
 | `--pool-root PATH` | Treehouse pool root. |
