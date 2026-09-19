@@ -35,10 +35,18 @@ For repository scope, canonicalize an explicit target or cwd to its Git top-leve
 resolve relative paths, preserve symlink identity). If unresolved, ask briefly. Explicit all-project
 scope skips Git-root resolution and `--repo`.
 
-Home precedence is `--home` > `TANDEM_HOME` > `~/.tandem`; keep it absolute and consistent. The
-store is `<home>/tasks/<task-id>.json`. Existence-check home and tasks before invoking, without
-creating either. Missing means one sentence: no durable store and no read attempted. Other
-filesystem errors are unknown/failed, not empty.
+Home precedence is `--home` > `TANDEM_HOME` > `~/.tandem`; keep it absolute and consistent.
+`<home>/state.sqlite` is the canonical task/runtime store. Existence-check the home and this
+database before invoking status, without creating either. Missing means one sentence: no canonical
+durable store and no read attempted. If legacy `runtime.json` or `tasks/*.json` exists without the
+database, report that explicit offline migration is required; never edit, resume, or retry from the
+legacy JSON.
+
+Migration is separate from status. Only when explicitly requested, inspect the read-only plan with
+`tandem migrate-state --home "<home>"`; never add `--yes` from this status skill or apply a plan.
+Unknown owned-operation outcomes are quarantined with capacity/resources retained; do not clear
+reservations, replace tasks, change policy, or retry uncertain work. Reset is not migration or
+recovery; `tandem --reset --force [PATH ...]` cancels selected active tasks.
 
 ## Communication receipts
 

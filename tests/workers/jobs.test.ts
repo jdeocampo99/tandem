@@ -359,12 +359,22 @@ test("rejects native model substitutions and missing role completion markers", a
 test("runner records setup and nonzero OMP failures without a console transport", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-native-worker-runner-"));
   try {
-    const job = makeJob(root);
+    const job = {
+      ...makeJob(root),
+      execution: {
+        schemaVersion: 1 as const,
+        home: root,
+        operationId: "operation-1",
+        fencingRevision: 1,
+        claimOwner: "test-owner",
+      },
+    };
     const jobPath = join(root, "job.json");
     await writeFile(jobPath, `${JSON.stringify(job)}\n`, { mode: 0o600 });
     const result = await runWorkerJob(jobPath, {
       run: async () => 9,
       now: () => "2030-01-02T03:04:05.000Z",
+      executionGate: async () => ({ admitted: true }),
     });
     expect(result.status).toBe("failed");
     expect(result.error).toBe("OMP exited with code 9");

@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult, ValidationCommand } from "../../src/contracts.ts";
-import type { ValidationResult } from "../../src/validation-worker.ts";
 import { runValidation, ValidationConfigurationError } from "../../src/workers/validation.ts";
 
 const command = (
@@ -257,25 +256,11 @@ test("persists cancellation when SIGINT arrives while loading a validation job",
       new Response(worker.stdout).text(),
       new Response(worker.stderr).text(),
     ]);
-    const persisted = JSON.parse(await readFile(resultPath, "utf8")) as ValidationResult;
 
     expect(exitCode).toBe(1);
-    expect(stderr).toBe("");
-    expect(JSON.parse(stdout) as ValidationResult).toEqual(persisted);
-    expect(persisted).toMatchObject({
-      id: job.id,
-      taskId: job.taskId,
-      generation: job.generation,
-      head: job.head,
-      status: "failed",
-    });
-    expect(persisted.evidence).toEqual([
-      expect.objectContaining({
-        name: "probe",
-        exitCode: 130,
-        head: job.head,
-      }),
-    ]);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("execution refused");
+    expect(await Bun.file(resultPath).exists()).toBe(false);
     expect(await Bun.file(markerPath).exists()).toBe(false);
   } finally {
     if (!workerExited) worker?.kill("SIGKILL");

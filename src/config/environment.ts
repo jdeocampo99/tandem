@@ -148,12 +148,13 @@ export function environmentForContext(
 }
 
 export function coordinatorSourceGuidance(environment: TandemBoundaryEnvironment): string {
-  if (environment.sourceRepo === undefined) {
-    return `Tandem has no dedicated clean source binding; ${JSON.stringify(environment.repo)} is the original project identity and source checkout.`;
-  }
-  return [
-    `Tandem's clean committed coordinator checkout is ${JSON.stringify(environment.sourceRepo)} and is the current committed source scope for repository reads and delegated work.`,
-    `The original project identity is ${JSON.stringify(environment.repo)}; pass that identity when creating tasks so records, policy, and delivery remain attached to the original project.`,
-    "Do not edit or read delegated-work guidance from the original project checkout; it is identity only, not the execution source.",
-  ].join(" ");
+  const boundary =
+    environment.sourceRepo === undefined
+      ? `Tandem has no dedicated clean source binding; ${JSON.stringify(environment.repo)} is the original project identity and source checkout.`
+      : [
+          `Tandem's clean committed coordinator checkout is ${JSON.stringify(environment.sourceRepo)} and is the current committed source scope for repository reads and delegated work.`,
+          `The original project identity is ${JSON.stringify(environment.repo)}; pass that identity when creating tasks so records, policy, and delivery remain attached to the original project.`,
+          "Do not edit or read delegated-work guidance from the original project checkout; it is identity only, not the execution source.",
+        ].join(" ");
+  return `${boundary} Source refresh happens only at the start of a new coordinator turn. Existing tasks and worker checkouts remain pinned to their captured commits; refresh may make earlier file observations stale.`;
 }

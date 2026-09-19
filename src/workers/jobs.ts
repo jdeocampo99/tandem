@@ -13,6 +13,7 @@ import {
   type ThinkingLevel,
 } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
+import type { ExecutionIdentity } from "./execution-gate.ts";
 
 export type WorkerRole = Exclude<AgentRole, "coordinator">;
 
@@ -31,6 +32,7 @@ export type WorkerJob = Readonly<{
   readonly model: ModelSpec;
   readonly prompt: string;
   readonly resultPath: string;
+  readonly execution?: ExecutionIdentity;
   readonly sessionDirectory?: string;
   readonly review?: WorkerReviewContext;
   readonly communication?: Readonly<{
@@ -140,6 +142,23 @@ function readPositiveInteger(value: unknown, field: string): number {
     throw new TypeError(`${field} must be a positive integer`);
   }
   return value;
+}
+
+function readExecutionIdentity(value: unknown): ExecutionIdentity {
+  if (!isRecord(value)) throw new TypeError("execution must be an object");
+  for (const key of Object.keys(value)) {
+    if (!["schemaVersion", "home", "operationId", "fencingRevision", "claimOwner"].includes(key)) {
+      throw new TypeError(`execution contains unknown field ${key}`);
+    }
+  }
+  if (value.schemaVersion !== 1) throw new TypeError("execution.schemaVersion must be 1");
+  return {
+    schemaVersion: 1,
+    home: readAbsolutePath(value.home, "execution.home"),
+    operationId: readSingleLineText(value.operationId, "execution.operationId"),
+    fencingRevision: readPositiveInteger(value.fencingRevision, "execution.fencingRevision"),
+    claimOwner: readSingleLineText(value.claimOwner, "execution.claimOwner"),
+  };
 }
 
 function isWorkerRole(value: unknown): value is WorkerRole {
@@ -295,6 +314,8 @@ export function parseWorkerJob(value: unknown): WorkerJob {
   const model = readModel(value.model);
   const prompt = readNonEmptyText(value.prompt, "prompt");
   const resultPath = readAbsolutePath(value.resultPath, "resultPath");
+  const execution =
+    value.execution === undefined ? undefined : readExecutionIdentity(value.execution);
   const sessionDirectory =
     value.sessionDirectory === undefined
       ? undefined
@@ -318,13 +339,13 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     model,
     prompt,
     resultPath,
+    ...(execution === undefined ? {} : { execution }),
     ...(sessionDirectory === undefined ? {} : { sessionDirectory }),
     ...(review === undefined ? {} : { review }),
     ...(communication === undefined ? {} : { communication }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   };
 }
-
 export function parseWorkerResult(value: unknown): WorkerResult {
   if (!isRecord(value)) {
     throw new TypeError("worker result must be an object");

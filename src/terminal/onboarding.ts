@@ -9,7 +9,17 @@ import {
   type RepoPolicy,
 } from "../contracts.ts";
 
-export type TerminalPrompt = (question: string) => Promise<string>;
+export type TerminalSelection = Readonly<{
+  readonly choices: readonly Readonly<{
+    readonly name: string;
+    readonly value: string;
+    readonly description?: string;
+  }>[];
+  readonly search?: boolean;
+  readonly default?: string;
+}>;
+
+export type TerminalPrompt = (question: string, selection?: TerminalSelection) => Promise<string>;
 
 export type TerminalPrompter = Readonly<{
   readonly ask: TerminalPrompt;
@@ -39,38 +49,41 @@ const CANCEL_WORDS: Readonly<Record<string, true>> = {
   quit: true,
   q: true,
 };
-const SAVE_WORDS: Readonly<Record<string, true>> = {
-  save: true,
-  "save settings": true,
-  yes: true,
-  y: true,
-};
-const KEEP_WORDS: Readonly<Record<string, true>> = {
-  keep: true,
-  "keep all": true,
-  "keep-all": true,
-  "1": true,
-};
-const CHANGE_WORDS: Readonly<Record<string, true>> = {
-  change: true,
-  "change roles": true,
-  "change-roles": true,
-  "2": true,
-};
-const NOT_NOW_WORDS: Readonly<Record<string, true>> = {
-  "not now": true,
-  "not-now": true,
-  cancel: true,
-  "3": true,
-  q: true,
-  quit: true,
-};
 const SELECTION_CANCEL_WORDS: Readonly<Record<string, true>> = {
   "not now": true,
   "not-now": true,
   cancel: true,
   q: true,
   quit: true,
+};
+
+const ROLE_GUIDANCE: Readonly<
+  Record<AgentRole, Readonly<{ purpose: string; recommendation: string }>>
+> = {
+  coordinator: {
+    purpose: "Talks with you, plans the work, delegates tasks, and asks for decisions.",
+    recommendation: "strong reasoning model",
+  },
+  scout: {
+    purpose: "Explores the codebase and gathers facts without changing code.",
+    recommendation: "cheap, fast model",
+  },
+  implementer: {
+    purpose: "Writes code and fixes issues within the scope you approve.",
+    recommendation: "strong coding model",
+  },
+  reviewer: {
+    purpose: "Independently checks changes for bugs, security risks, and design problems.",
+    recommendation: "strong reasoning model",
+  },
+  verifier: {
+    purpose: "Checks the final changes and recorded validation results against your requirements.",
+    recommendation: "strong reasoning model",
+  },
+  presentation: {
+    purpose: "Creates visual explanations and presentation artifacts when useful.",
+    recommendation: "fast model with good writing and layout skills",
+  },
 };
 
 function normalized(value: string): string {
@@ -85,19 +98,11 @@ function roleLabel(role: AgentRole): string {
   return MODEL_ROLE_LABELS[role];
 }
 
-function modelDescription(model: OmpModelRecord): string {
-  const label = model.name === undefined ? "" : ` — ${model.name}`;
-  return `${model.selector}${label} (thinking: ${model.thinking.join(", ")})`;
-}
-
-function writeCatalogue(
-  prompter: TerminalPrompter,
-  availableModels: readonly OmpModelRecord[],
-): void {
-  prompter.write("\nAvailable OMP models (choose an exact selector):\n");
-  for (const model of availableModels) {
-    prompter.write(`  ${modelDescription(model)}\n`);
-  }
+function currentForRole(
+  currentModels: RepoPolicy["models"] | undefined,
+  role: AgentRole,
+): ModelSpec | undefined {
+  return currentModels?.[role];
 }
 
 function uniqueModel(
@@ -106,6 +111,69 @@ function uniqueModel(
 ): OmpModelRecord | undefined {
   const matches = availableModels.filter((model) => model.selector === selector);
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+function usableModels(availableModels: readonly OmpModelRecord[]): readonly OmpModelRecord[] {
+  return availableModels.filter((model) => model.thinking.length > 0);
+}
+
+function ensureUsableCatalogue(
+  availableModels: readonly OmpModelRecord[],
+): readonly OmpModelRecord[] {
+  if (availableModels.length === 0) {
+    throw new Error(
+      "OMP returned no available models; install or authenticate OMP, then retry. Tandem will not guess a model.",
+    );
+  }
+  const models = usableModels(availableModels);
+  if (models.length === 0) {
+    throw new Error(
+      "OMP returned no models with supported thinking levels; refresh OMP model metadata, then retry.",
+    );
+  }
+  return models;
+}
+
+function modelSelection(
+  models: readonly OmpModelRecord[],
+  role: AgentRole,
+  currentModels: RepoPolicy["models"] | undefined,
+): TerminalSelection {
+  const choices = models.map((model) => ({
+    name: model.name === undefined ? model.selector : `${model.selector} — ${model.name}`,
+    value: model.selector,
+    description: `Supported thinking levels: ${model.thinking.join(", ")}`,
+  }));
+  const current = currentForRole(currentModels, role);
+  const defaults = defaultPolicy().models[role];
+  const suggested =
+    uniqueModel(models, current?.model ?? "")?.selector ??
+    uniqueModel(models, defaults.model)?.selector;
+  return suggested === undefined
+    ? { choices, search: true }
+    : { choices, search: true, default: suggested };
+}
+
+function thinkingSelection(
+  model: OmpModelRecord,
+  role: AgentRole,
+  currentModels: RepoPolicy["models"] | undefined,
+): TerminalSelection {
+  const current = currentForRole(currentModels, role);
+  const defaults = defaultPolicy().models[role];
+  const choices = model.thinking.map((level) => ({
+    name: `${level}${level === defaults.thinking ? " (Recommended)" : ""}${
+      current?.model === model.selector && level === current.thinking ? " (Saved)" : ""
+    }`,
+    value: level,
+  }));
+  const suggested =
+    current?.model === model.selector && model.thinking.includes(current.thinking)
+      ? current.thinking
+      : model.thinking.includes(defaults.thinking)
+        ? defaults.thinking
+        : undefined;
+  return suggested === undefined ? { choices } : { choices, default: suggested };
 }
 
 function validateAgainstCatalogue(
@@ -130,134 +198,61 @@ function validateAgainstCatalogue(
   return parsed;
 }
 
-function tryParseAllRoleAnswer(
-  value: string,
-  availableModels: readonly OmpModelRecord[],
-): RepoPolicy["models"] | undefined {
-  const text = value.trim();
-  if (!text.startsWith("{")) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text) as unknown;
-  } catch {
-    throw new Error("the six-role answer must be valid JSON");
-  }
-  return validateAgainstCatalogue(parseModelAssignments(parsed), availableModels);
-}
-
-function currentForRole(
-  currentModels: RepoPolicy["models"] | undefined,
-  role: AgentRole,
-): ModelSpec | undefined {
-  return currentModels?.[role];
-}
-
 async function readModelAndThinking(
   prompter: TerminalPrompter,
-  availableModels: readonly OmpModelRecord[],
+  models: readonly OmpModelRecord[],
   role: AgentRole,
   currentModels: RepoPolicy["models"] | undefined,
-  initialAnswer?: string,
 ): Promise<ModelSpec | undefined> {
-  const current = currentForRole(currentModels, role);
-  let modelAnswer = initialAnswer;
-  while (true) {
-    if (modelAnswer === undefined) {
-      const suggestion = current?.model ?? defaultPolicy().models[role].model;
-      const suggestionText =
-        uniqueModel(availableModels, suggestion) === undefined
-          ? "no default suggestion"
-          : `suggested ${suggestion} (still enter it explicitly)`;
-      modelAnswer = await prompter.ask(`${roleLabel(role)} model selector — ${suggestionText}: `);
-    }
+  const guidance = ROLE_GUIDANCE[role];
+  prompter.write(
+    `\n${roleLabel(role)} (${role})\n${guidance.purpose}\n(Recommended: ${guidance.recommendation})\n`,
+  );
+  const modelAnswer = (
+    await prompter.ask(
+      `${roleLabel(role)} model selector`,
+      modelSelection(models, role, currentModels),
+    )
+  ).trim();
+  if (modelAnswer.length === 0 || isCancellation(modelAnswer)) return undefined;
 
-    const modelText = modelAnswer.trim();
-    const lower = normalized(modelText);
-    if (modelText.length === 0 || isCancellation(modelText)) return undefined;
-    if (lower === "keep" || lower === "keep current") {
-      if (current === undefined) {
-        prompter.write(`${roleLabel(role)} has no saved choice to keep.\n`);
-        modelAnswer = undefined;
-        continue;
-      }
-      return { ...current };
-    }
-
-    const compactParts = modelText.split(/\s+/u);
-    if (compactParts.length === 2) {
-      const compactModel = uniqueModel(availableModels, compactParts[0] ?? "");
-      const compactThinking = compactParts[1] ?? "";
-      if (compactModel?.thinking.some((level) => level === compactThinking)) {
-        return {
-          model: compactModel.selector,
-          thinking: compactThinking as ModelSpec["thinking"],
-        };
-      }
-    }
-
-    const selected = uniqueModel(availableModels, modelText);
-    if (selected === undefined) {
-      prompter.write(
-        `${roleLabel(role)} must use one exact selector from the catalogue above; nothing was selected.\n`,
-      );
-      modelAnswer = undefined;
-      continue;
-    }
-
-    const thinkingAnswer = await prompter.ask(
-      `${roleLabel(role)} thinking level (${selected.thinking.join(", ")}): `,
+  const selected = uniqueModel(models, modelAnswer);
+  if (selected === undefined) {
+    throw new Error(
+      `${roleLabel(role)} selected an unavailable OMP model ${JSON.stringify(modelAnswer)}`,
     );
-    const thinking = thinkingAnswer.trim();
-    if (thinking.length === 0 || isCancellation(thinking)) return undefined;
-    if (!selected.thinking.some((level) => level === thinking)) {
-      prompter.write(
-        `${roleLabel(role)} selector ${selected.selector} does not support ${JSON.stringify(thinking)}.\n`,
-      );
-      modelAnswer = undefined;
-      continue;
-    }
-    return { model: selected.selector, thinking: thinking as ModelSpec["thinking"] };
   }
+
+  const thinkingAnswer = (
+    await prompter.ask(
+      `${roleLabel(role)} thinking level`,
+      thinkingSelection(selected, role, currentModels),
+    )
+  ).trim();
+  if (thinkingAnswer.length === 0 || isCancellation(thinkingAnswer)) return undefined;
+  if (!selected.thinking.includes(thinkingAnswer as ModelSpec["thinking"])) {
+    throw new Error(
+      `${roleLabel(role)} selector ${selected.selector} does not support thinking ${JSON.stringify(thinkingAnswer)}`,
+    );
+  }
+  return { model: selected.selector, thinking: thinkingAnswer as ModelSpec["thinking"] };
 }
+
 async function collectAssignments(
   prompter: TerminalPrompter,
   availableModels: readonly OmpModelRecord[],
   currentModels: RepoPolicy["models"] | undefined,
 ): Promise<RepoPolicy["models"] | undefined> {
-  if (availableModels.length === 0) {
-    throw new Error(
-      "OMP returned no available models; install or authenticate OMP, then retry. Tandem will not guess a model.",
-    );
-  }
-  writeCatalogue(prompter, availableModels);
+  const models = ensureUsableCatalogue(availableModels);
+  prompter.write(
+    "Type to filter models by name or selector. Use arrow keys and Enter to choose; Ctrl+C cancels without saving.\n",
+  );
+  prompter.write(
+    "Thinking level controls reasoning effort. Higher levels can take longer and cost more; Recommended marks the role's usual level when supported.\n",
+  );
   const values: Partial<Record<AgentRole, ModelSpec>> = {};
-  for (const [index, role] of MODEL_ROLE_ORDER.entries()) {
-    const current = currentForRole(currentModels, role);
-    const suggestion = current?.model ?? defaultPolicy().models[role].model;
-    const suggestionText =
-      uniqueModel(availableModels, suggestion) === undefined
-        ? "no default suggestion"
-        : `suggested ${suggestion} (still enter it explicitly)`;
-    prompter.write(`${roleLabel(role)}: ${suggestionText}\n`);
-    const keepHint = current === undefined ? "" : " Type keep to retain the saved choice.";
-    let initialAnswer: string | undefined = await prompter.ask(
-      `${roleLabel(role)} model selector${keepHint}: `,
-    );
-    if (index === 0 && initialAnswer.trim().startsWith("{")) {
-      try {
-        return tryParseAllRoleAnswer(initialAnswer, availableModels);
-      } catch (error) {
-        prompter.write(`${error instanceof Error ? error.message : String(error)}\n`);
-        initialAnswer = undefined;
-      }
-    }
-    const assignment = await readModelAndThinking(
-      prompter,
-      availableModels,
-      role,
-      currentModels,
-      initialAnswer,
-    );
+  for (const role of MODEL_ROLE_ORDER) {
+    const assignment = await readModelAndThinking(prompter, models, role, currentModels);
     if (assignment === undefined) return undefined;
     values[role] = assignment;
   }
@@ -307,8 +302,14 @@ async function firstTimeOnboarding(input: ModelOnboardingInput): Promise<ModelOn
     return { status: "cancelled", action: "cancel" };
   }
   writeRecap(input.prompter, models, input.home);
-  const save = await input.prompter.ask("Save these six choices? Enter save or not now: ");
-  if (SAVE_WORDS[normalized(save)] !== true) {
+  const save = await input.prompter.ask("Save these six choices?", {
+    choices: [
+      { name: "Save", value: "save" },
+      { name: "Not now", value: "not now" },
+    ],
+    default: "not now",
+  });
+  if (normalized(save) !== "save") {
     input.prompter.write(
       "Model setup paused; no model choices were saved and no project will launch.\n",
     );
@@ -321,6 +322,7 @@ async function savedOnboarding(input: ModelOnboardingInput): Promise<ModelOnboar
   if (input.currentModels === undefined) {
     throw new TypeError("saved model onboarding requires currentModels");
   }
+  ensureUsableCatalogue(input.availableModels);
   const current = parseModelAssignments(input.currentModels);
   input.prompter.write("\nSaved Tandem role choices:\n");
   for (const role of MODEL_ROLE_ORDER) {
@@ -329,20 +331,30 @@ async function savedOnboarding(input: ModelOnboardingInput): Promise<ModelOnboar
       `  ${roleLabel(role)} (${role}): ${assignment.model} · thinking ${assignment.thinking}\n`,
     );
   }
-  const choice = await input.prompter.ask("Choose Keep all, Change roles, or Not now: ");
-  const selected = normalized(choice);
-  if (KEEP_WORDS[selected] === true) {
-    return { status: "approved", action: "keep", models: current };
+  const choice = normalized(
+    await input.prompter.ask("Choose Keep all, Change roles, or Not now", {
+      choices: [
+        { name: "Keep all", value: "keep all" },
+        { name: "Change roles", value: "change roles" },
+        { name: "Not now", value: "not now" },
+      ],
+    }),
+  );
+  if (choice === "keep all") {
+    return {
+      status: "approved",
+      action: "keep",
+      models: validateAgainstCatalogue(current, input.availableModels),
+    };
   }
-  if (NOT_NOW_WORDS[selected] === true) {
+  if (choice === "not now" || isCancellation(choice)) {
     input.prompter.write(
       "Model setup paused; saved choices are unchanged and no project will launch.\n",
     );
     return { status: "cancelled", action: "cancel" };
   }
-  if (CHANGE_WORDS[selected] !== true) {
-    input.prompter.write("Enter Keep all, Change roles, or Not now.\n");
-    return savedOnboarding(input);
+  if (choice !== "change roles") {
+    throw new Error("saved model action must be Keep all, Change roles, or Not now");
   }
 
   const models = await collectAssignments(input.prompter, input.availableModels, current);
@@ -353,10 +365,14 @@ async function savedOnboarding(input: ModelOnboardingInput): Promise<ModelOnboar
     return { status: "cancelled", action: "cancel" };
   }
   writeRecap(input.prompter, models, input.home);
-  const save = await input.prompter.ask(
-    "Save the changed six-role choices? Enter save or not now: ",
-  );
-  if (SAVE_WORDS[normalized(save)] !== true) {
+  const save = await input.prompter.ask("Save the changed six-role choices?", {
+    choices: [
+      { name: "Save", value: "save" },
+      { name: "Not now", value: "not now" },
+    ],
+    default: "not now",
+  });
+  if (normalized(save) !== "save") {
     input.prompter.write(
       "Model setup paused; saved choices are unchanged and no project will launch.\n",
     );
@@ -386,8 +402,14 @@ export async function askProjectSettingsApproval(
     `\nSave Tandem settings for ${projectPath}? These settings stay on this computer, outside the project; they do not change the app or start work.\n`,
   );
   prompter.write(`The project record will be saved at ${configPath}.\n`);
-  const answer = await prompter.ask("Choose Save settings or Not now: ");
-  return SAVE_WORDS[normalized(answer)] === true;
+  const answer = await prompter.ask("Save project settings?", {
+    choices: [
+      { name: "Save settings", value: "save settings" },
+      { name: "Not now", value: "not now" },
+    ],
+    default: "save settings",
+  });
+  return answer === "save settings";
 }
 
 /** Selects one or more registered projects, or returns a path explicitly entered by the user. */

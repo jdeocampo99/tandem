@@ -67,7 +67,7 @@ export type AcquireWorktreeInput = Readonly<{
   root: string;
   tandemId: string;
   taskName: string;
-  baseBranch?: string;
+  sourceHead: string;
 }>;
 
 export type ReleaseWorktreeInput = Readonly<{
@@ -299,7 +299,13 @@ function validateLease(lease: WorktreeLease): void {
 function reportedLeasePath(repo: string, reportedPath: string): string {
   return reportedPath.startsWith("/") ? reportedPath : resolve(repo, reportedPath);
 }
-
+function checkedSourceHead(value: string): string {
+  const sourceHead = checkedText(value, "sourceHead");
+  if (!/^[0-9a-f]{40}$/u.test(sourceHead)) {
+    throw new TypeError("sourceHead must be a full 40-character commit SHA");
+  }
+  return sourceHead;
+}
 async function prepareWorktreeLease(
   run: CommandRunner,
   input: AcquireWorktreeInput,
@@ -310,9 +316,10 @@ async function prepareWorktreeLease(
   const repo = checkedPath(input.repo, "repo");
   const root = checkedPath(input.root, "root");
   const taskName = checkedText(input.taskName, "taskName");
+  const sourceHead = checkedSourceHead(input.sourceHead);
   const path = reportedLeasePath(repo, metadata.path);
   const branch = safeTaskBranchName(taskName);
-  let lease = leaseFromMetadata(metadata, root, path, taskName, "unknown", branch);
+  let lease = leaseFromMetadata(metadata, root, path, taskName, sourceHead, branch);
 
   try {
     const repoRoot = resolve(
@@ -329,6 +336,25 @@ async function prepareWorktreeLease(
         physicalResolver(worktreeRoot),
         physicalResolver(path),
       ]);
+    const [physicalRepoCommon, physicalWorktreeCommon] = await Promise.all([
+      physicalResolver(
+        resolve(
+          repoRoot,
+          await readGitText(run, repo, ["rev-parse", "--git-common-dir"], "git primary common dir"),
+        ),
+      ),
+      physicalResolver(
+        resolve(
+          worktreeRoot,
+          await readGitText(
+            run,
+            path,
+            ["rev-parse", "--git-common-dir"],
+            "git worktree common dir",
+          ),
+        ),
+      ),
+    ]);
     if (physicalRepoRoot === physicalWorktreeRoot || physicalRepoRoot === physicalReportedPath) {
       throw new LeaseSafetyError(
         "treehouse returned the primary repository instead of a distinct worktree",
@@ -347,29 +373,19 @@ async function prepareWorktreeLease(
         lease,
       );
     }
-
-    const baseHead = await readGitText(run, repo, ["rev-parse", "HEAD"], "git primary HEAD");
-    const baseBranch =
-      input.baseBranch === undefined
-        ? await readGitText(
-            run,
-            repo,
-            ["symbolic-ref", "--quiet", "--short", "HEAD"],
-            "git base branch",
-          )
-        : checkedText(input.baseBranch, "baseBranch");
-    const branchHead = await readGitText(
-      run,
-      repo,
-      ["rev-parse", `refs/heads/${baseBranch}`],
-      "git base branch HEAD",
-    );
-    if (branchHead !== baseHead) {
+    if (physicalRepoCommon !== physicalWorktreeCommon) {
       throw new LeaseSafetyError(
-        `primary HEAD ${baseHead} does not match base branch ${baseBranch} at ${branchHead}`,
-        leaseFromMetadata(metadata, root, path, taskName, baseHead, branch),
+        "acquired worktree does not share the primary repository's Git common directory",
+        lease,
       );
     }
+
+    await runChecked(
+      run,
+      { argv: ["git", "-C", repo, "cat-file", "-e", `${sourceHead}^{commit}`], cwd: repo },
+      "git source HEAD validation",
+    );
+    const baseHead = sourceHead;
     lease = leaseFromMetadata(metadata, root, path, taskName, baseHead, branch);
 
     const branchResult = await runChecked(
@@ -378,22 +394,49 @@ async function prepareWorktreeLease(
       "git worktree branch identity",
     );
     const actualBranch = branchResult.stdout.trim();
-    if (existingLease && actualBranch === branch) return lease;
-    if (actualBranch !== "" && actualBranch !== baseBranch) {
+    if (actualBranch === branch && existingLease) {
+      const status = await runChecked(
+        run,
+        {
+          argv: ["git", "-C", path, "status", "--porcelain=v1", "--untracked-files=all"],
+          cwd: path,
+        },
+        "git existing task worktree status",
+      );
+      const unmerged = await runChecked(
+        run,
+        { argv: ["git", "-C", path, "diff", "--name-only", "--diff-filter=U"], cwd: path },
+        "git existing task worktree unmerged check",
+      );
+      if (status.stdout.trim() !== "" || unmerged.stdout.trim() !== "") {
+        throw new LeaseSafetyError("existing task worktree is dirty or has unmerged paths", lease);
+      }
+      return lease;
+    }
+    if (actualBranch !== "") {
       throw new LeaseSafetyError(
-        `acquired worktree branch is ${JSON.stringify(actualBranch)}, expected base ${JSON.stringify(baseBranch)} or task ${JSON.stringify(branch)}`,
+        `acquired worktree branch is ${JSON.stringify(actualBranch)}, expected detached checkout or task ${JSON.stringify(branch)}`,
         lease,
       );
     }
-    const worktreeHead = await readGitText(run, path, ["rev-parse", "HEAD"], "git worktree HEAD");
-    if (worktreeHead !== baseHead) {
-      throw new LeaseSafetyError(
-        `acquired worktree HEAD ${worktreeHead} does not match primary HEAD ${baseHead}`,
-        lease,
-      );
+    const status = await runChecked(
+      run,
+      {
+        argv: ["git", "-C", path, "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd: path,
+      },
+      "git task worktree status",
+    );
+    const unmerged = await runChecked(
+      run,
+      { argv: ["git", "-C", path, "diff", "--name-only", "--diff-filter=U"], cwd: path },
+      "git task worktree unmerged check",
+    );
+    if (status.stdout.trim() !== "" || unmerged.stdout.trim() !== "") {
+      throw new LeaseSafetyError("acquired worktree is dirty or has unmerged paths", lease);
     }
     const switchRequest: CommandRequest = {
-      argv: ["git", "-C", path, "switch", "-c", branch],
+      argv: ["git", "-C", path, "switch", "--no-overwrite-ignore", "-c", branch, sourceHead],
       cwd: path,
     };
     await runChecked(run, switchRequest, "git task branch create");
@@ -403,9 +446,15 @@ async function prepareWorktreeLease(
       ["branch", "--show-current"],
       "git task branch verify",
     );
-    if (switchedBranch !== branch) {
+    const switchedHead = await readGitText(
+      run,
+      path,
+      ["rev-parse", "HEAD"],
+      "git task HEAD verify",
+    );
+    if (switchedBranch !== branch || switchedHead !== sourceHead) {
       throw new LeaseSafetyError(
-        `git created branch ${JSON.stringify(switchedBranch)} instead of ${JSON.stringify(branch)}`,
+        `git created ${JSON.stringify(switchedBranch)} at ${JSON.stringify(switchedHead)} instead of ${JSON.stringify(branch)} at ${JSON.stringify(sourceHead)}`,
         lease,
       );
     }
@@ -443,6 +492,7 @@ export async function acquireWorktree(
   const root = checkedPath(input.root, "root");
   const tandemId = checkedText(input.tandemId, "tandemId");
   const taskName = checkedText(input.taskName, "taskName");
+  const sourceHead = checkedSourceHead(input.sourceHead);
   const branch = safeTaskBranchName(taskName);
   const statusRequest: CommandRequest = {
     argv: ["treehouse", "--root", root, "status", "--json"],
@@ -484,7 +534,7 @@ export async function acquireWorktree(
     treehouseResult.stdout,
   );
   const path = reportedLeasePath(repo, metadata.path);
-  const acquiredLease = leaseFromMetadata(metadata, root, path, taskName, "unknown", branch);
+  const acquiredLease = leaseFromMetadata(metadata, root, path, taskName, sourceHead, branch);
   if (metadata.leaseHolder !== tandemId) {
     throw new LeaseSafetyError(
       `treehouse returned lease holder ${JSON.stringify(metadata.leaseHolder)} instead of ${JSON.stringify(tandemId)}`,

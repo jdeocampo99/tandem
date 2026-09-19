@@ -4,6 +4,12 @@ import { runCommand } from "./adapters/commands.ts";
 import { createHerdrStatusReporter } from "./adapters/herdr-status.ts";
 import type { CommandRunner, ValidationCommand, ValidationEvidence } from "./contracts.ts";
 import { writeJsonAtomically } from "./runtime/persistence.ts";
+import {
+  claimExecutionStart,
+  type ExecutionAdmission,
+  type ExecutionGateInput,
+  type ExecutionIdentity,
+} from "./workers/execution-gate.ts";
 import { runValidation, ValidationConfigurationError } from "./workers/validation.ts";
 
 export type ValidationJob = Readonly<{
@@ -16,6 +22,7 @@ export type ValidationJob = Readonly<{
   readonly surfaces: readonly string[];
   readonly commands: readonly ValidationCommand[];
   readonly resultPath: string;
+  readonly execution?: ExecutionIdentity;
 }>;
 
 export type ValidationResultStatus = "completed" | "failed";
@@ -37,6 +44,9 @@ export type ValidationWorkerOptions = Readonly<{
   readonly now?: () => string;
   readonly signal?: AbortSignal;
   readonly writeResult?: (path: string, result: ValidationResult) => void | Promise<void>;
+  readonly executionGate?: (
+    input: ExecutionGateInput,
+  ) => ExecutionAdmission | PromiseLike<ExecutionAdmission>;
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -69,6 +79,29 @@ function nonNegativeInteger(value: unknown, field: string): number {
   return value as number;
 }
 
+function positiveInteger(value: unknown, field: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+    throw new TypeError(`${field} must be a positive integer`);
+  }
+  return value as number;
+}
+
+function parseExecution(value: unknown): ExecutionIdentity {
+  if (!isRecord(value)) throw new TypeError("execution must be an object");
+  for (const key of Object.keys(value)) {
+    if (!["schemaVersion", "home", "operationId", "fencingRevision", "claimOwner"].includes(key)) {
+      throw new TypeError(`execution contains unknown field ${key}`);
+    }
+  }
+  if (value.schemaVersion !== 1) throw new TypeError("execution.schemaVersion must be 1");
+  return {
+    schemaVersion: 1,
+    home: absolute(value.home, "execution.home"),
+    operationId: singleLine(value.operationId, "execution.operationId"),
+    fencingRevision: positiveInteger(value.fencingRevision, "execution.fencingRevision"),
+    claimOwner: singleLine(value.claimOwner, "execution.claimOwner"),
+  };
+}
 function parseCommand(value: unknown, index: number): ValidationCommand {
   if (!isRecord(value)) throw new TypeError(`commands[${index}] must be an object`);
   const name = singleLine(value.name, `commands[${index}].name`);
@@ -105,6 +138,7 @@ export function parseValidationJob(value: unknown): ValidationJob {
   }
   if (!Array.isArray(value.commands)) throw new TypeError("commands must be an array");
   const commands = value.commands.map(parseCommand);
+  const execution = value.execution === undefined ? undefined : parseExecution(value.execution);
   return {
     schemaVersion: 1,
     id: singleLine(value.id, "id"),
@@ -115,6 +149,7 @@ export function parseValidationJob(value: unknown): ValidationJob {
     surfaces,
     commands,
     resultPath: absolute(value.resultPath, "resultPath"),
+    ...(execution === undefined ? {} : { execution }),
   };
 }
 
@@ -249,14 +284,62 @@ export async function readValidationResult(
   }
   return result;
 }
+async function existingValidationResult(job: ValidationJob): Promise<ValidationResult | undefined> {
+  try {
+    return await readValidationResult(job.resultPath, {
+      id: job.id,
+      taskId: job.taskId,
+      generation: job.generation,
+      head: job.head,
+    });
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
 
 export async function runValidationJob(
   input: ValidationJob,
   options: ValidationWorkerOptions = {},
 ): Promise<ValidationResult> {
   const job = parseValidationJob(input);
-  const run = options.run ?? runCommand;
   const now = options.now ?? (() => new Date().toISOString());
+  const prior = await existingValidationResult(job);
+  if (prior !== undefined) return prior;
+  if (job.execution === undefined) {
+    return resultFor(
+      job,
+      now,
+      "failed",
+      [failureEvidence(job, "execution refused: validation job has no execution admission", 125)],
+      "execution refused: validation job has no execution admission",
+    );
+  }
+  const gateInput: ExecutionGateInput = {
+    execution: job.execution,
+    jobId: job.id,
+    taskId: job.taskId,
+    generation: job.generation,
+    command: "validation",
+    cwd: job.repoPath,
+    resultPath: job.resultPath,
+    inputHead: job.head,
+  };
+  let admission: ExecutionAdmission;
+  try {
+    const gate = options.executionGate ?? claimExecutionStart;
+    admission = await gate(gateInput);
+  } catch (error) {
+    const message = `execution refused: ${describeError(error)}`;
+    return resultFor(job, now, "failed", [failureEvidence(job, message, 125)], message);
+  }
+  if (!admission.admitted) {
+    const message = `execution refused: ${admission.reason ?? "validation execution was refused"}`;
+    return resultFor(job, now, "failed", [failureEvidence(job, message, 125)], message);
+  }
+  const run = options.run ?? runCommand;
   const writeResult = options.writeResult ?? writeJsonAtomically;
   const statusReporter = createHerdrStatusReporter(runCommand, {
     cwd: job.repoPath,
@@ -338,6 +421,10 @@ async function runCli(argv: readonly string[]): Promise<number> {
   try {
     const job = await readJobFile(argv[0]);
     const result = await runValidationJob(job, { signal: controller.signal });
+    if (result.status === "failed" && result.error?.startsWith("execution refused:") === true) {
+      process.stderr.write(`${result.error}\n`);
+      return 1;
+    }
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return result.status === "completed" ? 0 : 1;
   } finally {

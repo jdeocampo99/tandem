@@ -1,5 +1,6 @@
+import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -8,6 +9,8 @@ import type {
   ResolvedPolicy,
   WorktreeLease,
 } from "../../src/contracts.ts";
+import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
+import { emptyRuntimeState } from "../../src/runtime/schema.ts";
 import { type TaskTransitionContext, transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore, type StoreTaskInput, type TaskStore } from "../../src/tasks/store.ts";
 import {
@@ -109,11 +112,11 @@ test("persists records with restrictive modes and reloads through a new store in
 
     const reloaded = makeStore(directory, "other");
     expect(await reloaded.list()).toEqual([created]);
-    const taskStat = await stat(join(directory, `${created.id}.json`));
-    expect(taskStat.mode & 0o777).toBe(0o600);
+    const databaseStat = await stat(join(directory, "state.sqlite"));
+    expect(databaseStat.mode & 0o777).toBe(0o600);
     const directoryStat = await stat(directory);
     expect(directoryStat.mode & 0o777).toBe(0o700);
-    const lockStat = await stat(join(directory, ".lock"));
+    const lockStat = await stat(join(directory, ".state.lock"));
     expect(lockStat.mode & 0o777).toBe(0o600);
   });
 });
@@ -174,20 +177,66 @@ test("supports one repository transaction without nested lock acquisition", asyn
   });
 });
 
-test("rejects corrupt JSON, schema mismatch, and traversal IDs instead of skipping state", async () => {
+test("rolls back task and runtime writes together when an exclusive callback throws", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "rollback-task" });
+    const path = runtimeFile(directory);
+    await writeRuntimeState(path, emptyRuntimeState());
+    await expect(
+      store.exclusive(async (transaction) => {
+        await transaction.update(created.id, created.revision, (task) =>
+          transitionTask(task, { type: "approve" }, transitionContext()),
+        );
+        await writeRuntimeState(path, {
+          ...emptyRuntimeState(),
+          presentations: [],
+        });
+        throw new Error("abort durable transition");
+      }),
+    ).rejects.toThrow("abort durable transition");
+    expect(await store.read(created.id)).toEqual(created);
+    expect(await readRuntimeState(path)).toEqual(emptyRuntimeState());
+  });
+});
+
+test("caught nested exclusive failures mark the owning transaction rollback-only", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "nested-rollback-task" });
+    await expect(
+      store.exclusive(async (outer) => {
+        try {
+          await store.exclusive(async (inner) => {
+            await inner.update(created.id, created.revision, (task) =>
+              transitionTask(task, { type: "approve" }, transitionContext()),
+            );
+            throw new Error("nested failure");
+          });
+        } catch (error) {
+          expect(error).toEqual(new Error("nested failure"));
+        }
+        expect(await outer.read(created.id)).toMatchObject({ revision: created.revision + 1 });
+      }),
+    ).rejects.toThrow("rollback-only");
+    expect(await store.read(created.id)).toEqual(created);
+  });
+});
+
+test("rejects missing SQLite tables and traversal IDs instead of skipping state", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
     await store.list();
-    await writeFile(join(directory, "broken.json"), "{not-json", "utf8");
-    await expect(store.list()).rejects.toBeInstanceOf(StateCorruptionError);
-
-    await unlink(join(directory, "broken.json"));
-    await writeFile(join(directory, "schema.json"), JSON.stringify({ schemaVersion: 99 }), "utf8");
-    await expect(store.read("schema")).rejects.toBeInstanceOf(StateCorruptionError);
-    await expect(store.read("../outside")).rejects.toBeInstanceOf(UnsafeTaskIdError);
+    expect(await store.read("../outside").catch((error) => error)).toBeInstanceOf(
+      UnsafeTaskIdError,
+    );
     await expect(store.create({ ...input, id: "../outside" })).rejects.toBeInstanceOf(
       UnsafeTaskIdError,
     );
+    const database = new Database(join(directory, "state.sqlite"));
+    database.exec("DROP TABLE tasks");
+    database.close();
+    await expect(store.list()).rejects.toThrow("authoritative state database");
   });
 });
 
@@ -195,10 +244,16 @@ test("rejects unsafe persisted revisions before they can participate in CAS", as
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
     const created = await store.create({ ...input, id: "unsafe-revision" });
-    const path = join(directory, `${created.id}.json`);
-    const persisted = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    const database = new Database(join(directory, "state.sqlite"));
+    const row = database.query("SELECT payload FROM tasks WHERE id = ?").get(created.id) as {
+      payload: string;
+    };
+    const persisted = JSON.parse(row.payload) as Record<string, unknown>;
     persisted.revision = Number.MAX_SAFE_INTEGER + 1;
-    await writeFile(path, JSON.stringify(persisted), "utf8");
+    database
+      .query("UPDATE tasks SET revision = ?, payload = ? WHERE id = ?")
+      .run(Number.MAX_SAFE_INTEGER + 1, JSON.stringify(persisted), created.id);
+    database.close();
 
     await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
     await expect(store.update(created.id, created.revision, (task) => task)).rejects.toBeInstanceOf(
@@ -222,21 +277,7 @@ test("preserves the previous record when a transform cannot produce a valid stat
       })),
     ).rejects.toBeInstanceOf(StateCorruptionError);
     expect(await store.read(created.id)).toEqual(created);
-    const files = await readdir(directory);
-    expect(files.some((file) => file.endsWith(".tmp"))).toBe(false);
-  });
-});
-
-test("recovers from stale temporary files without overwriting their contents", async () => {
-  await withTemporaryDirectory(async (directory) => {
-    const leftoverPath = join(directory, `.task-${process.pid}-1.tmp`);
-    await writeFile(leftoverPath, "crash-leftover", "utf8");
-
-    const store = makeStore(directory);
-    const recovered = await store.create({ ...input, id: "recovered-task" });
-
-    expect(recovered.id).toBe("recovered-task");
-    expect(await readFile(leftoverPath, "utf8")).toBe("crash-leftover");
+    expect(await Bun.file(join(directory, `${created.id}.json`)).exists()).toBe(false);
   });
 });
 
@@ -257,7 +298,7 @@ test("preserves live lock leases and reacquires after the owner incarnation rele
       await release.promise;
     });
     await entered.promise;
-    const lockPath = join(directory, ".lock");
+    const lockPath = join(directory, ".state.lock");
     const liveLock = await stat(lockPath);
     await expect(blockedStore.list()).rejects.toBeInstanceOf(StoreLockTimeoutError);
     release.resolve();

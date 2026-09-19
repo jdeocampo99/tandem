@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runCommand } from "../../src/adapters/commands.ts";
 import type {
   CommandRequest,
   CommandResult,
@@ -16,6 +17,10 @@ import { findRunningCoordinator } from "../../src/coordinator/ownership.ts";
 import type { CoordinatorRecord } from "../../src/coordinator/record.ts";
 import { listCoordinatorRecords, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { resetCoordinators } from "../../src/coordinator/reset.ts";
+import {
+  refreshCoordinatorSource,
+  resolveCoordinatorSourceHead,
+} from "../../src/coordinator/source.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { RuntimeTaskState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
@@ -123,12 +128,14 @@ type ResetPaneState = ResetPaneInput & {
   present: boolean;
 };
 
-function nativeResetRunner(inputs: readonly ResetPaneInput[]): Readonly<{
+type NativeResetRunner = Readonly<{
   readonly calls: readonly CommandRequest[];
   readonly panes: Map<string, ResetPaneState>;
   readonly run: CommandRunner;
   readonly workspaces: Map<string, string>;
-}> {
+}>;
+
+function nativeResetRunner(inputs: readonly ResetPaneInput[]): NativeResetRunner {
   const calls: CommandRequest[] = [];
   const panes = new Map<string, ResetPaneState>(
     inputs.map((input): [string, ResetPaneState] => [
@@ -308,23 +315,24 @@ async function seedTask(
   await store.update(task.id, task.revision, (current) => ({
     ...current,
     endpoints: [...endpoints],
+
     revision: current.revision + 1,
   }));
 }
 
-async function fixture(): Promise<
-  Readonly<{
-    readonly root: string;
-    readonly home: string;
-    readonly repoA: string;
-    readonly repoB: string;
-    readonly worktreeRoot: string;
-    readonly worktreeA: string;
-    readonly worktreeB: string;
-    readonly recordA: CoordinatorRecord;
-    readonly recordB: CoordinatorRecord;
-  }>
-> {
+type RegistryFixture = Readonly<{
+  readonly root: string;
+  readonly home: string;
+  readonly repoA: string;
+  readonly repoB: string;
+  readonly worktreeRoot: string;
+  readonly worktreeA: string;
+  readonly worktreeB: string;
+  readonly recordA: CoordinatorRecord;
+  readonly recordB: CoordinatorRecord;
+}>;
+
+async function fixture(): Promise<RegistryFixture> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-coordinator-registry-")));
   const home = join(root, "home");
   const repoA = join(root, "repo-a");
@@ -366,6 +374,79 @@ async function fixture(): Promise<
     recordA: record(repoA, worktreeA, "pane-a"),
     recordB: record(repoB, worktreeB, "pane-b"),
   };
+}
+
+type SourceRefreshFixture = Readonly<{
+  readonly values: RegistryFixture;
+  readonly sourceHeadA: string;
+  readonly sourceHeadB: string;
+}>;
+
+async function runGitFixtureCommand(cwd: string, args: readonly string[]): Promise<string> {
+  const response = await runCommand({ argv: ["git", "-C", cwd, ...args], cwd });
+  if (response.code !== 0) {
+    throw new Error(
+      `source refresh Git fixture command failed: ${args.join(" ")}: ${response.stderr}`,
+    );
+  }
+  return response.stdout.trim();
+}
+
+async function sourceRefreshFixture(): Promise<SourceRefreshFixture> {
+  const values = await fixture();
+  const origin = join(values.root, "origin.git");
+  await mkdir(origin, { recursive: true });
+  await runGitFixtureCommand(values.repoA, ["init", "-b", "main"]);
+  await runGitFixtureCommand(values.repoA, ["config", "user.email", "tandem-tests@example.com"]);
+  await runGitFixtureCommand(values.repoA, ["config", "user.name", "Tandem Tests"]);
+  await writeFile(join(values.repoA, "source.txt"), "source A\n");
+  await runGitFixtureCommand(values.repoA, ["add", "source.txt"]);
+  await runGitFixtureCommand(values.repoA, ["commit", "-m", "source A"]);
+  const sourceHeadA = await runGitFixtureCommand(values.repoA, ["rev-parse", "HEAD"]);
+  await writeFile(join(values.repoA, "source.txt"), "source B\n");
+  await runGitFixtureCommand(values.repoA, ["commit", "-am", "source B"]);
+  const sourceHeadB = await runGitFixtureCommand(values.repoA, ["rev-parse", "HEAD"]);
+  await runGitFixtureCommand(origin, ["init", "--bare"]);
+  await runGitFixtureCommand(values.repoA, ["remote", "add", "origin", origin]);
+  await runGitFixtureCommand(values.repoA, ["push", "origin", `${sourceHeadB}:refs/heads/main`]);
+  await runGitFixtureCommand(values.repoA, ["reset", "--hard", sourceHeadA]);
+  await rm(values.worktreeA, { recursive: true, force: true });
+  await runGitFixtureCommand(values.repoA, [
+    "worktree",
+    "add",
+    "-b",
+    values.recordA.worktree.branch,
+    values.worktreeA,
+    sourceHeadA,
+  ]);
+  const recordA = {
+    ...values.recordA,
+    worktree: { ...values.recordA.worktree, baseHead: sourceHeadA },
+  };
+  return {
+    values: { ...values, recordA },
+    sourceHeadA,
+    sourceHeadB,
+  };
+}
+
+function sourceRefreshRunner(
+  record: CoordinatorRecord,
+  afterSwitch?: (request: CommandRequest) => void | Promise<void>,
+): Readonly<{
+  readonly native: NativeResetRunner;
+  readonly run: CommandRunner;
+}> {
+  const native = nativeResetRunner([{ record, agentStatus: "idle" }]);
+  const run: CommandRunner = async (request) => {
+    if (request.argv[0] === "herdr") return native.run(request);
+    const response = await runCommand(request);
+    if (response.code === 0 && request.argv.includes("switch")) {
+      await afterSwitch?.(request);
+    }
+    return response;
+  };
+  return { native, run };
 }
 
 async function cleanup(root: string): Promise<void> {
@@ -870,11 +951,13 @@ test("refuses active durable workers, tasks, and reservations before closing", a
           presentations: [],
         });
       }
-      const durablePath =
-        activeKind === "task"
-          ? join(values.home, "tasks", "reset-task.json")
-          : runtimeFile(values.home);
-      const durableBefore = await readFile(durablePath, "utf8");
+      const store = createTaskStore({
+        directory: join(values.home, "tasks"),
+        clock: () => new Date().toISOString(),
+        idFactory: () => "reset-task",
+      });
+      const taskBefore = await store.read("reset-task");
+      const runtimeBefore = await readRuntimeState(runtimeFile(values.home));
 
       await expect(
         resetCoordinators(runner.run, {
@@ -883,7 +966,8 @@ test("refuses active durable workers, tasks, and reservations before closing", a
           repoPaths: [values.repoA],
         }),
       ).rejects.toThrow(/active|queued|job|reservation|worker|reset/u);
-      expect(await readFile(durablePath, "utf8")).toBe(durableBefore);
+      expect(await store.read("reset-task")).toEqual(taskBefore);
+      expect(await readRuntimeState(runtimeFile(values.home))).toEqual(runtimeBefore);
       expect(runner.calls.some((request) => request.argv[4] === "close")).toBe(false);
       expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
     } finally {
@@ -1091,8 +1175,12 @@ test("force reset refuses a foreign coordinator before cancelling tasks or closi
     await saveCoordinatorRecord(values.home, values.recordA);
     await saveCoordinatorRecord(values.home, values.recordB);
     await seedTask(values.home, values.repoA, "scout");
-    const taskPath = join(values.home, "tasks", "reset-task.json");
-    const before = await readFile(taskPath, "utf8");
+    const store = createTaskStore({
+      directory: join(values.home, "tasks"),
+      clock: () => new Date().toISOString(),
+      idFactory: () => "reset-task",
+    });
+    const before = await store.read("reset-task");
     const runner = nativeResetRunner([
       { record: values.recordA, agentStatus: "working" },
       { record: values.recordB, agentStatus: "working" },
@@ -1117,7 +1205,7 @@ test("force reset refuses a foreign coordinator before cancelling tasks or closi
       }),
     ).rejects.toThrow();
 
-    expect(await readFile(taskPath, "utf8")).toBe(before);
+    expect(await store.read("reset-task")).toEqual(before);
     expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
     expect(runner.panes.get(values.recordB.endpoint.paneId)?.present).toBe(true);
   } finally {
@@ -1131,8 +1219,12 @@ test("force reset refuses a foreign process in a recorded worker pane", async ()
     await saveCoordinatorRecord(values.home, values.recordA);
     const worker: Endpoint = { ...endpoint("tandem", "worker-pane"), role: "scout" };
     await seedTask(values.home, values.repoA, "scout", [worker]);
-    const taskPath = join(values.home, "tasks", "reset-task.json");
-    const before = await readFile(taskPath, "utf8");
+    const store = createTaskStore({
+      directory: join(values.home, "tasks"),
+      clock: () => new Date().toISOString(),
+      idFactory: () => "reset-task",
+    });
+    const before = await store.read("reset-task");
     await writeRuntimeState(runtimeFile(values.home), {
       schemaVersion: 1,
       tasks: [
@@ -1169,7 +1261,7 @@ test("force reset refuses a foreign process in a recorded worker pane", async ()
       }),
     ).rejects.toThrow();
 
-    expect(await readFile(taskPath, "utf8")).toBe(before);
+    expect(await store.read("reset-task")).toEqual(before);
     expect(runner.panes.get(worker.paneId)?.present).toBe(true);
     expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
   } finally {
@@ -1183,6 +1275,11 @@ test("force reset can retry a partial coordinator close without reviving cancell
     await saveCoordinatorRecord(values.home, values.recordA);
     await saveCoordinatorRecord(values.home, values.recordB);
     await seedTask(values.home, values.repoA, "scout");
+    const store = createTaskStore({
+      directory: join(values.home, "tasks"),
+      clock: () => new Date().toISOString(),
+      idFactory: () => "reset-task",
+    });
     const runner = nativeResetRunner([
       { record: values.recordA, agentStatus: "working" },
       {
@@ -1209,8 +1306,7 @@ test("force reset can retry a partial coordinator close without reviving cancell
     await resetCoordinators(runner.run, input);
 
     expect(runner.panes.get(values.recordB.endpoint.paneId)?.present).toBe(false);
-    const task = JSON.parse(await readFile(join(values.home, "tasks", "reset-task.json"), "utf8"));
-    expect(task.stage).toBe("cancelled");
+    expect((await store.read("reset-task"))?.stage).toBe("cancelled");
   } finally {
     await cleanup(values.root);
   }
@@ -1239,8 +1335,12 @@ test("force reset refuses work reserved by a different session", async () => {
       presentations: [],
     };
     await writeRuntimeState(runtimeFile(values.home), state);
-    const taskPath = join(values.home, "tasks", "reset-task.json");
-    const before = await readFile(taskPath, "utf8");
+    const store = createTaskStore({
+      directory: join(values.home, "tasks"),
+      clock: () => new Date().toISOString(),
+      idFactory: () => "reset-task",
+    });
+    const before = await store.read("reset-task");
     const runner = nativeResetRunner([{ record: values.recordA, agentStatus: "working" }]);
 
     await expect(
@@ -1252,7 +1352,7 @@ test("force reset refuses work reserved by a different session", async () => {
       }),
     ).rejects.toThrow();
 
-    expect(await readFile(taskPath, "utf8")).toBe(before);
+    expect(await store.read("reset-task")).toEqual(before);
     expect(await readRuntimeState(runtimeFile(values.home))).toEqual(state);
     expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
   } finally {
@@ -1467,12 +1567,42 @@ test("force reset reaps detached validation commands before closing their pane",
     await saveCoordinatorRecord(values.home, values.recordA);
     const worker: Endpoint = { ...endpoint("tandem", "validation-pane"), role: "implementer" };
     await seedTask(values.home, values.repoA, "scout", [worker]);
+    const store = createTaskStore({
+      directory: join(values.home, "tasks"),
+      clock: () => new Date().toISOString(),
+      idFactory: () => "reset-task",
+    });
+    const task = await store.read("reset-task");
+    if (task === undefined) throw new Error("missing validation fixture task");
+    await store.update(task.id, task.revision, (current) => ({
+      ...current,
+      stage: "validating",
+      revision: current.revision + 1,
+    }));
+    const operation = {
+      schemaVersion: 1 as const,
+      id: "reset-operation",
+      taskId: "reset-task",
+      kind: "validation" as const,
+      role: "validation" as const,
+      generation: 0,
+      inputHead: "abc123",
+      policyDigest: "reset-policy",
+      instructionRevision: 0,
+      jobId: "reset-job",
+      phase: "running" as const,
+      fencingRevision: 1,
+      claimOwner: "reset-test",
+      createdAt: "2030-01-02T03:04:05.000Z",
+      effects: [],
+    };
     const job = {
       ...runtimeWorkerJob(values),
+      operationId: operation.id,
       kind: "validation" as const,
       role: "validation" as const,
       endpoint: worker,
-      head: "abc123",
+      head: operation.inputHead,
     };
     await mkdir(dirname(job.jobPath), { recursive: true });
     const pidPath = join(dirname(job.jobPath), "command.pid");
@@ -1482,11 +1612,18 @@ test("force reset reaps detached validation commands before closing their pane",
         schemaVersion: 1,
         id: job.id,
         taskId: job.taskId,
-        generation: 0,
+        generation: job.generation,
         repoPath: job.cwd,
         head: job.head,
         surfaces: ["example.ts"],
         resultPath: job.resultPath,
+        execution: {
+          schemaVersion: 1,
+          home: values.home,
+          operationId: operation.id,
+          fencingRevision: operation.fencingRevision,
+          claimOwner: operation.claimOwner,
+        },
         commands: [
           {
             name: "owned validation command",
@@ -1503,7 +1640,7 @@ test("force reset reaps detached validation commands before closing their pane",
     );
     await writeRuntimeState(runtimeFile(values.home), {
       schemaVersion: 1,
-      tasks: [{ ...runtimeTask(values), endpoints: [worker], jobs: [job] }],
+      tasks: [{ ...runtimeTask(values), endpoints: [worker], operation, jobs: [job] }],
       presentations: [],
     });
     const workerPath = fileURLToPath(new URL("../../src/validation-worker.ts", import.meta.url));
@@ -1575,3 +1712,173 @@ test("force reset reaps detached validation commands before closing their pane",
     await cleanup(values.root);
   }
 }, 10_000);
+
+test("coordinator source resolution fetches origin/main before selecting a new revision", async () => {
+  const calls: CommandRequest[] = [];
+  const run: CommandRunner = async (request) => {
+    calls.push(request);
+    if (request.argv.slice(3).join(" ") === "remote") return result("origin\n");
+    if (request.argv.slice(3).join(" ") === "fetch origin refs/heads/main:refs/remotes/origin/main")
+      return result();
+    if (
+      request.argv.slice(3).join(" ") === "rev-parse --verify refs/remotes/origin/main^{commit}"
+    ) {
+      return result("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n");
+    }
+    throw new Error(`unexpected command ${request.argv.join(" ")}`);
+  };
+
+  await expect(resolveCoordinatorSourceHead(run, "/repo")).resolves.toEqual({
+    head: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    localOnly: false,
+  });
+  expect(calls.map((request) => request.argv.slice(3))).toEqual([
+    ["remote"],
+    ["fetch", "origin", "refs/heads/main:refs/remotes/origin/main"],
+    ["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"],
+  ]);
+});
+
+test("coordinator source resolution reports repositories without origin as explicitly local-only", async () => {
+  const calls: CommandRequest[] = [];
+  const run: CommandRunner = async (request) => {
+    calls.push(request);
+    if (request.argv.slice(3).join(" ") === "remote") return result("\n");
+    if (request.argv.slice(3).join(" ") === "rev-parse HEAD") {
+      return result("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+    }
+    throw new Error(`unexpected command ${request.argv.join(" ")}`);
+  };
+
+  await expect(resolveCoordinatorSourceHead(run, "/repo")).resolves.toEqual({
+    head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    localOnly: true,
+  });
+  expect(calls.map((request) => request.argv.slice(3))).toEqual([
+    ["remote"],
+    ["rev-parse", "HEAD"],
+  ]);
+});
+
+test("coordinator source resolution fails closed when configured origin/main cannot be fetched", async () => {
+  const run: CommandRunner = async (request) => {
+    if (request.argv.slice(3).join(" ") === "remote") return result("origin\n");
+    if (
+      request.argv.slice(3).join(" ") === "fetch origin refs/heads/main:refs/remotes/origin/main"
+    ) {
+      return result("", 1, "remote unavailable");
+    }
+    throw new Error(`unexpected command ${request.argv.join(" ")}`);
+  };
+
+  await expect(resolveCoordinatorSourceHead(run, "/repo")).rejects.toThrow(
+    "git fetch origin/main failed",
+  );
+});
+
+test("persists source refresh intent before switching and recovers an interrupted checkout", async () => {
+  const setup = await sourceRefreshFixture();
+  const { values, sourceHeadA, sourceHeadB } = setup;
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    let interruptAfterSwitch = true;
+    const runner = sourceRefreshRunner(values.recordA, async () => {
+      if (interruptAfterSwitch) {
+        interruptAfterSwitch = false;
+        throw new Error("simulated interruption after checkout switch");
+      }
+    });
+    const input = {
+      home: values.home,
+      sessionId: "tandem",
+      repoPath: values.repoA,
+      sourceRepoPath: values.worktreeA,
+      run: runner.run,
+    };
+
+    await expect(refreshCoordinatorSource(input)).rejects.toThrow(
+      "simulated interruption after checkout switch",
+    );
+    expect(await runGitFixtureCommand(values.worktreeA, ["rev-parse", "HEAD"])).toBe(sourceHeadB);
+    expect(await runGitFixtureCommand(values.repoA, ["rev-parse", "HEAD"])).toBe(sourceHeadA);
+    const interrupted = await listCoordinatorRecords(values.home, "tandem");
+    expect(interrupted).toEqual([
+      {
+        ...values.recordA,
+        pendingSourceRefresh: {
+          leaseId: values.recordA.worktree.leaseId,
+          leaseHolder: values.recordA.worktree.leaseHolder,
+          fromHead: sourceHeadA,
+          toHead: sourceHeadB,
+        },
+      },
+    ]);
+
+    await expect(refreshCoordinatorSource(input)).resolves.toEqual({
+      head: sourceHeadB,
+      localOnly: false,
+      previousHead: sourceHeadB,
+      changed: false,
+    });
+    expect(await runGitFixtureCommand(values.worktreeA, ["rev-parse", "HEAD"])).toBe(sourceHeadB);
+    expect(await runGitFixtureCommand(values.worktreeA, ["status", "--porcelain"])).toBe("");
+    expect(await runGitFixtureCommand(values.repoA, ["rev-parse", "HEAD"])).toBe(sourceHeadA);
+    expect(await listCoordinatorRecords(values.home, "tandem")).toEqual([
+      {
+        ...values.recordA,
+        worktree: { ...values.recordA.worktree, baseHead: sourceHeadB },
+      },
+    ]);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("refuses a dirty owned source checkout without discarding its file or lease", async () => {
+  const setup = await sourceRefreshFixture();
+  const { values, sourceHeadA } = setup;
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    const dirtyFile = join(values.worktreeA, "keep-me.txt");
+    await writeFile(dirtyFile, "do not discard\n");
+    const runner = sourceRefreshRunner(values.recordA);
+
+    await expect(
+      refreshCoordinatorSource({
+        home: values.home,
+        sessionId: "tandem",
+        repoPath: values.repoA,
+        sourceRepoPath: values.worktreeA,
+        run: runner.run,
+      }),
+    ).rejects.toThrow("is dirty or has unmerged paths");
+    expect(await readFile(dirtyFile, "utf8")).toBe("do not discard\n");
+    expect(await runGitFixtureCommand(values.worktreeA, ["rev-parse", "HEAD"])).toBe(sourceHeadA);
+    expect(await listCoordinatorRecords(values.home, "tandem")).toEqual([values.recordA]);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("refuses a clean owned checkout when the requested source path mismatches its lease", async () => {
+  const setup = await sourceRefreshFixture();
+  const { values, sourceHeadA } = setup;
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    const runner = sourceRefreshRunner(values.recordA);
+
+    await expect(
+      refreshCoordinatorSource({
+        home: values.home,
+        sessionId: "tandem",
+        repoPath: values.repoA,
+        sourceRepoPath: values.worktreeB,
+        run: runner.run,
+      }),
+    ).rejects.toThrow("does not match expected source checkout");
+    expect(await runGitFixtureCommand(values.worktreeA, ["rev-parse", "HEAD"])).toBe(sourceHeadA);
+    expect(await listCoordinatorRecords(values.home, "tandem")).toEqual([values.recordA]);
+  } finally {
+    await cleanup(values.root);
+  }
+});

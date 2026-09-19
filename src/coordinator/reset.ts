@@ -398,7 +398,7 @@ async function forceResetCoordinators(
   home: string,
   sessionId: string,
   repoPaths: readonly string[],
-  store: TaskStoreTransaction,
+  store: TaskStore,
   tasks: readonly TaskRecord[],
   runtimeByTaskId: ReadonlyMap<string, RuntimeTaskState>,
   selectedTaskIds: ReadonlySet<string>,
@@ -623,65 +623,67 @@ async function forceResetCoordinators(
       await writeRuntimeState(runtimeFile(home), currentState);
     }
 
-    const clock = () => new Date().toISOString();
-    for (const task of tasks) {
-      if (!selectedTaskIds.has(task.id)) continue;
-      const runtime = runtimeByTaskId.get(task.id);
-      if (taskIdsToCancel.has(task.id)) {
-        const nextTask = transitionTask(
-          task,
-          { type: "cancel", reason: "force reset" },
-          forceTaskContext(),
-        );
-        await store.update(task.id, task.revision, () => nextTask);
-        cancelledTaskIds.push(task.id);
+    await store.exclusive(async (transaction) => {
+      const clock = () => new Date().toISOString();
+      for (const task of tasks) {
+        if (!selectedTaskIds.has(task.id)) continue;
+        const runtime = runtimeByTaskId.get(task.id);
+        if (taskIdsToCancel.has(task.id)) {
+          const nextTask = transitionTask(
+            task,
+            { type: "cancel", reason: "force reset" },
+            forceTaskContext(),
+          );
+          await transaction.update(task.id, task.revision, () => nextTask);
+          cancelledTaskIds.push(task.id);
+        }
+        if (runtime !== undefined) {
+          currentState = markForceTaskRuntime(currentState, task, stoppedEndpointKeys, clock);
+        }
       }
-      if (runtime !== undefined) {
-        currentState = markForceTaskRuntime(currentState, task, stoppedEndpointKeys, clock);
-      }
-    }
-    for (const presentation of selectedPresentations) {
-      currentState = replaceRuntimePresentation(currentState, presentation.id, (current) => {
-        const {
-          endpoint: _endpoint,
-          endpointLaunch: _endpointLaunch,
-          ...withoutTransient
-        } = current;
-        const reservation =
-          current.reservation === undefined
-            ? undefined
-            : { ...current.reservation, phase: "released" as const, releasedAt: clock() };
-        const job =
-          current.job.phase === "reserved" ||
-          current.job.phase === "launching" ||
-          current.job.phase === "running"
-            ? (() => {
-                const { endpoint: _jobEndpoint, ...withoutEndpoint } = current.job;
-                return {
-                  ...withoutEndpoint,
-                  phase: "failed" as const,
-                  error: "cancelled by force reset",
-                };
-              })()
-            : current.job;
-        return {
-          ...withoutTransient,
-          ...(reservation === undefined ? {} : { reservation }),
-          job,
-          lastError: "cancelled by force reset",
-        };
-      });
-      const record = await readPresentationRecord(presentation.recordPath);
-      if (record.status !== "ended" && record.status !== "failed") {
-        await writeJsonAtomically(presentation.recordPath, {
-          ...record,
-          status: "failed",
-          error: "cancelled by force reset",
-          updatedAt: clock(),
+      for (const presentation of selectedPresentations) {
+        currentState = replaceRuntimePresentation(currentState, presentation.id, (current) => {
+          const {
+            endpoint: _endpoint,
+            endpointLaunch: _endpointLaunch,
+            ...withoutTransient
+          } = current;
+          const reservation =
+            current.reservation === undefined
+              ? undefined
+              : { ...current.reservation, phase: "released" as const, releasedAt: clock() };
+          const job =
+            current.job.phase === "reserved" ||
+            current.job.phase === "launching" ||
+            current.job.phase === "running"
+              ? (() => {
+                  const { endpoint: _jobEndpoint, ...withoutEndpoint } = current.job;
+                  return {
+                    ...withoutEndpoint,
+                    phase: "failed" as const,
+                    error: "cancelled by force reset",
+                  };
+                })()
+              : current.job;
+          return {
+            ...withoutTransient,
+            ...(reservation === undefined ? {} : { reservation }),
+            job,
+            lastError: "cancelled by force reset",
+          };
         });
+        const record = await readPresentationRecord(presentation.recordPath);
+        if (record.status !== "ended" && record.status !== "failed") {
+          await writeJsonAtomically(presentation.recordPath, {
+            ...record,
+            status: "failed",
+            error: "cancelled by force reset",
+            updatedAt: clock(),
+          });
+        }
       }
-    }
-    await writeRuntimeState(runtimeFile(home), currentState);
+      await writeRuntimeState(runtimeFile(home), currentState);
+    });
 
     for (const record of liveRecords) {
       const latest = await findResetCoordinator(run, {
@@ -727,12 +729,13 @@ async function resetCoordinatorsUnlocked(
   home: string,
   sessionId: string,
   repoPaths: readonly string[],
-  store: TaskStoreTransaction,
+  store: TaskStore,
+  transaction: TaskStoreTransaction,
   force: boolean,
   lockedPresentationPaths?: ReadonlySet<string>,
 ): Promise<readonly CoordinatorRecord[]> {
   await listCoordinatorRecords(home, sessionId);
-  const tasks = await store.list();
+  const tasks = await transaction.list();
   const state: RuntimeState = await readRuntimeState(runtimeFile(home));
   const tasksById = new Map<string, TaskRecord>();
   const repositoryCache = new Map<string, Promise<string>>();
@@ -921,7 +924,7 @@ async function withForcePresentationLocks<Result>(
   store: TaskStore,
   operation: (paths: ReadonlySet<string>) => Promise<Result>,
 ): Promise<Result> {
-  const paths = await store.exclusive(async (transaction) => {
+  const paths = await store.serialized(async (transaction) => {
     const selected = new Set<string>();
     for (const task of await transaction.list()) {
       if (repoPaths.includes(await canonicalPath(task.repoPath, "task.repoPath")))
@@ -983,13 +986,22 @@ export async function resetCoordinators(
     });
     if (input.force === true) {
       return withForcePresentationLocks(home, repoPaths, store, (paths) =>
-        store.exclusive((transaction) =>
-          resetCoordinatorsUnlocked(run, home, sessionId, repoPaths, transaction, true, paths),
+        store.serialized((transaction) =>
+          resetCoordinatorsUnlocked(
+            run,
+            home,
+            sessionId,
+            repoPaths,
+            store,
+            transaction,
+            true,
+            paths,
+          ),
         ),
       );
     }
-    return store.exclusive((transaction) =>
-      resetCoordinatorsUnlocked(run, home, sessionId, repoPaths, transaction, false),
+    return store.serialized((transaction) =>
+      resetCoordinatorsUnlocked(run, home, sessionId, repoPaths, store, transaction, false),
     );
   });
 }

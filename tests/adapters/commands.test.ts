@@ -92,7 +92,8 @@ test("times out and terminates descendants in the owned process group", async ()
         "sh -c 'trap \"\" TERM; sleep 5' >/dev/null 2>&1 & survivor=$!; sleep 2 & holder=$!; printf '%s' \"$survivor\"; wait",
       ],
       cwd: process.cwd(),
-      timeoutMs: 20,
+      // Allow the shell to create descendants before exercising the deadline.
+      timeoutMs: 200,
     });
   } catch (error) {
     caught = error;

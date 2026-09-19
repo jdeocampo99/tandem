@@ -36,7 +36,7 @@ const ROOT_GUIDANCE_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
 const CENTRAL_REPOSITORY_DIRECTORY = "repositories";
 const CENTRAL_CONFIG_FILE = "config.json";
 const CENTRAL_SCHEMA_VERSION = 1;
-const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
 
 /** Reads an absolute Tandem or target-repository file; return undefined only when the optional file is absent. */
 export type PolicyTextReader = (

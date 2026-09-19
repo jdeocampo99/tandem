@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { mergePullRequest, publishPullRequest } from "../../src/adapters/git.ts";
 import {
   closeEndpoint,
@@ -422,82 +425,87 @@ test("reports workspace-order warnings separately from the endpoint", async () =
   expect(Object.hasOwn(created.endpoint, "warnings")).toBe(false);
 });
 
-test("acquires a detached Treehouse checkout and returns it only after git safety checks", async () => {
-  const runner = scriptedRunner([
-    result("[]"),
-    result(
-      JSON.stringify({
-        path: "/tmp/treehouse/worktree",
-        lease_id: "lease-1",
-        lease_holder: "tandem-1",
-        leased_at: "2030-01-02T03:04:05.000Z",
-      }),
-    ),
-    result("/tmp/repo"),
-    result("/tmp/treehouse/worktree"),
-    result("abc123"),
-    result("main"),
-    result("abc123"),
-    result(""),
-    result("abc123"),
-    result(""),
-    result("tandem/Task-Test"),
-  ]);
-  const acquired = await acquireWorktree(
-    runner.run,
-    { repo: "/tmp/repo", root: "/tmp/treehouse", tandemId: "tandem-1", taskName: "Task/Test" },
-    { realpath: async (path) => path },
-  );
+test("pins a newly acquired lease to the captured commit when the pool checkout is newer", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-treehouse-pin-"));
+  const repo = join(home, "repo");
+  const pool = join(home, "pool");
+  const slot = join(pool, "slot");
+  await mkdir(repo, { recursive: true });
+  await mkdir(pool, { recursive: true });
+  const environment = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "Tandem Test",
+    GIT_AUTHOR_EMAIL: "tandem@example.test",
+    GIT_COMMITTER_NAME: "Tandem Test",
+    GIT_COMMITTER_EMAIL: "tandem@example.test",
+  };
+  const runGit = async (args: readonly string[], cwd = repo): Promise<string> => {
+    const child = Bun.spawn(["git", ...args], {
+      cwd,
+      env: environment,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    if (code !== 0) throw new Error(`git ${args.join(" ")} failed: ${stderr}`);
+    return stdout.trim();
+  };
+  try {
+    await runGit(["init", "-b", "main"]);
+    await writeFile(join(repo, "source.txt"), "A\n");
+    await runGit(["add", "source.txt"]);
+    await runGit(["commit", "-m", "A"]);
+    const sourceHead = await runGit(["rev-parse", "HEAD"]);
+    await writeFile(join(repo, "source.txt"), "B\n");
+    await runGit(["commit", "-am", "B"]);
+    const poolHead = await runGit(["rev-parse", "HEAD"]);
+    await runGit(["worktree", "add", "--detach", slot, poolHead]);
 
-  expect(acquired).toEqual(lease);
-  expect(runner.calls[1]?.argv).toEqual([
-    "treehouse",
-    "--root",
-    "/tmp/treehouse",
-    "get",
-    "--lease",
-    "--lease-holder",
-    "tandem-1",
-    "--no-fetch",
-    "--json",
-  ]);
+    const run: CommandRunner = async (request) => {
+      if (request.argv[0] === "treehouse" && request.argv.includes("status")) {
+        return result("[]");
+      }
+      if (request.argv[0] === "treehouse" && request.argv.includes("get")) {
+        return result(
+          JSON.stringify({
+            path: slot,
+            lease_id: "lease-pinned",
+            lease_holder: "tandem-pinned",
+            leased_at: "2030-01-02T03:04:05.000Z",
+          }),
+        );
+      }
+      const child = Bun.spawn([...request.argv], {
+        cwd: request.cwd,
+        env: environment,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      return { stdout, stderr, code };
+    };
 
-  const releaseRunner = scriptedRunner([
-    result(
-      JSON.stringify([
-        {
-          path: lease.path,
-          lease_id: lease.leaseId,
-          lease_holder: lease.leaseHolder,
-          leased_at: lease.leasedAt,
-        },
-      ]),
-    ),
-    result(lease.branch),
-    result(""),
-    result(""),
-    result(lease.baseHead),
-    result(lease.baseHead),
-    result(""),
-    result(""),
-  ]);
-  const released = await releaseWorktree(releaseRunner.run, {
-    repo: "/tmp/repo",
-    lease,
-    childWorkerStopped: true,
-  });
-  expect(released.released).toBe(true);
-  expect(releaseRunner.calls.at(-1)?.argv).toEqual([
-    "treehouse",
-    "--root",
-    lease.root,
-    "return",
-    lease.path,
-    "--if-lease-holder",
-    lease.leaseHolder,
-    "--if-lease-id",
-    lease.leaseId,
-  ]);
+    const acquired = await acquireWorktree(run, {
+      repo,
+      root: pool,
+      tandemId: "tandem-pinned",
+      taskName: "Pinned",
+      sourceHead,
+    });
+    expect(acquired.baseHead).toBe(sourceHead);
+    expect(await runGit(["rev-parse", "HEAD"], slot)).toBe(sourceHead);
+    expect(await readFile(join(slot, "source.txt"), "utf8")).toBe("A\n");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test("preserves acquired lease identity when post-acquire validation fails", async () => {
@@ -518,7 +526,13 @@ test("preserves acquired lease identity when post-acquire validation fails", asy
   try {
     await acquireWorktree(
       runner.run,
-      { repo: "/tmp/repo", root: lease.root, tandemId: lease.leaseHolder, taskName: lease.name },
+      {
+        repo: "/tmp/repo",
+        root: lease.root,
+        tandemId: lease.leaseHolder,
+        taskName: lease.name,
+        sourceHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
       { realpath: async (path) => path },
     );
   } catch (error) {

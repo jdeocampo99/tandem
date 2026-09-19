@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { IdFactory } from "../contracts.ts";
 import type { TaskStore } from "../tasks/store.ts";
+import {
+  readRuntimePayload,
+  runtimeStateWasInitialized,
+  withStateTransaction,
+  writeRuntimePayload,
+} from "./database.ts";
 import { absolutePath, emptyRuntimeState, parseRuntimeState, type RuntimeState } from "./schema.ts";
 
 export type RuntimeMutation = (state: RuntimeState) => RuntimeState | PromiseLike<RuntimeState>;
@@ -33,34 +39,29 @@ export function taskSessionDirectory(home: string, taskId: string): string {
   return join(resolve(home), "sessions", taskId);
 }
 
+function runtimeHome(path: string): string {
+  return dirname(absolutePath(path, "runtime path"));
+}
+
 export async function readRuntimeState(path: string): Promise<RuntimeState> {
   const runtimePath = absolutePath(path, "runtime path");
-  let contents: string;
-  try {
-    contents = await readFile(runtimePath, "utf8");
-  } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      !Array.isArray(error) &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
+  const home = dirname(runtimePath);
+  return withStateTransaction(home, (db) => {
+    const payload = readRuntimePayload(db);
+    if (payload === undefined) {
+      if (runtimeStateWasInitialized(db)) {
+        throw new Error(`runtime state at ${runtimePath} is missing from authoritative database`);
+      }
       return emptyRuntimeState();
     }
-    throw new Error(`could not read runtime state at ${runtimePath}: ${describeFailure(error)}`, {
-      cause: error,
-    });
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(contents) as unknown;
-  } catch (error) {
-    throw new Error(`runtime state at ${runtimePath} is invalid JSON: ${describeFailure(error)}`, {
-      cause: error,
-    });
-  }
-  return parseRuntimeState(parsed, runtimePath);
+    try {
+      return parseRuntimeState(payload, runtimePath);
+    } catch (error) {
+      throw new Error(`runtime state at ${runtimePath} is invalid: ${describeFailure(error)}`, {
+        cause: error,
+      });
+    }
+  });
 }
 
 export async function writeJsonAtomically(path: string, value: unknown): Promise<void> {
@@ -96,7 +97,10 @@ export async function writeTextAtomically(path: string, value: string): Promise<
 
 export async function writeRuntimeState(path: string, state: RuntimeState): Promise<void> {
   const parsed = parseRuntimeState(state, "runtime state");
-  await writeJsonAtomically(path, parsed);
+  const home = runtimeHome(path);
+  await withStateTransaction(home, (db) => {
+    writeRuntimePayload(db, parsed);
+  });
 }
 
 export async function updateRuntimeState(
@@ -112,6 +116,7 @@ export async function updateRuntimeState(
     return next;
   });
 }
+
 export function defaultIdFactory(): IdFactory {
   return () => randomUUID();
 }

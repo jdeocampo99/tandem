@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,7 @@ import type {
   TaskCommunicationView,
   TaskRecord,
 } from "../contracts.ts";
+import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { describeTaskPr, type PrSummary } from "../delivery/evidence.ts";
 import { mergeReviewedTask, publishReviewedTask } from "../delivery/pull-requests.ts";
 import { maintainPool } from "../pool/maintenance.ts";
@@ -46,6 +48,7 @@ import {
   taskRuntime,
   unreleasedReservation,
 } from "../runtime/activity.ts";
+import { withStateLock } from "../runtime/database.ts";
 import {
   defaultIdFactory,
   readRuntimeState,
@@ -57,30 +60,32 @@ import {
 } from "../runtime/persistence.ts";
 import type {
   DurableJob,
+  DurableReservation,
   RuntimePresentation,
   RuntimeState,
   RuntimeTaskState,
 } from "../runtime/schema.ts";
 import { TaskControlWorkflow } from "../tasks/control.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
+import { transitionTask } from "../tasks/lifecycle.ts";
 import { createTaskStore, type TaskStore, transitionStoredTask } from "../tasks/store.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
-import { WorkerWorkflow } from "../workers/workflow.ts";
+import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
 import { createJevShadowEvaluator } from "./jev.ts";
 import {
   absoluteDirectory,
   currentWriter,
-  DEFAULT_STARTUP_GRACE_MS,
   describeError,
+  durableOperation,
   isMissing,
   isMissingEndpoint,
-  isOlderThan,
   isRecord,
   isTerminalTask,
   makeDurableJob,
   positiveInteger,
   readTextList,
   replaceRuntimeTask,
+  serializedIdentity,
   singleLine,
   taskInputFor,
   taskNameFor,
@@ -101,6 +106,12 @@ export type ModelOptionsResult = Readonly<{
   readonly modelSettings: ModelSettings;
   readonly availableModels: readonly OmpModelRecord[];
 }>;
+export type SourceRefreshResult = Readonly<{
+  readonly head: string;
+  readonly previousHead: string;
+  readonly changed: boolean;
+  readonly localOnly: boolean;
+}>;
 export type TandemServiceOptions = Readonly<{
   readonly home: string;
   readonly sessionId: string;
@@ -110,6 +121,8 @@ export type TandemServiceOptions = Readonly<{
     readonly repoPath: string;
     readonly path: string;
   }>;
+  /** Callback runs under coordinator launch-lock then task-store serialization; it must not reacquire the launch lock. */
+  readonly refreshSource?: () => Promise<SourceRefreshResult>;
   readonly workerTimeoutMs?: number;
   readonly run?: CommandRunner;
   readonly clock?: Clock;
@@ -120,12 +133,10 @@ export type TandemService = Readonly<{
   readonly onboard: (repoPath: string, write?: boolean) => Promise<OnboardRepoResult>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
   readonly configureModels: (
-    input: Readonly<{
-      readonly repoPath: string;
-      readonly models: RepoPolicy["models"];
-    }>,
+    input: Readonly<{ readonly repoPath: string; readonly models: RepoPolicy["models"] }>,
   ) => Promise<ModelSettings>;
   readonly create: (input: CreateTaskRequest) => Promise<TaskRecord>;
+  readonly refreshSource?: () => Promise<SourceRefreshResult | undefined>;
   readonly list: () => Promise<readonly TaskRecord[]>;
   readonly get: (id: string) => Promise<TaskRecord>;
   readonly approve: (id: string) => Promise<TaskRecord>;
@@ -177,6 +188,7 @@ type ServiceDependencies = Readonly<{
         path: string;
       }>
     | undefined;
+  refreshSource: (() => Promise<SourceRefreshResult>) | undefined;
   workerTimeoutMs: number | undefined;
   run: CommandRunner;
   clock: Clock;
@@ -195,6 +207,43 @@ function assertArtifacts(artifacts: unknown): readonly string[] {
   return readTextList(artifacts, "artifacts");
 }
 
+function operationClaim(operation: RuntimeTaskState["operation"]): OperationClaim | undefined {
+  return operation === undefined
+    ? undefined
+    : {
+        id: operation.id,
+        claimOwner: operation.claimOwner,
+        fencingRevision: operation.fencingRevision,
+      };
+}
+
+function sameOperationClaim(
+  operation: RuntimeTaskState["operation"],
+  claim: OperationClaim | undefined,
+): boolean {
+  return claim === undefined
+    ? operation === undefined
+    : operation?.id === claim.id &&
+        operation.claimOwner === claim.claimOwner &&
+        operation.fencingRevision === claim.fencingRevision;
+}
+
+function sameReservationIdentity(
+  left: RuntimeTaskState["reservation"],
+  right: DurableReservation | undefined,
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.id === right.id &&
+    left.operationId === right.operationId &&
+    left.ownerSessionId === right.ownerSessionId &&
+    left.phase === right.phase &&
+    left.createdAt === right.createdAt &&
+    left.releasedAt === right.releasedAt
+  );
+}
+
 class TandemController {
   readonly #deps: ServiceDependencies;
   readonly #source: SourceInboxWorkflow;
@@ -204,8 +253,13 @@ class TandemController {
   readonly #control: TaskControlWorkflow;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
+  #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
+  #sourceRefreshError: string | undefined;
+  #sourceReadyHead: string | undefined;
+  #sourceReady = true;
   constructor(deps: ServiceDependencies) {
     this.#deps = deps;
+    this.#sourceReady = deps.refreshSource === undefined;
     this.#source = new SourceInboxWorkflow({
       home: deps.home,
       sourceWorkspace: deps.sourceWorkspace,
@@ -223,8 +277,6 @@ class TandemController {
       idFactory: deps.idFactory,
       readTask: (taskId) => this.get(taskId),
       taskInScope: (task) => this.#source.taskInScope(task),
-      failPresentation: (id, reason, releaseReservation, expectedJobId) =>
-        this.#presentationRuntime.failPresentation(id, reason, releaseReservation, expectedJobId),
     });
     this.#presentationRuntime = new PresentationRuntimeWorkflow({
       sessionId: deps.sessionId,
@@ -274,6 +326,7 @@ class TandemController {
       }),
     });
     this.#control = new TaskControlWorkflow({
+      home: deps.home,
       store: deps.store,
       runtimePath: deps.runtimePath,
       sessionId: deps.sessionId,
@@ -290,7 +343,7 @@ class TandemController {
       blockTask: (taskId, reason) => this.blockTask(taskId, reason),
       publishTaskInbox: (task) => this.#source.publishTaskInbox(task),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
-      saveEndpoint: (taskId, endpoint) => this.#worker.saveEndpoint(taskId, endpoint),
+      saveEndpoint: (taskId, endpoint, claim) => this.#worker.saveEndpoint(taskId, endpoint, claim),
     });
   }
 
@@ -300,6 +353,9 @@ class TandemController {
       models: (repoPath) => this.models(repoPath),
       configureModels: (input) => this.configureModels(input),
       create: (input) => this.create(input),
+      ...(this.#deps.refreshSource === undefined
+        ? {}
+        : { refreshSource: () => this.refreshSource() }),
       list: () => this.list(),
       get: (id) => this.get(id),
       approve: (id) => this.approve(id),
@@ -342,6 +398,45 @@ class TandemController {
     return { modelSettings, availableModels };
   }
 
+  async refreshSource(): Promise<SourceRefreshResult | undefined> {
+    const refresh = this.#deps.refreshSource;
+    if (refresh === undefined) return undefined;
+    const existing = this.#sourceRefreshPromise;
+    if (existing !== undefined) return existing;
+    const currentTick = this.#tickPromise;
+    const promise = (async (): Promise<SourceRefreshResult> => {
+      if (currentTick !== undefined) await currentTick;
+      try {
+        const result = await withCoordinatorLaunchLock(this.#deps.home, this.#deps.sessionId, () =>
+          this.#deps.store.serialized(() => refresh()),
+        );
+        this.#sourceRefreshError = undefined;
+        this.#sourceReadyHead = result.head;
+        this.#sourceReady = true;
+        return result;
+      } catch (error) {
+        this.#sourceReady = false;
+        this.#sourceRefreshError = error instanceof Error ? error.message : String(error);
+        throw error;
+      }
+    })();
+    this.#sourceRefreshPromise = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.#sourceRefreshPromise === promise) this.#sourceRefreshPromise = undefined;
+    }
+  }
+  private async ensureSourceReady(): Promise<void> {
+    const refresh = this.#sourceRefreshPromise;
+    if (refresh !== undefined) await refresh.catch(() => undefined);
+    if (!this.#sourceReady) {
+      throw new Error(
+        `coordinator source is not ready${this.#sourceRefreshError === undefined ? "" : `: ${this.#sourceRefreshError}`}`,
+      );
+    }
+  }
+
   async configureModels(
     input: Readonly<{
       readonly repoPath: string;
@@ -353,25 +448,39 @@ class TandemController {
     const models = parseModelAssignments(input.models);
     const availableModels = await listOmpModels(this.#deps.run, { cwd: source.checkoutPath });
     validateModelAssignments(models, availableModels);
+
     return writeModelSettings({
       repoPath: source.repoPath,
       home: this.#deps.home,
       models,
     });
   }
-
   async create(input: CreateTaskRequest): Promise<TaskRecord> {
+    await this.ensureSourceReady();
     if (!isRecord(input)) throw new TypeError("create input must be an object");
-    const source = await mapTaskSource(this.#deps.run, input.repoPath, this.#deps.sourceWorkspace);
-    const policy = await resolveRepoPolicy({
-      repoPath: source.repoPath,
-      home: this.#deps.home,
-      ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
-    });
-    const checkpoint = await readCheckpoint(this.#deps.run, { repo: source.checkoutPath });
-    const taskInput = taskInputFor(input, source.repoPath, policy);
-    const id = singleLine(this.#deps.idFactory(), "task id");
-    const task = await this.#deps.store.exclusive(async (store) => {
+    return this.#deps.store.exclusive(async (store) => {
+      const source = await mapTaskSource(
+        this.#deps.run,
+        input.repoPath,
+        this.#deps.sourceWorkspace,
+      );
+      const policy = await resolveRepoPolicy({
+        repoPath: source.repoPath,
+        home: this.#deps.home,
+        ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
+      });
+      const taskInput = taskInputFor(input, source.repoPath, policy);
+      const checkpoint = await readCheckpoint(this.#deps.run, { repo: source.checkoutPath });
+      const id = singleLine(this.#deps.idFactory(), "task id");
+      if (
+        this.#deps.refreshSource !== undefined &&
+        (this.#sourceReadyHead === undefined || checkpoint.head !== this.#sourceReadyHead)
+      ) {
+        this.#sourceReady = false;
+        throw new Error(
+          `coordinator source changed after refresh (expected ${this.#sourceReadyHead ?? "a successful refresh"}, observed ${checkpoint.head}); refresh before creating new work`,
+        );
+      }
       const created = await store.create({ ...taskInput, id });
       const current = await readRuntimeState(this.#deps.runtimePath);
       const runtimeTask: RuntimeTaskState = {
@@ -395,7 +504,6 @@ class TandemController {
       });
       return created;
     });
-    return task;
   }
 
   async list(): Promise<readonly TaskRecord[]> {
@@ -425,6 +533,8 @@ class TandemController {
   }
 
   async tick(): Promise<readonly TaskRecord[]> {
+    const sourceRefresh = this.#sourceRefreshPromise;
+    if (sourceRefresh !== undefined) await sourceRefresh.catch(() => undefined);
     const existing = this.#tickPromise;
     if (existing !== undefined) return existing;
     const current = this.advance().finally(() => {
@@ -560,7 +670,7 @@ class TandemController {
     },
   ): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("publish input must be an object");
-    return this.#deps.store.exclusive(async (store) => {
+    const prepared = await this.#deps.store.serialized(async (store) => {
       const task = await store.read(id);
       if (task === undefined || !(await this.#source.taskInScope(task))) {
         throw new Error(`Task ${id} was not found`);
@@ -574,9 +684,20 @@ class TandemController {
         approved: input.approved,
         run: this.#deps.run,
       });
-      return store.update(task.id, task.revision, (current) => ({
-        ...current,
-        revision: current.revision + 1,
+      return { task, metadata };
+    });
+    const { task, metadata } = prepared;
+    return this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(id);
+      if (current === undefined || !(await this.#source.taskInScope(current))) {
+        throw new Error(`Task ${id} was not found`);
+      }
+      if (current.revision !== task.revision) {
+        throw new Error(`Task ${id} changed while publishing; remote publication is retained`);
+      }
+      return store.update(current.id, current.revision, (candidate) => ({
+        ...candidate,
+        revision: candidate.revision + 1,
         updatedAt: this.#deps.clock(),
         pullRequest: metadata,
       }));
@@ -693,12 +814,46 @@ class TandemController {
       if (presentationRuntime(state, prepared.record.id) !== undefined) {
         throw new Error(`presentation ${prepared.record.id} already exists`);
       }
+      const taskRuntimeState = taskRuntime(state, task.id);
+      if (taskRuntimeState === undefined) {
+        throw new Error(`runtime task ${task.id} is missing`);
+      }
+      const operationId = singleLine(this.#deps.idFactory(), "presentation operation id");
+      const operation = durableOperation(
+        operationId,
+        task.id,
+        "presentation",
+        "presentation",
+        prepared.record.generation,
+        task.reviewHead ?? taskRuntimeState.sourceCheckpoint.head,
+        createHash("sha256").update(serializedIdentity(task.policy, "task policy")).digest("hex"),
+        task.communication?.revision ?? 0,
+        durableJob.id,
+        this.#worker.claimOwner,
+        this.#deps.clock(),
+      );
+      const linkedJob = { ...durableJob, operationId: operation.id };
+      const workerSpec = JSON.parse(await readFile(prepared.record.jobPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      await writeJsonAtomically(prepared.record.jobPath, {
+        ...workerSpec,
+        execution: {
+          schemaVersion: 1,
+          home: this.#deps.home,
+          operationId: operation.id,
+          fencingRevision: operation.fencingRevision,
+          claimOwner: operation.claimOwner,
+        },
+      });
       const next: RuntimePresentation = {
         schemaVersion: 1,
         id: prepared.record.id,
         taskId: task.id,
         recordPath,
-        job: durableJob,
+        operation,
+        job: linkedJob,
       };
       await writeRuntimeState(this.#deps.runtimePath, {
         ...state,
@@ -737,16 +892,24 @@ class TandemController {
   private async advance(): Promise<readonly TaskRecord[]> {
     const tasks = await this.#source.scopedTasks();
     for (const task of tasks) {
+      let capturedRuntime: RuntimeTaskState | undefined;
+      let captureSucceeded = false;
+      try {
+        capturedRuntime = await this.runtimeFor(task.id);
+        captureSucceeded = true;
+      } catch {
+        // An unavailable pre-reconcile snapshot is an ownership uncertainty.
+      }
       try {
         await this.reconcileTask(task);
       } catch (error) {
-        await this.blockTask(task.id, `scheduler failure: ${describeError(error)}`);
-      }
-      try {
-        const current = await this.get(task.id);
-        if (isTerminalTask(current)) await this.cleanupTerminalTask(current);
-      } catch (error) {
-        await this.setRuntimeError(task.id, `terminal cleanup failed: ${describeError(error)}`);
+        if (captureSucceeded) {
+          await this.blockTaskIfReconcileClaim(
+            task,
+            capturedRuntime,
+            `scheduler failure: ${describeError(error)}`,
+          );
+        }
       }
     }
     const state = await this.readState();
@@ -759,12 +922,128 @@ class TandemController {
         await this.#presentationRuntime.failPresentation(
           presentation.id,
           describeError(error),
+          {
+            jobId: presentation.job.id,
+            operationId: presentation.operation?.id,
+            fencingRevision: presentation.operation?.fencingRevision,
+            claimOwner: presentation.operation?.claimOwner,
+          },
           true,
-          presentation.job.id,
         );
       }
     }
     return this.#source.scopedTasks();
+  }
+
+  private async blockTaskIfReconcileClaim(
+    capturedTask: TaskRecord,
+    capturedRuntime: RuntimeTaskState | undefined,
+    reason: string,
+    options: Readonly<{
+      readonly runtimeError?: boolean;
+      readonly reservation?: DurableReservation;
+    }> = {},
+  ): Promise<void> {
+    const claim = operationClaim(capturedRuntime?.operation);
+    await withStateLock(this.#deps.home, async () => {
+      await this.#deps.store.exclusive(async (store) => {
+        const currentTask = await store.read(capturedTask.id);
+        if (
+          currentTask === undefined ||
+          currentTask.revision !== capturedTask.revision ||
+          currentTask.generation !== capturedTask.generation
+        ) {
+          return;
+        }
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const currentRuntime = taskRuntime(state, capturedTask.id);
+        if (
+          !sameOperationClaim(currentRuntime?.operation, claim) ||
+          (options.reservation !== undefined &&
+            !sameReservationIdentity(currentRuntime?.reservation, options.reservation))
+        ) {
+          return;
+        }
+        if (options.runtimeError === true && currentRuntime !== undefined) {
+          await writeRuntimeState(
+            this.#deps.runtimePath,
+            replaceRuntimeTask(state, capturedTask.id, (current) => ({
+              ...current,
+              lastError: reason,
+            })),
+          );
+        }
+        if (
+          currentTask.stage === "cancelled" ||
+          currentTask.stage === "completed" ||
+          currentTask.stage === "merged" ||
+          currentTask.stage === "paused" ||
+          currentTask.stage === "blocked"
+        ) {
+          return;
+        }
+        await store.update(currentTask.id, currentTask.revision, (task) =>
+          transitionTask(
+            task,
+            { type: "block", reason: text(reason, "block reason") },
+            this.context(),
+          ),
+        );
+      });
+    });
+  }
+  private async quarantineLegacyReservation(
+    capturedTask: TaskRecord,
+    reservation: DurableReservation,
+    reason: string,
+  ): Promise<void> {
+    await withStateLock(this.#deps.home, async () => {
+      await this.#deps.store.exclusive(async (store) => {
+        const currentTask = await store.read(capturedTask.id);
+        if (
+          currentTask === undefined ||
+          currentTask.revision !== capturedTask.revision ||
+          currentTask.generation !== capturedTask.generation
+        ) {
+          return;
+        }
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const currentRuntime = taskRuntime(state, capturedTask.id);
+        if (
+          currentRuntime?.operation !== undefined ||
+          !sameReservationIdentity(currentRuntime?.reservation, reservation)
+        ) {
+          return;
+        }
+        const nextRuntime = replaceRuntimeTask(state, capturedTask.id, (current) => ({
+          ...current,
+          lastError: reason,
+          legacyQuarantine: {
+            schemaVersion: 1,
+            reservationId: reservation.id,
+            reason,
+            observedAt: this.#deps.clock(),
+          },
+        }));
+        await writeRuntimeState(this.#deps.runtimePath, nextRuntime);
+        if (
+          currentTask.stage === "cancelled" ||
+          currentTask.stage === "completed" ||
+          currentTask.stage === "merged" ||
+          currentTask.stage === "paused" ||
+          currentTask.stage === "blocked"
+        ) {
+          return;
+        }
+        await store.update(currentTask.id, currentTask.revision, (task) =>
+          transitionTask(
+            task,
+            { type: "block", reason: text(reason, "block reason") },
+            this.context(),
+          ),
+        );
+      });
+    });
   }
 
   private async reconcileTask(task: TaskRecord): Promise<void> {
@@ -779,14 +1058,26 @@ class TandemController {
       return;
     }
     let runtime = loadedRuntime;
+    if (runtime.stopRequest !== undefined) {
+      await this.#control.reconcileStopRequest(task, runtime);
+      return;
+    }
+    if (isTerminalTask(task)) {
+      await this.cleanupTerminalTask(task);
+      return;
+    }
+    if (task.stage === "paused" || task.stage === "blocked") return;
+    if (
+      runtime.operation !== undefined &&
+      runtime.operation.claimOwner !== this.#worker.claimOwner
+    ) {
+      const claimed = await this.#worker.claimOperation(task.id);
+      if (claimed !== undefined) runtime = claimed;
+    }
     if (runtime.endpointLaunch !== undefined && currentWriter(runtime) === undefined) {
       const recovered = await this.#control.reconcileEndpointLaunch(task, runtime);
       if (recovered === undefined) return;
       runtime = recovered;
-    }
-    if (runtime.stopRequest !== undefined) {
-      await this.#control.reconcileStopRequest(task, runtime);
-      return;
     }
     const active = runtime.jobs.find(activeRuntimeJob);
     if (active !== undefined) {
@@ -794,27 +1085,26 @@ class TandemController {
       return;
     }
     if (unreleasedReservation(runtime.reservation)) {
+      const reconciledRuntime = runtime;
       const reservation = runtime.reservation;
-      const writer = currentWriter(runtime);
-      if (
-        reservation.ownerSessionId === this.#deps.sessionId &&
-        runtime.worktree !== undefined &&
-        writer !== undefined
-      ) {
-        if (task.stage === "queued") {
-          await this.#worker.startQueuedTask(task, { task, runtime, reservation });
-          return;
-        }
-        if (task.stage === "scouting" || task.stage === "implementing") {
-          await this.#worker.launchAgent(task, runtime, writer, workerRoleForTask(task));
-          return;
-        }
+      if (runtime.operation === undefined) {
+        const reason =
+          "legacy reservation has no durable operation; quarantined without clearing reservation or checkpoint";
+        await this.quarantineLegacyReservation(task, reservation, reason);
+        return;
       }
-      if (isOlderThan(reservation.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) {
-        await this.blockTask(
-          task.id,
-          "an owned scheduler reservation has no recoverable job intent",
-        );
+      if (reservation.operationId !== runtime.operation.id) {
+        const reason =
+          "reservation and operation identities do not match; quarantined without launch";
+        await this.blockTaskIfReconcileClaim(task, runtime, reason, {
+          runtimeError: true,
+          reservation,
+        });
+        return;
+      }
+      if (reconciledRuntime.operation !== undefined) {
+        await this.#worker.reconcileOperation(task, reconciledRuntime);
+        return;
       }
       return;
     }
@@ -982,42 +1272,56 @@ class TandemController {
   }
 
   private async cleanupTerminalTask(task: TaskRecord): Promise<void> {
-    const runtime = await this.runtimeFor(task.id);
-    if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) return;
-    if (runtime.endpointLaunch !== undefined || runtime.jobs.some(activeRuntimeJob)) return;
-    const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
-    for (const endpoint of runtime.endpoints) {
-      try {
-        const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-        if (inspection.activeWorker) return;
-        await closeEndpoint(this.#deps.run, { endpoint, cwd });
-      } catch (error) {
-        if (!isMissingEndpoint(error)) {
+    await withStateLock(this.#deps.home, async () => {
+      const current = await this.#deps.store.read(task.id);
+      if (current?.revision !== task.revision || !isTerminalTask(current)) return;
+      const state = await this.readState();
+      const runtime = taskRuntime(state, task.id);
+      if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) return;
+      if (runtime.endpointLaunch !== undefined || runtime.jobs.some(activeRuntimeJob)) return;
+      if (unreleasedReservation(runtime.reservation)) return;
+      if (
+        state.presentations.some(
+          (presentation) =>
+            presentation.taskId === task.id &&
+            (activeRuntimeJob(presentation.job) || unreleasedReservation(presentation.reservation)),
+        )
+      )
+        return;
+      const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
+      for (const endpoint of runtime.endpoints) {
+        try {
+          const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
+          if (inspection.activeWorker) return;
+          await closeEndpoint(this.#deps.run, { endpoint, cwd });
+        } catch (error) {
+          if (!isMissingEndpoint(error)) {
+            await this.setRuntimeError(
+              task.id,
+              `terminal cleanup could not close pane ${endpoint.paneId}: ${describeError(error)}`,
+            );
+            return;
+          }
+        }
+        await this.removeEndpoint(task.id, endpoint.paneId);
+      }
+      if (runtime.worktree !== undefined) {
+        try {
+          await releaseWorktree(this.#deps.run, {
+            repo: task.repoPath,
+            lease: runtime.worktree,
+            childWorkerStopped: true,
+          });
+        } catch (error) {
           await this.setRuntimeError(
             task.id,
-            `terminal cleanup could not close pane ${endpoint.paneId}: ${describeError(error)}`,
+            `terminal cleanup retained worktree: ${describeError(error)}`,
           );
           return;
         }
       }
-      await this.removeEndpoint(task.id, endpoint.paneId);
-    }
-    if (runtime.worktree !== undefined) {
-      try {
-        await releaseWorktree(this.#deps.run, {
-          repo: task.repoPath,
-          lease: runtime.worktree,
-          childWorkerStopped: true,
-        });
-      } catch (error) {
-        await this.setRuntimeError(
-          task.id,
-          `terminal cleanup retained worktree: ${describeError(error)}`,
-        );
-        return;
-      }
-    }
-    await this.removeRuntimeResources(task.id, task.revision);
+      await this.removeRuntimeResources(task.id, task.revision);
+    });
   }
 
   private async removeEndpoint(taskId: string, paneId: string): Promise<void> {
@@ -1150,6 +1454,10 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
           }
           return { repoPath, path };
         })();
+  const refreshSource = options.refreshSource === undefined ? undefined : options.refreshSource;
+  if (refreshSource !== undefined && typeof refreshSource !== "function") {
+    throw new TypeError("refreshSource must be a function");
+  }
   const workerTimeoutMs =
     options.workerTimeoutMs === undefined
       ? undefined
@@ -1169,6 +1477,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
         : singleLine(options.parentWorkspaceId, "parentWorkspaceId"),
     poolRoot,
     sourceWorkspace,
+    refreshSource,
     workerTimeoutMs,
     run,
     clock,

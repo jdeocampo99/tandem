@@ -54,6 +54,10 @@ shared Herdr session:
 tandem
 ```
 
+A normal launch also starts a stopped Herdr session; saved coordinator pane records do not require
+a reset. Use `tandem --continue` to resume saved coordinator conversations. Task state is retained
+with or without that flag.
+
 To reload the coordinator extension without canceling or resetting work, use the non-destructive
 restart from a separate normal terminal:
 
@@ -152,12 +156,12 @@ command's complete options. Home, session, and pool defaults come from `TANDEM_H
 `TANDEM_SESSION` (then Herdr's session variables), and `TANDEM_POOL_ROOT`.
 
 Each project in a launch set gets its own coordinator conversation and dedicated clean Treehouse
-source worktree pinned to that project's committed HEAD. Multiple projects share one Herdr session,
+source worktree. Fresh launches and restarts fetch and capture `origin/main`; repositories without
+an `origin` use their committed local `HEAD` explicitly. Multiple projects share one Herdr session,
 but coordinators and child-worker groups remain scoped to their original project identities. The
-original checkout may be dirty and remains untouched; coordinator source reads and delegated
-execution use the clean snapshot, while durable settings, task records, and delivery retain the
-original project identity. When several projects are opened, Tandem attaches to the shared Herdr
-session once every coordinator is ready.
+original checkout may be dirty and remains untouched; source reads and delegated execution use
+clean snapshots, while settings, task records, and delivery retain the original project identity.
+When several projects are opened, Tandem attaches once every coordinator is ready.
 
 Child agents run in real interactive OMP terminals, not JSON-log panes. Open their Herdr subtree
 to watch the work or chat directly. Completed agents stay open for read-only follow-up; their
@@ -176,9 +180,70 @@ also reflects its project's pending work and approval/blocking states. These are
 not ownership or completion evidence; durable task records remain authoritative.
 
 An explicit `tandem PATH` opens or reconnects only that project after ownership checks. Add
-`--continue` only when starting a stopped coordinator and resuming its saved conversation. An active
-coordinator remains pinned to its existing clean source even if the original project's HEAD has
-advanced; stop that coordinator and relaunch when you deliberately want a fresh source snapshot.
+`--continue` when starting a stopped coordinator and resuming its saved conversation. Before each
+planning turn, a managed coordinator refreshes its owned, clean source checkout from `origin/main`.
+New tasks capture that revision; existing tasks and workers keep their original pins and checkouts.
+Fetch or source-safety failures block new task creation rather than silently using stale source.
+Use `--restart` to reload the extension and refresh source without resetting child work.
+
+### Migrate legacy state (offline only)
+
+Current Tandem state is authoritative in `<home>/state.sqlite` (the default home is
+`~/.tandem`). Older homes may instead contain `<home>/runtime.json` and
+`<home>/tasks/*.json`; normal SQLite startup refuses to use that legacy state until it
+has been explicitly migrated. Do not run this procedure while any Tandem coordinator,
+worker, validation job, presentation, or legacy writer may still be active.
+
+Use the exact home that the coordinator uses:
+
+```sh
+# Read-only plan; do not add --yes.
+tandem migrate-state --home /absolute/path/to/tandem-home --json
+
+# Apply only after the plan is ready and all liveness/ownership checks are clear.
+tandem migrate-state --home /absolute/path/to/tandem-home --yes --json
+
+# A completed migration can be inspected without changing state.
+tandem migrate-state --home /absolute/path/to/tandem-home --json
+```
+
+The plan is read-only by default. It hashes and reports the legacy sources, checks for
+live or ambiguous native ownership, and reports incomplete reservation intents that will
+be quarantined rather than guessed or resumed. A live coordinator, active job, unresolved
+endpoint launch, or ambiguous ownership blocks the plan/apply path; stop the relevant
+Tandem/Herdr activity and plan again. Do not bypass a blocked plan.
+
+Malformed or unknown legacy fields, symlinked/non-regular sources, changed source hashes,
+an invalid migration manifest, or non-empty task/runtime tables in `state.sqlite` also fail
+closed.
+Preserve the source bytes and resolve the diagnostic; do not delete records to force a
+migration.
+
+Applying the plan is an offline, resumable cutover. It imports tasks and runtime state into
+`state.sqlite` while preserving task IDs, generations, fix-round and policy state,
+checkpoints, and operation history. It archives any present legacy source under
+`<home>/.tandem-migration/archive/` (`runtime.json` and `tasks/`), writes
+`<home>/.tandem-migration/manifest.json`, and installs old-writer fences at the former
+`runtime.json` and `tasks` paths plus `<home>/.tandem-migration/fence.json`. Keep the
+archive and fences. If an apply is interrupted, rerun the same `--yes` command; do not
+edit the archive or manifest and do not start normal Tandem use until the migration is
+complete.
+
+Migration is not task recovery: it does not resume a worker, clear a reservation, release
+capacity, reset a saved checkpoint, change task policy, or unblock a maxed fix policy.
+After migration is complete, normal reconciliation may recover only from positive native
+identity or durable result evidence. An unknown external-effect outcome is quarantined
+and retains its reservation/capacity and resources. A worker launch claim is at-most-once:
+duplicate or stale operation claims are refused. Never clear a reservation, invent a job
+or result, replace a task, or change policy to bypass unknown ownership; ask the
+coordinator to surface the durable blocker instead.
+
+These fences do not make external effects transactional or guarantee availability; they
+make uncertain ownership fail closed and keep the evidence for an explicit decision.
+
+The migration command does not accept project paths; `--home` must identify the Tandem
+home, not a repository. See the [agent/operator reference](docs/agent-reference.md) for
+the storage table and recovery contract.
 
 ## Use Tandem conversationally (optional)
 
@@ -263,6 +328,11 @@ Provider failures, malformed configuration, missing keys, and unavailable catalo
 normal dispatch. Set these variables in the environment that starts the Herdr server.
 Already-running Herdr/OMP processes do not acquire newly exported variables; a coordinator-only
 restart does not update the server's environment. Enable Jev when starting a fresh server session.
+
+See the [Jev integration overview](docs/jev-prd.md) for current status. Focused documents cover the
+[shadow contract](docs/jev-shadow.md), [context reuse](docs/jev-context-reuse-prd.md),
+[coordinator prompt routing](docs/jev-prompt-routing-prd.md), and the
+[evaluation plan](docs/jev-evaluation.md).
 
 ## What approval means
 

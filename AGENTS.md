@@ -39,6 +39,14 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
   still checks ownership/source safety and preserves unrelated panes.
 - Durable records and task/generation/HEAD-bound evidence are authoritative, not chat or stdout.
   Queued/blocked is not completed. Preserve pinned policy, instruction provenance, and configured limits.
+- `<home>/state.sqlite` is the canonical task/runtime authority. Never edit legacy `runtime.json` or
+  `tasks/*.json`; an offline legacy migration is an explicit two-step operation: inspect with
+  `tandem migrate-state --home PATH`, then apply with `tandem migrate-state --home PATH --yes`.
+  Read-only status/planning never applies; migration preserves durable records and archives/fences
+  original bytes.
+- Unknown owned-operation outcomes are quarantined with capacity/resources retained; never clear a
+  reservation, replace a task, retry uncertain work, or change policy to bypass ownership. Reset is
+  not migration or recovery; `tandem --reset --force [PATH ...]` cancels selected active tasks.
 - Child agents run interactive OMP. Fresh reviewers are read-only; stop implementer mutation during
   validation/review. Validation runs separately without a model. No remote fleets or alternate harnesses.
 

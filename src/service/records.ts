@@ -18,6 +18,8 @@ import { taskJobsDirectory } from "../runtime/persistence.ts";
 import type {
   DurableEndpointLaunch,
   DurableJob,
+  DurableOperation,
+  DurableOperationKind,
   DurableReservation,
   RuntimePresentation,
   RuntimeState,
@@ -214,14 +216,48 @@ export function runtimeReservation(
   taskId: string,
   sessionId: string,
   now: IsoTimestamp,
+  operationId?: string,
 ): DurableReservation {
   return {
     schemaVersion: 1,
     id,
     taskId,
     ownerSessionId: sessionId,
+    ...(operationId === undefined ? {} : { operationId }),
     phase: "reserved",
     createdAt: now,
+  };
+}
+
+export function durableOperation(
+  id: string,
+  taskId: string,
+  kind: DurableOperationKind,
+  role: DurableOperation["role"],
+  generation: number,
+  inputHead: string,
+  policyDigest: string,
+  instructionRevision: number,
+  jobId: string,
+  claimOwner: string,
+  createdAt: IsoTimestamp,
+): DurableOperation {
+  return {
+    schemaVersion: 1,
+    id: singleLine(id, "operation id"),
+    taskId: singleLine(taskId, "operation task id"),
+    kind,
+    role,
+    generation,
+    inputHead: singleLine(inputHead, "operation input head"),
+    policyDigest: singleLine(policyDigest, "operation policy digest"),
+    instructionRevision,
+    jobId: singleLine(jobId, "operation job id"),
+    phase: "prepared",
+    fencingRevision: 1,
+    claimOwner: singleLine(claimOwner, "operation claim owner"),
+    createdAt,
+    effects: [],
   };
 }
 
@@ -298,6 +334,7 @@ export function makeDurableJob(
   attempt: number,
   now: IsoTimestamp,
   extras: Readonly<{
+    operationId?: string;
     endpoint?: Endpoint;
     head?: string;
     reviewLens?: ReviewLens;
@@ -319,6 +356,7 @@ export function makeDurableJob(
     phase: "reserved",
     launchAttempted: false,
     createdAt: now,
+    ...(extras.operationId === undefined ? {} : { operationId: extras.operationId }),
     ...(extras.endpoint === undefined ? {} : { endpoint: extras.endpoint }),
     ...(extras.head === undefined ? {} : { head: extras.head }),
     ...(extras.reviewLens === undefined ? {} : { reviewLens: extras.reviewLens }),
@@ -346,10 +384,12 @@ export function endpointLaunchFor(
   generation: number,
   now: IsoTimestamp,
   parentWorkspaceId: string | undefined,
+  operationId?: string,
 ): DurableEndpointLaunch {
   return {
     schemaVersion: 1,
     reservationId: reservation.id,
+    ...(operationId === undefined ? {} : { operationId }),
     sessionId,
     taskName,
     workspaceLabel: singleLine(workspaceLabel, "workspaceLabel"),

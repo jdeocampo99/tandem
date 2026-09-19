@@ -39,7 +39,7 @@ export async function acquireDarwinFileLock(
   timeoutMs: number,
   pollMs: number,
   signal?: AbortSignal,
-): Promise<() => Promise<void>> {
+): Promise<(relocatedPath?: string) => Promise<void>> {
   assertNativeRepositoryLock();
   const assertNotAborted = (): void => {
     if (signal?.aborted) {
@@ -67,16 +67,16 @@ export async function acquireDarwinFileLock(
       const lease = handle;
       handle = undefined;
       let released = false;
-      return async () => {
+      return async (relocatedPath = path) => {
         if (released) {
           return;
         }
         released = true;
         try {
-          const currentStat = await lstat(path);
+          const currentStat = await lstat(relocatedPath);
           const ownerStat = await lease.stat();
           if (!sameFile(currentStat, ownerStat)) {
-            throw new StoreLockError(`Repository lock ${path} changed before release`);
+            throw new StoreLockError(`Repository lock ${relocatedPath} changed before release`);
           }
         } finally {
           await lease.close();

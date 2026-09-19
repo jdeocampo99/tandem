@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
 import type { GitCheckpoint } from "../adapters/git.ts";
-import type { Endpoint, IsoTimestamp, ReviewLens, WorktreeLease } from "../contracts.ts";
+import type { Endpoint, Finding, IsoTimestamp, ReviewLens, WorktreeLease } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 
@@ -9,6 +9,60 @@ const RUNTIME_SCHEMA_VERSION = 1;
 export type RuntimeJobPhase = "reserved" | "launching" | "running" | "consumed" | "failed";
 export type RuntimeReservationPhase = "reserved" | "worktree" | "endpoint" | "released";
 export type RuntimeJobKind = "worker" | "validation";
+export type DurableOperationKind =
+  | "scout"
+  | "implementation"
+  | "fix"
+  | "validation"
+  | "review"
+  | "verification"
+  | "presentation";
+export type DurableOperationPhase =
+  | "prepared"
+  | "admitted"
+  | "acquiring"
+  | "launching"
+  | "running"
+  | "finalizing"
+  | "completed"
+  | "failed"
+  | "quarantined"
+  | "cancelled";
+
+export type DurableOperationEffect = Readonly<{
+  readonly id: string;
+  readonly kind: "worktree" | "endpoint" | "worker";
+  readonly phase: "intent" | "started" | "succeeded" | "unknown";
+  readonly createdAt: IsoTimestamp;
+  readonly identity?: string;
+  readonly receipt?: string;
+}>;
+
+export type DurableOperation = Readonly<{
+  readonly schemaVersion: 1;
+  readonly id: string;
+  readonly taskId: string;
+  readonly kind: DurableOperationKind;
+  readonly role: WorkerRole | "validation";
+  readonly generation: number;
+  readonly inputHead: string;
+  readonly policyDigest: string;
+  readonly instructionRevision: number;
+  readonly jobId: string;
+  readonly fixContext?: Readonly<{
+    readonly head: string;
+    readonly generation: number;
+    readonly validationEvidence: readonly unknown[];
+    readonly findings: readonly Finding[];
+  }>;
+  readonly phase: DurableOperationPhase;
+  readonly fencingRevision: number;
+  readonly claimOwner: string;
+  readonly createdAt: IsoTimestamp;
+  readonly effects: readonly DurableOperationEffect[];
+  readonly resultConsumedAt?: IsoTimestamp;
+  readonly error?: string;
+}>;
 
 export type DurableJobConsumption = Readonly<{
   readonly schemaVersion: 1;
@@ -36,6 +90,8 @@ export type DurableJob = Readonly<{
   readonly phase: RuntimeJobPhase;
   readonly launchAttempted: boolean;
   readonly createdAt: IsoTimestamp;
+  /** New jobs always carry the operation that admitted them; absent means legacy state. */
+  readonly operationId?: string;
   readonly launchedAt?: IsoTimestamp;
   readonly consumedAt?: IsoTimestamp;
   readonly endpoint?: Endpoint;
@@ -50,6 +106,7 @@ export type DurableJob = Readonly<{
 export type DurableEndpointLaunch = Readonly<{
   readonly schemaVersion: 1;
   readonly reservationId: string;
+  readonly operationId?: string;
   readonly sessionId: string;
   readonly taskName: string;
   readonly workspaceLabel: string;
@@ -72,6 +129,8 @@ export type DurableReservation = Readonly<{
   readonly id: string;
   readonly taskId: string;
   readonly ownerSessionId: string;
+  /** New reservations always reference a durable operation; absent means legacy state. */
+  readonly operationId?: string;
   readonly phase: RuntimeReservationPhase;
   readonly createdAt: IsoTimestamp;
   readonly releasedAt?: IsoTimestamp;
@@ -83,6 +142,8 @@ export type RuntimeTaskState = Readonly<{
   readonly sourceCheckpoint: GitCheckpoint;
   readonly sourceRepoPath?: string;
   readonly taskName: string;
+  readonly operation?: DurableOperation;
+  readonly operationHistory?: readonly DurableOperation[];
   readonly reservation?: DurableReservation;
   readonly endpointLaunch?: DurableEndpointLaunch;
   readonly stopRequest?: DurableStopRequest;
@@ -95,6 +156,14 @@ export type RuntimeTaskState = Readonly<{
   readonly poolAdmissionKey?: string;
   readonly poolNotice?: string;
   readonly terminalCleanupRevision?: number;
+  readonly legacyQuarantine?: RuntimeLegacyQuarantine;
+}>;
+
+export type RuntimeLegacyQuarantine = Readonly<{
+  readonly schemaVersion: 1;
+  readonly reservationId: string;
+  readonly reason: string;
+  readonly observedAt: IsoTimestamp;
 }>;
 
 export type RuntimePresentation = Readonly<{
@@ -102,6 +171,8 @@ export type RuntimePresentation = Readonly<{
   readonly id: string;
   readonly taskId: string;
   readonly recordPath: string;
+  readonly operation?: DurableOperation;
+  readonly operationHistory?: readonly DurableOperation[];
   readonly reservation?: DurableReservation;
   readonly endpointLaunch?: DurableEndpointLaunch;
   readonly job: DurableJob;
@@ -169,8 +240,120 @@ function enumValue<Value extends string>(
   }
   return value as Value;
 }
+function parseOperationEffect(value: unknown, field: string): DurableOperationEffect {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  const identity =
+    value.identity === undefined ? undefined : singleLine(value.identity, `${field}.identity`);
+  const receipt =
+    value.receipt === undefined ? undefined : singleLine(value.receipt, `${field}.receipt`);
+  return {
+    id: singleLine(value.id, `${field}.id`),
+    kind: enumValue(value.kind, ["worktree", "endpoint", "worker"] as const, `${field}.kind`),
+    phase: enumValue(
+      value.phase,
+      ["intent", "started", "succeeded", "unknown"] as const,
+      `${field}.phase`,
+    ),
+    createdAt: singleLine(value.createdAt, `${field}.createdAt`),
+    ...(identity === undefined ? {} : { identity }),
+    ...(receipt === undefined ? {} : { receipt }),
+  };
+}
+
+function parseOperation(value: unknown, field: string): DurableOperation {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  if (!Array.isArray(value.effects)) throw new TypeError(`${field}.effects must be an array`);
+  const resultConsumedAt =
+    value.resultConsumedAt === undefined
+      ? undefined
+      : singleLine(value.resultConsumedAt, `${field}.resultConsumedAt`);
+  const error = value.error === undefined ? undefined : text(value.error, `${field}.error`);
+  const fixContext =
+    value.fixContext === undefined
+      ? undefined
+      : (() => {
+          if (!isRecord(value.fixContext))
+            throw new TypeError(`${field}.fixContext must be an object`);
+          if (!Array.isArray(value.fixContext.validationEvidence)) {
+            throw new TypeError(`${field}.fixContext.validationEvidence must be an array`);
+          }
+          if (!Array.isArray(value.fixContext.findings)) {
+            throw new TypeError(`${field}.fixContext.findings must be an array`);
+          }
+          return {
+            head: singleLine(value.fixContext.head, `${field}.fixContext.head`),
+            generation: nonNegativeInteger(
+              value.fixContext.generation,
+              `${field}.fixContext.generation`,
+            ),
+            validationEvidence: value.fixContext.validationEvidence,
+            findings: value.fixContext.findings as Finding[],
+          };
+        })();
+  return {
+    schemaVersion: 1,
+    id: singleLine(value.id, `${field}.id`),
+    taskId: singleLine(value.taskId, `${field}.taskId`),
+    kind: enumValue(
+      value.kind,
+      [
+        "scout",
+        "implementation",
+        "fix",
+        "validation",
+        "review",
+        "verification",
+        "presentation",
+      ] as const,
+      `${field}.kind`,
+    ),
+    role: enumValue(
+      value.role,
+      ["scout", "implementer", "reviewer", "verifier", "presentation", "validation"] as const,
+      `${field}.role`,
+    ),
+    generation: nonNegativeInteger(value.generation, `${field}.generation`),
+    inputHead: singleLine(value.inputHead, `${field}.inputHead`),
+    policyDigest: singleLine(value.policyDigest, `${field}.policyDigest`),
+    instructionRevision: nonNegativeInteger(
+      value.instructionRevision,
+      `${field}.instructionRevision`,
+    ),
+    jobId: singleLine(value.jobId, `${field}.jobId`),
+    ...(fixContext === undefined ? {} : { fixContext }),
+    phase: enumValue(
+      value.phase,
+      [
+        "prepared",
+        "admitted",
+        "acquiring",
+        "launching",
+        "running",
+        "finalizing",
+        "completed",
+        "failed",
+        "quarantined",
+        "cancelled",
+      ] as const,
+      `${field}.phase`,
+    ),
+    fencingRevision: positiveInteger(value.fencingRevision, `${field}.fencingRevision`),
+    claimOwner: singleLine(value.claimOwner, `${field}.claimOwner`),
+    createdAt: singleLine(value.createdAt, `${field}.createdAt`),
+    effects: value.effects.map((entry, index) =>
+      parseOperationEffect(entry, `${field}.effects[${index}]`),
+    ),
+    ...(resultConsumedAt === undefined ? {} : { resultConsumedAt }),
+    ...(error === undefined ? {} : { error }),
+  };
+}
+
 function parseEndpointLaunch(value: unknown, field: string): DurableEndpointLaunch {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  const operationId =
+    value.operationId === undefined
+      ? undefined
+      : singleLine(value.operationId, `${field}.operationId`);
   const parentWorkspaceId =
     value.parentWorkspaceId === undefined
       ? undefined
@@ -178,6 +361,7 @@ function parseEndpointLaunch(value: unknown, field: string): DurableEndpointLaun
   return {
     schemaVersion: 1,
     reservationId: singleLine(value.reservationId, `${field}.reservationId`),
+    ...(operationId === undefined ? {} : { operationId }),
     sessionId: singleLine(value.sessionId, `${field}.sessionId`),
     taskName: singleLine(value.taskName, `${field}.taskName`),
     workspaceLabel: singleLine(value.workspaceLabel, `${field}.workspaceLabel`),
@@ -258,6 +442,10 @@ function worktree(value: unknown, field: string): WorktreeLease {
 
 function parseReservation(value: unknown, field: string): DurableReservation {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  const operationId =
+    value.operationId === undefined
+      ? undefined
+      : singleLine(value.operationId, `${field}.operationId`);
   const releasedAt =
     value.releasedAt === undefined
       ? undefined
@@ -267,6 +455,7 @@ function parseReservation(value: unknown, field: string): DurableReservation {
     id: singleLine(value.id, `${field}.id`),
     taskId: singleLine(value.taskId, `${field}.taskId`),
     ownerSessionId: singleLine(value.ownerSessionId, `${field}.ownerSessionId`),
+    ...(operationId === undefined ? {} : { operationId }),
     phase: enumValue(
       value.phase,
       ["reserved", "worktree", "endpoint", "released"] as const,
@@ -285,6 +474,10 @@ function parseJob(value: unknown, field: string): DurableJob {
     `${field}.role`,
   );
   const kind = enumValue(value.kind, ["worker", "validation"] as const, `${field}.kind`);
+  const operationId =
+    value.operationId === undefined
+      ? undefined
+      : singleLine(value.operationId, `${field}.operationId`);
   const launchedAt =
     value.launchedAt === undefined
       ? undefined
@@ -345,6 +538,7 @@ function parseJob(value: unknown, field: string): DurableJob {
     ),
     launchAttempted: boolean(value.launchAttempted, `${field}.launchAttempted`),
     createdAt: singleLine(value.createdAt, `${field}.createdAt`),
+    ...(operationId === undefined ? {} : { operationId }),
     ...(launchedAt === undefined ? {} : { launchedAt }),
     ...(consumption === undefined ? {} : { consumption }),
     ...(consumedAt === undefined ? {} : { consumedAt }),
@@ -357,9 +551,22 @@ function parseJob(value: unknown, field: string): DurableJob {
     ...(error === undefined ? {} : { error }),
   };
 }
-
 function parseTask(value: unknown, field: string): RuntimeTaskState {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  const operation =
+    value.operation === undefined
+      ? undefined
+      : parseOperation(value.operation, `${field}.operation`);
+  const operationHistory =
+    value.operationHistory === undefined
+      ? undefined
+      : !Array.isArray(value.operationHistory)
+        ? (() => {
+            throw new TypeError(`${field}.operationHistory must be an array`);
+          })()
+        : value.operationHistory.map((entry, index) =>
+            parseOperation(entry, `${field}.operationHistory[${index}]`),
+          );
   const reservation =
     value.reservation === undefined
       ? undefined
@@ -404,12 +611,33 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
       : nonNegativeInteger(value.terminalCleanupRevision, `${field}.terminalCleanupRevision`);
   const lastError =
     value.lastError === undefined ? undefined : text(value.lastError, `${field}.lastError`);
+  const legacyQuarantine =
+    value.legacyQuarantine === undefined
+      ? undefined
+      : (() => {
+          if (!isRecord(value.legacyQuarantine))
+            throw new TypeError(`${field}.legacyQuarantine must be an object`);
+          return {
+            schemaVersion: 1 as const,
+            reservationId: singleLine(
+              value.legacyQuarantine.reservationId,
+              `${field}.legacyQuarantine.reservationId`,
+            ),
+            reason: text(value.legacyQuarantine.reason, `${field}.legacyQuarantine.reason`),
+            observedAt: singleLine(
+              value.legacyQuarantine.observedAt,
+              `${field}.legacyQuarantine.observedAt`,
+            ),
+          };
+        })();
   return {
     schemaVersion: 1,
     taskId: singleLine(value.taskId, `${field}.taskId`),
     sourceCheckpoint: checkpoint(value.sourceCheckpoint, `${field}.sourceCheckpoint`),
     ...(sourceRepoPath === undefined ? {} : { sourceRepoPath }),
     taskName: singleLine(value.taskName, `${field}.taskName`),
+    ...(operation === undefined ? {} : { operation }),
+    ...(operationHistory === undefined ? {} : { operationHistory }),
     ...(reservation === undefined ? {} : { reservation }),
     ...(endpointLaunch === undefined ? {} : { endpointLaunch }),
     ...(stopRequest === undefined ? {} : { stopRequest }),
@@ -420,12 +648,26 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
     ...(fixContextPath === undefined ? {} : { fixContextPath }),
     ...(lastError === undefined ? {} : { lastError }),
     ...(poolAdmissionKey === undefined ? {} : { poolAdmissionKey }),
+    ...(legacyQuarantine === undefined ? {} : { legacyQuarantine }),
     ...(poolNotice === undefined ? {} : { poolNotice }),
     ...(terminalCleanupRevision === undefined ? {} : { terminalCleanupRevision }),
   };
 }
 function parsePresentation(value: unknown, field: string): RuntimePresentation {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  const operation =
+    value.operation === undefined
+      ? undefined
+      : parseOperation(value.operation, `${field}.operation`);
+  let operationHistory: readonly DurableOperation[] | undefined;
+  if (value.operationHistory !== undefined) {
+    if (!Array.isArray(value.operationHistory)) {
+      throw new TypeError(`${field}.operationHistory must be an array`);
+    }
+    operationHistory = value.operationHistory.map((entry, index) =>
+      parseOperation(entry, `${field}.operationHistory[${index}]`),
+    );
+  }
   const endpointLaunch =
     value.endpointLaunch === undefined
       ? undefined
@@ -447,6 +689,8 @@ function parsePresentation(value: unknown, field: string): RuntimePresentation {
     id: singleLine(value.id, `${field}.id`),
     taskId: singleLine(value.taskId, `${field}.taskId`),
     recordPath: absolutePath(value.recordPath, `${field}.recordPath`),
+    ...(operation === undefined ? {} : { operation }),
+    ...(operationHistory === undefined ? {} : { operationHistory }),
     ...(reservation === undefined ? {} : { reservation }),
     ...(endpointLaunch === undefined ? {} : { endpointLaunch }),
     job,

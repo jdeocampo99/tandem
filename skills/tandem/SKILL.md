@@ -64,8 +64,9 @@ Tandem coordinators. With no paths it selects every valid saved project; explici
 that subset. Reset stops only idle coordinators with exact Tandem ownership, refuses busy, foreign,
 unknown, or unsafe work before closing any pane, and then runs the normal launch/one-attach flow.
 It preserves settings, conversation history, task records, worktrees, and repository files: reset is
-not task recovery, a factory reset, or data wiping. Add `--continue` only to resume saved
+not migration, task recovery, a factory reset, or data wiping. Add `--continue` only to resume saved
 conversations; otherwise the reopened coordinators start fresh. Never run reset from inside Herdr.
+
 Recorded coordinator panes left at their verified terminal shell are also closed by reset. Herdr
 removes empty workspaces after the last pane closes; extra panes stay open. Only generated old
 coordinator labels are retired, not custom labels. Labels never authorize closing unrelated terminals.
@@ -83,6 +84,23 @@ saved conversation. An active coordinator stays pinned to its clean source `HEAD
 original project advances; stop and relaunch when a fresh source snapshot is wanted. If an old
 pre-registry coordinator is detected, stop its Herdr pane/process once, confirm it exited, and
 relaunch. Tandem never adopts or duplicates it and never migrates existing tasks automatically.
+## Durable state and recovery
+
+`<home>/state.sqlite` is the canonical task/runtime authority. Do not edit or resume legacy
+`runtime.json` or `tasks/*.json`, and do not retry work when an external outcome is uncertain. Legacy
+state requires an explicit offline two-step migration from a separate normal terminal:
+
+```sh
+tandem migrate-state --home "<home>"
+tandem migrate-state --home "<home>" --yes
+```
+
+The first command is the read-only plan; only the second applies migration. Status and other
+read-only planning never apply it. Migration archives and fences the original bytes while preserving
+IDs, generations, fix-round/policy, and checkpoints/history; it refuses live or ambiguous ownership
+and unsettled work. An unknown owned-operation outcome remains quarantined with capacity/resources
+retained: never clear a reservation, replace a task, or change policy to bypass unknown ownership.
+Reset is not migration or recovery; `tandem --reset --force [PATH ...]` cancels selected active tasks.
 
 ## The usual path
 

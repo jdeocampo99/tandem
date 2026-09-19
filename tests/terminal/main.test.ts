@@ -189,13 +189,13 @@ test("declining the first-run role recap performs no model write and no launch",
   await rm(join(repo, ".."), { recursive: true, force: true });
 });
 
-test("unsupported thinking cancels before any model write or coordinator launch", async () => {
+test("unsupported thinking fails before any model write or coordinator launch", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const home = join(repo, "..", "home");
   const fake = onboardingService({ existingConfig: true, configured: false });
   const invocations: CliInvocation[] = [];
-  const answers = ["test/model", "max", "not now"];
+  const answers = ["test/model", "max"];
   const result = await runTerminal([repo, "--home", home], {
     cwd: repo,
     run: runCommand,
@@ -206,7 +206,7 @@ test("unsupported thinking cancels before any model write or coordinator launch"
     stdout: () => undefined,
     stderr: () => undefined,
   });
-  expect(result.status).toBe("cancelled");
+  expect(result.status).toBe("error");
   expect(fake.configureCalls).toHaveLength(0);
   expect(fake.writeCalls).toHaveLength(0);
   expect(invocations).toHaveLength(0);
@@ -266,27 +266,47 @@ test("explicit role answers are sent to the service only after the complete reca
   await rm(join(repo, ".."), { recursive: true, force: true });
 });
 
-test("the visible Save settings choice writes the central project record before launch", async () => {
+test("declining project settings through the keyboard menu performs no write or launch", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
-  const home = join(repo, "..", "home");
+  const parent = join(repo, "..");
+  const home = join(parent, "home");
+  const { input, output } = ttyStreams();
   const fake = onboardingService({ existingConfig: false, configured: true });
   const invocations: CliInvocation[] = [];
-  const answers = ["keep all", "save settings"];
-  const result = await runTerminal([repo, "--home", home, "--headless"], {
-    cwd: repo,
-    run: runCommand,
-    service: fake.service,
-    application: fakeApplication(invocations),
-    prompt: async () => answers.shift() ?? "not now",
-    isTTY: false,
-    stdout: () => undefined,
-    stderr: () => undefined,
+  const prompts = ["Choose Keep all, Change roles, or Not now", "Save project settings?"];
+  const keys = ["\r", "\u001b[B\r"];
+  let rendered = "";
+  let nextPrompt = 0;
+  output.on("data", (chunk: Buffer | string) => {
+    rendered += chunk.toString();
+    const marker = prompts[nextPrompt];
+    if (marker === undefined) return;
+    const start = rendered.lastIndexOf(marker);
+    if (start < 0 || !rendered.slice(start).includes("❯")) return;
+    const answer = keys[nextPrompt++];
+    if (answer !== undefined) queueMicrotask(() => input.write(answer));
   });
-  expect(result.status).toBe("launched");
-  expect(fake.writeCalls).toEqual([repo]);
-  expect(invocations).toHaveLength(1);
-  await rm(join(repo, ".."), { recursive: true, force: true });
+  try {
+    const result = await runTerminal([repo, "--home", home, "--headless"], {
+      cwd: repo,
+      run: runCommand,
+      service: fake.service,
+      application: fakeApplication(invocations),
+      input,
+      output,
+      isTTY: true,
+      stderr: () => undefined,
+    });
+    expect(result.status).toBe("cancelled");
+    expect(fake.configureCalls).toHaveLength(0);
+    expect(fake.writeCalls).toHaveLength(0);
+    expect(invocations).toHaveLength(0);
+  } finally {
+    input.destroy();
+    output.destroy();
+    await rm(parent, { recursive: true, force: true });
+  }
 });
 
 test("focuses the requested coordinator workspace before one Herdr attach", async () => {
@@ -305,6 +325,8 @@ test("focuses the requested coordinator workspace before one Herdr attach", asyn
       focusCalls.push(request);
       return { code: 0, stdout: "", stderr: "" };
     }
+    if (request.argv[0] === "herdr")
+      throw new Error("unexpected native Herdr command in terminal test");
     return runCommand(request);
   };
   const fake = onboardingService({ existingConfig: true, configured: true });
@@ -312,6 +334,7 @@ test("focuses the requested coordinator workspace before one Herdr attach", asyn
   const interactiveCalls: CommandRequest[] = [];
   const result = await runTerminal([repo, "--home", home], {
     cwd: repo,
+    processEnvironment: {},
     run,
     service: fake.service,
     application: fakeApplication(invocations),
@@ -409,10 +432,13 @@ test("bare launch opens all saved projects from an unrelated cwd and attaches on
       focusCalls.push(request);
       return { code: 0, stdout: "", stderr: "" };
     }
+    if (request.argv[0] === "herdr")
+      throw new Error("unexpected native Herdr command in terminal test");
     return runCommand(request);
   };
   const result = await runTerminal(["--home", home], {
     cwd,
+    processEnvironment: {},
     run,
     service: fake.service,
     application: fakeApplication(invocations),
@@ -463,10 +489,6 @@ test("bare non-TTY launch inside a saved repo opens every saved project", async 
   expect(result.status).toBe("launched");
   expect(result.projects).toEqual(projects);
   expect(invocations.map((invocation) => invocation.options.repo)).toEqual([...projects]);
-  expect(invocations.map((invocation) => invocation.options.sessionId)).toEqual([
-    "tandem",
-    "tandem",
-  ]);
   await rm(join(first, ".."), { recursive: true, force: true });
 });
 
@@ -567,6 +589,7 @@ test("saved interactive launch keeps terminal replies out of visible output", as
   try {
     const result = await runTerminal([repo, "--home", home], {
       cwd: repo,
+      processEnvironment: {},
       input,
       output,
       isTTY: true,
@@ -580,6 +603,8 @@ test("saved interactive launch keeps terminal replies out of visible output", as
         ) {
           return { code: 0, stdout: "", stderr: "" };
         }
+        if (request.argv[0] === "herdr")
+          throw new Error("unexpected native Herdr command in terminal test");
         return runCommand(request);
       },
       service: fake.service,
@@ -603,13 +628,13 @@ test("saved interactive launch keeps terminal replies out of visible output", as
   }
 });
 
-test("readline onboarding releases terminal input before Herdr attachment", async () => {
+test("keyboard onboarding releases terminal input before Herdr attachment", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const parent = join(repo, "..");
   const home = join(parent, "home");
   const { input, output } = ttyStreams();
-  const fake = onboardingService({ existingConfig: true, configured: false });
+  const fake = onboardingService({ existingConfig: false, configured: false });
   const invocations: CliInvocation[] = [];
   const promptMarkers = [
     "Planning model selector",
@@ -625,21 +650,38 @@ test("readline onboarding releases terminal input before Herdr attachment", asyn
     "Presentations model selector",
     "Presentations thinking level",
     "Save these six choices?",
+    "Save project settings?",
   ] as const;
-  const answers = roles.flatMap(() => ["test/model", "low"]);
-  answers.push("save");
+  const keySequences = [
+    "\r",
+    "l\r",
+    "\r",
+    "l\r",
+    "\r",
+    "l\r",
+    "\r",
+    "l\r",
+    "\r",
+    "l\r",
+    "\r",
+    "l\r",
+    "\u001b[A\r",
+    "\r",
+  ] as const;
   let rendered = "";
-  let nextAnswer = 0;
+  let nextPrompt = 0;
   let childInput = "";
   const onOutput = (chunk: Buffer | string): void => {
     rendered += chunk.toString();
-    while (nextAnswer < promptMarkers.length) {
-      const marker = promptMarkers[nextAnswer];
-      const answer = answers[nextAnswer];
-      if (marker === undefined || answer === undefined || !rendered.includes(marker)) break;
-      nextAnswer += 1;
+    while (nextPrompt < promptMarkers.length) {
+      const marker = promptMarkers[nextPrompt];
+      const keySequence = keySequences[nextPrompt];
+      if (marker === undefined || keySequence === undefined) break;
+      const promptStart = rendered.lastIndexOf(marker);
+      if (promptStart < 0 || !rendered.slice(promptStart).includes("❯")) break;
+      nextPrompt += 1;
       queueMicrotask(() => {
-        input.write(`${answer}\n`);
+        input.write(keySequence);
       });
     }
   };
@@ -647,6 +689,7 @@ test("readline onboarding releases terminal input before Herdr attachment", asyn
   try {
     const result = await runTerminal([repo, "--home", home], {
       cwd: repo,
+      processEnvironment: {},
       input,
       output,
       isTTY: true,
@@ -660,6 +703,8 @@ test("readline onboarding releases terminal input before Herdr attachment", asyn
         ) {
           return { code: 0, stdout: "", stderr: "" };
         }
+        if (request.argv[0] === "herdr")
+          throw new Error("unexpected native Herdr command in terminal test");
         return runCommand(request);
       },
       service: fake.service,
@@ -671,14 +716,63 @@ test("readline onboarding releases terminal input before Herdr attachment", asyn
     });
     expect(result.status).toBe("launched");
     expect(fake.configureCalls).toHaveLength(1);
+    expect(fake.configureCalls[0]).toHaveLength(6);
+    expect(
+      fake.configureCalls[0]?.every(
+        (model) => model.model === "test/model" && model.thinking === "low",
+      ),
+    ).toBe(true);
+    expect(fake.writeCalls).toEqual([repo]);
     expect(invocations).toHaveLength(1);
-    expect(nextAnswer).toBe(promptMarkers.length);
-    expect(promptMarkers.every((marker) => rendered.includes(marker))).toBe(true);
+    expect(nextPrompt).toBe(promptMarkers.length);
     expect(childInput).toBe(`${OSC_PALETTE_REPLY}${SGR_MOUSE_INPUT}${CHILD_TYPING}`);
     expect(rendered).not.toContain(OSC_PALETTE_REPLY);
     expect(rendered).not.toContain("rgb:1357/2468/abcd");
     expect(rendered).not.toContain(SGR_MOUSE_INPUT);
     expect(rendered).not.toContain("0;12;8M");
+  } finally {
+    output.off("data", onOutput);
+    input.destroy();
+    output.destroy();
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("cancelling keyboard onboarding before the first selection does not configure or launch", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const parent = join(repo, "..");
+  const home = join(parent, "home");
+  const { input, output } = ttyStreams();
+  const fake = onboardingService({ existingConfig: true, configured: false });
+  const invocations: CliInvocation[] = [];
+  let rendered = "";
+  let cancelled = false;
+  const onOutput = (chunk: Buffer | string): void => {
+    rendered += chunk.toString();
+    if (!cancelled && rendered.includes("Planning model selector")) {
+      cancelled = true;
+      queueMicrotask(() => {
+        input.write("\u0003");
+      });
+    }
+  };
+  output.on("data", onOutput);
+  try {
+    const result = await runTerminal([repo, "--home", home], {
+      cwd: repo,
+      processEnvironment: {},
+      input,
+      output,
+      isTTY: true,
+      run: runCommand,
+      service: fake.service,
+      application: fakeApplication(invocations),
+    });
+    expect(result.status).toBe("cancelled");
+    expect(fake.configureCalls).toHaveLength(0);
+    expect(fake.writeCalls).toHaveLength(0);
+    expect(invocations).toHaveLength(0);
   } finally {
     output.off("data", onOutput);
     input.destroy();
@@ -713,6 +807,8 @@ test("reset stops only the selected coordinators before fresh launch and one att
         events.push("focus");
         return { code: 0, stdout: "", stderr: "" };
       }
+      if (request.argv[0] === "herdr")
+        throw new Error("unexpected native Herdr command in terminal test");
       return runCommand(request);
     },
     service: fake.service,

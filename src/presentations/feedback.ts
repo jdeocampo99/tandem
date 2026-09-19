@@ -32,12 +32,6 @@ export type PresentationFeedbackDependencies = Readonly<{
   readonly idFactory: IdFactory;
   readonly readTask: (taskId: string) => Promise<TaskRecord>;
   readonly taskInScope: (task: TaskRecord) => Promise<boolean>;
-  readonly failPresentation: (
-    id: string,
-    reason: string,
-    releaseReservation?: boolean,
-    expectedJobId?: string,
-  ) => Promise<void>;
 }>;
 
 const MANUAL_SHARED_FEEDBACK_WAIT_MS = 1_000;
@@ -266,9 +260,8 @@ export class PresentationFeedbackWorkflow {
     }
     return this.flushPresentationNotification(runtime, signal);
   }
-
   private beginPresentationFeedback(
-    runtime: Pick<RuntimePresentation, "id" | "recordPath">,
+    runtime: RuntimePresentation,
     record: PresentationRecord,
     signal?: AbortSignal,
     continuous = false,
@@ -298,35 +291,71 @@ export class PresentationFeedbackWorkflow {
       controller.signal,
       continuous,
       allowBrowserDisconnected,
-    ).finally(() => {
-      if (this.#polls.get(runtime.id)?.promise === poll) {
-        this.#polls.delete(runtime.id);
-      }
-      if (signal !== undefined && onAbort !== undefined) {
-        signal.removeEventListener("abort", onAbort);
-      }
-    });
+    )
+      .catch(async (error) => {
+        if (!continuous) throw error;
+        if (!this.#shuttingDown) await this.projectFeedbackFailure(runtime, error);
+        return readPresentationRecord(runtime.recordPath);
+      })
+      .finally(() => {
+        if (this.#polls.get(runtime.id)?.promise === poll) {
+          this.#polls.delete(runtime.id);
+        }
+        if (signal !== undefined && onAbort !== undefined) {
+          signal.removeEventListener("abort", onAbort);
+        }
+      });
     this.#polls.set(runtime.id, { promise: poll, controller });
     void poll.catch(() => undefined);
     return poll;
   }
+  private async projectFeedbackFailure(
+    runtime: RuntimePresentation,
+    error: unknown,
+  ): Promise<void> {
+    if (error instanceof Error && error.name === "AbortError") return;
+    const reason = `presentation feedback poll failed: ${describeError(error)}`;
+    let shouldFlush = false;
+    await withPresentationLock(runtime.recordPath, undefined, async () => {
+      await this.#deps.store.exclusive(async () => {
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const current = presentationRuntime(state, runtime.id);
+        if (
+          current === undefined ||
+          current.job.id !== runtime.job.id ||
+          current.job.operationId !== runtime.job.operationId ||
+          current.job.phase !== "consumed" ||
+          current.operation?.id !== runtime.operation?.id ||
+          current.operation?.fencingRevision !== runtime.operation?.fencingRevision ||
+          current.operation?.claimOwner !== runtime.operation?.claimOwner
+        )
+          return;
+        const record = await readPresentationRecord(current.recordPath);
+        if (record.status === "ended") return;
+        const failed: PresentationRecord = {
+          ...record,
+          status: "failed",
+          error: reason,
+          updatedAt: this.#deps.clock(),
+        };
+        const failedWithNotification = this.withPresentationNotification(record, failed);
+        await writeJsonAtomically(current.recordPath, failedWithNotification);
+        shouldFlush = hasPendingPresentationNotification(failedWithNotification);
+      });
+    });
+    if (shouldFlush) await this.flushPresentationNotification(runtime);
+  }
 
-  startPresentationFeedback(
-    runtime: Pick<RuntimePresentation, "id" | "recordPath">,
-    record: PresentationRecord,
-  ): void {
+  startPresentationFeedback(runtime: RuntimePresentation, record: PresentationRecord): void {
     if (this.#shuttingDown) return;
     if (
       !hasPendingPresentationNotification(record) &&
       (record.status !== "open" || record.observation?.status === "browser_disconnected")
     )
       return;
-    void this.beginPresentationFeedback(runtime, record, undefined, true, false).catch((error) => {
-      if (this.#shuttingDown) return;
-      void this.#deps
-        .failPresentation(runtime.id, `presentation feedback poll failed: ${describeError(error)}`)
-        .catch(() => undefined);
-    });
+    void this.beginPresentationFeedback(runtime, record, undefined, true, false).catch(
+      () => undefined,
+    );
   }
 
   async feedback(presentationId: string, signal?: AbortSignal): Promise<PresentationRecord> {

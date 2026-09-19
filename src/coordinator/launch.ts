@@ -22,6 +22,7 @@ import { withCoordinatorLaunchLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
 import { type CoordinatorRecord, recordPath } from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
+import { resolveCoordinatorSourceHead } from "./source.ts";
 import { coordinatorWorkspaceLabel, retireCoordinatorWorkspace } from "./workspace.ts";
 
 const DEFAULT_COORDINATOR_CONFIG = "worker-config.yml";
@@ -43,6 +44,7 @@ export type CoordinatorLaunchRequest = Readonly<{
   readonly cwd: string;
   readonly repo: string;
   readonly sourceRepo?: string;
+  readonly sourceHead?: string;
   readonly home: string;
   readonly poolRoot: string;
   readonly sessionId: string;
@@ -228,14 +230,6 @@ async function validateBoundCoordinatorSource(
   return normalizedBoundSourcePath;
 }
 
-async function readCommittedHead(run: CommandRunner, repo: string): Promise<string> {
-  const result = await runExternal(run, {
-    argv: ["git", "-C", repo, "rev-parse", "HEAD"],
-    cwd: repo,
-  });
-  return text(result.stdout.trim(), "git checkpoint HEAD");
-}
-
 async function acquireCoordinatorWorktree(
   request: CoordinatorLaunchRequest,
   paths: CoordinatorPaths,
@@ -249,15 +243,11 @@ async function acquireCoordinatorWorktree(
     root: paths.poolRoot,
     tandemId: identity.tandemId,
     taskName: identity.taskName,
+    sourceHead,
   });
   if (worktree.baseHead !== sourceHead) {
     throw new Error(
       `coordinator lease ${JSON.stringify(worktree.leaseId)} is pinned to ${worktree.baseHead}, expected captured source HEAD ${sourceHead}`,
-    );
-  }
-  if (await sameCoordinatorPath(paths.repo, worktree.path)) {
-    throw new Error(
-      `coordinator lease ${JSON.stringify(worktree.leaseId)} must be distinct from original repository ${JSON.stringify(paths.repo)}`,
     );
   }
   const checkout = await readCheckpoint(dependencies.run, { repo: worktree.path });
@@ -521,7 +511,6 @@ export async function launchCoordinatorUnlocked(
     sessionDirectory: paths.sessionDirectory,
     ...(request.prompt === undefined ? {} : { prompt: request.prompt }),
   });
-  const sourceHead = await readCommittedHead(dependencies.run, paths.repo);
   const running = await findRunningCoordinator(dependencies.run, {
     home: paths.home,
     sessionId: request.sessionId,
@@ -576,6 +565,8 @@ export async function launchCoordinatorUnlocked(
       );
     }
   }
+  const sourceHead =
+    request.sourceHead ?? (await resolveCoordinatorSourceHead(dependencies.run, paths.repo)).head;
   const previous =
     running ?? (await readCoordinatorRecord(recordPath(paths.home, request.sessionId, paths.repo)));
   if (previous !== undefined) await retireCoordinatorWorkspace(dependencies.run, previous);
@@ -647,6 +638,8 @@ export async function launchCoordinatorUnlocked(
       env: serverEnvironment,
     });
     await waitForHerdr(dependencies.run, dependencies.sleep, request.sessionId, coordinatorCwd);
+    // Starting Herdr can restore the previous workspace and its saved label.
+    if (previous !== undefined) await retireCoordinatorWorkspace(dependencies.run, previous);
   }
   const workspaceResult = await runExternal(dependencies.run, {
     argv: [

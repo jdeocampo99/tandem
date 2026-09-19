@@ -18,5 +18,9 @@
     "@oh-my-pi/pi-coding-agent": "18.1.18",
     "@types/bun": "^1.2.21",
     "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@inquirer/search": "^4.3.3",
+    "@inquirer/select": "^5.2.5"
   }
 }

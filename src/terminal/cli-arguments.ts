@@ -45,7 +45,6 @@ const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
   watch: "watch",
   pause: "pause",
   resume: "resume",
-  cancel: "cancel",
   steer: "steer",
   answer: "answer",
   messages: "messages",
@@ -56,6 +55,7 @@ const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
   publish: "publish",
   merge: "merge",
   cleanup: "cleanup",
+  "migrate-state": "migrate-state",
 };
 const PR_COMMANDS: Readonly<Record<string, CliCommand>> = {
   describe: "describe",
@@ -89,6 +89,7 @@ const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
   publish: 5,
   merge: 2,
   cleanup: 1,
+  "migrate-state": 0,
 };
 
 export type MergeMethod = "merge" | "squash" | "rebase";
@@ -119,7 +120,8 @@ export type CliCommand =
   | "describe"
   | "publish"
   | "merge"
-  | "cleanup";
+  | "cleanup"
+  | "migrate-state";
 
 export type CliOptions = Readonly<{
   readonly help: boolean;

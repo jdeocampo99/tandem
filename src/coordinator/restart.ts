@@ -17,6 +17,7 @@ import {
   parseJson,
   sameCommand,
 } from "./ownership.ts";
+import { resolveCoordinatorSourceHead } from "./source.ts";
 
 export type CoordinatorRestartResult = CoordinatorLaunchResult &
   Readonly<{ restarted: boolean; previousPaneId?: string }>;
@@ -115,6 +116,7 @@ export async function restartCoordinator(
           })
         : undefined;
     const prior = previous ?? stopped;
+    const sourceHead = await resolveCoordinatorSourceHead(dependencies.run, request.repo);
     if (prior !== undefined) {
       await closeSupersededPane(
         dependencies.run,
@@ -126,6 +128,7 @@ export async function restartCoordinator(
     const launch = await launchCoordinatorUnlocked(
       {
         ...request,
+        sourceHead: sourceHead.head,
         continueSession: true,
         headless: true,
         noAttach: true,

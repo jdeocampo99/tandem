@@ -9,12 +9,19 @@ export const SCHEMA_VERSION = 1 as const;
 
 type JsonRecord = Record<string, unknown>;
 type ErrorWithCode = Error & { readonly code?: string };
+export type PendingSourceRefresh = Readonly<{
+  readonly leaseId: string;
+  readonly leaseHolder: string;
+  readonly fromHead: string;
+  readonly toHead: string;
+}>;
 export type CoordinatorRecord = Readonly<{
   readonly schemaVersion: 1;
   readonly repoPath: string;
   readonly endpoint: Endpoint;
   readonly worktree: WorktreeLease;
   readonly command: readonly string[];
+  readonly pendingSourceRefresh?: PendingSourceRefresh;
 }>;
 export function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -88,6 +95,20 @@ function ensureExactKeys(value: JsonRecord, keys: readonly string[], field: stri
       throw new TypeError(`${field} is missing ${JSON.stringify(key)}`);
   }
 }
+function ensureCoordinatorRecordKeys(value: JsonRecord, field: string): void {
+  const required = ["schemaVersion", "repoPath", "endpoint", "worktree", "command"];
+  const allowed = new Set([...required, "pendingSourceRefresh"]);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw new TypeError(`${field} contains unknown key ${JSON.stringify(key)}`);
+    }
+  }
+  for (const key of required) {
+    if (!Object.hasOwn(value, key)) {
+      throw new TypeError(`${field} is missing ${JSON.stringify(key)}`);
+    }
+  }
+}
 
 function positiveInteger(value: unknown, field: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
@@ -132,6 +153,17 @@ function parseWorktree(value: unknown, field: string): WorktreeLease {
   };
 }
 
+function parsePendingSourceRefresh(value: unknown, field: string): PendingSourceRefresh {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  ensureExactKeys(value, ["leaseId", "leaseHolder", "fromHead", "toHead"], field);
+  return {
+    leaseId: text(value.leaseId, `${field}.leaseId`),
+    leaseHolder: text(value.leaseHolder, `${field}.leaseHolder`),
+    fromHead: text(value.fromHead, `${field}.fromHead`),
+    toHead: text(value.toHead, `${field}.toHead`),
+  };
+}
+
 function parseCommand(value: unknown, field: string): readonly string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new TypeError(`${field} must be a non-empty array`);
@@ -147,19 +179,18 @@ export function pathIsWithin(root: string, candidate: string): boolean {
     child === "" || (!child.startsWith(`..${sep}`) && child !== ".." && !child.startsWith(sep))
   );
 }
-
 export async function canonicalizeRecord(record: CoordinatorRecord): Promise<CoordinatorRecord> {
   if (!isRecord(record)) throw new TypeError("coordinator record must be an object");
-  ensureExactKeys(
-    record,
-    ["schemaVersion", "repoPath", "endpoint", "worktree", "command"],
-    "record",
-  );
+  ensureCoordinatorRecordKeys(record, "record");
   if (record.schemaVersion !== SCHEMA_VERSION) {
     throw new TypeError(`record.schemaVersion must be ${SCHEMA_VERSION}`);
   }
   const endpoint = parseEndpoint(record.endpoint, "record.endpoint");
   const worktree = parseWorktree(record.worktree, "record.worktree");
+  const pendingSourceRefresh =
+    record.pendingSourceRefresh === undefined
+      ? undefined
+      : parsePendingSourceRefresh(record.pendingSourceRefresh, "record.pendingSourceRefresh");
   const repoPath = await canonicalPath(record.repoPath, "record.repoPath");
   const root = await canonicalPath(worktree.root, "record.worktree.root");
   const worktreePath = await canonicalPath(worktree.path, "record.worktree.path");
@@ -169,28 +200,26 @@ export async function canonicalizeRecord(record: CoordinatorRecord): Promise<Coo
   return {
     schemaVersion: SCHEMA_VERSION,
     repoPath,
-    endpoint: {
-      ...endpoint,
-      sessionId: endpoint.sessionId,
-    },
-    worktree: {
-      ...worktree,
-      root,
-      path: worktreePath,
-    },
+    endpoint: { ...endpoint, sessionId: endpoint.sessionId },
+    worktree: { ...worktree, root, path: worktreePath },
     command: parseCommand(record.command, "record.command"),
+    ...(pendingSourceRefresh === undefined ? {} : { pendingSourceRefresh }),
   };
 }
 
 export function parseStoredRecord(value: unknown, source: string): CoordinatorRecord {
   if (!isRecord(value)) throw new TypeError(`${source} must contain an object`);
-  ensureExactKeys(value, ["schemaVersion", "repoPath", "endpoint", "worktree", "command"], source);
+  ensureCoordinatorRecordKeys(value, source);
   if (value.schemaVersion !== SCHEMA_VERSION) {
     throw new TypeError(`${source}.schemaVersion must be ${SCHEMA_VERSION}`);
   }
   const repoPath = absolutePath(value.repoPath, `${source}.repoPath`);
   const endpoint = parseEndpoint(value.endpoint, `${source}.endpoint`);
   const worktree = parseWorktree(value.worktree, `${source}.worktree`);
+  const pendingSourceRefresh =
+    value.pendingSourceRefresh === undefined
+      ? undefined
+      : parsePendingSourceRefresh(value.pendingSourceRefresh, `${source}.pendingSourceRefresh`);
   if (!pathIsWithin(worktree.root, worktree.path)) {
     throw new TypeError(`${source}.worktree.path must be inside ${source}.worktree.root`);
   }
@@ -200,6 +229,7 @@ export function parseStoredRecord(value: unknown, source: string): CoordinatorRe
     endpoint,
     worktree,
     command: parseCommand(value.command, `${source}.command`),
+    ...(pendingSourceRefresh === undefined ? {} : { pendingSourceRefresh }),
   };
 }
 

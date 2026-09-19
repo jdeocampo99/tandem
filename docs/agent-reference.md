@@ -309,14 +309,19 @@ panes are then closed and normal launch resumes. A failure reports already-cance
 stopped panes/coordinators; retrying does not resurrect interrupted work. Neither mode discards
 repository files, uncommitted task work, worktrees, settings, or conversation history.
 
-For each project, launch captures the original repository's committed `HEAD`, acquires a distinct
-clean Treehouse source worktree under the pool, and starts OMP from that clean checkout. The
-original checkout may be dirty and remains untouched; source reads and delegated execution use the
-clean snapshot, while settings, task records, and delivery retain the original identity. The
-coordinator receives the original identity as `TANDEM_REPO` and its owned source checkout as
-`TANDEM_SOURCE_REPO`; users normally do not set the latter themselves.
+For each project, fresh launch and non-destructive restart fetch and capture `origin/main`, acquire
+a distinct clean Treehouse source worktree, and start OMP there. Without `origin`, launch explicitly
+uses the original repository's committed local `HEAD`; a configured remote's fetch failure never
+falls back to stale source. The original checkout may be dirty and remains untouched. Settings,
+task records, and delivery retain the original identity as `TANDEM_REPO`; the owned source checkout
+is `TANDEM_SOURCE_REPO`, which users normally do not set themselves.
 
-An explicit `tandem PATH` opens or reconnects only that project after ownership checks. For either form, `--continue` is needed only when no active coordinator remains and the new process should resume the saved repository-scoped conversation. The active coordinator stays pinned to its existing source `HEAD` even if the original project has advanced. Use non-destructive `--restart` when you only need to reload the extension and preserve the current source/workflow; stop that coordinator and relaunch (with `--continue` when the saved conversation should continue) to deliberately acquire a fresh source snapshot. Prior pinned leases and snapshots are not reset or silently replaced.
+An explicit `tandem PATH` opens or reconnects only that project after ownership checks. `--continue`
+resumes a stopped coordinator's saved conversation; `--restart` reloads the extension, prefetches
+fresh source before closing the old coordinator, and preserves child work and conversation history.
+Before each planning turn, the coordinator refreshes only its proven-owned clean checkout. A durable
+refresh intent recovers an interrupted switch only for the same lease at its recorded old or new
+HEAD. Dirty, foreign, or unexpectedly moved source checkouts fail closed.
 
 An old pre-registry coordinator without a clean lease record is never adopted or duplicated. Stop
 that coordinator manually, confirm its Herdr pane/process has exited, and relaunch `tandem` once.
@@ -369,6 +374,10 @@ first-time model choice, ask:
 >
 > Choose **Save settings** or **Not now**.
 
+The native terminal presents these as selectable options, with **Save settings** highlighted.
+Enter accepts the highlighted choice; selecting **Not now** or pressing Ctrl+C pauses setup without
+creating the project record. Previously saved model preferences are retained.
+
 Keep default worker/fix limits, script identifiers, hash paths, raw commands, and JSON in structured
 details; share them only on request or when the user must choose meaningful custom settings. If valid
 settings already exist, say they will be kept rather than overwritten. A read-only proposal is not a
@@ -409,7 +418,9 @@ Validation discovery is deterministic:
 - Otherwise, non-empty `check`, `typecheck`, `lint`, and `test` scripts are proposed in that
   order as `bun run <script>`.
 - `check` and `typecheck` use the `typecheck` surface, `lint` uses `lint`, and `test` uses
-  `test`; `ci:local` has no fixed surface tag. Proposed commands use a 120,000 ms timeout.
+  `test`; `ci:local` has no fixed surface tag. Proposed commands default to a 600,000 ms
+  (10-minute) timeout, configurable per command through `timeoutMs`. Existing saved command
+  timeouts and task policy snapshots remain unchanged.
 - Missing or invalid `package.json`, missing scripts, no discovered scripts, or the absence of
   `ci:local` is reported in `unresolved`; unresolved discovery is not a passing check.
 
@@ -430,6 +441,17 @@ Catalogue records retain `selector`, `id`, `provider`, and `thinking`, plus opti
 `reasoning`, `contextWindow`, and `cost: { input: number, output: number }`. Use the actual catalogue
 and one lookup per operation; do not parse private model configuration or invent names. Cost metadata
 is descriptive and does not guarantee account pricing or latency.
+
+The native terminal onboarding and `tandem configure` use searchable model pickers populated from
+that catalogue. Type to filter by model name or selector, use arrow keys to navigate, and press Enter
+to choose. Each model is followed by a menu containing only its supported thinking levels. Available
+saved choices or role suggestions are highlighted, but every role still requires confirmation.
+Each role prompt explains its responsibilities and the kind of model recommended for it; for example,
+Research recommends a cheap, fast model for read-only investigation. Thinking levels control reasoning
+effort: higher levels can take longer and cost more. The role's usual thinking level is labeled
+**Recommended** only when supported by the selected model; a saved level is labeled separately.
+The complete six-role recap has a separate **Save** / **Not now** menu, defaulting to **Not now**.
+Ctrl+C cancels without saving partial choices; saved preferences remain unchanged.
 
 On every onboarding, make model selection explicit for all six role identities and their human
 labels: **Planning** (`coordinator`), **Research** (`scout`), **Coding** (`implementer`), **Review**
@@ -550,7 +572,7 @@ The envelope has exactly these outer fields and no others:
         "name": "package:ci:local",
         "argv": ["bun", "run", "ci:local"],
         "surfaces": [],
-        "timeoutMs": 120000
+        "timeoutMs": 600000
       }
     ]
   }
@@ -642,6 +664,12 @@ configured clean source checkout and normalizes the record to the original canon
 The two checkouts must be distinct worktrees of the same Git common directory; unrelated paths are
 rejected. Prefer the original `TANDEM_REPO` path in task requests so task records, policy, and
 delivery remain visibly attached to the project the user selected.
+
+Task creation captures policy and the ready source revision atomically. Workers start at that exact
+commit even if `origin/main` advances afterward. Existing tasks, leases, and worker checkouts are not
+repinned by a coordinator refresh. Fetch or source-safety failures block new creation, not existing
+pinned work. A saved lease without worker history must pass the same captured-HEAD check on retry;
+an allocation failure never grants permission to launch from the rejected checkout.
 
 A scout is created in `queued` and scope-approved. This records requested work but does not prove that a worker has started or that research is complete. If delegation is blocked, the coordinator discloses the durable blocker as actionable state; direct research requires explicit user authorization. An implementation is created in `awaiting-approval` with `scopeApproved: false`; creation does not approve it. Approve the recorded scope explicitly before dispatch:
 
@@ -993,13 +1021,102 @@ are Tandem-owned state, not files in target repositories:
 | `<home>/repositories/<key>/config.json` | Private central policy envelope for the canonical repository root; `<key>` is the first 24 hex characters of its SHA-256 realpath digest. |
 | `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. |
 | `<home>/coordinator-scripts/*.sh` | Atomically written `0700` launch scripts containing the coordinator command and scoped environment overrides; kept outside project checkouts. |
-| `<home>/tasks/<task-id>.json` | Versioned task record, policy snapshot, lifecycle state, evidence, reviews, notifications, and delivery metadata. |
-| `<home>/communications/<safe-task-id>/inbox.json` | Derived bounded task-message projection; canonical communication remains in the task record. |
-| `<home>/runtime.json` | Versioned runtime state for reservations, endpoint identities, durable jobs, stop requests, and presentations. |
+| `<home>/state.sqlite` | Canonical SQLite source of truth for task records, policy snapshots, lifecycle/evidence/review/delivery metadata, runtime reservations, endpoint identities, durable jobs and operations, stop requests, presentations, and migration metadata. |
+| `<home>/communications/<safe-task-id>/inbox.json` | Derived bounded task-message projection; canonical communication remains in the task row in `state.sqlite`. |
+| `<home>/tasks/*.json` (legacy input only) | Pre-migration task snapshots. A successful migration archives the original bytes under `<home>/.tandem-migration/archive/tasks/` and replaces `<home>/tasks` with an old-writer fence file. |
+| `<home>/runtime.json` (legacy input only) | Pre-migration runtime snapshot. A successful migration archives the original bytes under `<home>/.tandem-migration/archive/runtime.json` and replaces `<home>/runtime.json` with an old-writer fence directory. |
 | `<home>/jobs/<task-id>/...` | Worker/validation job inputs, private result files, persisted reports, `job.json.terminal.json` lifecycle/heartbeat state, and short-lived `job.json.terminal.json.command` pause/close requests. |
 | `<home>/sessions/<task-id>/` | Implementer OMP session directories when continuation is needed. Scouts do not receive a session directory. |
 | `<home>/presentations/<presentation-id>/` | Private presentation job, result, artifact, interactive terminal state/control, and `feedback/<event-id>.json` evidence files. |
 | `<home>/pool/` | Default Treehouse pool root unless overridden. |
+
+### Legacy JSON migration (offline only)
+
+`state.sqlite` is the only canonical task/runtime store. `<home>/runtime.json` and
+`<home>/tasks/*.json` are legacy migration inputs, not a second authority. A home that
+contains legacy JSON is refused by normal SQLite startup until migration completes.
+Migration is an explicit offline cutover; do not use it while any Tandem coordinator,
+worker, validation job, presentation, or legacy writer may be running.
+
+Use the same home that the coordinator uses (`--home PATH`, then `TANDEM_HOME`, otherwise
+`~/.tandem`) and follow this sequence:
+
+1. Stop all Tandem/Herdr activity for that home. Resolve every live or ambiguous
+   coordinator, active worker or validation job, and unresolved endpoint launch before
+   continuing. Do not treat a missing process observation as proof when native ownership
+   is ambiguous; incomplete reservation intents are reported for quarantine instead.
+2. Run the read-only plan. Omitting `--yes` is important:
+
+   ```sh
+   tandem migrate-state --home /absolute/path/to/tandem-home --json
+   ```
+
+   The plan hashes regular legacy source files, reports source/task counts and
+   diagnostics, and lists incomplete reservation intents that will be quarantined
+   without guessing or resuming them. `blocked` means stop and resolve the reported
+   liveness/ownership condition; never bypass it.
+
+3. When the plan is `ready`, apply it with the same home:
+
+   ```sh
+   tandem migrate-state --home /absolute/path/to/tandem-home --yes --json
+   ```
+
+   The apply path rechecks native authority after acquiring the home fence lock and
+   refuses if ownership changed. It validates source hashes, archives any present legacy
+   source at `<home>/.tandem-migration/archive/runtime.json` and
+   `<home>/.tandem-migration/archive/tasks/`, imports them into `state.sqlite`, writes
+   `<home>/.tandem-migration/manifest.json`, and installs
+   `<home>/.tandem-migration/fence.json`. The former `<home>/runtime.json` becomes a
+   read-only fence directory; the former `<home>/tasks` becomes a read-only fence file.
+   The archive and manifest preserve source identity for replay.
+4. If apply is interrupted, rerun the exact same `--yes` command. The manifest/archive
+   phases make the import resumable and idempotent; do not edit, delete, or recreate
+   legacy sources, the archive, or the fences. Re-run the plan command and proceed with
+   normal launch only when it reports `complete`.
+
+Planning and apply fail closed on malformed or unknown legacy fields, symlinked or
+non-regular sources, changed source hashes, an invalid migration manifest, a non-empty
+SQLite task/runtime store, or any unproven native ownership. Do not repair around a
+diagnostic by deleting records or replacing a source; preserve the bytes and rerun the
+read-only plan after the prerequisite is resolved.
+
+Import preserves task IDs, generations, fix-round and policy state, saved checkpoints,
+evidence, and operation history. Incomplete legacy reservation intents remain recorded
+and are quarantined by reconciliation; migration never invents an operation or resumes
+an uncertain launch. Migration is not recovery and does not resume tasks, clear
+reservations, release retained capacity/resources, reset a checkpoint, change policy, or
+unblock a maxed fix-round policy.
+
+After cutover, recovery accepts only positive native identity or durable result evidence.
+An unknown external-effect outcome is quarantined and keeps its reservation, capacity,
+and resources. A worker launch is at-most-once: a duplicate claim or a stale
+task/generation/operation/fencing identity is refused. Never clear a reservation,
+invent a job or result, replace a task, or change policy to bypass unknown ownership.
+
+### Durable operation and recovery contract
+
+Before a reservation or any external resource/effect, the runtime records a durable
+operation containing the role, task generation, input checkpoint (`inputHead`), policy
+and instruction identity, job and result paths, operation ID, claim owner, and fencing
+revision. The home-native fence lock (`<home>/.state.lock`) protects state ownership and
+external-effect decisions; each SQLite transition is short and commits the
+operation/reservation/effect intent before the corresponding external action. A later
+execution claim must match the operation, task, generation, job, input checkpoint, claim
+owner, fencing revision, paths, and active stop state. The first committed worker claim
+wins; duplicate or stale claims are refused, so an uncertain launch is never retried
+merely because a process or result is missing.
+
+On restart, positive native endpoint identity or a task/generation/HEAD-matching durable
+result may allow reconciliation to continue. Missing, conflicting, or ambiguous
+identity/result evidence quarantines the operation and retains its reservation and
+resources for inspection. Quarantine is not failure cleanup and does not release
+capacity. Only an explicit, evidence-backed transition may consume a result or release
+resources; recovery must not clear records, manufacture receipts, replace a task, or
+change saved policy/checkpoints.
+
+These controls do not make external effects transactional or guarantee availability; they
+make uncertain ownership fail closed and preserve evidence for an explicit decision.
 
 The central record's validated `repoPath` may be reused as an already-known project index when
 resolving a requested name. It does not authorize a home crawl, a first-basename guess, cloning,
@@ -1010,17 +1127,25 @@ different record under a different home.
 setup creates only the missing central file, exclusively; `configure-models` writes only after explicit
 approval and atomically replaces the global model envelope. Existing, malformed, mismatched, or
 symlinked policy state is retained and reported rather than overwritten. New central directories use
-`0700` and policy files use exclusive creation with `0600`. Runtime JSON/text state uses atomic
-replacement; do not hand-edit durable task records while Tandem is running.
+`0700` and policy files use exclusive creation with `0600`. Canonical task/runtime writes go
+through short SQLite transactions under the Darwin native home fence lock
+(`<home>/.state.lock`); sidecar JSON is evidence, projection, or job input rather than a
+second authority. Do not hand-edit `state.sqlite` or durable sidecars while Tandem is running.
 
-On restart, use the same home, repository, pool root, and named session. The scheduler reconciles durable endpoint-launch intent, Herdr identities, jobs, result files, reservations, and stop requests. It identifies a recoverable endpoint only by exact workspace label/root-pane/cwd identity. Missing or ambiguous resources block or remain pending rather than being guessed; worker output is accepted only when task ID, generation, and HEAD match. A failure preserves reports and worktree state.
+On restart, use the same home, repository, pool root, and named session. The scheduler reconciles
+durable operation and endpoint-launch intent, Herdr identities, jobs, result files, reservations,
+and stop requests. It identifies a recoverable endpoint only by exact workspace label/root-pane/cwd
+identity and accepts worker output only when task, generation, job, and input HEAD identities match.
+Positive native identity or matching durable result evidence may continue recovery; missing,
+conflicting, or ambiguous evidence quarantines the operation and retains its reservation/resources
+rather than guessing. A failure preserves reports and worktree state.
 
-Task communication is canonical in the task record and published as a small derived inbox under
-`<home>/communications/<safe-task-id>/inbox.json`. The service persists canonical state before
-publishing the projection and reconciles a stale or missing inbox after a crash. Worker receipts
-are identity-bound to task, job, and generation; an applied receipt means provider-bound context,
-not implementation completion. Pending directions survive restart unless the service explicitly
-rejects them for a terminal resource or safety state.
+Task communication is canonical in the task row in `state.sqlite` and published as a small
+derived inbox under `<home>/communications/<safe-task-id>/inbox.json`. The service persists
+canonical state before publishing the projection and reconciles a stale or missing inbox after a
+crash. Worker receipts are identity-bound to task, job, generation, and operation; an applied
+receipt means provider-bound context, not implementation completion. Pending directions survive
+restart unless the service explicitly rejects them for a terminal resource or safety state.
 
 OMP-native compaction and the durable store work together:
 
@@ -1028,7 +1153,9 @@ OMP-native compaction and the durable store work together:
 - during `session.compacting`, it refreshes that context and preserves `tandemDigest`;
 - after `session_compact`, it reconciles the scheduler and appends a fresh `tandem-digest` entry.
 
-The aggregate durable digest is bounded to 8,000 characters and may omit older task detail; the task files and reports remain authoritative. Model-facing action summaries are bounded separately, while `show --full` retains more structured detail.
+The aggregate durable digest is bounded to 8,000 characters and may omit older task detail;
+`state.sqlite` and durable reports/evidence remain authoritative. Model-facing action summaries
+are bounded separately, while `show --full` retains more structured detail.
 
 An undefined worker timeout means no default deadline for the delegated turn. An explicit positive
 worker limit is enforced by the interactive extension: it aborts the delegated turn and records

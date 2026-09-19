@@ -28,13 +28,33 @@ export function unreleasedReservation(
   return reservation !== undefined && reservation.phase !== "released";
 }
 
+function reservationConsumesCapacity(
+  reservation: DurableReservation | undefined,
+  operationPhase: string | undefined,
+): boolean {
+  if (!unreleasedReservation(reservation)) return false;
+  // Legacy reservations and quarantined operations remain fenced until positive
+  // ownership/resource evidence releases them. Completed terminal operations do not
+  // pin a fresh claim if cleanup was interrupted.
+  return (
+    operationPhase === undefined ||
+    operationPhase === "prepared" ||
+    operationPhase === "admitted" ||
+    operationPhase === "acquiring" ||
+    operationPhase === "launching" ||
+    operationPhase === "running" ||
+    operationPhase === "finalizing" ||
+    operationPhase === "quarantined"
+  );
+}
+
 export function activeReservations(state: RuntimeState): number {
   let count = 0;
   for (const task of state.tasks) {
-    if (unreleasedReservation(task.reservation)) count += 1;
+    if (reservationConsumesCapacity(task.reservation, task.operation?.phase)) count += 1;
   }
   for (const presentation of state.presentations) {
-    if (unreleasedReservation(presentation.reservation)) count += 1;
+    if (reservationConsumesCapacity(presentation.reservation, undefined)) count += 1;
   }
   return count;
 }

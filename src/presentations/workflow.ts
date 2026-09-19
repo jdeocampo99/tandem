@@ -25,6 +25,7 @@ import {
 import type {
   DurableEndpointLaunch,
   DurableJob,
+  DurableOperation,
   RuntimePresentation,
   RuntimeState,
 } from "../runtime/schema.ts";
@@ -67,7 +68,21 @@ export type PresentationRuntimeDependencies = Readonly<{
   readonly feedback: PresentationFeedbackWorkflow;
   readonly recordShadowRecommendation?: (task: TaskRecord, job: DurableJob) => Promise<void>;
 }>;
+export type PresentationFailureBinding = Readonly<{
+  readonly jobId: string;
+  readonly operationId: string | undefined;
+  readonly fencingRevision: number | undefined;
+  readonly claimOwner: string | undefined;
+}>;
 
+function presentationFailureBinding(runtime: RuntimePresentation): PresentationFailureBinding {
+  return {
+    jobId: runtime.job.id,
+    operationId: runtime.operation?.id,
+    fencingRevision: runtime.operation?.fencingRevision,
+    claimOwner: runtime.operation?.claimOwner,
+  };
+}
 export class PresentationRuntimeWorkflow {
   readonly #deps: PresentationRuntimeDependencies;
 
@@ -85,56 +100,121 @@ export class PresentationRuntimeWorkflow {
     const state = await this.#deps.readState();
     const initialRuntime = presentationRuntime(state, presentationId);
     if (initialRuntime === undefined) throw new Error(`presentation ${presentationId} is missing`);
-    let failedRuntime: Pick<RuntimePresentation, "recordPath"> | undefined;
-    await withPresentationLock(initialRuntime.recordPath, undefined, () =>
+    const intent = await withPresentationLock(initialRuntime.recordPath, undefined, () =>
       this.#deps.store.exclusive(async () => {
         const currentState = await readRuntimeState(this.#deps.runtimePath);
         const runtime = presentationRuntime(currentState, presentationId);
         if (runtime === undefined) throw new Error(`presentation ${presentationId} is missing`);
         if (
+          runtime.operation === undefined ||
+          runtime.job.operationId !== runtime.operation.id ||
           runtime.job.id !== jobId ||
           runtime.job.phase !== "reserved" ||
           runtime.job.launchAttempted
-        )
-          return;
-        const launching = replaceRuntimePresentation(currentState, presentationId, (entry) => ({
-          ...entry,
-          job: { ...entry.job, phase: "launching", launchAttempted: true },
-        }));
-        await writeRuntimeState(this.#deps.runtimePath, launching);
-        try {
-          await sendCommand(this.#deps.run, { endpoint, cwd, command });
-        } catch (error) {
-          const reason = `presentation launch failed after launch intent: ${describeError(error)}`;
-          const failed = replaceRuntimePresentation(launching, presentationId, (entry) => ({
-            ...entry,
-            lastError: reason,
-            job: { ...entry.job, phase: "failed", error: reason },
-          }));
-          await writeRuntimeState(this.#deps.runtimePath, failed);
-          const record = await readPresentationRecord(runtime.recordPath);
-          const failedRecord: PresentationRecord = {
-            ...record,
-            status: "failed",
-            error: reason,
-            updatedAt: this.#deps.clock(),
-          };
-          await writeJsonAtomically(
-            runtime.recordPath,
-            this.#deps.feedback.withPresentationNotification(record, failedRecord),
-          );
-          failedRuntime = { recordPath: runtime.recordPath };
-          return;
+        ) {
+          return undefined;
         }
-        const running = replaceRuntimePresentation(launching, presentationId, (entry) => ({
-          ...entry,
-          job: { ...entry.job, phase: "running", launchedAt: this.#deps.clock() },
-        }));
-        await writeRuntimeState(this.#deps.runtimePath, running);
+        const launching = replaceRuntimePresentation(currentState, presentationId, (entry) => {
+          if (entry.operation === undefined) return entry;
+          return {
+            ...entry,
+            operation: {
+              ...entry.operation,
+              phase: "launching" as const,
+              effects: [
+                ...entry.operation.effects,
+                {
+                  id: jobId,
+                  kind: "worker" as const,
+                  phase: "intent" as const,
+                  createdAt: this.#deps.clock(),
+                  identity: entry.job.jobPath,
+                },
+              ],
+            },
+            job: { ...entry.job, phase: "launching", launchAttempted: true },
+          };
+        });
+        await writeRuntimeState(this.#deps.runtimePath, launching);
+        return {
+          recordPath: runtime.recordPath,
+          operationId: runtime.operation.id,
+          fencingRevision: runtime.operation.fencingRevision,
+          claimOwner: runtime.operation.claimOwner,
+        };
       }),
     );
-    if (failedRuntime !== undefined)
-      await this.#deps.feedback.flushPresentationNotification(failedRuntime);
+    if (intent === undefined) return;
+    let reason: string | undefined;
+    let stateUpdated = false;
+    try {
+      await sendCommand(this.#deps.run, { endpoint, cwd, command });
+    } catch (error) {
+      reason = `presentation launch failed after launch intent: ${describeError(error)}`;
+    }
+    await withPresentationLock(intent.recordPath, undefined, () =>
+      this.#deps.store.exclusive(async () => {
+        const currentState = await readRuntimeState(this.#deps.runtimePath);
+        const runtime = presentationRuntime(currentState, presentationId);
+        if (
+          runtime === undefined ||
+          runtime.job.id !== jobId ||
+          runtime.job.operationId !== intent.operationId ||
+          runtime.operation?.id !== intent.operationId ||
+          runtime.operation.fencingRevision !== intent.fencingRevision ||
+          runtime.operation.claimOwner !== intent.claimOwner
+        )
+          return;
+        const next = replaceRuntimePresentation(currentState, presentationId, (entry) => {
+          if (
+            entry.operation === undefined ||
+            entry.job.operationId !== intent.operationId ||
+            entry.operation.id !== intent.operationId ||
+            entry.operation.fencingRevision !== intent.fencingRevision ||
+            entry.operation.claimOwner !== intent.claimOwner
+          )
+            return entry;
+          stateUpdated = true;
+          return {
+            ...entry,
+            ...(reason === undefined ? {} : { lastError: reason }),
+            operation: {
+              ...entry.operation,
+              phase: reason === undefined ? ("running" as const) : ("quarantined" as const),
+              effects: entry.operation.effects.map((effect) =>
+                effect.id === jobId
+                  ? {
+                      ...effect,
+                      phase: reason === undefined ? ("succeeded" as const) : ("unknown" as const),
+                      ...(reason === undefined ? { receipt: endpoint.paneId } : {}),
+                    }
+                  : effect,
+              ),
+              ...(reason === undefined ? {} : { error: reason }),
+            },
+            job:
+              reason === undefined
+                ? { ...entry.job, phase: "running", launchedAt: this.#deps.clock() }
+                : { ...entry.job, phase: "failed", error: reason },
+          };
+        });
+        await writeRuntimeState(this.#deps.runtimePath, next);
+      }),
+    );
+    if (reason !== undefined && stateUpdated) {
+      const record = await readPresentationRecord(intent.recordPath);
+      const failedRecord: PresentationRecord = {
+        ...record,
+        status: "failed",
+        error: reason,
+        updatedAt: this.#deps.clock(),
+      };
+      await writeJsonAtomically(
+        intent.recordPath,
+        this.#deps.feedback.withPresentationNotification(record, failedRecord),
+      );
+      await this.#deps.feedback.flushPresentationNotification({ recordPath: intent.recordPath });
+    }
   }
 
   private async markPresentationRunning(id: string): Promise<RuntimePresentation | undefined> {
@@ -211,37 +291,43 @@ export class PresentationRuntimeWorkflow {
       runtime.job.generation,
       this.#deps.clock(),
       this.#deps.parentWorkspaceId,
+      runtime.operation?.id,
     );
     try {
       const claimed = await this.savePresentationEndpointLaunch(id, endpointLaunch);
       if (!claimed) return;
     } catch (error) {
-      await this.releaseUnlaunchedPresentationReservation(id, runtime.reservation.id);
+      await this.releaseUnlaunchedPresentationReservation(
+        id,
+        runtime.reservation.id,
+        runtime.job.id,
+        runtime.operation?.id,
+      );
       await this.failPresentation(
         id,
         `presentation launch intent could not be persisted: ${describeError(error)}`,
+        presentationFailureBinding(runtime),
       );
       return;
     }
     let endpointResult: HerdrEndpointResult;
     try {
-      endpointResult = await this.#deps.store.exclusive(() =>
-        createTaskEndpoint(this.#deps.run, {
-          sessionId: this.#deps.sessionId,
-          cwd: runtime.job.cwd,
-          taskName,
-          workspaceLabel: endpointLaunch.workspaceLabel,
-          role: "presentation",
-          generation: runtime.job.generation,
-          ...(this.#deps.parentWorkspaceId === undefined
-            ? {}
-            : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
-        }),
-      );
+      endpointResult = await createTaskEndpoint(this.#deps.run, {
+        sessionId: this.#deps.sessionId,
+        cwd: runtime.job.cwd,
+        taskName,
+        workspaceLabel: endpointLaunch.workspaceLabel,
+        role: "presentation",
+        generation: runtime.job.generation,
+        ...(this.#deps.parentWorkspaceId === undefined
+          ? {}
+          : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
+      });
     } catch (error) {
       await this.failPresentation(
         id,
         `presentation pane allocation failed: ${describeError(error)}`,
+        presentationFailureBinding(runtime),
         false,
       );
       return;
@@ -259,6 +345,7 @@ export class PresentationRuntimeWorkflow {
       await this.failPresentation(
         id,
         `presentation pane identity could not be persisted: ${describeError(error)}`,
+        presentationFailureBinding(runtime),
         false,
       );
       return;
@@ -287,11 +374,16 @@ export class PresentationRuntimeWorkflow {
     const initialRuntime = presentationRuntime(state, presentationId);
     if (initialRuntime === undefined) throw new Error(`presentation ${presentationId} is missing`);
     const nextJobId = singleLine(this.#deps.idFactory(), "presentation answer job id");
+    const nextOperationId = singleLine(this.#deps.idFactory(), "presentation answer operation id");
     const normalizedAnswer = singleLine(answer, "presentation answer");
     await withPresentationLock(initialRuntime.recordPath, undefined, async () => {
       const currentState = await this.#deps.readState();
       const runtime = presentationRuntime(currentState, presentationId);
       if (runtime === undefined) throw new Error(`presentation ${presentationId} is missing`);
+      const priorOperation = runtime.operation;
+      if (priorOperation === undefined) {
+        throw new Error(`presentation ${presentationId} has no durable operation`);
+      }
       const owner = await this.#deps.readTask(runtime.taskId);
       if (owner.stage === "cancelled") {
         throw new Error(`presentation ${presentationId} cannot resume cancelled task ${owner.id}`);
@@ -317,40 +409,90 @@ export class PresentationRuntimeWorkflow {
         askedQuestion.recommendation === undefined
           ? ""
           : `\nRecommendation: ${askedQuestion.recommendation}`;
+      const now = this.#deps.clock();
+      const {
+        error: _priorError,
+        resultConsumedAt: _priorConsumedAt,
+        ...operationBase
+      } = priorOperation;
+      const nextOperation: DurableOperation = {
+        ...operationBase,
+        id: nextOperationId,
+        jobId: nextJobId,
+        phase: "admitted",
+        fencingRevision: priorOperation.fencingRevision + 1,
+        claimOwner: `${this.#deps.sessionId}:${nextOperationId}`,
+        createdAt: now,
+        effects: [],
+      };
       const nextWorker = {
         ...worker,
         id: nextJobId,
         jobPath: nextJobPath,
         resultPath: nextResultPath,
-        prompt: `${worker.prompt}\n\nPrior worker report: ${runtime.job.resultPath}\nPrior question: ${askedQuestion.text}${recommendation}\nCoordinator answer: ${normalizedAnswer}`,
+        prompt: [
+          worker.prompt,
+          `Prior worker report: ${runtime.job.resultPath}`,
+          `Coordinator question: ${askedQuestion.text}`,
+          `Coordinator answer: ${normalizedAnswer}${recommendation}`,
+        ].join("\n\n"),
+        ...(worker.execution === undefined
+          ? {}
+          : {
+              execution: {
+                ...worker.execution,
+                operationId: nextOperation.id,
+                fencingRevision: nextOperation.fencingRevision,
+                claimOwner: nextOperation.claimOwner,
+              },
+            }),
       };
+      parseWorkerJob(nextWorker);
       await writeJsonAtomically(nextJobPath, nextWorker);
-      const nextDurableJob = {
-        schemaVersion: 1 as const,
+      const nextDurableJob: DurableJob = {
+        schemaVersion: 1,
         id: nextJobId,
         taskId: runtime.job.taskId,
         generation: runtime.job.generation,
-        role: "presentation" as const,
-        kind: "worker" as const,
+        role: "presentation",
+        kind: "worker",
         cwd: runtime.job.cwd,
         jobPath: nextJobPath,
         resultPath: nextResultPath,
         attempt: runtime.job.attempt + 1,
-        phase: "reserved" as const,
+        phase: "reserved",
         launchAttempted: false,
-        createdAt: this.#deps.clock(),
+        createdAt: now,
+        operationId: nextOperation.id,
         ...(runtime.job.endpoint === undefined ? {} : { endpoint: runtime.job.endpoint }),
       };
       await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
         replaceRuntimePresentation(current, presentationId, (entry) => ({
           ...entry,
+          operation: nextOperation,
+          operationHistory: [
+            ...(entry.operationHistory ?? []),
+            entry.operation === undefined ? priorOperation : entry.operation,
+          ],
+          ...(entry.reservation === undefined
+            ? {}
+            : {
+                reservation: {
+                  ...entry.reservation,
+                  ownerSessionId: this.#deps.sessionId,
+                  operationId: nextOperation.id,
+                },
+              }),
+          ...(entry.endpointLaunch === undefined
+            ? {}
+            : { endpointLaunch: { ...entry.endpointLaunch, operationId: nextOperation.id } }),
           job: nextDurableJob,
         })),
       );
       await writeJsonAtomically(runtime.recordPath, {
         ...recordWithoutTransient,
         status: "queued",
-        updatedAt: this.#deps.clock(),
+        updatedAt: now,
       });
     });
     await this.startPresentation(presentationId);
@@ -400,8 +542,8 @@ export class PresentationRuntimeWorkflow {
         await this.failPresentation(
           freshRuntime.id,
           "presentation has no endpoint identity",
+          presentationFailureBinding(freshRuntime),
           true,
-          job.id,
         );
       }
       return;
@@ -490,18 +632,36 @@ export class PresentationRuntimeWorkflow {
         let consumed = false;
         await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
           replaceRuntimePresentation(current, runtime.id, (entry) => {
-            if (entry.job.id !== job.id || !activeRuntimeJob(entry.job)) return entry;
+            if (
+              entry.job.id !== job.id ||
+              entry.job.operationId !== job.operationId ||
+              entry.operation?.id !== runtime.operation?.id ||
+              entry.operation?.fencingRevision !== runtime.operation?.fencingRevision ||
+              entry.operation?.claimOwner !== runtime.operation?.claimOwner ||
+              !activeRuntimeJob(entry.job)
+            )
+              return entry;
             consumed = true;
+            const consumedAt = this.#deps.clock();
             return {
               ...entry,
-              job: { ...entry.job, phase: "consumed", consumedAt: this.#deps.clock() },
+              ...(entry.operation === undefined
+                ? {}
+                : {
+                    operation: {
+                      ...entry.operation,
+                      phase: "completed" as const,
+                      resultConsumedAt: consumedAt,
+                    },
+                  }),
+              job: { ...entry.job, phase: "consumed", consumedAt },
               ...(entry.reservation === undefined
                 ? {}
                 : {
                     reservation: {
                       ...entry.reservation,
                       phase: "released",
-                      releasedAt: this.#deps.clock(),
+                      releasedAt: consumedAt,
                     },
                   }),
             };
@@ -518,7 +678,12 @@ export class PresentationRuntimeWorkflow {
           }
           return;
         }
-        followUp = { runtime, record: completedWithNotification };
+        const consumedState = await this.#deps.readState();
+        const consumedRuntime = presentationRuntime(consumedState, runtime.id);
+        followUp = {
+          runtime: consumedRuntime ?? runtime,
+          record: completedWithNotification,
+        };
       });
     } catch (error) {
       if (failureReason === undefined) {
@@ -526,7 +691,12 @@ export class PresentationRuntimeWorkflow {
       }
     }
     if (failureReason !== undefined) {
-      await this.failPresentation(runtimeHint.id, failureReason, true, runtimeHint.job.id);
+      await this.failPresentation(
+        runtimeHint.id,
+        failureReason,
+        presentationFailureBinding(runtimeHint),
+        true,
+      );
       return;
     }
     if (followUp === undefined) return;
@@ -542,8 +712,8 @@ export class PresentationRuntimeWorkflow {
   async failPresentation(
     id: string,
     reason: string,
+    expectedBinding: PresentationFailureBinding,
     releaseReservation = true,
-    expectedJobId?: string,
   ): Promise<void> {
     const state = await this.#deps.readState();
     const initialRuntime = presentationRuntime(state, id);
@@ -554,16 +724,75 @@ export class PresentationRuntimeWorkflow {
       const runtime = presentationRuntime(currentState, id);
       if (runtime === undefined) return;
       if (
-        expectedJobId !== undefined &&
-        (runtime.job.id !== expectedJobId || !activeRuntimeJob(runtime.job))
+        runtime.job.id !== expectedBinding.jobId ||
+        runtime.job.operationId !== expectedBinding.operationId ||
+        runtime.operation?.id !== expectedBinding.operationId ||
+        runtime.operation?.fencingRevision !== expectedBinding.fencingRevision ||
+        runtime.operation?.claimOwner !== expectedBinding.claimOwner ||
+        !activeRuntimeJob(runtime.job)
       )
         return;
       const record = await readPresentationRecord(runtime.recordPath);
       if (record.status === "ended") return;
-      if (!releaseReservation && runtime.endpointLaunch !== undefined) {
-        await this.setPresentationError(id, reason);
-        return;
-      }
+      const canRelease =
+        releaseReservation &&
+        runtime.endpointLaunch === undefined &&
+        runtime.job.phase === "reserved" &&
+        !runtime.job.launchAttempted;
+      let settled = false;
+      await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
+        replaceRuntimePresentation(current, id, (entry) => {
+          if (
+            entry.job.id !== expectedBinding.jobId ||
+            entry.job.operationId !== expectedBinding.operationId ||
+            entry.operation?.id !== expectedBinding.operationId ||
+            entry.operation?.fencingRevision !== expectedBinding.fencingRevision ||
+            entry.operation?.claimOwner !== expectedBinding.claimOwner
+          )
+            return entry;
+          settled = true;
+          if (!canRelease) {
+            return {
+              ...entry,
+              lastError: reason,
+              ...(entry.job.launchAttempted && entry.operation !== undefined
+                ? {
+                    operation: {
+                      ...entry.operation,
+                      phase: "quarantined" as const,
+                      error: reason,
+                    },
+                  }
+                : {}),
+            };
+          }
+          return {
+            ...entry,
+            lastError: reason,
+            ...(entry.operation === undefined
+              ? {}
+              : {
+                  operation: {
+                    ...entry.operation,
+                    phase: "failed" as const,
+                    error: reason,
+                  },
+                }),
+            job: { ...entry.job, phase: "failed", error: reason },
+            ...(entry.reservation === undefined
+              ? {}
+              : {
+                  reservation: {
+                    ...entry.reservation,
+                    phase: "released" as const,
+                    releasedAt: this.#deps.clock(),
+                  },
+                }),
+          };
+        }),
+      );
+      if (!settled) return;
+      if (!canRelease && !runtime.job.launchAttempted) return;
       const failed: PresentationRecord = {
         ...record,
         status: "failed",
@@ -575,22 +804,6 @@ export class PresentationRuntimeWorkflow {
         failed,
       );
       await writeJsonAtomically(runtime.recordPath, failedWithNotification);
-      await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
-        replaceRuntimePresentation(current, id, (entry) => ({
-          ...entry,
-          lastError: reason,
-          job: { ...entry.job, phase: "failed", error: reason },
-          ...(entry.reservation === undefined
-            ? {}
-            : {
-                reservation: {
-                  ...entry.reservation,
-                  phase: "released",
-                  releasedAt: this.#deps.clock(),
-                },
-              }),
-        })),
-      );
       shouldFlush = hasPendingPresentationNotification(failedWithNotification);
     });
     if (shouldFlush) await this.#deps.feedback.flushPresentationNotification(initialRuntime);
@@ -607,15 +820,25 @@ export class PresentationRuntimeWorkflow {
         throw new Error(`task ${runtime.taskId} is missing`);
       }
       if (activeReservations(state) >= task.policy.config.maxWorkers) return false;
+      if (runtime.operation === undefined) {
+        throw new Error(`presentation ${id} has no durable operation`);
+      }
       const reservation = runtimeReservation(
         singleLine(this.#deps.idFactory(), "presentation reservation id"),
         runtime.taskId,
         this.#deps.sessionId,
         this.#deps.clock(),
+        runtime.operation.id,
       );
       await writeRuntimeState(
         this.#deps.runtimePath,
-        replaceRuntimePresentation(state, id, (current) => ({ ...current, reservation })),
+        replaceRuntimePresentation(state, id, (current) => ({
+          ...current,
+          ...(current.operation === undefined
+            ? {}
+            : { operation: { ...current.operation, phase: "admitted" as const } }),
+          reservation,
+        })),
       );
       return true;
     });
@@ -630,6 +853,15 @@ export class PresentationRuntimeWorkflow {
       replaceRuntimePresentation(state, presentationId, (current) => {
         if (current.reservation?.id !== launch.reservationId) {
           throw new Error(`presentation ${presentationId} has no matching endpoint reservation`);
+        }
+        if (
+          !unreleasedReservation(current.reservation) ||
+          !activeRuntimeJob(current.job) ||
+          current.operation === undefined ||
+          current.operation.id !== launch.operationId ||
+          current.reservation.operationId !== launch.operationId
+        ) {
+          return current;
         }
         if (
           current.endpointLaunch !== undefined ||
@@ -648,6 +880,8 @@ export class PresentationRuntimeWorkflow {
   async releaseUnlaunchedPresentationReservation(
     presentationId: string,
     reservationId: string,
+    expectedJobId?: string,
+    expectedOperationId?: string,
   ): Promise<void> {
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
       replaceRuntimePresentation(state, presentationId, (current) => {
@@ -655,7 +889,9 @@ export class PresentationRuntimeWorkflow {
           current.reservation?.id !== reservationId ||
           !unreleasedReservation(current.reservation) ||
           current.endpointLaunch !== undefined ||
-          activeRuntimeJob(current.job)
+          activeRuntimeJob(current.job) ||
+          (expectedJobId !== undefined && current.job.id !== expectedJobId) ||
+          (expectedOperationId !== undefined && current.operation?.id !== expectedOperationId)
         ) {
           return current;
         }
@@ -676,25 +912,31 @@ export class PresentationRuntimeWorkflow {
   ): Promise<RuntimePresentation | undefined> {
     const launch = runtime.endpointLaunch;
     if (launch === undefined) return runtime;
-    if (runtime.reservation?.ownerSessionId !== this.#deps.sessionId) {
-      await this.setPresentationError(
-        runtime.id,
-        "endpoint launch is owned by another session; recovery was not attempted",
-      );
-      return undefined;
-    }
     const recovery = await recoverEndpointFromLaunch(this.#deps.run, launch);
     if (recovery.status !== "recovered") {
       const reason =
         recovery.status === "ambiguous"
           ? `presentation endpoint recovery is ambiguous: ${recovery.detail}`
           : `presentation endpoint recovery is pending: ${recovery.detail}`;
-      await this.setPresentationError(runtime.id, reason);
+      await this.setPresentationError(runtime.id, reason, runtime);
       return undefined;
     }
     try {
       await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
         replaceRuntimePresentation(state, runtime.id, (current) => {
+          if (
+            current.job.id !== runtime.job.id ||
+            current.job.operationId !== runtime.job.operationId ||
+            current.operation?.id !== runtime.operation?.id ||
+            current.operation?.fencingRevision !== runtime.operation?.fencingRevision ||
+            current.operation?.claimOwner !== runtime.operation?.claimOwner ||
+            current.endpointLaunch?.reservationId !== launch.reservationId ||
+            current.endpointLaunch?.operationId !== launch.operationId ||
+            current.endpointLaunch?.createdAt !== launch.createdAt ||
+            current.endpointLaunch?.sessionId !== launch.sessionId ||
+            current.endpointLaunch?.workspaceLabel !== launch.workspaceLabel
+          )
+            return current;
           const { endpointLaunch: _endpointLaunch, ...withoutLaunch } = current;
           return {
             ...withoutLaunch,
@@ -707,6 +949,7 @@ export class PresentationRuntimeWorkflow {
       await this.setPresentationError(
         runtime.id,
         `recovered presentation endpoint identity could not be persisted: ${describeError(error)}`,
+        runtime,
       );
       return undefined;
     }
@@ -714,11 +957,24 @@ export class PresentationRuntimeWorkflow {
     return presentationRuntime(state, runtime.id);
   }
 
-  private async setPresentationError(id: string, error: string): Promise<void> {
+  private async setPresentationError(
+    id: string,
+    error: string,
+    expected?: RuntimePresentation,
+  ): Promise<void> {
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
-      replaceRuntimePresentation(state, id, (current) =>
-        current.lastError === error ? current : { ...current, lastError: error },
-      ),
+      replaceRuntimePresentation(state, id, (current) => {
+        if (
+          expected !== undefined &&
+          (current.job.id !== expected.job.id ||
+            current.job.operationId !== expected.job.operationId ||
+            current.operation?.id !== expected.operation?.id ||
+            current.operation?.fencingRevision !== expected.operation?.fencingRevision ||
+            current.operation?.claimOwner !== expected.operation?.claimOwner)
+        )
+          return current;
+        return current.lastError === error ? current : { ...current, lastError: error };
+      }),
     );
   }
 }

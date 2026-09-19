@@ -172,6 +172,43 @@ test("extension binds services to a clean source while preserving original ident
   expect(shutdownCalls).toBe(1);
 });
 
+test("before_agent_start exposes a blocked source refresh instead of silently planning stale work", async () => {
+  type LifecycleHandler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
+  const handlers = new Map<string, LifecycleHandler>();
+  const service = {
+    list: async () => [],
+    refreshSource: async () => {
+      throw new Error("origin/main fetch failed");
+    },
+    shutdown: async () => undefined,
+  } as unknown as TandemService;
+  const pi = {
+    zod,
+    on: (event: string, handler: LifecycleHandler) => {
+      handlers.set(event, handler);
+    },
+    registerTool: () => undefined,
+    registerCommand: () => undefined,
+    logger: { error: () => undefined },
+    sendMessage: () => undefined,
+    appendEntry: () => undefined,
+  } as unknown as ExtensionAPI;
+
+  createTandemExtension({ service })(pi);
+  const beforeAgentStart = handlers.get("before_agent_start");
+  if (beforeAgentStart === undefined) throw new Error("before_agent_start handler missing");
+  const context = {
+    cwd: "/tmp/clean-coordinator",
+    sessionManager: { getSessionId: () => "session-a" },
+  } as unknown as ExtensionContext;
+
+  const result = (await beforeAgentStart({ systemPrompt: ["existing"] }, context)) as {
+    readonly systemPrompt: readonly string[];
+  };
+  expect(result.systemPrompt.join("\n")).toContain("SOURCE REFRESH BLOCKED");
+  expect(result.systemPrompt.join("\n")).toContain("Do not create or launch new work");
+});
+
 test("Tandem command parsing preserves quoted values and routes presentation feedback", () => {
   expect(
     parseTandemCommand('present task-1 "show the changed screen" /tmp/a.html,/tmp/b.png'),

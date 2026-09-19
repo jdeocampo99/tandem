@@ -4,6 +4,7 @@ import { closeEndpoint, type HerdrPaneInspection, inspectEndpoint } from "../ada
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type { Clock, CommandRunner, Endpoint, IdFactory, TaskRecord } from "../contracts.ts";
 import { activeRuntimeJob, taskRuntime } from "../runtime/activity.ts";
+import { withStateLock } from "../runtime/database.ts";
 import { readRuntimeState, writeRuntimeState } from "../runtime/persistence.ts";
 import type {
   DurableEndpointLaunch,
@@ -22,6 +23,7 @@ import {
   isRecord,
   replaceRuntimeTask,
   singleLine,
+  text,
 } from "../service/records.ts";
 import { taskSourcePath } from "../service/source.ts";
 import { readValidationResult } from "../validation-worker.ts";
@@ -32,6 +34,7 @@ import {
   prepareWorkerTerminal,
   workerJobForEndpoint,
 } from "../workers/terminal-control.ts";
+import type { OperationClaim } from "../workers/workflow.ts";
 import { appendTaskMessage } from "./communication-protocol.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "./lifecycle.ts";
 import type { TaskStore } from "./store.ts";
@@ -57,6 +60,26 @@ type OwnedEndpointProbe = Readonly<{
   readonly status: "active" | "stopped" | "missing" | "rejected";
   readonly detail: string | undefined;
 }>;
+
+function sameEndpointLaunch(
+  left: DurableEndpointLaunch | undefined,
+  right: DurableEndpointLaunch,
+): boolean {
+  return (
+    left !== undefined &&
+    left.schemaVersion === right.schemaVersion &&
+    left.reservationId === right.reservationId &&
+    left.operationId === right.operationId &&
+    left.sessionId === right.sessionId &&
+    left.taskName === right.taskName &&
+    left.workspaceLabel === right.workspaceLabel &&
+    left.cwd === right.cwd &&
+    left.role === right.role &&
+    left.generation === right.generation &&
+    left.createdAt === right.createdAt &&
+    left.parentWorkspaceId === right.parentWorkspaceId
+  );
+}
 type TerminalResultProbe =
   | Readonly<{ readonly status: "valid" }>
   | Readonly<{ readonly status: "missing" }>
@@ -68,6 +91,7 @@ type ResumeResourceCheck = Readonly<{
 }>;
 
 export type TaskControlDependencies = Readonly<{
+  readonly home: string;
   readonly store: TaskStore;
   readonly runtimePath: string;
   readonly sessionId: string;
@@ -87,8 +111,12 @@ export type TaskControlDependencies = Readonly<{
   readonly transition: (taskId: string, event: TaskEvent) => Promise<TaskRecord>;
   readonly blockTask: (taskId: string, reason: string) => Promise<TaskRecord>;
   readonly publishTaskInbox: (task: TaskRecord) => Promise<void>;
+  readonly saveEndpoint: (
+    taskId: string,
+    endpoint: Endpoint,
+    claim?: OperationClaim,
+  ) => Promise<void>;
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
-  readonly saveEndpoint: (taskId: string, endpoint: Endpoint) => Promise<void>;
 }>;
 
 function parseHerdrPayload(raw: string, operation: string): Record<string, unknown> {
@@ -294,42 +322,145 @@ export class TaskControlWorkflow {
     this.#deps = deps;
   }
 
+  private async mutateIfOperationClaim(
+    task: TaskRecord,
+    claim: OperationClaim | undefined,
+    reason: string,
+    block: boolean,
+    expectedLaunch?: DurableEndpointLaunch,
+  ): Promise<boolean> {
+    return withStateLock(this.#deps.home, async () =>
+      this.#deps.store.exclusive(async (store) => {
+        const currentTask = await store.read(task.id);
+        if (currentTask === undefined || currentTask.generation !== task.generation) {
+          return false;
+        }
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const current = taskRuntime(state, task.id);
+        const operation = current?.operation;
+        const owns =
+          claim === undefined
+            ? operation === undefined
+            : operation?.id === claim.id &&
+              operation.claimOwner === claim.claimOwner &&
+              operation.fencingRevision === claim.fencingRevision;
+        if (
+          !owns ||
+          (expectedLaunch !== undefined &&
+            (current?.reservation?.id !== expectedLaunch.reservationId ||
+              current?.reservation?.operationId !== expectedLaunch.operationId ||
+              !sameEndpointLaunch(current?.endpointLaunch, expectedLaunch))) ||
+          current?.stopRequest !== undefined
+        ) {
+          return false;
+        }
+        if (current !== undefined) {
+          await writeRuntimeState(
+            this.#deps.runtimePath,
+            replaceRuntimeTask(state, task.id, (entry) => ({
+              ...entry,
+              lastError: reason,
+            })),
+          );
+        }
+        if (
+          block &&
+          currentTask.stage !== "cancelled" &&
+          currentTask.stage !== "completed" &&
+          currentTask.stage !== "merged" &&
+          currentTask.stage !== "paused" &&
+          currentTask.stage !== "blocked"
+        ) {
+          await store.update(currentTask.id, currentTask.revision, (entry) =>
+            transitionTask(
+              entry,
+              { type: "block", reason: text(reason, "block reason") },
+              this.#deps.context(),
+            ),
+          );
+        }
+        return true;
+      }),
+    );
+  }
   async reconcileEndpointLaunch(
     task: TaskRecord,
     runtime: RuntimeTaskState,
   ): Promise<RuntimeTaskState | undefined> {
     const launch = runtime.endpointLaunch;
     if (launch === undefined) return runtime;
+    const claim: OperationClaim | undefined =
+      runtime.operation === undefined
+        ? undefined
+        : {
+            id: runtime.operation.id,
+            fencingRevision: runtime.operation.fencingRevision,
+            claimOwner: runtime.operation.claimOwner,
+          };
+    if (runtime.stopRequest !== undefined) return runtime;
     if (runtime.reservation?.ownerSessionId !== this.#deps.sessionId) {
-      await this.#deps.setRuntimeError(
-        task.id,
+      await this.mutateIfOperationClaim(
+        task,
+        claim,
         "endpoint launch is owned by another session; recovery was not attempted",
+        false,
+        launch,
       );
       return undefined;
     }
-    const recovery = await recoverEndpointFromLaunch(this.#deps.run, launch);
-    if (recovery.status !== "recovered") {
-      const reason =
-        recovery.status === "ambiguous"
-          ? `endpoint recovery is ambiguous: ${recovery.detail}`
-          : `endpoint recovery is pending: ${recovery.detail}`;
-      await this.#deps.setRuntimeError(task.id, reason);
-      if (
-        recovery.status === "ambiguous" ||
-        isOlderThan(launch.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)
-      ) {
-        await this.#deps.blockTask(task.id, reason);
+    return withStateLock(this.#deps.home, async () => {
+      const recovery = await recoverEndpointFromLaunch(this.#deps.run, launch);
+      if (recovery.status !== "recovered") {
+        const reason =
+          recovery.status === "ambiguous"
+            ? `endpoint recovery is ambiguous: ${recovery.detail}`
+            : `endpoint recovery is pending: ${recovery.detail}`;
+        await this.mutateIfOperationClaim(
+          task,
+          claim,
+          reason,
+          recovery.status === "ambiguous" ||
+            isOlderThan(launch.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS),
+          launch,
+        );
+        return undefined;
       }
-      return undefined;
-    }
-    try {
-      await this.#deps.saveEndpoint(task.id, recovery.endpoint);
-    } catch (error) {
-      const reason = `recovered endpoint identity could not be persisted: ${describeError(error)}`;
-      await this.#deps.setRuntimeError(task.id, reason);
-      return undefined;
-    }
-    return this.#deps.runtimeFor(task.id);
+      const currentTask = await this.#deps.getTask(task.id);
+      const current = await this.#deps.runtimeFor(task.id);
+      if (
+        current === undefined ||
+        current.stopRequest !== undefined ||
+        current.reservation?.id !== launch.reservationId ||
+        current.reservation?.ownerSessionId !== this.#deps.sessionId ||
+        current.reservation?.operationId !== launch.operationId ||
+        !sameEndpointLaunch(current.endpointLaunch, launch) ||
+        (claim === undefined
+          ? launch.operationId !== undefined || current.operation !== undefined
+          : launch.operationId !== claim.id ||
+            current.operation?.id !== claim.id ||
+            current.operation?.claimOwner !== claim.claimOwner ||
+            current.operation?.fencingRevision !== claim.fencingRevision) ||
+        currentTask.generation !== launch.generation
+      ) {
+        return undefined;
+      }
+      try {
+        await this.#deps.saveEndpoint(task.id, recovery.endpoint, claim);
+      } catch (error) {
+        if (
+          !(await this.mutateIfOperationClaim(
+            task,
+            claim,
+            `recovered endpoint identity could not be persisted: ${describeError(error)}`,
+            false,
+            launch,
+          ))
+        ) {
+          return undefined;
+        }
+      }
+      return this.#deps.runtimeFor(task.id);
+    });
   }
 
   async controlTask(
@@ -337,49 +468,56 @@ export class TaskControlWorkflow {
     action: ControlAction,
     reason: string | undefined,
   ): Promise<TaskRecord> {
-    return this.#deps.store.exclusive(async (store) => {
-      const task = await store.read(taskId);
-      if (task === undefined || !(await this.#deps.taskInScope(task))) {
-        throw new Error(`task ${taskId} is missing`);
-      }
-      const terminal =
-        task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged";
-      const state = await readRuntimeState(this.#deps.runtimePath);
-      const runtime = taskRuntime(state, taskId);
-      if (terminal) {
-        if (runtime !== undefined) {
-          const resources = await this.inspectOwnedResources(task, runtime);
-          if (resources.failure !== undefined) {
-            throw new Error(`cannot confirm task ${taskId} is stopped: ${resources.failure}`);
-          }
-          if (resources.abandonedJobIds.length > 0 || resources.terminalJobIds.length > 0) {
+    return withStateLock(this.#deps.home, async () => {
+      const prepared = await this.#deps.store.exclusive(async (store) => {
+        const task = await store.read(taskId);
+        if (task === undefined || !(await this.#deps.taskInScope(task))) {
+          throw new Error(`task ${taskId} is missing`);
+        }
+        const terminal =
+          task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged";
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const runtime = taskRuntime(state, taskId);
+        if (terminal) return { kind: "terminal" as const, task, runtime };
+        if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
+        const event: TaskEvent =
+          action === "pause"
+            ? { type: "pause", reason: reason ?? "paused by coordinator" }
+            : { type: "cancel", ...(reason === undefined ? {} : { reason }) };
+        const stopRequest: DurableStopRequest = {
+          schemaVersion: 1,
+          action,
+          generation: task.generation,
+          requestedAt: this.#deps.clock(),
+        };
+        await writeRuntimeState(
+          this.#deps.runtimePath,
+          replaceRuntimeTask(state, taskId, (current) => ({
+            ...current,
+            stopRequest,
+            lastError: `${action} requested`,
+          })),
+        );
+        return { kind: "active" as const, task, runtime, event };
+      });
+      if (prepared.kind === "terminal") {
+        if (prepared.runtime !== undefined) {
+          const resources = await this.inspectOwnedResources(prepared.task, prepared.runtime);
+          if (
+            resources.failure !== undefined ||
+            resources.abandonedJobIds.length > 0 ||
+            resources.terminalJobIds.length > 0
+          ) {
             throw new Error(
-              `cannot confirm task ${taskId} is stopped: a durable worker job remains`,
+              `cannot confirm task ${taskId} is stopped: ${
+                resources.failure ?? "a durable worker job remains"
+              }`,
             );
           }
         }
-        return task;
+        return prepared.task;
       }
-      if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
-
-      const event: TaskEvent =
-        action === "pause"
-          ? { type: "pause", reason: reason ?? "paused by coordinator" }
-          : { type: "cancel", ...(reason === undefined ? {} : { reason }) };
-      const planned = transitionTask(task, event, this.#deps.context());
-      const stopRequest: DurableStopRequest = {
-        schemaVersion: 1,
-        action,
-        generation: task.generation,
-        requestedAt: this.#deps.clock(),
-      };
-      const requested = replaceRuntimeTask(state, taskId, (current) => ({
-        ...current,
-        stopRequest,
-        lastError: `${action} requested`,
-      }));
-      await writeRuntimeState(this.#deps.runtimePath, requested);
-
+      const { task, runtime, event } = prepared;
       const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
       let stopFailure: string | undefined;
       for (const endpoint of runtime.endpoints) {
@@ -401,22 +539,32 @@ export class TaskControlWorkflow {
       if (runtime.jobs.some(activeRuntimeJob) && runtime.endpoints.length === 0) {
         stopFailure = "a durable worker job has no endpoint identity";
       }
-      if (stopFailure !== undefined) {
-        const blockedReason = `could not safely ${action} task ${taskId}: ${stopFailure}`;
-        const failedState = replaceRuntimeTask(requested, taskId, (current) => ({
-          ...current,
-          lastError: blockedReason,
-        }));
-        await writeRuntimeState(this.#deps.runtimePath, failedState);
-        const blocked =
-          task.stage === "paused" || task.stage === "blocked"
-            ? task
-            : transitionTask(task, { type: "block", reason: blockedReason }, this.#deps.context());
-        if (blocked !== task) await store.update(task.id, task.revision, () => blocked);
-        return blocked;
-      }
-      await store.update(task.id, task.revision, () => planned);
-      return planned;
+      return this.#deps.store.exclusive(async (store) => {
+        const current = await store.read(taskId);
+        if (current === undefined) throw new Error(`task ${taskId} is missing`);
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        if (stopFailure !== undefined) {
+          const blockedReason = `could not safely ${action} task ${taskId}: ${stopFailure}`;
+          const failedState = replaceRuntimeTask(state, taskId, (entry) => ({
+            ...entry,
+            lastError: blockedReason,
+          }));
+          await writeRuntimeState(this.#deps.runtimePath, failedState);
+          const blocked =
+            current.stage === "paused" || current.stage === "blocked"
+              ? current
+              : transitionTask(
+                  current,
+                  { type: "block", reason: blockedReason },
+                  this.#deps.context(),
+                );
+          if (blocked !== current) await store.update(current.id, current.revision, () => blocked);
+          return blocked;
+        }
+        const planned = transitionTask(current, event, this.#deps.context());
+        await store.update(current.id, current.revision, () => planned);
+        return planned;
+      });
     });
   }
 

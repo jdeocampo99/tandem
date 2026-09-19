@@ -7,6 +7,11 @@ import { formatTaskMessages } from "./tasks/communication-protocol.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
 import { WORKER_CONTROL_ENV } from "./worker-control.ts";
 import {
+  claimExecutionStart,
+  type ExecutionAdmission,
+  type ExecutionGateInput,
+} from "./workers/execution-gate.ts";
+import {
   parseWorkerJob,
   parseWorkerResult,
   persistWorkerResult,
@@ -18,11 +23,13 @@ import { WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
 
 export type WorkerClock = () => string;
 export type WorkerResultWriter = (resultPath: string, result: WorkerResult) => void | Promise<void>;
-
 export type WorkerRunOptions = Readonly<{
   readonly run?: RunInteractive;
   readonly now?: WorkerClock;
   readonly writeResult?: WorkerResultWriter;
+  readonly executionGate?: (
+    input: ExecutionGateInput,
+  ) => ExecutionAdmission | PromiseLike<ExecutionAdmission>;
 }>;
 
 const SCOUT_TOOLS = ["read", "grep", "glob", "web_search"] as const;
@@ -149,6 +156,40 @@ export async function runWorkerJob(
   const absoluteJobPath = resolve(jobPath);
   const job = await readJobFile(absoluteJobPath);
   const now = options.now ?? (() => new Date().toISOString());
+  const prior = await existingResult(job);
+  if (prior !== undefined) return prior;
+  if (job.execution === undefined) {
+    return failureResult(job, "execution refused: worker job has no execution admission", now);
+  }
+  const gateInput: ExecutionGateInput = {
+    execution: job.execution,
+    jobId: job.id,
+    taskId: job.taskId,
+    generation: job.generation,
+    command: job.role === "presentation" ? "presentation" : "worker",
+    cwd: job.cwd,
+    resultPath: job.resultPath,
+    ...(job.review === undefined ? {} : { inputHead: job.review.head }),
+  };
+  let admission: ExecutionAdmission;
+  try {
+    const gate = options.executionGate ?? claimExecutionStart;
+    admission = await gate(gateInput);
+  } catch (error) {
+    return failureResult(
+      job,
+      `execution refused: ${error instanceof Error ? error.message : String(error)}`,
+      now,
+    );
+  }
+  if (!admission.admitted) {
+    return failureResult(
+      job,
+      `execution refused: ${admission.reason ?? "worker execution was refused"}`,
+      now,
+    );
+  }
+
   const writeResult = options.writeResult ?? persistWorkerResult;
   const run = options.run ?? defaultRunInteractive;
   let childExit: number;
@@ -156,15 +197,15 @@ export async function runWorkerJob(
     const prompt = await promptWithInitialCommunication(job);
     childExit = await run(buildWorkerCommand(job, prompt, absoluteJobPath));
   } catch (error) {
-    const prior = await existingResult(job);
-    if (prior !== undefined) return prior;
+    const completed = await existingResult(job);
+    if (completed !== undefined) return completed;
     const result = failureResult(job, error, now);
     await writeResult(job.resultPath, result);
     return result;
   }
 
-  const prior = await existingResult(job);
-  if (prior !== undefined) return prior;
+  const completed = await existingResult(job);
+  if (completed !== undefined) return completed;
   const result = failureResult(
     job,
     childExit === 0
@@ -193,6 +234,9 @@ async function runCli(argv: readonly string[]): Promise<number> {
     throw new TypeError("usage: bun src/worker.ts JOB_JSON_PATH");
   }
   const result = await runWorkerJob(argv[0]);
+  if (result.status === "failed" && result.error?.startsWith("execution refused:") === true) {
+    process.stderr.write(`${result.error}\n`);
+  }
   return result.status === "failed" ? 1 : 0;
 }
 

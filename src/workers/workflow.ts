@@ -1,11 +1,11 @@
-import { mkdir } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
 import {
   closeEndpoint,
   createReviewerEndpoint,
   createTaskEndpoint,
-  type HerdrEndpointResult,
   type HerdrPaneInspection,
   inspectEndpoint,
   sendCommand,
@@ -27,6 +27,7 @@ import {
   taskRuntime,
   unreleasedReservation,
 } from "../runtime/activity.ts";
+import { withStateLock } from "../runtime/database.ts";
 import {
   readRuntimeState,
   taskJobsDirectory,
@@ -39,6 +40,9 @@ import type {
   DurableEndpointLaunch,
   DurableJob,
   DurableJobConsumption,
+  DurableOperation,
+  DurableOperationEffect,
+  DurableOperationKind,
   DurableReservation,
   RuntimeState,
   RuntimeTaskState,
@@ -54,12 +58,14 @@ import {
   currentWriter,
   DEFAULT_STARTUP_GRACE_MS,
   describeError,
+  durableOperation,
   endpointLaunchFor,
   inputEventKey,
   instructionOptions,
   isMissing,
   isMissingEndpoint,
   isOlderThan,
+  isRecord,
   jobDirectoryFor,
   jobPaths,
   makeDurableJob,
@@ -70,6 +76,7 @@ import {
   reportPathFor,
   reviewFindings,
   runtimeReservation,
+  serializedIdentity,
   singleLine,
   taskFingerprint,
   taskWithQuestion,
@@ -113,12 +120,26 @@ const REQUIRED_REVIEW_LENSES: readonly ["behavior", "design", "coverage", "verif
   "coverage",
   "verification",
 ];
+export type OperationClaim = Readonly<{
+  readonly id: string;
+  readonly fencingRevision: number;
+  readonly claimOwner: string;
+}>;
 export type ReservationResult = Readonly<{
   readonly task: TaskRecord;
   readonly runtime: RuntimeTaskState;
   readonly reservation: DurableReservation;
 }>;
 
+function claimOf(operation: DurableOperation | undefined): OperationClaim | undefined {
+  return operation === undefined
+    ? undefined
+    : {
+        id: operation.id,
+        fencingRevision: operation.fencingRevision,
+        claimOwner: operation.claimOwner,
+      };
+}
 export type CurrentCheckout = Readonly<{
   readonly checkpoint: GitCheckpoint;
   readonly expectedHead: string;
@@ -155,19 +176,47 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly maintainPoolForAllocation: (task: TaskRecord) => Promise<boolean>;
   readonly evaluateShadow?: (input: JevShadowInput) => Promise<JevShadowResult>;
 }>;
-
 export class WorkerWorkflow {
   readonly #deps: WorkerWorkflowDependencies;
+  readonly #claimOwner: string;
 
   constructor(deps: WorkerWorkflowDependencies) {
     this.#deps = deps;
+    this.#claimOwner = `${deps.sessionId}:${process.pid}:${randomUUID()}`;
+  }
+
+  get claimOwner(): string {
+    return this.#claimOwner;
   }
 
   async reconcileJob(task: TaskRecord, runtime: RuntimeTaskState, job: DurableJob): Promise<void> {
     const endpoint = job.endpoint;
+    const claim = claimOf(runtime.operation);
+    if (claim === undefined) return;
+    if (
+      endpoint !== undefined &&
+      job.phase === "reserved" &&
+      !job.launchAttempted &&
+      runtime.operation?.jobId === job.id &&
+      runtime.operation.effects.every((effect) => effect.id !== job.id)
+    ) {
+      const command =
+        job.kind === "validation"
+          ? workerCommand(this.#deps.validationWorkerPath, job.jobPath)
+          : workerCommand(this.#deps.workerPath, job.jobPath);
+      await this.launchJob(task.id, job.id, endpoint, job.cwd, command, claim);
+      return;
+    }
     if (endpoint === undefined) {
       if (isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) {
-        await this.failJob(task, job, "worker job has no durable endpoint identity");
+        await this.failJob(
+          task,
+          job,
+          "worker job has no durable endpoint identity",
+          claim,
+          true,
+          true,
+        );
       }
       return;
     }
@@ -179,17 +228,21 @@ export class WorkerWorkflow {
       });
     } catch (error) {
       if (error instanceof EndpointOwnershipError && error.reason === "missing") {
-        await this.reconcileMissingEndpoint(task, job);
+        await this.reconcileMissingEndpoint(task, job, claim);
         return;
       }
       throw error;
     }
     if (inspection.activeWorker) {
-      await this.observeWorkerProgress(task, job);
+      await this.observeWorkerProgress(task, job, claim);
       const terminal = await liveWorkerTerminal(inspection, job);
       if (terminal === undefined || (!terminal.completed && terminal.phase !== "paused")) {
-        if (job.phase !== "running")
-          await this.updateJob(job.taskId, job.id, (current) => ({ ...current, phase: "running" }));
+        if (job.phase !== "running") {
+          await this.updateJob(job.taskId, job.id, claim, (current) => ({
+            ...current,
+            phase: "running",
+          }));
+        }
         return;
       }
     }
@@ -209,10 +262,13 @@ export class WorkerWorkflow {
             task,
             job,
             `worker stopped without a durable result: ${describeError(error)}`,
+            claim,
+            true,
+            true,
           );
           return;
         }
-        await this.failJob(task, job, `worker result rejected: ${describeError(error)}`);
+        await this.failJob(task, job, `worker result rejected: ${describeError(error)}`, claim);
         return;
       }
       await this.consumeWorkerResult(task, runtime, job, result);
@@ -234,31 +290,42 @@ export class WorkerWorkflow {
           task,
           job,
           `validation stopped without durable evidence: ${describeError(error)}`,
+          claim,
+          true,
+          true,
         );
         return;
       }
-      await this.failJob(task, job, `validation result rejected: ${describeError(error)}`);
+      await this.failJob(task, job, `validation result rejected: ${describeError(error)}`, claim);
       return;
     }
     await this.consumeValidationResult(task, runtime, job, result);
   }
 
-  private async reconcileMissingEndpoint(task: TaskRecord, job: DurableJob): Promise<void> {
+  private async reconcileMissingEndpoint(
+    task: TaskRecord,
+    job: DurableJob,
+    claim: OperationClaim,
+  ): Promise<void> {
     if (!isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) return;
     const resultExists = await this.#deps.resultExists(job.resultPath);
-    if (resultExists) {
-      await this.failJob(
-        task,
-        job,
-        "owned endpoint disappeared; durable result cannot be trusted without stopped-pane proof",
-      );
-      return;
-    }
-    if (job.endpoint !== undefined) await this.#deps.removeEndpoint(task.id, job.endpoint.paneId);
-    await this.failJob(task, job, "owned endpoint disappeared before a durable result was written");
+    await this.failJob(
+      task,
+      job,
+      resultExists
+        ? "owned endpoint disappeared; durable result cannot be trusted without stopped-pane proof"
+        : "owned endpoint disappeared before a durable result was written",
+      claim,
+      true,
+      true,
+    );
   }
 
-  private async observeWorkerProgress(task: TaskRecord, job: DurableJob): Promise<void> {
+  private async observeWorkerProgress(
+    task: TaskRecord,
+    job: DurableJob,
+    claim: OperationClaim,
+  ): Promise<void> {
     if (job.receiptPath === undefined) return;
     const receipt = await readWorkerReceipt(job.receiptPath, {
       jobId: job.id,
@@ -285,7 +352,7 @@ export class WorkerWorkflow {
       receipt !== undefined &&
       Date.parse(receipt.progressAt) > Date.parse(job.progressWarningAt)
     ) {
-      await this.updateJob(job.taskId, job.id, (current) => {
+      await this.updateJob(job.taskId, job.id, claim, (current) => {
         const { progressWarningAt: _progressWarningAt, ...withoutWarning } = current;
         return withoutWarning;
       });
@@ -293,7 +360,7 @@ export class WorkerWorkflow {
     }
     if (!heartbeatStale && !progressStale) return;
     if (job.progressWarningAt !== undefined) return;
-    await this.updateJob(job.taskId, job.id, (current) => ({
+    await this.updateJob(job.taskId, job.id, claim, (current) => ({
       ...current,
       progressWarningAt: now,
     }));
@@ -347,6 +414,8 @@ export class WorkerWorkflow {
     job: DurableJob,
     result: WorkerResult,
   ): Promise<void> {
+    const claim = claimOf(runtime.operation);
+    if (claim === undefined) return;
     if (
       (job.role === "reviewer" || job.role === "verifier") &&
       (job.instructionRevision ?? 0) !== (task.communication?.revision ?? 0)
@@ -355,6 +424,7 @@ export class WorkerWorkflow {
         task,
         job,
         "review result was launched for an older instruction revision",
+        claim,
         false,
       );
       return;
@@ -362,7 +432,13 @@ export class WorkerWorkflow {
     try {
       await this.assertInstructionCurrent(task, job, result.instructionRevision);
     } catch (error) {
-      await this.failJob(task, job, `stale worker instruction: ${describeError(error)}`, false);
+      await this.failJob(
+        task,
+        job,
+        `stale worker instruction: ${describeError(error)}`,
+        claim,
+        false,
+      );
       return;
     }
     if (result.status === "failed" || result.status === "needs-decision") {
@@ -395,6 +471,7 @@ export class WorkerWorkflow {
       await this.consumeJob(
         task.id,
         job.id,
+        claim,
         { type: "block", reason },
         {
           ...(question === undefined ? {} : { question }),
@@ -412,6 +489,7 @@ export class WorkerWorkflow {
         await this.consumeJob(
           task.id,
           job.id,
+          claim,
           {
             type: "block",
             reason: `scout checkout could not be verified: ${describeError(error)}; worktree is preserved`,
@@ -428,6 +506,7 @@ export class WorkerWorkflow {
         await this.consumeJob(
           task.id,
           job.id,
+          claim,
           {
             type: "block",
             reason:
@@ -442,6 +521,7 @@ export class WorkerWorkflow {
       await this.consumeJob(
         task.id,
         job.id,
+        claim,
         {
           type: "scout-report-complete",
           reportPath,
@@ -461,6 +541,7 @@ export class WorkerWorkflow {
         await this.consumeJob(
           task.id,
           job.id,
+          claim,
           {
             type: "block",
             reason:
@@ -475,6 +556,7 @@ export class WorkerWorkflow {
       await this.consumeJob(
         task.id,
         job.id,
+        claim,
         {
           type: "implementation-complete",
           head: checkout.checkpoint.head,
@@ -487,7 +569,12 @@ export class WorkerWorkflow {
     }
     const review = result.review;
     if (review === undefined || job.head === undefined || job.reviewLens === undefined) {
-      await this.failJob(task, job, "review worker completed without complete review identity");
+      await this.failJob(
+        task,
+        job,
+        "review worker completed without complete review identity",
+        claim,
+      );
       return;
     }
     const checkout = await this.readWorkerCheckout(runtime, job);
@@ -502,6 +589,7 @@ export class WorkerWorkflow {
       await this.consumeJob(
         task.id,
         job.id,
+        claim,
         {
           type: "block",
           reason: `stale or dirty review evidence for ${job.reviewLens} at ${job.head}; review was not accepted`,
@@ -513,6 +601,7 @@ export class WorkerWorkflow {
     await this.consumeJob(
       task.id,
       job.id,
+      claim,
       { type: "record-review", review },
       instructionOptions(result.instructionRevision),
     );
@@ -524,19 +613,22 @@ export class WorkerWorkflow {
     job: DurableJob,
     result: ValidationResult,
   ): Promise<void> {
+    const claim = claimOf(runtime.operation);
+    if (claim === undefined) return;
     const canonicalRevision = task.communication?.revision ?? 0;
     if (canonicalRevision !== 0 && job.instructionRevision !== canonicalRevision) {
       await this.failJob(
         task,
         job,
         `stale validation instruction revision ${String(job.instructionRevision)}; canonical is ${canonicalRevision}`,
+        claim,
         false,
       );
       return;
     }
     const expectedHead = job.head;
     if (expectedHead === undefined) {
-      await this.failJob(task, job, "validation job has no expected HEAD");
+      await this.failJob(task, job, "validation job has no expected HEAD", claim);
       return;
     }
     const checkout = await this.readWorkerCheckout(runtime, job);
@@ -548,6 +640,7 @@ export class WorkerWorkflow {
       await this.consumeJob(
         task.id,
         job.id,
+        claim,
         {
           type: "validation-failed",
           head: expectedHead,
@@ -583,7 +676,7 @@ export class WorkerWorkflow {
             generation: job.generation,
             evidence: result.evidence,
           };
-    await this.consumeJob(task.id, job.id, event, {
+    await this.consumeJob(task.id, job.id, claim, event, {
       ...instructionOptions(job.instructionRevision),
     });
     await this.closeValidationAfterResult(task.id, job.endpoint);
@@ -617,32 +710,128 @@ export class WorkerWorkflow {
     task: TaskRecord,
     job: DurableJob,
     reason: string,
+    claim: OperationClaim,
     block = true,
+    quarantine = false,
   ): Promise<void> {
-    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
-      replaceRuntimeTask(state, task.id, (current) => {
-        const failed = replaceJob(current, job.id, (entry) => ({
-          ...entry,
-          phase: "failed",
-          error: reason,
-        }));
-        return failed.reservation === undefined || failed.jobs.some(activeRuntimeJob)
-          ? failed
-          : {
-              ...failed,
-              reservation: {
-                ...failed.reservation,
-                releasedAt: this.#deps.clock(),
+    await withStateLock(this.#deps.home, async () => {
+      await this.#deps.store.exclusive(async () => {
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const current = taskRuntime(state, task.id);
+        const operation = current?.operation;
+        const currentJob = current?.jobs.find((entry) => entry.id === job.id);
+        if (
+          current === undefined ||
+          operation === undefined ||
+          currentJob === undefined ||
+          operation.id !== claim.id ||
+          operation.claimOwner !== claim.claimOwner ||
+          operation.fencingRevision !== claim.fencingRevision ||
+          operation.taskId !== task.id ||
+          operation.jobId !== job.id ||
+          job.taskId !== task.id ||
+          job.operationId !== operation.id ||
+          currentJob.operationId !== operation.id
+        ) {
+          return;
+        }
+        const next = replaceRuntimeTask(state, task.id, (entry) => {
+          if (quarantine) {
+            return {
+              ...entry,
+              lastError: reason,
+              operation: {
+                ...operation,
+                phase: "quarantined" as const,
+                error: reason,
               },
             };
+          }
+          const failed = replaceJob(entry, job.id, (candidate) => ({
+            ...candidate,
+            phase: "failed",
+            error: reason,
+          }));
+          const completedFailure = {
+            ...failed,
+            operation: {
+              ...operation,
+              phase: "failed" as const,
+              error: reason,
+            },
+          };
+          return completedFailure.reservation === undefined ||
+            completedFailure.jobs.some(activeRuntimeJob)
+            ? completedFailure
+            : {
+                ...completedFailure,
+                reservation: {
+                  ...completedFailure.reservation,
+                  phase: "released",
+                  releasedAt: this.#deps.clock(),
+                },
+              };
+        });
+        await writeRuntimeState(this.#deps.runtimePath, next);
+        if (quarantine || block) await this.#deps.blockTask(task.id, reason);
+      });
+    });
+  }
+  private async blockIfOperationClaim(
+    taskId: string,
+    reason: string,
+    claim: OperationClaim,
+  ): Promise<void> {
+    await withStateLock(this.#deps.home, async () => {
+      await this.#deps.store.exclusive(async (store) => {
+        const runtime = await this.#deps.runtimeFor(taskId);
+        if (
+          runtime === undefined ||
+          runtime.stopRequest !== undefined ||
+          runtime.operation === undefined ||
+          runtime.operation.id !== claim.id ||
+          runtime.operation.claimOwner !== claim.claimOwner ||
+          runtime.operation.fencingRevision !== claim.fencingRevision ||
+          ["completed", "quarantined", "cancelled"].includes(runtime.operation.phase)
+        ) {
+          return;
+        }
+        const task = await store.read(taskId);
+        if (task?.generation !== runtime.operation.generation) return;
+        await this.#deps.blockTask(taskId, reason);
+      });
+    });
+  }
+  private async transitionIfOperationClaim(
+    taskId: string,
+    claim: OperationClaim,
+    event: TaskEvent,
+  ): Promise<boolean> {
+    return withStateLock(this.#deps.home, async () =>
+      this.#deps.store.exclusive(async (store) => {
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const runtime = taskRuntime(state, taskId);
+        const operation = runtime?.operation;
+        if (
+          operation?.id !== claim.id ||
+          operation.claimOwner !== claim.claimOwner ||
+          operation.fencingRevision !== claim.fencingRevision
+        ) {
+          return false;
+        }
+        const task = await store.read(taskId);
+        if (task === undefined || task.stage !== "queued") return false;
+        const next = transitionTask(task, event, this.#deps.context());
+        await store.update(taskId, task.revision, () => next);
+        return true;
       }),
     );
-    if (block) await this.#deps.blockTask(task.id, reason);
   }
 
   private async consumeJob(
     taskId: string,
     jobId: string,
+    claim: OperationClaim,
     event: TaskEvent,
     options: Readonly<{
       question?: TaskQuestion;
@@ -657,8 +846,19 @@ export class WorkerWorkflow {
       const job = runtime.jobs.find((entry) => entry.id === jobId);
       if (job === undefined) throw new Error(`runtime job ${jobId} is missing`);
       const task = await store.read(taskId);
-      if (task === undefined || !(await this.#deps.taskInScope(task))) {
-        throw new Error(`task ${taskId} is missing`);
+      if (task === undefined) throw new Error(`task ${taskId} is missing`);
+      if (
+        runtime.operation === undefined ||
+        runtime.stopRequest !== undefined ||
+        ["completed", "failed", "quarantined", "cancelled"].includes(runtime.operation.phase) ||
+        runtime.operation.id !== claim.id ||
+        runtime.operation.claimOwner !== claim.claimOwner ||
+        runtime.operation.fencingRevision !== claim.fencingRevision ||
+        runtime.operation.jobId !== job.id ||
+        job.operationId !== runtime.operation.id ||
+        job.taskId !== taskId
+      ) {
+        return task;
       }
       try {
         if (
@@ -853,36 +1053,140 @@ export class WorkerWorkflow {
           consumedAt: this.#deps.clock(),
           consumption,
         }));
-        if (consumed.reservation !== undefined && !consumed.jobs.some(activeRuntimeJob)) {
+        const completed = {
+          ...consumed,
+          ...(consumed.operation === undefined
+            ? {}
+            : {
+                operation: {
+                  ...consumed.operation,
+                  phase: "completed" as const,
+                  resultConsumedAt: this.#deps.clock(),
+                },
+              }),
+        };
+        if (completed.reservation !== undefined && !completed.jobs.some(activeRuntimeJob)) {
           return {
-            ...consumed,
+            ...completed,
             reservation: {
-              ...consumed.reservation,
+              ...completed.reservation,
               phase: "released",
               releasedAt: this.#deps.clock(),
             },
           };
         }
-        return consumed;
+        return completed;
       });
       await writeRuntimeState(this.#deps.runtimePath, nextRuntime);
       await this.#deps.publishTaskInbox(nextTask);
       return nextTask;
     });
   }
-
   private async setReservationPhase(
     taskId: string,
     phase: DurableReservation["phase"],
+    claim: OperationClaim,
   ): Promise<void> {
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
-      replaceRuntimeTask(state, taskId, (current) => ({
-        ...current,
-        ...(current.reservation === undefined
-          ? {}
-          : { reservation: { ...current.reservation, phase } }),
-      })),
+      replaceRuntimeTask(state, taskId, (current) => {
+        this.assertOperationClaim(current, taskId, claim);
+        return {
+          ...current,
+          ...(current.reservation === undefined
+            ? {}
+            : { reservation: { ...current.reservation, phase } }),
+        };
+      }),
     );
+  }
+
+  private assertOperationClaim(
+    runtime: RuntimeTaskState,
+    taskId: string,
+    claim: OperationClaim,
+  ): void {
+    const operation = runtime.operation;
+    if (
+      operation === undefined ||
+      operation.id !== claim.id ||
+      operation.claimOwner !== claim.claimOwner ||
+      operation.fencingRevision !== claim.fencingRevision
+    ) {
+      throw new Error(`runtime task ${taskId} operation claim was fenced`);
+    }
+  }
+  private async recordOperationEffect(
+    taskId: string,
+    claim: OperationClaim,
+    id: string,
+    kind: DurableOperationEffect["kind"],
+    phase: DurableOperationEffect["phase"],
+    identity: string,
+    receipt?: string,
+  ): Promise<void> {
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
+      replaceRuntimeTask(state, taskId, (current) => {
+        this.assertOperationClaim(current, taskId, claim);
+        const operation = current.operation;
+        if (operation === undefined) throw new Error(`runtime task ${taskId} has no operation`);
+        const effect: DurableOperationEffect = {
+          id,
+          kind,
+          phase,
+          createdAt: this.#deps.clock(),
+          identity,
+          ...(receipt === undefined ? {} : { receipt }),
+        };
+        const effects = operation.effects.some((entry) => entry.id === id)
+          ? operation.effects.map((entry) => (entry.id === id ? { ...entry, ...effect } : entry))
+          : [...operation.effects, effect];
+        return {
+          ...current,
+          operation: {
+            ...operation,
+            effects,
+          },
+        };
+      }),
+    );
+  }
+
+  private async withOperationEffect<Result>(
+    taskId: string,
+    claim: OperationClaim,
+    generation: number,
+    stages: readonly TaskRecord["stage"][],
+    effect: (
+      input: Readonly<{ readonly task: TaskRecord; readonly runtime: RuntimeTaskState }>,
+    ) => Promise<Result>,
+  ): Promise<Result | undefined> {
+    return withStateLock(this.#deps.home, async () => {
+      const permit = await this.#deps.store.exclusive(async (store) => {
+        const task = await store.read(taskId);
+        if (task === undefined || task.generation !== generation || !stages.includes(task.stage)) {
+          return undefined;
+        }
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const runtime = taskRuntime(state, taskId);
+        if (
+          runtime === undefined ||
+          runtime.stopRequest !== undefined ||
+          runtime.reservation?.operationId !== claim.id
+        ) {
+          return undefined;
+        }
+        this.assertOperationClaim(runtime, taskId, claim);
+        if (
+          runtime.operation === undefined ||
+          ["completed", "failed", "quarantined", "cancelled"].includes(runtime.operation.phase)
+        ) {
+          return undefined;
+        }
+        return { task, runtime };
+      });
+      if (permit === undefined) return undefined;
+      return effect(permit);
+    });
   }
 
   async startQueuedTask(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
@@ -890,261 +1194,596 @@ export class WorkerWorkflow {
     const reservation = reserved ?? (await this.reserveTask(task.id, role));
     if (reservation === undefined) return;
     const runtime = reservation.runtime;
-    if (runtime.worktree === undefined && !(await this.#deps.maintainPoolForAllocation(task))) {
+    const operation = runtime.operation;
+    if (operation === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
       return;
     }
-    let lease = runtime.worktree;
-    if (lease === undefined) {
-      try {
-        const source = await readCheckpoint(this.#deps.run, {
-          repo: taskSourcePath(task, runtime),
-        });
-        this.assertSourceUnchanged(runtime.sourceCheckpoint, source);
-        lease = await acquireWorktree(this.#deps.run, {
-          repo: taskSourcePath(task, runtime),
-          root: this.#deps.poolRoot,
-          tandemId: `${this.#deps.sessionId}:${task.id}`,
-          taskName: runtime.taskName,
-        });
-        if (lease.baseHead !== runtime.sourceCheckpoint.head) {
-          throw new LeaseSafetyError(
-            `acquired worktree base ${lease.baseHead} does not match pinned source ${runtime.sourceCheckpoint.head}`,
-            lease,
-          );
-        }
-        await this.saveWorktree(task.id, lease);
-      } catch (error) {
-        if (error instanceof LeaseSafetyError) await this.saveWorktree(task.id, error.lease);
-        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-        await this.#deps.blockTask(task.id, `worktree allocation failed: ${describeError(error)}`);
+    const claim: OperationClaim = {
+      id: operation.id,
+      fencingRevision: operation.fencingRevision,
+      claimOwner: operation.claimOwner,
+    };
+    if (runtime.worktree === undefined) {
+      const poolReady = await this.withOperationEffect(
+        task.id,
+        claim,
+        task.generation,
+        ["queued"],
+        ({ task: currentTask }) => this.#deps.maintainPoolForAllocation(currentTask),
+      );
+      if (poolReady !== true) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
         return;
       }
     }
+    let lease = runtime.worktree;
+    try {
+      const source = await readCheckpoint(this.#deps.run, {
+        repo: taskSourcePath(task, runtime),
+      });
+      this.assertSourceUnchanged(
+        runtime.sourceCheckpoint,
+        source,
+        runtime.sourceRepoPath !== undefined,
+      );
+      const expectedHolder = `${this.#deps.sessionId}:${task.id}`;
+      if (lease !== undefined && lease.leaseHolder !== expectedHolder) {
+        throw new LeaseSafetyError(
+          `runtime worktree lease is held by ${JSON.stringify(lease.leaseHolder)}, expected ${JSON.stringify(expectedHolder)}`,
+          lease,
+        );
+      }
+      const needsFirstLaunchValidation = runtime.jobs.length === 0;
+      const needsLeasePreparation =
+        lease === undefined ||
+        lease.baseHead === "unknown" ||
+        (needsFirstLaunchValidation &&
+          task.worktree === undefined &&
+          runtime.endpointLaunch === undefined &&
+          runtime.endpoints.length === 0);
+      if (lease !== undefined && needsFirstLaunchValidation) {
+        const savedLease = await readCheckpoint(this.#deps.run, { repo: lease.path });
+        if (
+          savedLease.head !== runtime.sourceCheckpoint.head ||
+          savedLease.dirty ||
+          savedLease.unmerged
+        ) {
+          throw new LeaseSafetyError(
+            `saved worktree is not the captured source commit ${runtime.sourceCheckpoint.head}`,
+            lease,
+          );
+        }
+      }
+      if (needsLeasePreparation) {
+        const prepared = await this.withOperationEffect(
+          task.id,
+          claim,
+          task.generation,
+          ["queued"],
+          async ({ task: currentTask, runtime: currentRuntime }) => {
+            const existingEffect = currentRuntime.operation?.effects.find(
+              (entry) => entry.id === `worktree:${claim.id}`,
+            );
+            if (existingEffect !== undefined) {
+              if (existingEffect.phase !== "succeeded" || existingEffect.receipt === undefined) {
+                await this.quarantineOperation(
+                  task.id,
+                  `worktree effect ${existingEffect.id} is unresolved; allocator retry refused`,
+                  claim,
+                );
+                return undefined;
+              }
+              try {
+                const restored = JSON.parse(existingEffect.receipt) as NonNullable<
+                  RuntimeTaskState["worktree"]
+                >;
+                await this.saveWorktree(task.id, restored, claim);
+                return restored;
+              } catch {
+                await this.quarantineOperation(
+                  task.id,
+                  `worktree effect ${existingEffect.id} has an invalid receipt`,
+                  claim,
+                );
+                return undefined;
+              }
+            }
+            await this.recordOperationEffect(
+              task.id,
+              claim,
+              `worktree:${claim.id}`,
+              "worktree",
+              "intent",
+              expectedHolder,
+            );
+            const acquired = await acquireWorktree(this.#deps.run, {
+              repo: taskSourcePath(currentTask, currentRuntime),
+              root: this.#deps.poolRoot,
+              tandemId: expectedHolder,
+              taskName: currentRuntime.taskName,
+              sourceHead: currentRuntime.sourceCheckpoint.head,
+            });
+            if (
+              lease !== undefined &&
+              (acquired.leaseId !== lease.leaseId || acquired.path !== lease.path)
+            ) {
+              throw new LeaseSafetyError(
+                "treehouse returned a different lease than the runtime worktree",
+                acquired,
+              );
+            }
+            if (acquired.baseHead !== currentRuntime.sourceCheckpoint.head) {
+              throw new LeaseSafetyError(
+                `acquired worktree base ${acquired.baseHead} does not match pinned source ${currentRuntime.sourceCheckpoint.head}`,
+                acquired,
+              );
+            }
+            await this.recordOperationEffect(
+              task.id,
+              claim,
+              `worktree:${claim.id}`,
+              "worktree",
+              "succeeded",
+              expectedHolder,
+              JSON.stringify(acquired),
+            );
+            await this.saveWorktree(task.id, acquired, claim);
+            return acquired;
+          },
+        );
+        if (prepared === undefined) {
+          await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+          return;
+        }
+        lease = prepared;
+      }
+    } catch (error) {
+      if (error instanceof LeaseSafetyError) {
+        await this.saveWorktree(task.id, { ...error.lease, baseHead: "unknown" }, claim);
+      }
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
+        task.id,
+        `worktree allocation failed: ${describeError(error)}`,
+        claim,
+      );
+      await this.blockIfOperationClaim(task.id, "worktree allocation returned no lease", claim);
+      return;
+    }
     if (lease === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(task.id, "worktree allocation returned no lease");
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(task.id, "worktree allocation returned no lease", claim);
       return;
     }
     const endpoint = currentWriter({ ...runtime, worktree: lease });
     if (endpoint === undefined) {
-      const workspaceLabel = taskWorkspaceLabel(runtime.taskName, task.objective, role);
-      const endpointLaunch = endpointLaunchFor(
-        reservation.reservation,
-        this.#deps.sessionId,
-        runtime.taskName,
-        workspaceLabel,
-        lease.path,
-        role,
+      const created = await this.withOperationEffect(
+        task.id,
+        claim,
         task.generation,
-        this.#deps.clock(),
-        this.#deps.parentWorkspaceId,
-      );
-      try {
-        await this.setReservationPhase(task.id, "endpoint");
-        const claimed = await this.saveEndpointLaunch(task.id, endpointLaunch);
-        if (!claimed) return;
-      } catch (error) {
-        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-        await this.#deps.blockTask(
-          task.id,
-          `worker launch intent could not be persisted: ${describeError(error)}`,
-        );
-        return;
-      }
-      let created: HerdrEndpointResult;
-      try {
-        created = await this.#deps.store.exclusive(() =>
-          createTaskEndpoint(this.#deps.run, {
+        ["queued"],
+        async ({ task: currentTask, runtime: currentRuntime }) => {
+          const workspaceLabel = taskWorkspaceLabel(
+            currentRuntime.taskName,
+            currentTask.objective,
+            role,
+          );
+          const endpointLaunch = endpointLaunchFor(
+            reservation.reservation,
+            this.#deps.sessionId,
+            currentRuntime.taskName,
+            workspaceLabel,
+            lease.path,
+            role,
+            currentTask.generation,
+            this.#deps.clock(),
+            this.#deps.parentWorkspaceId,
+            claim.id,
+          );
+          await this.setReservationPhase(task.id, "endpoint", claim);
+          if (!(await this.saveEndpointLaunch(task.id, endpointLaunch, claim))) return undefined;
+          await this.recordOperationEffect(
+            task.id,
+            claim,
+            `endpoint:${claim.id}`,
+            "endpoint",
+            "intent",
+            endpointLaunch.workspaceLabel,
+          );
+          const result = await createTaskEndpoint(this.#deps.run, {
             sessionId: this.#deps.sessionId,
             cwd: lease.path,
-            taskName: runtime.taskName,
+            taskName: currentRuntime.taskName,
             workspaceLabel: endpointLaunch.workspaceLabel,
             role,
-            generation: task.generation,
+            generation: currentTask.generation,
             ...(this.#deps.parentWorkspaceId === undefined
               ? {}
               : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
-          }),
-        );
-      } catch (error) {
-        await this.#deps.blockTask(
-          task.id,
-          `worker pane allocation failed: ${describeError(error)}`,
-        );
-        return;
-      }
-      try {
-        await this.saveEndpoint(task.id, created.endpoint);
-      } catch (error) {
-        await this.#deps.blockTask(
-          task.id,
-          `worker pane identity could not be persisted: ${describeError(error)}`,
-        );
-        return;
-      }
-      try {
-        const current = await this.#deps.getTask(task.id);
-        if (current.stage === "queued") {
-          await this.#deps.transition(task.id, {
-            type: "start",
-            worktree: lease,
-            endpoints: [created.endpoint],
           });
-        }
-      } catch (error) {
-        const current = await this.#deps.getTask(task.id);
-        if (current.stage === "queued") {
-          await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-          await this.#deps.blockTask(
+          await this.recordOperationEffect(
             task.id,
-            `task start transition failed after pane allocation: ${describeError(error)}`,
+            claim,
+            `endpoint:${claim.id}`,
+            "endpoint",
+            "succeeded",
+            endpointLaunch.workspaceLabel,
+            JSON.stringify(result.endpoint),
           );
-          return;
-        }
+          await this.saveEndpoint(task.id, result.endpoint, claim);
+          return result;
+        },
+      );
+      if (created === undefined) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+        return;
       }
-    } else if ((await this.#deps.getTask(task.id)).stage === "queued") {
       try {
-        await this.#deps.transition(task.id, {
+        await this.transitionIfOperationClaim(task.id, claim, {
+          type: "start",
+          worktree: lease,
+          endpoints: [created.endpoint],
+        });
+      } catch (error) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+        await this.blockIfOperationClaim(
+          task.id,
+          `task start transition failed after pane allocation: ${describeError(error)}`,
+          claim,
+        );
+        return;
+      }
+    } else {
+      try {
+        await this.transitionIfOperationClaim(task.id, claim, {
           type: "start",
           worktree: lease,
           endpoints: [endpoint],
         });
       } catch (error) {
-        const current = await this.#deps.getTask(task.id);
-        if (current.stage === "queued") {
-          await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-          await this.#deps.blockTask(
-            task.id,
-            `task start transition failed with recovered pane: ${describeError(error)}`,
-          );
-          return;
-        }
+        await this.blockIfOperationClaim(
+          task.id,
+          `task start transition failed with recovered pane: ${describeError(error)}`,
+          claim,
+        );
+        return;
       }
     }
     const currentTask = await this.#deps.getTask(task.id);
     const expectedStage = role === "scout" ? "scouting" : "implementing";
     if (currentTask.stage !== expectedStage) {
       if (["paused", "blocked", "cancelled", "completed", "merged"].includes(currentTask.stage)) {
-        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
       }
       return;
     }
     const currentRuntime = await this.#deps.runtimeFor(task.id);
     if (currentRuntime === undefined || currentRuntime.worktree === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
         task.id,
         "runtime lost its acquired worktree before worker launch",
+        claim,
       );
       return;
     }
     const writer = currentWriter(currentRuntime);
     if (writer === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(task.id, "runtime lost its worker endpoint before launch");
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
+        task.id,
+        "runtime lost its worker endpoint before launch",
+        claim,
+      );
       return;
     }
     await this.launchAgent(currentTask, currentRuntime, writer, role);
   }
 
-  async beginFixes(task: TaskRecord): Promise<void> {
-    if (task.reviewHead === undefined) {
+  async beginFixes(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
+    const recoveryFix = task.stage !== "awaiting-fixes";
+    if (!recoveryFix && task.reviewHead === undefined) {
       await this.#deps.blockTask(task.id, "fix stage has no reviewed HEAD");
       return;
     }
-    const reservation = await this.reserveTask(task.id, "implementer");
-    if (reservation === undefined) return;
-    const contextPath = join(
-      taskJobsDirectory(this.#deps.home, task.id),
-      `fix-context-${task.generation + 1}.json`,
-    );
-    try {
-      await writeJsonAtomically(contextPath, {
-        taskId: task.id,
-        head: task.reviewHead,
-        generation: task.generation,
-        validationEvidence: task.validationEvidence,
-        findings: reviewFindings(task),
-      });
-    } catch (error) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
+    if (!recoveryFix && task.reviewRound >= task.policy.config.maxFixRounds) {
       await this.#deps.blockTask(
+        task.id,
+        `fix round budget exhausted at ${task.reviewRound}; no new fix operation was admitted`,
+      );
+      return;
+    }
+    const reservation = reserved ?? (await this.reserveTask(task.id, "implementer"));
+    if (reservation === undefined) return;
+    const operation = reservation.runtime.operation;
+    const claim = claimOf(operation);
+    const contextPath =
+      reservation.runtime.fixContextPath ??
+      join(taskJobsDirectory(this.#deps.home, task.id), `fix-context-${task.generation + 1}.json`);
+    if (operation === undefined || claim === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      return;
+    }
+    if (operation.fixContext === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
+        task.id,
+        "fix admission has no durable context snapshot",
+        claim,
+      );
+      return;
+    }
+    const fixContext = operation.fixContext;
+    try {
+      const written = await this.withOperationEffect(
+        task.id,
+        claim,
+        operation.generation,
+        ["implementing"],
+        async () => {
+          await writeJsonAtomically(contextPath, {
+            head: fixContext.head,
+            generation: fixContext.generation,
+            validationEvidence: fixContext.validationEvidence,
+            findings: fixContext.findings,
+          });
+          return true;
+        },
+      );
+      if (written !== true) return;
+    } catch (error) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
         task.id,
         `fix context could not be persisted: ${describeError(error)}`,
-      );
-      return;
-    }
-    try {
-      await this.#deps.updateTask(task.id, (current) => {
-        if (current.reviewHead === undefined) throw new Error("fix stage has no reviewed HEAD");
-        const next = transitionTask(
-          current,
-          { type: "begin-fixes", head: current.reviewHead, generation: current.generation },
-          this.#deps.context(),
-        );
-        return {
-          ...next,
-          endpoints: (next.endpoints ?? []).map((endpoint) => ({
-            ...endpoint,
-            generation: next.generation,
-          })),
-        };
-      });
-    } catch (error) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(task.id, `fix round could not begin: ${describeError(error)}`);
-      return;
-    }
-    try {
-      await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
-        replaceRuntimeTask(state, task.id, (current) => ({
-          ...current,
-          fixContextPath: contextPath,
-          endpoints: current.endpoints.map((endpoint) => ({
-            ...endpoint,
-            generation: task.generation + 1,
-          })),
-        })),
-      );
-    } catch (error) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(
-        task.id,
-        `fix runtime metadata could not be persisted: ${describeError(error)}`,
+        claim,
       );
       return;
     }
     const nextTask = await this.#deps.getTask(task.id);
     const nextRuntime = await this.#deps.runtimeFor(task.id);
     if (nextRuntime === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
         task.id,
         "fix round lost its durable runtime metadata before launch",
+        claim,
       );
       return;
     }
     const writer = currentWriter(nextRuntime);
     if (writer === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(task.id, "fix round has no owned implementer pane");
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(task.id, "fix round has no owned implementer pane", claim);
       return;
     }
     await this.launchAgent(nextTask, nextRuntime, writer, "implementer");
   }
 
-  async startValidation(task: TaskRecord): Promise<void> {
+  private async restoreResourceEffect(
+    taskId: string,
+    effect: DurableOperationEffect,
+    claim: OperationClaim,
+  ): Promise<boolean> {
+    if (effect.receipt === undefined) return false;
+    let value: unknown;
+    try {
+      value = JSON.parse(effect.receipt);
+    } catch {
+      return false;
+    }
+    if (!isRecord(value)) return false;
+    if (effect.kind === "endpoint") {
+      const required = ["sessionId", "workspaceId", "tabId", "paneId", "role", "generation"];
+      if (!required.every((field) => field in value)) return false;
+      await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
+        replaceRuntimeTask(state, taskId, (current) => {
+          if (
+            current.operation?.id !== claim.id ||
+            current.operation.claimOwner !== claim.claimOwner ||
+            current.operation.fencingRevision !== claim.fencingRevision
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            endpoints: current.endpoints.some((entry) => entry.paneId === value.paneId)
+              ? current.endpoints
+              : [...current.endpoints, value as unknown as Endpoint],
+          };
+        }),
+      );
+      return true;
+    }
+    if (effect.kind === "worktree") {
+      const required = [
+        "root",
+        "path",
+        "name",
+        "baseHead",
+        "branch",
+        "leaseId",
+        "leaseHolder",
+        "leasedAt",
+      ];
+      if (!required.every((field) => field in value)) return false;
+      await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
+        replaceRuntimeTask(state, taskId, (current) => {
+          if (
+            current.operation?.id !== claim.id ||
+            current.operation.claimOwner !== claim.claimOwner ||
+            current.operation.fencingRevision !== claim.fencingRevision
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            ...(current.worktree === undefined
+              ? { worktree: value as unknown as NonNullable<RuntimeTaskState["worktree"]> }
+              : {}),
+          };
+        }),
+      );
+      return true;
+    }
+    return false;
+  }
+  private async quarantineOperation(
+    taskId: string,
+    reason: string,
+    claim: OperationClaim,
+  ): Promise<void> {
+    await withStateLock(this.#deps.home, async () => {
+      await this.#deps.store.exclusive(async () => {
+        await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
+          replaceRuntimeTask(state, taskId, (current) => {
+            if (
+              current.operation === undefined ||
+              current.operation.id !== claim.id ||
+              current.operation.claimOwner !== claim.claimOwner ||
+              current.operation.fencingRevision !== claim.fencingRevision ||
+              current.stopRequest !== undefined ||
+              ["completed", "failed", "quarantined", "cancelled"].includes(current.operation.phase)
+            ) {
+              return current;
+            }
+            return {
+              ...current,
+              lastError: reason,
+              operation: {
+                ...current.operation,
+                phase: "quarantined" as const,
+                error: reason,
+              },
+            };
+          }),
+        );
+        const currentTask = await this.#deps.getTask(taskId);
+        if (!["blocked", "cancelled", "completed", "merged"].includes(currentTask.stage)) {
+          await this.#deps.blockTask(taskId, reason);
+        }
+      });
+    });
+  }
+  async reconcileOperation(task: TaskRecord, runtime: RuntimeTaskState): Promise<void> {
+    const operation = runtime.operation;
+    const claim = claimOf(operation);
+    if (operation === undefined || claim === undefined || operation.phase === "quarantined") return;
+    for (const effect of operation.effects) {
+      if (effect.kind === "worktree" && runtime.worktree === undefined) {
+        if (
+          effect.phase === "succeeded" &&
+          (await this.restoreResourceEffect(task.id, effect, claim))
+        ) {
+          return;
+        }
+        if (effect.phase !== "succeeded") {
+          await this.quarantineOperation(
+            task.id,
+            `worktree effect ${effect.id} has no durable receipt; allocator will not be retried`,
+            claim,
+          );
+          return;
+        }
+      }
+      if (effect.kind === "endpoint" && runtime.endpointLaunch === undefined) {
+        if (effect.phase !== "succeeded" || effect.receipt === undefined) {
+          await this.quarantineOperation(
+            task.id,
+            `endpoint effect ${effect.id} has no durable receipt; pane allocator will not be retried`,
+            claim,
+          );
+          return;
+        }
+        let receipt: unknown;
+        try {
+          receipt = JSON.parse(effect.receipt);
+        } catch {
+          await this.quarantineOperation(
+            task.id,
+            `endpoint effect ${effect.id} has invalid receipt`,
+            claim,
+          );
+          return;
+        }
+        if (
+          !isRecord(receipt) ||
+          typeof receipt.paneId !== "string" ||
+          typeof receipt.generation !== "number"
+        ) {
+          await this.quarantineOperation(
+            task.id,
+            `endpoint effect ${effect.id} has invalid receipt`,
+            claim,
+          );
+          return;
+        }
+        const samePane = runtime.endpoints.find((entry) => entry.paneId === receipt.paneId);
+        if (samePane !== undefined && samePane.generation !== receipt.generation) {
+          await this.quarantineOperation(
+            task.id,
+            `endpoint effect ${effect.id} receipt generation conflicts with runtime`,
+            claim,
+          );
+          return;
+        }
+        const linked = runtime.endpoints.some(
+          (entry) => entry.paneId === receipt.paneId && entry.generation === receipt.generation,
+        );
+        if (!linked) {
+          if (await this.restoreResourceEffect(task.id, effect, claim)) return;
+          await this.quarantineOperation(
+            task.id,
+            `endpoint effect ${effect.id} could not be restored`,
+            claim,
+          );
+          return;
+        }
+      }
+    }
+    const reservation =
+      runtime.reservation === undefined || runtime.reservation.phase === "released"
+        ? undefined
+        : { task, runtime, reservation: runtime.reservation };
+    if (operation.kind === "fix") {
+      await this.beginFixes(task, reservation);
+      return;
+    }
+    if (operation.kind === "validation") {
+      await this.startValidation(task, reservation);
+      return;
+    }
+    if (operation.kind === "review" || operation.kind === "verification") {
+      await this.advanceReview(task, reservation);
+      return;
+    }
+    if (task.stage === "queued") {
+      await this.startQueuedTask(task, reservation);
+      return;
+    }
+    const writer = currentWriter(runtime);
+    if (writer !== undefined && runtime.worktree !== undefined) {
+      await this.launchAgent(task, runtime, writer, workerRoleForTask(task));
+    }
+  }
+
+  async startValidation(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
     if (task.reviewHead === undefined || task.worktree === undefined) {
       await this.#deps.blockTask(task.id, "validation requires a task worktree and reviewed HEAD");
       return;
     }
-    const reservation = await this.reserveTask(task.id, "validation");
+    const reservation = reserved ?? (await this.reserveTask(task.id, "validation"));
     if (reservation === undefined) return;
     const runtime = reservation.runtime;
+    const claim = claimOf(runtime.operation);
+    if (claim === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      return;
+    }
     if (runtime.worktree === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(task.id, "validation runtime lost its worktree");
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(task.id, "validation runtime lost its worktree", claim);
       return;
     }
     let checkout: CurrentCheckout;
@@ -1154,10 +1793,11 @@ export class WorkerWorkflow {
         head: task.reviewHead,
       });
     } catch (error) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
         task.id,
         `validation checkout could not be verified: ${describeError(error)}`,
+        claim,
       );
       return;
     }
@@ -1166,51 +1806,129 @@ export class WorkerWorkflow {
       checkout.checkpoint.dirty ||
       checkout.checkpoint.unmerged
     ) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
         task.id,
         "validation refused because the task worktree is stale or dirty",
+        claim,
       );
+      return;
+    }
+    const validationCwd = runtime.worktree?.path;
+    if (validationCwd === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(task.id, "validation runtime lost its worktree", claim);
       return;
     }
     const writer = currentWriter(runtime);
     if (writer === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(task.id, "validation has no owned implementer pane");
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(task.id, "validation has no owned implementer pane", claim);
       return;
     }
-    const writerJob = workerJobForEndpoint(runtime.jobs, writer);
-    let validationEndpointResult: HerdrEndpointResult;
+    let validationEndpoint: Endpoint | undefined;
     try {
-      validationEndpointResult = await createReviewerEndpoint(this.#deps.run, {
-        sessionId: this.#deps.sessionId,
-        cwd: runtime.worktree.path,
-        writer,
-        generation: task.generation,
-        ...(writerJob === undefined ? {} : { writerJob }),
-      });
+      validationEndpoint = await this.withOperationEffect(
+        task.id,
+        claim,
+        task.generation,
+        ["validating"],
+        async ({ runtime: currentRuntime }) => {
+          const existingEffect = currentRuntime.operation?.effects.find(
+            (entry) => entry.id === `endpoint:${claim.id}`,
+          );
+          let receiptPaneId: string | undefined;
+          if (existingEffect?.receipt !== undefined) {
+            try {
+              const receipt = JSON.parse(existingEffect.receipt) as Record<string, unknown>;
+              receiptPaneId = typeof receipt.paneId === "string" ? receipt.paneId : undefined;
+            } catch {
+              receiptPaneId = undefined;
+            }
+          }
+          const existingEndpoint = currentRuntime.endpoints.find(
+            (entry) =>
+              entry.paneId === receiptPaneId ||
+              (receiptPaneId === undefined &&
+                entry.generation === task.generation &&
+                entry.role === "reviewer"),
+          );
+          if (existingEndpoint !== undefined) return existingEndpoint;
+          if (existingEffect !== undefined) {
+            if (existingEffect.phase !== "succeeded" || existingEffect.receipt === undefined) {
+              await this.quarantineOperation(
+                task.id,
+                `endpoint effect ${existingEffect.id} is unresolved`,
+                claim,
+              );
+              return undefined;
+            }
+            try {
+              const restored = JSON.parse(existingEffect.receipt) as Endpoint;
+              await this.saveEndpoint(task.id, restored, claim);
+              return restored;
+            } catch {
+              await this.quarantineOperation(
+                task.id,
+                `endpoint effect ${existingEffect.id} has invalid receipt`,
+                claim,
+              );
+              return undefined;
+            }
+          }
+          const currentWriterEndpoint = currentWriter(currentRuntime);
+          if (currentWriterEndpoint === undefined) {
+            throw new Error("validation has no owned implementer pane");
+          }
+          const writerJob = workerJobForEndpoint(currentRuntime.jobs, currentWriterEndpoint);
+          await this.recordOperationEffect(
+            task.id,
+            claim,
+            `endpoint:${claim.id}`,
+            "endpoint",
+            "intent",
+            `validation:${task.id}:${task.generation}`,
+          );
+          const result = await createReviewerEndpoint(this.#deps.run, {
+            sessionId: this.#deps.sessionId,
+            cwd: currentRuntime.worktree?.path ?? validationCwd,
+            writer: currentWriterEndpoint,
+            generation: task.generation,
+            ...(writerJob === undefined ? {} : { writerJob }),
+          });
+          await this.recordOperationEffect(
+            task.id,
+            claim,
+            `endpoint:${claim.id}`,
+            "endpoint",
+            "succeeded",
+            `validation:${task.id}:${task.generation}`,
+            JSON.stringify(result.endpoint),
+          );
+          await this.saveEndpoint(task.id, result.endpoint, claim);
+          return result.endpoint;
+        },
+      );
+      if (validationEndpoint === undefined) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+        return;
+      }
     } catch (error) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
         task.id,
         `validation pane allocation failed: ${describeError(error)}`,
+        claim,
       );
       return;
     }
-    const validationEndpoint = validationEndpointResult.endpoint;
-    try {
-      await this.saveEndpoint(task.id, validationEndpoint);
-    } catch (error) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(
-        task.id,
-        `validation pane identity could not be persisted: ${describeError(error)}`,
-      );
-      return;
-    }
+    const validationEndpointReady = validationEndpoint;
+    if (validationEndpointReady === undefined) return;
     let durableJob: DurableJob;
     try {
-      const jobId = singleLine(this.#deps.idFactory(), "validation job id");
+      const jobId =
+        reservation.runtime.operation?.jobId ??
+        singleLine(this.#deps.idFactory(), "validation job id");
       const directory = jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId);
       const paths = jobPaths(directory);
       const spec: ValidationJob = {
@@ -1218,13 +1936,37 @@ export class WorkerWorkflow {
         id: jobId,
         taskId: task.id,
         generation: task.generation,
-        repoPath: runtime.worktree.path,
+        repoPath: validationCwd,
         head: task.reviewHead,
         surfaces: task.surfaces,
         commands: task.policy.config.validationCommands,
         resultPath: paths.resultPath,
+        ...(reservation.runtime.operation === undefined
+          ? {}
+          : {
+              execution: {
+                schemaVersion: 1 as const,
+                home: this.#deps.home,
+                operationId: reservation.runtime.operation.id,
+                fencingRevision: reservation.runtime.operation.fencingRevision,
+                claimOwner: reservation.runtime.operation.claimOwner,
+              },
+            }),
       };
-      await writeJsonAtomically(paths.jobPath, spec);
+      const jobWritten = await this.withOperationEffect(
+        task.id,
+        claim,
+        task.generation,
+        ["validating"],
+        async () => {
+          await writeJsonAtomically(paths.jobPath, spec);
+          return true;
+        },
+      );
+      if (jobWritten !== true) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+        return;
+      }
       durableJob = {
         schemaVersion: 1,
         id: jobId,
@@ -1232,38 +1974,43 @@ export class WorkerWorkflow {
         generation: task.generation,
         role: "validation",
         kind: "validation",
-        cwd: runtime.worktree.path,
+        cwd: validationCwd,
         jobPath: paths.jobPath,
         resultPath: paths.resultPath,
         attempt: 1,
         phase: "reserved",
         launchAttempted: false,
         createdAt: this.#deps.clock(),
-        endpoint: validationEndpoint,
+        ...(reservation.runtime.operation === undefined
+          ? {}
+          : { operationId: reservation.runtime.operation.id }),
+        endpoint: validationEndpointReady,
         head: task.reviewHead,
         ...(task.communication === undefined
           ? {}
           : { instructionRevision: task.communication.revision }),
       };
-      await this.appendJob(task.id, durableJob);
+      await this.appendJob(task.id, durableJob, claim);
     } catch (error) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
         task.id,
         `validation job could not be persisted: ${describeError(error)}`,
+        claim,
       );
       return;
     }
     await this.launchJob(
       task.id,
       durableJob.id,
-      validationEndpoint,
-      runtime.worktree.path,
+      validationEndpointReady,
+      validationCwd,
       workerCommand(this.#deps.validationWorkerPath, durableJob.jobPath),
+      claim,
     );
   }
 
-  async advanceReview(task: TaskRecord): Promise<void> {
+  async advanceReview(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
     if (task.reviewHead === undefined || task.worktree === undefined) {
       await this.#deps.blockTask(task.id, "review requires a task worktree and reviewed HEAD");
       return;
@@ -1320,39 +2067,99 @@ export class WorkerWorkflow {
       return;
     }
     const role: WorkerRole = nextLens === "verification" ? "verifier" : "reviewer";
-    const reservation = await this.reserveTask(task.id, role);
+    const reservation = reserved ?? (await this.reserveTask(task.id, role));
     if (reservation === undefined) return;
     const reservedRuntime = reservation.runtime;
+    const claim = claimOf(reservedRuntime.operation);
+    if (claim === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      return;
+    }
     const writer = currentWriter(reservedRuntime);
     if (writer === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      await this.#deps.blockTask(task.id, "review has no writer endpoint");
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(task.id, "review has no writer endpoint", claim);
       return;
     }
-    const writerJob = workerJobForEndpoint(reservedRuntime.jobs, writer);
-    let endpointResult: HerdrEndpointResult;
+    let endpoint: Endpoint | undefined;
     try {
-      endpointResult = await createReviewerEndpoint(this.#deps.run, {
-        sessionId: this.#deps.sessionId,
-        cwd: task.worktree.path,
-        writer,
-        ...(writerJob === undefined ? {} : { writerJob }),
-        generation: task.generation,
-      });
+      endpoint = await this.withOperationEffect(
+        task.id,
+        claim,
+        task.generation,
+        ["reviewing"],
+        async ({ runtime: currentRuntime }) => {
+          const existingEndpoint = currentRuntime.endpoints.find(
+            (entry) => entry.role === role && entry.generation === task.generation,
+          );
+          if (existingEndpoint !== undefined) return existingEndpoint;
+          const currentWriterEndpoint = currentWriter(currentRuntime);
+          if (currentWriterEndpoint === undefined) throw new Error("review has no writer endpoint");
+          const writerJob = workerJobForEndpoint(currentRuntime.jobs, currentWriterEndpoint);
+          const reviewCwd = currentRuntime.worktree?.path ?? task.worktree?.path;
+          if (reviewCwd === undefined) throw new Error("review has no worktree");
+          await this.recordOperationEffect(
+            task.id,
+            claim,
+            `endpoint:${claim.id}`,
+            "endpoint",
+            "intent",
+            `review:${task.id}:${task.generation}`,
+          );
+          const result = await createReviewerEndpoint(this.#deps.run, {
+            sessionId: this.#deps.sessionId,
+            cwd: reviewCwd,
+            writer: currentWriterEndpoint,
+            ...(writerJob === undefined ? {} : { writerJob }),
+            generation: task.generation,
+          });
+          const createdEndpoint: Endpoint = { ...result.endpoint, role };
+          await this.recordOperationEffect(
+            task.id,
+            claim,
+            `endpoint:${claim.id}`,
+            "endpoint",
+            "succeeded",
+            `review:${task.id}:${task.generation}`,
+            JSON.stringify(createdEndpoint),
+          );
+          await this.saveEndpoint(task.id, createdEndpoint, claim);
+          return createdEndpoint;
+        },
+      );
+      if (endpoint === undefined) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+        return;
+      }
     } catch (error) {
-      await this.#deps.blockTask(task.id, `review pane allocation failed: ${describeError(error)}`);
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      await this.blockIfOperationClaim(
+        task.id,
+        `review pane allocation failed: ${describeError(error)}`,
+        claim,
+      );
       return;
     }
-    const endpoint: Endpoint = { ...endpointResult.endpoint, role };
+    const reviewEndpoint = endpoint;
     try {
-      await this.saveEndpoint(task.id, endpoint);
-      const jobId = singleLine(this.#deps.idFactory(), "review job id");
+      const jobId =
+        reservedRuntime.operation?.jobId ?? singleLine(this.#deps.idFactory(), "review job id");
       const directory = jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId);
       const paths = jobPaths(directory);
       const diffPath = join(directory, "diff.patch");
       const evidencePath = join(directory, "validation-evidence.json");
-      await writeTextAtomically(diffPath, currentCheckout.diff);
-      await writeJsonAtomically(evidencePath, task.validationEvidence);
+      const artifactsWritten = await this.withOperationEffect(
+        task.id,
+        claim,
+        task.generation,
+        ["reviewing"],
+        async () => {
+          await writeTextAtomically(diffPath, currentCheckout.diff);
+          await writeJsonAtomically(evidencePath, task.validationEvidence);
+          return true;
+        },
+      );
+      if (artifactsWritten !== true) return;
       const reportPath = reportPathFor(paths.jobPath);
       const instructionRevision = task.communication?.revision ?? 0;
       const communication = {
@@ -1390,13 +2197,34 @@ export class WorkerWorkflow {
         model: task.policy.config.models[role],
         prompt,
         resultPath: paths.resultPath,
+        ...(reservedRuntime.operation === undefined
+          ? {}
+          : {
+              execution: {
+                schemaVersion: 1 as const,
+                home: this.#deps.home,
+                operationId: reservedRuntime.operation.id,
+                fencingRevision: reservedRuntime.operation.fencingRevision,
+                claimOwner: reservedRuntime.operation.claimOwner,
+              },
+            }),
         communication,
         review: { head: task.reviewHead, lens: nextLens },
         ...(this.#deps.workerTimeoutMs === undefined
           ? {}
           : { timeoutMs: this.#deps.workerTimeoutMs }),
       };
-      await writeJsonAtomically(paths.jobPath, spec);
+      const specWritten = await this.withOperationEffect(
+        task.id,
+        claim,
+        task.generation,
+        ["reviewing"],
+        async () => {
+          await writeJsonAtomically(paths.jobPath, spec);
+          return true;
+        },
+      );
+      if (specWritten !== true) return;
       const durableJob: DurableJob = makeDurableJob(
         task.id,
         task.generation,
@@ -1408,30 +2236,37 @@ export class WorkerWorkflow {
         1,
         this.#deps.clock(),
         {
-          endpoint,
+          ...(reservedRuntime.operation === undefined
+            ? {}
+            : { operationId: reservedRuntime.operation.id }),
+          endpoint: reviewEndpoint,
           head: task.reviewHead,
           reviewLens: nextLens,
           receiptPath: communication.receiptPath,
           instructionRevision,
         },
       );
-      await this.appendJob(task.id, durableJob);
+      await this.appendJob(task.id, durableJob, claim);
       await this.recordShadowRecommendation(task, durableJob);
       await this.launchJob(
         task.id,
         durableJob.id,
-        endpoint,
+        reviewEndpoint,
         task.worktree.path,
         workerCommand(this.#deps.workerPath, paths.jobPath),
+        claim,
       );
     } catch (error) {
       const currentRuntime = await this.#deps.runtimeFor(task.id);
-      if (currentRuntime?.endpoints.some((candidate) => candidate.paneId === endpoint.paneId)) {
-        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
+      if (
+        currentRuntime?.endpoints.some((candidate) => candidate.paneId === reviewEndpoint.paneId)
+      ) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
       }
-      await this.#deps.blockTask(
+      await this.blockIfOperationClaim(
         task.id,
         `review job could not be prepared: ${describeError(error)}`,
+        claim,
       );
     }
   }
@@ -1481,7 +2316,7 @@ export class WorkerWorkflow {
     endpoint: Endpoint,
     role: WorkerRole,
   ): Promise<void> {
-    const jobId = singleLine(this.#deps.idFactory(), "worker job id");
+    const jobId = runtime.operation?.jobId ?? singleLine(this.#deps.idFactory(), "worker job id");
     const directory = jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId);
     const paths = jobPaths(directory);
     const reportPath = reportPathFor(paths.jobPath);
@@ -1505,8 +2340,21 @@ export class WorkerWorkflow {
     ];
     const sessionDirectory =
       role === "implementer" || role === "scout" ? runtime.sessionDirectory : undefined;
-    if (sessionDirectory !== undefined)
-      await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
+    const claim = claimOf(runtime.operation);
+    if (claim === undefined) return;
+    if (sessionDirectory !== undefined) {
+      const prepared = await this.withOperationEffect(
+        task.id,
+        claim,
+        task.generation,
+        ["scouting", "implementing"],
+        async () => {
+          await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
+          return true;
+        },
+      );
+      if (prepared !== true) return;
+    }
     const instructionRevision = task.communication?.revision ?? 0;
     const communication = {
       inboxPath: taskInboxPath(this.#deps.home, task.id),
@@ -1540,14 +2388,34 @@ export class WorkerWorkflow {
       model: task.policy.config.models[role],
       prompt,
       resultPath: paths.resultPath,
+      ...(runtime.operation === undefined
+        ? {}
+        : {
+            execution: {
+              schemaVersion: 1 as const,
+              home: this.#deps.home,
+              operationId: runtime.operation.id,
+              fencingRevision: runtime.operation.fencingRevision,
+              claimOwner: runtime.operation.claimOwner,
+            },
+          }),
       communication,
       ...(this.#deps.workerTimeoutMs === undefined
         ? {}
         : { timeoutMs: this.#deps.workerTimeoutMs }),
-      ...(sessionDirectory === undefined ? {} : { sessionDirectory }),
     };
-    await writeJsonAtomically(paths.jobPath, spec);
-    parseWorkerJob(spec);
+    const specWritten = await this.withOperationEffect(
+      task.id,
+      claim,
+      task.generation,
+      ["scouting", "implementing"],
+      async () => {
+        await writeJsonAtomically(paths.jobPath, spec);
+        parseWorkerJob(spec);
+        return true;
+      },
+    );
+    if (specWritten !== true) return;
     const durableJob: DurableJob = makeDurableJob(
       task.id,
       task.generation,
@@ -1559,13 +2427,14 @@ export class WorkerWorkflow {
       1,
       this.#deps.clock(),
       {
+        ...(runtime.operation === undefined ? {} : { operationId: runtime.operation.id }),
         endpoint,
         receiptPath: communication.receiptPath,
         instructionRevision,
       },
     );
     try {
-      await this.appendJob(task.id, durableJob);
+      await this.appendJob(task.id, durableJob, claim);
     } catch (error) {
       const currentRuntime = await this.#deps.runtimeFor(task.id);
       if (currentRuntime?.jobs.some(activeRuntimeJob)) return;
@@ -1578,6 +2447,7 @@ export class WorkerWorkflow {
       endpoint,
       spec.cwd,
       workerCommand(this.#deps.workerPath, paths.jobPath),
+      claim,
     );
   }
 
@@ -1587,58 +2457,151 @@ export class WorkerWorkflow {
     endpoint: Endpoint,
     cwd: string,
     command: readonly string[],
+    claim: OperationClaim,
   ): Promise<void> {
-    await this.#deps.store.exclusive(async (store) => {
-      const state = await readRuntimeState(this.#deps.runtimePath);
-      const runtime = taskRuntime(state, taskId);
-      if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
-      const task = await store.read(taskId);
-      if (task === undefined || !(await this.#deps.taskInScope(task))) {
-        throw new Error(`task ${taskId} is missing`);
-      }
-      const job = runtime.jobs.find((entry) => entry.id === jobId);
-      if (job === undefined) throw new Error(`runtime job ${jobId} is missing`);
-      if (job.phase !== "reserved" || job.launchAttempted) return;
-
-      const activeTask =
-        task.stage !== "paused" &&
-        task.stage !== "blocked" &&
-        task.stage !== "cancelled" &&
-        task.stage !== "completed" &&
-        task.stage !== "merged";
-      if (!activeTask || runtime.stopRequest !== undefined) {
-        const released = replaceRuntimeTask(state, taskId, (current) => {
-          const failed = replaceJob(current, jobId, (entry) => ({
+    return withStateLock(this.#deps.home, async () => {
+      let launch:
+        | Readonly<{
+            readonly task: TaskRecord;
+            readonly runtime: RuntimeTaskState;
+            readonly job: DurableJob;
+            readonly activeTask: boolean;
+          }>
+        | undefined;
+      await this.#deps.store.exclusive(async (store) => {
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const runtime = taskRuntime(state, taskId);
+        if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
+        const task = await store.read(taskId);
+        if (task === undefined || !(await this.#deps.taskInScope(task))) {
+          throw new Error(`task ${taskId} is missing`);
+        }
+        const job = runtime.jobs.find((entry) => entry.id === jobId);
+        if (job === undefined) throw new Error(`runtime job ${jobId} is missing`);
+        if (job.phase !== "reserved" || job.launchAttempted) return;
+        const operation = runtime.operation;
+        if (
+          (claim !== undefined && operation === undefined) ||
+          (operation !== undefined &&
+            (operation.jobId !== jobId ||
+              operation.claimOwner !== this.#claimOwner ||
+              (claim !== undefined &&
+                (operation.id !== claim.id ||
+                  operation.claimOwner !== claim.claimOwner ||
+                  operation.fencingRevision !== claim.fencingRevision)) ||
+              operation.policyDigest !==
+                createHash("sha256")
+                  .update(serializedIdentity(task.policy, "task policy"))
+                  .digest("hex") ||
+              ["completed", "failed", "quarantined", "cancelled"].includes(operation.phase) ||
+              operation.inputHead !==
+                (operation.kind === "fix"
+                  ? operation.fixContext?.head
+                  : (task.reviewHead ?? runtime.sourceCheckpoint.head))))
+        ) {
+          return;
+        }
+        const activeTask =
+          task.stage !== "paused" &&
+          task.stage !== "blocked" &&
+          task.stage !== "cancelled" &&
+          task.stage !== "completed" &&
+          task.stage !== "merged";
+        if (!activeTask || runtime.stopRequest !== undefined) {
+          const cancelled = replaceRuntimeTask(state, taskId, (current) => {
+            const failed = replaceJob(current, jobId, (entry) => ({
+              ...entry,
+              phase: "failed",
+              error: "worker launch was refused by a durable stop request",
+            }));
+            return {
+              ...failed,
+              ...(failed.operation === undefined
+                ? {}
+                : { operation: { ...failed.operation, phase: "cancelled" as const } }),
+              ...(failed.reservation === undefined
+                ? {}
+                : {
+                    reservation: {
+                      ...failed.reservation,
+                      phase: "released" as const,
+                      releasedAt: this.#deps.clock(),
+                    },
+                  }),
+            };
+          });
+          await writeRuntimeState(this.#deps.runtimePath, cancelled);
+          return;
+        }
+        const launching = replaceRuntimeTask(state, taskId, (current) => ({
+          ...replaceJob(current, jobId, (entry) => ({
             ...entry,
-            phase: "failed",
-            error: "worker launch was refused by a durable stop request",
-          }));
-          return failed.reservation === undefined
-            ? failed
+            phase: "launching",
+            launchAttempted: true,
+          })),
+          ...(current.operation === undefined
+            ? {}
             : {
-                ...failed,
-                reservation: {
-                  ...failed.reservation,
-                  phase: "released",
-                  releasedAt: this.#deps.clock(),
+                operation: {
+                  ...current.operation,
+                  phase: "launching" as const,
+                  fencingRevision: current.operation.fencingRevision,
+                  effects: [
+                    ...current.operation.effects,
+                    {
+                      id: jobId,
+                      kind: "worker" as const,
+                      phase: "intent" as const,
+                      createdAt: this.#deps.clock(),
+                      identity: job.jobPath,
+                    },
+                  ],
                 },
-              };
-        });
-        await writeRuntimeState(this.#deps.runtimePath, released);
-        return;
+              }),
+        }));
+        await writeRuntimeState(this.#deps.runtimePath, launching);
+        launch = {
+          task,
+          runtime,
+          job,
+          activeTask,
+        };
+      });
+      if (launch === undefined) return;
+      if (launch.job.phase === "reserved" && claim !== undefined) {
+        try {
+          const parsed = JSON.parse(await readFile(launch.job.jobPath, "utf8")) as unknown;
+          if (
+            !isRecord(parsed) ||
+            parsed.id !== launch.job.id ||
+            parsed.taskId !== launch.job.taskId
+          ) {
+            throw new Error("prepared job spec identity does not match durable job");
+          }
+          if (parsed.generation !== launch.job.generation || !isRecord(parsed.execution)) {
+            throw new Error("prepared job spec execution identity is invalid");
+          }
+          await writeJsonAtomically(launch.job.jobPath, {
+            ...parsed,
+            execution: {
+              ...parsed.execution,
+              operationId: claim.id,
+              fencingRevision: claim.fencingRevision,
+              claimOwner: claim.claimOwner,
+            },
+          });
+        } catch (error) {
+          await this.quarantineOperation(
+            taskId,
+            `prepared job spec could not be refreshed: ${describeError(error)}`,
+            claim,
+          );
+          return;
+        }
       }
-
-      const launching = replaceRuntimeTask(state, taskId, (current) =>
-        replaceJob(current, jobId, (entry) => ({
-          ...entry,
-          phase: "launching",
-          launchAttempted: true,
-        })),
-      );
-      await writeRuntimeState(this.#deps.runtimePath, launching);
       try {
         const previousJob = workerJobForEndpoint(
-          runtime.jobs.filter((entry) => entry.id !== jobId),
+          launch.runtime.jobs.filter((entry) => entry.id !== jobId),
           endpoint,
         );
         await prepareWorkerTerminal(this.#deps.run, {
@@ -1647,27 +2610,87 @@ export class WorkerWorkflow {
           ...(previousJob === undefined ? {} : { job: previousJob }),
         });
         await sendCommand(this.#deps.run, { endpoint, cwd, command });
-        await this.proveWorkerStartup(job, endpoint, cwd);
+        await this.proveWorkerStartup(launch.job, endpoint, cwd);
       } catch (error) {
         const reason = `worker launch could not be proven after launch intent: ${describeError(error)}`;
-        const failed = replaceRuntimeTask(launching, taskId, (current) =>
-          replaceJob(current, jobId, (entry) => ({ ...entry, phase: "failed", error: reason })),
-        );
-        await writeRuntimeState(this.#deps.runtimePath, failed);
-        if (activeTask) {
-          const blocked = transitionTask(task, { type: "block", reason }, this.#deps.context());
-          await store.update(task.id, task.revision, () => blocked);
-        }
+        await this.#deps.store.exclusive(async () => {
+          const state = await readRuntimeState(this.#deps.runtimePath);
+          const current = taskRuntime(state, taskId);
+          const operation = current?.operation;
+          const currentJob = current?.jobs.find((entry) => entry.id === jobId);
+          if (
+            current === undefined ||
+            operation === undefined ||
+            currentJob === undefined ||
+            operation.id !== claim.id ||
+            operation.claimOwner !== claim.claimOwner ||
+            operation.fencingRevision !== claim.fencingRevision ||
+            operation.jobId !== jobId ||
+            currentJob.operationId !== operation.id ||
+            current.stopRequest !== undefined
+          ) {
+            return;
+          }
+          const quarantined = replaceRuntimeTask(state, taskId, (entry) => ({
+            ...entry,
+            lastError: reason,
+            operation: {
+              ...operation,
+              phase: "quarantined" as const,
+              error: reason,
+              effects: operation.effects.map((effect) =>
+                effect.id === jobId ? { ...effect, phase: "unknown" as const } : effect,
+              ),
+            },
+          }));
+          await writeRuntimeState(this.#deps.runtimePath, quarantined);
+          await this.#deps.blockTask(taskId, reason);
+        });
+
         return;
       }
-      const running = replaceRuntimeTask(launching, taskId, (current) =>
-        replaceJob(current, jobId, (entry) => ({
-          ...entry,
-          phase: "running",
-          launchedAt: this.#deps.clock(),
-        })),
-      );
-      await writeRuntimeState(this.#deps.runtimePath, running);
+      await this.#deps.store.exclusive(async () => {
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const current = taskRuntime(state, taskId);
+        const operation = current?.operation;
+        const currentJob = current?.jobs.find((entry) => entry.id === jobId);
+        if (
+          current === undefined ||
+          operation === undefined ||
+          currentJob === undefined ||
+          operation.id !== claim.id ||
+          operation.claimOwner !== claim.claimOwner ||
+          operation.fencingRevision !== claim.fencingRevision ||
+          operation.jobId !== jobId ||
+          currentJob.operationId !== operation.id ||
+          currentJob.phase !== "launching" ||
+          current.stopRequest !== undefined ||
+          ["completed", "failed", "quarantined", "cancelled"].includes(operation.phase)
+        ) {
+          return;
+        }
+        const running = replaceRuntimeTask(state, taskId, (entry) => ({
+          ...replaceJob(entry, jobId, (candidate) => ({
+            ...candidate,
+            phase: "running",
+            launchedAt: this.#deps.clock(),
+          })),
+          operation: {
+            ...operation,
+            phase: "running" as const,
+            effects: operation.effects.map((effect) =>
+              effect.id === jobId
+                ? {
+                    ...effect,
+                    phase: "succeeded" as const,
+                    receipt: endpoint.paneId,
+                  }
+                : effect,
+            ),
+          },
+        }));
+        await writeRuntimeState(this.#deps.runtimePath, running);
+      });
     });
   }
 
@@ -1698,6 +2721,13 @@ export class WorkerWorkflow {
       if (task === undefined || !(await this.#deps.taskInScope(task))) {
         throw new Error(`task ${taskId} is missing`);
       }
+      const isFix = role === "implementer" && task.stage === "awaiting-fixes";
+      if (
+        isFix &&
+        (task.reviewHead === undefined || task.reviewRound >= task.policy.config.maxFixRounds)
+      ) {
+        return undefined;
+      }
       const stageAllowed =
         role === "validation"
           ? task.stage === "validating"
@@ -1705,9 +2735,7 @@ export class WorkerWorkflow {
             ? task.stage === "queued" || task.stage === "scouting"
             : role === "reviewer" || role === "verifier"
               ? task.stage === "reviewing"
-              : task.stage === "queued" ||
-                task.stage === "implementing" ||
-                task.stage === "awaiting-fixes";
+              : task.stage === "queued" || task.stage === "implementing" || isFix;
       if (!stageAllowed) return undefined;
       const state = await readRuntimeState(this.#deps.runtimePath);
       const runtime = taskRuntime(state, taskId);
@@ -1716,24 +2744,149 @@ export class WorkerWorkflow {
       if (unreleasedReservation(runtime.reservation)) return undefined;
       if (runtime.jobs.some(activeRuntimeJob)) return undefined;
       if (activeReservations(state) >= task.policy.config.maxWorkers) return undefined;
+      const inputHead = task.reviewHead ?? runtime.sourceCheckpoint.head;
+      const targetTask = isFix
+        ? (() => {
+            const transitioned = transitionTask(
+              task,
+              { type: "begin-fixes", head: inputHead, generation: task.generation },
+              this.#deps.context(),
+            );
+            return {
+              ...transitioned,
+              ...(transitioned.endpoints === undefined
+                ? {}
+                : {
+                    endpoints: transitioned.endpoints.map((endpoint) => ({
+                      ...endpoint,
+                      generation: transitioned.generation,
+                    })),
+                  }),
+            };
+          })()
+        : task;
+      const operationId = singleLine(this.#deps.idFactory(), "operation id");
+      const jobId = singleLine(this.#deps.idFactory(), "operation job id");
+      const kind: DurableOperationKind =
+        role === "validation"
+          ? "validation"
+          : role === "scout"
+            ? "scout"
+            : role === "reviewer"
+              ? "review"
+              : role === "verifier"
+                ? "verification"
+                : isFix
+                  ? "fix"
+                  : "implementation";
+      const contextPath = isFix
+        ? join(
+            taskJobsDirectory(this.#deps.home, task.id),
+            `fix-context-${targetTask.generation}.json`,
+          )
+        : undefined;
+      const operation = {
+        ...durableOperation(
+          operationId,
+          taskId,
+          kind,
+          role,
+          targetTask.generation,
+          inputHead,
+          createHash("sha256")
+            .update(serializedIdentity(targetTask.policy, "task policy"))
+            .digest("hex"),
+          targetTask.communication?.revision ?? 0,
+          jobId,
+          this.#claimOwner,
+          this.#deps.clock(),
+        ),
+        phase: "admitted" as const,
+        ...(isFix
+          ? {
+              fixContext: {
+                head: inputHead,
+                generation: task.generation,
+                validationEvidence: task.validationEvidence,
+                findings: reviewFindings(task),
+              },
+            }
+          : {}),
+      };
       const reservation = runtimeReservation(
         singleLine(this.#deps.idFactory(), "reservation id"),
         taskId,
         this.#deps.sessionId,
         this.#deps.clock(),
+        operation.id,
       );
-      const nextRuntime = { ...runtime, reservation };
+      const nextRuntime = {
+        ...runtime,
+        operation,
+        ...(runtime.operation === undefined
+          ? {}
+          : { operationHistory: [...(runtime.operationHistory ?? []), runtime.operation] }),
+        reservation,
+        ...(contextPath === undefined ? {} : { fixContextPath: contextPath }),
+        ...(isFix
+          ? {
+              endpoints: runtime.endpoints.map((endpoint) => ({
+                ...endpoint,
+                generation: targetTask.generation,
+              })),
+            }
+          : {}),
+      };
+      if (isFix) await store.update(task.id, task.revision, () => targetTask);
       await writeRuntimeState(
         this.#deps.runtimePath,
         replaceRuntimeTask(state, taskId, () => nextRuntime),
       );
-      return { task, runtime: nextRuntime, reservation };
+      return { task: targetTask, runtime: nextRuntime, reservation };
     });
   }
+  async claimOperation(taskId: string): Promise<RuntimeTaskState | undefined> {
+    let claimed: RuntimeTaskState | undefined;
+    await this.#deps.store.exclusive(async () => {
+      const state = await readRuntimeState(this.#deps.runtimePath);
+      const runtime = taskRuntime(state, taskId);
+      if (runtime?.operation === undefined) return;
+      const operation = runtime.operation;
+      if (
+        runtime.stopRequest !== undefined ||
+        !["admitted", "prepared"].includes(operation.phase) ||
+        runtime.jobs.some((job) => job.id === operation.jobId && job.launchAttempted) ||
+        operation.effects.some(
+          (effect) => effect.id === operation.jobId || effect.id === `execution:${operation.jobId}`,
+        )
+      ) {
+        return;
+      }
+      const next = replaceRuntimeTask(state, taskId, (current) => ({
+        ...current,
+        ...(current.operation === undefined
+          ? {}
+          : {
+              operation: {
+                ...current.operation,
+                claimOwner: this.#claimOwner,
+                fencingRevision: current.operation.fencingRevision + 1,
+              },
+            }),
+        ...(current.reservation === undefined
+          ? {}
+          : { reservation: { ...current.reservation, ownerSessionId: this.#deps.sessionId } }),
+      }));
+      await writeRuntimeState(this.#deps.runtimePath, next);
+      claimed = taskRuntime(next, taskId);
+    });
+    return claimed;
+  }
 
-  private async appendJob(taskId: string, job: DurableJob): Promise<void> {
+  private async appendJob(taskId: string, job: DurableJob, claim: OperationClaim): Promise<void> {
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
       replaceRuntimeTask(state, taskId, (current) => {
+        this.assertOperationClaim(current, taskId, claim);
         if (current.jobs.some(activeRuntimeJob)) {
           throw new Error(`runtime task ${taskId} already has an active job`);
         }
@@ -1745,53 +2898,47 @@ export class WorkerWorkflow {
   private async updateJob(
     taskId: string,
     jobId: string,
+    claim: OperationClaim,
     transform: (job: DurableJob) => DurableJob,
   ): Promise<void> {
-    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
-      replaceRuntimeTask(state, taskId, (current) => replaceJob(current, jobId, transform)),
-    );
-  }
-
-  private async saveWorktree(
-    taskId: string,
-    worktree: NonNullable<RuntimeTaskState["worktree"]>,
-  ): Promise<void> {
-    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
-      replaceRuntimeTask(state, taskId, (current) => ({
-        ...current,
-        worktree,
-        ...(current.reservation === undefined
-          ? {}
-          : { reservation: { ...current.reservation, phase: "worktree" } }),
-      })),
-    );
-  }
-
-  async saveEndpoint(taskId: string, endpoint: Endpoint): Promise<void> {
-    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
-      replaceRuntimeTask(state, taskId, (current) => {
-        const { endpointLaunch: _endpointLaunch, ...withoutLaunch } = current;
-        return {
-          ...withoutLaunch,
-          endpoints: [
-            ...current.endpoints.filter((candidate) => candidate.paneId !== endpoint.paneId),
-            endpoint,
-          ],
-          ...(current.reservation === undefined
-            ? {}
-            : { reservation: { ...current.reservation, phase: "endpoint" } }),
-        };
-      }),
-    );
+    await withStateLock(this.#deps.home, async () => {
+      await this.#deps.store.exclusive(async () => {
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const runtime = taskRuntime(state, taskId);
+        const operation = runtime?.operation;
+        const job = runtime?.jobs.find((entry) => entry.id === jobId);
+        if (
+          runtime === undefined ||
+          operation === undefined ||
+          job === undefined ||
+          operation.id !== claim.id ||
+          operation.claimOwner !== claim.claimOwner ||
+          operation.fencingRevision !== claim.fencingRevision ||
+          operation.jobId !== jobId ||
+          job.operationId !== operation.id ||
+          runtime.stopRequest !== undefined ||
+          ["completed", "failed", "quarantined", "cancelled"].includes(operation.phase) ||
+          ["consumed", "failed"].includes(job.phase)
+        ) {
+          return;
+        }
+        await writeRuntimeState(
+          this.#deps.runtimePath,
+          replaceRuntimeTask(state, taskId, (current) => replaceJob(current, jobId, transform)),
+        );
+      });
+    });
   }
 
   private async saveEndpointLaunch(
     taskId: string,
     launch: DurableEndpointLaunch,
+    claim: OperationClaim,
   ): Promise<boolean> {
     let claimed = false;
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
       replaceRuntimeTask(state, taskId, (current) => {
+        this.assertOperationClaim(current, taskId, claim);
         if (current.reservation?.id !== launch.reservationId) {
           throw new Error(`runtime task ${taskId} has no matching endpoint reservation`);
         }
@@ -1804,10 +2951,24 @@ export class WorkerWorkflow {
     return claimed;
   }
 
-  async releaseUnlaunchedTaskReservation(taskId: string, reservationId: string): Promise<void> {
+  async releaseUnlaunchedTaskReservation(
+    taskId: string,
+    reservationId: string,
+    claim?: OperationClaim,
+  ): Promise<void> {
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
       replaceRuntimeTask(state, taskId, (current) => {
         if (
+          current.operation !== undefined &&
+          (claim === undefined ||
+            current.operation.id !== claim.id ||
+            current.operation.claimOwner !== claim.claimOwner ||
+            current.operation.fencingRevision !== claim.fencingRevision)
+        ) {
+          return current;
+        }
+        if (
+          current.operation?.phase === "quarantined" ||
           current.reservation?.id !== reservationId ||
           current.reservation.phase === "released" ||
           current.endpointLaunch !== undefined ||
@@ -1818,11 +2979,75 @@ export class WorkerWorkflow {
         }
         return {
           ...current,
+          ...(current.operation === undefined
+            ? {}
+            : { operation: { ...current.operation, phase: "failed" as const } }),
           reservation: {
             ...current.reservation,
             phase: "released",
             releasedAt: this.#deps.clock(),
           },
+        };
+      }),
+    );
+  }
+
+  private async saveWorktree(
+    taskId: string,
+    worktree: NonNullable<RuntimeTaskState["worktree"]>,
+    claim: OperationClaim,
+  ): Promise<void> {
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
+      replaceRuntimeTask(state, taskId, (current) => {
+        this.assertOperationClaim(current, taskId, claim);
+        return {
+          ...current,
+          worktree,
+          ...(current.reservation === undefined
+            ? {}
+            : { reservation: { ...current.reservation, phase: "worktree" } }),
+        };
+      }),
+    );
+  }
+  async saveEndpoint(taskId: string, endpoint: Endpoint, claim?: OperationClaim): Promise<void> {
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
+      replaceRuntimeTask(state, taskId, (current) => {
+        if (current.operation !== undefined && claim === undefined) {
+          throw new Error(`runtime task ${taskId} operation claim is required`);
+        }
+        if (claim !== undefined) this.assertOperationClaim(current, taskId, claim);
+        const launch = current.endpointLaunch;
+        const operation = current.operation;
+        const completesEndpointEffect =
+          claim !== undefined &&
+          operation !== undefined &&
+          launch?.operationId === claim.id &&
+          launch.operationId === operation.id;
+        const effects = completesEndpointEffect
+          ? operation.effects.map((effect) =>
+              effect.id === `endpoint:${claim.id}` && effect.kind === "endpoint"
+                ? {
+                    ...effect,
+                    phase: "succeeded" as const,
+                    receipt: JSON.stringify(endpoint),
+                  }
+                : effect,
+            )
+          : operation?.effects;
+        const { endpointLaunch: _endpointLaunch, ...withoutLaunch } = current;
+        return {
+          ...withoutLaunch,
+          ...(operation === undefined || effects === undefined
+            ? {}
+            : { operation: { ...operation, effects } }),
+          endpoints: [
+            ...current.endpoints.filter((candidate) => candidate.paneId !== endpoint.paneId),
+            endpoint,
+          ],
+          ...(current.reservation === undefined
+            ? {}
+            : { reservation: { ...current.reservation, phase: "endpoint" } }),
         };
       }),
     );
@@ -1844,9 +3069,13 @@ export class WorkerWorkflow {
     return { checkpoint, expectedHead };
   }
 
-  assertSourceUnchanged(pinned: GitCheckpoint, current: GitCheckpoint): void {
+  assertSourceUnchanged(
+    pinned: GitCheckpoint,
+    current: GitCheckpoint,
+    allowManagedHeadAdvance = false,
+  ): void {
     if (
-      pinned.head === current.head &&
+      (allowManagedHeadAdvance || pinned.head === current.head) &&
       pinned.dirty === current.dirty &&
       pinned.unmerged === current.unmerged &&
       !current.dirty &&
@@ -1855,7 +3084,7 @@ export class WorkerWorkflow {
       return;
     }
     const reasons = [
-      pinned.head !== current.head
+      !allowManagedHeadAdvance && pinned.head !== current.head
         ? `HEAD changed from ${pinned.head} to ${current.head}`
         : undefined,
       current.dirty

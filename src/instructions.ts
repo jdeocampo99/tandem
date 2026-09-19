@@ -40,7 +40,19 @@ Keep user-facing communication concise, warm, and plain-language. Research is au
 
 Delegate automatically through the configured Treehouse worktrees and child Herdr workspaces. Keep the main conversation authoritative, preserve unmerged work and reports, and make pause, cancel, restart, and recovery restart-safe. Keep implementation, validation, and review instruction channels appendable and preserve their source references. Pin the resolved policy and task snapshot. Use OMP-native compaction together with durable task state. Preserve the default maximum of three workers and three fix rounds; do not silently broaden them.
 
+At each new coordinator turn, the extension refreshes the proven clean coordinator source before planning. Treat source-status context as authoritative for this turn: a refresh can make earlier file observations and repository guidance stale, while already-created tasks and worker checkouts remain pinned to their captured commits. If refresh fails, do not create or launch new work; disclose the exact blocker.
+
 Treat durable task state as authoritative. Disclose delegation blockers as coordinator-actionable notifications and derive recorded task counts only from durable state, never from worker or process observations, receipts, or guesses. Distinguish queued and blocked work from active work: a queued steering receipt is not a running scout, and queued or blocked work is not completed research.
+
+The canonical task and runtime authority is <home>/state.sqlite. Treat legacy runtime.json and
+tasks/*.json as read-only input: never edit them, resume from them, or retry uncertain work.
+Migration is explicit and offline: first inspect with tandem migrate-state --home PATH, then apply
+only with tandem migrate-state --home PATH --yes; status and read-only planning never apply it.
+Migration preserves IDs, generations, fix-round/policy, and checkpoints/history while archiving and
+fencing the original bytes. An unknown outcome for an owned operation is quarantined with
+capacity/resources retained; never clear a reservation, replace a task, or change policy to bypass
+unknown ownership. Reset is not migration or recovery; tandem --reset --force [PATH ...] cancels
+selected active tasks.
 
 If delegation is blocked, never silently take over research. Ask for and receive explicit user authorization before researching directly.
 
@@ -123,7 +135,8 @@ type PromptRoleInstructions = Readonly<Record<AgentRole, readonly string[]>>;
 
 const COMMON_AGENT_INSTRUCTIONS = [
   "Treat this brief as workflow guidance, not as a sandbox or permission boundary; runtime adapters and permissions enforce isolation and authorization.",
-  "Preserve observable semantics and update every affected caller. Do not add compatibility shims, suppressions, stubs, or unrelated cleanup.",
+  "Use <home>/state.sqlite as canonical task/runtime state. Never edit, resume, or retry from legacy runtime.json or tasks/*.json; offline migration is inspect-only with tandem migrate-state --home PATH, then apply only with tandem migrate-state --home PATH --yes. Status/read-only planning never applies migration; migration preserves IDs, generations, fix-round/policy, checkpoints/history, and archives/fences original bytes.",
+  "Quarantine unknown owned-operation outcomes while retaining capacity/resources; never clear reservations, replace tasks, or change policy to bypass ownership. Reset is not migration or recovery, and tandem --reset --force [PATH ...] cancels selected active tasks.",
   "Use only the relevant artifact references supplied below; do not reproduce or request the entire conversation.",
   "A needs-decision result is durable task communication that wakes the coordinator; do not prompt the user directly. Include the bounded question, optional recommendation, and report evidence needed for the coordinator to judge it.",
 ] as const;

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -23,12 +24,14 @@ import type {
 import type { PresentationRecord } from "../../src/presentations/records.ts";
 import { activeReservations, activeRuntimeJob } from "../../src/runtime/activity.ts";
 import {
+  readRuntimeState,
   runtimeFile,
   writeJsonAtomically,
   writeRuntimeState,
 } from "../../src/runtime/persistence.ts";
 import type {
   DurableJob,
+  DurableOperation,
   DurableReservation,
   RuntimePresentation,
   RuntimeState,
@@ -45,6 +48,7 @@ import { type TaskEvent, transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
+import { WorkerWorkflow } from "../../src/workers/workflow.ts";
 
 const TIMESTAMP = "2030-01-01T00:00:00.000Z";
 const SOURCE_CHECKPOINT = {
@@ -100,14 +104,16 @@ const OMP_MODELS = [
 
 type FakeRunnerOptions = Readonly<{
   readonly active?: boolean;
-  readonly holdProof?: boolean;
+  readonly holdInitialHead?: boolean;
   readonly checkoutHead?: string;
+  readonly checkoutHeadFor?: (path: string) => string;
   readonly commonDirectory?: string;
   readonly dirty?: boolean;
   readonly unmerged?: boolean;
   readonly recovery?: boolean;
   readonly paneState?: "owned" | "missing" | "foreign";
   readonly workspaceLabel?: string;
+  readonly holdProof?: boolean;
   readonly presentationResponses?: readonly CommandResult[];
   readonly presentationOpenResponse?: CommandResult;
   readonly ompModels?: readonly unknown[];
@@ -120,6 +126,8 @@ type FakeRunnerState = {
   readonly proofBlocked: boolean;
   readonly proofStarted: Promise<void>;
   readonly releaseProof: () => void;
+  readonly headStarted: Promise<void>;
+  readonly releaseHead: () => void;
   readonly presentationStarted: Promise<void>;
   readonly releasePresentation: () => void;
 };
@@ -147,6 +155,15 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
   const proofGate = new Promise<void>((resolve) => {
     releaseProof = resolve;
   });
+  let headBlocked = false;
+  let startHead = (): void => undefined;
+  let releaseHead = (): void => undefined;
+  const headStarted = new Promise<void>((resolve) => {
+    startHead = resolve;
+  });
+  const headGate = new Promise<void>((resolve) => {
+    releaseHead = resolve;
+  });
   const presentationStarted = Promise.withResolvers<void>();
   const presentationGate = Promise.withResolvers<void>();
   const startPresentation = (): void => presentationStarted.resolve();
@@ -166,6 +183,10 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
     proofStarted,
     get releaseProof() {
       return releaseProof;
+    },
+    headStarted,
+    get releaseHead() {
+      return releaseHead;
     },
     presentationStarted: presentationStarted.promise,
     get releasePresentation() {
@@ -219,7 +240,7 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
                 : [
                     {
                       pane_id: "pane-1",
-                      tab_id: options.paneState === "foreign" ? "tab-foreign" : "tab-1",
+                      tab_id: "tab-1",
                       workspace_id:
                         options.paneState === "foreign" ? "workspace-foreign" : "workspace-1",
                       cwd: request.cwd,
@@ -318,15 +339,22 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
     }
     if (argv[0] === "git") {
       const path = argv[2] ?? request.cwd;
+      const checkoutHead = options.checkoutHeadFor?.(path) ?? options.checkoutHead ?? "source-head";
       if (argv.includes("rev-parse")) {
         const target = argv.at(-1);
-        if (target === "HEAD") return commandResult(options.checkoutHead ?? "source-head");
+        if (target === "HEAD") {
+          if (options.holdInitialHead && !headBlocked) {
+            headBlocked = true;
+            startHead();
+            await headGate;
+          }
+          return commandResult(checkoutHead);
+        }
         if (target === "--git-common-dir") return commandResult(options.commonDirectory ?? path);
         if (target === "source-head" || target?.startsWith("refs/heads/"))
           return commandResult("source-head");
-        if (target === "--show-toplevel") return commandResult(path);
+        if (target !== undefined) return commandResult(target);
       }
-      if (argv.includes("symbolic-ref")) return commandResult("main");
       if (argv.includes("branch") && argv.includes("--show-current"))
         return commandResult("tandem-task-1");
       if (argv.includes("status"))
@@ -390,6 +418,7 @@ type FixtureOptions = Readonly<{
     readonly stage?: TaskRecord["stage"];
     readonly previousStage?: TaskRecord["stage"];
     readonly reviewHead?: string;
+    readonly reviewRound?: number;
     readonly worktree?: WorktreeLease;
     readonly clearWorktree?: boolean;
   }>;
@@ -451,6 +480,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
         ...(edits?.stage === undefined ? {} : { stage: edits.stage }),
         ...(edits?.previousStage === undefined ? {} : { previousStage: edits.previousStage }),
         ...(edits?.reviewHead === undefined ? {} : { reviewHead: edits.reviewHead }),
+        ...(edits?.reviewRound === undefined ? {} : { reviewRound: edits.reviewRound }),
         ...(edits?.worktree === undefined ? {} : { worktree: edits.worktree }),
       };
       if (edits?.clearWorktree === true) {
@@ -509,6 +539,10 @@ async function withFixture(
     await rm(created.home, { recursive: true, force: true });
   }
 }
+async function readRuntime(home: string): Promise<RuntimeState> {
+  return readRuntimeState(runtimeFile(home));
+}
+
 test("bound coordinators scope tasks by physical original identity and reject foreign projects", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-service-scope-"));
   const home = join(root, "home");
@@ -592,9 +626,7 @@ test("bound task creation normalizes clean input to the original identity and pe
       surfaces: ["src"],
     });
     expect(created.repoPath).toBe(await realpath(original));
-    const runtime = JSON.parse(await readFile(runtimeFile(home), "utf8")) as {
-      readonly tasks: readonly RuntimeTaskState[];
-    };
+    const runtime = await readRuntime(home);
     expect(runtime.tasks[0]?.sourceRepoPath).toBe(await realpath(source));
   } finally {
     await service.shutdown();
@@ -696,9 +728,40 @@ function workerJob(
     resultPath: join(directory, "result.json"),
     attempt: 1,
     phase,
-    launchAttempted: true,
+    launchAttempted: phase !== "reserved",
     createdAt: TIMESTAMP,
     endpoint,
+  };
+}
+function operationForJob(job: DurableJob, task: TaskRecord): DurableOperation {
+  const kind: DurableOperation["kind"] =
+    job.kind === "validation"
+      ? "validation"
+      : job.role === "scout"
+        ? "scout"
+        : job.role === "implementer"
+          ? task.reviewRound > 0
+            ? "fix"
+            : "implementation"
+          : job.role === "reviewer"
+            ? "review"
+            : "verification";
+  return {
+    schemaVersion: 1,
+    id: `${job.id}-operation`,
+    taskId: job.taskId,
+    kind,
+    role: job.role,
+    generation: job.generation,
+    inputHead: task.reviewHead ?? SOURCE_CHECKPOINT.head,
+    policyDigest: createHash("sha256").update(JSON.stringify(task.policy)).digest("hex"),
+    instructionRevision: 0,
+    jobId: job.id,
+    phase: job.phase === "consumed" ? "finalizing" : "running",
+    fencingRevision: 1,
+    claimOwner: "seeded-controller",
+    createdAt: TIMESTAMP,
+    effects: [],
   };
 }
 
@@ -723,13 +786,27 @@ async function seedTaskResources(
   });
   const current = await store.read("task-1");
   if (current === undefined) throw new Error("fixture task missing");
-  await store.update(current.id, current.revision, (task) => ({
+  const updated = await store.update(current.id, current.revision, (task) => ({
     ...task,
     revision: task.revision + 1,
     updatedAt: TIMESTAMP,
     worktree: lease,
     endpoints,
   }));
+  const seedJob = jobs[0];
+  const operation = seedJob === undefined ? undefined : operationForJob(seedJob, updated);
+  const linkedJobs = jobs.map((job) =>
+    operation !== undefined && job.id === operation.jobId
+      ? { ...job, operationId: operation.id }
+      : job,
+  );
+  const reservation =
+    operation !== undefined && seedJob !== undefined && activeRuntimeJob(seedJob)
+      ? {
+          ...reservationFor("task-1"),
+          operationId: operation.id,
+        }
+      : undefined;
   await writeRuntimeState(runtimeFile(home), {
     schemaVersion: 1,
     tasks: [
@@ -738,9 +815,11 @@ async function seedTaskResources(
         taskId: "task-1",
         sourceCheckpoint: SOURCE_CHECKPOINT,
         taskName: "tandem-task-1",
+        ...(operation === undefined ? {} : { operation }),
+        ...(reservation === undefined ? {} : { reservation }),
         worktree: lease,
         endpoints,
-        jobs,
+        jobs: linkedJobs,
       },
     ],
     presentations: [],
@@ -776,9 +855,7 @@ async function seedConsumedPresentation(
       rawFeedback: "",
     },
   });
-  const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-    readonly tasks: RuntimeTaskState[];
-  };
+  const runtime = await readRuntime(home);
   await writeRuntimeState(runtimeFile(home), {
     schemaVersion: 1,
     tasks: runtime.tasks,
@@ -839,9 +916,24 @@ async function seedRunningPresentation(
     updatedAt: TIMESTAMP,
     endpoint,
   });
-  const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-    readonly tasks: RuntimeTaskState[];
+  const operation: DurableOperation = {
+    schemaVersion: 1,
+    id: `${id}-operation`,
+    taskId: "task-1",
+    kind: "presentation",
+    role: "presentation",
+    generation: 0,
+    inputHead: SOURCE_CHECKPOINT.head,
+    policyDigest: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
+    instructionRevision: 0,
+    jobId: id,
+    phase: "running",
+    fencingRevision: 1,
+    claimOwner: "seeded-controller",
+    createdAt: TIMESTAMP,
+    effects: [],
   };
+  const runtime = await readRuntime(home);
   await writeRuntimeState(runtimeFile(home), {
     schemaVersion: 1,
     tasks: runtime.tasks,
@@ -849,6 +941,7 @@ async function seedRunningPresentation(
       {
         schemaVersion: 1,
         id,
+        operation,
         taskId: "task-1",
         recordPath,
         endpoint,
@@ -861,6 +954,7 @@ async function seedRunningPresentation(
           kind: "worker",
           cwd: home,
           jobPath,
+          operationId: operation.id,
           resultPath,
           attempt: 1,
           phase: "running",
@@ -941,7 +1035,25 @@ async function seedBlockedPresentation(
     updatedAt: TIMESTAMP,
   } satisfies PresentationRecord;
   await writeJsonAtomically(recordPath, record);
-  const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as RuntimeState;
+  const operation: DurableOperation = {
+    schemaVersion: 1,
+    id: `${questionId}-operation`,
+    taskId,
+    kind: "presentation",
+    role: "presentation",
+    generation: 0,
+    inputHead: SOURCE_CHECKPOINT.head,
+    policyDigest: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
+    instructionRevision: 0,
+    jobId: questionId,
+    phase: "completed",
+    fencingRevision: 1,
+    claimOwner: "seeded-controller",
+    createdAt: TIMESTAMP,
+    effects: [],
+    resultConsumedAt: TIMESTAMP,
+  };
+  const runtime = await readRuntime(home);
   await writeRuntimeState(runtimeFile(home), {
     ...runtime,
     presentations: [
@@ -951,6 +1063,7 @@ async function seedBlockedPresentation(
         id,
         taskId,
         recordPath,
+        operation,
         endpoint,
         job: {
           schemaVersion: 1,
@@ -961,6 +1074,7 @@ async function seedBlockedPresentation(
           kind: "worker",
           cwd: home,
           jobPath,
+          operationId: operation.id,
           resultPath,
           attempt: 1,
           phase: "consumed",
@@ -1008,9 +1122,7 @@ test("presentation answers create isolated attempts, preserve evidence, and targ
         questionId: second.questionId,
         status: "queued",
       });
-      const state = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        readonly presentations: readonly RuntimePresentation[];
-      };
+      const state = await readRuntime(home);
       const restarted = state.presentations.find((entry) => entry.id === "presentation-second");
       if (restarted === undefined) throw new Error("restarted presentation runtime missing");
       expect(restarted.job.jobPath).not.toBe(second.jobPath);
@@ -1024,9 +1136,7 @@ test("presentation answers create isolated attempts, preserve evidence, and targ
       expect(await readFile(second.resultPath, "utf8")).toContain("needs-decision");
 
       await service.tick();
-      const afterTick = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        readonly presentations: readonly RuntimePresentation[];
-      };
+      const afterTick = await readRuntime(home);
       const afterRestart = afterTick.presentations.find(
         (entry) => entry.id === "presentation-second",
       );
@@ -1101,16 +1211,8 @@ test("concurrent controllers consume one completed presentation only once", asyn
         const openCalls = runnerState.calls.filter(
           (request) => request.argv[0] === "lavish-axi" && request.argv[1] !== "poll",
         );
-        expect(
-          openCalls,
-          await Bun.file(join(home, "presentation-1-record.json")).text(),
-        ).toHaveLength(1);
-        const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-          readonly presentations: readonly {
-            readonly job: { readonly phase: string };
-            readonly endpoint?: Endpoint;
-          }[];
-        };
+        expect(openCalls).toHaveLength(1);
+        const runtime = await readRuntime(home);
         expect(runtime.presentations[0]?.job.phase).toBe("consumed");
         expect(runtime.presentations[0]?.endpoint?.paneId).toBe("pane-1");
         const record = JSON.parse(
@@ -1127,8 +1229,8 @@ test("concurrent controllers consume one completed presentation only once", asyn
   );
 });
 
-test("queues a presentation failure behind an unflushed feedback notification", async () => {
-  await withFixture({}, async ({ home, service }) => {
+test("quarantines a presentation notification after delivering pending feedback exactly once", async () => {
+  await withFixture({ stage: "completed" }, async ({ home, service }) => {
     const recordPath = join(home, "failure-record.json");
     const jobPath = join(home, "failure-job.json");
     const resultPath = join(home, "failure-result.json");
@@ -1159,18 +1261,39 @@ test("queues a presentation failure behind an unflushed feedback notification", 
         message: "Choose a direction before the worker fails",
       },
     });
-    const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-      readonly tasks: RuntimeTaskState[];
+    const operation: DurableOperation = {
+      schemaVersion: 1,
+      id: "failure-operation",
+      taskId: "task-1",
+      kind: "presentation",
+      role: "presentation",
+      generation: 0,
+      inputHead: SOURCE_CHECKPOINT.head,
+      policyDigest: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
+      instructionRevision: 0,
+      jobId: "failure-job",
+      phase: "running",
+      fencingRevision: 1,
+      claimOwner: "seeded-controller",
+      createdAt: TIMESTAMP,
+      effects: [],
     };
+    const presentationReservation = { ...reservationFor("task-1"), operationId: operation.id };
+    const runtime = await readRuntime(home);
     await writeRuntimeState(runtimeFile(home), {
       schemaVersion: 1,
-      tasks: runtime.tasks,
+      tasks: runtime.tasks.map((entry) => ({
+        ...entry,
+        operation,
+        reservation: presentationReservation,
+      })),
       presentations: [
         {
           schemaVersion: 1,
           id: "presentation-failure",
           taskId: "task-1",
           recordPath,
+          operation,
           job: {
             schemaVersion: 1,
             id: "failure-job",
@@ -1183,6 +1306,7 @@ test("queues a presentation failure behind an unflushed feedback notification", 
             resultPath,
             attempt: 1,
             phase: "running",
+            operationId: operation.id,
             launchAttempted: true,
             createdAt: "2020-01-01T00:00:00.000Z",
           },
@@ -1190,15 +1314,91 @@ test("queues a presentation failure behind an unflushed feedback notification", 
       ],
     });
     await service.tick();
-    const task = await service.get("task-1");
-    const notifications = task.notifications.filter((entry) => entry.kind === "coordinator");
-    expect(notifications.at(-2)?.message).toBe("Choose a direction before the worker fails");
-    expect(notifications.at(-1)?.message).toContain("failed");
-    const persistedRuntime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-      readonly presentations: readonly { readonly job: { readonly phase: string } }[];
-    };
-    expect(persistedRuntime.presentations[0]?.job.phase).toBe("failed");
+    let task = await service.get("task-1");
+    let notifications = task.notifications.filter((entry) => entry.kind === "coordinator");
+    expect(notifications.filter((entry) => entry.id === "feedback-before-failure")).toHaveLength(1);
+    expect(notifications.filter((entry) => entry.id !== "feedback-before-failure")).toHaveLength(1);
+    expect(notifications.findIndex((entry) => entry.id === "feedback-before-failure")).toBeLessThan(
+      notifications.findIndex((entry) => entry.id !== "feedback-before-failure"),
+    );
+    let persistedRuntime = await readRuntime(home);
+    expect(persistedRuntime.presentations[0]?.job.phase).toBe("running");
+    expect(persistedRuntime.presentations[0]?.operation?.phase).toBe("quarantined");
+    expect(persistedRuntime.tasks[0]?.reservation?.phase).toBe("reserved");
+    expect(activeReservations(persistedRuntime)).toBe(1);
+    await service.tick();
+    task = await service.get("task-1");
+    notifications = task.notifications.filter((entry) => entry.kind === "coordinator");
+    expect(notifications.filter((entry) => entry.id === "feedback-before-failure")).toHaveLength(1);
+    expect(notifications.filter((entry) => entry.id !== "feedback-before-failure")).toHaveLength(1);
+    persistedRuntime = await readRuntime(home);
+    expect(persistedRuntime.presentations[0]?.job.phase).toBe("running");
   });
+});
+
+test("feedback poll failure marks a consumed presentation failed without resurrecting its operation", async () => {
+  await withFixture(
+    {
+      stage: "completed",
+      runner: { presentationResponses: [commandResult("", 1, "poll failed")] },
+    },
+    async ({ home, service, runnerState }) => {
+      const id = "presentation-consumed-feedback-failure";
+      await seedConsumedPresentation(home, id);
+      const state = await readRuntime(home);
+      const current = state.presentations[0];
+      if (current === undefined) throw new Error("consumed presentation fixture missing");
+      const operation: DurableOperation = {
+        schemaVersion: 1,
+        id: `${id}-operation`,
+        taskId: "task-1",
+        kind: "presentation",
+        role: "presentation",
+        generation: 0,
+        inputHead: SOURCE_CHECKPOINT.head,
+        policyDigest: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
+        instructionRevision: 0,
+        jobId: current.job.id,
+        phase: "completed",
+        fencingRevision: 1,
+        claimOwner: "seeded-controller",
+        createdAt: TIMESTAMP,
+        effects: [],
+      };
+      const reservation = {
+        ...reservationFor("task-1", "released"),
+        operationId: operation.id,
+        releasedAt: TIMESTAMP,
+      };
+      await writeRuntimeState(runtimeFile(home), {
+        ...state,
+        presentations: [
+          {
+            ...current,
+            operation,
+            reservation,
+            job: { ...current.job, operationId: operation.id },
+          },
+        ],
+      });
+
+      await service.tick();
+      await runnerState.presentationStarted;
+      const feedback = service.feedback(id);
+      runnerState.releasePresentation();
+      const failed = await feedback;
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toBeDefined();
+
+      const task = await service.get("task-1");
+      expect(task.notifications.some((entry) => entry.kind === "coordinator")).toBe(true);
+      const persisted = await readRuntime(home);
+      const presentation = persisted.presentations[0];
+      expect(presentation?.job.phase).toBe("consumed");
+      expect(presentation?.operation?.phase).toBe("completed");
+      expect(presentation?.reservation?.phase).toBe("released");
+    },
+  );
 });
 
 test("approved task allocates a fresh endpoint and dispatches one worker", async () => {
@@ -1237,9 +1437,7 @@ test("approved task allocates a fresh endpoint and dispatches one worker", async
     await service.tick();
 
     const started = await service.get("task-1");
-    const persisted = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-      tasks: RuntimeTaskState[];
-    };
+    const persisted = await readRuntime(home);
     expect(started.stage).toBe("implementing");
     expect(started.endpoints).toHaveLength(1);
     expect(started.endpoints?.[0]?.paneId).toBe("pane-1");
@@ -1300,10 +1498,11 @@ test("two controllers serialize one worker dispatch and persist one active job",
       });
       await Promise.all([service.tick(), other.tick()]);
       const task = await service.get("task-1");
-      const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-      };
-      expect(task.stage).toBe("scouting");
+      const runtime = await readRuntime(home);
+      expect({ stage: task.stage, blockReason: task.blockReason }).toEqual({
+        stage: "scouting",
+        blockReason: undefined,
+      });
       expect(runnerState.launches).toBe(1);
       expect(runtime.tasks[0]?.jobs).toHaveLength(1);
       expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("running");
@@ -1357,9 +1556,7 @@ test("pause waits behind launch proof and prevents a second dispatch", async () 
       expect((await service.get("task-1")).stage).toBe("paused");
       expect(runnerState.launches).toBe(1);
       expect(runnerState.active).toBe(false);
-      const persisted = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-      };
+      const persisted = await readRuntime(home);
       expect(persisted.tasks[0]?.stopRequest?.action).toBe("pause");
     },
   );
@@ -1443,9 +1640,7 @@ test("pre-job validation blocker can resume without retaining a reservation", as
       expect((await service.get("task-1")).stage).toBe("blocked");
       const resumed = await service.resume("task-1");
       expect(resumed.stage).toBe("validating");
-      const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-      };
+      const runtime = await readRuntime(home);
       expect(runtime.tasks[0]?.reservation?.phase).toBe("released");
       expect(runtime.tasks[0]?.jobs).toHaveLength(0);
     },
@@ -1466,6 +1661,103 @@ test("source checkpoint diagnostics distinguish dirty worktrees from changed HEA
       );
     },
   );
+});
+test("managed coordinator sources permit clean refreshes but retain dirty safety", () => {
+  const workflow = Object.create(WorkerWorkflow.prototype) as WorkerWorkflow;
+  const pinned = {
+    head: "source-a",
+    base: "source-a",
+    diff: "",
+    dirty: false,
+    unmerged: false,
+  };
+  expect(() =>
+    workflow.assertSourceUnchanged(pinned, { ...pinned, head: "source-b", base: "source-b" }, true),
+  ).not.toThrow();
+  expect(() =>
+    workflow.assertSourceUnchanged(
+      pinned,
+      { ...pinned, head: "source-b", base: "source-b", dirty: true },
+      true,
+    ),
+  ).toThrow("current worktree is dirty");
+  expect(() =>
+    workflow.assertSourceUnchanged(pinned, { ...pinned, head: "source-b", base: "source-b" }),
+  ).toThrow("HEAD changed from source-a to source-b");
+});
+test("blocks a saved lease whose checkout moved before the first worker in both queue recovery shapes", async () => {
+  const capturedSource = {
+    head: "A",
+    base: "A",
+    diff: "",
+    dirty: false,
+    unmerged: false,
+  } as const;
+  for (const recovered of [false, true]) {
+    await withFixture(
+      {
+        kind: "scout",
+        stage: recovered ? "blocked" : "queued",
+        ...(recovered ? { taskEdits: { previousStage: "queued" as const } } : {}),
+        runner: {
+          checkoutHeadFor: (path) => (path.endsWith("/repo") ? "A" : "B"),
+        },
+      },
+      async ({ home, lease, endpoint, service, runnerState }) => {
+        const savedLease = { ...lease, baseHead: "A" };
+        const store = createTaskStore({
+          directory: join(home, "tasks"),
+          clock: () => TIMESTAMP,
+          idFactory: () => "unused",
+        });
+        const current = await store.read("task-1");
+        if (current === undefined) throw new Error("fixture task missing");
+        await store.update(current.id, current.revision, (task) => ({
+          ...task,
+          revision: task.revision + 1,
+          updatedAt: TIMESTAMP,
+          ...(recovered ? { worktree: savedLease, endpoints: [endpoint] } : {}),
+        }));
+        await writeRuntimeState(runtimeFile(home), {
+          schemaVersion: 1,
+          tasks: [
+            {
+              schemaVersion: 1,
+              taskId: "task-1",
+              sourceCheckpoint: capturedSource,
+              taskName: "tandem-task-1",
+              worktree: savedLease,
+              endpoints: recovered ? [endpoint] : [],
+              jobs: [],
+            },
+          ],
+          presentations: [],
+        });
+
+        if (recovered) {
+          expect((await service.resume("task-1")).stage).toBe("queued");
+        }
+        await service.tick();
+
+        const task = await service.get("task-1");
+        const persisted = await readRuntime(home);
+        const runtime = persisted.tasks[0];
+        expect(task.stage).toBe("blocked");
+        expect(task.blockReason).toContain("saved worktree is not the captured source commit A");
+        expect(runtime?.jobs).toHaveLength(0);
+        expect(runtime?.worktree?.path).toBe(savedLease.path);
+        expect(runtime?.worktree?.leaseId).toBe(savedLease.leaseId);
+        expect(runnerState.launches).toBe(0);
+        expect(
+          runnerState.calls.some(
+            (request) =>
+              request.argv[0] === "git" &&
+              request.argv.some((argument) => ["checkout", "reset", "switch"].includes(argument)),
+          ),
+        ).toBe(false);
+      },
+    );
+  }
 });
 
 test("scout success is blocked and the worktree is preserved when checkout changed", async () => {
@@ -1501,6 +1793,8 @@ test("scout success is blocked and the worktree is preserved when checkout chang
         worktree: lease,
         endpoints: [endpoint],
       }));
+      const operation = { ...operationForJob(job, current), phase: "finalizing" as const };
+      const linkedJob = { ...job, operationId: operation.id };
       await writeRuntimeState(runtimeFile(home), {
         schemaVersion: 1,
         tasks: [
@@ -1509,18 +1803,17 @@ test("scout success is blocked and the worktree is preserved when checkout chang
             taskId: "task-1",
             sourceCheckpoint: SOURCE_CHECKPOINT,
             taskName: "tandem-task-1",
+            operation,
             worktree: lease,
             endpoints: [endpoint],
-            jobs: [job],
+            jobs: [linkedJob],
           },
         ],
         presentations: [],
       });
       await service.tick();
       const task = await service.get("task-1");
-      const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-      };
+      const runtime = await readRuntime(home);
       expect(task.stage).toBe("blocked");
       expect(task.worktree?.path).toBe(lease.path);
       expect(runtime.tasks[0]?.worktree?.path).toBe(lease.path);
@@ -1560,9 +1853,7 @@ test("active worker watchdog warns once per quiet episode without a runtime kill
         await writeJsonAtomically(receiptPath, receipt);
       };
       const readRuntimeTask = async (): Promise<RuntimeTaskState> => {
-        const state = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-          tasks: RuntimeTaskState[];
-        };
+        const state = await readRuntime(home);
         const runtime = state.tasks[0];
         if (runtime === undefined) throw new Error("watchdog runtime task missing");
         return runtime;
@@ -1614,10 +1905,15 @@ test("endpoint launch recovery adopts the exact Herdr pane without creating anot
       runner: { active: false, workspaceLabel: "└ Saved recovery label · task-1 · scout" },
     },
     async ({ home, lease, service, runnerState }) => {
-      const reservation = reservationFor("task-1", "endpoint");
+      const reservationBase = reservationFor("task-1", "endpoint");
+      const seedJob = workerJob(home, endpointFor("scout"), "scout", "reserved");
+      const currentTask = await service.get("task-1");
+      const operation = { ...operationForJob(seedJob, currentTask), phase: "admitted" as const };
+      const reservation = { ...reservationBase, operationId: operation.id };
       const endpointLaunch = {
         schemaVersion: 1 as const,
         reservationId: reservation.id,
+        operationId: operation.id,
         sessionId: "session-1",
         taskName: "tandem-task-1",
         workspaceLabel: "└ Saved recovery label · task-1 · scout",
@@ -1626,6 +1922,18 @@ test("endpoint launch recovery adopts the exact Herdr pane without creating anot
         generation: 0,
         createdAt: TIMESTAMP,
       };
+      const operationWithEndpointIntent: DurableOperation = {
+        ...operation,
+        effects: [
+          {
+            id: `endpoint:${operation.id}`,
+            kind: "endpoint",
+            phase: "intent",
+            createdAt: TIMESTAMP,
+            identity: endpointLaunch.workspaceLabel,
+          },
+        ],
+      };
       await writeRuntimeState(runtimeFile(home), {
         schemaVersion: 1,
         tasks: [
@@ -1633,6 +1941,7 @@ test("endpoint launch recovery adopts the exact Herdr pane without creating anot
             schemaVersion: 1,
             taskId: "task-1",
             sourceCheckpoint: SOURCE_CHECKPOINT,
+            operation: operationWithEndpointIntent,
             taskName: "tandem-task-1",
             reservation,
             endpointLaunch,
@@ -1645,9 +1954,7 @@ test("endpoint launch recovery adopts the exact Herdr pane without creating anot
       });
       await service.tick();
       const task = await service.get("task-1");
-      const persisted = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-      };
+      const persisted = await readRuntime(home);
       expect(task.stage).toBe("scouting");
       expect(runnerState.launches).toBe(1);
       expect(persisted.tasks[0]?.endpointLaunch).toBeUndefined();
@@ -1670,31 +1977,12 @@ test("owned pre-launch worker reservation recovers without a duplicate admission
     },
     async ({ home, lease, endpoint, service, runnerState }) => {
       await seedTaskResources(home, lease, [endpoint], []);
-      const state = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        schemaVersion: 1;
-        tasks: RuntimeTaskState[];
-        presentations: RuntimePresentation[];
-      };
-      const runtime = state.tasks.find((entry) => entry.taskId === "task-1");
-      if (runtime === undefined) throw new Error("fixture runtime task missing");
-      await writeRuntimeState(runtimeFile(home), {
-        schemaVersion: 1,
-        tasks: [
-          {
-            ...runtime,
-            reservation: reservationFor("task-1", "worktree"),
-          },
-        ],
-        presentations: state.presentations,
-      });
+      const job = workerJob(home, endpoint, "implementer", "reserved");
+      await seedOperationIntent(home, job, "admitted");
 
       await service.tick();
       expect(runnerState.launches).toBe(1);
-      const recovered = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        schemaVersion: 1;
-        tasks: RuntimeTaskState[];
-        presentations: RuntimePresentation[];
-      };
+      const recovered = await readRuntime(home);
       expect(activeReservations(recovered)).toBe(1);
       expect(recovered.tasks[0]?.jobs.filter(activeRuntimeJob)).toHaveLength(1);
     },
@@ -1759,6 +2047,8 @@ test("pending worker consumption replays once from its persisted two-file identi
           notificationId: "notification-1",
         },
       };
+      const operation = { ...operationForJob(pending, before), phase: "finalizing" as const };
+      const linkedPending = { ...pending, operationId: operation.id };
       await writeRuntimeState(runtimeFile(home), {
         schemaVersion: 1,
         tasks: [
@@ -1769,20 +2059,23 @@ test("pending worker consumption replays once from its persisted two-file identi
             taskName: "tandem-task-1",
             worktree: lease,
             endpoints: [endpoint],
-            jobs: [pending],
+            operation,
+            jobs: [linkedPending],
           },
         ],
         presentations: [],
       });
       await service.tick();
       const consumed = await service.get("task-1");
-      const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-      };
+      const runtime = await readRuntime(home);
       expect(consumed.stage).toBe("validating");
       expect(consumed.revision).toBe(after.revision);
       expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("consumed");
+      await service.tick();
       expect(consumed.notifications).toHaveLength(before.notifications.length);
+      const repeated = await service.get("task-1");
+      expect(repeated.revision).toBe(consumed.revision);
+      expect(repeated.notifications).toHaveLength(consumed.notifications.length);
     },
   );
 });
@@ -1821,9 +2114,7 @@ test("a direction arriving before worker completion survives an old-revision res
       await service.tick();
 
       const task = await service.get("task-1");
-      const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-      };
+      const runtime = await readRuntime(home);
       expect(task.stage).toBe("implementing");
       expect(task.communication?.revision).toBe(1);
       expect(task.communication?.messages[0]?.text).toBe(
@@ -2062,6 +2353,8 @@ test("resume refuses an active worker pane and leaves the paused task unchanged"
         worktree: lease,
         endpoints: [endpoint],
       }));
+      const operation = { ...operationForJob(job, current), phase: "running" as const };
+      const linkedJob = { ...job, operationId: operation.id };
       await writeRuntimeState(runtimeFile(home), {
         schemaVersion: 1,
         tasks: [
@@ -2070,9 +2363,10 @@ test("resume refuses an active worker pane and leaves the paused task unchanged"
             taskId: "task-1",
             sourceCheckpoint: SOURCE_CHECKPOINT,
             taskName: "tandem-task-1",
+            operation,
             worktree: lease,
             endpoints: [endpoint],
-            jobs: [job],
+            jobs: [linkedJob],
           },
         ],
         presentations: [],
@@ -2128,19 +2422,13 @@ test("an existing presentation reservation is not treated as permission for a du
         createdAt: TIMESTAMP,
       },
     };
-    const state = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-      tasks: RuntimeTaskState[];
-      presentations: RuntimePresentation[];
-    };
+    const state = await readRuntime(home);
     await writeRuntimeState(runtimeFile(home), {
-      schemaVersion: 1,
       ...state,
       presentations: [presentation],
     });
     await service.tick();
-    const persisted = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-      presentations: RuntimePresentation[];
-    };
+    const persisted = await readRuntime(home);
     expect(runnerState.launches).toBe(0);
     expect(persisted.presentations[0]?.reservation?.id).toBe("reservation-1");
     expect(persisted.presentations[0]?.job.phase).toBe("reserved");
@@ -2173,12 +2461,8 @@ test("reloads a browser-disconnected presentation as open for an explicit user d
         rawFeedback: "",
       },
     });
-    const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-      tasks: RuntimeTaskState[];
-      presentations: RuntimePresentation[];
-    };
+    const runtime = await readRuntime(home);
     await writeRuntimeState(runtimeFile(home), {
-      schemaVersion: 1,
       ...runtime,
       presentations: [
         {
@@ -2266,10 +2550,7 @@ test("scheduler starts open presentation feedback polling without blocking task 
           rawFeedback: "",
         },
       });
-      const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-        presentations: RuntimePresentation[];
-      };
+      const runtime = await readRuntime(home);
       await writeRuntimeState(runtimeFile(home), {
         schemaVersion: 1,
         tasks: runtime.tasks,
@@ -2485,9 +2766,7 @@ test("resume consumes a stopped worker result once without relaunching the imple
       const resumed = await service.resume("task-1");
       expect(resumed.stage).toBe("validating");
       expect(runnerState.launches).toBe(0);
-      const persisted = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-      };
+      const persisted = await readRuntime(home);
       expect(persisted.tasks[0]?.jobs[0]?.phase).toBe("consumed");
 
       const repeated = await service.resume("task-1");
@@ -2540,6 +2819,8 @@ test("review result retains its reviewer pane with durable task revisions", asyn
       expect(current.endpoints ?? []).toHaveLength(1);
       expect(current.revision).toBe(before.revision + 1);
       expect(runnerState.launches).toBe(0);
+      const runtime = await readRuntime(home);
+      expect(runtime.tasks[0]?.operation?.kind).toBe("review");
     },
   );
 });
@@ -2632,9 +2913,7 @@ test("validation runs in a split non-model pane beside the retained writer", asy
 
       await service.tick();
 
-      const persisted = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        readonly tasks: readonly RuntimeTaskState[];
-      };
+      const persisted = await readRuntime(home);
       const runtime = persisted.tasks[0];
       if (runtime === undefined) throw new Error("fixture runtime task missing");
       const validationJob = runtime.jobs[0];
@@ -2647,6 +2926,7 @@ test("validation runs in a split non-model pane beside the retained writer", asy
       expect(writer?.paneId).toBe(endpoint.paneId);
       expect(validationEndpoint?.paneId).toBe("pane-2");
       expect(runnerState.launches).toBe(1);
+      expect(runtime.operation?.kind).toBe("validation");
     },
   );
 });
@@ -2665,11 +2945,7 @@ test("resume waits for capacity and retains admission after the slot is freed", 
       },
       async ({ home, lease, endpoint, service, runnerState }) => {
         await seedTaskResources(home, lease, [endpoint], []);
-        const initial = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-          schemaVersion: 1;
-          tasks: RuntimeTaskState[];
-          presentations: RuntimePresentation[];
-        };
+        const initial = await readRuntime(home);
         const taskRuntime = initial.tasks.find((entry) => entry.taskId === "task-1");
         if (taskRuntime === undefined) throw new Error("fixture runtime task missing");
         const busyRuntime: RuntimeTaskState = {
@@ -2699,18 +2975,12 @@ test("resume waits for capacity and retains admission after the slot is freed", 
         const resumed = await service.resume("task-1");
         expect(resumed.stage).toBe(kind === "scout" ? "scouting" : "implementing");
         expect(runnerState.launches).toBe(0);
-        const waiting = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-          tasks: RuntimeTaskState[];
-        };
+        const waiting = await readRuntime(home);
         const waitingTask = waiting.tasks.find((entry) => entry.taskId === "task-1");
         expect(waitingTask?.reservation?.phase).toBe("released");
         expect(waitingTask?.worktree?.path).toBe(lease.path);
 
-        const withFreeSlot = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-          schemaVersion: 1;
-          tasks: RuntimeTaskState[];
-          presentations: RuntimePresentation[];
-        };
+        const withFreeSlot = await readRuntime(home);
         await writeRuntimeState(runtimeFile(home), {
           schemaVersion: 1,
           tasks: withFreeSlot.tasks.map(
@@ -2731,11 +3001,7 @@ test("resume waits for capacity and retains admission after the slot is freed", 
 
         await service.tick();
         expect(runnerState.launches).toBe(1);
-        const running = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-          schemaVersion: 1;
-          tasks: RuntimeTaskState[];
-          presentations: RuntimePresentation[];
-        };
+        const running = await readRuntime(home);
         expect(activeReservations(running)).toBe(1);
         const resumedRuntime = running.tasks.find((entry) => entry.taskId === "task-1");
         expect(resumedRuntime?.jobs.filter(activeRuntimeJob)).toHaveLength(1);
@@ -2764,9 +3030,7 @@ test("resume after an interrupted worker abandons the stopped job and dispatches
       const resumed = await service.resume("task-1");
       expect(resumed.stage).toBe("implementing");
       expect(runnerState.launches).toBe(2);
-      const persisted = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-      };
+      const persisted = await readRuntime(home);
       const jobs = persisted.tasks[0]?.jobs ?? [];
       expect(jobs.some((job) => job.phase === "failed")).toBe(true);
       expect(jobs.filter(activeRuntimeJob)).toHaveLength(1);
@@ -2795,9 +3059,7 @@ test("resume tolerates a closed reviewer pane and removes it without a revision 
       expect(current.stage).toBe("reviewing");
       expect(current.endpoints ?? []).toHaveLength(0);
       expect(current.revision).toBe(before.revision + 2);
-      const persisted = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
-        tasks: RuntimeTaskState[];
-      };
+      const persisted = await readRuntime(home);
       expect(persisted.tasks[0]?.endpoints).toHaveLength(0);
     },
   );
@@ -2829,5 +3091,663 @@ test("resume refuses a foreign endpoint during root recovery", async () => {
 test("rejects a relative durable home before constructing service state", () => {
   expect(() => createTandemService({ home: "relative-home", sessionId: "session-1" })).toThrow(
     TypeError,
+  );
+});
+
+async function seedOperationIntent(
+  home: string,
+  job: DurableJob,
+  phase: DurableOperation["phase"] = "admitted",
+): Promise<DurableOperation> {
+  const state = await readRuntime(home);
+  const runtime = state.tasks.find((entry) => entry.taskId === job.taskId);
+  if (runtime === undefined) throw new Error("fixture runtime task missing");
+  const store = createTaskStore({
+    directory: join(home, "tasks"),
+    clock: () => TIMESTAMP,
+    idFactory: () => "unused",
+  });
+  const task = await store.read(job.taskId);
+  if (task === undefined) throw new Error("fixture task missing");
+  const operation = { ...operationForJob(job, task), phase };
+  const linkedJob = { ...job, operationId: operation.id };
+  const reservation = { ...reservationFor(job.taskId), operationId: operation.id };
+  await writeRuntimeState(runtimeFile(home), {
+    ...state,
+    tasks: state.tasks.map((entry) =>
+      entry.taskId !== job.taskId
+        ? entry
+        : {
+            ...entry,
+            operation,
+            reservation,
+            jobs: [linkedJob],
+          },
+    ),
+  });
+  if (job.role !== "validation") {
+    await writeJsonAtomically(job.jobPath, {
+      schemaVersion: 1,
+      id: job.id,
+      taskId: job.taskId,
+      generation: job.generation,
+      role: job.role,
+      cwd: job.cwd,
+      model: { model: `test/${job.role}`, thinking: "low" },
+      prompt: "recover the admitted operation",
+      resultPath: job.resultPath,
+      execution: {
+        schemaVersion: 1,
+        home,
+        operationId: operation.id,
+        fencingRevision: operation.fencingRevision,
+        claimOwner: operation.claimOwner,
+      },
+    });
+  }
+  return operation;
+}
+
+test("TAG-989 maxed awaiting-fixes intent cannot reserve, launch, or advance work", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "awaiting-fixes",
+      taskEdits: { reviewRound: 1, reviewHead: "review-head" },
+      runner: { active: false },
+    },
+    async ({ home, lease, endpoint, service, runnerState }) => {
+      await seedTaskResources(home, lease, [endpoint], []);
+      const before = await service.get("task-1");
+
+      await service.tick();
+
+      const after = await service.get("task-1");
+      const state = await readRuntime(home);
+      const runtime = state.tasks[0];
+      expect(after.stage).toBe("blocked");
+      expect(after.generation).toBe(before.generation);
+      expect(after.reviewRound).toBe(before.reviewRound);
+      expect(after.reviewHead).toBe(before.reviewHead);
+      expect(after.policy).toEqual(before.policy);
+      expect(runnerState.launches).toBe(0);
+      expect(activeReservations(state)).toBe(0);
+      expect(runtime?.operation).toBeUndefined();
+      expect(runtime?.endpoints).toEqual([endpoint]);
+      expect(runtime?.jobs.some(activeRuntimeJob)).toBe(false);
+    },
+  );
+});
+
+test("awaiting-fixes below the budget resumes through one durable fix operation", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "awaiting-fixes",
+      taskEdits: { reviewRound: 0, reviewHead: "review-head" },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, endpoint, service, runnerState }) => {
+      await seedTaskResources(home, lease, [endpoint], []);
+      await service.tick();
+
+      const state = await readRuntime(home);
+      const runtime = state.tasks[0];
+      const task = await service.get("task-1");
+      expect(task.stage).toBe("implementing");
+      expect(task.reviewRound).toBe(1);
+      expect(runtime?.operation?.kind).toBe("fix");
+      expect(runtime?.operation?.inputHead).toBe("review-head");
+      expect(runtime?.operation?.phase).toBe("running");
+      expect(runtime?.jobs.filter(activeRuntimeJob)).toHaveLength(1);
+      expect(runnerState.launches).toBe(1);
+
+      await service.tick();
+      const repeated = await readRuntime(home);
+      expect(repeated.tasks[0]?.jobs.filter(activeRuntimeJob)).toHaveLength(1);
+      expect(runnerState.launches).toBe(1);
+    },
+  );
+});
+
+test("legacy incomplete reservation is quarantined without inventing an operation", async () => {
+  await withFixture(
+    { kind: "scout", stage: "queued", runner: { active: false } },
+    async ({ home, lease, service, runnerState }) => {
+      const state = await readRuntime(home);
+      const initialRuntime = state.tasks[0];
+      if (initialRuntime === undefined) throw new Error("fixture runtime missing");
+      await writeRuntimeState(runtimeFile(home), {
+        ...state,
+        tasks: [
+          {
+            ...initialRuntime,
+            worktree: lease,
+            reservation: reservationFor("task-1"),
+          },
+        ],
+      });
+
+      await service.tick();
+
+      const recovered = await readRuntime(home);
+      const runtime = recovered.tasks[0];
+      expect(runnerState.launches).toBe(0);
+      expect(runtime?.operation).toBeUndefined();
+      expect(runtime?.reservation?.phase).toBe("reserved");
+      expect(runtime?.lastError).toContain("legacy reservation");
+      expect(activeReservations(recovered)).toBe(1);
+    },
+  );
+});
+
+test("unknown launch acknowledgement quarantines the operation and retains capacity", async () => {
+  await withFixture(
+    {
+      kind: "scout",
+      stage: "scouting",
+      clock: () => "2030-01-01T00:01:00.000Z",
+      runner: { active: false, paneState: "missing" },
+    },
+    async ({ home, service, runnerState }) => {
+      const endpoint = endpointFor("scout");
+      const job = workerJob(home, endpoint, "scout", "launching");
+      const intent = await seedOperationIntent(home, job, "launching");
+
+      await service.tick();
+
+      const state = await readRuntime(home);
+      const runtime = state.tasks[0];
+      expect(runnerState.launches).toBe(0);
+      expect(runtime?.operation?.id).toBe(intent.id);
+      expect(runtime?.operation?.phase).toBe("quarantined");
+      expect(runtime?.reservation?.phase).toBe("reserved");
+      expect(runtime?.jobs[0]?.phase).toBe("launching");
+      expect(activeReservations(state)).toBe(1);
+    },
+  );
+});
+
+test("paused and cancelled operation intents never relaunch after restart", async () => {
+  for (const stage of ["paused", "cancelled"] as const) {
+    await withFixture(
+      {
+        kind: "scout",
+        stage,
+        ...(stage === "paused" ? { taskEdits: { previousStage: "scouting" as const } } : {}),
+        runner: { active: false },
+      },
+      async ({ home, service, runnerState }) => {
+        const endpoint = endpointFor("scout");
+        const job = workerJob(home, endpoint, "scout", "running");
+        await seedOperationIntent(home, job, "running");
+
+        await service.tick();
+        await service.tick();
+
+        expect(runnerState.launches).toBe(0);
+      },
+    );
+  }
+});
+
+async function seedValidationEndpointRecovery(
+  home: string,
+  lease: WorktreeLease,
+  writer: Endpoint,
+  service: TandemService,
+  effectPhase: "started" | "succeeded",
+): Promise<Readonly<{ readonly operationId: string; readonly jobId: string }>> {
+  await seedTaskResources(home, lease, [writer], []);
+  const task = await service.get("task-1");
+  const template = workerJob(home, writer, "implementer", "reserved");
+  const validationJob: DurableJob = {
+    ...template,
+    role: "validation",
+    kind: "validation",
+    launchAttempted: false,
+  };
+  const baseOperation = operationForJob(validationJob, task);
+  const endpoint = { ...endpointFor("reviewer"), paneId: "pane-2" };
+  const operation: DurableOperation = {
+    ...baseOperation,
+    phase: "admitted",
+    effects: [
+      {
+        id: `endpoint:${baseOperation.id}`,
+        kind: "endpoint",
+        phase: effectPhase,
+        createdAt: TIMESTAMP,
+        identity: `validation:${task.id}:${task.generation}`,
+        ...(effectPhase === "succeeded" ? { receipt: JSON.stringify(endpoint) } : {}),
+      },
+    ],
+  };
+  const state = await readRuntime(home);
+  await writeRuntimeState(runtimeFile(home), {
+    ...state,
+    tasks: state.tasks.map((entry) =>
+      entry.taskId !== task.id
+        ? entry
+        : {
+            ...entry,
+            operation,
+            reservation: { ...reservationFor(task.id), operationId: operation.id },
+            endpoints: [writer],
+            jobs: [],
+          },
+    ),
+  });
+  return { operationId: operation.id, jobId: operation.jobId };
+}
+
+test("validation endpoint receipt recovery reuses the pane and launches one admitted job", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "validating",
+      taskEdits: { reviewHead: "review-head" },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, endpoint, service, runnerState }) => {
+      const intent = await seedValidationEndpointRecovery(
+        home,
+        lease,
+        endpoint,
+        service,
+        "succeeded",
+      );
+
+      await service.tick();
+      await service.tick();
+
+      const state = await readRuntime(home);
+      const runtime = state.tasks[0];
+      expect(runnerState.calls.some((request) => request.argv.includes("split"))).toBe(false);
+      expect(runnerState.launches).toBe(1);
+      expect(runtime?.endpoints.some((entry) => entry.paneId === "pane-2")).toBe(true);
+      expect(runtime?.operation?.id).toBe(intent.operationId);
+      expect(runtime?.jobs[0]?.id).toBe(intent.jobId);
+      expect(runtime?.jobs[0]?.operationId).toBe(intent.operationId);
+    },
+  );
+});
+
+test("validation endpoint started intent without a receipt quarantines before pane allocation", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "validating",
+      taskEdits: { reviewHead: "review-head" },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, endpoint, service, runnerState }) => {
+      const intent = await seedValidationEndpointRecovery(
+        home,
+        lease,
+        endpoint,
+        service,
+        "started",
+      );
+
+      await service.tick();
+
+      const state = await readRuntime(home);
+      const runtime = state.tasks[0];
+      expect(runnerState.calls.some((request) => request.argv.includes("split"))).toBe(false);
+      expect(runnerState.launches).toBe(0);
+      expect(runtime?.operation?.id).toBe(intent.operationId);
+      expect(runtime?.operation?.phase).toBe("quarantined");
+      expect(runtime?.reservation?.phase).toBe("reserved");
+      expect(activeReservations(state)).toBe(1);
+    },
+  );
+});
+
+test("admitted fix context recovery materializes findings and launches the same generation job", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      taskEdits: { reviewRound: 1, reviewHead: "review-head" },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, service, runnerState }) => {
+      await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+      const task = await service.get("task-1");
+      const template = workerJob(home, endpointFor("implementer"), "implementer", "reserved");
+      const operation: DurableOperation = {
+        ...operationForJob(template, task),
+        kind: "fix",
+        phase: "admitted",
+        generation: task.generation,
+        fixContext: {
+          head: "review-head",
+          generation: task.generation,
+          validationEvidence: [{ command: "bun test", passed: false }],
+          findings: [
+            {
+              id: "finding-1",
+              severity: "P1",
+              verdict: "confirmed",
+              description: "repair the persisted recovery path",
+            },
+          ],
+        },
+      };
+      const state = await readRuntime(home);
+      await writeRuntimeState(runtimeFile(home), {
+        ...state,
+        tasks: state.tasks.map((entry) =>
+          entry.taskId !== task.id
+            ? entry
+            : {
+                ...entry,
+                operation,
+                reservation: { ...reservationFor(task.id), operationId: operation.id },
+                fixContextPath: join(home, "jobs", task.id, "fix-context-missing.json"),
+                endpoints: [endpointFor("implementer")],
+                jobs: [],
+              },
+        ),
+      });
+
+      await service.tick();
+
+      const after = await service.get("task-1");
+      const recovered = await readRuntime(home);
+      const runtime = recovered.tasks[0];
+      const contextPath = runtime?.fixContextPath;
+      if (contextPath === undefined) throw new Error("fix context path was not retained");
+      const context = JSON.parse(await readFile(contextPath, "utf8")) as {
+        readonly generation: number;
+        readonly findings: readonly { readonly id: string }[];
+      };
+      expect(after.reviewRound).toBe(task.reviewRound);
+      expect(after.generation).toBe(task.generation);
+      expect(context.generation).toBe(task.generation);
+      expect(context.findings[0]?.id).toBe("finding-1");
+      expect(runtime?.operation?.jobId).toBe(operation.jobId);
+      expect(runtime?.jobs[0]?.id).toBe(operation.jobId);
+      expect(runnerState.launches).toBe(1);
+    },
+  );
+});
+
+test("prepared jobs refresh their execution fence and launch the same durable job", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      runner: { active: false },
+    },
+    async ({ home, lease, endpoint, service, runnerState }) => {
+      await seedTaskResources(home, lease, [endpoint], []);
+      const job = workerJob(home, endpoint, "implementer", "reserved");
+      const admitted = await seedOperationIntent(home, job, "prepared");
+      await writeJsonAtomically(job.jobPath, {
+        schemaVersion: 1,
+        id: job.id,
+        taskId: job.taskId,
+        generation: job.generation,
+        role: "implementer",
+        cwd: job.cwd,
+        model: { model: "test/implementer", thinking: "low" },
+        prompt: "resume the admitted implementation",
+        resultPath: job.resultPath,
+        execution: {
+          schemaVersion: 1,
+          home,
+          operationId: admitted.id,
+          fencingRevision: admitted.fencingRevision,
+          claimOwner: admitted.claimOwner,
+        },
+      });
+
+      await service.tick();
+
+      const state = await readRuntime(home);
+      const runtime = state.tasks[0];
+      const operation = runtime?.operation;
+      const spec = JSON.parse(await readFile(job.jobPath, "utf8")) as {
+        readonly execution?: {
+          readonly operationId: string;
+          readonly fencingRevision: number;
+          readonly claimOwner: string;
+        };
+      };
+      expect(runnerState.launches).toBe(1);
+      expect(runtime?.jobs).toHaveLength(1);
+      expect(runtime?.jobs[0]?.id).toBe(admitted.jobId);
+      expect(runtime?.jobs[0]?.phase).toBe("running");
+      expect(operation?.jobId).toBe(admitted.jobId);
+      expect(operation?.fencingRevision).toBeGreaterThan(admitted.fencingRevision);
+      expect(spec.execution?.operationId).toBe(operation?.id);
+      expect(spec.execution?.fencingRevision).toBe(operation?.fencingRevision);
+      expect(spec.execution?.claimOwner).toBe(operation?.claimOwner);
+      expect(runtime?.endpoints.some((entry) => entry.paneId === endpoint.paneId)).toBe(true);
+    },
+  );
+});
+
+test("stale source-check failure cannot block a reservation taken over by another controller", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "queued",
+      runner: { active: false, holdInitialHead: true, checkoutHead: "mismatched-head" },
+    },
+    async ({ home, lease, service, runnerState }) => {
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const task = await store.read("task-1");
+      if (task === undefined) throw new Error("fixture task missing");
+      await store.update(task.id, task.revision, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        updatedAt: TIMESTAMP,
+        worktree: lease,
+      }));
+      const initial = await readRuntime(home);
+      await writeRuntimeState(runtimeFile(home), {
+        ...initial,
+        tasks: initial.tasks.map((entry) =>
+          entry.taskId === "task-1"
+            ? { ...entry, worktree: lease, endpoints: [], jobs: [] }
+            : entry,
+        ),
+      });
+
+      const seedJob = workerJob(home, endpointFor("implementer"), "implementer", "reserved");
+      await seedTaskResources(home, lease, [], []);
+      await seedOperationIntent(home, seedJob, "admitted");
+      const admittedState = await readRuntime(home);
+      await writeRuntimeState(runtimeFile(home), {
+        ...admittedState,
+        tasks: admittedState.tasks.map((entry) =>
+          entry.taskId === "task-1" ? { ...entry, jobs: [] } : entry,
+        ),
+      });
+      const firstTick = service.tick();
+      await runnerState.headStarted;
+
+      const beforeTakeover = await readRuntime(home);
+      const current = beforeTakeover.tasks[0];
+      const currentOperation = current?.operation;
+      const currentReservation = current?.reservation;
+      if (currentOperation === undefined || currentReservation === undefined) {
+        throw new Error("launch did not persist an operation and reservation");
+      }
+      const beforeTask = await service.get("task-1");
+      const takeover = writeRuntimeState(runtimeFile(home), {
+        ...beforeTakeover,
+        tasks: beforeTakeover.tasks.map((entry) =>
+          entry.taskId !== "task-1"
+            ? entry
+            : {
+                ...entry,
+                operation: {
+                  ...currentOperation,
+                  claimOwner: "controller-b",
+                  fencingRevision: currentOperation.fencingRevision + 1,
+                },
+                reservation: {
+                  ...currentReservation,
+                  ownerSessionId: "session-2",
+                },
+              },
+        ),
+      });
+
+      runnerState.releaseHead();
+      await firstTick;
+      await takeover;
+
+      const after = await readRuntime(home);
+      const runtime = after.tasks[0];
+      expect(runnerState.launches).toBe(0);
+      expect(runtime?.operation?.claimOwner).toBe("controller-b");
+      expect(runtime?.reservation?.ownerSessionId).toBe("session-2");
+      expect(runtime?.reservation?.phase).toBe("reserved");
+      expect(runtime?.lastError).toBeUndefined();
+      expect((await service.get("task-1")).stage).toBe(beforeTask.stage);
+    },
+  );
+});
+
+test("stale successful source-check cannot transition a queued task after takeover", async () => {
+  await withFixture(
+    {
+      kind: "scout",
+      stage: "queued",
+      runner: { active: false, holdInitialHead: true, checkoutHead: SOURCE_CHECKPOINT.head },
+    },
+    async ({ home, lease, endpoint, run, service, runnerState }) => {
+      await seedTaskResources(home, lease, [endpoint], []);
+      const seedJob = workerJob(home, endpoint, "scout", "reserved");
+      await seedOperationIntent(home, seedJob, "admitted");
+      const admittedState = await readRuntime(home);
+      await writeRuntimeState(runtimeFile(home), {
+        ...admittedState,
+        tasks: admittedState.tasks.map((entry) =>
+          entry.taskId === "task-1" ? { ...entry, jobs: [] } : entry,
+        ),
+      });
+
+      const secondHeadStarted = Promise.withResolvers<void>();
+      const secondHeadGate = Promise.withResolvers<void>();
+      let headCalls = 0;
+      const sharedRun = async (request: CommandRequest): Promise<CommandResult> => {
+        if (request.argv.includes("rev-parse") && request.argv.at(-1) === "HEAD") {
+          headCalls += 1;
+          if (headCalls === 1) {
+            secondHeadStarted.resolve();
+            await secondHeadGate.promise;
+          }
+        }
+        return run(request);
+      };
+      const other = createTandemService({
+        home,
+        sessionId: "session-1",
+        poolRoot: lease.root,
+        run: sharedRun,
+        clock: () => TIMESTAMP,
+        idFactory: () => "controller-b-id",
+      });
+      const firstTick = service.tick();
+      let secondTick: typeof firstTick | undefined;
+      try {
+        await runnerState.headStarted;
+        secondTick = other.tick();
+        await secondHeadStarted.promise;
+
+        runnerState.releaseHead();
+        await firstTick;
+
+        const afterFirst = await readRuntime(home);
+        expect((await service.get("task-1")).stage).toBe("queued");
+        expect(afterFirst.tasks[0]?.jobs).toHaveLength(0);
+        expect(runnerState.launches).toBe(0);
+
+        secondHeadGate.resolve();
+        await secondTick;
+
+        const finalRuntime = await readRuntime(home);
+        expect((await service.get("task-1")).stage).toBe("scouting");
+        expect(finalRuntime.tasks[0]?.jobs.filter(activeRuntimeJob)).toHaveLength(1);
+        expect(runnerState.launches).toBe(1);
+      } finally {
+        runnerState.releaseHead();
+        secondHeadGate.resolve();
+        await Promise.allSettled(secondTick === undefined ? [firstTick] : [firstTick, secondTick]);
+        await other.shutdown();
+      }
+    },
+  );
+});
+
+test("launched operation with missing endpoint and result is quarantined, not failed-and-released", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      clock: () => "2030-01-01T00:01:00.000Z",
+      runner: { active: false, paneState: "missing" },
+    },
+    async ({ home, lease, endpoint, service, runnerState }) => {
+      const job = workerJob(home, endpoint, "implementer", "running");
+      await seedTaskResources(home, lease, [endpoint], [job]);
+      const state = await readRuntime(home);
+      const runtime = state.tasks[0];
+      if (runtime?.operation === undefined || runtime.reservation === undefined) {
+        throw new Error("fixture did not persist launched operation");
+      }
+      const operation: DurableOperation = {
+        ...runtime.operation,
+        phase: "running",
+        effects: [
+          {
+            id: `execution:${job.id}`,
+            kind: "worker",
+            phase: "started",
+            createdAt: TIMESTAMP,
+            identity: job.id,
+          },
+        ],
+      };
+      await writeRuntimeState(runtimeFile(home), {
+        ...state,
+        tasks: state.tasks.map((entry) =>
+          entry.taskId !== "task-1"
+            ? entry
+            : {
+                ...entry,
+                operation,
+                endpoints: [],
+                jobs: entry.jobs.map((candidate) =>
+                  candidate.id === job.id ? { ...candidate, operationId: operation.id } : candidate,
+                ),
+              },
+        ),
+      });
+
+      await service.tick();
+      await service.tick();
+      await service.resume("task-1").catch(() => undefined);
+      await service.tick();
+
+      const after = await readRuntime(home);
+      const recovered = after.tasks[0];
+      expect(runnerState.launches).toBe(0);
+      expect(recovered?.operation?.phase).toBe("quarantined");
+      expect(recovered?.reservation?.phase).toBe("reserved");
+      expect(recovered?.jobs[0]?.phase).toBe("running");
+      expect(activeReservations(after)).toBe(1);
+      expect(recovered?.endpoints).toHaveLength(0);
+    },
   );
 });

@@ -20,7 +20,13 @@ export async function retireCoordinatorWorkspace(
   };
   const current = await run(getRequest);
   if (current.code !== 0) {
-    if (commandErrorCode(current.stdout, current.stderr) === "workspace_not_found") return;
+    const code = commandErrorCode(current.stdout, current.stderr);
+    if (
+      code === "workspace_not_found" ||
+      code === "session_not_found" ||
+      code === "server_not_running"
+    )
+      return;
     throw new AdapterCommandError("herdr workspace get", getRequest, current);
   }
   const value = parseJson(current.stdout, "herdr workspace get");

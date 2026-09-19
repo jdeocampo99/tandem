@@ -12,6 +12,7 @@ import {
   type TandemBoundaryEnvironment,
   type TandemEnvironmentSource,
 } from "./config/environment.ts";
+import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import { deliverPendingNotifications } from "./extension/notifications.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { buildDurableDigest } from "./extension/summary.ts";
@@ -40,6 +41,7 @@ function serviceForContext(
 ): TandemService {
   if (options.service !== undefined) return options.service;
   const environment = resolvedEnvironment ?? environmentForContext(options, ctx);
+  const sourceRepo = environment.sourceRepo;
   const createService = options.createService ?? createTandemService;
   return createService({
     home: environment.home,
@@ -48,13 +50,21 @@ function serviceForContext(
       ? {}
       : { parentWorkspaceId: environment.parentWorkspaceId }),
     poolRoot: environment.poolRoot,
-    ...(environment.sourceRepo === undefined
+    ...(sourceRepo === undefined
       ? {}
       : {
           sourceWorkspace: {
             repoPath: environment.repo,
-            path: environment.sourceRepo,
+            path: sourceRepo,
           },
+          refreshSource: () =>
+            refreshCoordinatorSourceUnlocked({
+              home: environment.home,
+              sessionId: environment.sessionId,
+              repoPath: environment.repo,
+              sourceRepoPath: sourceRepo,
+              run: runCommand,
+            }),
         }),
   });
 }
@@ -81,6 +91,8 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     };
     let tickTimer: Timer | undefined;
     let tickInFlight: Promise<void> | undefined;
+    let sourceStatus =
+      "Source is refreshed only at the start of a new coordinator turn; tasks already created remain pinned to their captured commit.";
     let shuttingDown = false;
     let statusReporter: HerdrStatusReporter | undefined;
     let agentActive = false;
@@ -151,17 +163,46 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       await reconcile(ctx, false);
     };
     registerTandemOmp(pi, { getService, reconcile, postAction });
-
     pi.on("before_agent_start", async (event, ctx) => {
+      const current = getService(ctx);
+      try {
+        const refreshed = await current.refreshSource?.();
+        if (refreshed?.changed === true) {
+          sourceStatus = `Coordinator source advanced from ${refreshed.previousHead} to ${refreshed.head}; earlier file observations and repository guidance may be stale. Existing tasks remain pinned to their captured commits.`;
+        } else if (refreshed?.localOnly) {
+          sourceStatus =
+            "Coordinator source is local-only; no origin/main refresh is configured. Existing tasks remain pinned to their captured commits.";
+        } else {
+          sourceStatus =
+            "Coordinator source is current for this turn. Existing tasks remain pinned to their captured commits.";
+        }
+      } catch (error) {
+        taskState = "blocked";
+        taskMessage = error instanceof Error ? error.message : String(error);
+        sourceStatus = `SOURCE REFRESH BLOCKED: ${taskMessage}. Do not create or launch new work until the coordinator source refresh succeeds.`;
+        reportStatus();
+        const digest = await refreshDigest(current);
+        return {
+          systemPrompt: [
+            ...event.systemPrompt,
+            COORDINATOR_INSTRUCTIONS,
+            COORDINATOR_TOOL_GUIDANCE,
+            coordinatorSourceGuidance(getEnvironment(ctx)),
+            sourceStatus,
+            digest,
+          ],
+        };
+      }
       agentActive = true;
       reportStatus();
-      const digest = await refreshDigest(getService(ctx));
+      const digest = await refreshDigest(current);
       return {
         systemPrompt: [
           ...event.systemPrompt,
           COORDINATOR_INSTRUCTIONS,
           COORDINATOR_TOOL_GUIDANCE,
           coordinatorSourceGuidance(getEnvironment(ctx)),
+          sourceStatus,
           digest,
         ],
       };
@@ -213,6 +254,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
           COORDINATOR_INSTRUCTIONS,
           COORDINATOR_TOOL_GUIDANCE,
           coordinatorSourceGuidance(getEnvironment(ctx)),
+          sourceStatus,
           digest,
         ],
         preserveData: { tandemDigest: digest },

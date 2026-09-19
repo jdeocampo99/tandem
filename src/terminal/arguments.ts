@@ -1,4 +1,4 @@
-export type TerminalCommand = "launch" | "configure";
+export type TerminalCommand = "launch" | "configure" | "migrate-state";
 
 export type TerminalInvocation = Readonly<{
   readonly command: TerminalCommand;
@@ -13,10 +13,13 @@ export type TerminalInvocation = Readonly<{
   readonly reset: boolean;
   readonly restart: boolean;
   readonly force: boolean;
+  readonly yes: boolean;
+  readonly json: boolean;
 }>;
 export type TerminalRunResult = Readonly<{
   readonly exitCode: number;
-  readonly status: "help" | "launched" | "configured" | "cancelled" | "error";
+  readonly status: "help" | "launched" | "configured" | "migrated" | "cancelled" | "error";
+  readonly migration?: unknown;
   readonly projects?: readonly string[];
   readonly sessionId?: string;
   readonly launches?: readonly unknown[];
@@ -55,6 +58,8 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   let force = false;
   let headless = false;
   let noAttach = false;
+  let yes = false;
+  let json = false;
   const paths: string[] = [];
   let parseOptions = true;
 
@@ -67,6 +72,14 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     }
     if (parseOptions && (token === "-h" || token === "--help")) {
       help = true;
+      continue;
+    }
+    if (parseOptions && token === "--yes") {
+      yes = true;
+      continue;
+    }
+    if (parseOptions && token === "--json") {
+      json = true;
       continue;
     }
     if (parseOptions && token === "--continue") {
@@ -111,11 +124,12 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       index = parsed.next;
       continue;
     }
-    if (parseOptions && token.startsWith("-")) {
-      throw new Error(`unknown option ${JSON.stringify(token)}; run tandem --help`);
-    }
     if (parseOptions && command === undefined && token === "configure") {
       command = "configure";
+      continue;
+    }
+    if (parseOptions && command === undefined && token === "migrate-state") {
+      command = "migrate-state";
       continue;
     }
     if (command === undefined) command = "launch";
@@ -123,6 +137,9 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   }
 
   const resolvedCommand = command ?? "launch";
+  if (resolvedCommand === "migrate-state" && paths.length > 0) {
+    throw new Error("tandem migrate-state does not accept project paths");
+  }
   if (resolvedCommand === "configure" && paths.length > 1) {
     throw new Error("tandem configure accepts at most one project path");
   }
@@ -141,14 +158,16 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     command: resolvedCommand,
     paths,
     help,
-    ...(home === undefined ? {} : { home }),
-    ...(sessionId === undefined ? {} : { sessionId }),
-    ...(poolRoot === undefined ? {} : { poolRoot }),
     continueSession,
     headless,
     noAttach,
     reset,
     restart,
     force,
+    yes,
+    json,
+    ...(home === undefined ? {} : { home }),
+    ...(sessionId === undefined ? {} : { sessionId }),
+    ...(poolRoot === undefined ? {} : { poolRoot }),
   };
 }

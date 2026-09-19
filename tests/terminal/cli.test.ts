@@ -102,8 +102,8 @@ function coordinatorRunner(input: CoordinatorRunnerInput): Readonly<{
   readonly run: CommandRunner;
 }> {
   const calls: CommandRequest[] = [];
-  const sourceHead = input.sourceHead ?? "source-head";
-  const cleanHead = input.cleanHead ?? sourceHead;
+  const sourceHead = input.sourceHead ?? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  let cleanHead = input.cleanHead ?? sourceHead;
   let branch = input.existingLease?.branch ?? "";
   let processInfoCalls = 0;
   let herdrStatusCalls = 0;
@@ -244,20 +244,35 @@ function coordinatorRunner(input: CoordinatorRunnerInput): Readonly<{
       }
     }
     if (program === "git") {
+      if (request.argv.includes("remote")) {
+        return { code: 0, stdout: "\n", stderr: "" };
+      }
       const pathIndex = request.argv.indexOf("-C");
       const gitPath = pathIndex === -1 ? request.cwd : request.argv[pathIndex + 1];
+      if (request.argv.includes("--git-common-dir")) {
+        await mkdir(join(input.repo, ".git"), { recursive: true });
+        return { code: 0, stdout: `${input.repo}/.git\n`, stderr: "" };
+      }
       if (request.argv.includes("--show-toplevel")) {
         return { code: 0, stdout: `${gitPath}\n`, stderr: "" };
       }
       if (request.argv.includes("symbolic-ref")) return { code: 0, stdout: "main\n", stderr: "" };
-      if (request.argv.includes("switch") && request.argv.includes("-c")) {
-        branch = request.argv.at(-1) ?? "";
+      if (request.argv.includes("switch")) {
+        const switchIndex = request.argv.indexOf("switch");
+        const branchIndex = request.argv.findIndex(
+          (arg, index) => index > switchIndex && (arg === "-c" || arg === "-C"),
+        );
+        branch = request.argv[branchIndex + 1] ?? "";
+        cleanHead = request.argv.at(-1) ?? sourceHead;
         return { code: 0, stdout: "", stderr: "" };
       }
       if (request.argv.includes("branch") && request.argv.includes("--show-current")) {
         return { code: 0, stdout: `${branch}\n`, stderr: "" };
       }
-      if (request.argv.includes("refs/heads/main")) {
+      if (request.argv.includes("cat-file")) {
+        return { code: 0, stdout: `${sourceHead}\n`, stderr: "" };
+      }
+      if (request.argv.includes("rev-parse") && request.argv.includes("--verify")) {
         return { code: 0, stdout: `${sourceHead}\n`, stderr: "" };
       }
       if (request.argv.includes("rev-parse") && request.argv.includes("HEAD")) {
@@ -623,7 +638,7 @@ test("CLI launches a clean coordinator while preserving dirty original source id
     expect(result.value).toMatchObject({
       direct: true,
       repoPath: repo,
-      worktree: { path: cleanRepo, baseHead: "source-head" },
+      worktree: { path: cleanRepo, baseHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
       workspaceId: "workspace-1",
       paneId: "pane-1",
     });
@@ -731,8 +746,8 @@ test("CLI reports a failed direct coordinator child as a nonzero outcome", async
   }
 });
 
-test("launchCoordinator executes the generated quoted command from a clean checkout in a new Herdr pane", async () => {
-  const root = await mkdtemp(join(tmpdir(), "tandem-cli-pane-"));
+test("launchCoordinator cold-starts and relaunches a saved coordinator after its server stops", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-cli-pane-")));
   try {
     const repo = join(root, "repo");
     const home = join(root, "coordinator home");
@@ -772,7 +787,7 @@ test("launchCoordinator executes the generated quoted command from a clean check
       HERDR_WORKSPACE_ID: "herdr-workspace",
       HERDR_PANE_ID: "herdr-pane",
     } as const;
-    const runner = coordinatorRunner({
+    const runnerInput = {
       repo,
       recordedCommand,
       poolRoot,
@@ -781,18 +796,58 @@ test("launchCoordinator executes the generated quoted command from a clean check
       startServer: true,
       startupTransitionCount: 1,
       herdrEnvironment,
-    });
+    };
+    let runner = coordinatorRunner(runnerInput);
     let startPersistentCalls = 0;
+    let serverRunning = false;
+    let restoredLabel = "Tandem coordinator · repo";
+    const run: CommandRunner = async (call) => {
+      if (call.argv[0] === "herdr" && !serverRunning) {
+        if (call.argv.includes("status")) {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              server: { socket: "/tmp/herdr.sock", running: false, session: request.sessionId },
+            }),
+            stderr: "",
+          };
+        }
+        return {
+          code: 1,
+          stdout: JSON.stringify({ error: { code: "server_not_running" } }),
+          stderr: "",
+        };
+      }
+      if (
+        call.argv[0] === "herdr" &&
+        call.argv[3] === "workspace" &&
+        (call.argv[4] === "get" || call.argv[4] === "rename")
+      ) {
+        if (call.argv[4] === "rename") restoredLabel = call.argv[6] ?? restoredLabel;
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            result: {
+              type: "workspace_info",
+              workspace: { workspace_id: "workspace-2", label: restoredLabel },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      return runner.run(call);
+    };
     const result = await withProcessEnvironment(
       {
         AUTH_TOKEN: "preserve-me",
         PATH: path,
       },
-      () =>
-        launchCoordinator(request, {
-          run: runner.run,
+      async () => {
+        const dependencies = {
+          run,
           startPersistent: async () => {
             startPersistentCalls += 1;
+            serverRunning = true;
             return undefined;
           },
           runInteractive: async () => {
@@ -800,9 +855,23 @@ test("launchCoordinator executes the generated quoted command from a clean check
           },
           sleep: async () => undefined,
           processEnvironment: { AUTH_TOKEN: "preserve-me" },
-        }),
+        };
+        const first = await launchCoordinator(request, dependencies);
+        const leaseHolder = `coordinator:${[repo, request.sessionId, first.worktree.baseHead]
+          .map((value) => createHash("sha256").update(value).digest("hex").slice(0, 16))
+          .join(":")}`;
+        runner = coordinatorRunner({
+          ...runnerInput,
+          startServer: false,
+          existingLease: { leaseHolder, branch: first.worktree.branch },
+        });
+        serverRunning = false;
+        return launchCoordinator(request, dependencies);
+      },
     );
-    expect(startPersistentCalls).toBe(1);
+    expect(startPersistentCalls).toBe(2);
+    expect(result.reused).toBeUndefined();
+    expect(restoredLabel).toBe("Retained terminals · repo");
 
     expect(result.direct).toBe(false);
     expect(result.repoPath).toBe(repo);
@@ -872,8 +941,8 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
       poolRoot,
       cleanRepo,
       model,
-      sourceHead: "head-1",
-      cleanHead: "head-1",
+      sourceHead: "1111111111111111111111111111111111111111",
+      cleanHead: "1111111111111111111111111111111111111111",
       recordedCommand,
       herdrEnvironment: { PATH: fixturePath },
       startServer: true,
@@ -888,15 +957,15 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
       processEnvironment: {},
     });
     expect(first.direct).toBe(false);
-    expect(first.worktree.baseHead).toBe("head-1");
+    expect(first.worktree.baseHead).toBe("1111111111111111111111111111111111111111");
 
     const secondRunner = coordinatorRunner({
       repo,
       poolRoot,
       cleanRepo,
       model,
-      sourceHead: "head-2",
-      cleanHead: "head-1",
+      sourceHead: "2222222222222222222222222222222222222222",
+      cleanHead: "1111111111111111111111111111111111111111",
       recordedCommand,
       herdrEnvironment: { PATH: fixturePath },
     });
@@ -914,7 +983,7 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
     expect(second.reused).toBe(true);
     expect(second.repoPath).toBe(repo);
     expect(second.worktree.path).toBe(cleanRepo);
-    expect(second.worktree.baseHead).toBe("head-1");
+    expect(second.worktree.baseHead).toBe("1111111111111111111111111111111111111111");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -987,7 +1056,7 @@ test("launchCoordinator retires the old generated workspace label before replaci
     let renames = 0;
     let creates = 0;
     const hash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
-    const holderKey = `${hash(repo)}-${hash("retire-session")}-${hash("source-head")}`;
+    const holderKey = `${hash(repo)}-${hash("retire-session")}-${hash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")}`;
     const base = coordinatorRunner({
       repo,
       poolRoot,
@@ -1073,7 +1142,7 @@ test("launchCoordinator rejects an unsafe reused coordinator lease without clean
     await mkdir(repo, { recursive: true });
     await mkdir(cleanRepo, { recursive: true });
     const sessionId = "unsafe-session";
-    const sourceHead = "source-head";
+    const sourceHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const hash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
     const repositoryKey = hash(repo);
     const sessionKey = hash(sessionId);
@@ -1313,4 +1382,12 @@ process.exitCode = result.exitCode;
     if (!exited) child?.kill("SIGKILL");
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("migrate-state is an explicit read-only-by-default CLI command", () => {
+  const invocation = parseCliArgs(["migrate-state", "--home", "/tmp/offline-tandem-state"]);
+  expect(invocation.command).toBe("migrate-state");
+  expect(invocation.options.yes).toBe(false);
+  expect(invocation.options.home).toBe("/tmp/offline-tandem-state");
+  expect(parseCliArgs(["migrate-state", "--yes"]).options.yes).toBe(true);
 });
