@@ -20,7 +20,7 @@ Tandem separates research, implementation, validation, review, presentation, and
 5. **Delivery is gated.** Publishing and merging are explicit approval-bearing actions. Tandem never merges automatically.
 6. **Presentation uses a separate artifact directory.** A presentation worker writes HTML outside the repository. The controller, not the worker, opens Lavish and owns the supervised continuous feedback listener.
 
-Prompts are workflow guidance, not a security boundary. Runtime checks, Herdr/Treehouse ownership, filesystem checks, and Git/GitHub preconditions guard workflow mutations. Tool allowlists do not provide an operating-system or filesystem sandbox.
+Prompts are workflow guidance, not a security boundary or deterministic policy engine. Runtime checks, Herdr/Treehouse ownership, filesystem checks, and Git/GitHub preconditions guard workflow mutations. Tool allowlists do not provide an operating-system or filesystem sandbox; coordinator self-resolution guidance cannot replace those runtime safeguards.
 
 ### Worker capabilities
 
@@ -220,7 +220,24 @@ bun run start -- launch --repo /absolute/path/to/repository
 ```
 
 With no action, the low-level CLI defaults to `launch`. Use the same `--home`, `--session`, and
-`--pool-root` values when restarting so durable state and the named Herdr context are reused.
+`--pool-root` values when reconnecting or restarting so durable state and the named Herdr context
+are reused.
+
+`--restart` is the non-destructive coordinator replacement surface. From a separate normal
+terminal, `tandem --restart PATH` verifies exact recorded coordinator ownership, revalidates the
+pane cwd/process immediately before close, confirms close acknowledgement and pane absence, then
+launches a replacement with the same lease/session directory and `--continue`. Child panes, task
+IDs and generations, worktrees, conversation history, pending questions/messages, and reports
+remain intact. Foreign, ambiguous, or missing ownership refuses before any close. This frontdoor
+surface replaces the coordinator only; it is not task cancellation or recovery, and
+`--reset`/`--reset --force` retain their destructive meanings.
+
+To restart one managed worker without replacing the coordinator, use `/tandem restart TASK_ID`,
+tool request `{request:{action:"restart",taskId:"TASK_ID"}}`, or
+`bun src/cli.ts restart TASK_ID`. The acknowledged pause/stop/resume bridge preserves task identity,
+generation, worktree, worker context, messages, reports, and questions. It refuses cancelled or
+completed tasks and paused/blocked tasks with an unanswered question. No restart action lets a
+coordinator restart itself.
 
 ## Launching the coordinator
 
@@ -235,6 +252,7 @@ The installed `tandem` command uses the following terminal options and environme
 | Conversation reconnect | Bare `tandem` opens or reconnects all saved projects; explicit `tandem PATH` opens or reconnects only that project; add `--continue` only when starting stopped coordinators and resuming saved conversations |
 | Herdr attachment | `--headless` or `--no-attach`; both prepare without attaching the Herdr terminal client |
 | Coordinator reset | `--reset`; preflight and reopen only selected idle Tandem-owned coordinators; launch-only and rejected inside Herdr |
+| Coordinator restart | `--restart`; replace only the owned coordinator while preserving tasks, generations, conversations, questions/messages, reports, worktrees, leases, and child panes |
 | Forced cancellation | `--reset --force`; cancel selected active work, stop owned terminals, and reopen coordinators while preserving files/worktrees |
 
 Explicit `PATH` values share the selected Herdr session, but each project receives its own
@@ -298,13 +316,7 @@ clean snapshot, while settings, task records, and delivery retain the original i
 coordinator receives the original identity as `TANDEM_REPO` and its owned source checkout as
 `TANDEM_SOURCE_REPO`; users normally do not set the latter themselves.
 
-An explicit `tandem PATH` opens or reconnects only that project after ownership checks. A bare
-`tandem` applies the same checks to every project in its launch set (all saved registry projects when
-records exist). For either form, `--continue` is needed only when no active coordinator remains and
-the new process should resume the saved repository-scoped conversation. The active coordinator stays
-pinned to its existing source `HEAD` even if the original project has advanced. Stop that coordinator
-in Herdr and relaunch (with `--continue` when the saved conversation should continue) to deliberately
-acquire a fresh source snapshot; prior pinned leases and snapshots are not reset or silently replaced.
+An explicit `tandem PATH` opens or reconnects only that project after ownership checks. For either form, `--continue` is needed only when no active coordinator remains and the new process should resume the saved repository-scoped conversation. The active coordinator stays pinned to its existing source `HEAD` even if the original project has advanced. Use non-destructive `--restart` when you only need to reload the extension and preserve the current source/workflow; stop that coordinator and relaunch (with `--continue` when the saved conversation should continue) to deliberately acquire a fresh source snapshot. Prior pinned leases and snapshots are not reset or silently replaced.
 
 An old pre-registry coordinator without a clean lease record is never adopted or duplicated. Stop
 that coordinator manually, confirm its Herdr pane/process has exited, and relaunch `tandem` once.
@@ -472,6 +484,57 @@ existing task policy snapshots.
 Changing the main conversation model takes effect on the next Tandem launch; it never hot-swaps an
 already-running OMP conversation.
 
+### Optional TypeSafe Jev shadow recommendations
+
+Jev integration is an explicit, recommendation-only shadow path. It is disabled by default and
+does not switch a model, remove context, approve scope, answer a question, or transition a task.
+Opt in for a coordinator process with `TANDEM_JEV_MODE=shadow` and `TYPESAFE_API_KEY`; a key alone
+does not opt in. The provider is pinned to Jev `1.13.0` at `https://api.typesafe.ai/v1/systemone`.
+`TANDEM_JEV_TIMEOUT_MS` may set a bounded timeout (default 2,000ms; accepted range 1–10,000ms).
+
+Optional per-role candidates live outside the repository at `<home>/jev.json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "routingCandidates": {
+    "implementer": [
+      {
+        "id": "coding-fast",
+        "model": "openai-codex/gpt-5.6-luna",
+        "thinking": "high",
+        "description": "A configured coding model for comparison with the pinned baseline."
+      }
+    ]
+  }
+}
+```
+
+Candidate selectors and thinking levels are checked against the existing `omp models --json`
+catalogue before they can be recommended. A model-choice question is sent only when at least one
+validated alternative differs from the pinned role model; there is no singleton or invented
+alternative. Saved scout reports and safely resolved explicit task-surface files may be evaluated
+as optional supplemental context. Mandatory instructions, task scope, current questions and
+answers, safety constraints, and review findings are never reclassified as removable context.
+
+At most one bounded shadow evaluation is made for each prepared durable job. The private
+`<home>/jobs/<task-id>/.../jev-recommendation-<job-id>.json` record contains the status, approved candidate
+ID/model/confidence, ranked context IDs/source references, Jev model, usage, and elapsed time; it
+never stores the API key, raw request, or full excerpts. A routine notification points the main
+conversation to the local evidence path. Provider failure, malformed candidates, missing keys, or
+unavailable catalogue/service leave normal dispatch unchanged and record a bounded unavailable
+reason where applicable.
+
+Shadow evaluation is attached to model-backed scout, implementer, reviewer, verifier, and
+presentation dispatches. Validation is a non-model runner job and is not evaluated; presentation's
+separate artifact workflow invokes the same bounded recorder before each durable presentation launch.
+This sends the bounded task state and selected supplemental excerpts to TypeSafe only when shadow
+mode and a key are present. It is not a proof of savings, quality, or latency improvements, and
+it never enables automatic switching. Set these variables in the environment that starts the
+Herdr server. Already-running Herdr/OMP processes do not acquire newly exported variables;
+a coordinator-only restart does not update the server's environment. Enable Jev when starting
+a fresh server session.
+
 ### Central config envelope
 
 The envelope has exactly these outer fields and no others:
@@ -616,7 +679,7 @@ All four lenses are required. A failed lens sends the task to `awaiting-fixes`; 
 
 Validation commands are argv-only and execute in declaration order. A command runs when its `surfaces` is empty, contains `*`, or intersects the task surfaces; a task surface of `*` matches every command. The runner stops after the first non-zero, timeout, or cancellation result. Every evidence record includes the command name, argv, exit code, captured stdout/stderr, and exact HEAD. No configured command or no matching command is a validation configuration failure, not a pass.
 
-Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. The implementer must report exactly one final `Outcome: implemented|needs-decision|failed` line and is expected to provide a commit checkpoint before `implemented`. For `Outcome: needs-decision`, emit one bounded single-line `Question: ...` and an optional bounded single-line `Recommendation: ...` (each no more than 1,000 characters); point to the report for full evidence instead of dumping logs or transcript text.
+Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Textual scout and implementer results must start with exactly one role-appropriate `Outcome: completed|needs-decision|failed` (scouts) or `Outcome: implemented|needs-decision|failed` (implementers) line. Reviewer, verifier, and presentation workers may use `Outcome: needs-decision` for a genuine blocker; otherwise reviewer/verifier success remains the strict `ReviewResult` JSON contract and presentation success remains its `Artifact: <absolute path>` contract. Any `needs-decision` result emits exactly one bounded single-line `Question: ...` and optional bounded single-line `Recommendation: ...` (each no more than 1,000 characters); durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
 
 ### Interactive child terminals
 
@@ -716,12 +779,11 @@ information-only actions do not need `--yes` when they stay inside approved scop
 wider request still follows the normal interview and approval workflow, and steering never changes
 the pinned policy or `scopeApproved` state.
 
-When a worker reports a current needs-decision question, relay its `Question:` and optional
-`Recommendation:` to the user, then send the answer with the exact question identifier:
+When a worker reports a current needs-decision question, the coordinator is the single user inbox. It first inspects the durable current question id, recommendation, report path or artifact path, task/presentation identity, approval state, and relevant in-scope evidence. It may answer through the existing questionId-bound answer action only when explicit prior user direction, the approved scope, or unambiguous repository facts establish a safe non-destructive answer; it must send a concise rationale with the exact current question id. For presentation questions, include the presentation's task identity and current question id in the same answer request; the controller routes it to the presentation runtime. Genuine product choices, ambiguous evidence, scope changes, credentials, and approval-bearing, destructive, publishing, merging, or deployment decisions remain with the user; the coordinator never infers consent:
 
 ```sh
 bun src/cli.ts answer --task TASK_ID --question QUESTION_ID \
-  --text "Choose the compatibility-preserving option"
+  --text "The approved scope already requires preserving the existing API; proceed with that option."
 ```
 
 `messages` returns structured communication metadata and per-message status. In compact output,

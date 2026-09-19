@@ -66,6 +66,7 @@ import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { createTaskStore, type TaskStore, transitionStoredTask } from "../tasks/store.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { WorkerWorkflow } from "../workers/workflow.ts";
+import { createJevShadowEvaluator } from "./jev.ts";
 import {
   absoluteDirectory,
   currentWriter,
@@ -129,13 +130,14 @@ export type TandemService = Readonly<{
   readonly get: (id: string) => Promise<TaskRecord>;
   readonly approve: (id: string) => Promise<TaskRecord>;
   readonly tick: () => Promise<readonly TaskRecord[]>;
+  readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly steer: (input: SteerTaskInput) => Promise<TaskCommunicationView>;
   readonly answer: (input: AnswerTaskInput) => Promise<TaskCommunicationView>;
   readonly messages: (taskId: string) => Promise<TaskCommunicationView>;
   readonly pause: (id: string, reason?: string) => Promise<TaskRecord>;
   readonly resume: (id: string) => Promise<TaskRecord>;
+  readonly restart: (id: string) => Promise<TaskRecord>;
   readonly cancel: (id: string, reason?: string) => Promise<TaskRecord>;
-  readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly describePr: (id: string, summary: PrSummary) => Promise<string>;
   readonly publish: (
     id: string,
@@ -237,6 +239,7 @@ class TandemController {
       readTask: (taskId) => this.get(taskId),
       taskInScope: (task) => this.#source.taskInScope(task),
       feedback: this.#presentationFeedback,
+      recordShadowRecommendation: (task, job) => this.#worker.recordShadowRecommendation(task, job),
     });
     this.#worker = new WorkerWorkflow({
       home: deps.home,
@@ -264,6 +267,11 @@ class TandemController {
       removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
+      evaluateShadow: createJevShadowEvaluator({
+        home: deps.home,
+        run: deps.run,
+        listTasks: () => this.#source.scopedTasks(),
+      }),
     });
     this.#control = new TaskControlWorkflow({
       store: deps.store,
@@ -296,13 +304,14 @@ class TandemController {
       get: (id) => this.get(id),
       approve: (id) => this.approve(id),
       tick: () => this.tick(),
+      acknowledge: (id, notificationId) => this.acknowledge(id, notificationId),
       steer: (input) => this.steer(input),
       answer: (input) => this.answer(input),
       messages: (taskId) => this.messages(taskId),
       pause: (id, reason) => this.pause(id, reason),
       resume: (id) => this.resume(id),
+      restart: (id) => this.restart(id),
       cancel: (id, reason) => this.cancel(id, reason),
-      acknowledge: (id, notificationId) => this.acknowledge(id, notificationId),
       describePr: (id, summary) => this.describePr(id, summary),
       publish: (id, input) => this.publish(id, input),
       merge: (id, input) => this.merge(id, input),
@@ -369,11 +378,11 @@ class TandemController {
         schemaVersion: 1,
         taskId: created.id,
         sourceCheckpoint: checkpoint,
+        ...(source.sourceRepoPath === undefined ? {} : { sourceRepoPath: source.sourceRepoPath }),
         taskName: taskNameFor(created),
         endpoints: [],
         jobs: [],
-        ...(source.sourceRepoPath === undefined ? {} : { sourceRepoPath: source.sourceRepoPath }),
-        ...(created.kind === "implementation"
+        ...(["scout", "implementation"].includes(created.kind)
           ? { sessionDirectory: taskSessionDirectory(this.#deps.home, created.id) }
           : {}),
       };
@@ -432,6 +441,21 @@ class TandemController {
   async resume(id: string): Promise<TaskRecord> {
     return this.#control.resumeTask(assertTaskId(id));
   }
+  async restart(id: string): Promise<TaskRecord> {
+    const taskId = assertTaskId(id);
+    const task = await this.get(taskId);
+    const state = await this.readState();
+    for (const presentation of state.presentations) {
+      if (presentation.taskId !== task.id) continue;
+      const record = await readPresentationRecord(presentation.recordPath);
+      if (record.question !== undefined) {
+        throw new Error(
+          `Task ${taskId} has an unanswered presentation question ${JSON.stringify(record.question.id)}; answer it before restarting managed work`,
+        );
+      }
+    }
+    return this.#control.restartTask(taskId);
+  }
 
   async cancel(id: string, reason?: string): Promise<TaskRecord> {
     return this.#control.controlTask(
@@ -477,6 +501,33 @@ class TandemController {
     const taskId = assertTaskId(input.taskId);
     const questionId = singleLine(input.questionId, "questionId");
     const answer = singleLine(input.text, "text");
+    const task = await this.get(taskId);
+    if (task.communication?.question?.id === questionId) {
+      const result = await this.#source.appendAnswer(taskId, questionId, answer);
+      if (result.resumed) {
+        const resumed = await this.#control.resumeTask(taskId);
+        if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage)) {
+          await this.reconcileTask(resumed);
+        }
+      }
+      return this.messages(taskId);
+    }
+    const state = await this.readState();
+    for (const presentation of state.presentations) {
+      if (presentation.taskId !== task.id) continue;
+      const record = await readPresentationRecord(presentation.recordPath);
+      if (record.status !== "blocked" || record.question?.id !== questionId) continue;
+      await this.#presentationRuntime.answer(presentation.id, questionId, answer);
+      const view = await this.messages(taskId);
+      return {
+        ...view,
+        presentationAnswer: {
+          presentationId: presentation.id,
+          questionId,
+          status: "queued",
+        },
+      };
+    }
     const result = await this.#source.appendAnswer(taskId, questionId, answer);
     if (result.resumed) await this.#control.resumeTask(taskId);
     return this.messages(taskId);

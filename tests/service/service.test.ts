@@ -20,6 +20,7 @@ import type {
   WorkerReceipt,
   WorktreeLease,
 } from "../../src/contracts.ts";
+import type { PresentationRecord } from "../../src/presentations/records.ts";
 import { activeReservations, activeRuntimeJob } from "../../src/runtime/activity.ts";
 import {
   runtimeFile,
@@ -30,6 +31,7 @@ import type {
   DurableJob,
   DurableReservation,
   RuntimePresentation,
+  RuntimeState,
   RuntimeTaskState,
 } from "../../src/runtime/schema.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
@@ -41,6 +43,7 @@ import {
 import { taskInbox } from "../../src/tasks/communication-protocol.ts";
 import { type TaskEvent, transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
 
 const TIMESTAMP = "2030-01-01T00:00:00.000Z";
@@ -880,6 +883,198 @@ async function seedRunningPresentation(
   });
   return { artifactPath, recordPath, resultPath };
 }
+async function seedBlockedPresentation(
+  home: string,
+  id: string,
+  taskId: string,
+  questionText: string,
+): Promise<
+  Readonly<{
+    readonly recordPath: string;
+    readonly jobPath: string;
+    readonly resultPath: string;
+    readonly questionId: string;
+  }>
+> {
+  const recordPath = join(home, `${id}-record.json`);
+  const jobPath = join(home, `${id}-job.json`);
+  const resultPath = join(home, `${id}-result.json`);
+  const artifactPath = join(home, `${id}-artifact.html`);
+  const questionId = `${id}-old-job`;
+  const endpoint = endpointFor("presentation");
+  const question = { id: questionId, text: questionText };
+  await writeFile(artifactPath, "<!doctype html><title>blocked presentation</title>", "utf8");
+  const job = {
+    schemaVersion: 1 as const,
+    id: questionId,
+    taskId,
+    generation: 0,
+    role: "presentation" as const,
+    cwd: home,
+    model: { model: "test/presentation", thinking: "low" as const },
+    prompt: `Create the ${id} artifact.`,
+    resultPath,
+  } satisfies WorkerJob;
+  await writeJsonAtomically(jobPath, job);
+  const result = {
+    id: questionId,
+    taskId,
+    generation: 0,
+    role: "presentation" as const,
+    status: "needs-decision" as const,
+    text: `Outcome: needs-decision\nQuestion: ${questionText}`,
+    question: { text: questionText },
+    finishedAt: TIMESTAMP,
+  } satisfies WorkerResult;
+  await writeJsonAtomically(resultPath, result);
+  const record = {
+    id,
+    taskId,
+    generation: 0,
+    cwd: home,
+    artifactPath,
+    jobPath,
+    resultPath,
+    status: "blocked" as const,
+    question,
+    createdAt: TIMESTAMP,
+    updatedAt: TIMESTAMP,
+  } satisfies PresentationRecord;
+  await writeJsonAtomically(recordPath, record);
+  const runtime = JSON.parse(await Bun.file(runtimeFile(home)).text()) as RuntimeState;
+  await writeRuntimeState(runtimeFile(home), {
+    ...runtime,
+    presentations: [
+      ...runtime.presentations,
+      {
+        schemaVersion: 1,
+        id,
+        taskId,
+        recordPath,
+        endpoint,
+        job: {
+          schemaVersion: 1,
+          id: questionId,
+          taskId,
+          generation: 0,
+          role: "presentation",
+          kind: "worker",
+          cwd: home,
+          jobPath,
+          resultPath,
+          attempt: 1,
+          phase: "consumed",
+          launchAttempted: true,
+          createdAt: TIMESTAMP,
+          consumedAt: TIMESTAMP,
+          endpoint,
+        },
+      },
+    ],
+  });
+  return { recordPath, jobPath, resultPath, questionId };
+}
+test("presentation answers create isolated attempts, preserve evidence, and target the owning record", async () => {
+  await withFixture(
+    { kind: "implementation", stage: "paused", runner: { active: false } },
+    async ({ home, service }) => {
+      const first = await seedBlockedPresentation(
+        home,
+        "presentation-first",
+        "task-1",
+        "Which first direction should be used?",
+      );
+      const second = await seedBlockedPresentation(
+        home,
+        "presentation-second",
+        "task-1",
+        "Which second direction should be used?",
+      );
+      await expect(
+        service.answer({
+          taskId: "task-1",
+          questionId: "stale-question",
+          text: "stale",
+        }),
+      ).rejects.toThrow("no longer current");
+
+      const answered = await service.answer({
+        taskId: "task-1",
+        questionId: second.questionId,
+        text: "Use the second direction.",
+      });
+      expect(answered.presentationAnswer).toEqual({
+        presentationId: "presentation-second",
+        questionId: second.questionId,
+        status: "queued",
+      });
+      const state = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
+        readonly presentations: readonly RuntimePresentation[];
+      };
+      const restarted = state.presentations.find((entry) => entry.id === "presentation-second");
+      if (restarted === undefined) throw new Error("restarted presentation runtime missing");
+      expect(restarted.job.jobPath).not.toBe(second.jobPath);
+      expect(restarted.job.resultPath).not.toBe(second.resultPath);
+      const worker = JSON.parse(await readFile(restarted.job.jobPath, "utf8")) as {
+        readonly prompt: string;
+      };
+      expect(worker.prompt).toContain(`Prior worker report: ${second.resultPath}`);
+      expect(worker.prompt).toContain("Which second direction should be used?");
+      expect(worker.prompt).toContain("Use the second direction.");
+      expect(await readFile(second.resultPath, "utf8")).toContain("needs-decision");
+
+      await service.tick();
+      const afterTick = JSON.parse(await Bun.file(runtimeFile(home)).text()) as {
+        readonly presentations: readonly RuntimePresentation[];
+      };
+      const afterRestart = afterTick.presentations.find(
+        (entry) => entry.id === "presentation-second",
+      );
+      if (afterRestart === undefined) throw new Error("restarted presentation disappeared");
+      expect(afterRestart.job.phase).toBe("running");
+      const firstRecord = (await service.presentations()).find(
+        (record) => record.id === "presentation-first",
+      );
+      expect(firstRecord?.status).toBe("blocked");
+      expect(firstRecord?.question?.id).toBe(first.questionId);
+    },
+  );
+});
+
+test("presentation answers reject cancelled owners but remain allowed for completed owners", async () => {
+  await withFixture({ kind: "implementation", stage: "paused" }, async ({ home, service }) => {
+    const blocked = await seedBlockedPresentation(
+      home,
+      "presentation-cancelled",
+      "task-1",
+      "Which cancelled direction should be used?",
+    );
+    await service.cancel("task-1", "cancel presentation owner");
+    await expect(
+      service.answer({
+        taskId: "task-1",
+        questionId: blocked.questionId,
+        text: "Do not relaunch.",
+      }),
+    ).rejects.toThrow("cancelled task");
+  });
+
+  await withFixture({ kind: "implementation", stage: "completed" }, async ({ home, service }) => {
+    const blocked = await seedBlockedPresentation(
+      home,
+      "presentation-completed",
+      "task-1",
+      "Which completed-task direction should be used?",
+    );
+    const answered = await service.answer({
+      taskId: "task-1",
+      questionId: blocked.questionId,
+      text: "Reuse the approved completed artifact.",
+    });
+    expect(answered.presentationAnswer?.presentationId).toBe("presentation-completed");
+    expect((await service.presentations())[0]?.status).toBe("running");
+  });
+});
 
 test("concurrent controllers consume one completed presentation only once", async () => {
   await withFixture(
@@ -1711,6 +1906,84 @@ test("needs-decision survives reload, rejects stale answers, and resumes only af
       }
     },
   );
+});
+test("scout and reviewer questions preserve report evidence and resume only their prior role stage", async () => {
+  const cases: readonly {
+    readonly kind: "scout" | "implementation";
+    readonly stage: "scouting" | "reviewing";
+    readonly role: "scout" | "reviewer";
+    readonly report: string;
+  }[] = [
+    {
+      kind: "scout",
+      stage: "scouting",
+      role: "scout",
+      report: "Outcome: needs-decision\nQuestion: Which source is authoritative?",
+    },
+    {
+      kind: "implementation",
+      stage: "reviewing",
+      role: "reviewer",
+      report: "Outcome: needs-decision\nQuestion: Which review evidence should be authoritative?",
+    },
+  ];
+  for (const value of cases) {
+    await withFixture(
+      {
+        kind: value.kind,
+        stage: value.stage,
+        ...(value.role === "reviewer" ? { taskEdits: { reviewHead: "source-head" } } : {}),
+        runner: { active: false },
+      },
+      async ({ home, lease, service }) => {
+        const endpoint = endpointFor(value.role);
+        const writer = value.role === "reviewer" ? endpointFor("implementer") : undefined;
+        const job = workerJob(home, endpoint, value.role);
+        await writeJsonAtomically(job.resultPath, {
+          id: job.id,
+          taskId: job.taskId,
+          generation: job.generation,
+          role: job.role,
+          status: "needs-decision",
+          text: value.report,
+          question: { text: value.report.split("Question: ")[1] },
+          finishedAt: TIMESTAMP,
+        });
+        await seedTaskResources(
+          home,
+          lease,
+          writer === undefined ? [endpoint] : [writer, endpoint],
+          [job],
+        );
+        await service.tick();
+        const blocked = await service.get("task-1");
+        const question = blocked.communication?.question;
+        if (question === undefined || blocked.reportPath === undefined) {
+          throw new Error("worker question or report evidence was not persisted");
+        }
+        expect(blocked.stage).toBe("blocked");
+        expect(await readFile(blocked.reportPath, "utf8")).toBe(value.report);
+        await expect(
+          service.answer({
+            taskId: "task-1",
+            questionId: "stale-question",
+            text: "stale",
+          }),
+        ).rejects.toThrow("no longer current");
+        const answered = await service.answer({
+          taskId: "task-1",
+          questionId: question.id,
+          text: "Use the repository evidence.",
+        });
+        expect(answered.question).toBeUndefined();
+        const answeredTask = await service.get("task-1");
+        expect(answeredTask.blockReason).toBeUndefined();
+        expect(answered.stage).toBe(value.stage);
+        expect(answeredTask.reportPath).toBe(blocked.reportPath);
+        expect(answered.messages.at(-1)?.replyTo).toBe(question.id);
+      },
+    );
+  }
 });
 
 test("communication repair and answer publication never preserve a stale inbox revision", async () => {

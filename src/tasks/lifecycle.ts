@@ -868,6 +868,7 @@ export function transitionTask(
         context,
         { stage: "completed", reportPath: event.reportPath },
         `Scout report completed for task ${task.id}`,
+        "coordinator",
       );
     }
     case "pause": {

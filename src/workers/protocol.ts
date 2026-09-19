@@ -297,17 +297,21 @@ export type ReportedOutcome = Readonly<{
 }>;
 
 export function reportedOutcome(role: WorkerRole, text: string): ReportedOutcome {
-  if (role !== "implementer") {
+  const matches = [...text.matchAll(/^\s*Outcome\s*:\s*([^\r\n]+?)\s*$/gim)];
+  if (matches.length === 0) {
+    if (role === "implementer") {
+      return {
+        status: "failed",
+        error:
+          "implementer output must include exactly one Outcome: implemented|needs-decision|failed line",
+      };
+    }
     return { status: "completed" };
   }
-  const matches = [
-    ...text.matchAll(/^\s*Outcome\s*:\s*(implemented|needs-decision|failed)\s*$/gim),
-  ];
   if (matches.length !== 1) {
     return {
       status: "failed",
-      error:
-        "implementer output must include exactly one Outcome: implemented|needs-decision|failed line",
+      error: `${role} output must include exactly one Outcome line`,
     };
   }
   const outcome = matches[0]?.[1]?.toLowerCase();
@@ -315,9 +319,21 @@ export function reportedOutcome(role: WorkerRole, text: string): ReportedOutcome
     return { status: "needs-decision" };
   }
   if (outcome === "failed") {
-    return { status: "failed", error: "implementer reported a failed outcome" };
+    return { status: "failed", error: `${role} reported a failed outcome` };
   }
-  return { status: "completed" };
+  if (role === "implementer" && outcome === "implemented") {
+    return { status: "completed" };
+  }
+  if (role !== "implementer" && outcome === "completed") {
+    return { status: "completed" };
+  }
+  return {
+    status: "failed",
+    error:
+      role === "implementer"
+        ? "implementer Outcome must be implemented, needs-decision, or failed"
+        : `${role} Outcome must be completed, needs-decision, or failed`,
+  };
 }
 
 export type ReportedQuestion = Readonly<{
@@ -330,11 +346,11 @@ export function reportedQuestion(
   status: WorkerStatus,
   text: string,
 ): ReportedQuestion {
-  if (role !== "implementer" || status !== "needs-decision") return {};
+  if (status !== "needs-decision") return {};
   const questionMatches = [...text.matchAll(/^\s*Question\s*:\s*([^\r\n]+?)\s*$/gim)];
   if (questionMatches.length !== 1) {
     return {
-      error: "needs-decision implementer output must include exactly one Question: <text> line",
+      error: `needs-decision ${role} output must include exactly one Question: <text> line`,
     };
   }
   const questionText = questionMatches[0]?.[1]?.trim();
@@ -350,7 +366,7 @@ export function reportedQuestion(
   const recommendationMatches = [...text.matchAll(/^\s*Recommendation\s*:\s*([^\r\n]+?)\s*$/gim)];
   if (recommendationMatches.length > 1) {
     return {
-      error: "needs-decision implementer output may include at most one Recommendation: line",
+      error: `needs-decision ${role} output may include at most one Recommendation: line`,
     };
   }
   const recommendation = recommendationMatches[0]?.[1]?.trim();

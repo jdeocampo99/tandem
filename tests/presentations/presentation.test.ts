@@ -247,6 +247,49 @@ test("verifies the expected regular artifact before opening Lavish and preserves
     await rm(root, { recursive: true, force: true });
   }
 });
+test("preserves a presentation needs-decision question for coordinator resume", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-presentation-question-"));
+  try {
+    const paths = await freshPresentationPaths(root, "presentation-question");
+    const run: CommandRunner = async () => result(feedbackResponse());
+    const prepared = await preparePresentation({
+      task: task(paths.repository),
+      id: "presentation-question",
+      directory: paths.directory,
+      objective: "Show the approved work clearly",
+      artifacts: [],
+      now: "2030-01-02T03:04:05.000Z",
+      timeoutMs: 10_000,
+      run,
+    });
+    const blocked = await completePresentation({
+      record: prepared.record,
+      result: {
+        id: prepared.record.id,
+        taskId: prepared.record.taskId,
+        generation: prepared.record.generation,
+        role: "presentation",
+        status: "needs-decision",
+        text: "Outcome: needs-decision\nQuestion: Which visual direction is approved?",
+        question: {
+          text: "Which visual direction is approved?",
+          recommendation: "Use the existing product palette.",
+        },
+        finishedAt: "2030-01-02T03:04:06.000Z",
+      },
+      now: "2030-01-02T03:04:07.000Z",
+      run,
+    });
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.question).toEqual({
+      id: prepared.record.id,
+      text: "Which visual direction is approved?",
+      recommendation: "Use the existing product palette.",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("preserves a known session URL when later observations omit it", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-presentation-"));

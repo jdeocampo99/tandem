@@ -54,6 +54,12 @@ export type CoordinatorLaunchRequest = Readonly<{
   readonly noAttach: boolean;
   readonly parentWorkspaceId?: string;
   readonly prompt?: string;
+  /**
+   * Bypass the ordinary reconnect reuse path after restart ownership has been
+   * proven. The caller must close the superseded pane before launching the
+   * replacement, so two OMP processes never share the saved conversation.
+   */
+  readonly restart?: boolean;
 }>;
 
 export type CoordinatorLaunchResult = Readonly<{
@@ -494,7 +500,7 @@ async function waitForCoordinatorOwnership(
   );
 }
 
-async function launchCoordinatorUnlocked(
+export async function launchCoordinatorUnlocked(
   request: CoordinatorLaunchRequest,
   dependencies: CoordinatorLaunchDependencies,
 ): Promise<CoordinatorLaunchResult> {
@@ -521,7 +527,7 @@ async function launchCoordinatorUnlocked(
     sessionId: request.sessionId,
     repoPath: paths.repo,
   });
-  if (running !== undefined) {
+  if (running !== undefined && request.restart !== true) {
     const runningCheckpoint = await readCheckpoint(dependencies.run, {
       repo: running.worktree.path,
     });
@@ -546,6 +552,33 @@ async function launchCoordinatorUnlocked(
     }
     return coordinatorResultFromRecord(running);
   }
+  if (running !== undefined) {
+    const runningCheckpoint = await readCheckpoint(dependencies.run, {
+      repo: running.worktree.path,
+    });
+    validateCoordinatorCheckout(
+      running.worktree.path,
+      runningCheckpoint,
+      running.worktree.baseHead,
+    );
+    const boundSourcePath = await validateBoundCoordinatorSource(
+      request,
+      dependencies,
+      running.worktree.baseHead,
+      context,
+    );
+    if (
+      boundSourcePath !== undefined &&
+      !(await sameCoordinatorPath(boundSourcePath, running.worktree.path))
+    ) {
+      throw new Error(
+        `coordinator source ${JSON.stringify(boundSourcePath)} does not match running coordinator worktree ${JSON.stringify(running.worktree.path)}`,
+      );
+    }
+  }
+  const previous =
+    running ?? (await readCoordinatorRecord(recordPath(paths.home, request.sessionId, paths.repo)));
+  if (previous !== undefined) await retireCoordinatorWorkspace(dependencies.run, previous);
   const boundSourcePath = await validateBoundCoordinatorSource(
     request,
     dependencies,
@@ -597,7 +630,6 @@ async function launchCoordinatorUnlocked(
       processExitCode,
     };
   }
-
   const herdrLauncher = headless
     ? ["herdr", "--session", request.sessionId, "server"]
     : ["herdr", "--session", request.sessionId];
@@ -615,12 +647,6 @@ async function launchCoordinatorUnlocked(
       env: serverEnvironment,
     });
     await waitForHerdr(dependencies.run, dependencies.sleep, request.sessionId, coordinatorCwd);
-  }
-  const previous = await readCoordinatorRecord(
-    recordPath(paths.home, request.sessionId, paths.repo),
-  );
-  if (previous !== undefined) {
-    await retireCoordinatorWorkspace(dependencies.run, previous);
   }
   const workspaceResult = await runExternal(dependencies.run, {
     argv: [

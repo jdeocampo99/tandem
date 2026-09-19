@@ -11,6 +11,10 @@ type NotificationRef = Readonly<{
   readonly notificationId: string;
   readonly message: string;
   readonly judgmentNeeded: boolean;
+  readonly questionId?: string;
+  readonly questionText?: string;
+  readonly recommendation?: string;
+  readonly reportPath?: string;
 }>;
 
 function taskNeedsCoordinatorJudgment(task: Pick<TaskRecord, "kind" | "stage">): boolean {
@@ -36,28 +40,51 @@ function allPendingNotifications(tasks: readonly TaskRecord[]): readonly Notific
         (notification.kind === undefined &&
           taskNeedsCoordinatorJudgment(task) &&
           notification.id === latestLegacyId);
+      const question = judgmentNeeded ? task.communication?.question : undefined;
       result.push({
         taskId: task.id,
         notificationId: notification.id,
         message: notification.message,
         judgmentNeeded,
+        ...(question === undefined
+          ? {}
+          : {
+              questionId: question.id,
+              questionText: question.text,
+              ...(question.recommendation === undefined
+                ? {}
+                : { recommendation: question.recommendation }),
+            }),
+        ...(judgmentNeeded && task.reportPath !== undefined ? { reportPath: task.reportPath } : {}),
       });
     }
   }
   return result;
 }
+function notificationContent(notifications: readonly NotificationRef[]): string {
+  return notifications
+    .map((notification) => {
+      const lines = [
+        `[${notification.taskId}] ${compactText(notification.message, ACTION_SUMMARY_MAX_TEXT)}`,
+      ];
+      if (notification.questionId !== undefined) {
+        lines.push(
+          `Question ${compactText(notification.questionId, 100)}: ${compactText(notification.questionText ?? "text unavailable", ACTION_SUMMARY_MAX_TEXT)}`,
+        );
+        if (notification.recommendation !== undefined)
+          lines.push(
+            `Recommendation: ${compactText(notification.recommendation, ACTION_SUMMARY_MAX_TEXT)}`,
+          );
+      }
+      if (notification.reportPath !== undefined)
+        lines.push(`Evidence report: ${compactText(notification.reportPath, 180)}`);
+      return lines.join("\n");
+    })
+    .join("\n");
+}
 
 type NotificationMessageSink = Pick<ExtensionAPI, "sendMessage" | "appendEntry">;
 type NotificationUi = Readonly<{ readonly ui: Pick<ExtensionContext["ui"], "notify"> }>;
-
-function notificationContent(notifications: readonly NotificationRef[]): string {
-  return notifications
-    .map(
-      (notification) =>
-        `[${notification.taskId}] ${compactText(notification.message, ACTION_SUMMARY_MAX_TEXT)}`,
-    )
-    .join("\n");
-}
 
 /** Deliver pending notifications without turning routine scheduler work into model input. */
 export async function deliverPendingNotifications(

@@ -30,6 +30,7 @@ const MERGE_METHODS: Readonly<Record<MergeMethod, true>> = {
 };
 const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
   launch: "launch",
+  restart: "restart",
   models: "models",
   "configure-models": "configure-models",
   doctor: "doctor",
@@ -63,6 +64,7 @@ const PR_COMMANDS: Readonly<Record<string, CliCommand>> = {
 };
 const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
   launch: 0,
+  restart: 1,
   models: 0,
   "configure-models": 0,
   doctor: 0,
@@ -93,6 +95,7 @@ export type MergeMethod = "merge" | "squash" | "rebase";
 
 export type CliCommand =
   | "launch"
+  | "restart"
   | "models"
   | "configure-models"
   | "doctor"
@@ -125,6 +128,7 @@ export type CliOptions = Readonly<{
   readonly write: boolean;
   readonly discard: boolean;
   readonly continueSession: boolean;
+  readonly restart: boolean;
   readonly headless: boolean;
   readonly noAttach: boolean;
   readonly home?: string;
@@ -270,6 +274,7 @@ type MutableCliOptions = {
   write: boolean;
   discard: boolean;
   continueSession: boolean;
+  restart: boolean;
   headless: boolean;
   noAttach: boolean;
   home?: string;
@@ -310,6 +315,7 @@ function initialOptions(): MutableCliOptions {
     write: false,
     discard: false,
     continueSession: false,
+    restart: false,
     headless: false,
     noAttach: false,
     supersedes: [],
@@ -349,6 +355,9 @@ function parseOption(options: MutableCliOptions, argv: readonly string[], index:
       return index;
     case "--continue":
       options.continueSession = true;
+      return index;
+    case "--restart":
+      options.restart = true;
       return index;
     case "--headless":
       options.headless = true;

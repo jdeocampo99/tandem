@@ -562,6 +562,28 @@ export async function completePresentation(input: {
   ) {
     throw new Error("presentation worker result identity does not match the presentation record");
   }
+  if (result.status === "needs-decision") {
+    if (result.question === undefined) {
+      return failedRecord(
+        input.record,
+        now,
+        "presentation needs-decision result omitted its question",
+      );
+    }
+    return {
+      ...input.record,
+      status: "blocked",
+      updatedAt: now,
+      question: {
+        id: result.id,
+        text: result.question.text,
+        ...(result.question.recommendation === undefined
+          ? {}
+          : { recommendation: result.question.recommendation }),
+      },
+      ...(result.error === undefined ? {} : { error: result.error }),
+    };
+  }
   if (result.status !== "completed") {
     return failedRecord(
       input.record,

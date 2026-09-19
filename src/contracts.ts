@@ -89,6 +89,11 @@ export type TaskCommunicationView = Readonly<{
   })[];
   readonly question?: TaskQuestion;
   readonly activity?: WorkerReceipt;
+  readonly presentationAnswer?: Readonly<{
+    readonly presentationId: string;
+    readonly questionId: string;
+    readonly status: "queued";
+  }>;
 }>;
 
 export type SteerTaskInput = Readonly<{

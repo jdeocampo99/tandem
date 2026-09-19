@@ -831,5 +831,23 @@ test("configure --reset and reset inside Herdr reject before any mutation", asyn
   expect(fake.writeCalls).toHaveLength(0);
   expect(fake.configureCalls).toHaveLength(0);
   expect(invocations).toHaveLength(0);
+  const restartResult = await runTerminal([repo, "--restart", "--home", home], {
+    cwd: repo,
+    processEnvironment: {
+      HERDR_ENV: "1",
+      HERDR_SESSION: "tandem",
+      HERDR_WORKSPACE_ID: "workspace-parent",
+      HERDR_PANE_ID: "pane-parent",
+    },
+    run: runCommand,
+    service: fake.service,
+    application: fakeApplication(invocations),
+    isTTY: false,
+    stdout: () => undefined,
+    stderr: () => undefined,
+  });
+  expect(restartResult.status).toBe("error");
+  expect(restartResult.error?.message).toContain("tandem --restart cannot run from inside Herdr");
+  expect(invocations).toHaveLength(0);
   await rm(join(repo, ".."), { recursive: true, force: true });
 });

@@ -11,6 +11,7 @@ export type TerminalInvocation = Readonly<{
   readonly headless: boolean;
   readonly noAttach: boolean;
   readonly reset: boolean;
+  readonly restart: boolean;
   readonly force: boolean;
 }>;
 export type TerminalRunResult = Readonly<{
@@ -50,6 +51,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   let poolRoot: string | undefined;
   let continueSession = false;
   let reset = false;
+  let restart = false;
   let force = false;
   let headless = false;
   let noAttach = false;
@@ -73,6 +75,10 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     }
     if (parseOptions && token === "--reset") {
       reset = true;
+      continue;
+    }
+    if (parseOptions && token === "--restart") {
+      restart = true;
       continue;
     }
     if (parseOptions && token === "--force") {
@@ -123,8 +129,13 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   if (force && !reset) {
     throw new Error("tandem --force requires --reset");
   }
-  if (resolvedCommand === "configure" && reset) {
-    throw new Error("tandem --reset is launch-only; it cannot be combined with configure");
+  if (reset && restart) {
+    throw new Error("tandem --reset and --restart are mutually exclusive");
+  }
+  if (resolvedCommand === "configure" && (reset || restart)) {
+    throw new Error(
+      "tandem --reset/--restart are launch-only; they cannot be combined with configure",
+    );
   }
   return {
     command: resolvedCommand,
@@ -134,9 +145,10 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     ...(sessionId === undefined ? {} : { sessionId }),
     ...(poolRoot === undefined ? {} : { poolRoot }),
     continueSession,
-    reset,
-    force,
     headless,
     noAttach,
+    reset,
+    restart,
+    force,
   };
 }

@@ -84,6 +84,7 @@ export async function launchProjects(
         environment.sessionId,
         "--headless",
         "--no-attach",
+        ...(invocation.restart ? ["--restart"] : []),
         ...(invocation.continueSession ? ["--continue"] : []),
       ];
       const result = await application.invoke(parseCliArgs(args));

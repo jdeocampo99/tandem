@@ -54,6 +54,31 @@ shared Herdr session:
 tandem
 ```
 
+To reload the coordinator extension without canceling or resetting work, use the non-destructive
+restart from a separate normal terminal:
+
+```sh
+tandem --restart /absolute/path/to/repo
+```
+
+The frontdoor verifies exact Tandem ownership, revalidates the pane cwd/process immediately before
+close, confirms close acknowledgement and pane absence, then launches a replacement with the same
+lease/session directory and `--continue`. Child panes, task IDs and generations, worktrees,
+conversation history, pending questions/messages, and reports are preserved. Foreign, ambiguous,
+or missing ownership refuses before any close. This replaces only the coordinator; `--reset` and
+`--reset --force` retain their destructive meanings.
+
+To restart one managed worker without replacing the coordinator, use `/tandem restart TASK_ID`,
+the tool request `{request:{action:"restart",taskId:"TASK_ID"}}`, or:
+
+```sh
+bun src/cli.ts restart TASK_ID
+```
+
+The acknowledged pause/stop/resume bridge preserves task identity, generation, worktree, worker
+context, messages, reports, and questions. Cancelled or completed tasks and paused/blocked tasks
+with an unanswered question are refused. A coordinator cannot restart itself.
+
 To cleanly reopen only Tandem-owned coordinators, use the reset launch from a separate normal
 terminal:
 
@@ -190,10 +215,54 @@ effect on the next Tandem launch, not in an already-running conversation.
 For an approved task, a clear follow-up direction can be sent with the coordinator's `steer`
 action without a redundant generic approval prompt; `steer` queues it for the next safe boundary.
 Ask for `messages` when you need a queued, received, or delivered receipt, not as a repeated polling
-loop. If the worker asks a decision, the coordinator relays its `Question:` and optional
-`Recommendation:`, then sends your answer. A receipt is not proof that implementation is finished.
-Before initial approval, its confirmation includes the current revision and effective communication
-deltas, so queued scope is visible without replaying superseded messages or full JSON.
+loop. Worker needs-decision questions wake the coordinator as the single user inbox. The coordinator
+first checks the durable question id, recommendation, report path, approved scope, prior directions,
+and unambiguous in-scope repository evidence. It may answer a safe, non-destructive question already
+settled by that evidence through the questionId-bound `answer` action with a concise rationale; it
+must bring genuine product choices, ambiguity, scope changes, credentials, destructive actions, and
+publishing, merging, or deployment decisions to you. A receipt is not proof that implementation is
+finished.
+
+## Optional Jev shadow recommendations
+
+TypeSafe Jev integration is off by default and recommendation-only. To opt in for a Tandem
+coordinator, set `TANDEM_JEV_MODE=shadow` and `TYPESAFE_API_KEY` before launching Tandem; a key
+alone does not enable it. The pinned endpoint/model is Jev `1.13.0`. An optional
+`TANDEM_JEV_TIMEOUT_MS` sets a bounded 1–10,000ms timeout (default 2,000ms).
+
+Candidate alternatives are configured in `<home>/jev.json` (normally `~/.tandem/jev.json`), not the repository:
+
+```json
+{
+  "schemaVersion": 1,
+  "routingCandidates": {
+    "implementer": [
+      {
+        "id": "coding-fast",
+        "model": "openai-codex/gpt-5.6-luna",
+        "thinking": "high",
+        "description": "Configured coding alternative for shadow comparison."
+      }
+    ]
+  }
+}
+```
+
+Tandem validates candidates against the existing OMP catalogue, evaluates at most once per
+prepared job, and records a local `jev-recommendation-<job-id>.json` beside that job. Records contain only
+bounded status, model choice/confidence, ranked supplemental-context IDs/source references, usage,
+and latency—not keys, raw requests, or full excerpts. Routine notifications point the main
+conversation to the evidence. Mandatory instructions, scope, questions, answers, safety, and
+review findings are never optionalized. Jev advice never changes dispatch, prompts, context,
+approval, or task transitions; it provides no proven savings or automatic switching.
+Shadow checks run for model-backed scout, implementer, reviewer, verifier, and presentation jobs;
+validation is a non-model runner job. The presentation workflow invokes the same recorder before
+each durable presentation launch.
+Only bounded task state and eligible saved scout/surface evidence is shared when opted in.
+Provider failures, malformed configuration, missing keys, and unavailable catalogue data retain
+normal dispatch. Set these variables in the environment that starts the Herdr server.
+Already-running Herdr/OMP processes do not acquire newly exported variables; a coordinator-only
+restart does not update the server's environment. Enable Jev when starting a fresh server session.
 
 ## What approval means
 
@@ -201,6 +270,8 @@ Tandem first inspects your project without changing it. Saving settings, startin
 approving a coding plan, publishing a pull request, merging, and deleting unfinished work each
 need your approval. Research can start before you approve code changes; coding waits for your
 approved plan, followed by checks and a separate review. Tandem never merges automatically.
+Coordinator self-resolution is bounded workflow guidance, not deterministic enforcement; runtime
+ownership, approval, and safety checks remain authoritative.
 
 Delegated scouts use read-only repository tools and native `web_search`: they prefer official or primary sources, use `read` for known URLs, cite sources, and separate verified facts from recommendations. Queued or blocked delegation is actionable state, not a running or completed research effort; the coordinator must disclose it and never silently take over research without explicit user authorization. Recorded task counts and statuses come from saved durable task state, not receipts or process observations.
 Asking how it works does not give it permission to inspect files or take action.

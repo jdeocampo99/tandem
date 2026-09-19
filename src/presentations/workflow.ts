@@ -1,3 +1,5 @@
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   createTaskEndpoint,
   type HerdrEndpointResult,
@@ -22,6 +24,7 @@ import {
 } from "../runtime/persistence.ts";
 import type {
   DurableEndpointLaunch,
+  DurableJob,
   RuntimePresentation,
   RuntimeState,
 } from "../runtime/schema.ts";
@@ -38,7 +41,7 @@ import {
 } from "../service/records.ts";
 import { recoverEndpointFromLaunch } from "../tasks/control.ts";
 import type { TaskStore } from "../tasks/store.ts";
-import { readWorkerResult, type WorkerResult } from "../workers/jobs.ts";
+import { parseWorkerJob, readWorkerResult, type WorkerResult } from "../workers/jobs.ts";
 import { liveWorkerTerminal } from "../workers/terminal.ts";
 import type { PresentationFeedbackWorkflow } from "./feedback.ts";
 import { withPresentationLock } from "./lock.ts";
@@ -62,6 +65,7 @@ export type PresentationRuntimeDependencies = Readonly<{
   readonly readTask: (taskId: string) => Promise<TaskRecord>;
   readonly taskInScope: (task: TaskRecord) => Promise<boolean>;
   readonly feedback: PresentationFeedbackWorkflow;
+  readonly recordShadowRecommendation?: (task: TaskRecord, job: DurableJob) => Promise<void>;
 }>;
 
 export class PresentationRuntimeWorkflow {
@@ -144,7 +148,7 @@ export class PresentationRuntimeWorkflow {
       const endpoint = runtime.endpoint ?? runtime.job.endpoint;
       if (endpoint === undefined) return runtime;
       const record = await readPresentationRecord(runtime.recordPath);
-      if (record.status !== "queued") return runtime;
+      if (record.status !== "queued") return undefined;
       await writeJsonAtomically(runtime.recordPath, {
         ...record,
         status: "running",
@@ -166,9 +170,17 @@ export class PresentationRuntimeWorkflow {
       runtime = presentationRuntime(state, id);
       if (runtime === undefined) throw new Error(`presentation ${id} is missing`);
     }
+    const task = await this.#deps.readTask(runtime.taskId);
+    if (task.stage === "cancelled") {
+      throw new Error(`presentation ${id} cannot start for cancelled task ${task.id}`);
+    }
+    const canRecordShadow = task.stage !== "paused" && task.stage !== "blocked";
     if (runtime.endpoint !== undefined) {
       const running = await this.markPresentationRunning(id);
       if (running === undefined) return;
+      if (canRecordShadow) {
+        await this.#deps.recordShadowRecommendation?.(task, running.job);
+      }
       const endpoint = running.endpoint ?? running.job.endpoint;
       if (endpoint === undefined) return;
       await this.launchPresentationJob(
@@ -180,7 +192,6 @@ export class PresentationRuntimeWorkflow {
       );
       return;
     }
-    const task = await this.#deps.readTask(runtime.taskId);
     const capacity = await this.reservePresentation(id);
     if (!capacity) return;
     state = await this.#deps.readState();
@@ -254,6 +265,9 @@ export class PresentationRuntimeWorkflow {
     }
     const running = await this.markPresentationRunning(id);
     if (running === undefined) return;
+    if (canRecordShadow) {
+      await this.#deps.recordShadowRecommendation?.(task, running.job);
+    }
     const runningEndpoint = running.endpoint ?? running.job.endpoint;
     if (runningEndpoint === undefined) return;
     await this.launchPresentationJob(
@@ -263,6 +277,87 @@ export class PresentationRuntimeWorkflow {
       running.job.cwd,
       workerCommand(this.#deps.workerPath, running.job.jobPath),
     );
+  }
+  async answer(
+    presentationId: string,
+    questionId: string,
+    answer: string,
+  ): Promise<PresentationRecord> {
+    const state = await this.#deps.readState();
+    const initialRuntime = presentationRuntime(state, presentationId);
+    if (initialRuntime === undefined) throw new Error(`presentation ${presentationId} is missing`);
+    const nextJobId = singleLine(this.#deps.idFactory(), "presentation answer job id");
+    const normalizedAnswer = singleLine(answer, "presentation answer");
+    await withPresentationLock(initialRuntime.recordPath, undefined, async () => {
+      const currentState = await this.#deps.readState();
+      const runtime = presentationRuntime(currentState, presentationId);
+      if (runtime === undefined) throw new Error(`presentation ${presentationId} is missing`);
+      const owner = await this.#deps.readTask(runtime.taskId);
+      if (owner.stage === "cancelled") {
+        throw new Error(`presentation ${presentationId} cannot resume cancelled task ${owner.id}`);
+      }
+      const record = await readPresentationRecord(runtime.recordPath);
+      const { question: askedQuestion, error: _error, ...recordWithoutTransient } = record;
+      if (
+        record.status !== "blocked" ||
+        askedQuestion === undefined ||
+        askedQuestion.id !== questionId
+      ) {
+        throw new Error(
+          `question ${questionId} is no longer current for presentation ${presentationId}`,
+        );
+      }
+      const workerValue = JSON.parse(await readFile(runtime.job.jobPath, "utf8")) as unknown;
+      const worker = parseWorkerJob(workerValue);
+      const attemptDirectory = join(runtime.job.cwd, "attempts", nextJobId);
+      await mkdir(attemptDirectory, { recursive: true, mode: 0o700 });
+      const nextJobPath = join(attemptDirectory, "job.json");
+      const nextResultPath = join(attemptDirectory, "result.json");
+      const recommendation =
+        askedQuestion.recommendation === undefined
+          ? ""
+          : `\nRecommendation: ${askedQuestion.recommendation}`;
+      const nextWorker = {
+        ...worker,
+        id: nextJobId,
+        jobPath: nextJobPath,
+        resultPath: nextResultPath,
+        prompt: `${worker.prompt}\n\nPrior worker report: ${runtime.job.resultPath}\nPrior question: ${askedQuestion.text}${recommendation}\nCoordinator answer: ${normalizedAnswer}`,
+      };
+      await writeJsonAtomically(nextJobPath, nextWorker);
+      const nextDurableJob = {
+        schemaVersion: 1 as const,
+        id: nextJobId,
+        taskId: runtime.job.taskId,
+        generation: runtime.job.generation,
+        role: "presentation" as const,
+        kind: "worker" as const,
+        cwd: runtime.job.cwd,
+        jobPath: nextJobPath,
+        resultPath: nextResultPath,
+        attempt: runtime.job.attempt + 1,
+        phase: "reserved" as const,
+        launchAttempted: false,
+        createdAt: this.#deps.clock(),
+        ...(runtime.job.endpoint === undefined ? {} : { endpoint: runtime.job.endpoint }),
+      };
+      await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
+        replaceRuntimePresentation(current, presentationId, (entry) => ({
+          ...entry,
+          job: nextDurableJob,
+        })),
+      );
+      await writeJsonAtomically(runtime.recordPath, {
+        ...recordWithoutTransient,
+        status: "queued",
+        updatedAt: this.#deps.clock(),
+      });
+    });
+    await this.startPresentation(presentationId);
+    const restartedState = await this.#deps.readState();
+    const restarted = presentationRuntime(restartedState, presentationId);
+    if (restarted === undefined) throw new Error(`presentation ${presentationId} disappeared`);
+    return readPresentationRecord(restarted.recordPath);
   }
 
   async reconcilePresentation(runtime: RuntimePresentation): Promise<void> {
@@ -275,12 +370,22 @@ export class PresentationRuntimeWorkflow {
     const state = await this.#deps.readState();
     const freshRuntime = presentationRuntime(state, currentRuntime.id);
     if (freshRuntime === undefined) return;
-    const record = await readPresentationRecord(freshRuntime.recordPath);
+    let record = await readPresentationRecord(freshRuntime.recordPath);
     const job = freshRuntime.job;
     const endpoint = freshRuntime.endpoint ?? job.endpoint;
-    if (job.phase === "reserved" && endpoint !== undefined) {
-      await this.startPresentation(freshRuntime.id);
-      return;
+    if (
+      (record.status === "blocked" || record.status === "running") &&
+      record.question !== undefined &&
+      record.question.id !== job.id &&
+      (job.phase === "reserved" || job.phase === "launching" || job.phase === "running")
+    ) {
+      const { question: _question, error: _error, ...withoutTransient } = record;
+      record = {
+        ...withoutTransient,
+        status: "queued",
+        updatedAt: this.#deps.clock(),
+      };
+      await writeJsonAtomically(freshRuntime.recordPath, record);
     }
     if (record.status === "queued" && job.phase === "reserved") {
       await this.startPresentation(freshRuntime.id);

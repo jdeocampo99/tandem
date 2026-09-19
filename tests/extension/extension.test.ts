@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-coding-agent";
 import { resolveTandemEnvironment } from "../../src/config/environment.ts";
 import type { ModelSpec, RepoPolicy, ResolvedPolicy, TaskRecord } from "../../src/contracts.ts";
@@ -6,8 +9,9 @@ import { executeTandemAction, parseTandemCommand } from "../../src/extension/act
 import { deliverPendingNotifications } from "../../src/extension/notifications.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/extension/summary.ts";
 import { createTandemExtension } from "../../src/extension.ts";
-import type { TandemService } from "../../src/service/controller.ts";
+import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
+import { createTaskStore } from "../../src/tasks/store.ts";
 
 const models: Readonly<
   Record<
@@ -563,7 +567,7 @@ test("approval-bearing command syntax carries no model-controlled approval field
   expect(() => parseTandemCommand("merge task-1 squash --approved")).toThrow("expects at most");
 });
 
-test("durable digest prioritizes current blockers and preserves acceptance and review evidence", () => {
+test("durable digest prioritizes current blockers and preserves acceptance, review, and question evidence", () => {
   const blocked = task({
     id: "blocked",
     stage: "blocked",
@@ -571,6 +575,15 @@ test("durable digest prioritizes current blockers and preserves acceptance and r
     acceptanceCriteria: ["Keep the API stable", "Record the decision durably"],
     blockReason: "Waiting for the owner to choose the migration path.",
     reviewHead: "head-active",
+    communication: {
+      revision: 2,
+      messages: [],
+      question: {
+        id: "question-current",
+        text: "Should the existing API remain unchanged?",
+        recommendation: "Keep the existing API unchanged.",
+      },
+    },
     reviews: [
       {
         lens: "behavior",
@@ -601,6 +614,9 @@ test("durable digest prioritizes current blockers and preserves acceptance and r
   expect(digest).toContain("Keep the API stable");
   expect(digest).toContain("Waiting for the owner");
   expect(digest).toContain("finding-current");
+  expect(digest).toContain("question-current");
+  expect(digest).toContain("Should the existing API remain unchanged?");
+  expect(digest).toContain("Keep the existing API unchanged.");
   expect(digest).toContain("P1");
   expect(digest).toContain("head-active");
 });
@@ -701,7 +717,19 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
   );
   const context = notificationContext((message) => notices.push(message));
   const blocked = transitionTask(
-    task({ id: "blocked", stage: "implementing" }),
+    task({
+      stage: "implementing",
+      reportPath: "/tmp/tandem/task-1/report.txt",
+      communication: {
+        revision: 2,
+        messages: [],
+        question: {
+          id: "question-1",
+          text: "Should the existing API remain unchanged?",
+          recommendation: "Keep the existing API unchanged.",
+        },
+      },
+    }),
     { type: "block", reason: "worktree allocation failed before worker launch" },
     { now: "2030-01-02T03:04:06.000Z", notificationId: "blocked-notification" },
   );
@@ -714,9 +742,153 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
   expect(blocked.notifications.at(-1)?.kind).toBe("coordinator");
   expect(sent).toHaveLength(1);
   expect(sent[0]?.content).toContain("worktree allocation failed before worker launch");
+  expect(sent[0]?.content).toContain(
+    "Question question-1: Should the existing API remain unchanged?",
+  );
+  expect(sent[0]?.content).toContain("Recommendation: Keep the existing API unchanged.");
+  expect(sent[0]?.content).toContain("Evidence report: /tmp/tandem/task-1/report.txt");
   expect(modelTurns).toBe(1);
   expect(notices).toHaveLength(0);
-  expect(acknowledged).toEqual(["blocked:blocked-notification"]);
+  expect(acknowledged).toEqual(["task-1:blocked-notification"]);
+});
+test("scout report completion wakes once, survives durable reconnect, and retries failed delivery", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-extension-scout-"));
+  const now = "2030-01-02T03:04:06.000Z";
+  const clock = () => now;
+  const store = createTaskStore({
+    directory: join(home, "tasks"),
+    clock,
+    idFactory: () => "store-id",
+  });
+  try {
+    let scouting = await store.create({
+      id: "scout-task",
+      repoPath: join(home, "repo"),
+      kind: "scout",
+      objective: "Collect the requested evidence.",
+      acceptanceCriteria: ["Report the evidence."],
+      surfaces: ["repository"],
+      policy,
+    });
+    scouting = await store.update(scouting.id, scouting.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      stage: "scouting",
+      updatedAt: now,
+    }));
+    const completed = await store.update(scouting.id, scouting.revision, (current) =>
+      transitionTask(
+        current,
+        {
+          type: "scout-report-complete",
+          generation: current.generation,
+          reportPath: "/tmp/tandem/scout-report.txt",
+        },
+        { now, notificationId: "scout-complete" },
+      ),
+    );
+    expect(completed.stage).toBe("completed");
+    expect(completed.notifications.at(-1)?.id).toBe("scout-complete");
+    expect(completed.notifications.at(-1)?.kind).toBe("coordinator");
+
+    const sent: Array<{ readonly content: string; readonly options: unknown }> = [];
+    const notices: string[] = [];
+    const sink = notificationSink(
+      (content, options) => sent.push({ content, options }),
+      () => undefined,
+    );
+    const context = notificationContext((message) => notices.push(message));
+    const delivered = new Set<string>();
+    const service = createTandemService({
+      home,
+      sessionId: "extension-scout-session",
+      clock,
+      idFactory: () => "service-id",
+    });
+    try {
+      await deliverPendingNotifications(sink, service, [completed], delivered, context);
+      await deliverPendingNotifications(sink, service, [completed], delivered, context);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.content).toContain("/tmp/tandem/scout-report.txt");
+      expect(sent[0]?.options).toEqual({ deliverAs: "followUp", triggerTurn: true });
+      expect(notices).toHaveLength(0);
+    } finally {
+      await service.shutdown();
+    }
+
+    const reopened = createTandemService({
+      home,
+      sessionId: "extension-scout-reconnected",
+      clock,
+      idFactory: () => "reconnected-id",
+    });
+    try {
+      const persisted = await reopened.get("scout-task");
+      expect(persisted.notifications.at(-1)?.acknowledged).toBe(true);
+      await deliverPendingNotifications(sink, reopened, [persisted], new Set<string>(), context);
+      expect(sent).toHaveLength(1);
+
+      let retryScouting = await store.create({
+        id: "scout-retry",
+        repoPath: join(home, "repo"),
+        kind: "scout",
+        objective: "Retry the requested evidence.",
+        acceptanceCriteria: ["Report the evidence."],
+        surfaces: ["repository"],
+        policy,
+      });
+      retryScouting = await store.update(retryScouting.id, retryScouting.revision, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        stage: "scouting",
+        updatedAt: now,
+      }));
+      const retryTask = await store.update(retryScouting.id, retryScouting.revision, (current) =>
+        transitionTask(
+          current,
+          {
+            type: "scout-report-complete",
+            generation: current.generation,
+            reportPath: "/tmp/tandem/scout-retry-report.txt",
+          },
+          { now, notificationId: "scout-retry" },
+        ),
+      );
+      let failSend = true;
+      const retrySent: string[] = [];
+      const retrySink = notificationSink(
+        (content) => {
+          if (failSend) {
+            failSend = false;
+            throw new Error("coordinator bridge unavailable");
+          }
+          retrySent.push(content);
+        },
+        () => undefined,
+      );
+      const retryDelivered = new Set<string>();
+      await expect(
+        deliverPendingNotifications(retrySink, reopened, [retryTask], retryDelivered, context),
+      ).rejects.toThrow("coordinator bridge unavailable");
+      const pendingRetry = await reopened.get("scout-retry");
+      expect(pendingRetry.notifications.at(-1)?.id).toBe("scout-retry");
+      expect(pendingRetry.notifications.at(-1)?.acknowledged).toBe(false);
+      await deliverPendingNotifications(
+        retrySink,
+        reopened,
+        [pendingRetry],
+        retryDelivered,
+        context,
+      );
+      expect(retrySent).toHaveLength(1);
+      expect(retrySent[0]).toContain("/tmp/tandem/scout-retry-report.txt");
+      expect((await reopened.get("scout-retry")).notifications.at(-1)?.acknowledged).toBe(true);
+    } finally {
+      await reopened.shutdown();
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test("automatic review-fix handoffs stay visible without waking the coordinator", async () => {

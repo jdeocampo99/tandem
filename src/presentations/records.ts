@@ -1,8 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { PresentationObservation } from "../adapters/lavish.ts";
-import { type AgentRole, type Endpoint, isAgentRole, type NotificationKind } from "../contracts.ts";
-
+import {
+  type AgentRole,
+  type Endpoint,
+  isAgentRole,
+  type NotificationKind,
+  type TaskQuestion,
+} from "../contracts.ts";
+import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 export type PendingPresentationNotification = Readonly<{
   readonly id: string;
   readonly message: string;
@@ -17,12 +23,13 @@ export type PresentationRecord = Readonly<{
   readonly artifactPath: string;
   readonly jobPath: string;
   readonly resultPath: string;
-  readonly status: "queued" | "running" | "open" | "ended" | "failed";
+  readonly status: "queued" | "running" | "blocked" | "open" | "ended" | "failed";
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly endpoint?: Endpoint;
   readonly sessionUrl?: string;
   readonly observation?: PresentationObservation;
+  readonly question?: TaskQuestion;
   readonly pendingNotification?: PendingPresentationNotification;
   readonly pendingNotificationQueue?: readonly PendingPresentationNotification[];
   readonly error?: string;
@@ -95,6 +102,37 @@ function nonNegativeInteger(value: unknown, field: string): number {
   }
   return value as number;
 }
+
+function parseQuestion(value: unknown, field: string): TaskQuestion {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${field} must be an object`);
+  }
+  const candidate = value as Record<string, unknown>;
+  for (const key of Object.keys(candidate)) {
+    if (key !== "id" && key !== "text" && key !== "recommendation") {
+      throw new TypeError(`${field} contains unknown field ${key}`);
+    }
+  }
+  const id = singleLine(candidate.id, `${field}.id`);
+  const question = singleLine(candidate.text, `${field}.text`);
+  if (question.length > MAX_TASK_MESSAGE_CHARS) {
+    throw new TypeError(`${field}.text exceeds the ${MAX_TASK_MESSAGE_CHARS}-character limit`);
+  }
+  const recommendation =
+    candidate.recommendation === undefined
+      ? undefined
+      : singleLine(candidate.recommendation, `${field}.recommendation`);
+  if (recommendation !== undefined && recommendation.length > MAX_TASK_MESSAGE_CHARS) {
+    throw new TypeError(
+      `${field}.recommendation exceeds the ${MAX_TASK_MESSAGE_CHARS}-character limit`,
+    );
+  }
+  return {
+    id,
+    text: question,
+    ...(recommendation === undefined ? {} : { recommendation }),
+  };
+}
 export function readText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
     throw new TypeError(`${field} must be non-empty text without NUL characters`);
@@ -104,13 +142,12 @@ export function readText(value: unknown, field: string): string {
 
 export function readSingleLine(value: unknown, field: string): string {
   const text = readText(value, field);
-  if (/[\r\n\u2028\u2029]/u.test(text)) throw new TypeError(`${field} must be a single-line value`);
+  if (/[\r\n\u2028\u2029]/u.test(text)) throw new TypeError(`${field} must be single-line value`);
   return text;
 }
-
 export function readAbsolutePath(value: unknown, field: string): string {
   const path = readSingleLine(value, field);
-  if (!isAbsolute(path)) throw new TypeError(`${field} must be an absolute path`);
+  if (!isAbsolute(path)) throw new TypeError(`${field} must be absolute`);
   return resolve(path);
 }
 
@@ -145,6 +182,7 @@ export function validateRecord(record: PresentationRecord): ValidatedRecordPaths
   const statuses: readonly PresentationRecord["status"][] = [
     "queued",
     "running",
+    "blocked",
     "open",
     "ended",
     "failed",
@@ -153,6 +191,7 @@ export function validateRecord(record: PresentationRecord): ValidatedRecordPaths
   readSingleLine(record.createdAt, "record.createdAt");
   readSingleLine(record.updatedAt, "record.updatedAt");
   if (record.sessionUrl !== undefined) readSingleLine(record.sessionUrl, "record.sessionUrl");
+  if (record.question !== undefined) parseQuestion(record.question, "record.question");
   const pendingNotifications = [
     ...(record.pendingNotification === undefined ? [] : [record.pendingNotification]),
     ...(record.pendingNotificationQueue ?? []),
@@ -224,6 +263,26 @@ export function presentationNotificationForTransition(
 ): Pick<PendingPresentationNotification, "message" | "kind"> | undefined {
   const previousObservation = previous.observation;
   const observation = next.observation;
+  if (next.status === "blocked") {
+    if (previous.status === "blocked" && previous.question?.id === next.question?.id)
+      return undefined;
+    const questionId = boundedNotificationText(
+      next.question?.id ?? next.id,
+      MAX_NOTIFICATION_BYTES,
+    );
+    const question = boundedNotificationText(
+      next.question?.text ?? "presentation worker needs a decision",
+      MAX_TASK_MESSAGE_CHARS,
+    );
+    const recommendation =
+      next.question?.recommendation === undefined
+        ? ""
+        : ` Recommendation: ${boundedNotificationText(next.question.recommendation, MAX_TASK_MESSAGE_CHARS)}`;
+    return {
+      message: `Presentation ${next.id} needs a decision (question ${questionId}): ${question}${recommendation}`,
+      kind: "coordinator",
+    };
+  }
   if (next.status === "failed") {
     if (previous.status === "failed" && previous.error === next.error) return undefined;
     const detail = boundedNotificationText(
@@ -430,6 +489,7 @@ export function parsePresentationRecord(value: unknown, source: string): Present
   const statuses: readonly PresentationRecord["status"][] = [
     "queued",
     "running",
+    "blocked",
     "open",
     "ended",
     "failed",
@@ -450,6 +510,8 @@ export function parsePresentationRecord(value: unknown, source: string): Present
     value.sessionUrl === undefined
       ? observation?.sessionUrl
       : singleLine(value.sessionUrl, `${source}.sessionUrl`);
+  const question =
+    value.question === undefined ? undefined : parseQuestion(value.question, `${source}.question`);
   const pendingNotification =
     value.pendingNotification === undefined
       ? undefined
@@ -476,6 +538,7 @@ export function parsePresentationRecord(value: unknown, source: string): Present
     status: status as PresentationRecord["status"],
     createdAt: singleLine(value.createdAt, `${source}.createdAt`),
     updatedAt: singleLine(value.updatedAt, `${source}.updatedAt`),
+    ...(question === undefined ? {} : { question }),
     ...(endpoint === undefined ? {} : { endpoint }),
     ...(sessionUrl === undefined ? {} : { sessionUrl }),
     ...(observation === undefined ? {} : { observation }),

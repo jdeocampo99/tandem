@@ -729,6 +729,16 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
     lines.push(
       `- ${task.id}: ${task.stage}; ${compactText(task.objective)}${notificationSuffix}${blockerSuffix}${headSuffix}${reportSuffix}`,
     );
+    const question = task.communication?.question;
+    if (question !== undefined) {
+      lines.push(
+        `  question ${compactText(question.id, 100)}: ${compactText(question.text, MAX_TASK_MESSAGE_CHARS)}`,
+      );
+      if (question.recommendation !== undefined)
+        lines.push(
+          `  recommendation: ${compactText(question.recommendation, MAX_TASK_MESSAGE_CHARS)}`,
+        );
+    }
     if (!isTerminalTask(task)) {
       lines.push(
         `  acceptance (${task.acceptanceCriteria.length}): ${compactList(task.acceptanceCriteria, 3, 110)}`,

@@ -11,6 +11,7 @@ import {
   coordinatorFiles,
   launchCoordinator,
 } from "../coordinator/launch.ts";
+import { restartCoordinator } from "../coordinator/restart.ts";
 import {
   createTandemService,
   type TandemService,
@@ -140,8 +141,7 @@ function externalError(argv: readonly string[], result: CommandResult): Error {
 function requireYes(invocation: CliInvocation, message: string): void {
   if (!invocation.options.yes) throw new CliConsentError(`${message} requires explicit --yes`);
 }
-
-const HELP_TEXT = `Tandem coordinator\n\nUsage: bun src/cli.ts [command] [options]\n\nCommands:\n  launch       Launch the OMP coordinator in the owned Herdr context\n  models       List available OMP models and saved global role choices\n  configure-models  Validate and save global role choices (requires --input FILE --yes)\n  doctor       Check model, Herdr, policy, and coordinator files without mutating\n  setup        Propose or write Tandem-owned per-repository policy (requires --yes to write)\n  onboard      Inspect Tandem-owned policy and validation surfaces\n  create       Create a scout or implementation task\n  list/status   List durable tasks\n  show         Show one durable task\n  messages     Inspect steer/answer delivery and blocker questions\n  steer        Queue a concise user direction for a task\n  answer       Answer the task's current needs-decision question\n  approve      Approve implementation scope (requires --yes)\n  tick/watch  Advance bounded scheduler work\n  pause/resume/cancel  Control owned task work\n  present/feedback/presentations  Route and inspect visual work\n  pr describe/publish/merge  Record or publish reviewed PR work\n  cleanup      Release owned resources; --discard requires --yes\n\nSafety options:\n  --yes        Explicit human automation consent for approval-bearing commands\n  --json       Emit one JSON result for automation\n  --headless   Use a named headless Herdr server\n  --no-attach  Do not launch a GUI; use headless Herdr\n`;
+const HELP_TEXT = `Tandem coordinator\n\nUsage: bun src/cli.ts [command] [options]\n\nCommands:\n  launch       Launch the OMP coordinator in the owned Herdr context\n  restart      Restart one managed worker task without changing its identity\n  models       List available OMP models and saved global role choices\n  configure-models  Validate and save global role choices (requires --input FILE --yes)\n  doctor       Check model, Herdr, policy, and coordinator files without mutating\n  setup        Propose or write Tandem-owned per-repository policy (requires --yes)\n  onboard      Inspect Tandem-owned policy and validation surfaces\n  create       Create a scout or implementation task\n  list/status   List durable tasks\n  show         Show one durable task\n  messages     Inspect steer/answer delivery and blocker questions\n  steer        Queue a concise user direction for a task\n  answer       Answer the task's current needs-decision question\n  approve      Approve implementation scope (requires --yes)\n  tick/watch  Advance bounded scheduler work\n  pause/resume/cancel  Control owned task work\n  present/feedback/presentations  Route and inspect visual work\n  pr describe/publish/merge  Record or publish reviewed PR work\n  cleanup      Release owned resources; --discard requires --yes\n\nSafety options:\n  --yes        Explicit human automation consent for approval-bearing commands\n  --json       Emit one JSON result for automation\n  --headless   Use a named headless Herdr server\n  --no-attach  Do not launch a GUI; use headless Herdr\n`;
 
 export type CliApplication = Readonly<{
   readonly invoke: (invocation: CliInvocation, signal?: AbortSignal) => Promise<CliResult>;
@@ -185,27 +185,52 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
           sleep,
           processEnvironment: dependencies.processEnvironment ?? environmentSource(),
         };
-        const launch = await launchCoordinator(
-          {
-            cwd: environment.repo,
-            repo: environment.repo,
-            home: environment.home,
-            poolRoot: environment.poolRoot,
-            sessionId: environment.sessionId,
-            model,
-            configPath: files.configPath,
-            extensionPath: files.extensionPath,
-            continueSession: invocation.options.continueSession,
-            headless: invocation.options.headless,
-            noAttach: invocation.options.noAttach,
-            ...(environment.parentWorkspaceId === undefined
-              ? {}
-              : { parentWorkspaceId: environment.parentWorkspaceId }),
-          },
-          launchDependencies,
-        );
+        const launch = invocation.options.restart
+          ? await restartCoordinator(
+              {
+                cwd: environment.repo,
+                repo: environment.repo,
+                home: environment.home,
+                poolRoot: environment.poolRoot,
+                sessionId: environment.sessionId,
+                model,
+                configPath: files.configPath,
+                extensionPath: files.extensionPath,
+                continueSession: true,
+                headless: invocation.options.headless,
+                noAttach: invocation.options.noAttach,
+                ...(environment.parentWorkspaceId === undefined
+                  ? {}
+                  : { parentWorkspaceId: environment.parentWorkspaceId }),
+              },
+              launchDependencies,
+            )
+          : await launchCoordinator(
+              {
+                cwd: environment.repo,
+                repo: environment.repo,
+                home: environment.home,
+                poolRoot: environment.poolRoot,
+                sessionId: environment.sessionId,
+                model,
+                configPath: files.configPath,
+                extensionPath: files.extensionPath,
+                continueSession: invocation.options.continueSession,
+                headless: invocation.options.headless,
+                noAttach: invocation.options.noAttach,
+                ...(environment.parentWorkspaceId === undefined
+                  ? {}
+                  : { parentWorkspaceId: environment.parentWorkspaceId }),
+              },
+              launchDependencies,
+            );
         return { command: invocation.command, value: launch };
       }
+      case "restart":
+        return {
+          command: invocation.command,
+          value: await getService(environment).restart(taskIdFor(invocation)),
+        };
       case "models":
         return {
           command: invocation.command,

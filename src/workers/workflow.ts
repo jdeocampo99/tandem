@@ -44,6 +44,11 @@ import type {
   RuntimeTaskState,
 } from "../runtime/schema.ts";
 import {
+  type JevShadowInput,
+  type JevShadowResult,
+  jevRecommendationNotification,
+} from "../service/jev.ts";
+import {
   appendTaskJob,
   buildPrompt,
   currentWriter,
@@ -148,6 +153,7 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
   readonly maintainPoolForAllocation: (task: TaskRecord) => Promise<boolean>;
+  readonly evaluateShadow?: (input: JevShadowInput) => Promise<JevShadowResult>;
 }>;
 
 export class WorkerWorkflow {
@@ -384,6 +390,8 @@ export class WorkerWorkflow {
                 ? []
                 : [`Recommendation: ${question.recommendation}`]),
             ].join(" ");
+      const reportPath = reportPathFor(job.jobPath);
+      await writeTextAtomically(reportPath, result.text);
       await this.consumeJob(
         task.id,
         job.id,
@@ -391,6 +399,7 @@ export class WorkerWorkflow {
         {
           ...(question === undefined ? {} : { question }),
           ...instructionOptions(result.instructionRevision),
+          reportPath,
         },
       );
       return;
@@ -635,7 +644,11 @@ export class WorkerWorkflow {
     taskId: string,
     jobId: string,
     event: TaskEvent,
-    options: Readonly<{ question?: TaskQuestion; instructionRevision?: number }> = {},
+    options: Readonly<{
+      question?: TaskQuestion;
+      instructionRevision?: number;
+      reportPath?: string;
+    }> = {},
   ): Promise<TaskRecord> {
     return this.#deps.store.exclusive(async (store) => {
       const state = await readRuntimeState(this.#deps.runtimePath);
@@ -689,6 +702,20 @@ export class WorkerWorkflow {
         return task;
       }
       if (job.phase === "consumed") return task;
+      const applyReportPath = (candidate: TaskRecord): TaskRecord => {
+        if (options.reportPath === undefined || candidate.reportPath === options.reportPath) {
+          return candidate;
+        }
+        if (candidate.revision !== task.revision) {
+          return { ...candidate, reportPath: options.reportPath };
+        }
+        return {
+          ...candidate,
+          revision: candidate.revision + 1,
+          updatedAt: this.#deps.clock(),
+          reportPath: options.reportPath,
+        };
+      };
       const inputKey = inputEventKey(job.id, event);
       const existing = job.consumption;
       let nextTask = task;
@@ -722,10 +749,11 @@ export class WorkerWorkflow {
             };
             nextTask = transitionTask(task, effectiveEvent, context);
           }
-          nextTask =
+          nextTask = applyReportPath(
             options.question === undefined
               ? nextTask
-              : taskWithQuestion(nextTask, options.question);
+              : taskWithQuestion(nextTask, options.question),
+          );
           if (
             inputEventKey(job.id, effectiveEvent) !== existing.appliedEventKey ||
             nextTask.revision !== existing.afterRevision ||
@@ -748,10 +776,11 @@ export class WorkerWorkflow {
           throw new Error(`durable result ${job.id} has an unexpected task revision or state`);
         }
       } else if (recognizesAppliedEvent(task, event)) {
-        nextTask =
+        nextTask = applyReportPath(
           options.question === undefined
             ? task
-            : taskWithQuestionCommit(task, options.question, this.#deps.clock());
+            : taskWithQuestionCommit(task, options.question, this.#deps.clock()),
+        );
         consumption = {
           schemaVersion: 1,
           inputEventKey: inputKey,
@@ -791,6 +820,7 @@ export class WorkerWorkflow {
               ? taskWithQuestionCommit(nextTask, options.question, context.now)
               : taskWithQuestion(nextTask, options.question);
         }
+        nextTask = applyReportPath(nextTask);
         consumption = {
           schemaVersion: 1,
           inputEventKey: inputKey,
@@ -1386,6 +1416,7 @@ export class WorkerWorkflow {
         },
       );
       await this.appendJob(task.id, durableJob);
+      await this.recordShadowRecommendation(task, durableJob);
       await this.launchJob(
         task.id,
         durableJob.id,
@@ -1404,6 +1435,45 @@ export class WorkerWorkflow {
       );
     }
   }
+  async recordShadowRecommendation(task: TaskRecord, job: DurableJob): Promise<void> {
+    const evaluator = this.#deps.evaluateShadow;
+    if (evaluator === undefined) return;
+    let result: JevShadowResult;
+    try {
+      result = await evaluator({
+        task,
+        job,
+      });
+    } catch {
+      result = {
+        status: "unavailable",
+        message: "Jev shadow evaluator failed; normal dispatch continues",
+      };
+    }
+    if (result.status === "skipped" && result.artifactPath === undefined) return;
+    const message = jevRecommendationNotification(result);
+    try {
+      await this.#deps.updateTask(task.id, (current) => {
+        if (current.notifications.some((entry) => entry.message === message)) return current;
+        return {
+          ...current,
+          revision: current.revision + 1,
+          updatedAt: this.#deps.clock(),
+          notifications: [
+            ...current.notifications,
+            {
+              id: singleLine(this.#deps.idFactory(), "Jev shadow notification id"),
+              message,
+              acknowledged: false,
+              kind: "routine",
+            },
+          ],
+        };
+      });
+    } catch {
+      // Shadow metadata must never block or alter the normal worker launch.
+    }
+  }
 
   async launchAgent(
     task: TaskRecord,
@@ -1415,15 +1485,26 @@ export class WorkerWorkflow {
     const directory = jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId);
     const paths = jobPaths(directory);
     const reportPath = reportPathFor(paths.jobPath);
-    const fixArtifacts = runtime.fixContextPath === undefined ? [] : [runtime.fixContextPath];
-    const extra =
-      role === "implementer" && runtime.fixContextPath !== undefined
+    const priorReportPath = task.reportPath;
+    const fixArtifacts = [
+      ...(runtime.fixContextPath === undefined ? [] : [runtime.fixContextPath]),
+      ...(priorReportPath === undefined ? [] : [priorReportPath]),
+    ];
+    const extra = [
+      ...(priorReportPath === undefined
+        ? []
+        : [
+            `A prior worker question/report is recorded at ${priorReportPath}. Read it before continuing and preserve its evidence context.`,
+          ]),
+      ...(role === "implementer" && runtime.fixContextPath !== undefined
         ? [
             `This is a bounded fix round. Read findings and validation evidence from ${runtime.fixContextPath}.`,
             "Preserve the original task scope and repair only evidence-backed findings.",
           ]
-        : [];
-    const sessionDirectory = role === "implementer" ? runtime.sessionDirectory : undefined;
+        : []),
+    ];
+    const sessionDirectory =
+      role === "implementer" || role === "scout" ? runtime.sessionDirectory : undefined;
     if (sessionDirectory !== undefined)
       await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
     const instructionRevision = task.communication?.revision ?? 0;
@@ -1490,6 +1571,7 @@ export class WorkerWorkflow {
       if (currentRuntime?.jobs.some(activeRuntimeJob)) return;
       throw error;
     }
+    await this.recordShadowRecommendation(task, durableJob);
     await this.launchJob(
       task.id,
       durableJob.id,

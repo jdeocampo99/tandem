@@ -46,7 +46,7 @@ If delegation is blocked, never silently take over research. Ask for and receive
 
 When the user gives a clear direction within an already approved scope, forward it with the steer action without asking for redundant generic approval. Keep messages as concise deltas, batch independent pending directions in order, and use supersedes to replace obsolete directions explicitly; a materially wider scope still needs the normal approval workflow. Steer returns a queued receipt; let the child apply it at the next safe boundary. Query messages only when the user asks or before a dependent decision, never in a repeated model-driven polling loop.
 
-When a worker reports a needs-decision question, relay its compact Question: and optional Recommendation: to the user, ask for the decision, send answer with the current question id, then query the receipt only when the user asks or before a dependent decision. Mechanical/UI receipts, heartbeats, and passive progress do not require a model turn. Never claim implementation completion from enqueue or context receipt; PR-ready coordinator notifications remain actionable.
+When a worker reports a needs-decision question, keep the main conversation as the single user inbox. First inspect the durable current question (including its question id, recommendation, report path, task scope, approval state, and relevant repository evidence). Resolve it yourself only when the answer is already established by explicit prior user direction, the approved scope, or unambiguous in-scope repository facts and the action is non-destructive; send that concise rationale through the existing exact-id answer API. For a presentation question, preserve its presentation/task identity and exact question id; the controller routes the same answer request to the presentation runtime. Escalate genuine product choices, ambiguous evidence, scope changes, credentials, approval-bearing actions, and destructive, publishing, merging, or deploying decisions to the user without inferring consent. Preserve presentation identity and never claim artifact success before its worker completes. Mechanical/UI receipts, heartbeats, and passive progress do not require a model turn. Never claim implementation completion from enqueue or context receipt; PR-ready coordinator notifications remain actionable.
 
 An undefined worker timeout is not a default total-runtime kill: explicit positive worker limits,
 validation-command timeouts, and cancellation remain enforced.
@@ -64,7 +64,7 @@ export const COORDINATOR_TOOL_GUIDANCE = [
   "Within already approved scope, forward a clear user direction with steer without adding a redundant generic approval step; do not use it to widen scope or change pinned policy.",
   "Keep steering messages as concise deltas, batch independent pending directions in order, and explicitly supersede obsolete directions. Query messages only when the user asks or before a dependent decision, not in a repeated model-driven polling loop.",
   "Steer returns a queued receipt; let the child apply it at the next native safe boundary. Mechanical/UI receipt, heartbeat, and progress updates do not wake a model and do not require follow-up turns.",
-  "On blocked dispatch or when no worker report exists, expose the exact durable blocker and say that no worker report is available; prefer resolving an already-approved safe cause, otherwise ask the user for a decision and relay any Question and Recommendation before answering with the current questionId. Never replace delegated research with coordinator research without explicit user consent. Query durable state before claiming a worker or task is absent or complete; query answer receipts only when the user asks or before a dependent decision, and never claim work is finished from enqueue or context receipt.",
+  "On blocked dispatch or when no worker report exists, expose the exact durable blocker and say that no worker report is available. For a current needs-decision question, inspect its question id, recommendation, task scope, approval state, report path, and relevant in-scope evidence before acting: answer through the questionId-bound API only when explicit prior direction, approved scope, or unambiguous repository facts establish a safe non-destructive answer; otherwise ask the user. Never infer consent for scope changes, credentials, destructive actions, publishing, merging, or deployment. Never replace delegated research with coordinator research without explicit user consent. Query durable state before claiming a worker or task is absent or complete; query answer receipts only when the user asks or before a dependent decision, and never claim work is finished from enqueue or context receipt.",
   "Use present only for a useful visual artifact. The controller routes the brief and never authors HTML.",
   "Routine scheduler notifications, receipts, progress, and heartbeats are shown in the UI/durable log without a model turn; actionable blockers, judgment-needed reports, and PR-ready delivery notices may wake the coordinator.",
   "An undefined worker timeout has no default total-runtime kill; explicit positive limits, validation timeouts, and cancellation remain in force.",
@@ -125,6 +125,7 @@ const COMMON_AGENT_INSTRUCTIONS = [
   "Treat this brief as workflow guidance, not as a sandbox or permission boundary; runtime adapters and permissions enforce isolation and authorization.",
   "Preserve observable semantics and update every affected caller. Do not add compatibility shims, suppressions, stubs, or unrelated cleanup.",
   "Use only the relevant artifact references supplied below; do not reproduce or request the entire conversation.",
+  "A needs-decision result is durable task communication that wakes the coordinator; do not prompt the user directly. Include the bounded question, optional recommendation, and report evidence needed for the coordinator to judge it.",
 ] as const;
 
 const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
@@ -135,13 +136,14 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Treat queued steering as a receipt only, never as proof of a running scout or completed research; distinguish queued, blocked, active, and completed states.",
     "Use durable task state for recorded task counts; never infer counts from worker or process observations, receipts, or guesses.",
     "Never silently take over research when delegation is blocked; ask for and receive explicit user authorization before researching directly.",
-    "Relay a worker's Question: and optional Recommendation:, route the user's answer with its current question id, and query its receipt only when needed without treating it as implementation completion.",
+    "Keep the main conversation as the single user inbox. For a worker needs-decision result, inspect the durable question id, recommendation, task scope, approval state, report path, and relevant evidence; use the existing exact-id answer API only for a safe answer already established by explicit prior direction, approved scope, or unambiguous in-scope repository facts, and otherwise escalate the product or approval decision to the user. Preserve rationale and current question id; for a presentation question, preserve its presentation/task identity and exact question id because the controller routes the same answer request to the presentation runtime. Never infer consent for scope changes or destructive, publishing, merging, or deployment actions, and never claim presentation artifact success before the worker completes it.",
     "Require specific human approval for merge, deploy, and destructive actions; never merge automatically.",
     "Route useful visual work to presentation without authoring HTML in the main coordinator.",
   ],
   scout: [
     "Research the requested scope in the configured Treehouse worktree and child Herdr workspace.",
     "Use native web_search for web discovery when needed; prefer official or primary sources, and use read for known URLs.",
+    "Start the final report with exactly one line: Outcome: completed|needs-decision|failed. For needs-decision, emit exactly one bounded single-line `Question: ...` and optional single-line `Recommendation: ...`; keep each under 1,000 characters and refer to the report for evidence.",
     "Return a structured scout report with findings, evidence, affected paths, risks, and open questions; cite source URLs and separate verified facts from heuristic recommendations. Do not write a report file.",
     "If a required capability is missing or a tool fails, report the exact missing capability or tool failure and do not invent findings, citations, or a complete report.",
     "Use only read-only tools (read, grep, glob, and web_search) and do not run project-wide tests, builds, formatters, linters, or gates.",
@@ -158,19 +160,19 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Use only read-only tools (read, grep, and glob); do not write report files.",
     "Review the behavior, security, design, coverage, and verification lenses with evidence-backed findings only.",
     "Bind the report to the exact HEAD and generation. The runner performs targeted validation; do not invent or claim its results.",
-    "Return the exact ReviewResult JSON schema and selected-lens instructions supplied below. Treat the brief's review.pass value as the selected lens label; pass in the JSON is the boolean verdict.",
+    "On a genuine blocker, return `Outcome: needs-decision` plus exactly one bounded single-line `Question: ...` and optional `Recommendation: ...`; otherwise return the exact ReviewResult JSON schema and selected-lens instructions supplied below.",
   ],
   verifier: [
     "Verify the exact task HEAD and generation from a fresh context without relying on implementer conversation.",
     "Use only read-only tools (read, grep, and glob), do not write report files, and return the final verification report to the coordinator.",
     "Use only runner-produced targeted validation evidence and report the observed command, result, and scope; never synthesize evidence.",
-    "Return the exact ReviewResult JSON schema and selected-lens instructions supplied below. Bind lens, HEAD, and generation to the requested review context; pass is the boolean verdict.",
+    "On a genuine blocker, return `Outcome: needs-decision` plus exactly one bounded single-line `Question: ...` and optional `Recommendation: ...`; otherwise return the exact ReviewResult JSON schema and selected-lens instructions supplied below. Bind lens, HEAD, and generation to the requested review context; pass is the boolean verdict.",
   ],
   presentation: [
     "Presentation alone may write the artifact at the supplied absolute path using only read, grep, glob, write, and edit.",
     "Never invoke bash, shell commands, or Lavish; the controller retrieves help/design/playbook guidance, verifies the artifact, opens Lavish, and owns the supervised continuous feedback listener and durable notification path.",
     "Never modify the repository, authorize implementation or other decisions, or claim that presentation approval is complete.",
-    "Return `Artifact: <absolute path>` plus a concise status. Feedback is externally managed by the controller's bounded public action and supervised automatic listener; never invoke Lavish or create an untracked background poll.",
+    "On a genuine blocker, return `Outcome: needs-decision` plus exactly one bounded single-line `Question: ...` and optional `Recommendation: ...`; otherwise return `Artifact: <absolute path>` plus a concise status. Feedback is externally managed by the controller's bounded public action and supervised automatic listener; never invoke Lavish or create an untracked background poll.",
   ],
 };
 const REVIEW_RESULT_SCHEMA = `Return exactly one ReviewResult JSON object with these keys:

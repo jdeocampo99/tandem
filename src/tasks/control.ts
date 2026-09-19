@@ -383,8 +383,8 @@ export class TaskControlWorkflow {
       const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
       let stopFailure: string | undefined;
       for (const endpoint of runtime.endpoints) {
+        const job = workerJobForEndpoint(runtime.jobs, endpoint);
         try {
-          const job = workerJobForEndpoint(runtime.jobs, endpoint);
           await pauseWorkerTerminal(this.#deps.run, {
             endpoint,
             cwd,
@@ -493,6 +493,56 @@ export class TaskControlWorkflow {
           currentWriter(runtime) !== undefined));
     if (shouldContinue) await this.#deps.reconcileTask(current);
     return this.#deps.getTask(taskId);
+  }
+  /**
+   * Restart managed worker execution without changing task identity or
+   * generation. Stop/resume reuses the durable job/session context and the
+   * normal scheduler bridge; terminal tasks are never resurrected.
+   */
+  async restartTask(taskId: string): Promise<TaskRecord> {
+    const task = await this.#deps.getTask(taskId);
+    if (["cancelled", "completed", "merged"].includes(task.stage)) {
+      throw new Error(`Task ${taskId} cannot be restarted while it is ${task.stage}`);
+    }
+    if (
+      (task.stage === "paused" || task.stage === "blocked") &&
+      task.communication?.question !== undefined
+    ) {
+      throw new Error(
+        `Task ${taskId} has an unanswered question ${JSON.stringify(task.communication.question.id)}; answer it before restarting managed work`,
+      );
+    }
+    if (task.stage === "paused" || task.stage === "blocked") {
+      const resumed = await this.resumeTask(taskId);
+      const current = await this.#deps.getTask(taskId);
+      if (["validating", "reviewing", "awaiting-fixes"].includes(current.stage)) {
+        await this.#deps.reconcileTask(current);
+        return this.#deps.getTask(taskId);
+      }
+      return resumed;
+    }
+    if (task.stage === "queued") {
+      await this.#deps.reconcileTask(task);
+      return this.#deps.getTask(taskId);
+    }
+    if (
+      !["scouting", "implementing", "validating", "reviewing", "awaiting-fixes"].includes(
+        task.stage,
+      )
+    ) {
+      throw new Error(`Task ${taskId} has no restartable managed worker at stage ${task.stage}`);
+    }
+    const paused = await this.controlTask(taskId, "pause", "managed worker restart");
+    if (paused.stage !== "paused") {
+      throw new Error(`Task ${taskId} could not be safely paused for managed restart`);
+    }
+    const resumed = await this.resumeTask(taskId);
+    const current = await this.#deps.getTask(taskId);
+    if (["validating", "reviewing", "awaiting-fixes"].includes(current.stage)) {
+      await this.#deps.reconcileTask(current);
+      return this.#deps.getTask(taskId);
+    }
+    return resumed;
   }
 
   private async probeOwnedEndpoint(

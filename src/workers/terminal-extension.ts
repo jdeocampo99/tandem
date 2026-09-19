@@ -231,17 +231,29 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       const failure = readNativeEventFailure(event);
       if (failure !== undefined) throw new WorkerOutputError(failure);
       const parsed = parseNativeAgentEnd(event, expectedModelParts(job.model.model), ctx.model);
+      const outcome = reportedOutcome(job.role, parsed.text);
+      const question = reportedQuestion(job.role, outcome.status, parsed.text);
       if (job.role === "reviewer" || job.role === "verifier") {
-        const review = parseReviewWorkerText(job, parsed.text);
-        const revision = await instructionRevision(job, true);
-        result = resultFor(job, "completed", parsed.text, {
-          review,
-          ...(revision === undefined ? {} : { instructionRevision: revision }),
-        });
+        if (outcome.status === "needs-decision" || outcome.error !== undefined) {
+          const error = outcome.error ?? question.error;
+          const status = error === undefined ? "needs-decision" : "failed";
+          const revision = await instructionRevision(job, status !== "failed");
+          result = resultFor(job, status, parsed.text, {
+            ...(question.question === undefined ? {} : { question: question.question }),
+            ...(error === undefined ? {} : { error }),
+            ...(revision === undefined ? {} : { instructionRevision: revision }),
+          });
+        } else {
+          const review = parseReviewWorkerText(job, parsed.text);
+          const revision = await instructionRevision(job, true);
+          result = resultFor(job, "completed", parsed.text, {
+            review,
+            ...(revision === undefined ? {} : { instructionRevision: revision }),
+          });
+        }
       } else {
-        const outcome = reportedOutcome(job.role, parsed.text);
-        const question = reportedQuestion(job.role, outcome.status, parsed.text);
-        const artifact = artifactPathFromText(job.role, parsed.text);
+        const artifact =
+          outcome.status === "completed" ? artifactPathFromText(job.role, parsed.text) : {};
         const error = outcome.error ?? question.error ?? artifact.error;
         const status = error === undefined ? outcome.status : "failed";
         const extras =

@@ -331,6 +331,21 @@ test("parseCliArgs keeps PR commands explicit and records consent separately", (
   expect(invocation.options.yes).toBe(true);
   expect(invocation.options.json).toBe(true);
 });
+test("restart CLI preserves the explicit managed-worker command contract", () => {
+  const invocation = parseCliArgs([
+    "restart",
+    "task-1",
+    "--repo",
+    "/repo",
+    "--home",
+    "/home",
+    "--json",
+  ]);
+  expect(invocation.command).toBe("restart");
+  expect(invocation.positionals).toEqual(["task-1"]);
+  expect(invocation.options.repo).toBe("/repo");
+  expect(invocation.options.json).toBe(true);
+});
 
 test("communication CLI syntax keeps repeatable supersedes and exact answer fields", () => {
   const steer = parseCliArgs([
@@ -1130,6 +1145,7 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     tick: unused,
     pause: unused,
     resume: unused,
+    restart: unused,
     cancel: unused,
     steer: unused,
     answer: unused,

@@ -230,6 +230,82 @@ test("rejects malformed review text at the native event boundary", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+test("all interactive worker roles persist the shared needs-decision report without changing review JSON success", async () => {
+  const previous = process.env.TANDEM_WORKER_JOB_PATH;
+  const cases: readonly {
+    readonly role: WorkerJob["role"];
+    readonly text: string;
+  }[] = [
+    {
+      role: "scout",
+      text: "Outcome: needs-decision\nQuestion: Which source should be authoritative?\nRecommendation: Prefer the repository policy.",
+    },
+    {
+      role: "implementer",
+      text: "Outcome: needs-decision\nQuestion: Should the existing API remain unchanged?",
+    },
+    {
+      role: "reviewer",
+      text: "Outcome: needs-decision\nQuestion: The selected review lens needs a decision.",
+    },
+    {
+      role: "verifier",
+      text: "Outcome: needs-decision\nQuestion: Validation evidence is ambiguous; which command is authoritative?",
+    },
+    {
+      role: "presentation",
+      text: "Outcome: needs-decision\nQuestion: Which visual direction should the artifact follow?",
+    },
+  ];
+  try {
+    for (const value of cases) {
+      const root = await mkdtemp(join(tmpdir(), "tandem-worker-question-"));
+      try {
+        const job = makeJob(root, value.role);
+        const { fixture: f } = await startExtension(root, job);
+        const end = f.handlers.get("agent_end");
+        if (end === undefined) throw new Error("missing agent_end handler");
+        await end(agentEnd(value.text), f.context);
+        const result = await readWorkerResult(job.resultPath, job);
+        expect(result.status).toBe("needs-decision");
+        expect(result.text).toBe(value.text);
+        expect(result.question?.text).toBe(value.text.match(/^Question:\s*(.+)$/m)?.[1]);
+        if (value.role === "scout") {
+          expect(result.question?.recommendation).toBe("Prefer the repository policy.");
+        }
+        expect(result.review).toBeUndefined();
+        expect(result.artifactPath).toBeUndefined();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+
+    const root = await mkdtemp(join(tmpdir(), "tandem-review-json-"));
+    try {
+      const job = makeJob(root, "reviewer");
+      const { fixture: f } = await startExtension(root, job);
+      const end = f.handlers.get("agent_end");
+      if (end === undefined) throw new Error("missing agent_end handler");
+      const review = JSON.stringify({
+        lens: "behavior",
+        head: "abc123",
+        generation: 3,
+        pass: true,
+        findings: [],
+        summary: "No behavior findings.",
+      });
+      await end(agentEnd(review), f.context);
+      const result = await readWorkerResult(job.resultPath, job);
+      expect(result.status).toBe("completed");
+      expect(result.review?.lens).toBe("behavior");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  } finally {
+    if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
+    else process.env.TANDEM_WORKER_JOB_PATH = previous;
+  }
+});
 
 test("rejects native model substitutions and missing role completion markers", async () => {
   const previous = process.env.TANDEM_WORKER_JOB_PATH;
@@ -369,16 +445,22 @@ test("atomically writes private results and rejects stale identities", async () 
   }
 });
 
-test("rejects session directories for fresh non-implementer jobs", () => {
+test("allows role-scoped session directories for scout and implementer jobs only", () => {
   const root = process.cwd();
-  for (const role of ["scout", "reviewer", "verifier", "presentation"] as const) {
+  for (const role of ["reviewer", "verifier", "presentation"] as const) {
     expect(() =>
       parseWorkerJob({
         ...makeJob(root, role),
-        sessionDirectory: join(root, "implementer-session"),
+        sessionDirectory: join(root, "worker-session"),
       }),
     ).toThrow(TypeError);
   }
+  expect(() =>
+    parseWorkerJob({
+      ...makeJob(root, "scout"),
+      sessionDirectory: join(root, "scout-session"),
+    }),
+  ).not.toThrow();
   expect(() =>
     parseWorkerJob({
       ...makeJob(root, "implementer"),

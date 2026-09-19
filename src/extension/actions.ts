@@ -15,6 +15,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   Record<string, Readonly<{ readonly min: number; readonly max: number }>>
 > = {
   list: { min: 1, max: 1 },
+  restart: { min: 2, max: 2 },
   status: { min: 1, max: 1 },
   presentations: { min: 1, max: 1 },
   onboard: { min: 2, max: 2 },
@@ -41,9 +42,10 @@ const TANDEM_COMMAND_ARITY: Readonly<
 };
 
 export type TandemAction =
-  | Readonly<{ readonly action: "onboard"; readonly repoPath: string }>
+  | Readonly<{ readonly action: "restart"; readonly taskId: string }>
   | Readonly<{ readonly action: "setup"; readonly repoPath: string }>
   | Readonly<{ readonly action: "models"; readonly repoPath: string }>
+  | Readonly<{ readonly action: "onboard"; readonly repoPath: string }>
   | Readonly<{
       readonly action: "configure-models";
       readonly repoPath: string;
@@ -274,7 +276,6 @@ function serviceCreateInput(
   };
 }
 
-/** Execute one validated extension action against the exact service contract. */
 export async function executeTandemAction(
   action: TandemAction,
   service: TandemService,
@@ -290,6 +291,8 @@ export async function executeTandemAction(
     );
 
   switch (action.action) {
+    case "restart":
+      return textResult(await service.restart(action.taskId), action.action);
     case "onboard":
       return textResult(await service.onboard(action.repoPath, false), action.action);
     case "setup":
@@ -467,6 +470,8 @@ export function parseTandemCommand(input: string): TandemAction {
   ensureCommandArity(command, words);
   const value = (index: number, field: string): string => requireCommandValue(words, index, field);
   switch (command) {
+    case "restart":
+      return { action: "restart", taskId: value(1, "restart") };
     case "list":
     case "status":
       return { action: "list" };

@@ -99,7 +99,7 @@ function readBoundedSingleLineText(value: unknown, field: string): string {
   return text;
 }
 
-function readWorkerQuestion(value: unknown): WorkerQuestion {
+export function parseWorkerQuestion(value: unknown): WorkerQuestion {
   if (!isRecord(value)) throw new TypeError("question must be an object");
   const keys = Object.keys(value);
   for (const key of keys) {
@@ -117,6 +117,8 @@ function readWorkerQuestion(value: unknown): WorkerQuestion {
     ...(recommendation === undefined ? {} : { recommendation }),
   };
 }
+
+const readWorkerQuestion = parseWorkerQuestion;
 
 function readAbsolutePath(value: unknown, field: string): string {
   const path = readSingleLineText(value, field);
@@ -297,8 +299,8 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     value.sessionDirectory === undefined
       ? undefined
       : readAbsolutePath(value.sessionDirectory, "sessionDirectory");
-  if (sessionDirectory !== undefined && role !== "implementer") {
-    throw new TypeError("sessionDirectory is only permitted for implementer jobs");
+  if (sessionDirectory !== undefined && role !== "implementer" && role !== "scout") {
+    throw new TypeError("sessionDirectory is only permitted for implementer or scout jobs");
   }
   const review = value.review === undefined ? undefined : readReviewContext(value.review);
   const communication =
@@ -360,7 +362,7 @@ export function parseWorkerResult(value: unknown): WorkerResult {
   const finishedAt = readSingleLineText(value.finishedAt, "finishedAt");
 
   const requiresReview = role === "reviewer" || role === "verifier";
-  if (review === undefined && requiresReview && status !== "failed") {
+  if (review === undefined && requiresReview && status === "completed") {
     throw new TypeError("completed review worker result must include review");
   }
   if (review !== undefined && !requiresReview) {
@@ -368,6 +370,9 @@ export function parseWorkerResult(value: unknown): WorkerResult {
   }
   if (question !== undefined && status !== "needs-decision") {
     throw new TypeError("question is only valid for needs-decision results");
+  }
+  if (status === "needs-decision" && question === undefined) {
+    throw new TypeError("needs-decision results must include a question");
   }
 
   return {

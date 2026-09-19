@@ -85,6 +85,7 @@ export function registerTandemOmp(
   ) as Record<AgentRole, typeof modelSpecSchema>;
   const modelAssignmentsSchema = z.object(modelAssignmentsShape).strict();
   const actionSchema = z.union([
+    z.object({ action: z.literal("restart"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("onboard"), repoPath: z.string() }).strict(),
     z.object({ action: z.literal("setup"), repoPath: z.string() }).strict(),
     z.object({ action: z.literal("models"), repoPath: z.string() }).strict(),
@@ -223,10 +224,9 @@ export function registerTandemOmp(
       }
     },
   });
-
   pi.registerCommand("tandem", {
     description:
-      "Inspect or control Tandem: list, presentations, show, messages, models, onboard, setup, create, approve, steer, answer, tick, pause, resume, cancel, present, feedback, describe, publish, merge, cleanup.",
+      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, steer, answer, tick, pause, resume, cancel, present, feedback, describe, publish, merge, cleanup.",
     handler: async (args, ctx) => {
       try {
         const parsedAction = parseTandemCommand(args);
@@ -235,8 +235,8 @@ export function registerTandemOmp(
             ? { ...parsedAction, repoPath: ctx.cwd }
             : parsedAction;
         const result = await executeTandemAction(action, dependencies.getService(ctx), ctx);
-        await dependencies.postAction(ctx);
         ctx.ui.notify(renderActionResult(result), "info");
+        await dependencies.postAction(ctx);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         ctx.ui.notify(`Tandem command failed: ${message}`, "error");
