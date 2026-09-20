@@ -241,7 +241,9 @@ test("fix-round exhaustion names the remaining blockers and the available decisi
   });
   const reason = describeFixRoundExhaustion(taskWith(ledger));
 
-  expect(reason).toContain("fix round budget exhausted at 2 of 2");
+  expect(reason).toContain("Bounded review loop exhausted");
+  expect(reason).toContain("fix round budget spent at 2 of 2");
+  expect(reason).toContain("the task is not ready and not accepted");
   expect(reason).toContain("1 evidence-backed blocker(s) remain");
   expect(reason).toContain("behavior/f-1");
   expect(reason).not.toContain("behavior/f-2");

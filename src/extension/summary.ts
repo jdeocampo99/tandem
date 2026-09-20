@@ -260,6 +260,11 @@ function summarizeTask(task: TaskRecord): string {
     lines.push(
       `Pull request: ${task.pullRequest.repository}#${task.pullRequest.number} ${task.pullRequest.state}; head ${task.pullRequest.head}; base ${task.pullRequest.base}`,
     );
+    if (task.pullRequest.state === "draft") {
+      lines.push(
+        "Draft visibility only: the draft is unfinished and is not evidence of readiness, mergeability, deployment, or acceptance.",
+      );
+    }
   }
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
@@ -790,6 +795,7 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     action === "cancel" ||
     action === "cleanup" ||
     action === "publish" ||
+    action === "draft" ||
     action === "merge"
   ) {
     return isTaskRecord(value) ? summarizeTask(value) : boundedJson(value, ACTION_RESULT_MAX_CHARS);

@@ -32,6 +32,23 @@ export type PrDescriptionInput = Readonly<{
   readonly validation: readonly string[];
 }>;
 
+export type DraftPrDescriptionInput = Readonly<{
+  readonly status: readonly string[];
+  readonly reviewLevel: readonly string[];
+  readonly activity: readonly string[];
+  readonly blockers: readonly string[];
+  readonly remainingChecks: readonly string[];
+}>;
+
+export const DRAFT_PR_BANNER =
+  "Unfinished: this draft shows work in progress so reviewers can watch it. It is visibility only, and it is not a claim that the work is ready, mergeable, deployable, or accepted.";
+
+export const DRAFT_PR_FINAL_ACCEPTANCE: readonly string[] = [
+  "Final acceptance stays pinned to the delivered code: successful pinned validation evidence bound to the current HEAD, one passing fresh independent read-only review per required lens at that same HEAD, and runner-owned required checks.",
+  "Unknown, stale, or failed evidence does not pass, and a targeted fix-time check never substitutes for the final gate.",
+  "Publishing this draft as a finished pull request, merging, and deploying each remain separate explicit approvals. Tandem never merges or deploys automatically.",
+];
+
 const MAX_ORDINARY_BRIEF_BYTES = 64 * 1024;
 
 export const COORDINATOR_INSTRUCTIONS = `You are Tandem's main conversational coordinator and authority.
@@ -406,5 +423,39 @@ export function renderPrDescription(input: PrDescriptionInput): string {
   lines.push(...formatBullets(what), "", "# Why");
   lines.push(...formatBullets(why), "", "# Validation");
   lines.push(...formatBullets(validation));
+  return lines.join("\n");
+}
+
+/** Render the body of an unfinished draft; it reports progress and never asserts acceptance. */
+export function renderDraftPrDescription(input: DraftPrDescriptionInput): string {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("draft PR description input must be an object");
+  }
+
+  const status = readDescriptionEntries(input.status, "status", 1);
+  const reviewLevel = readDescriptionEntries(input.reviewLevel, "reviewLevel", 1);
+  const activity = readDescriptionEntries(input.activity, "activity", 1);
+  const blockers = readDescriptionEntries(input.blockers, "blockers", 0);
+  const remainingChecks = readDescriptionEntries(input.remainingChecks, "remainingChecks", 0);
+
+  const lines: string[] = [DRAFT_PR_BANNER, "", "# Status"];
+  lines.push(...formatBullets(status), "", "# Review level");
+  lines.push(...formatBullets(reviewLevel), "", "# Current activity");
+  lines.push(...formatBullets(activity), "", "# Blockers");
+  lines.push(
+    ...(blockers.length === 0
+      ? ["- None recorded in durable task state."]
+      : formatBullets(blockers)),
+    "",
+    "# Remaining checks",
+  );
+  lines.push(
+    ...(remainingChecks.length === 0
+      ? ["- No pinned check is outstanding; the final gate below still applies."]
+      : formatBullets(remainingChecks)),
+    "",
+    "# Final acceptance",
+  );
+  lines.push(...formatBullets(DRAFT_PR_FINAL_ACCEPTANCE));
   return lines.join("\n");
 }

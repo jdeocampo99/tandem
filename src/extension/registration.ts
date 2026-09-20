@@ -208,6 +208,15 @@ export function registerTandemOmp(
       .strict(),
     z
       .object({
+        action: z.literal("draft"),
+        taskId: z.string(),
+        repository: z.string(),
+        title: z.string(),
+        base: z.string(),
+      })
+      .strict(),
+    z
+      .object({
         action: z.literal("merge"),
         taskId: z.string(),
         method: z.enum(["merge", "squash", "rebase"]),
@@ -254,7 +263,7 @@ export function registerTandemOmp(
   });
   pi.registerCommand("tandem", {
     description:
-      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, steer, answer, tick, pause, resume, cancel, present, feedback, describe, publish, merge, cleanup.",
+      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, steer, answer, tick, pause, resume, cancel, present, feedback, describe, draft, publish, merge, cleanup.",
     handler: async (args, ctx) => {
       try {
         const parsedAction = parseTandemCommand(args);
