@@ -112,6 +112,11 @@ extra pane is left open, and `tandem`/`--reset` print a notice naming it. Custom
 preserved untouched, and a pane that cannot prove it has exactly stopped is quarantined (left alone,
 also with a printed notice) rather than closed. A normal relaunch without reset retires a previous
 stopped coordinator's pane the same way. Labels alone never authorize closing a workspace or pane.
+Replacing a coordinator also reuses or releases its exact previous worktree lease, so repeated
+launches and restarts do not accumulate coordinator worktrees. A previous checkout with uncommitted
+or unmerged work is kept and reported, never released. If a launch fails after acquiring a new
+lease, it rolls that lease and its new pane back; whatever it cannot prove safe to undo is recorded
+under `<home>/coordinator-quarantine/` and named in the error instead of being guessed at.
 Busy, unknown, foreign, or otherwise unsafe work refuses before any pane is closed; if a coordinator
 changes state or fails to close after earlier ones in the same run already closed, reset stops and
 reports exactly which coordinators it already closed. Reset retains

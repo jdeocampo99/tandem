@@ -7,6 +7,7 @@ import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
   canonicalizeRecord,
+  canonicalPath,
   isMissing,
   ownershipFailure,
   parseStoredRecord,
@@ -76,6 +77,22 @@ export async function saveCoordinatorRecord(
     recordPath(home, canonical.endpoint.sessionId, canonical.repoPath),
     canonical,
   );
+}
+
+/**
+ * Removes the stored record for one session and repository. Callers use this only after the
+ * resources it named have been released or durably quarantined, so no lease loses its last
+ * durable pointer.
+ */
+export async function removeCoordinatorRecord(
+  homeInput: string,
+  sessionInput: string,
+  repoPathInput: string,
+): Promise<void> {
+  const home = await canonicalHome(homeInput);
+  const sessionId = sessionText(sessionInput);
+  const repoPath = await canonicalPath(repoPathInput, "repoPath");
+  await rm(recordPath(home, sessionId, repoPath), { force: true });
 }
 
 /** Lists stored records for one session without probing panes or processes. */
