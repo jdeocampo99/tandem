@@ -863,6 +863,80 @@ test("rejects missing, over-limit, and stale scout handoff references", async ()
   });
 });
 
+test("a foreign-project scout is refused as a handoff and an accepted one stays approval-gated", async () => {
+  await withFixture({ kind: "scout" }, async (fixtureValue) => {
+    const createInput = {
+      repoPath: fixtureValue.task.repoPath,
+      kind: "implementation" as const,
+      objective: "Implement from the interviewed scope",
+      acceptanceCriteria: ["The approved scope lands"],
+      surfaces: ["service"],
+    };
+    const foreignRepo = join(fixtureValue.home, "foreign-repo");
+    await mkdir(foreignRepo, { recursive: true });
+    const foreignReport = join(
+      fixtureValue.home,
+      "jobs",
+      "foreign-scout",
+      "0",
+      "job-1",
+      "report.txt",
+    );
+    await mkdir(dirname(foreignReport), { recursive: true });
+    await writeFile(foreignReport, "Outcome: completed\nforeign evidence", "utf8");
+    const store = createTaskStore({
+      directory: join(fixtureValue.home, "tasks"),
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    const foreign = await store.create({
+      id: "foreign-scout",
+      repoPath: foreignRepo,
+      kind: "scout",
+      objective: "Investigate another project and then fix it",
+      acceptanceCriteria: ["Report the cause"],
+      surfaces: ["service"],
+      policy,
+      researchContinuation: {
+        schemaVersion: 1,
+        disposition: "implementation-interview",
+        selectedBy: "explicit",
+      },
+    });
+    await store.update(foreign.id, foreign.revision, (task) => ({
+      ...task,
+      revision: task.revision + 1,
+      updatedAt: TIMESTAMP,
+      stage: "completed",
+      previousStage: "scouting",
+      reportPath: foreignReport,
+    }));
+    await expect(
+      fixtureValue.service.create({ ...createInput, researchTaskIds: ["foreign-scout"] }),
+    ).rejects.toThrow("belongs to a different project");
+
+    await seedCompletedScout(fixtureValue, "Outcome: completed\ninterviewed evidence");
+    const created = await fixtureValue.service.create({
+      ...createInput,
+      researchTaskIds: [fixtureValue.task.id],
+    });
+    expect(created.stage).toBe("awaiting-approval");
+    expect(created.scopeApproved).toBe(false);
+    expect(created.researchHandoffs?.[0]?.scoutTaskId).toBe(fixtureValue.task.id);
+    expect(created.researchContinuation).toBeUndefined();
+
+    await fixtureValue.service.tick();
+    const afterTick = await fixtureValue.service.get(created.id);
+    expect(afterTick.stage).toBe("awaiting-approval");
+    expect(afterTick.scopeApproved).toBe(false);
+    expect(afterTick.worktree).toBeUndefined();
+
+    const approved = await fixtureValue.service.approve(created.id);
+    expect(approved.stage).toBe("queued");
+    expect(approved.scopeApproved).toBe(true);
+  });
+});
+
 test("service resolves task policy from Tandem home and leaves repository-local config untouched", async () => {
   await withFixture({}, async ({ home, service }) => {
     const existing = await service.get("task-1");

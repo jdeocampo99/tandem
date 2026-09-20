@@ -14,7 +14,10 @@ import {
   type TandemEnvironmentSource,
 } from "./config/environment.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
-import { deliverPendingNotifications } from "./extension/notifications.ts";
+import {
+  deliverPendingNotifications,
+  isResearchReportReadable,
+} from "./extension/notifications.ts";
 import { promptRoutingConfig } from "./extension/prompt-routing.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { buildDurableDigest } from "./extension/summary.ts";
@@ -161,7 +164,14 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             }
             reportStatus();
           }
-          await deliverPendingNotifications(pi, current, tasks, deliveredNotifications, ctx);
+          await deliverPendingNotifications({
+            pi,
+            service: current,
+            tasks,
+            delivered: deliveredNotifications,
+            ctx,
+            reportReadable: isResearchReportReadable,
+          });
         } catch (error) {
           taskState = "blocked";
           taskMessage = error instanceof Error ? error.message : String(error);
