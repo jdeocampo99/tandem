@@ -1,10 +1,17 @@
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { TaskRecord } from "../contracts.ts";
 import type { TandemService } from "../service/controller.ts";
+import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
+import { buildResearchFollowUpContent } from "./research-follow-up.ts";
 import { ACTION_SUMMARY_MAX_TEXT, compactText, prioritizeTasks } from "./summary.ts";
 
 const MAX_NOTIFICATION_BATCH = 8;
 const TANDEM_NOTIFICATION_ENTRY = "tandem-notification";
+
+/** Proof that a recorded report is still readable, so the follow-up decision may trust it. */
+export type ResearchReportProbe = (reportPath: string) => Promise<boolean>;
 
 type NotificationRef = Readonly<{
   readonly taskId: string;
@@ -15,17 +22,40 @@ type NotificationRef = Readonly<{
   readonly questionText?: string;
   readonly recommendation?: string;
   readonly reportPath?: string;
+  readonly followUp?: string;
 }>;
+
+export async function isResearchReportReadable(reportPath: string): Promise<boolean> {
+  try {
+    await access(reportPath, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function taskNeedsCoordinatorJudgment(task: Pick<TaskRecord, "kind" | "stage">): boolean {
   if (task.stage === "blocked") return true;
   return task.kind === "scout" && task.stage === "completed";
 }
 
-function allPendingNotifications(tasks: readonly TaskRecord[]): readonly NotificationRef[] {
+async function researchFollowUpContent(
+  task: TaskRecord,
+  reportReadable: ResearchReportProbe,
+): Promise<string | undefined> {
+  if (task.kind !== "scout") return undefined;
+  const readable = task.reportPath !== undefined && (await reportReadable(task.reportPath));
+  return buildResearchFollowUpContent(decideResearchFollowUp({ task, reportReadable: readable }));
+}
+
+async function allPendingNotifications(
+  tasks: readonly TaskRecord[],
+  reportReadable: ResearchReportProbe,
+): Promise<readonly NotificationRef[]> {
   const result: NotificationRef[] = [];
   for (const task of prioritizeTasks(tasks)) {
     const pending = task.notifications.filter((notification) => !notification.acknowledged);
+    if (pending.length === 0) continue;
     let latestLegacyId: string | undefined;
     for (let index = task.notifications.length - 1; index >= 0; index -= 1) {
       const notification = task.notifications[index];
@@ -34,6 +64,7 @@ function allPendingNotifications(tasks: readonly TaskRecord[]): readonly Notific
         break;
       }
     }
+    let followUp: string | undefined;
     for (const notification of pending) {
       const judgmentNeeded =
         notification.kind === "coordinator" ||
@@ -41,6 +72,7 @@ function allPendingNotifications(tasks: readonly TaskRecord[]): readonly Notific
           taskNeedsCoordinatorJudgment(task) &&
           notification.id === latestLegacyId);
       const question = judgmentNeeded ? task.communication?.question : undefined;
+      if (judgmentNeeded) followUp ??= await researchFollowUpContent(task, reportReadable);
       result.push({
         taskId: task.id,
         notificationId: notification.id,
@@ -56,6 +88,7 @@ function allPendingNotifications(tasks: readonly TaskRecord[]): readonly Notific
                 : { recommendation: question.recommendation }),
             }),
         ...(judgmentNeeded && task.reportPath !== undefined ? { reportPath: task.reportPath } : {}),
+        ...(judgmentNeeded && followUp !== undefined ? { followUp } : {}),
       });
     }
   }
@@ -78,6 +111,7 @@ function notificationContent(notifications: readonly NotificationRef[]): string 
       }
       if (notification.reportPath !== undefined)
         lines.push(`Evidence report: ${compactText(notification.reportPath, 180)}`);
+      if (notification.followUp !== undefined) lines.push(notification.followUp);
       return lines.join("\n");
     })
     .join("\n");
@@ -86,15 +120,22 @@ function notificationContent(notifications: readonly NotificationRef[]): string 
 type NotificationMessageSink = Pick<ExtensionAPI, "sendMessage" | "appendEntry">;
 type NotificationUi = Readonly<{ readonly ui: Pick<ExtensionContext["ui"], "notify"> }>;
 
+export type PendingNotificationDelivery = Readonly<{
+  readonly pi: NotificationMessageSink;
+  readonly service: Pick<TandemService, "acknowledge">;
+  readonly tasks: readonly TaskRecord[];
+  /** Task/notification pairs already sent in this process, so one wake is not repeated. */
+  readonly delivered: Set<string>;
+  readonly ctx: NotificationUi;
+  readonly reportReadable: ResearchReportProbe;
+}>;
+
 /** Deliver pending notifications without turning routine scheduler work into model input. */
 export async function deliverPendingNotifications(
-  pi: NotificationMessageSink,
-  service: Pick<TandemService, "acknowledge">,
-  tasks: readonly TaskRecord[],
-  delivered: Set<string>,
-  ctx: NotificationUi,
+  delivery: PendingNotificationDelivery,
 ): Promise<void> {
-  const pending = allPendingNotifications(tasks).filter(
+  const { pi, service, tasks, delivered, ctx } = delivery;
+  const pending = (await allPendingNotifications(tasks, delivery.reportReadable)).filter(
     (notification) => !delivered.has(`${notification.taskId}:${notification.notificationId}`),
   );
   if (pending.length === 0) return;

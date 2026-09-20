@@ -51,6 +51,10 @@ import {
 import { taskInbox } from "../../src/tasks/communication-protocol.ts";
 import { type TaskEvent, transitionTask } from "../../src/tasks/lifecycle.ts";
 import {
+  RESEARCH_CONTINUATION_CLASSIFIER_VERSION,
+  type ResearchContinuationRequest,
+} from "../../src/tasks/research-continuation-classifier.ts";
+import {
   type ReviewAssistanceRuntime,
   reviewAssistanceRuntime,
 } from "../../src/tasks/review-assistance.ts";
@@ -776,6 +780,113 @@ test("bound task creation normalizes clean input to the original identity and pe
     await rm(root, { recursive: true, force: true });
   }
 });
+test("new scouts persist a classified continuation and an explicit disposition still wins", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-service-continuation-"));
+  const home = join(root, "home");
+  const original = join(root, "original");
+  const source = join(root, "clean-source");
+  const common = join(root, "git-common");
+  await Promise.all([mkdir(original), mkdir(source), mkdir(common)]);
+  const runner = fakeRunner({ commonDirectory: common });
+  const requests: ResearchContinuationRequest[] = [];
+  let sequence = 0;
+  const serviceOptions = {
+    home,
+    sessionId: "session-a",
+    poolRoot: join(root, "pool"),
+    sourceWorkspace: { repoPath: original, path: source },
+    run: runner.run,
+    clock: () => TIMESTAMP,
+    idFactory: () => {
+      sequence += 1;
+      return `task-${sequence}`;
+    },
+  } as const;
+  const classified = createTandemService({
+    ...serviceOptions,
+    classifyResearchContinuation: async (request) => {
+      requests.push(request);
+      return {
+        continuation: {
+          schemaVersion: 1,
+          disposition: "implementation-interview",
+          selectedBy: "jev",
+          classifierVersion: RESEARCH_CONTINUATION_CLASSIFIER_VERSION,
+        },
+        reason: "jev-classified",
+        durationMs: 4,
+      };
+    },
+  });
+  try {
+    const scout = await classified.create({
+      repoPath: source,
+      kind: "scout",
+      objective: "Research the flaky worker timeout",
+      acceptanceCriteria: ["Report the cause"],
+      surfaces: ["src"],
+    });
+    expect(scout.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "implementation-interview",
+      selectedBy: "jev",
+      classifierVersion: RESEARCH_CONTINUATION_CLASSIFIER_VERSION,
+    });
+    expect(requests).toEqual([
+      { objective: "Research the flaky worker timeout", taskKind: "scout" },
+    ]);
+
+    const explicit = await classified.create({
+      repoPath: source,
+      kind: "scout",
+      objective: "Research the flaky worker timeout once more",
+      acceptanceCriteria: ["Report the cause"],
+      surfaces: ["src"],
+      researchContinuation: {
+        schemaVersion: 1,
+        disposition: "report-only",
+        selectedBy: "explicit",
+      },
+    });
+    expect(explicit.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "report-only",
+      selectedBy: "explicit",
+    });
+    expect(requests.length).toBe(1);
+
+    const implementation = await classified.create({
+      repoPath: source,
+      kind: "implementation",
+      objective: "Apply the approved scheduler change",
+      acceptanceCriteria: ["The change lands"],
+      surfaces: ["src"],
+    });
+    expect(implementation.researchContinuation).toBeUndefined();
+    expect(requests.length).toBe(1);
+  } finally {
+    await classified.shutdown();
+  }
+
+  const deterministic = createTandemService(serviceOptions);
+  try {
+    const scout = await deterministic.create({
+      repoPath: source,
+      kind: "scout",
+      objective: "Investigate the flaky worker timeout and then fix it",
+      acceptanceCriteria: ["Report the cause"],
+      surfaces: ["src"],
+    });
+    expect(scout.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "implementation-interview",
+      selectedBy: "deterministic",
+    });
+  } finally {
+    await deterministic.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("creates a bounded immutable scout handoff for a same-source implementation", async () => {
   await withFixture({ kind: "scout" }, async (fixtureValue) => {
     const report = `Outcome: completed\n${"界".repeat(3_000)}`;
@@ -844,6 +955,80 @@ test("rejects missing, over-limit, and stale scout handoff references", async ()
     expect(
       (await fixtureValue.service.list()).some((entry) => entry.kind === "implementation"),
     ).toBe(false);
+  });
+});
+
+test("a foreign-project scout is refused as a handoff and an accepted one stays approval-gated", async () => {
+  await withFixture({ kind: "scout" }, async (fixtureValue) => {
+    const createInput = {
+      repoPath: fixtureValue.task.repoPath,
+      kind: "implementation" as const,
+      objective: "Implement from the interviewed scope",
+      acceptanceCriteria: ["The approved scope lands"],
+      surfaces: ["service"],
+    };
+    const foreignRepo = join(fixtureValue.home, "foreign-repo");
+    await mkdir(foreignRepo, { recursive: true });
+    const foreignReport = join(
+      fixtureValue.home,
+      "jobs",
+      "foreign-scout",
+      "0",
+      "job-1",
+      "report.txt",
+    );
+    await mkdir(dirname(foreignReport), { recursive: true });
+    await writeFile(foreignReport, "Outcome: completed\nforeign evidence", "utf8");
+    const store = createTaskStore({
+      directory: join(fixtureValue.home, "tasks"),
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    const foreign = await store.create({
+      id: "foreign-scout",
+      repoPath: foreignRepo,
+      kind: "scout",
+      objective: "Investigate another project and then fix it",
+      acceptanceCriteria: ["Report the cause"],
+      surfaces: ["service"],
+      policy,
+      researchContinuation: {
+        schemaVersion: 1,
+        disposition: "implementation-interview",
+        selectedBy: "explicit",
+      },
+    });
+    await store.update(foreign.id, foreign.revision, (task) => ({
+      ...task,
+      revision: task.revision + 1,
+      updatedAt: TIMESTAMP,
+      stage: "completed",
+      previousStage: "scouting",
+      reportPath: foreignReport,
+    }));
+    await expect(
+      fixtureValue.service.create({ ...createInput, researchTaskIds: ["foreign-scout"] }),
+    ).rejects.toThrow("belongs to a different project");
+
+    await seedCompletedScout(fixtureValue, "Outcome: completed\ninterviewed evidence");
+    const created = await fixtureValue.service.create({
+      ...createInput,
+      researchTaskIds: [fixtureValue.task.id],
+    });
+    expect(created.stage).toBe("awaiting-approval");
+    expect(created.scopeApproved).toBe(false);
+    expect(created.researchHandoffs?.[0]?.scoutTaskId).toBe(fixtureValue.task.id);
+    expect(created.researchContinuation).toBeUndefined();
+
+    await fixtureValue.service.tick();
+    const afterTick = await fixtureValue.service.get(created.id);
+    expect(afterTick.stage).toBe("awaiting-approval");
+    expect(afterTick.scopeApproved).toBe(false);
+    expect(afterTick.worktree).toBeUndefined();
+
+    const approved = await fixtureValue.service.approve(created.id);
+    expect(approved.stage).toBe("queued");
+    expect(approved.scopeApproved).toBe(true);
   });
 });
 

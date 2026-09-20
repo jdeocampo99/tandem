@@ -823,8 +823,8 @@ Only scout records may carry one; a continuation on an implementation record is 
 | `selectedBy` | `explicit` (supplied with the task request), `deterministic` (rule table), or `jev`. |
 | `classifierVersion` | Required for `jev`, optional for `deterministic`, refused for `explicit`. |
 
-Task creation accepts an explicitly supplied disposition; a scout created without one records the
-conservative `ask-intent` with `deterministic` provenance. Scout records written before the field
+Task creation accepts an explicitly supplied disposition; a scout created without one is classified
+before the record is written. Scout records written before the field
 existed load with that same conservative default, so restart, compaction, legacy JSON migration,
 and bounded recovery all keep one disposition per task. Unsupported dispositions, unsupported
 selectors, unknown fields, and malformed provenance fail closed as state corruption instead of
@@ -835,6 +835,49 @@ open `needs-decision` question is answered first; a failed, blocked, cancelled, 
 stale-generation, or missing-report scout discloses its blocker instead of entering the generic
 follow-up. Task summaries and the durable digest print the disposition and its provenance, so the
 choice survives context compaction without an ephemeral model-memory flag.
+
+#### Following up after a scout reports
+
+The existing completed-scout coordinator notification remains the only wake mechanism. The
+notification text carries the follow-up decided from the persisted record, with the delivery path
+first proving the recorded report is still readable, so the same durable record produces the same
+wake text after compaction, restart, or coordinator replacement:
+
+| Follow-up | Coordinator behavior |
+| --- | --- |
+| `report-only` | Summarize the report and stop; propose no implementation work. |
+| `ask-intent` | Summarize the report, then ask only whether the user wants implementation work. |
+| `implementation-interview` | Summarize the report with its evidence, propose one initial direction, then ask focused questions about desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility, and approval, with a default for each. |
+| `answer-question` | An open `needs-decision` question outranks the disposition and is resolved first. |
+| `disclose-blocker` | A non-scout, blocked, cancelled, incomplete, stale-generation, or unreadable-report record has its exact blocker disclosed. |
+
+The interview stays inside the report and the user's request and never widens scope on its own.
+Only after the user answers may the coordinator create an implementation task citing that scout in
+`researchTaskIds`. That task is created `awaiting-approval` with `scopeApproved` false, still passes
+repository and source-checkpoint handoff validation, and does not launch until the concrete scope is
+explicitly approved. User answers travel through the existing steer/answer communication APIs.
+
+#### Classifying the disposition
+
+A narrow continuation classifier, separate from the read-only prompt router, chooses the
+disposition for a scout created without an explicit one:
+
+1. A pure deterministic cue table decides first and makes no provider call. Explicit
+   information-only wording records `report-only`; explicit investigate-then-fix, implement, or
+   prepare-a-patch wording records `implementation-interview`; wording carrying both cues records
+   `ask-intent`, so an explicit report-only request can never be upgraded. Only imperative requests
+   count: descriptive or hypothetical wording such as "how retries are implemented" or "whether we
+   should implement the queue" stays unresolved for step 2.
+2. Only wording the rules leave unresolved, such as an unqualified "research this ticket", reaches
+   Jev, as one typed closed-set choice over the three dispositions. The request state contains only
+   the sanitized, single-line, length-bounded objective and the task kind: never the repository, a
+   scout report, credentials, or transcript. The model and the question/schema version are pinned
+   and recorded together in `classifierVersion`.
+3. A missing `TYPESAFE_API_KEY`, a timeout, a provider outage, a malformed answer, or a confidence
+   below the classifier threshold records the conservative `ask-intent` with `deterministic`
+   provenance. Research is never blocked or delayed past the bounded `TANDEM_JEV_TIMEOUT_MS`
+   request timeout, and Jev never creates tasks, approves scope, selects implementation details, or
+   relaxes any safety policy.
 
 ### Review and validation
 
@@ -1288,7 +1331,7 @@ The extension also registers `/tandem`. Arguments use shell-style quoting for pa
 /tandem cleanup TASK [--discard]
 ```
 
-The extension scheduler starts at session start with a 2,000 ms default interval and reconciles once immediately. It refreshes the durable digest before an agent turn, during OMP-native compaction, and after compaction. Routine notices, receipts, heartbeats, and passive progress are shown with `ctx.ui.notify` and appended to the durable UI log without a model turn. The newest actionable notices in one delivery batch are coalesced into at most one follow-up/model wake; routine backlog is excluded from that wake. Current blocked tasks, completed scout reports, and PR-ready coordinator notices are the judgment-needed cases. Progress is not death: after roughly five minutes without meaningful activity, or about 60 seconds without a startup heartbeat, Tandem emits one actionable inspection warning per inactivity episode and resets the episode when progress resumes; it does not kill a worker merely because time elapsed. Actual process exit or error still follows the existing failed/blocked path.
+The extension scheduler starts at session start with a 2,000 ms default interval and reconciles once immediately. It refreshes the durable digest before an agent turn, during OMP-native compaction, and after compaction. Routine notices, receipts, heartbeats, and passive progress are shown with `ctx.ui.notify` and appended to the durable UI log without a model turn. The newest actionable notices in one delivery batch are coalesced into at most one follow-up/model wake; routine backlog is excluded from that wake. Current blocked tasks, completed scout reports, and PR-ready coordinator notices are the judgment-needed cases. A judgment-needed notice on a scout also carries that scout's [post-research follow-up](#following-up-after-a-scout-reports), rebuilt from the durable record on every delivery. Progress is not death: after roughly five minutes without meaningful activity, or about 60 seconds without a startup heartbeat, Tandem emits one actionable inspection warning per inactivity episode and resets the episode when progress resumes; it does not kill a worker merely because time elapsed. Actual process exit or error still follows the existing failed/blocked path.
 
 A scout is completed research only when durable state records its `completed` stage and report; queued or blocked scout work is not completion.
 

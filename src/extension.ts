@@ -14,7 +14,10 @@ import {
   type TandemEnvironmentSource,
 } from "./config/environment.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
-import { deliverPendingNotifications } from "./extension/notifications.ts";
+import {
+  deliverPendingNotifications,
+  isResearchReportReadable,
+} from "./extension/notifications.ts";
 import { promptRoutingConfig } from "./extension/prompt-routing.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { buildDurableDigest } from "./extension/summary.ts";
@@ -25,6 +28,11 @@ import {
   type TandemServiceOptions,
 } from "./service/controller.ts";
 import { isMissing, isTerminalTask } from "./service/records.ts";
+import {
+  type ResearchContinuationClassifier,
+  researchContinuationClassifier,
+  researchContinuationClassifierConfig,
+} from "./tasks/research-continuation-classifier.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
 
@@ -38,11 +46,10 @@ export type TandemExtensionOptions = Readonly<{
 
 function serviceForContext(
   options: TandemExtensionOptions,
-  ctx: ExtensionContext,
-  resolvedEnvironment?: TandemBoundaryEnvironment,
+  environment: TandemBoundaryEnvironment,
+  classifyResearchContinuation: ResearchContinuationClassifier,
 ): TandemService {
   if (options.service !== undefined) return options.service;
-  const environment = resolvedEnvironment ?? environmentForContext(options, ctx);
   const sourceRepo = environment.sourceRepo;
   const createService = options.createService ?? createTandemService;
   return createService({
@@ -52,6 +59,7 @@ function serviceForContext(
       ? {}
       : { parentWorkspaceId: environment.parentWorkspaceId }),
     poolRoot: environment.poolRoot,
+    classifyResearchContinuation,
     ...(sourceRepo === undefined
       ? {}
       : {
@@ -84,8 +92,10 @@ function logExtensionError(pi: ExtensionAPI, error: unknown): void {
 /** Create the OMP extension factory; all mutable runtime state is per loaded extension instance. */
 export function createTandemExtension(options: TandemExtensionOptions = {}): ExtensionFactory {
   return (pi: ExtensionAPI): void => {
-    const promptRouting = promptRoutingConfig(
-      processEnvironmentSnapshot(options.processEnvironment),
+    const environmentSnapshot = processEnvironmentSnapshot(options.processEnvironment);
+    const promptRouting = promptRoutingConfig(environmentSnapshot);
+    const classifyResearchContinuation = researchContinuationClassifier(
+      researchContinuationClassifierConfig(environmentSnapshot),
     );
     let service: TandemService | undefined;
     let boundaryEnvironment: TandemBoundaryEnvironment | undefined;
@@ -115,7 +125,9 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     };
     const deliveredNotifications = new Set<string>();
     const getService = (ctx: ExtensionContext): TandemService => {
-      if (service === undefined) service = serviceForContext(options, ctx, getEnvironment(ctx));
+      if (service === undefined) {
+        service = serviceForContext(options, getEnvironment(ctx), classifyResearchContinuation);
+      }
       return service;
     };
     const reconcile = async (ctx: ExtensionContext, runTick: boolean): Promise<void> => {
@@ -152,7 +164,14 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             }
             reportStatus();
           }
-          await deliverPendingNotifications(pi, current, tasks, deliveredNotifications, ctx);
+          await deliverPendingNotifications({
+            pi,
+            service: current,
+            tasks,
+            delivered: deliveredNotifications,
+            ctx,
+            reportReadable: isResearchReportReadable,
+          });
         } catch (error) {
           taskState = "blocked";
           taskMessage = error instanceof Error ? error.message : String(error);

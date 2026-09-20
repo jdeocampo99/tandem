@@ -94,6 +94,11 @@ import { TaskControlWorkflow } from "../tasks/control.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
 import {
+  DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS,
+  type ResearchContinuationClassifier,
+  researchContinuationClassifier,
+} from "../tasks/research-continuation-classifier.ts";
+import {
   type ReviewAssistanceRuntime,
   reviewAssistanceConfig,
   reviewAssistanceRuntime,
@@ -166,6 +171,8 @@ export type TandemServiceOptions = Readonly<{
   readonly run?: CommandRunner;
   readonly clock?: Clock;
   readonly idFactory?: IdFactory;
+  /** Chooses a new scout's post-research disposition; defaults to deterministic cues alone. */
+  readonly classifyResearchContinuation?: ResearchContinuationClassifier;
   /** The Jev transport, cache, and diagnostics sink review-level assistance is allowed to use. */
   readonly reviewAssistance?: ReviewAssistanceRuntime;
 }>;
@@ -264,6 +271,7 @@ type ServiceDependencies = Readonly<{
   run: CommandRunner;
   clock: Clock;
   idFactory: IdFactory;
+  classifyResearchContinuation: ResearchContinuationClassifier;
   store: TaskStore;
   runtimePath: string;
   workerPath: string;
@@ -708,9 +716,22 @@ class TandemController {
       models,
     });
   }
+  /** Classified outside the store lock so a bounded classifier call never delays other work. */
+  private async continuationFor(
+    input: CreateTaskRequest,
+  ): Promise<ResearchContinuation | undefined> {
+    if (input.kind !== "scout" || input.researchContinuation !== undefined) return undefined;
+    const classified = await this.#deps.classifyResearchContinuation({
+      objective: typeof input.objective === "string" ? input.objective : "",
+      taskKind: input.kind,
+    });
+    return classified.continuation;
+  }
+
   async create(input: CreateTaskRequest): Promise<TaskRecord> {
     await this.ensureSourceReady();
     if (!isRecord(input)) throw new TypeError("create input must be an object");
+    const classifiedContinuation = await this.continuationFor(input);
     return this.#deps.store.exclusive(async (store) => {
       const source = await mapTaskSource(
         this.#deps.run,
@@ -743,7 +764,13 @@ class TandemController {
         store,
       );
       const taskInput = taskInputFor(
-        { ...input, ...(researchHandoffs === undefined ? {} : { researchHandoffs }) },
+        {
+          ...input,
+          ...(researchHandoffs === undefined ? {} : { researchHandoffs }),
+          ...(classifiedContinuation === undefined
+            ? {}
+            : { researchContinuation: classifiedContinuation }),
+        },
         source.repoPath,
         policy,
       );
@@ -1858,6 +1885,12 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
   const idFactory = options.idFactory ?? defaultIdFactory();
   if (typeof clock !== "function" || typeof idFactory !== "function")
     throw new TypeError("clock and idFactory must be functions");
+  const classifyResearchContinuation =
+    options.classifyResearchContinuation ??
+    researchContinuationClassifier({ timeoutMs: DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS });
+  if (typeof classifyResearchContinuation !== "function") {
+    throw new TypeError("classifyResearchContinuation must be a function");
+  }
   return {
     home,
     sessionId,
@@ -1872,6 +1905,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     run,
     clock,
     idFactory,
+    classifyResearchContinuation,
     store: createTaskStore({ directory: join(home, "tasks"), clock, idFactory }),
     runtimePath: runtimeFile(home),
     workerPath: fileURLToPath(new URL("../worker.ts", import.meta.url)),
