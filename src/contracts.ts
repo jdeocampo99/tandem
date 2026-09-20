@@ -196,6 +196,34 @@ export type Finding = {
   readonly description: string;
 };
 
+/** Where a finding status was established: the reviewed code and the fix round that observed it. */
+export type FindingObservation = {
+  readonly head: string;
+  readonly generation: number;
+  readonly reviewRound: number;
+};
+
+/**
+ * What a finding identity is currently known to be. `addressed` means a later review of the same
+ * lens stopped reporting it, `regressed` means an addressed identity came back, and `disputed`
+ * means two reviews of the same identity recorded contradicting verdicts.
+ */
+export type FindingStatus = "addressed" | "unresolved" | "regressed" | "disputed";
+
+/** One finding identity carried across review rounds, with the change supporting its status. */
+export type FindingLedgerEntry = {
+  readonly id: string;
+  readonly lens: ReviewLens;
+  readonly severity: FindingSeverity;
+  readonly verdict: FindingVerdict;
+  readonly description: string;
+  readonly file?: string;
+  readonly line?: number;
+  readonly status: FindingStatus;
+  readonly raisedAt: FindingObservation;
+  readonly statusAt: FindingObservation;
+};
+
 export type ReviewResult = {
   readonly lens: ReviewLens;
   readonly head: string;
@@ -331,6 +359,7 @@ export type TaskRecord = {
   readonly reportPath?: string;
   readonly validationEvidence: readonly ValidationEvidence[];
   readonly reviews: readonly ReviewResult[];
+  readonly findingLedger?: readonly FindingLedgerEntry[];
   readonly researchHandoffs?: readonly ResearchHandoff[];
   readonly blockReason?: string;
   readonly notifications: readonly Notification[];

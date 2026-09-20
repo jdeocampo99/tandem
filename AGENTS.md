@@ -20,7 +20,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Action CLI / JSON automation | [cli.ts](src/cli.ts) → [terminal/cli-application.ts](src/terminal/cli-application.ts) |
 | Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
 | Models, environment, policy | [config/](src/config/) |
-| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `store.ts`, `control.ts` |
+| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `store.ts`, `control.ts` |
 | Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/workflow.ts](src/recovery/workflow.ts) |
 | Worker execution, results, control, validation | [workers/](src/workers/); entry points: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [validation-worker.ts](src/validation-worker.ts) |
 | OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |

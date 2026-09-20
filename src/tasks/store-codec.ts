@@ -3,6 +3,8 @@ import {
   type CheckOrigin,
   type Endpoint,
   type Finding,
+  type FindingLedgerEntry,
+  type FindingObservation,
   type FindingSeverity,
   type FindingVerdict,
   type GuidanceProvenance,
@@ -35,6 +37,7 @@ import {
 } from "../contracts.ts";
 import { FINAL_REVIEW_LENSES } from "./acceptance.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
+import { FINDING_STATUSES } from "./findings.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
 import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
 
@@ -97,6 +100,7 @@ const TOP_LEVEL_KEYS = [
   "iterationScope",
   "validationEvidence",
   "reviews",
+  "findingLedger",
   "researchHandoffs",
   "reportPath",
   "blockReason",
@@ -550,6 +554,60 @@ function parseValidationEvidence(value: unknown, source: string): ValidationEvid
   };
 }
 
+function parseFindingObservation(value: unknown, source: string): FindingObservation {
+  if (!isRecord(value)) {
+    failState(source, "finding observation must be an object");
+  }
+  assertExactKeys(value, ["head", "generation", "reviewRound"], source);
+  return {
+    head: requiredText(value, "head", source),
+    generation: requiredInteger(value, "generation", source),
+    reviewRound: requiredInteger(value, "reviewRound", source),
+  };
+}
+
+function parseFindingLedgerEntry(value: unknown, source: string): FindingLedgerEntry {
+  if (!isRecord(value)) {
+    failState(source, "finding ledger entry must be an object");
+  }
+  assertExactKeys(
+    value,
+    [
+      "id",
+      "lens",
+      "severity",
+      "verdict",
+      "description",
+      "file",
+      "line",
+      "status",
+      "raisedAt",
+      "statusAt",
+    ],
+    source,
+  );
+  const file = optionalText(value, "file", source);
+  const line = optionalInteger(value, "line", source, 1);
+  return {
+    id: requiredText(value, "id", source),
+    lens: requiredEnum(value, "lens", REVIEW_LENSES, source),
+    severity: requiredEnum(value, "severity", FINDING_SEVERITIES, source),
+    verdict: requiredEnum(value, "verdict", FINDING_VERDICTS, source),
+    description: requiredText(value, "description", source),
+    status: requiredEnum(value, "status", FINDING_STATUSES, source),
+    raisedAt: parseFindingObservation(
+      requiredValue(value, "raisedAt", source),
+      `${source}.raisedAt`,
+    ),
+    statusAt: parseFindingObservation(
+      requiredValue(value, "statusAt", source),
+      `${source}.statusAt`,
+    ),
+    ...(file === undefined ? {} : { file }),
+    ...(line === undefined ? {} : { line }),
+  };
+}
+
 function parseIterationScope(value: unknown, source: string): IterationScope {
   if (!isRecord(value)) {
     failState(source, "iteration scope must be an object");
@@ -736,6 +794,14 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
       failState(`${source}.communication`, error instanceof Error ? error.message : String(error));
     }
   }
+  const findingLedgerValue = Object.hasOwn(value, "findingLedger")
+    ? requiredValue(value, "findingLedger", source)
+    : undefined;
+  if (findingLedgerValue !== undefined && !Array.isArray(findingLedgerValue)) {
+    failState(`${source}.findingLedger`, "findingLedger must be an array when present");
+  }
+  const findingLedgerEntries: readonly unknown[] =
+    findingLedgerValue === undefined ? [] : findingLedgerValue;
   const reviewHead = optionalText(value, "reviewHead", source);
   const iterationScopeValue = Object.hasOwn(value, "iterationScope")
     ? requiredValue(value, "iterationScope", source)
@@ -769,6 +835,13 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
       parseValidationEvidence(entry, `${source}.validationEvidence[${index}]`),
     ),
     reviews: reviewEntries.map((entry, index) => parseReview(entry, `${source}.reviews[${index}]`)),
+    ...(findingLedgerValue === undefined
+      ? {}
+      : {
+          findingLedger: findingLedgerEntries.map((entry, index) =>
+            parseFindingLedgerEntry(entry, `${source}.findingLedger[${index}]`),
+          ),
+        }),
     notifications: notificationEntries.map((entry, index) =>
       parseNotification(entry, `${source}.notifications[${index}]`),
     ),

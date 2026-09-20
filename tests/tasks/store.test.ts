@@ -12,6 +12,7 @@ import type {
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { emptyRuntimeState } from "../../src/runtime/schema.ts";
 import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
+import { ledgerBlockers } from "../../src/tasks/findings.ts";
 import { type TaskTransitionContext, transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore, type StoreTaskInput, type TaskStore } from "../../src/tasks/store.ts";
 import {
@@ -169,6 +170,87 @@ test("keeps a completed record with legacy evidence readable", async () => {
     if (reloaded === undefined) throw new Error("legacy task did not reload");
     expect(reloaded.stage).toBe("completed");
     expect(reloaded.validationEvidence).toHaveLength(1);
+  });
+});
+
+const LEDGER_ENTRY = {
+  id: "f-1",
+  lens: "behavior",
+  severity: "P1",
+  verdict: "confirmed",
+  description: "The retry loop drops the cancellation signal.",
+  file: "src/service/controller.ts",
+  line: 42,
+  status: "unresolved",
+  raisedAt: { head: "head-1", generation: 0, reviewRound: 0 },
+  statusAt: { head: "head-1", generation: 0, reviewRound: 0 },
+} as const;
+
+test("loads a record written before the finding ledger existed with no prior finding status", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-ledger" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.stage = "reviewing";
+      payload.reviewHead = "head-1";
+      delete payload.findingLedger;
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("legacy task did not reload");
+    expect(reloaded.findingLedger).toBeUndefined();
+    expect(ledgerBlockers(reloaded.findingLedger ?? [])).toEqual([]);
+  });
+});
+
+test("reloads a recorded finding ledger unchanged", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "ledger-roundtrip" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.findingLedger = [{ ...LEDGER_ENTRY }];
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("ledger task did not reload");
+    expect(reloaded.findingLedger).toEqual([LEDGER_ENTRY]);
+  });
+});
+
+test("refuses a finding ledger entry with an unknown status", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "ledger-status" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.findingLedger = [{ ...LEDGER_ENTRY, status: "probably-fine" }];
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("refuses a finding ledger entry missing the change that supports its status", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "ledger-observation" });
+    rewritePayload(directory, created.id, (payload) => {
+      const { statusAt: _dropped, ...withoutStatusAt } = LEDGER_ENTRY;
+      payload.findingLedger = [withoutStatusAt];
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("refuses a finding ledger that is not an array", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "ledger-shape" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.findingLedger = { "f-1": LEDGER_ENTRY };
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
   });
 });
 

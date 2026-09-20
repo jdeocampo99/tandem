@@ -824,6 +824,65 @@ Local runner checks and GitHub checks stay distinct. Runner evidence is stamped 
 
 Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Textual scout and implementer results must start with exactly one role-appropriate `Outcome: completed|needs-decision|failed` (scouts) or `Outcome: implemented|needs-decision|failed` (implementers) line. Reviewer, verifier, and presentation workers may use `Outcome: needs-decision` for a genuine blocker; otherwise reviewer/verifier success remains the strict `ReviewResult` JSON contract and presentation success remains its `Artifact: <absolute path>` contract. Any `needs-decision` result emits exactly one bounded single-line `Question: ...` and optional bounded single-line `Recommendation: ...` (each no more than 1,000 characters); durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
 
+### Incremental review briefs and finding status
+
+Each bounded review round writes one deterministic review brief next to the immutable diff in the
+reviewer's job directory, at `review-brief.md`. `src/tasks/review-brief.ts` builds it as a pure
+function of durable task state plus injected git observations, so the same task, HEAD, and worktree
+always produce the same brief. It is reused context, not a second memory, handoff, or provider
+system: every field comes from the records the task already keeps.
+
+The brief carries the approved scope, the acceptance criteria, the five applicable principles as
+mandatory blocking requirements, and explicit non-goals; the exact source, policy, instruction, and
+configuration identities (HEAD, branch, base, generation, review round, policy digest, review-channel
+instruction provenance, `maxFixRounds`, `maxWorkers`, and the configured command names); references
+to the cumulative range from the worktree base and the range since the last reviewed HEAD, each as a
+patch path plus its changed-file list; the files at HEAD that reference a changed file; source links
+pinned to HEAD; the current final-acceptance status and iteration scope; the recorded checks; and the
+prior finding status with the change that supports it. Reviewers keep full source access and an
+independent context. The brief says so explicitly: an implementer assertion, summary, report, or
+claimed fix is never proof, and every claim is confirmed against the source, the diff, or
+runner-produced evidence.
+
+Findings keep a stable identity across rounds on the durable `findingLedger`, which `record-review`
+is the only writer of. An identity is `lens:id`, and the reviewer is instructed to reuse the exact id
+the brief lists when it reports the same issue again. Each entry carries `unresolved`, `addressed`,
+`regressed`, or `disputed`, together with the round that raised it and the round and HEAD that set
+its current status. A review of the same lens at a later generation that stops reporting an identity
+settles it as `addressed`; only a later review that reports it again reopens it as `regressed`, so a
+settled finding is never reopened without new evidence. Two reviews of one identity that record
+contradicting verdicts mark it `disputed`. Blockers and suggestions are split by the rule a review
+already enforces: a confirmed P0, P1, or P2, or a plausible P0 or P1, blocks, and everything else is
+an optional suggestion. A violation of a mandatory design rule or applicable principle blocks through
+the same rule.
+
+The brief also states how wide this round must be. Impact is `contained`, `expanded`, or `unknown`,
+and it reuses the existing `EscalationReason` vocabulary rather than adding a parallel one. A fix that
+reaches files outside the surface the round was authorized to touch reports `broad-impact`; a fix
+whose surface cannot be bounded, a truncated incremental patch, or a missing prior reviewed HEAD
+reports `unknown-impact`; and an escalated validation contract carries its own reason through. Any
+assessment other than `contained` tells the reviewer to read the cumulative diff and the affected
+callers in full.
+
+The brief is bounded by named limits in `REVIEW_BRIEF_LIMITS`, covering the findings, changed files,
+affected callers, source links, advisory leads, evidence entries, per-field text, the patch byte
+budget, and the rendered brief itself. Suggestions, settled findings, long descriptions, and the bulky
+file lists are compacted first; blocker identities and their status are never elided, and an elision
+is stated with a pointer to the complete durable record. The brief input also carries an optional,
+typed slot for advisory review leads. Those render with their provenance under an untrusted heading
+and can never become blockers, drop mandatory context, or authorize acceptance; Tandem produces none
+of them today.
+
+When the configured fix-round budget is spent, the durable block reason names the blockers that
+remain and the decision that is available: stop for a human decision, or revise and re-approve the
+task scope. No round is retried automatically, nothing auto-passes, and no unresolved blocker is
+downgraded to a suggestion. The final review still runs against the delivered code at the current
+HEAD and the brief never replaces the final acceptance contract.
+
+Records written before the finding ledger existed load unchanged with no ledger, so no prior status
+is claimed without evidence. A ledger entry naming an unknown status, or missing the observation that
+supports its status, is a corrupt shape and fails closed.
+
 ### Interactive child terminals
 
 Scouts, implementers, reviewers, verifiers, and presentation workers launch interactive OMP with

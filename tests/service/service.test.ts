@@ -47,6 +47,7 @@ import {
 } from "../../src/tasks/communication-persistence.ts";
 import { taskInbox } from "../../src/tasks/communication-protocol.ts";
 import { type TaskEvent, transitionTask } from "../../src/tasks/lifecycle.ts";
+import { REVIEW_BRIEF_LIMITS } from "../../src/tasks/review-brief.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
@@ -110,6 +111,8 @@ type FakeRunnerOptions = Readonly<{
   readonly active?: boolean;
   readonly holdInitialHead?: boolean;
   readonly checkoutHead?: string;
+  readonly changedFiles?: string;
+  readonly referencingFiles?: string;
   readonly checkoutHeadFor?: (path: string) => string;
   readonly commonDirectory?: string;
   readonly dirty?: boolean;
@@ -365,6 +368,12 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
         return commandResult(options.dirty === true ? " M dirty.txt\n" : "");
       if (argv.includes("--diff-filter=U"))
         return commandResult(options.unmerged === true ? "conflict.txt\n" : "");
+      if (argv.includes("grep"))
+        return options.referencingFiles === undefined
+          ? commandResult("", 1)
+          : commandResult(options.referencingFiles);
+      if (argv.includes("diff") && argv.includes("--name-only"))
+        return commandResult(options.changedFiles ?? "");
       if (argv.includes("diff")) return commandResult();
       if (argv.includes("merge-base")) return commandResult();
     }
@@ -3010,6 +3019,51 @@ test("resume consumes a stopped worker result once without relaunching the imple
       const repeated = await service.resume("task-1");
       expect(repeated.stage).toBe("validating");
       expect(runnerState.launches).toBe(0);
+    },
+  );
+});
+
+test("a launched review job receives a bounded deterministic review brief", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "reviewing",
+      taskEdits: { reviewHead: "review-head" },
+      runner: {
+        active: false,
+        checkoutHead: "review-head",
+        changedFiles: "src/service/controller.ts\n",
+        referencingFiles: "review-head:src/main.ts\n",
+      },
+    },
+    async ({ home, lease, service }) => {
+      await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+
+      await service.tick();
+
+      const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
+      if (launched === undefined) throw new Error("review job was not persisted");
+      const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
+        readonly prompt: string;
+      };
+      const briefPath = join(dirname(launched.jobPath), "review-brief.md");
+      expect(spec.prompt).toContain(briefPath);
+      expect(spec.prompt).toContain("is not proof");
+      expect(spec.prompt).toContain("Reuse the exact finding id");
+
+      const brief = await readFile(briefPath, "utf8");
+      expect(Buffer.byteLength(brief, "utf8")).toBeLessThanOrEqual(
+        REVIEW_BRIEF_LIMITS.maxBriefBytes,
+      );
+      expect(brief).toContain("## Approved scope");
+      expect(brief).toContain("## Applicable principles");
+      expect(brief).toContain("## Non-goals");
+      expect(brief).toContain("cumulative diff source-head..review-head");
+      expect(brief).toContain("src/service/controller.ts");
+      expect(brief).toContain("affected callers observed at HEAD: src/main.ts");
+      expect(brief).toContain("## Evidence-backed blockers");
+      expect(brief).toContain("## Advisory leads (untrusted; never blockers)");
+      expect(brief).toContain("## Fix-round budget");
     },
   );
 });

@@ -24,6 +24,7 @@ import {
   finalAcceptanceStatus,
   isPinnedEvidence,
 } from "./acceptance.ts";
+import { recordReviewFindings } from "./findings.ts";
 
 export type TaskInput = Readonly<{
   readonly id: string;
@@ -897,7 +898,14 @@ export function transitionTask(
           `Review lens ${event.review.lens} already exists for head ${event.review.head} generation ${event.review.generation}`,
         );
       }
-      return commitTask(task, context.now, { reviews: [...task.reviews, event.review] });
+      return commitTask(task, context.now, {
+        reviews: [...task.reviews, event.review],
+        findingLedger: recordReviewFindings({
+          ledger: task.findingLedger ?? [],
+          review: event.review,
+          reviewRound: task.reviewRound,
+        }),
+      });
     }
     case "finish-review": {
       if (task.stage !== "reviewing") {

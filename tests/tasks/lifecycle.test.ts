@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type {
   Endpoint,
+  Finding,
   InstructionChannels,
   PinnedValidationEvidence,
   RepoPolicy,
@@ -10,6 +11,7 @@ import type {
   WorktreeLease,
 } from "../../src/contracts.ts";
 import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
+import { ledgerBlockers } from "../../src/tasks/findings.ts";
 import {
   ALL_REVIEW_LENSES,
   createTask,
@@ -362,6 +364,63 @@ test("records failed validation, bounds fix rounds, and invalidates old review a
   expect(() =>
     transitionTask(task, { type: "begin-fixes", head: "head-1", generation: 1 }, context()),
   ).toThrow(TaskTransitionError);
+});
+
+test("carries finding identities and their status across review rounds", () => {
+  const blocker: Finding = {
+    id: "finding-1",
+    severity: "P1",
+    verdict: "confirmed",
+    description: "A blocking behavior defect",
+    file: "src/service/controller.ts",
+  };
+  let task = implementationToReviewing();
+  task = transitionTask(
+    task,
+    { type: "record-review", review: { ...review("behavior", false), findings: [blocker] } },
+    context(),
+  );
+  expect(task.findingLedger).toHaveLength(1);
+  expect(task.findingLedger?.[0]?.status).toBe("unresolved");
+  expect(ledgerBlockers(task.findingLedger ?? []).map((entry) => entry.id)).toEqual(["finding-1"]);
+
+  for (const lens of ["design", "coverage", "verification"] as const) {
+    task = transitionTask(task, { type: "record-review", review: review(lens, false) }, context());
+  }
+  task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
+  expect(task.stage).toBe("awaiting-fixes");
+
+  task = transitionTask(task, { type: "begin-fixes", head: "head-1", generation: 0 }, context());
+  expect(task.findingLedger?.[0]?.status).toBe("unresolved");
+
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head: "head-2", generation: 1 },
+    context(),
+  );
+  task = transitionTask(
+    task,
+    {
+      type: "validation-succeeded",
+      head: "head-2",
+      generation: 1,
+      contract: "iteration",
+      policyDigest,
+      evidence: [evidence("head-2", "iteration")],
+    },
+    context(),
+  );
+  task = transitionTask(
+    task,
+    { type: "record-review", review: review("behavior", true, "head-2", 1) },
+    context(),
+  );
+
+  const settled = task.findingLedger?.[0];
+  expect(settled?.status).toBe("addressed");
+  expect(settled?.raisedAt).toEqual({ head: "head-1", generation: 0, reviewRound: 0 });
+  expect(settled?.statusAt).toEqual({ head: "head-2", generation: 1, reviewRound: 1 });
+  expect(ledgerBlockers(task.findingLedger ?? [])).toEqual([]);
 });
 
 test("pause, resume, block, cancel, scout completion, and merge remain distinct", () => {

@@ -2,7 +2,12 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mergePullRequest, publishPullRequest } from "../../src/adapters/git.ts";
+import {
+  mergePullRequest,
+  publishPullRequest,
+  readDiffRange,
+  readReferencingFiles,
+} from "../../src/adapters/git.ts";
 import {
   closeEndpoint,
   createReviewerEndpoint,
@@ -992,4 +997,86 @@ test("destroys one exact Treehouse target with the safe confirmation flag", asyn
     "/tmp/treehouse/worktree",
     "--yes",
   ]);
+});
+
+test("readDiffRange reports the changed files and bounds the patch", async () => {
+  const patch = "x".repeat(200);
+  const { calls, run } = scriptedRunner([result("src/a.ts\nsrc/b.ts\n"), result(patch)]);
+
+  const observation = await readDiffRange(run, {
+    repo: "/repo",
+    fromRef: "base",
+    toRef: "head",
+    maxBytes: 64,
+  });
+
+  expect(observation.files).toEqual(["src/a.ts", "src/b.ts"]);
+  expect(observation.truncated).toBe(true);
+  expect(observation.patch).toHaveLength(64);
+  expect(calls[0]?.argv).toEqual([
+    "git",
+    "-C",
+    "/repo",
+    "diff",
+    "--no-ext-diff",
+    "--name-only",
+    "base..head",
+  ]);
+  expect(calls[1]?.argv).toContain("base..head");
+});
+
+test("readDiffRange keeps an empty range readable", async () => {
+  const { run } = scriptedRunner([result(""), result("")]);
+
+  const observation = await readDiffRange(run, {
+    repo: "/repo",
+    fromRef: "base",
+    toRef: "head",
+    maxBytes: 64,
+  });
+
+  expect(observation.files).toEqual([]);
+  expect(observation.truncated).toBe(false);
+});
+
+test("readReferencingFiles excludes the changed files and bounds the result", async () => {
+  const { calls, run } = scriptedRunner([
+    result("head:src/a.ts\nhead:src/main.ts\nhead:src/cli.ts\n"),
+  ]);
+
+  const referencing = await readReferencingFiles(run, {
+    repo: "/repo",
+    ref: "head",
+    files: ["src/a.ts"],
+    maxResults: 1,
+  });
+
+  expect(referencing).toEqual(["src/main.ts"]);
+  expect(calls[0]?.argv).toEqual([
+    "git",
+    "-C",
+    "/repo",
+    "grep",
+    "--files-with-matches",
+    "--fixed-strings",
+    "-e",
+    "a",
+    "head",
+  ]);
+});
+
+test("readReferencingFiles treats no match as an empty observation", async () => {
+  const { run } = scriptedRunner([result("", 1)]);
+
+  await expect(
+    readReferencingFiles(run, { repo: "/repo", ref: "head", files: ["src/a.ts"], maxResults: 5 }),
+  ).resolves.toEqual([]);
+});
+
+test("readReferencingFiles surfaces a real git failure", async () => {
+  const { run } = scriptedRunner([result("", 128, "fatal: bad revision")]);
+
+  await expect(
+    readReferencingFiles(run, { repo: "/repo", ref: "head", files: ["src/a.ts"], maxResults: 5 }),
+  ).rejects.toThrow();
 });
