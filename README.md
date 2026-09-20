@@ -188,7 +188,7 @@ An explicit `tandem PATH` opens or reconnects only that project after ownership 
 planning turn, a managed coordinator refreshes its owned, clean source checkout from `origin/main`.
 New tasks capture that revision; existing tasks and workers keep their original pins and checkouts.
 Fetch or source-safety failures block new task creation rather than silently using stale source.
-Use `--restart` to reload the extension and refresh source without resetting child work.
+Use `tandem restart` to reload the extension and refresh source without resetting child work.
 
 ### Migrate legacy state (offline only)
 

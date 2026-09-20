@@ -234,8 +234,8 @@ With no action, the low-level CLI defaults to `launch`. It uses the same remembe
 normal terminal command and agent integration. Explicit overrides must remain consistent when
 reconnecting or restarting so durable state and the named Herdr context are reused.
 
-`--restart` is the non-destructive coordinator replacement surface. From a separate normal
-terminal, `tandem --restart PATH` verifies exact recorded coordinator ownership, revalidates the
+`tandem restart` is the non-destructive coordinator replacement surface. From a separate normal
+terminal, `tandem restart PATH` verifies exact recorded coordinator ownership, revalidates the
 pane cwd/process immediately before close, confirms close acknowledgement and pane absence, then
 launches a replacement with the same lease/session directory and `--continue`. Child panes, task
 IDs and generations, worktrees, conversation history, pending questions/messages, and reports
@@ -263,7 +263,7 @@ The installed `tandem` command uses the following terminal options and environme
 | Conversation reconnect | Bare `tandem` opens or reconnects all saved projects; explicit `tandem PATH` opens or reconnects only that project; add `--continue` only when starting stopped coordinators and resuming saved conversations |
 | Herdr attachment | `--headless` or `--no-attach`; both prepare without attaching the Herdr terminal client |
 | Coordinator reset | `--reset`; preflight and reopen only selected idle Tandem-owned coordinators; launch-only and rejected inside Herdr |
-| Coordinator restart | `--restart`; replace only the owned coordinator while preserving tasks, generations, conversations, questions/messages, reports, worktrees, leases, and child panes |
+| Coordinator restart | `tandem restart` (`--restart` accepted); replace only the owned coordinator while preserving tasks, generations, conversations, questions/messages, reports, worktrees, leases, and child panes |
 | Forced cancellation | `--reset --force`; cancel selected active work, stop owned terminals, and reopen coordinators while preserving files/worktrees |
 
 ### Remembered setup
@@ -354,7 +354,7 @@ task records, and delivery retain the original identity as `TANDEM_REPO`; the ow
 is `TANDEM_SOURCE_REPO`, which users normally do not set themselves.
 
 An explicit `tandem PATH` opens or reconnects only that project after ownership checks. `--continue`
-resumes a stopped coordinator's saved conversation; `--restart` reloads the extension, prefetches
+resumes a stopped coordinator's saved conversation; `tandem restart` reloads the extension, prefetches
 fresh source before closing the old coordinator, and preserves child work and conversation history.
 Before each planning turn, the coordinator refreshes only its proven-owned clean checkout. A durable
 refresh intent recovers an interrupted switch only for the same lease at its recorded old or new
