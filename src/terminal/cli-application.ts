@@ -7,6 +7,7 @@ import {
   type TandemEnvironmentSource,
 } from "../config/environment.ts";
 import type { CommandRequest, CommandResult, CommandRunner, ModelSpec } from "../contracts.ts";
+import { PARALLEL_COORDINATORS_VARIABLE } from "../coordinator/exclusivity.ts";
 import {
   type CoordinatorLaunchDependencies,
   coordinatorFiles,
@@ -80,6 +81,7 @@ function environmentSource(): TandemEnvironmentSource {
     "TANDEM_POOL_ROOT",
     "TANDEM_REPO",
     "TANDEM_SOURCE_REPO",
+    PARALLEL_COORDINATORS_VARIABLE,
     "HERDR_ENV",
     "HERDR_SESSION",
     "HERDR_SESSION_NAME",
@@ -644,6 +646,28 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
             title,
             base,
             summary: summaryForInvocation(invocation, 4),
+            approved: true,
+          }),
+          approved: true,
+        };
+      }
+      case "draft": {
+        const taskId = taskIdFor(invocation);
+        requireYes(invocation, `publishing an unfinished draft for ${taskId}`);
+        const repository = requiredPositionOrOption(
+          invocation,
+          invocation.options.repository,
+          1,
+          "repository",
+        );
+        const title = requiredPositionOrOption(invocation, invocation.options.title, 2, "title");
+        const base = requiredPositionOrOption(invocation, invocation.options.base, 3, "base");
+        return {
+          command: invocation.command,
+          value: await getService(environment).publishDraft(taskId, {
+            repository,
+            title,
+            base,
             approved: true,
           }),
           approved: true,

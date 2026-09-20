@@ -136,6 +136,56 @@ export type ValidationCommand = {
   readonly timeoutMs: number;
 };
 
+/** How much review scrutiny a change is classified for, ordered from least to most. */
+export const REVIEW_LEVEL_ORDER = ["light", "standard", "deep"] as const;
+
+export type ReviewLevel = (typeof REVIEW_LEVEL_ORDER)[number];
+
+/**
+ * Change kinds that always force at least their own documented level, whatever the rest of the
+ * diff shows. A floor is fixed: no classifier input, helper, or policy setting can lower it.
+ */
+export const SAFETY_FLOOR_ORDER = [
+  "permissions-security",
+  "data-integrity",
+  "shared-contracts-concurrency",
+  "dependency-build-infra",
+] as const;
+
+export type SafetyFloor = (typeof SAFETY_FLOOR_ORDER)[number];
+
+/**
+ * A depth recommendation a helper offered for the same change. In shadow mode it is recorded
+ * beside the deterministic level for later comparison and never becomes the level that is used.
+ */
+export type ReviewLevelAssistance = {
+  readonly mode: "shadow";
+  readonly recommendation: ReviewLevel | "unavailable";
+  readonly reason: string;
+  readonly requestIdentity: string;
+  readonly resultIdentity: string;
+};
+
+/** The durable classification of a task's change, with the reason and floors that produced it. */
+export type ReviewLevelRecord = {
+  readonly level: ReviewLevel;
+  readonly reason: string;
+  readonly floors: readonly SafetyFloor[];
+  readonly assistance?: ReviewLevelAssistance;
+};
+
+/**
+ * Repository settings that decide whether a review level may change what actually runs. Every
+ * field defaults to the value that reproduces the review behavior Tandem had before levels
+ * existed, so a repository only opts in deliberately.
+ */
+export type ReviewLevelPolicy = {
+  readonly reducedRouting: boolean;
+  readonly deepScrutiny: boolean;
+  readonly jevAssistance: "off" | "shadow";
+  readonly sourceTransmission: boolean;
+};
+
 export type RepoPolicy = {
   readonly version: 1;
   readonly models: Readonly<Record<AgentRole, ModelSpec>>;
@@ -144,6 +194,7 @@ export type RepoPolicy = {
   readonly validationCommands: readonly ValidationCommand[];
   readonly maxWorkers: number;
   readonly maxFixRounds: number;
+  readonly reviewLevels: ReviewLevelPolicy;
 };
 
 export type GuidanceProvenance = {
@@ -196,6 +247,34 @@ export type Finding = {
   readonly description: string;
 };
 
+/** Where a finding status was established: the reviewed code and the fix round that observed it. */
+export type FindingObservation = {
+  readonly head: string;
+  readonly generation: number;
+  readonly reviewRound: number;
+};
+
+/**
+ * What a finding identity is currently known to be. `addressed` means a later review of the same
+ * lens stopped reporting it, `regressed` means an addressed identity came back, and `disputed`
+ * means two reviews of the same identity recorded contradicting verdicts.
+ */
+export type FindingStatus = "addressed" | "unresolved" | "regressed" | "disputed";
+
+/** One finding identity carried across review rounds, with the change supporting its status. */
+export type FindingLedgerEntry = {
+  readonly id: string;
+  readonly lens: ReviewLens;
+  readonly severity: FindingSeverity;
+  readonly verdict: FindingVerdict;
+  readonly description: string;
+  readonly file?: string;
+  readonly line?: number;
+  readonly status: FindingStatus;
+  readonly raisedAt: FindingObservation;
+  readonly statusAt: FindingObservation;
+};
+
 export type ReviewResult = {
   readonly lens: ReviewLens;
   readonly head: string;
@@ -206,7 +285,33 @@ export type ReviewResult = {
   readonly mode?: ReviewMode;
 };
 
-export type ValidationEvidence = {
+/** Names the two validation contracts: targeted fix-time checks and the complete final gate. */
+export type ValidationContractName = "iteration" | "final";
+
+/** Keeps runner-owned local checks distinguishable from GitHub or other remote checks. */
+export type CheckOrigin = "local" | "github";
+
+/** The delivered code and policy a contract result is pinned to. */
+export type ContractIdentity = {
+  readonly head: string;
+  readonly generation: number;
+  readonly policyDigest: string;
+};
+
+/** What an authorized fix round targets, recorded when the round is admitted. */
+export type IterationScope = {
+  readonly head: string;
+  readonly generation: number;
+  readonly policyDigest: string;
+  readonly reproduces: readonly string[];
+  readonly surfaces: readonly string[];
+  readonly findingIds: readonly string[];
+};
+
+/** Marks evidence written before validation contracts existed, so it can never prove acceptance. */
+export const LEGACY_EVIDENCE_CONTRACT = "legacy";
+
+type RecordedCheck = {
   readonly name: string;
   readonly argv: readonly string[];
   readonly exitCode: number;
@@ -214,6 +319,23 @@ export type ValidationEvidence = {
   readonly stderr: string;
   readonly head: string;
 };
+
+/** A check recorded under a named contract and pinned to one code and policy identity. */
+export type PinnedValidationEvidence = RecordedCheck & {
+  readonly contract: ValidationContractName;
+  readonly origin: CheckOrigin;
+  readonly policyDigest: string;
+};
+
+/**
+ * A check recovered from a durable record written before contracts existed. It carries no contract,
+ * origin, or policy identity, so it stays readable as history and never satisfies either contract.
+ */
+export type LegacyValidationEvidence = RecordedCheck & {
+  readonly contract: typeof LEGACY_EVIDENCE_CONTRACT;
+};
+
+export type ValidationEvidence = PinnedValidationEvidence | LegacyValidationEvidence;
 
 export type NotificationKind = "routine" | "coordinator";
 
@@ -277,6 +399,21 @@ export type ResearchContinuation = {
   readonly classifierVersion?: string;
 };
 
+/**
+ * How far automatic release of a terminal task's child pane and worktree got, and why it stopped
+ * there. `released` and `retained` are settled outcomes, `pending` is retried by reconciliation,
+ * and `quarantined` waits for a human because ownership could not be proven.
+ */
+export type TaskCleanupStatus = "released" | "retained" | "pending" | "quarantined";
+
+/** The durable note a cleanup attempt leaves on the task it inspected. */
+export type TaskCleanupState = {
+  readonly schemaVersion: 1;
+  readonly status: TaskCleanupStatus;
+  readonly reason: string;
+  readonly observedAt: IsoTimestamp;
+};
+
 export type TaskRecord = {
   readonly schemaVersion: 1;
   readonly id: string;
@@ -297,15 +434,19 @@ export type TaskRecord = {
   readonly generation: number;
   readonly reviewRound: number;
   readonly reviewHead?: string;
+  readonly iterationScope?: IterationScope;
+  readonly reviewLevel?: ReviewLevelRecord;
   readonly reportPath?: string;
   readonly validationEvidence: readonly ValidationEvidence[];
   readonly reviews: readonly ReviewResult[];
+  readonly findingLedger?: readonly FindingLedgerEntry[];
   readonly researchHandoffs?: readonly ResearchHandoff[];
   readonly researchContinuation?: ResearchContinuation;
   readonly blockReason?: string;
   readonly notifications: readonly Notification[];
   readonly communication?: TaskCommunication;
   readonly pullRequest?: PullRequestMetadata;
+  readonly cleanup?: TaskCleanupState;
 };
 
 export type CommandRequest = {

@@ -18,9 +18,9 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | --- | --- |
 | Normal `tandem`, onboarding, project selection | [main.ts](src/main.ts) → [terminal/](src/terminal/) |
 | Action CLI / JSON automation | [cli.ts](src/cli.ts) → [terminal/cli-application.ts](src/terminal/cli-application.ts) |
-| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `reset.ts`, `workspace.ts` |
+| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
 | Models, environment, policy | [config/](src/config/) |
-| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `store.ts`, `control.ts` |
+| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts` |
 | Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/workflow.ts](src/recovery/workflow.ts) |
 | Worker execution, results, control, validation | [workers/](src/workers/); entry points: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [validation-worker.ts](src/validation-worker.ts) |
 | OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
@@ -44,6 +44,8 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
   `tandem migrate-state --home PATH`, then apply with `tandem migrate-state --home PATH --yes`.
   Read-only status/planning never applies; migration preserves durable records and archives/fences
   original bytes.
+- Never delete coordinator records, panes, worktrees, or lock files by hand; run the dry-run-by-default
+  `tandem reconcile-resources`, then `--yes`, which classifies every resource before changing any of it.
 - Unknown owned-operation outcomes are quarantined with capacity/resources retained; never clear a
   reservation, replace a task, retry uncertain work, or change policy to bypass ownership. Reset is
   not migration or recovery; `tandem --reset --force [PATH ...]` cancels selected active tasks.
@@ -60,6 +62,10 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 - File moves must update imports and `import.meta.url` worker/extension resource paths together.
 - Test observable behavior. Native process/terminal checks use isolated Herdr sessions and temporary
   Tandem homes, never the user's live state.
+- Cross-subsystem scenario evals live in [tests/evals/](tests/evals/). Reuse
+  [scenario.ts](tests/evals/scenario.ts) for its temporary home, fake Herdr/Treehouse/git/OMP/TypeSafe
+  boundaries, scripted failures, event trace, and retained/released/failed/quarantined resource ledger
+  rather than writing another external-boundary fake. Focused unit tests stay the regression suite.
 - Only the parent runs project-wide gates after integration; child workers run no tests, builds,
   formatters, or linters. From the repository root:
 
@@ -85,6 +91,7 @@ Before changing behavior, read its contract:
 - PRs/artifacts: [Pull-request delivery](docs/agent-reference.md#pull-request-delivery), [Presentations and Lavish](docs/agent-reference.md#presentations-and-lavish).
 - Persistence/restart/locking: [Recovery and durable state](docs/agent-reference.md#recovery-durable-state-and-compaction), [Local limits](docs/agent-reference.md#local-limits-and-source-of-truth).
 - Recovery/rescue workflow: [First-class bounded recovery actions](docs/agent-reference.md#first-class-bounded-recovery-actions).
+- Stale records/panes/leases: [Reconciling Tandem resources across sessions](docs/agent-reference.md#reconciling-tandem-resources-across-sessions).
 
 Keep this file a routing map and cross-cutting rules. Update links when code moves; put detailed
 behavior in the reference instead of accumulating incident-specific instructions here.

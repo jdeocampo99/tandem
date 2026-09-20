@@ -245,6 +245,12 @@ const resetPolicy: ResolvedPolicy = {
     validationCommands: [],
     maxWorkers: 3,
     maxFixRounds: 1,
+    reviewLevels: {
+      reducedRouting: false,
+      deepScrutiny: false,
+      jevAssistance: "off",
+      sourceTransmission: false,
+    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -1616,6 +1622,8 @@ test("force reset reaps detached validation commands before closing their pane",
         generation: job.generation,
         repoPath: job.cwd,
         head: job.head,
+        contract: "final",
+        policyDigest: "policy-digest",
         surfaces: ["example.ts"],
         resultPath: job.resultPath,
         execution: {

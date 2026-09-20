@@ -35,6 +35,12 @@ const policy: ResolvedPolicy = {
     validationCommands: [{ name: "smoke", argv: ["true"], surfaces: ["*"], timeoutMs: 1_000 }],
     maxWorkers: 4,
     maxFixRounds: 1,
+    reviewLevels: {
+      reducedRouting: false,
+      deepScrutiny: false,
+      jevAssistance: "off",
+      sourceTransmission: false,
+    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -489,6 +495,28 @@ test("delivery preflight rejects reviewed HEAD mismatch", async () => {
     const value = await f.workflow.deliveryPreflight("task-1", "owner/repo", "main");
     expect(value.ready).toBe(false);
     expect(value.refusals.join("\n")).toContain("reviewed-head");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("delivery preflight treats the task's own draft as the PR to update, not a duplicate", async () => {
+  const draft = {
+    repository: "owner/repo",
+    number: 11,
+    state: "draft" as const,
+    head: HEAD,
+    base: "main",
+  };
+  const f = await fixture({ stage: "ready", pullRequest: draft });
+  try {
+    const value = await f.workflow.deliveryPreflight("task-1", "owner/repo", "main");
+    expect(value.refusals.join("\n")).not.toContain("duplicate publication");
+    expect(value.draftPullRequest).toEqual(draft);
+    expect(value.duplicatePullRequest).toBeUndefined();
+
+    const other = await f.workflow.deliveryPreflight("task-1", "owner/other", "main");
+    expect(other.refusals.join("\n")).toContain("duplicate publication");
   } finally {
     await f.cleanup();
   }

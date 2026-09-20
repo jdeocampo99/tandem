@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
+import {
+  type GitCheckpoint,
+  readCheckpoint,
+  readDiffRange,
+  readReferencingFiles,
+} from "../adapters/git.ts";
 import {
   closeEndpoint,
   createReviewerEndpoint,
@@ -18,6 +23,7 @@ import type {
   CommandRunner,
   Endpoint,
   IdFactory,
+  ReviewLevelRecord,
   ReviewMode,
   TaskQuestion,
   TaskRecord,
@@ -82,6 +88,13 @@ import {
 } from "../service/records.ts";
 import { taskSourcePath } from "../service/source.ts";
 import {
+  iterationScopeFor,
+  type PlannedValidation,
+  planValidation,
+  policyIdentity,
+  ValidationConfigurationError,
+} from "../tasks/acceptance.ts";
+import {
   readWorkerReceipt,
   taskInboxPath,
   workerReceiptPath,
@@ -91,7 +104,28 @@ import {
   formatTaskMessages,
   MAX_TASK_MESSAGE_CHARS,
 } from "../tasks/communication-protocol.ts";
+import { describeFixRoundExhaustion } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
+import type { ReviewAssistanceRuntime } from "../tasks/review-assistance.ts";
+import { requestReviewAssistance } from "../tasks/review-assistance.ts";
+import {
+  type AdvisoryReviewLead,
+  assessReviewImpact,
+  buildReviewBrief,
+  type DiffRange,
+  lastReviewedHead,
+  REVIEW_BRIEF_LIMITS,
+  type ReviewBriefDiffReference,
+  type ReviewBriefObservations,
+  renderReviewBrief,
+} from "../tasks/review-brief.ts";
+import {
+  assistedReviewLevel,
+  classifyReviewLevel,
+  observeChangedFiles,
+  reclassifyReviewLevel,
+  requiredReviewLenses,
+} from "../tasks/review-levels.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import {
   readValidationResult,
@@ -110,12 +144,52 @@ import { prepareWorkerTerminal, workerJobForEndpoint } from "./terminal-control.
 
 const DEFAULT_STALL_WARNING_MS = 5 * 60 * 1000;
 const DEFAULT_HEARTBEAT_GRACE_MS = 60 * 1000;
-const REQUIRED_REVIEW_LENSES: readonly ["behavior", "design", "coverage", "verification"] = [
-  "behavior",
-  "design",
-  "coverage",
-  "verification",
-];
+/** One observed diff range, before a caller has chosen where its patch will be written. */
+type ReviewDiffFact = Readonly<{
+  readonly range: DiffRange;
+  readonly fromRef: string;
+  readonly toRef: string;
+  readonly changedFiles: readonly string[];
+  readonly truncated: boolean;
+  readonly patch: string;
+}>;
+
+/** The git facts one review round is classified and briefed from. */
+type ReviewDiffFacts = Readonly<{
+  readonly cumulative: ReviewDiffFact;
+  readonly sinceLastReview?: ReviewDiffFact;
+  readonly affectedCallers: readonly string[];
+}>;
+
+function diffReference(fact: ReviewDiffFact, patchPath: string): ReviewBriefDiffReference {
+  return {
+    range: fact.range,
+    fromRef: fact.fromRef,
+    toRef: fact.toRef,
+    patchPath,
+    changedFiles: fact.changedFiles,
+    truncated: fact.truncated,
+  };
+}
+
+/** Names where each observed patch was written, which is all the brief adds to the raw facts. */
+function reviewBriefObservations(
+  facts: ReviewDiffFacts,
+  paths: Readonly<{
+    readonly cumulativePatchPath: string;
+    readonly incrementalPatchPath: string;
+  }>,
+): ReviewBriefObservations {
+  return {
+    cumulative: diffReference(facts.cumulative, paths.cumulativePatchPath),
+    ...(facts.sinceLastReview === undefined
+      ? {}
+      : {
+          sinceLastReview: diffReference(facts.sinceLastReview, paths.incrementalPatchPath),
+        }),
+    affectedCallers: facts.affectedCallers,
+  };
+}
 export type OperationClaim = Readonly<{
   readonly id: string;
   readonly fencingRevision: number;
@@ -170,6 +244,7 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
   readonly maintainPoolForAllocation: (task: TaskRecord) => Promise<boolean>;
+  readonly reviewAssistance: ReviewAssistanceRuntime;
 }>;
 export class WorkerWorkflow {
   readonly #deps: WorkerWorkflowDependencies;
@@ -272,11 +347,16 @@ export class WorkerWorkflow {
     let result: ValidationResult;
     try {
       if (job.head === undefined) throw new Error("validation job is missing expected HEAD");
+      if (job.contract === undefined || job.policyDigest === undefined) {
+        throw new Error("validation job is missing its contract identity");
+      }
       result = await readValidationResult(job.resultPath, {
         id: job.id,
         taskId: job.taskId,
         generation: job.generation,
         head: job.head,
+        contract: job.contract,
+        policyDigest: job.policyDigest,
       });
     } catch (error) {
       if (isMissing(error)) {
@@ -640,6 +720,21 @@ export class WorkerWorkflow {
       await this.failJob(task, job, "validation job has no expected HEAD", claim);
       return;
     }
+    const contract = job.contract;
+    const policyDigest = job.policyDigest;
+    if (contract === undefined || policyDigest === undefined) {
+      await this.failJob(task, job, "validation job has no contract identity", claim);
+      return;
+    }
+    if (policyIdentity(task.policy) !== policyDigest) {
+      await this.failJob(
+        task,
+        job,
+        "validation evidence was produced under a different policy identity",
+        claim,
+      );
+      return;
+    }
     const checkout = await this.readWorkerCheckout(runtime, job);
     if (
       checkout.checkpoint.dirty ||
@@ -654,6 +749,8 @@ export class WorkerWorkflow {
           type: "validation-failed",
           head: expectedHead,
           generation: job.generation,
+          contract,
+          policyDigest,
           evidence: [
             ...result.evidence,
             {
@@ -663,6 +760,9 @@ export class WorkerWorkflow {
               stdout: checkout.checkpoint.head,
               stderr: "worktree changed while validation was running",
               head: expectedHead,
+              contract,
+              origin: "local",
+              policyDigest,
             },
           ],
         },
@@ -677,12 +777,16 @@ export class WorkerWorkflow {
             type: "validation-succeeded",
             head: expectedHead,
             generation: job.generation,
+            contract,
+            policyDigest,
             evidence: result.evidence,
           }
         : {
             type: "validation-failed",
             head: expectedHead,
             generation: job.generation,
+            contract,
+            policyDigest,
             evidence: result.evidence,
           };
     await this.consumeJob(task.id, job.id, claim, event, {
@@ -1504,10 +1608,7 @@ export class WorkerWorkflow {
       return;
     }
     if (!recoveryFix && task.reviewRound >= task.policy.config.maxFixRounds) {
-      await this.#deps.blockTask(
-        task.id,
-        `fix round budget exhausted at ${task.reviewRound}; no new fix operation was admitted`,
-      );
+      await this.#deps.blockTask(task.id, describeFixRoundExhaustion(task));
       return;
     }
     const reservation = reserved ?? (await this.reserveTask(task.id, "implementer"));
@@ -1789,6 +1890,19 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, "validation requires a task worktree and reviewed HEAD");
       return;
     }
+    let planned: PlannedValidation;
+    try {
+      planned = planValidation(task, task.reviewHead);
+    } catch (error) {
+      await this.#deps.blockTask(
+        task.id,
+        error instanceof ValidationConfigurationError
+          ? `validation refused: ${error.message}`
+          : `validation contract could not be planned: ${describeError(error)}`,
+      );
+      return;
+    }
+    const plan = planned.plan;
     const reservation = reserved ?? (await this.reserveTask(task.id, "validation"));
     if (reservation === undefined) return;
     const runtime = reservation.runtime;
@@ -1862,13 +1976,16 @@ export class WorkerWorkflow {
               receiptPaneId = undefined;
             }
           }
-          const existingEndpoint = currentRuntime.endpoints.find(
-            (entry) =>
-              entry.paneId === receiptPaneId ||
-              (receiptPaneId === undefined &&
-                entry.generation === task.generation &&
-                entry.role === "reviewer"),
-          );
+          const existingEndpoint =
+            existingEffect === undefined
+              ? undefined
+              : currentRuntime.endpoints.find(
+                  (entry) =>
+                    entry.paneId === receiptPaneId ||
+                    (receiptPaneId === undefined &&
+                      entry.generation === task.generation &&
+                      entry.role === "reviewer"),
+                );
           if (existingEndpoint !== undefined) return existingEndpoint;
           if (existingEffect !== undefined) {
             if (existingEffect.phase !== "succeeded" || existingEffect.receipt === undefined) {
@@ -1954,8 +2071,10 @@ export class WorkerWorkflow {
         generation: task.generation,
         repoPath: validationCwd,
         head: task.reviewHead,
-        surfaces: task.surfaces,
-        commands: task.policy.config.validationCommands,
+        contract: plan.contract,
+        policyDigest: plan.identity.policyDigest,
+        surfaces: plan.surfaces,
+        commands: plan.commands,
         resultPath: paths.resultPath,
         ...(reservation.runtime.operation === undefined
           ? {}
@@ -2002,6 +2121,9 @@ export class WorkerWorkflow {
           : { operationId: reservation.runtime.operation.id }),
         endpoint: validationEndpointReady,
         head: task.reviewHead,
+        contract: plan.contract,
+        policyDigest: plan.identity.policyDigest,
+        ...(planned.escalation === undefined ? {} : { escalation: planned.escalation }),
         ...(task.communication === undefined
           ? {}
           : { instructionRevision: task.communication.revision }),
@@ -2024,6 +2146,153 @@ export class WorkerWorkflow {
       workerCommand(this.#deps.validationWorkerPath, durableJob.jobPath),
       claim,
     );
+  }
+
+  /**
+   * Reads the git facts both the review-level classifier and the review brief need: the cumulative
+   * range from the worktree base, the range since the last reviewed HEAD, and the files at HEAD
+   * that reference a changed file. The patches are returned with the facts because neither caller
+   * has chosen where they will be written yet.
+   */
+  private async readReviewDiffFacts(
+    input: Readonly<{
+      readonly task: TaskRecord;
+      readonly head: string;
+      readonly repo: string;
+      readonly baseHead: string;
+    }>,
+  ): Promise<ReviewDiffFacts> {
+    const maxBytes = REVIEW_BRIEF_LIMITS.maxDiffPatchBytes;
+    const cumulative = await readDiffRange(this.#deps.run, {
+      repo: input.repo,
+      fromRef: input.baseHead,
+      toRef: input.head,
+      maxBytes,
+    });
+    const affectedCallers = await readReferencingFiles(this.#deps.run, {
+      repo: input.repo,
+      ref: input.head,
+      files: cumulative.files.slice(0, REVIEW_BRIEF_LIMITS.maxChangedFiles),
+      maxResults: REVIEW_BRIEF_LIMITS.maxAffectedCallers,
+    });
+    const cumulativeFact: ReviewDiffFact = {
+      range: "cumulative",
+      fromRef: input.baseHead,
+      toRef: input.head,
+      changedFiles: cumulative.files,
+      truncated: cumulative.truncated,
+      patch: cumulative.patch,
+    };
+    const previousHead = lastReviewedHead(input.task);
+    if (previousHead === undefined || previousHead === input.head) {
+      return { cumulative: cumulativeFact, affectedCallers };
+    }
+    const incremental = await readDiffRange(this.#deps.run, {
+      repo: input.repo,
+      fromRef: previousHead,
+      toRef: input.head,
+      maxBytes,
+    });
+    return {
+      cumulative: cumulativeFact,
+      sinceLastReview: {
+        range: "since-last-review",
+        fromRef: previousHead,
+        toRef: input.head,
+        changedFiles: incremental.files,
+        truncated: incremental.truncated,
+        patch: incremental.patch,
+      },
+      affectedCallers,
+    };
+  }
+
+  /**
+   * Classifies the round from the observed diff, merges it into the recorded classification so a
+   * level never drops, and asks the configured helper for a shadow depth recommendation and focus
+   * flags. Returns the classification to persist and the untrusted leads to pass to the brief.
+   */
+  private async classifyRound(
+    input: Readonly<{
+      readonly task: TaskRecord;
+      readonly head: string;
+      readonly facts: ReviewDiffFacts;
+    }>,
+  ): Promise<
+    Readonly<{
+      readonly record: ReviewLevelRecord;
+      readonly leads: readonly AdvisoryReviewLead[];
+    }>
+  > {
+    const { facts, head, task } = input;
+    const files = observeChangedFiles({
+      changedFiles: facts.cumulative.changedFiles,
+      patch: facts.cumulative.patch,
+      truncated: facts.cumulative.truncated,
+    });
+    const impact = assessReviewImpact({
+      task,
+      ledger: task.findingLedger ?? [],
+      observations: facts,
+      escalation: planValidation(task, head).escalation,
+    });
+    const deterministic = reclassifyReviewLevel(
+      task.reviewLevel,
+      classifyReviewLevel({ files, affectedCallers: facts.affectedCallers, impact }),
+    );
+    const assistance = await requestReviewAssistance(
+      this.#deps.reviewAssistance,
+      task.policy.config.reviewLevels,
+      {
+        files,
+        affectedCallers: facts.affectedCallers,
+        deterministic,
+        impact: impact.assessment,
+        policyDigest: policyIdentity(task.policy),
+        source: `${facts.cumulative.range} diff ${facts.cumulative.fromRef}..${facts.cumulative.toRef}`,
+      },
+    );
+    if (assistance.identity === undefined) return { record: deterministic, leads: [] };
+    const assisted: ReviewLevelRecord = {
+      ...deterministic,
+      assistance: {
+        mode: "shadow",
+        recommendation: assistance.recommendation,
+        reason: assistance.reason,
+        requestIdentity: assistance.identity.request,
+        resultIdentity: assistance.resultIdentity ?? "unavailable",
+      },
+    };
+    return {
+      record: {
+        ...assisted,
+        level: assistedReviewLevel(assisted, task.policy.config.reviewLevels),
+      },
+      leads: assistance.leads,
+    };
+  }
+
+  /**
+   * Persists the round's classification so the level and its reason survive a restart and appear
+   * in the task summary. The durable write is skipped when the classification is unchanged, which
+   * keeps a review tick from bumping the task revision for nothing.
+   */
+  private async recordReviewLevel(
+    task: TaskRecord,
+    record: ReviewLevelRecord,
+  ): Promise<TaskRecord> {
+    if (
+      task.reviewLevel !== undefined &&
+      JSON.stringify(task.reviewLevel) === JSON.stringify(record)
+    ) {
+      return task;
+    }
+    return this.#deps.updateTask(task.id, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: this.#deps.clock(),
+      reviewLevel: record,
+    }));
   }
 
   async advanceReview(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
@@ -2078,13 +2347,22 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, "review refused because the worktree is stale or dirty");
       return;
     }
-    const nextLens = REQUIRED_REVIEW_LENSES.find(
+    const reviewHead = task.reviewHead;
+    const facts = await this.readReviewDiffFacts({
+      task,
+      head: reviewHead,
+      repo: task.worktree.path,
+      baseHead: task.worktree.baseHead,
+    });
+    const classified = await this.classifyRound({ task, head: reviewHead, facts });
+    const leveledTask = await this.recordReviewLevel(task, classified.record);
+    const nextLens = requiredReviewLenses(leveledTask, reviewHead).find(
       (lens) =>
-        !task.reviews.some(
+        !leveledTask.reviews.some(
           (review) =>
             review.lens === lens &&
-            review.head === task.reviewHead &&
-            review.generation === task.generation,
+            review.head === reviewHead &&
+            review.generation === leveledTask.generation,
         ),
     );
     if (nextLens === undefined) {
@@ -2208,7 +2486,23 @@ export class WorkerWorkflow {
       const paths = jobPaths(directory);
       const diffPath = join(directory, "diff.patch");
       const evidencePath = join(directory, "validation-evidence.json");
+      const briefPath = join(directory, "review-brief.md");
+      const cumulativePatchPath = join(directory, "cumulative.patch");
+      const incrementalPatchPath = join(directory, "since-last-review.patch");
       const reviewMode: ReviewMode = reservedRuntime.reviewMode ?? "review_changed_diff";
+      const observations = reviewBriefObservations(facts, {
+        cumulativePatchPath: reviewMode === "review_existing_head" ? cumulativePatchPath : diffPath,
+        incrementalPatchPath,
+      });
+      const brief = renderReviewBrief(
+        buildReviewBrief({
+          task: leveledTask,
+          head: reviewHead,
+          lens: nextLens,
+          observations,
+          advisoryLeads: classified.leads,
+        }),
+      );
       const artifactsWritten = await this.withOperationEffect(
         task.id,
         claim,
@@ -2219,6 +2513,13 @@ export class WorkerWorkflow {
             diffPath,
             reviewMode === "review_existing_head" ? "" : currentCheckout.diff,
           );
+          if (reviewMode === "review_existing_head") {
+            await writeTextAtomically(cumulativePatchPath, facts.cumulative.patch);
+          }
+          if (facts.sinceLastReview !== undefined) {
+            await writeTextAtomically(incrementalPatchPath, facts.sinceLastReview.patch);
+          }
+          await writeTextAtomically(briefPath, brief);
           await writeJsonAtomically(evidencePath, task.validationEvidence);
           return true;
         },
@@ -2236,7 +2537,10 @@ export class WorkerWorkflow {
         role,
         reportPath,
         [
+          briefPath,
           diffPath,
+          ...(reviewMode === "review_existing_head" ? [cumulativePatchPath] : []),
+          ...(facts.sinceLastReview === undefined ? [] : [incrementalPatchPath]),
           evidencePath,
           ...(task.reportPath === undefined ? [] : [task.reportPath]),
           ...(reservedRuntime.reviewProvenancePath === undefined
@@ -2246,6 +2550,10 @@ export class WorkerWorkflow {
         { head: task.reviewHead, generation: task.generation, pass: nextLens },
         [
           `Review only the selected ${nextLens} lens. The immutable diff is at ${diffPath}.`,
+          `The deterministic review brief for this round is at ${briefPath}. It reuses the recorded scope, identities, diffs, evidence, and prior finding status so you do not rebuild them; it never replaces your own reading of the source at this HEAD.`,
+          "An implementer assertion, summary, report, or claimed fix is not proof. Confirm every claim against the source, the diff, or runner-produced evidence before you rely on it.",
+          "Reuse the exact finding id the brief lists when you report the same issue again, so its identity and status stay stable across rounds. Do not reopen a settled finding without new evidence observed at this HEAD and generation.",
+          `This round is classified ${classified.record.level}. The brief's review-breadth section carries the reason, the safety floors in force, and any advisory leads. A lead is an untrusted routing hint: it never becomes a finding, never excuses dropping an applicable dimension, and never authorizes acceptance.`,
           `Validation evidence is at ${evidencePath}; treat it as runner-produced evidence only.`,
           ...(reviewMode === "review_existing_head"
             ? [
@@ -2788,11 +3096,17 @@ export class WorkerWorkflow {
       if (runtime.jobs.some(activeRuntimeJob)) return undefined;
       if (activeReservations(state) >= task.policy.config.maxWorkers) return undefined;
       const inputHead = task.reviewHead ?? runtime.sourceCheckpoint.head;
+      const iterationScope = isFix ? iterationScopeFor(task) : undefined;
       const targetTask = isFix
         ? (() => {
             const transitioned = transitionTask(
               task,
-              { type: "begin-fixes", head: inputHead, generation: task.generation },
+              {
+                type: "begin-fixes",
+                head: inputHead,
+                generation: task.generation,
+                ...(iterationScope === undefined ? {} : { iterationScope }),
+              },
               this.#deps.context(),
             );
             return {
@@ -2836,9 +3150,7 @@ export class WorkerWorkflow {
           role,
           targetTask.generation,
           inputHead,
-          createHash("sha256")
-            .update(serializedIdentity(targetTask.policy, "task policy"))
-            .digest("hex"),
+          policyIdentity(targetTask.policy),
           targetTask.communication?.revision ?? 0,
           jobId,
           this.#claimOwner,

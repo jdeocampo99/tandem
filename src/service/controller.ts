@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
-import { closeEndpoint, inspectEndpoint } from "../adapters/herdr.ts";
+import { closeEndpoint } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
@@ -24,6 +24,7 @@ import {
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
   MAX_RESEARCH_HANDOFF_TOTAL_BYTES,
+  type PullRequestMetadata,
   type RepoPolicy,
   type ResearchContinuation,
   type ResearchHandoff,
@@ -32,8 +33,14 @@ import {
   type TaskRecord,
 } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
-import { describeTaskPr, type PrSummary } from "../delivery/evidence.ts";
-import { mergeReviewedTask, publishReviewedTask } from "../delivery/pull-requests.ts";
+import { describeTaskPr, draftProgressDigest, type PrSummary } from "../delivery/evidence.ts";
+import {
+  type DraftPublication,
+  mergeReviewedTask,
+  publishReviewedTask,
+  publishTaskDraft,
+  refreshTaskDraft,
+} from "../delivery/pull-requests.ts";
 import { maintainPool } from "../pool/maintenance.ts";
 import {
   isPoolNotification,
@@ -65,6 +72,7 @@ import {
   unreleasedReservation,
 } from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
+import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import {
   defaultIdFactory,
   readRuntimeState,
@@ -90,6 +98,11 @@ import {
   type ResearchContinuationClassifier,
   researchContinuationClassifier,
 } from "../tasks/research-continuation-classifier.ts";
+import {
+  type ReviewAssistanceRuntime,
+  reviewAssistanceConfig,
+  reviewAssistanceRuntime,
+} from "../tasks/review-assistance.ts";
 import {
   createTaskStore,
   type TaskStore,
@@ -120,6 +133,7 @@ import {
   validateModelAssignments,
   workerRoleForTask,
 } from "./records.ts";
+import { releaseTerminalTaskResources } from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskSourcePath } from "./source.ts";
 
 export type CreateTaskRequest = Readonly<{
@@ -159,6 +173,8 @@ export type TandemServiceOptions = Readonly<{
   readonly idFactory?: IdFactory;
   /** Chooses a new scout's post-research disposition; defaults to deterministic cues alone. */
   readonly classifyResearchContinuation?: ResearchContinuationClassifier;
+  /** The Jev transport, cache, and diagnostics sink review-level assistance is allowed to use. */
+  readonly reviewAssistance?: ReviewAssistanceRuntime;
 }>;
 export type TandemService = Readonly<{
   readonly onboard: (repoPath: string, write?: boolean) => Promise<OnboardRepoResult>;
@@ -213,6 +229,15 @@ export type TandemService = Readonly<{
       readonly approved: boolean;
     },
   ) => Promise<TaskRecord>;
+  readonly publishDraft: (
+    id: string,
+    input: {
+      readonly repository: string;
+      readonly title: string;
+      readonly base: string;
+      readonly approved: boolean;
+    },
+  ) => Promise<TaskRecord>;
   readonly merge: (
     id: string,
     input: { readonly approved: boolean; readonly method?: "merge" | "squash" | "rebase" },
@@ -251,6 +276,7 @@ type ServiceDependencies = Readonly<{
   runtimePath: string;
   workerPath: string;
   validationWorkerPath: string;
+  reviewAssistance: ReviewAssistanceRuntime;
 }>;
 
 function assertTaskId(id: unknown): string {
@@ -436,6 +462,30 @@ function sameReservationIdentity(
   );
 }
 
+/** A task advanced while a remote publication was in flight; the published result is retained. */
+class TaskRevisionConflictError extends Error {
+  constructor(taskId: string) {
+    super(`Task ${taskId} changed while publishing; remote publication is retained`);
+    this.name = "TaskRevisionConflictError";
+  }
+}
+
+/** Bounded, privacy-safe failure label: a class name, never message text or command payloads. */
+function errorClassName(error: unknown): string {
+  if (error instanceof Error) return error.name.slice(0, 64);
+  return typeof error;
+}
+
+function samePullRequest(left: PullRequestMetadata, right: PullRequestMetadata): boolean {
+  return (
+    left.repository === right.repository &&
+    left.number === right.number &&
+    left.state === right.state &&
+    left.head === right.head &&
+    left.base === right.base
+  );
+}
+
 class TandemController {
   readonly #deps: ServiceDependencies;
   readonly #source: SourceInboxWorkflow;
@@ -444,6 +494,8 @@ class TandemController {
   readonly #worker: WorkerWorkflow;
   readonly #control: TaskControlWorkflow;
   readonly #recovery: RecoveryWorkflow;
+  /** Durable-state digest of the draft body last published per task, to avoid redundant refreshes. */
+  readonly #draftDigests = new Map<string, string>();
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
@@ -511,6 +563,7 @@ class TandemController {
       removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
+      reviewAssistance: deps.reviewAssistance,
     });
     this.#control = new TaskControlWorkflow({
       home: deps.home,
@@ -577,6 +630,7 @@ class TandemController {
       cancel: (id, reason) => this.cancel(id, reason),
       describePr: (id, summary) => this.describePr(id, summary),
       publish: (id, input) => this.publish(id, input),
+      publishDraft: (id, input) => this.publishDraft(id, input),
       merge: (id, input) => this.merge(id, input),
       cleanup: (id, input) => this.cleanup(id, input),
       present: (id, input) => this.present(id, input),
@@ -942,21 +996,45 @@ class TandemController {
       return { task, metadata };
     });
     const { task, metadata } = prepared;
-    return this.#deps.store.exclusive(async (store) => {
-      const current = await store.read(id);
-      if (current === undefined || !(await this.#source.taskInScope(current))) {
+    return this.recordPullRequest(id, task.revision, metadata);
+  }
+
+  /**
+   * Create or update the task's draft pull request before final acceptance. It requires explicit
+   * publishing approval, stays visibly unfinished, and neither merges, deploys, nor accepts.
+   */
+  async publishDraft(
+    id: string,
+    input: {
+      readonly repository: string;
+      readonly title: string;
+      readonly base: string;
+      readonly approved: boolean;
+    },
+  ): Promise<TaskRecord> {
+    if (!isRecord(input)) throw new TypeError("draft publish input must be an object");
+    const prepared = await this.#deps.store.serialized(async (store) => {
+      const task = await store.read(id);
+      if (task === undefined || !(await this.#source.taskInScope(task))) {
         throw new Error(`Task ${id} was not found`);
       }
-      if (current.revision !== task.revision) {
-        throw new Error(`Task ${id} changed while publishing; remote publication is retained`);
-      }
-      return store.update(current.id, current.revision, (candidate) => ({
-        ...candidate,
-        revision: candidate.revision + 1,
-        updatedAt: this.#deps.clock(),
-        pullRequest: metadata,
-      }));
+      const publication = await publishTaskDraft({
+        task,
+        repository: singleLine(input.repository, "repository"),
+        title: singleLine(input.title, "title"),
+        base: singleLine(input.base, "base"),
+        approved: input.approved,
+        run: this.#deps.run,
+      });
+      return { task, publication };
     });
+    const updated = await this.recordPullRequest(
+      id,
+      prepared.task.revision,
+      prepared.publication.pullRequest,
+    );
+    this.#draftDigests.set(id, draftProgressDigest(prepared.task));
+    return updated;
   }
 
   async merge(
@@ -1187,7 +1265,12 @@ class TandemController {
         );
       }
     }
-    return this.#source.scopedTasks();
+    const settled = await this.#source.scopedTasks();
+    let draftRecorded = false;
+    for (const task of settled) {
+      if (await this.refreshDraftPullRequest(task)) draftRecorded = true;
+    }
+    return draftRecorded ? this.#source.scopedTasks() : settled;
   }
 
   private async blockTaskIfReconcileClaim(
@@ -1301,6 +1384,113 @@ class TandemController {
     });
   }
 
+  private async recordPullRequest(
+    taskId: string,
+    expectedRevision: number,
+    metadata: PullRequestMetadata,
+  ): Promise<TaskRecord> {
+    return this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      if (current === undefined || !(await this.#source.taskInScope(current))) {
+        throw new Error(`Task ${taskId} was not found`);
+      }
+      if (current.revision !== expectedRevision) {
+        throw new TaskRevisionConflictError(taskId);
+      }
+      return store.update(current.id, current.revision, (candidate) => ({
+        ...candidate,
+        revision: candidate.revision + 1,
+        updatedAt: this.#deps.clock(),
+        pullRequest: metadata,
+      }));
+    });
+  }
+
+  /**
+   * Record a draft-refresh failure so a stale draft is observable, without letting observability
+   * change workflow behavior. Details stay bounded: task id, pull request number, which step
+   * failed, and the error class name. No message text, stdout, stderr, or command payload.
+   */
+  private async recordDraftRefreshFailure(input: {
+    readonly taskId: string;
+    readonly step: "digest" | "remote-refresh" | "record";
+    readonly pullRequestNumber?: number;
+    readonly error: unknown;
+  }): Promise<void> {
+    await appendDiagnosticEvent(
+      this.#deps.home,
+      {
+        event: "draft-refresh-failed",
+        taskId: input.taskId,
+        details: {
+          step: input.step,
+          errorClass: errorClassName(input.error),
+          ...(input.pullRequestNumber === undefined
+            ? {}
+            : { pullRequest: input.pullRequestNumber }),
+        },
+      },
+      this.#deps.clock,
+    );
+  }
+
+  /**
+   * Keep an already approved draft showing current durable task state. It never creates a pull
+   * request, never asks for a new approval, and never blocks durable work when the remote is
+   * unavailable; the next durable change retries. Answers whether the task record changed.
+   */
+  private async refreshDraftPullRequest(task: TaskRecord): Promise<boolean> {
+    const recorded = task.pullRequest;
+    if (recorded === undefined || recorded.state !== "draft") {
+      this.#draftDigests.delete(task.id);
+      return false;
+    }
+    let digest: string;
+    try {
+      digest = draftProgressDigest(task);
+    } catch (error) {
+      await this.recordDraftRefreshFailure({
+        taskId: task.id,
+        step: "digest",
+        pullRequestNumber: recorded.number,
+        error,
+      });
+      return false;
+    }
+    if (this.#draftDigests.get(task.id) === digest) return false;
+    // Consume this durable state before attempting it, so one failure is one bounded attempt and
+    // one diagnostic rather than a per-tick retry loop against an unavailable remote.
+    this.#draftDigests.set(task.id, digest);
+
+    let publication: DraftPublication | undefined;
+    try {
+      publication = await refreshTaskDraft({ task, run: this.#deps.run });
+    } catch (error) {
+      await this.recordDraftRefreshFailure({
+        taskId: task.id,
+        step: "remote-refresh",
+        pullRequestNumber: recorded.number,
+        error,
+      });
+      return false;
+    }
+    if (publication === undefined || samePullRequest(publication.pullRequest, recorded)) {
+      return false;
+    }
+    try {
+      await this.recordPullRequest(task.id, task.revision, publication.pullRequest);
+      return true;
+    } catch (error) {
+      await this.recordDraftRefreshFailure({
+        taskId: task.id,
+        step: "record",
+        pullRequestNumber: publication.pullRequest.number,
+        error,
+      });
+      return false;
+    }
+  }
+
   private async reconcileTask(task: TaskRecord): Promise<void> {
     try {
       await this.#source.repairTaskInbox(task.id);
@@ -1315,6 +1505,7 @@ class TandemController {
     let runtime = loadedRuntime;
     if (runtime.stopRequest !== undefined) {
       await this.#control.reconcileStopRequest(task, runtime);
+      await this.cleanupSettledTask(task.id);
       return;
     }
     if (isTerminalTask(task)) {
@@ -1337,6 +1528,7 @@ class TandemController {
     const active = runtime.jobs.find(activeRuntimeJob);
     if (active !== undefined) {
       await this.#worker.reconcileJob(task, runtime, active);
+      await this.cleanupSettledTask(task.id);
       return;
     }
     if (unreleasedReservation(runtime.reservation)) {
@@ -1527,56 +1719,26 @@ class TandemController {
   }
 
   private async cleanupTerminalTask(task: TaskRecord): Promise<void> {
-    await withStateLock(this.#deps.home, async () => {
-      const current = await this.#deps.store.read(task.id);
-      if (current?.revision !== task.revision || !isTerminalTask(current)) return;
-      const state = await this.readState();
-      const runtime = taskRuntime(state, task.id);
-      if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) return;
-      if (runtime.endpointLaunch !== undefined || runtime.jobs.some(activeRuntimeJob)) return;
-      if (unreleasedReservation(runtime.reservation)) return;
-      if (
-        state.presentations.some(
-          (presentation) =>
-            presentation.taskId === task.id &&
-            (activeRuntimeJob(presentation.job) || unreleasedReservation(presentation.reservation)),
-        )
-      )
-        return;
-      const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
-      for (const endpoint of runtime.endpoints) {
-        try {
-          const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-          if (inspection.activeWorker) return;
-          await closeEndpoint(this.#deps.run, { endpoint, cwd });
-        } catch (error) {
-          if (!isMissingEndpoint(error)) {
-            await this.setRuntimeError(
-              task.id,
-              `terminal cleanup could not close pane ${endpoint.paneId}: ${describeError(error)}`,
-            );
-            return;
-          }
-        }
-        await this.removeEndpoint(task.id, endpoint.paneId);
-      }
-      if (runtime.worktree !== undefined) {
-        try {
-          await releaseWorktree(this.#deps.run, {
-            repo: task.repoPath,
-            lease: runtime.worktree,
-            childWorkerStopped: true,
-          });
-        } catch (error) {
-          await this.setRuntimeError(
-            task.id,
-            `terminal cleanup retained worktree: ${describeError(error)}`,
-          );
-          return;
-        }
-      }
-      await this.removeRuntimeResources(task.id, task.revision);
-    });
+    await releaseTerminalTaskResources(
+      {
+        home: this.#deps.home,
+        store: this.#deps.store,
+        runtimePath: this.#deps.runtimePath,
+        run: this.#deps.run,
+        clock: this.#deps.clock,
+      },
+      task,
+    );
+  }
+
+  /**
+   * Releases a task's child resources in the same pass that settled it, so a completed scout does
+   * not hold its pane and worktree until a later coordinator turn.
+   */
+  private async cleanupSettledTask(taskId: string): Promise<void> {
+    const current = await this.#deps.store.read(taskId);
+    if (current === undefined || !isTerminalTask(current)) return;
+    await this.cleanupTerminalTask(current);
   }
 
   private async removeEndpoint(taskId: string, paneId: string): Promise<void> {
@@ -1748,6 +1910,18 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     runtimePath: runtimeFile(home),
     workerPath: fileURLToPath(new URL("../worker.ts", import.meta.url)),
     validationWorkerPath: fileURLToPath(new URL("../validation-worker.ts", import.meta.url)),
+    reviewAssistance:
+      options.reviewAssistance ??
+      reviewAssistanceRuntime({
+        ...reviewAssistanceConfig(process.env),
+        recordDiagnostic: async (event, details) => {
+          try {
+            await appendDiagnosticEvent(home, { event, details });
+          } catch {
+            // Assistance diagnostics are best effort and never change review behavior.
+          }
+        },
+      }),
   };
 }
 

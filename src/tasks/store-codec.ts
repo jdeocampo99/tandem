@@ -1,11 +1,16 @@
 import {
   type AgentRole,
+  type CheckOrigin,
   type Endpoint,
   type Finding,
+  type FindingLedgerEntry,
+  type FindingObservation,
   type FindingSeverity,
   type FindingVerdict,
   type GuidanceProvenance,
   type InstructionChannel,
+  type IterationScope,
+  LEGACY_EVIDENCE_CONTRACT,
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
   MAX_RESEARCH_HANDOFF_TOTAL_BYTES,
@@ -13,24 +18,37 @@ import {
   type ModelSpec,
   type Notification,
   type PullRequestMetadata,
+  REVIEW_LEVEL_ORDER,
   type RepoPolicy,
   type ResearchContinuation,
   type ResearchHandoff,
   type ResolvedGuidance,
   type ResolvedPolicy,
   type ReviewLens,
+  type ReviewLevel,
+  type ReviewLevelAssistance,
+  type ReviewLevelPolicy,
+  type ReviewLevelRecord,
   type ReviewMode,
   type ReviewResult,
+  SAFETY_FLOOR_ORDER,
+  type SafetyFloor,
+  type TaskCleanupState,
+  type TaskCleanupStatus,
   type TaskKind,
   type TaskRecord,
   type TaskStage,
   type ValidationCommand,
+  type ValidationContractName,
   type ValidationEvidence,
   type WorktreeLease,
 } from "../contracts.ts";
+import { FINAL_REVIEW_LENSES } from "./acceptance.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
+import { FINDING_STATUSES } from "./findings.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
+import { DEFAULT_REVIEW_LEVEL_POLICY } from "./review-levels.ts";
 import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
 
 const TASK_STAGES: readonly TaskStage[] = [
@@ -66,7 +84,9 @@ const THINKING_LEVELS = [
 ] as const;
 const FINDING_SEVERITIES: readonly FindingSeverity[] = ["P0", "P1", "P2", "P3"];
 const FINDING_VERDICTS: readonly FindingVerdict[] = ["confirmed", "plausible"];
-const REVIEW_LENSES: readonly ReviewLens[] = ["behavior", "design", "coverage", "verification"];
+const REVIEW_LENSES: readonly ReviewLens[] = FINAL_REVIEW_LENSES;
+const VALIDATION_CONTRACT_NAMES: readonly ValidationContractName[] = ["iteration", "final"];
+const CHECK_ORIGINS: readonly CheckOrigin[] = ["local", "github"];
 const TOP_LEVEL_KEYS = [
   "schemaVersion",
   "id",
@@ -87,8 +107,11 @@ const TOP_LEVEL_KEYS = [
   "generation",
   "reviewRound",
   "reviewHead",
+  "iterationScope",
+  "reviewLevel",
   "validationEvidence",
   "reviews",
+  "findingLedger",
   "researchHandoffs",
   "researchContinuation",
   "reportPath",
@@ -96,7 +119,14 @@ const TOP_LEVEL_KEYS = [
   "notifications",
   "communication",
   "pullRequest",
+  "cleanup",
 ] as const;
+const TASK_CLEANUP_STATUSES: readonly TaskCleanupStatus[] = [
+  "released",
+  "retained",
+  "pending",
+  "quarantined",
+];
 type UnknownRecord = Record<string, unknown>;
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -268,6 +298,7 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       "validationCommands",
       "maxWorkers",
       "maxFixRounds",
+      "reviewLevels",
     ],
     source,
   );
@@ -327,6 +358,31 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
     ),
     maxWorkers: requiredInteger(value, "maxWorkers", source, 1),
     maxFixRounds: requiredInteger(value, "maxFixRounds", source, 0),
+    reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`),
+  };
+}
+
+/**
+ * Reads the review-level opt-ins from a pinned policy. A record written before review levels
+ * existed carries none, and it loads with every opt-in off, which is exactly the review behavior
+ * that record was pinned under. A present but malformed section fails closed.
+ */
+function parseReviewLevelPolicy(record: UnknownRecord, source: string): ReviewLevelPolicy {
+  if (!Object.hasOwn(record, "reviewLevels")) return { ...DEFAULT_REVIEW_LEVEL_POLICY };
+  const value = requiredValue(record, "reviewLevels", source);
+  if (!isRecord(value)) {
+    failState(source, "reviewLevels must be an object");
+  }
+  assertExactKeys(
+    value,
+    ["reducedRouting", "deepScrutiny", "jevAssistance", "sourceTransmission"],
+    source,
+  );
+  return {
+    reducedRouting: requiredBoolean(value, "reducedRouting", source),
+    deepScrutiny: requiredBoolean(value, "deepScrutiny", source),
+    jevAssistance: requiredEnum(value, "jevAssistance", ["off", "shadow"] as const, source),
+    sourceTransmission: requiredBoolean(value, "sourceTransmission", source),
   };
 }
 
@@ -480,23 +536,184 @@ function parseReview(value: unknown, source: string): ReviewResult {
   };
 }
 
+/**
+ * Records written before validation contracts existed carry none of `contract`, `origin`, or
+ * `policyDigest`. Those load unchanged and are marked legacy, which no contract accepts, so the
+ * candidate must run the complete final manifest again. A record carrying only some of the three
+ * is a corrupt shape rather than a recoverable one, and fails closed.
+ */
 function parseValidationEvidence(value: unknown, source: string): ValidationEvidence {
   if (!isRecord(value)) {
     failState(source, "validation evidence must be an object");
   }
-  assertExactKeys(value, ["name", "argv", "exitCode", "stdout", "stderr", "head"], source);
+  assertExactKeys(
+    value,
+    ["name", "argv", "exitCode", "stdout", "stderr", "head", "contract", "origin", "policyDigest"],
+    source,
+  );
   const stdout = requiredValue(value, "stdout", source);
   const stderr = requiredValue(value, "stderr", source);
   if (typeof stdout !== "string" || typeof stderr !== "string") {
     failState(source, "stdout and stderr must be strings");
   }
-  return {
+  const recorded = {
     name: requiredText(value, "name", source),
     argv: requiredTextArray(value, "argv", source),
     exitCode: requiredInteger(value, "exitCode", source),
     stdout,
     stderr,
     head: requiredText(value, "head", source),
+  };
+
+  const pinningKeys = ["contract", "origin", "policyDigest"] as const;
+  const present = pinningKeys.filter((key) => Object.hasOwn(value, key));
+  if (present.length === 0) {
+    return { ...recorded, contract: LEGACY_EVIDENCE_CONTRACT };
+  }
+  if (value.contract === LEGACY_EVIDENCE_CONTRACT) {
+    if (present.length !== 1) {
+      failState(source, "legacy validation evidence must not carry an origin or policy digest");
+    }
+    return { ...recorded, contract: LEGACY_EVIDENCE_CONTRACT };
+  }
+  if (present.length !== pinningKeys.length) {
+    failState(
+      source,
+      `validation evidence must name its contract, origin, and policy digest together; missing ${pinningKeys
+        .filter((key) => !present.includes(key))
+        .join(", ")}`,
+    );
+  }
+  return {
+    ...recorded,
+    contract: requiredEnum(value, "contract", VALIDATION_CONTRACT_NAMES, source),
+    origin: requiredEnum(value, "origin", CHECK_ORIGINS, source),
+    policyDigest: requiredText(value, "policyDigest", source),
+  };
+}
+
+function parseFindingObservation(value: unknown, source: string): FindingObservation {
+  if (!isRecord(value)) {
+    failState(source, "finding observation must be an object");
+  }
+  assertExactKeys(value, ["head", "generation", "reviewRound"], source);
+  return {
+    head: requiredText(value, "head", source),
+    generation: requiredInteger(value, "generation", source),
+    reviewRound: requiredInteger(value, "reviewRound", source),
+  };
+}
+
+function parseFindingLedgerEntry(value: unknown, source: string): FindingLedgerEntry {
+  if (!isRecord(value)) {
+    failState(source, "finding ledger entry must be an object");
+  }
+  assertExactKeys(
+    value,
+    [
+      "id",
+      "lens",
+      "severity",
+      "verdict",
+      "description",
+      "file",
+      "line",
+      "status",
+      "raisedAt",
+      "statusAt",
+    ],
+    source,
+  );
+  const file = optionalText(value, "file", source);
+  const line = optionalInteger(value, "line", source, 1);
+  return {
+    id: requiredText(value, "id", source),
+    lens: requiredEnum(value, "lens", REVIEW_LENSES, source),
+    severity: requiredEnum(value, "severity", FINDING_SEVERITIES, source),
+    verdict: requiredEnum(value, "verdict", FINDING_VERDICTS, source),
+    description: requiredText(value, "description", source),
+    status: requiredEnum(value, "status", FINDING_STATUSES, source),
+    raisedAt: parseFindingObservation(
+      requiredValue(value, "raisedAt", source),
+      `${source}.raisedAt`,
+    ),
+    statusAt: parseFindingObservation(
+      requiredValue(value, "statusAt", source),
+      `${source}.statusAt`,
+    ),
+    ...(file === undefined ? {} : { file }),
+    ...(line === undefined ? {} : { line }),
+  };
+}
+
+function parseIterationScope(value: unknown, source: string): IterationScope {
+  if (!isRecord(value)) {
+    failState(source, "iteration scope must be an object");
+  }
+  assertExactKeys(
+    value,
+    ["head", "generation", "policyDigest", "reproduces", "surfaces", "findingIds"],
+    source,
+  );
+  return {
+    head: requiredText(value, "head", source),
+    generation: requiredInteger(value, "generation", source),
+    policyDigest: requiredText(value, "policyDigest", source),
+    reproduces: requiredTextArray(value, "reproduces", source),
+    surfaces: requiredTextArray(value, "surfaces", source),
+    findingIds: requiredTextArray(value, "findingIds", source),
+  };
+}
+
+function parseReviewLevelAssistance(value: unknown, source: string): ReviewLevelAssistance {
+  if (!isRecord(value)) {
+    failState(source, "review level assistance must be an object");
+  }
+  assertExactKeys(
+    value,
+    ["mode", "recommendation", "reason", "requestIdentity", "resultIdentity"],
+    source,
+  );
+  const recommendation = requiredText(value, "recommendation", source);
+  if (
+    recommendation !== "unavailable" &&
+    !REVIEW_LEVEL_ORDER.includes(recommendation as ReviewLevel)
+  ) {
+    failState(source, `unsupported assistance recommendation ${recommendation}`);
+  }
+  return {
+    mode: requiredEnum(value, "mode", ["shadow"] as const, source),
+    recommendation: recommendation as ReviewLevel | "unavailable",
+    reason: requiredText(value, "reason", source),
+    requestIdentity: requiredText(value, "requestIdentity", source),
+    resultIdentity: requiredText(value, "resultIdentity", source),
+  };
+}
+
+/** Parses a recorded classification. A present section must be complete and well formed. */
+function parseReviewLevelRecord(value: unknown, source: string): ReviewLevelRecord {
+  if (!isRecord(value)) {
+    failState(source, "review level must be an object");
+  }
+  assertExactKeys(value, ["level", "reason", "floors", "assistance"], source);
+  const floors = requiredTextArray(value, "floors", source);
+  for (const floor of floors) {
+    if (!SAFETY_FLOOR_ORDER.includes(floor as SafetyFloor)) {
+      failState(source, `unsupported safety floor ${floor}`);
+    }
+  }
+  const assistanceValue = Object.hasOwn(value, "assistance")
+    ? requiredValue(value, "assistance", source)
+    : undefined;
+  return {
+    level: requiredEnum(value, "level", REVIEW_LEVEL_ORDER, source),
+    reason: requiredText(value, "reason", source),
+    floors: floors as readonly SafetyFloor[],
+    ...(assistanceValue === undefined
+      ? {}
+      : {
+          assistance: parseReviewLevelAssistance(assistanceValue, `${source}.assistance`),
+        }),
   };
 }
 
@@ -534,6 +751,28 @@ function parsePullRequest(value: unknown, source: string): PullRequestMetadata {
     ...(title === undefined ? {} : { title }),
   };
 }
+/**
+ * Reads the cleanup note written by a newer build. Records written before cleanup notes existed
+ * simply omit the field and load unchanged; a present-but-malformed note is state corruption and
+ * fails the read rather than being coerced into a plausible-looking status.
+ */
+function parseTaskCleanup(value: unknown, source: string): TaskCleanupState {
+  if (!isRecord(value)) {
+    failState(source, "cleanup state must be an object");
+  }
+  assertExactKeys(value, ["schemaVersion", "status", "reason", "observedAt"], source);
+  const schemaVersion = requiredInteger(value, "schemaVersion", source, 1);
+  if (schemaVersion !== 1) {
+    failState(source, `unsupported cleanup schemaVersion ${schemaVersion}`);
+  }
+  return {
+    schemaVersion: 1,
+    status: requiredEnum(value, "status", TASK_CLEANUP_STATUSES, source),
+    reason: requiredText(value, "reason", source),
+    observedAt: requiredText(value, "observedAt", source),
+  };
+}
+
 function parseResearchHandoff(value: unknown, source: string): ResearchHandoff {
   if (!isRecord(value)) failState(source, "research handoff must be an object");
   assertExactKeys(
@@ -668,12 +907,29 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
       failState(`${source}.communication`, error instanceof Error ? error.message : String(error));
     }
   }
+  const findingLedgerValue = Object.hasOwn(value, "findingLedger")
+    ? requiredValue(value, "findingLedger", source)
+    : undefined;
+  if (findingLedgerValue !== undefined && !Array.isArray(findingLedgerValue)) {
+    failState(`${source}.findingLedger`, "findingLedger must be an array when present");
+  }
+  const findingLedgerEntries: readonly unknown[] =
+    findingLedgerValue === undefined ? [] : findingLedgerValue;
   const reviewHead = optionalText(value, "reviewHead", source);
+  const iterationScopeValue = Object.hasOwn(value, "iterationScope")
+    ? requiredValue(value, "iterationScope", source)
+    : undefined;
+  const reviewLevelValue = Object.hasOwn(value, "reviewLevel")
+    ? requiredValue(value, "reviewLevel", source)
+    : undefined;
   const pullRequestValue = Object.hasOwn(value, "pullRequest")
     ? requiredValue(value, "pullRequest", source)
     : undefined;
   const worktreeValue = Object.hasOwn(value, "worktree")
     ? requiredValue(value, "worktree", source)
+    : undefined;
+  const cleanupValue = Object.hasOwn(value, "cleanup")
+    ? requiredValue(value, "cleanup", source)
     : undefined;
   const kind = requiredEnum(value, "kind", TASK_KINDS, source);
   const researchContinuation = parseResearchContinuation(value, kind, source);
@@ -697,6 +953,13 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
       parseValidationEvidence(entry, `${source}.validationEvidence[${index}]`),
     ),
     reviews: reviewEntries.map((entry, index) => parseReview(entry, `${source}.reviews[${index}]`)),
+    ...(findingLedgerValue === undefined
+      ? {}
+      : {
+          findingLedger: findingLedgerEntries.map((entry, index) =>
+            parseFindingLedgerEntry(entry, `${source}.findingLedger[${index}]`),
+          ),
+        }),
     notifications: notificationEntries.map((entry, index) =>
       parseNotification(entry, `${source}.notifications[${index}]`),
     ),
@@ -723,12 +986,23 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
           ),
         }),
     ...(reviewHead === undefined ? {} : { reviewHead }),
+    ...(iterationScopeValue === undefined
+      ? {}
+      : {
+          iterationScope: parseIterationScope(iterationScopeValue, `${source}.iterationScope`),
+        }),
+    ...(reviewLevelValue === undefined
+      ? {}
+      : { reviewLevel: parseReviewLevelRecord(reviewLevelValue, `${source}.reviewLevel`) }),
     ...(reportPath === undefined ? {} : { reportPath }),
     ...(blockReason === undefined ? {} : { blockReason }),
     ...(communication === undefined ? {} : { communication }),
     ...(pullRequestValue === undefined
       ? {}
       : { pullRequest: parsePullRequest(pullRequestValue, `${source}.pullRequest`) }),
+    ...(cleanupValue === undefined
+      ? {}
+      : { cleanup: parseTaskCleanup(cleanupValue, `${source}.cleanup`) }),
   };
 }
 

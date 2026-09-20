@@ -75,6 +75,27 @@ tandem logs
 Use `tandem logs --json` for machine-readable output or add `--home PATH` for an explicit home.
 The command is read-only and prints the resolved log path even when no routing events exist.
 
+After a crash, a forced exit, a session change, or a failed launch, reconcile the coordinator
+records, Herdr panes, and Treehouse leases Tandem left behind instead of deleting anything by hand:
+
+```sh
+tandem reconcile-resources
+tandem reconcile-resources --yes
+```
+
+The command scans every Tandem session under the home and classifies each resource before it
+changes anything. Without `--yes` it is a dry run that issues only read-only commands and reports
+what it would clean. Live coordinators are retained; a stopped owned coordinator has its pane
+closed, its exact lease released, and its record removed; an orphaned clean coordinator lease is
+returned by its exact lease identity; completed scout resources are finished through the normal
+task cleanup rules; and anything dirty, unmerged, unlanded, foreign, or ownership-uncertain is kept
+and reported with its reason. Quarantine notes and unreadable record files are listed with their
+path and never deleted. Reports, task history, provenance, and unmerged branches survive every
+path, applying is idempotent, and `--json` prints a versioned report for automation. The exit code
+is non-zero only when the scan or an apply actually failed, not because something was retained.
+This home-wide command is separate from the advanced CLI's per-task `tandem reconcile TASK_ID`
+recovery action.
+
 The frontdoor verifies exact Tandem ownership, revalidates the pane cwd/process immediately before
 close, confirms close acknowledgement and pane absence, then launches a replacement with the same
 lease/session directory and `--continue`. Child panes, task IDs and generations, worktrees,
@@ -105,10 +126,18 @@ subset. It preflights all selected roots, stops only idle coordinators that Tand
 and then performs the normal launch so each selected coordinator is recreated and attached once.
 Unrelated Herdr terminals are left untouched.
 Reset also closes a recorded coordinator pane that has returned to its shell, provided its native
-identity and worktree still match. Herdr removes a workspace when its last pane closes. Extra panes
-remain open; Tandem changes only its generated old coordinator label to `Retained terminals`.
-Custom labels are preserved. A normal relaunch without reset keeps the old shell and retires its
-coordinator label instead. Labels alone never authorize closing a workspace or pane.
+identity and worktree still match. Herdr removes a workspace when its last pane closes, so closing
+that owned pane is the default outcome. A workspace is retained (renamed to `Retained terminals`)
+only when another pane still shares the coordinator workspace after the owned pane closes; that
+extra pane is left open, and `tandem`/`--reset` print a notice naming it. Custom labels are
+preserved untouched, and a pane that cannot prove it has exactly stopped is quarantined (left alone,
+also with a printed notice) rather than closed. A normal relaunch without reset retires a previous
+stopped coordinator's pane the same way. Labels alone never authorize closing a workspace or pane.
+Replacing a coordinator also reuses or releases its exact previous worktree lease, so repeated
+launches and restarts do not accumulate coordinator worktrees. A previous checkout with uncommitted
+or unmerged work is kept and reported, never released. If a launch fails after acquiring a new
+lease, it rolls that lease and its new pane back; whatever it cannot prove safe to undo is recorded
+under `<home>/coordinator-quarantine/` and named in the error instead of being guessed at.
 Busy, unknown, foreign, or otherwise unsafe work refuses before any pane is closed; if a coordinator
 changes state or fails to close after earlier ones in the same run already closed, reset stops and
 reports exactly which coordinators it already closed. Reset retains
@@ -175,6 +204,13 @@ but coordinators and child-worker groups remain scoped to their original project
 original checkout may be dirty and remains untouched; source reads and delegated execution use
 clean snapshots, while settings, task records, and delivery retain the original project identity.
 When several projects are opened, Tandem attaches once every coordinator is ready.
+
+One repository gets one coordinator across every session that shares a Tandem home, so switching
+from `tandem` to a session such as `tandem-fresh` reconnects or reconciles instead of starting a
+second coordinator. A coordinator another session still runs is never stopped or adopted: the
+launch refuses and names the session holding it. Set `TANDEM_ALLOW_PARALLEL_COORDINATORS=1` when
+you deliberately want parallel coordinators for one repository; it is off by default. See
+[one coordinator per repository](docs/agent-reference.md#launching-the-coordinator).
 
 Child agents run in real interactive OMP terminals, not JSON-log panes. Open their Herdr subtree
 to watch the work or chat directly. Completed agents stay open for read-only follow-up; their

@@ -36,15 +36,20 @@ import {
   replaceRuntimeTask,
   reportPathFor,
 } from "../service/records.ts";
+import {
+  FINAL_REVIEW_LENSES,
+  finalAcceptanceContract,
+  ValidationConfigurationError,
+} from "../tasks/acceptance.ts";
 import { type TaskEvent, transitionTask } from "../tasks/lifecycle.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import type { ValidationJob, ValidationResult } from "../validation-worker.ts";
-import { runValidation, ValidationConfigurationError } from "../workers/validation.ts";
+import { runValidation } from "../workers/validation.ts";
 
 const MAX_RECOVERY_ATTEMPTS = 3;
 const MAX_VALIDATION_RETRIES = 3;
 const MAX_EVIDENCE_REPAIRS = 3;
-const REQUIRED_REVIEW_LENSES = ["behavior", "design", "coverage", "verification"] as const;
+const REQUIRED_REVIEW_LENSES = FINAL_REVIEW_LENSES;
 const LOCK_RETRY_COUNT = 3;
 
 export type RecoveryWorkflowDependencies = Readonly<{
@@ -69,6 +74,8 @@ export type RecoveryJobState = Readonly<{
   readonly phase: RuntimeJobPhase;
   readonly generation: number;
   readonly head?: string;
+  readonly contract?: DurableJob["contract"];
+  readonly escalation?: DurableJob["escalation"];
   readonly endpointPaneId?: string;
   readonly jobPath: string;
   readonly resultPath: string;
@@ -244,6 +251,8 @@ export type DeliveryPreflightResult = Readonly<{
   }>[];
   readonly refusals: readonly string[];
   readonly duplicatePullRequest?: TaskRecord["pullRequest"];
+  /** The task's own draft, which final publication updates in place rather than duplicating. */
+  readonly draftPullRequest?: TaskRecord["pullRequest"];
 }>;
 
 type EndpointObservation = RecoveryInspection["endpoints"][number];
@@ -381,6 +390,8 @@ function jobState(job: DurableJob, resultExists: boolean): RecoveryJobState {
     phase: job.phase,
     generation: job.generation,
     ...(job.head === undefined ? {} : { head: job.head }),
+    ...(job.contract === undefined ? {} : { contract: job.contract }),
+    ...(job.escalation === undefined ? {} : { escalation: job.escalation }),
     ...(job.endpoint?.paneId === undefined ? {} : { endpointPaneId: job.endpoint.paneId }),
     jobPath: job.jobPath,
     resultPath: job.resultPath,
@@ -1402,12 +1413,19 @@ export class RecoveryWorkflow {
       }
     }
     let duplicatePullRequest: TaskRecord["pullRequest"];
-    if (task.pullRequest !== undefined) {
+    let draftPullRequest: TaskRecord["pullRequest"];
+    const ownDraft =
+      task.pullRequest !== undefined &&
+      task.pullRequest.state === "draft" &&
+      task.pullRequest.repository === repository &&
+      task.pullRequest.base === base;
+    if (task.pullRequest !== undefined && !ownDraft) {
       refusals.push(
         `task already has pull request #${task.pullRequest.number}; duplicate publication is refused`,
       );
       duplicatePullRequest = task.pullRequest;
     } else {
+      if (task.pullRequest !== undefined) draftPullRequest = task.pullRequest;
       try {
         const lookup = await this.#deps.run({
           argv: [
@@ -1436,7 +1454,7 @@ export class RecoveryWorkflow {
               typeof entry.headRefOid === "string" &&
               typeof entry.baseRefName === "string"
             ) {
-              duplicatePullRequest = {
+              const observed: NonNullable<TaskRecord["pullRequest"]> = {
                 repository,
                 number: entry.number as number,
                 state: entry.isDraft === true ? "draft" : "open",
@@ -1445,9 +1463,14 @@ export class RecoveryWorkflow {
                 ...(typeof entry.url === "string" ? { url: entry.url } : {}),
                 ...(typeof entry.title === "string" ? { title: entry.title } : {}),
               };
-              refusals.push(
-                `open pull request #${entry.number} already exists for ${worktree.branch}`,
-              );
+              if (draftPullRequest?.number === observed.number) {
+                draftPullRequest = observed;
+              } else {
+                duplicatePullRequest = observed;
+                refusals.push(
+                  `open pull request #${entry.number} already exists for ${worktree.branch}`,
+                );
+              }
             } else {
               refusals.push("duplicate pull-request lookup returned malformed metadata");
             }
@@ -1471,6 +1494,7 @@ export class RecoveryWorkflow {
       checks,
       refusals,
       ...(duplicatePullRequest === undefined ? {} : { duplicatePullRequest }),
+      ...(draftPullRequest === undefined ? {} : { draftPullRequest }),
     };
   }
 
@@ -1514,6 +1538,7 @@ export class RecoveryWorkflow {
   }> {
     const head = task.reviewHead ?? runtime.worktree?.baseHead;
     if (head === undefined) throw new Error("validation has no reviewed HEAD");
+    const manifest = finalAcceptanceContract(task, head);
     const jobId = `${operationName}-${this.#deps.idFactory()}`;
     const directory = jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId);
     const paths = jobPaths(directory);
@@ -1524,8 +1549,10 @@ export class RecoveryWorkflow {
       generation: task.generation,
       repoPath: runtime.worktree?.path ?? task.repoPath,
       head,
-      surfaces: task.surfaces,
-      commands: task.policy.config.validationCommands,
+      contract: manifest.contract,
+      policyDigest: manifest.identity.policyDigest,
+      surfaces: manifest.surfaces,
+      commands: manifest.commands,
       resultPath: paths.resultPath,
     };
     await writeJsonAtomically(paths.jobPath, validationJob);
@@ -1567,9 +1594,9 @@ export class RecoveryWorkflow {
     try {
       const evidence = await runValidation({
         repoPath: validationJob.repoPath,
-        head,
-        surfaces: task.surfaces,
-        commands: task.policy.config.validationCommands,
+        contract: manifest.contract,
+        identity: manifest.identity,
+        commands: manifest.commands,
         run: this.#deps.run,
       });
       const failed = evidence.some((entry) => entry.exitCode !== 0);
@@ -1579,6 +1606,8 @@ export class RecoveryWorkflow {
         taskId: task.id,
         generation: task.generation,
         head,
+        contract: manifest.contract,
+        policyDigest: manifest.identity.policyDigest,
         status: failed ? "failed" : "completed",
         evidence,
         finishedAt: timestamp(this.#deps),
@@ -1596,6 +1625,9 @@ export class RecoveryWorkflow {
           stdout: "",
           stderr: describeError(error),
           head,
+          contract: manifest.contract,
+          origin: "local",
+          policyDigest: manifest.identity.policyDigest,
         },
       ];
       result = {
@@ -1604,6 +1636,8 @@ export class RecoveryWorkflow {
         taskId: task.id,
         generation: task.generation,
         head,
+        contract: manifest.contract,
+        policyDigest: manifest.identity.policyDigest,
         status: "failed",
         evidence,
         finishedAt: timestamp(this.#deps),
@@ -1624,12 +1658,16 @@ export class RecoveryWorkflow {
                 type: "validation-succeeded",
                 head,
                 generation: current.generation,
+                contract: result.contract,
+                policyDigest: result.policyDigest,
                 evidence: result.evidence,
               }
             : {
                 type: "validation-failed",
                 head,
                 generation: current.generation,
+                contract: result.contract,
+                policyDigest: result.policyDigest,
                 evidence: result.evidence,
               };
         const transitioned =

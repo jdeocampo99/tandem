@@ -10,6 +10,7 @@ import {
   requiredInteger,
   requiredRecord,
   requiredString,
+  requireSuccess,
   runChecked,
 } from "./primitives.ts";
 
@@ -39,6 +40,14 @@ export type PublishPullRequestInput = Readonly<{
   body: string;
   base: string;
   head: string;
+  draft?: boolean;
+}>;
+
+export type EditPullRequestBodyInput = Readonly<{
+  cwd: string;
+  repository: string;
+  number: number;
+  body: string;
 }>;
 
 export type MergePullRequestInput = Readonly<{
@@ -80,6 +89,108 @@ export async function readCheckpoint(
     dirty: status.trim().length !== 0,
     unmerged: unmerged.trim().length !== 0,
   };
+}
+
+export type DiffRangeInput = Readonly<{
+  repo: string;
+  fromRef: string;
+  toRef: string;
+  maxBytes: number;
+}>;
+
+export type DiffRangeObservation = Readonly<{
+  files: readonly string[];
+  patch: string;
+  truncated: boolean;
+}>;
+
+export type ReferencingFilesInput = Readonly<{
+  repo: string;
+  ref: string;
+  files: readonly string[];
+  maxResults: number;
+}>;
+
+function readPositiveCount(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${field} must be a positive integer`);
+  }
+  return value;
+}
+
+function splitLines(output: string): readonly string[] {
+  const lines: string[] = [];
+  for (const line of output.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) lines.push(trimmed);
+  }
+  return lines;
+}
+
+/** Reads one committed range as a bounded patch plus its changed-file list. */
+export async function readDiffRange(
+  run: CommandRunner,
+  input: DiffRangeInput,
+): Promise<DiffRangeObservation> {
+  const repo = checkedPath(input.repo, "repo");
+  const range = `${checkedText(input.fromRef, "fromRef")}..${checkedText(input.toRef, "toRef")}`;
+  const maxBytes = readPositiveCount(input.maxBytes, "maxBytes");
+  const namesRequest: CommandRequest = {
+    argv: ["git", "-C", repo, "diff", "--no-ext-diff", "--name-only", range],
+    cwd: repo,
+  };
+  const names = (await runChecked(run, namesRequest, "git diff range names")).stdout;
+  const patchRequest: CommandRequest = {
+    argv: ["git", "-C", repo, "diff", "--no-ext-diff", "--binary", range],
+    cwd: repo,
+  };
+  const patch = (await runChecked(run, patchRequest, "git diff range patch")).stdout;
+  const truncated = Buffer.byteLength(patch, "utf8") > maxBytes;
+  return {
+    files: splitLines(names),
+    patch: truncated ? patch.slice(0, maxBytes) : patch,
+    truncated,
+  };
+}
+
+/**
+ * Lists tracked files at `ref` that mention one of the changed files by module stem and were not
+ * themselves changed. This is an observation of the affected surface, not a proven call graph.
+ */
+export async function readReferencingFiles(
+  run: CommandRunner,
+  input: ReferencingFilesInput,
+): Promise<readonly string[]> {
+  const repo = checkedPath(input.repo, "repo");
+  const ref = checkedText(input.ref, "ref");
+  const maxResults = readPositiveCount(input.maxResults, "maxResults");
+  const changed = new Set(input.files);
+  const stems = new Set<string>();
+  for (const file of input.files) {
+    const stem = file
+      .split("/")
+      .at(-1)
+      ?.replace(/\.[^.]+$/u, "");
+    if (stem !== undefined && stem.length > 0) stems.add(stem);
+  }
+  if (stems.size === 0) return [];
+  const patterns = [...stems].flatMap((stem) => ["-e", stem]);
+  const request: CommandRequest = {
+    argv: ["git", "-C", repo, "grep", "--files-with-matches", "--fixed-strings", ...patterns, ref],
+    cwd: repo,
+  };
+  const result = await run(request);
+  if (result.code !== 0 && result.code !== 1) {
+    requireSuccess(result, request, "git grep referencing files");
+  }
+  const referencing: string[] = [];
+  for (const line of splitLines(result.stdout)) {
+    const file = line.startsWith(`${ref}:`) ? line.slice(ref.length + 1) : line;
+    if (changed.has(file) || referencing.includes(file)) continue;
+    referencing.push(file);
+    if (referencing.length >= maxResults) break;
+  }
+  return referencing;
 }
 
 function parsePullRequestMetadata(
@@ -162,6 +273,9 @@ export async function publishPullRequest(
   const body = checkedText(input.body, "body");
   const base = checkedText(input.base, "base");
   const head = checkedText(input.head, "head");
+  if (input.draft !== undefined && typeof input.draft !== "boolean") {
+    throw new TypeError("draft must be a boolean when supplied");
+  }
   const request: CommandRequest = {
     argv: [
       "gh",
@@ -177,6 +291,7 @@ export async function publishPullRequest(
       base,
       "--head",
       head,
+      ...(input.draft === true ? ["--draft"] : []),
     ],
     cwd,
   };
@@ -189,6 +304,26 @@ export async function publishPullRequest(
       result.stdout,
     );
   }
+  return readPullRequest(run, cwd, repository, selector, "github pull request observe");
+}
+
+/** Replace an existing pull request's body without touching its draft state, base, or head. */
+export async function editPullRequestBody(
+  run: CommandRunner,
+  input: EditPullRequestBodyInput,
+): Promise<PullRequestMetadata> {
+  const cwd = checkedPath(input.cwd, "cwd");
+  const repository = checkedText(input.repository, "repository");
+  const body = checkedText(input.body, "body");
+  if (!Number.isSafeInteger(input.number) || input.number < 1) {
+    throw new TypeError("pull request number must be a positive integer");
+  }
+  const selector = String(input.number);
+  const request: CommandRequest = {
+    argv: ["gh", "pr", "edit", selector, "--repo", repository, "--body", body],
+    cwd,
+  };
+  await runChecked(run, request, "github pull request body update");
   return readPullRequest(run, cwd, repository, selector, "github pull request observe");
 }
 

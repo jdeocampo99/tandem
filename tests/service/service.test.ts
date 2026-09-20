@@ -19,12 +19,14 @@ import {
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
   type ResolvedPolicy,
+  type ReviewLens,
   type TaskRecord,
   type WorkerReceipt,
   type WorktreeLease,
 } from "../../src/contracts.ts";
 import type { PresentationRecord } from "../../src/presentations/records.ts";
 import { activeReservations, activeRuntimeJob } from "../../src/runtime/activity.ts";
+import { diagnosticsPath } from "../../src/runtime/diagnostics.ts";
 import {
   readRuntimeState,
   runtimeFile,
@@ -40,6 +42,7 @@ import type {
   RuntimeTaskState,
 } from "../../src/runtime/schema.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
+import { FINAL_REVIEW_LENSES } from "../../src/tasks/acceptance.ts";
 import {
   readTaskInbox,
   taskInboxPath,
@@ -51,6 +54,15 @@ import {
   RESEARCH_CONTINUATION_CLASSIFIER_VERSION,
   type ResearchContinuationRequest,
 } from "../../src/tasks/research-continuation-classifier.ts";
+import {
+  type ReviewAssistanceRuntime,
+  reviewAssistanceRuntime,
+} from "../../src/tasks/review-assistance.ts";
+import { REVIEW_BRIEF_LIMITS } from "../../src/tasks/review-brief.ts";
+import {
+  DEFAULT_REVIEW_LEVEL_POLICY,
+  requiredReviewLenses,
+} from "../../src/tasks/review-levels.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
@@ -78,9 +90,17 @@ const policy: ResolvedPolicy = {
     },
     instructions: { implementation: [], validation: [], review: [] },
     instructionFiles: { implementation: [], validation: [], review: [] },
-    validationCommands: [],
+    validationCommands: [
+      { name: "check", argv: ["bun", "run", "check"], surfaces: [], timeoutMs: 10_000 },
+    ],
     maxWorkers: 4,
     maxFixRounds: 1,
+    reviewLevels: {
+      reducedRouting: false,
+      deepScrutiny: false,
+      jevAssistance: "off",
+      sourceTransmission: false,
+    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -108,10 +128,27 @@ const OMP_MODELS = [
   },
 ] as const;
 
+/** Opt-in GitHub remote for draft-PR paths; absent by default so other fixtures are unaffected. */
+type DraftRemoteOptions = Readonly<{
+  readonly repository: string;
+  readonly branch: string;
+  readonly base: string;
+  readonly number: number;
+}>;
+
+type DraftRemoteState = {
+  created: number;
+  editBodies: string[];
+  failEdit: boolean;
+};
+
 type FakeRunnerOptions = Readonly<{
+  readonly draftRemote?: DraftRemoteOptions;
   readonly active?: boolean;
   readonly holdInitialHead?: boolean;
   readonly checkoutHead?: string;
+  readonly changedFiles?: string;
+  readonly referencingFiles?: string;
   readonly checkoutHeadFor?: (path: string) => string;
   readonly commonDirectory?: string;
   readonly dirty?: boolean;
@@ -127,6 +164,7 @@ type FakeRunnerOptions = Readonly<{
 
 type FakeRunnerState = {
   readonly calls: CommandRequest[];
+  readonly draftRemote: DraftRemoteState;
   readonly launches: number;
   readonly active: boolean;
   readonly proofBlocked: boolean;
@@ -175,8 +213,23 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
   const startPresentation = (): void => presentationStarted.resolve();
   const releasePresentation = (): void => presentationGate.resolve();
 
+  const draftRemote = options.draftRemote;
+  const draftRemoteState: DraftRemoteState = { created: 0, editBodies: [], failEdit: false };
+  let draftRemoteOpen = false;
+  const draftRemoteJson = (): Record<string, unknown> => ({
+    number: draftRemote?.number ?? 0,
+    url: `https://github.com/${draftRemote?.repository ?? "acme/repo"}/pull/${draftRemote?.number ?? 0}`,
+    state: "OPEN",
+    isDraft: true,
+    headRefName: draftRemote?.branch ?? "",
+    headRefOid: options.checkoutHead ?? "source-head",
+    baseRefName: draftRemote?.base ?? "main",
+    title: "Draft: exercise a durable service path",
+  });
+
   const state: FakeRunnerState = {
     calls,
+    draftRemote: draftRemoteState,
     get launches() {
       return launches;
     },
@@ -203,6 +256,33 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
   const run = async (request: CommandRequest): Promise<CommandResult> => {
     calls.push(request);
     const argv = request.argv;
+    if (draftRemote !== undefined) {
+      if (argv[0] === "git" && argv.includes("symbolic-ref")) {
+        return commandResult(`${draftRemote.branch}\n`);
+      }
+      if (argv[0] === "git" && argv.includes("remote") && argv.includes("get-url")) {
+        return commandResult(`git@github.com:${draftRemote.repository}.git\n`);
+      }
+      if (argv[0] === "git" && argv.includes("push")) return commandResult();
+      if (argv[0] === "gh" && argv[1] === "pr") {
+        if (argv[2] === "list") {
+          return commandResult(JSON.stringify(draftRemoteOpen ? [draftRemoteJson()] : []));
+        }
+        if (argv[2] === "create") {
+          draftRemoteState.created += 1;
+          draftRemoteOpen = true;
+          return commandResult(
+            `https://github.com/${draftRemote.repository}/pull/${draftRemote.number}\n`,
+          );
+        }
+        if (argv[2] === "edit") {
+          if (draftRemoteState.failEdit) return commandResult("", 1, "remote rejected the update");
+          draftRemoteState.editBodies.push(argv.at(-1) ?? "");
+          return commandResult();
+        }
+        if (argv[2] === "view") return commandResult(JSON.stringify(draftRemoteJson()));
+      }
+    }
     if (argv[0] === "omp" && argv[1] === "models") {
       return commandResult(JSON.stringify({ models: options.ompModels ?? [] }));
     }
@@ -367,6 +447,12 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
         return commandResult(options.dirty === true ? " M dirty.txt\n" : "");
       if (argv.includes("--diff-filter=U"))
         return commandResult(options.unmerged === true ? "conflict.txt\n" : "");
+      if (argv.includes("grep"))
+        return options.referencingFiles === undefined
+          ? commandResult("", 1)
+          : commandResult(options.referencingFiles);
+      if (argv.includes("diff") && argv.includes("--name-only"))
+        return commandResult(options.changedFiles ?? "");
       if (argv.includes("diff")) return commandResult();
       if (argv.includes("merge-base")) return commandResult();
     }
@@ -425,11 +511,15 @@ type FixtureOptions = Readonly<{
     readonly previousStage?: TaskRecord["stage"];
     readonly reviewHead?: string;
     readonly reviewRound?: number;
+    readonly reviews?: TaskRecord["reviews"];
     readonly worktree?: WorktreeLease;
     readonly clearWorktree?: boolean;
   }>;
   readonly runtimeEdits?: Partial<RuntimeTaskState>;
   readonly runner?: FakeRunnerOptions;
+  /** Attach the fixture's worktree lease to the task record, as delivery paths require. */
+  readonly attachLease?: boolean;
+  readonly reviewAssistance?: ReviewAssistanceRuntime;
 }>;
 
 type Fixture = Readonly<{
@@ -476,17 +566,19 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     );
   }
   const edits = options.taskEdits;
-  if (edits !== undefined || options.stage !== undefined) {
+  if (edits !== undefined || options.stage !== undefined || options.attachLease === true) {
     task = await store.update(task.id, task.revision, (current) => {
       let next: TaskRecord = {
         ...current,
         revision: current.revision + 1,
         updatedAt: clock(),
+        ...(options.attachLease === true ? { worktree: leaseFor(home) } : {}),
         ...(options.stage === undefined ? {} : { stage: options.stage }),
         ...(edits?.stage === undefined ? {} : { stage: edits.stage }),
         ...(edits?.previousStage === undefined ? {} : { previousStage: edits.previousStage }),
         ...(edits?.reviewHead === undefined ? {} : { reviewHead: edits.reviewHead }),
         ...(edits?.reviewRound === undefined ? {} : { reviewRound: edits.reviewRound }),
+        ...(edits?.reviews === undefined ? {} : { reviews: edits.reviews }),
         ...(edits?.worktree === undefined ? {} : { worktree: edits.worktree }),
       };
       if (edits?.clearWorktree === true) {
@@ -528,6 +620,9 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     run: runner.run,
     clock,
     idFactory,
+    ...(options.reviewAssistance === undefined
+      ? {}
+      : { reviewAssistance: options.reviewAssistance }),
   });
   return { home, task, lease, endpoint, run: runner.run, runnerState: runner.state, service };
 }
@@ -3197,6 +3292,132 @@ test("resume consumes a stopped worker result once without relaunching the imple
   );
 });
 
+test("a launched review job receives a bounded deterministic review brief", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "reviewing",
+      taskEdits: { reviewHead: "review-head" },
+      runner: {
+        active: false,
+        checkoutHead: "review-head",
+        changedFiles: "src/service/controller.ts\n",
+        referencingFiles: "review-head:src/main.ts\n",
+      },
+    },
+    async ({ home, lease, service }) => {
+      await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+
+      await service.tick();
+
+      const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
+      if (launched === undefined) throw new Error("review job was not persisted");
+      const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
+        readonly prompt: string;
+      };
+      const briefPath = join(dirname(launched.jobPath), "review-brief.md");
+      expect(spec.prompt).toContain(briefPath);
+      expect(spec.prompt).toContain("is not proof");
+      expect(spec.prompt).toContain("Reuse the exact finding id");
+
+      const brief = await readFile(briefPath, "utf8");
+      expect(Buffer.byteLength(brief, "utf8")).toBeLessThanOrEqual(
+        REVIEW_BRIEF_LIMITS.maxBriefBytes,
+      );
+      expect(brief).toContain("## Approved scope");
+      expect(brief).toContain("## Applicable principles");
+      expect(brief).toContain("## Non-goals");
+      expect(brief).toContain("cumulative diff source-head..review-head");
+      expect(brief).toContain("src/service/controller.ts");
+      expect(brief).toContain("affected callers observed at HEAD: src/main.ts");
+      expect(brief).toContain("## Evidence-backed blockers");
+      expect(brief).toContain("## Advisory leads (untrusted; never blockers)");
+      expect(brief).toContain("## Fix-round budget");
+      expect(brief).toContain("- review level: ");
+    },
+  );
+});
+
+function passingReview(lens: ReviewLens): TaskRecord["reviews"][number] {
+  return {
+    lens,
+    head: "review-head",
+    generation: 0,
+    pass: true,
+    findings: [],
+    summary: `no ${lens} findings`,
+  };
+}
+
+test("the default policy launches today's four review lenses and never calls the helper", async () => {
+  let evaluatorCalls = 0;
+  const assistance = reviewAssistanceRuntime({
+    apiKey: "would-be-used-if-opted-in",
+    timeoutMs: 1_000,
+    evaluate: async () => {
+      evaluatorCalls += 1;
+      throw new Error("the evaluator must not be called under the default policy");
+    },
+  });
+  const launchedLenses: string[] = [];
+  for (const recorded of [
+    [],
+    [passingReview("behavior")],
+    [passingReview("behavior"), passingReview("design")],
+    [passingReview("behavior"), passingReview("design"), passingReview("coverage")],
+  ]) {
+    await withFixture(
+      {
+        kind: "implementation",
+        stage: "reviewing",
+        taskEdits: { reviewHead: "review-head", reviews: recorded },
+        runner: { active: false, checkoutHead: "review-head" },
+        reviewAssistance: assistance,
+      },
+      async ({ home, lease, service }) => {
+        await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+        await service.tick();
+        const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
+        if (launched?.reviewLens === undefined) throw new Error("no review job was launched");
+        launchedLenses.push(launched.reviewLens);
+
+        const persisted = await service.get("task-1");
+        expect(persisted.reviewLevel?.level).toBe("standard");
+        expect(persisted.reviewLevel?.reason.length).toBeGreaterThan(0);
+        expect(persisted.reviewLevel?.assistance).toBeUndefined();
+        expect(persisted.policy.config.reviewLevels).toEqual(DEFAULT_REVIEW_LEVEL_POLICY);
+        expect(requiredReviewLenses(persisted, "review-head")).toEqual(FINAL_REVIEW_LENSES);
+      },
+    );
+  }
+  expect(launchedLenses).toEqual([...FINAL_REVIEW_LENSES]);
+  expect(evaluatorCalls).toBe(0);
+});
+
+test("classification leaves a running task's pinned policy and model choices unchanged", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "reviewing",
+      taskEdits: { reviewHead: "review-head" },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, service, task }) => {
+      await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+      const before = await service.get("task-1");
+      await service.tick();
+      const after = await service.get("task-1");
+
+      expect(after.reviewLevel).toBeDefined();
+      expect(after.policy).toEqual(before.policy);
+      expect(after.policy.config.models).toEqual(task.policy.config.models);
+      expect(after.policy.config.maxFixRounds).toBe(task.policy.config.maxFixRounds);
+      expect(after.policy.config.maxWorkers).toBe(task.policy.config.maxWorkers);
+      expect(after.policy.config.validationCommands).toEqual(task.policy.config.validationCommands);
+    },
+  );
+});
+
 test("review result retains its reviewer pane with durable task revisions", async () => {
   await withFixture(
     {
@@ -4169,6 +4390,100 @@ test("launched operation with missing endpoint and result is quarantined, not fa
       expect(recovered?.jobs[0]?.phase).toBe("running");
       expect(activeReservations(after)).toBe(1);
       expect(recovered?.endpoints).toHaveLength(0);
+    },
+  );
+});
+
+async function draftRefreshFailures(home: string): Promise<readonly Record<string, unknown>[]> {
+  let contents: string;
+  try {
+    contents = await readFile(diagnosticsPath(home), "utf8");
+  } catch {
+    return [];
+  }
+  const events: Record<string, unknown>[] = [];
+  for (const line of contents.split(/\r?\n/u)) {
+    if (line.trim().length === 0) continue;
+    const parsed: unknown = JSON.parse(line);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      if (record.event === "draft-refresh-failed") events.push(record);
+    }
+  }
+  return events;
+}
+
+function githubCalls(calls: readonly CommandRequest[]): readonly CommandRequest[] {
+  return calls.filter((call) => call.argv[0] === "gh");
+}
+
+test("the scheduler refreshes an approved draft on durable change and records refresh failures", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "ready",
+      attachLease: true,
+      taskEdits: { reviewHead: "source-head" },
+      runner: {
+        draftRemote: {
+          repository: "acme/repo",
+          branch: "tandem/task-1",
+          base: "main",
+          number: 11,
+        },
+      },
+    },
+    async ({ home, service, runnerState }) => {
+      const published = await service.publishDraft("task-1", {
+        repository: "acme/repo",
+        title: "Draft: exercise a durable service path",
+        base: "main",
+        approved: true,
+      });
+      expect(published.pullRequest?.state).toBe("draft");
+      expect(runnerState.draftRemote.created).toBe(1);
+      expect(runnerState.draftRemote.editBodies).toHaveLength(0);
+
+      const afterPublish = runnerState.calls.length;
+      await service.tick();
+      expect(githubCalls(runnerState.calls.slice(afterPublish))).toHaveLength(0);
+
+      await service.pause("task-1", "waiting on the repository owner");
+      await service.tick();
+      expect(runnerState.draftRemote.created).toBe(1);
+      expect(runnerState.draftRemote.editBodies).toHaveLength(1);
+      const body = runnerState.draftRemote.editBodies[0] ?? "";
+      expect(body).toContain("Task task-1 is paused");
+      expect(body).toContain("Work is paused from ready and is not progressing.");
+      expect(body).toContain(
+        "it is not a claim that the work is ready, mergeable, deployable, or accepted",
+      );
+      expect(await draftRefreshFailures(home)).toHaveLength(0);
+
+      const afterRefresh = runnerState.calls.length;
+      await service.tick();
+      expect(githubCalls(runnerState.calls.slice(afterRefresh))).toHaveLength(0);
+
+      runnerState.draftRemote.failEdit = true;
+      await service.resume("task-1");
+      const advanced = await service.tick();
+      expect(advanced.find((entry) => entry.id === "task-1")?.stage).toBe("ready");
+      expect((await service.get("task-1")).stage).toBe("ready");
+      expect(runnerState.draftRemote.created).toBe(1);
+      expect(runnerState.draftRemote.editBodies).toHaveLength(1);
+      const failures = await draftRefreshFailures(home);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({
+        event: "draft-refresh-failed",
+        taskId: "task-1",
+        details: { step: "remote-refresh", errorClass: "AdapterCommandError", pullRequest: 11 },
+      });
+      expect(JSON.stringify(failures[0])).not.toContain("remote rejected the update");
+
+      const afterFailure = runnerState.calls.length;
+      await service.tick();
+      expect(githubCalls(runnerState.calls.slice(afterFailure))).toHaveLength(0);
+      expect(await draftRefreshFailures(home)).toHaveLength(1);
     },
   );
 });
