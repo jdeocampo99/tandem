@@ -7,8 +7,8 @@ import {
   type CoordinatorLaunchRequest,
   type CoordinatorLaunchResult,
   launchCoordinatorUnlocked,
+  withClaimedCoordinatorRepository,
 } from "./launch.ts";
-import { withCoordinatorLaunchLock } from "./lock.ts";
 import {
   assertStoppedCoordinatorShell,
   commandErrorCode,
@@ -101,7 +101,7 @@ export async function restartCoordinator(
   request: CoordinatorLaunchRequest,
   dependencies: CoordinatorLaunchDependencies,
 ): Promise<CoordinatorRestartResult> {
-  return withCoordinatorLaunchLock(request.home, request.sessionId, async () => {
+  return withClaimedCoordinatorRepository(request, dependencies, async (reconciliations) => {
     const previous = await findRunningCoordinator(dependencies.run, {
       home: request.home,
       sessionId: request.sessionId,
@@ -148,6 +148,7 @@ export async function restartCoordinator(
       ...launch,
       restarted: prior !== undefined,
       ...(prior === undefined ? {} : { previousPaneId: prior.endpoint.paneId }),
+      ...(reconciliations.length === 0 ? {} : { otherSessionReconciliations: reconciliations }),
     };
   });
 }

@@ -19,7 +19,12 @@ import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
 import { mergeInheritedEnvironment } from "../terminal/cli-process.ts";
-import { withCoordinatorLaunchLock } from "./lock.ts";
+import {
+  type CoordinatorSessionReconciliation,
+  claimRepositoryCoordinator,
+  parallelCoordinatorsAllowed,
+} from "./exclusivity.ts";
+import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
 import { type CoordinatorRecord, recordPath } from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
@@ -95,6 +100,8 @@ export type CoordinatorLaunchResult = Readonly<{
   readonly workspaceRetirement?: CoordinatorWorkspaceRetirement;
   /** What happened to a previous coordinator's worktree lease, when one was replaced. */
   readonly previousResources?: CoordinatorResourceOutcome;
+  /** What happened to stopped coordinator records other Tandem sessions held for this repository. */
+  readonly otherSessionReconciliations?: readonly CoordinatorSessionReconciliation[];
 }>;
 
 export type CoordinatorLaunchDependencies = Readonly<{
@@ -881,12 +888,50 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   };
 }
 
+/**
+ * Holds one canonical repository's coordinator claim while the caller launches or restarts: the
+ * repository lock shared by every session in this Tandem home, then this session's launch lock,
+ * then whatever cross-session reconciliation the claim requires. The operation receives what that
+ * reconciliation did, so a caller can report it.
+ *
+ * The explicit parallel-coordinator escape hatch keeps both locks and skips only the claim, so an
+ * opted-in launch still serializes against every other launch for the same repository.
+ */
+export async function withClaimedCoordinatorRepository<Result>(
+  request: CoordinatorLaunchRequest,
+  dependencies: CoordinatorLaunchDependencies,
+  operation: (reconciliations: readonly CoordinatorSessionReconciliation[]) => Promise<Result>,
+): Promise<Result> {
+  const paths = coordinatorPaths(request);
+  return withCoordinatorRepositoryLock(paths.home, paths.repo, () =>
+    withCoordinatorLaunchLock(paths.home, request.sessionId, async () => {
+      if (parallelCoordinatorsAllowed(dependencies.processEnvironment)) return operation([]);
+      const reconciliations = await claimRepositoryCoordinator({
+        run: dependencies.run,
+        home: paths.home,
+        sessionId: request.sessionId,
+        repoPath: paths.repo,
+        requestedSourceHead: async () =>
+          request.sourceHead ??
+          (await resolveCoordinatorSourceHead(dependencies.run, paths.repo)).head,
+        replacementLeaseHolder: (sourceHead) =>
+          coordinatorLeaseIdentity(paths.repo, request.sessionId, sourceHead).tandemId,
+        clock: dependencies.clock ?? defaultClock,
+        newId: dependencies.newId ?? randomUUID,
+      });
+      return operation(reconciliations);
+    }),
+  );
+}
+
 export async function launchCoordinator(
   request: CoordinatorLaunchRequest,
   dependencies: CoordinatorLaunchDependencies,
 ): Promise<CoordinatorLaunchResult> {
-  const paths = coordinatorPaths(request);
-  return withCoordinatorLaunchLock(paths.home, request.sessionId, () =>
-    launchCoordinatorUnlocked(request, dependencies),
-  );
+  return withClaimedCoordinatorRepository(request, dependencies, async (reconciliations) => {
+    const launch = await launchCoordinatorUnlocked(request, dependencies);
+    return reconciliations.length === 0
+      ? launch
+      : { ...launch, otherSessionReconciliations: reconciliations };
+  });
 }

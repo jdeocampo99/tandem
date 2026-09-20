@@ -98,6 +98,32 @@ export function previousResourcesNotice(
   return `Tandem quarantined the previous coordinator worktree lease for ${repoPath}: ${resources.reason}.${where}\n`;
 }
 
+/**
+ * Formats one notice per stopped coordinator a launch settled for another Tandem session, so a
+ * cross-session release, retention, or quarantine is never silent.
+ */
+export function otherSessionReconciliationNotices(
+  repoPath: string,
+  value: unknown,
+): readonly string[] {
+  if (!isRecord(value) || !Array.isArray(value.otherSessionReconciliations)) return [];
+  const notices: string[] = [];
+  for (const entry of value.otherSessionReconciliations) {
+    if (!isRecord(entry) || typeof entry.sessionId !== "string") continue;
+    const resources = entry.resources;
+    if (!isRecord(resources) || typeof resources.outcome !== "string") continue;
+    const reason = typeof resources.reason === "string" ? `: ${resources.reason}` : "";
+    const where =
+      typeof resources.quarantinePath === "string"
+        ? ` Recorded at ${resources.quarantinePath}.`
+        : "";
+    notices.push(
+      `Tandem settled a stopped coordinator for ${repoPath} from Herdr session ${entry.sessionId} (${resources.outcome})${reason}.${where}\n`,
+    );
+  }
+  return notices;
+}
+
 export async function launchProjects(
   roots: readonly string[],
   invocation: TerminalInvocation,
