@@ -60,6 +60,10 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 - File moves must update imports and `import.meta.url` worker/extension resource paths together.
 - Test observable behavior. Native process/terminal checks use isolated Herdr sessions and temporary
   Tandem homes, never the user's live state.
+- Cross-subsystem scenario evals live in [tests/evals/](tests/evals/). Reuse
+  [scenario.ts](tests/evals/scenario.ts) for its temporary home, fake Herdr/Treehouse/git/OMP/TypeSafe
+  boundaries, scripted failures, event trace, and retained/released/failed/quarantined resource ledger
+  rather than writing another external-boundary fake. Focused unit tests stay the regression suite.
 - Only the parent runs project-wide gates after integration; child workers run no tests, builds,
   formatters, or linters. From the repository root:
 
