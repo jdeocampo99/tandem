@@ -21,7 +21,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   onboard: { min: 2, max: 2 },
   setup: { min: 2, max: 2 },
   models: { min: 1, max: 2 },
-  create: { min: 6, max: 6 },
+  create: { min: 6, max: 7 },
   approve: { min: 2, max: 2 },
   tick: { min: 1, max: 1 },
   pause: { min: 2, max: Number.POSITIVE_INFINITY },
@@ -58,6 +58,7 @@ export type TandemAction =
       readonly objective: string;
       readonly acceptanceCriteria: readonly string[];
       readonly surfaces: readonly string[];
+      readonly researchTaskIds?: readonly string[] | undefined;
     }>
   | Readonly<{ readonly action: "list" }>
   | Readonly<{ readonly action: "presentations" }>
@@ -273,6 +274,7 @@ function serviceCreateInput(
     objective: action.objective,
     acceptanceCriteria: action.acceptanceCriteria,
     surfaces: action.surfaces,
+    ...(action.researchTaskIds === undefined ? {} : { researchTaskIds: action.researchTaskIds }),
   };
 }
 
@@ -496,6 +498,13 @@ export function parseTandemCommand(input: string): TandemAction {
       if (acceptanceCriteria.length === 0)
         throw new TypeError("create requires at least one acceptance criterion");
       if (surfaces.length === 0) throw new TypeError("create requires at least one surface");
+      const researchTaskIds =
+        words[6] === undefined
+          ? undefined
+          : words[6]
+              .split(",")
+              .map((entry) => entry.trim())
+              .filter((entry) => entry.length > 0);
       return {
         action: "create",
         repoPath: value(1, "create"),
@@ -503,6 +512,7 @@ export function parseTandemCommand(input: string): TandemAction {
         objective: value(3, "create objective"),
         acceptanceCriteria,
         surfaces,
+        ...(researchTaskIds === undefined ? {} : { researchTaskIds }),
       };
     }
     case "show":

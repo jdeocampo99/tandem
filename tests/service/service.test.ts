@@ -12,14 +12,16 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type {
-  CommandRequest,
-  CommandResult,
-  Endpoint,
-  ResolvedPolicy,
-  TaskRecord,
-  WorkerReceipt,
-  WorktreeLease,
+import {
+  type CommandRequest,
+  type CommandResult,
+  type Endpoint,
+  MAX_RESEARCH_HANDOFF_COUNT,
+  MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
+  type ResolvedPolicy,
+  type TaskRecord,
+  type WorkerReceipt,
+  type WorktreeLease,
 } from "../../src/contracts.ts";
 import type { PresentationRecord } from "../../src/presentations/records.ts";
 import { activeReservations, activeRuntimeJob } from "../../src/runtime/activity.ts";
@@ -542,6 +544,52 @@ async function withFixture(
 async function readRuntime(home: string): Promise<RuntimeState> {
   return readRuntimeState(runtimeFile(home));
 }
+async function seedCompletedScout(
+  fixtureValue: Fixture,
+  report: string,
+  sourceCheckpoint: RuntimeTaskState["sourceCheckpoint"] = SOURCE_CHECKPOINT,
+): Promise<string> {
+  const reportPath = join(
+    fixtureValue.home,
+    "jobs",
+    fixtureValue.task.id,
+    "0",
+    "job-1",
+    "report.txt",
+  );
+  await mkdir(dirname(reportPath), { recursive: true });
+  await writeFile(reportPath, report, "utf8");
+
+  const store = createTaskStore({
+    directory: join(fixtureValue.home, "tasks"),
+    clock: () => TIMESTAMP,
+    idFactory: () => "unused",
+  });
+  const current = await store.read(fixtureValue.task.id);
+  if (current === undefined) throw new Error("fixture scout task missing");
+  await store.update(current.id, current.revision, (task) => ({
+    ...task,
+    revision: task.revision + 1,
+    updatedAt: TIMESTAMP,
+    stage: "completed",
+    previousStage: "scouting",
+    reportPath,
+  }));
+
+  const runtime = await readRuntime(fixtureValue.home);
+  const scoutRuntime = runtime.tasks.find((entry) => entry.taskId === fixtureValue.task.id);
+  if (scoutRuntime === undefined) throw new Error("fixture scout runtime missing");
+  const scoutJob = workerJob(fixtureValue.home, fixtureValue.endpoint, "scout", "consumed");
+  await writeRuntimeState(runtimeFile(fixtureValue.home), {
+    ...runtime,
+    tasks: runtime.tasks.map((entry) =>
+      entry.taskId === fixtureValue.task.id
+        ? { ...entry, sourceCheckpoint, jobs: [scoutJob] }
+        : entry,
+    ),
+  });
+  return reportPath;
+}
 
 test("bound coordinators scope tasks by physical original identity and reject foreign projects", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-service-scope-"));
@@ -632,6 +680,76 @@ test("bound task creation normalizes clean input to the original identity and pe
     await service.shutdown();
     await rm(root, { recursive: true, force: true });
   }
+});
+test("creates a bounded immutable scout handoff for a same-source implementation", async () => {
+  await withFixture({ kind: "scout" }, async (fixtureValue) => {
+    const report = `Outcome: completed\n${"界".repeat(3_000)}`;
+    const reportPath = await seedCompletedScout(fixtureValue, report);
+
+    const created = await fixtureValue.service.create({
+      repoPath: fixtureValue.task.repoPath,
+      kind: "implementation",
+      objective: "Use the completed scout evidence",
+      acceptanceCriteria: ["The implementation uses the handoff"],
+      surfaces: ["service"],
+      researchTaskIds: [fixtureValue.task.id],
+    });
+    const handoff = created.researchHandoffs?.[0];
+    if (handoff === undefined) throw new Error("research handoff was not persisted");
+
+    expect(handoff.scoutTaskId).toBe(fixtureValue.task.id);
+    expect(handoff.scoutRepoPath).toBe(await realpath(fixtureValue.task.repoPath));
+    expect(handoff.scoutSourceHead).toBe(SOURCE_CHECKPOINT.head);
+    expect(handoff.scoutSourceBase).toBe(SOURCE_CHECKPOINT.base);
+    expect(handoff.reportPath).toBe(await realpath(reportPath));
+    expect(handoff.reportDigest).toBe(createHash("sha256").update(report).digest("hex"));
+    expect(Buffer.byteLength(handoff.excerpt, "utf8")).toBeLessThanOrEqual(
+      MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
+    );
+    expect(handoff.excerpt).toContain("Outcome: completed");
+    expect((await fixtureValue.service.get(created.id)).researchHandoffs).toEqual(
+      created.researchHandoffs,
+    );
+  });
+});
+
+test("rejects missing, over-limit, and stale scout handoff references", async () => {
+  await withFixture({ kind: "scout" }, async (fixtureValue) => {
+    const createInput = {
+      repoPath: fixtureValue.task.repoPath,
+      kind: "implementation" as const,
+      objective: "Implement from scout evidence",
+      acceptanceCriteria: ["Invalid references fail closed"],
+      surfaces: ["service"],
+    };
+    await expect(
+      fixtureValue.service.create({ ...createInput, researchTaskIds: ["missing-scout"] }),
+    ).rejects.toThrow("not a completed scout");
+    await expect(
+      fixtureValue.service.create({
+        ...createInput,
+        researchTaskIds: Array.from(
+          { length: MAX_RESEARCH_HANDOFF_COUNT + 1 },
+          (_, index) => `scout-${index}`,
+        ),
+      }),
+    ).rejects.toThrow(`at most ${MAX_RESEARCH_HANDOFF_COUNT}`);
+
+    await seedCompletedScout(fixtureValue, "Outcome: completed\nstale", {
+      ...SOURCE_CHECKPOINT,
+      head: "old-head",
+      base: "old-head",
+    });
+    await expect(
+      fixtureValue.service.create({
+        ...createInput,
+        researchTaskIds: [fixtureValue.task.id],
+      }),
+    ).rejects.toThrow("stale for the implementation source checkpoint");
+    expect(
+      (await fixtureValue.service.list()).some((entry) => entry.kind === "implementation"),
+    ).toBe(false);
+  });
 });
 
 test("service resolves task policy from Tandem home and leaves repository-local config untouched", async () => {
@@ -1445,10 +1563,60 @@ test("approved task allocates a fresh endpoint and dispatches one worker", async
     const workspaceCreate = runnerState.calls.find(
       (request) => request.argv.includes("workspace") && request.argv.includes("create"),
     );
-    expect(workspaceCreate?.argv).toContain("└ exercise a durable service path · task-1 · impl");
+    expect(workspaceCreate?.argv).toContain("└ implement exercise a durable service path · task-1");
     expect(persisted.tasks[0]?.taskName).toBe("tandem-task-1");
     expect(persisted.tasks[0]?.worktree?.name).toBe("tandem-task-1");
     expect(persisted.tasks[0]?.jobs[0]?.phase).toBe("running");
+  });
+});
+test("implementer jobs receive bounded scout context and the full report artifact", async () => {
+  await withFixture({ kind: "implementation" }, async ({ home, lease, service }) => {
+    const reportPath = join(home, "jobs", "scout-1", "0", "job-1", "report.txt");
+    const handoff = {
+      scoutTaskId: "scout-1",
+      scoutRepoPath: join(home, "repo"),
+      scoutSourceHead: SOURCE_CHECKPOINT.head,
+      scoutSourceBase: SOURCE_CHECKPOINT.base,
+      reportPath,
+      reportDigest: "a".repeat(64),
+      excerpt: "Evidence from scout.",
+    } as const;
+    const store = createTaskStore({
+      directory: join(home, "tasks"),
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    const current = await store.read("task-1");
+    if (current === undefined) throw new Error("fixture implementation task missing");
+    await store.update(current.id, current.revision, (task) => ({
+      ...task,
+      revision: task.revision + 1,
+      updatedAt: TIMESTAMP,
+      worktree: lease,
+      researchHandoffs: [handoff],
+    }));
+    const runtime = await readRuntime(home);
+    await writeRuntimeState(runtimeFile(home), {
+      ...runtime,
+      tasks: runtime.tasks.map((entry) => ({
+        ...entry,
+        worktree: lease,
+        endpoints: [],
+        jobs: [],
+      })),
+    });
+
+    await service.approve("task-1");
+    await service.tick();
+
+    const launched = (await readRuntime(home)).tasks[0]?.jobs[0];
+    if (launched === undefined) throw new Error("implementer job was not persisted");
+    const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
+      readonly prompt: string;
+    };
+    expect(spec.prompt).toContain("Evidence from scout.");
+    expect(spec.prompt).toContain("untrusted task evidence");
+    expect(spec.prompt).toContain(reportPath);
   });
 });
 
@@ -1558,6 +1726,24 @@ test("pause waits behind launch proof and prevents a second dispatch", async () 
       expect(runnerState.active).toBe(false);
       const persisted = await readRuntime(home);
       expect(persisted.tasks[0]?.stopRequest?.action).toBe("pause");
+    },
+  );
+});
+test("pause treats a missing worker pane as already stopped", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      runner: { active: false, paneState: "missing" },
+    },
+    async ({ home, lease, service }) => {
+      const endpoint = endpointFor("implementer");
+      await seedTaskResources(home, lease, [endpoint], []);
+
+      const paused = await service.pause("task-1", "stop the missing worker pane");
+      expect(paused.stage).toBe("paused");
+      const runtime = await readRuntime(home);
+      expect(runtime.tasks[0]?.stopRequest?.action).toBe("pause");
     },
   );
 });
@@ -2272,6 +2458,56 @@ test("scout and reviewer questions preserve report evidence and resume only thei
         expect(answered.stage).toBe(value.stage);
         expect(answeredTask.reportPath).toBe(blocked.reportPath);
         expect(answered.messages.at(-1)?.replyTo).toBe(question.id);
+      },
+    );
+  }
+});
+test("failed review results block the task instead of advancing into a review loop", async () => {
+  for (const status of ["completed", "failed"] as const) {
+    await withFixture(
+      {
+        kind: "implementation",
+        stage: "reviewing",
+        taskEdits: { reviewHead: "source-head" },
+        runner: { active: false },
+      },
+      async ({ home, lease, service }) => {
+        const endpoint = endpointFor("reviewer");
+        const job = {
+          ...workerJob(home, endpoint, "reviewer"),
+          reviewLens: "design" as const,
+          receiptPath: join(home, "review-receipt.json"),
+          instructionRevision: 0,
+        };
+        await writeJsonAtomically(job.resultPath, {
+          id: job.id,
+          taskId: job.taskId,
+          generation: job.generation,
+          role: job.role,
+          status,
+          text: '{"lens":"design","head":"source-head","generation":0,"pass":false,"findings":[],"summary":"review"}',
+          ...(status === "failed" ? { error: "review output identity mismatch" } : {}),
+          review: {
+            lens: "design",
+            head: "source-head",
+            generation: 0,
+            pass: false,
+            findings: [],
+            summary: "review",
+          },
+          finishedAt: TIMESTAMP,
+        });
+        await seedTaskResources(home, lease, [endpointFor("implementer"), endpoint], [job]);
+
+        await service.tick();
+        const blocked = await service.get("task-1");
+        expect(blocked.stage).toBe("blocked");
+        expect(blocked.blockReason).toContain("stale worker instruction");
+
+        await service.tick();
+        const runtime = await readRuntime(home);
+        expect(runtime.tasks[0]?.jobs).toHaveLength(1);
+        expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("failed");
       },
     );
   }

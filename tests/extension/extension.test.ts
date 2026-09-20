@@ -300,6 +300,14 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
     acceptanceCriteria: ["behavior", "tests"],
     surfaces: ["src", "tests"],
   });
+  expect(
+    parseTandemCommand(
+      'create /repo implementation "ship feature" "behavior" "src" "scout-a,scout-b"',
+    ),
+  ).toMatchObject({
+    action: "create",
+    researchTaskIds: ["scout-a", "scout-b"],
+  });
 });
 
 test("communication slash commands join quoted deltas and reject extra message arguments", () => {

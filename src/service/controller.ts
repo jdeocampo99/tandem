@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { createReadStream } from "node:fs";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
-import { readCheckpoint } from "../adapters/git.ts";
+import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, inspectEndpoint } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
@@ -15,15 +16,19 @@ import {
   writeModelSettings,
 } from "../config/models.ts";
 import { type OnboardRepoResult, onboardRepo, resolveRepoPolicy } from "../config/repositories.ts";
-import type {
-  AnswerTaskInput,
-  Clock,
-  CommandRunner,
-  IdFactory,
-  RepoPolicy,
-  SteerTaskInput,
-  TaskCommunicationView,
-  TaskRecord,
+import {
+  type AnswerTaskInput,
+  type Clock,
+  type CommandRunner,
+  type IdFactory,
+  MAX_RESEARCH_HANDOFF_COUNT,
+  MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
+  MAX_RESEARCH_HANDOFF_TOTAL_BYTES,
+  type RepoPolicy,
+  type ResearchHandoff,
+  type SteerTaskInput,
+  type TaskCommunicationView,
+  type TaskRecord,
 } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { describeTaskPr, type PrSummary } from "../delivery/evidence.ts";
@@ -53,6 +58,7 @@ import {
   defaultIdFactory,
   readRuntimeState,
   runtimeFile,
+  taskJobsDirectory,
   taskSessionDirectory,
   updateRuntimeState,
   writeJsonAtomically,
@@ -68,7 +74,12 @@ import type {
 import { TaskControlWorkflow } from "../tasks/control.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
-import { createTaskStore, type TaskStore, transitionStoredTask } from "../tasks/store.ts";
+import {
+  createTaskStore,
+  type TaskStore,
+  type TaskStoreTransaction,
+  transitionStoredTask,
+} from "../tasks/store.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
 import { createJevShadowEvaluator } from "./jev.ts";
@@ -85,6 +96,7 @@ import {
   positiveInteger,
   readTextList,
   replaceRuntimeTask,
+  reportPathFor,
   serializedIdentity,
   singleLine,
   taskInputFor,
@@ -101,6 +113,7 @@ export type CreateTaskRequest = Readonly<{
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
   readonly surfaces: readonly string[];
+  readonly researchTaskIds?: readonly string[];
 }>;
 export type ModelOptionsResult = Readonly<{
   readonly modelSettings: ModelSettings;
@@ -217,6 +230,144 @@ function operationClaim(operation: RuntimeTaskState["operation"]): OperationClai
       };
 }
 
+function pathWithin(root: string, candidate: string): boolean {
+  const relativePath = relative(root, candidate);
+  return (
+    relativePath.length > 0 &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${sep}`) &&
+    !relativePath.startsWith(sep)
+  );
+}
+
+function boundedUtf8Prefix(value: string, limit: number): string {
+  if (Buffer.byteLength(value, "utf8") <= limit) return value;
+  let end = Math.min(value.length, limit);
+  while (end > 0) {
+    const lastCodeUnit = value.charCodeAt(end - 1);
+    if (
+      Buffer.byteLength(value.slice(0, end), "utf8") <= limit &&
+      (lastCodeUnit < 0xd800 || lastCodeUnit > 0xdbff)
+    ) {
+      break;
+    }
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+async function readBoundedResearchReport(
+  path: string,
+): Promise<
+  Readonly<{ readonly hasContent: boolean; readonly digest: string; readonly excerpt: string }>
+> {
+  const digest = createHash("sha256");
+  let excerpt = "";
+  let hasContent = false;
+  for await (const chunk of createReadStream(path, { encoding: "utf8" })) {
+    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    if (text.length === 0) continue;
+    hasContent = true;
+    digest.update(text);
+    if (Buffer.byteLength(excerpt, "utf8") < MAX_RESEARCH_HANDOFF_EXCERPT_BYTES) {
+      excerpt = boundedUtf8Prefix(`${excerpt}${text}`, MAX_RESEARCH_HANDOFF_EXCERPT_BYTES);
+    }
+  }
+  return { hasContent, digest: digest.digest("hex"), excerpt };
+}
+
+async function resolveResearchHandoffs(
+  ids: readonly string[] | undefined,
+  implementationRepoPath: string,
+  implementationCheckpoint: Pick<GitCheckpoint, "head" | "base">,
+  home: string,
+  runtime: RuntimeState,
+  store: Pick<TaskStoreTransaction, "read">,
+): Promise<readonly ResearchHandoff[] | undefined> {
+  if (ids === undefined) return undefined;
+  if (ids.length > MAX_RESEARCH_HANDOFF_COUNT) {
+    throw new Error(`at most ${MAX_RESEARCH_HANDOFF_COUNT} research task references are allowed`);
+  }
+  const projectRoot = await realpath(implementationRepoPath);
+  const handoffs: ResearchHandoff[] = [];
+  for (const rawId of ids) {
+    const scoutTaskId = singleLine(rawId, "researchTaskIds entry");
+    if (handoffs.some((entry) => entry.scoutTaskId === scoutTaskId)) {
+      throw new Error(`duplicate research task reference ${scoutTaskId}`);
+    }
+    const scout = await store.read(scoutTaskId);
+    if (scout === undefined || scout.kind !== "scout" || scout.stage !== "completed") {
+      throw new Error(`research task ${scoutTaskId} is not a completed scout`);
+    }
+    if (scout.reportPath === undefined) {
+      throw new Error(`research task ${scoutTaskId} has no completed report`);
+    }
+    if ((await realpath(scout.repoPath)) !== projectRoot) {
+      throw new Error(`research task ${scoutTaskId} belongs to a different project`);
+    }
+    const runtimeTask = runtime.tasks.find((entry) => entry.taskId === scout.id);
+    if (
+      runtimeTask === undefined ||
+      runtimeTask.sourceCheckpoint.head.length === 0 ||
+      runtimeTask.sourceCheckpoint.base.length === 0 ||
+      runtimeTask.sourceCheckpoint.dirty ||
+      runtimeTask.sourceCheckpoint.unmerged
+    ) {
+      throw new Error(`research task ${scoutTaskId} has invalid or stale source provenance`);
+    }
+    if (
+      runtimeTask.sourceCheckpoint.head !== implementationCheckpoint.head ||
+      runtimeTask.sourceCheckpoint.base !== implementationCheckpoint.base
+    ) {
+      throw new Error(
+        `research task ${scoutTaskId} is stale for the implementation source checkpoint`,
+      );
+    }
+    const reportPath = resolve(scout.reportPath);
+    const reportRoot = await realpath(taskJobsDirectory(home, scout.id)).catch(() => undefined);
+    const physicalReport = await realpath(reportPath).catch(() => undefined);
+    if (
+      !isAbsolute(scout.reportPath) ||
+      reportRoot === undefined ||
+      physicalReport === undefined ||
+      basename(physicalReport) !== "report.txt" ||
+      !pathWithin(reportRoot, physicalReport)
+    ) {
+      throw new Error(`research task ${scoutTaskId} has an unsafe or missing report`);
+    }
+    const metadata = await lstat(physicalReport);
+    if (!metadata.isFile()) throw new Error(`research task ${scoutTaskId} report is not a file`);
+    const scoutJob = runtimeTask.jobs.find(
+      (job) =>
+        job.role === "scout" &&
+        job.phase === "consumed" &&
+        job.generation === scout.generation &&
+        resolve(reportPathFor(job.jobPath)) === reportPath,
+    );
+    if (scoutJob === undefined) {
+      throw new Error(`research task ${scoutTaskId} report provenance is stale`);
+    }
+    const report = await readBoundedResearchReport(physicalReport);
+    if (!report.hasContent) throw new Error(`research task ${scoutTaskId} report is empty`);
+    handoffs.push({
+      scoutTaskId,
+      scoutRepoPath: projectRoot,
+      scoutSourceHead: runtimeTask.sourceCheckpoint.head,
+      scoutSourceBase: runtimeTask.sourceCheckpoint.base,
+      reportPath: physicalReport,
+      reportDigest: report.digest,
+      excerpt: report.excerpt,
+    });
+  }
+  const totalBytes = handoffs.reduce(
+    (total, handoff) => total + Buffer.byteLength(handoff.excerpt, "utf8"),
+    0,
+  );
+  if (totalBytes > MAX_RESEARCH_HANDOFF_TOTAL_BYTES) {
+    throw new Error(`research handoff exceeds ${MAX_RESEARCH_HANDOFF_TOTAL_BYTES} UTF-8 bytes`);
+  }
+  return handoffs;
+}
 function sameOperationClaim(
   operation: RuntimeTaskState["operation"],
   claim: OperationClaim | undefined,
@@ -469,8 +620,28 @@ class TandemController {
         home: this.#deps.home,
         ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
       });
-      const taskInput = taskInputFor(input, source.repoPath, policy);
+      const researchTaskIds =
+        input.researchTaskIds === undefined
+          ? undefined
+          : readTextList(input.researchTaskIds, "researchTaskIds");
+      if (researchTaskIds !== undefined && input.kind !== "implementation") {
+        throw new Error("research task references are only valid for implementation tasks");
+      }
       const checkpoint = await readCheckpoint(this.#deps.run, { repo: source.checkoutPath });
+      const runtime = await readRuntimeState(this.#deps.runtimePath);
+      const researchHandoffs = await resolveResearchHandoffs(
+        researchTaskIds,
+        source.repoPath,
+        checkpoint,
+        this.#deps.home,
+        runtime,
+        store,
+      );
+      const taskInput = taskInputFor(
+        { ...input, ...(researchHandoffs === undefined ? {} : { researchHandoffs }) },
+        source.repoPath,
+        policy,
+      );
       const id = singleLine(this.#deps.idFactory(), "task id");
       if (
         this.#deps.refreshSource !== undefined &&

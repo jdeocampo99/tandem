@@ -6,6 +6,7 @@ import type {
   IsoTimestamp,
   Notification,
   PullRequestMetadata,
+  ResearchHandoff,
   ResolvedGuidance,
   ReviewLens,
   ReviewResult,
@@ -24,6 +25,7 @@ export type TaskInput = Readonly<{
   readonly acceptanceCriteria: readonly string[];
   readonly surfaces: readonly string[];
   readonly policy: TaskRecord["policy"];
+  readonly researchHandoffs?: readonly ResearchHandoff[];
 }>;
 
 export type TaskTransitionContext = Readonly<{
@@ -631,6 +633,9 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     validationEvidence: [],
     reviews: [],
     notifications: [],
+    ...(input.researchHandoffs === undefined
+      ? {}
+      : { researchHandoffs: [...input.researchHandoffs] }),
   };
 }
 

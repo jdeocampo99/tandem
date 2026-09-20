@@ -533,12 +533,14 @@ export class TaskControlWorkflow {
             stopFailure = `pane ${endpoint.paneId} still has an active worker`;
           }
         } catch (error) {
+          if (isMissingEndpoint(error)) continue;
           stopFailure = `pane ${endpoint.paneId} could not be proven stopped: ${describeError(error)}`;
         }
       }
       if (runtime.jobs.some(activeRuntimeJob) && runtime.endpoints.length === 0) {
         stopFailure = "a durable worker job has no endpoint identity";
       }
+
       return this.#deps.store.exclusive(async (store) => {
         const current = await store.read(taskId);
         if (current === undefined) throw new Error(`task ${taskId} is missing`);
@@ -812,6 +814,49 @@ export class TaskControlWorkflow {
     return { failure: undefined, abandonedJobIds, terminalJobIds };
   }
 
+  private async settleQuarantinedCancellation(taskId: string): Promise<void> {
+    await withStateLock(this.#deps.home, async () => {
+      await this.#deps.store.exclusive(async () => {
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const settled = replaceRuntimeTask(state, taskId, (current) => {
+          const { stopRequest: _stopRequest, ...withoutStopRequest } = current;
+          const jobs = current.jobs.map((job) =>
+            activeRuntimeJob(job)
+              ? {
+                  ...job,
+                  phase: "failed" as const,
+                  error: "worker stopped after task cancellation",
+                }
+              : job,
+          );
+          return {
+            ...withoutStopRequest,
+            endpoints: [],
+            jobs,
+            ...(current.operation === undefined
+              ? {}
+              : {
+                  operation: {
+                    ...current.operation,
+                    phase: "cancelled" as const,
+                  },
+                }),
+            ...(current.reservation === undefined || current.reservation.phase === "released"
+              ? {}
+              : {
+                  reservation: {
+                    ...current.reservation,
+                    phase: "released" as const,
+                    releasedAt: this.#deps.clock(),
+                  },
+                }),
+          };
+        });
+        await writeRuntimeState(this.#deps.runtimePath, settled);
+      });
+    });
+  }
+
   async reconcileStopRequest(task: TaskRecord, runtime: RuntimeTaskState): Promise<void> {
     const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
 
@@ -835,6 +880,7 @@ export class TaskControlWorkflow {
           return;
         }
       } catch (error) {
+        if (isMissingEndpoint(error)) continue;
         await this.#deps.setRuntimeError(
           task.id,
           `stop request could not stop pane ${endpoint.paneId}: ${describeError(error)}`,
@@ -844,6 +890,10 @@ export class TaskControlWorkflow {
     }
     const active = runtime.jobs.find(activeRuntimeJob);
     if (active !== undefined) {
+      if (task.stage === "cancelled" && runtime.operation?.phase === "quarantined") {
+        await this.settleQuarantinedCancellation(task.id);
+        return;
+      }
       await this.#deps.reconcileJob(task, runtime, active);
       return;
     }

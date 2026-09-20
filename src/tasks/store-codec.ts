@@ -6,11 +6,15 @@ import {
   type FindingVerdict,
   type GuidanceProvenance,
   type InstructionChannel,
+  MAX_RESEARCH_HANDOFF_COUNT,
+  MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
+  MAX_RESEARCH_HANDOFF_TOTAL_BYTES,
   MODEL_ROLE_ORDER,
   type ModelSpec,
   type Notification,
   type PullRequestMetadata,
   type RepoPolicy,
+  type ResearchHandoff,
   type ResolvedGuidance,
   type ResolvedPolicy,
   type ReviewLens,
@@ -82,6 +86,7 @@ const TOP_LEVEL_KEYS = [
   "reviewHead",
   "validationEvidence",
   "reviews",
+  "researchHandoffs",
   "reportPath",
   "blockReason",
   "notifications",
@@ -516,12 +521,72 @@ function parsePullRequest(value: unknown, source: string): PullRequestMetadata {
     ...(title === undefined ? {} : { title }),
   };
 }
+function parseResearchHandoff(value: unknown, source: string): ResearchHandoff {
+  if (!isRecord(value)) failState(source, "research handoff must be an object");
+  assertExactKeys(
+    value,
+    [
+      "scoutTaskId",
+      "scoutRepoPath",
+      "scoutSourceHead",
+      "scoutSourceBase",
+      "reportPath",
+      "reportDigest",
+      "excerpt",
+    ],
+    source,
+  );
+  const excerpt = requiredText(value, "excerpt", source);
+  const excerptBytes = Buffer.byteLength(excerpt, "utf8");
+  if (excerptBytes > MAX_RESEARCH_HANDOFF_EXCERPT_BYTES) {
+    failState(source, `excerpt exceeds ${MAX_RESEARCH_HANDOFF_EXCERPT_BYTES} UTF-8 bytes`);
+  }
+  const reportDigest = requiredText(value, "reportDigest", source);
+  if (!/^[a-f0-9]{64}$/u.test(reportDigest)) {
+    failState(source, "reportDigest must be a lowercase SHA-256 digest");
+  }
+  return {
+    scoutTaskId: requiredText(value, "scoutTaskId", source),
+    scoutRepoPath: requiredText(value, "scoutRepoPath", source),
+    scoutSourceHead: requiredText(value, "scoutSourceHead", source),
+    scoutSourceBase: requiredText(value, "scoutSourceBase", source),
+    reportPath: requiredText(value, "reportPath", source),
+    reportDigest,
+    excerpt,
+  };
+}
 
 export function parseTaskRecord(value: unknown, source = "task record"): TaskRecord {
   if (!isRecord(value)) {
     failState(source, "task record must be an object");
   }
   assertExactKeys(value, TOP_LEVEL_KEYS, source);
+  const researchHandoffsValue = Object.hasOwn(value, "researchHandoffs")
+    ? requiredValue(value, "researchHandoffs", source)
+    : undefined;
+  if (
+    researchHandoffsValue !== undefined &&
+    (!Array.isArray(researchHandoffsValue) ||
+      researchHandoffsValue.length > MAX_RESEARCH_HANDOFF_COUNT)
+  ) {
+    failState(
+      source,
+      `researchHandoffs must be an array with at most ${MAX_RESEARCH_HANDOFF_COUNT} entries`,
+    );
+  }
+  const researchHandoffEntries: readonly unknown[] =
+    researchHandoffsValue === undefined ? [] : researchHandoffsValue;
+  const totalResearchBytes = researchHandoffEntries.reduce<number>(
+    (total, entry) =>
+      total +
+      (isRecord(entry) && typeof entry.excerpt === "string"
+        ? Buffer.byteLength(entry.excerpt, "utf8")
+        : 0),
+    0,
+  );
+  if (totalResearchBytes > MAX_RESEARCH_HANDOFF_TOTAL_BYTES) {
+    failState(source, `researchHandoffs exceed ${MAX_RESEARCH_HANDOFF_TOTAL_BYTES} UTF-8 bytes`);
+  }
   const endpointsValue = Object.hasOwn(value, "endpoints")
     ? requiredValue(value, "endpoints", source)
     : undefined;
@@ -597,6 +662,13 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     notifications: notificationEntries.map((entry, index) =>
       parseNotification(entry, `${source}.notifications[${index}]`),
     ),
+    ...(researchHandoffsValue === undefined
+      ? {}
+      : {
+          researchHandoffs: researchHandoffEntries.map((entry, index) =>
+            parseResearchHandoff(entry, `${source}.researchHandoffs[${index}]`),
+          ),
+        }),
   };
   return {
     ...taskBase,

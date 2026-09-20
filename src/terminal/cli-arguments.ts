@@ -44,6 +44,7 @@ const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
   tick: "tick",
   watch: "watch",
   pause: "pause",
+  cancel: "cancel",
   resume: "resume",
   steer: "steer",
   answer: "answer",

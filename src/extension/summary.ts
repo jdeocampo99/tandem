@@ -666,6 +666,7 @@ function isTaskRecord(value: unknown): value is TaskRecord {
     (record.reviewHead === undefined || typeof record.reviewHead === "string") &&
     (record.worktree === undefined || isTaskWorktree(record.worktree)) &&
     (record.reportPath === undefined || typeof record.reportPath === "string") &&
+    (record.researchHandoffs === undefined || Array.isArray(record.researchHandoffs)) &&
     (record.blockReason === undefined || typeof record.blockReason === "string") &&
     (record.pullRequest === undefined || isTaskPullRequest(record.pullRequest))
   );

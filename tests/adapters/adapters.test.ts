@@ -155,7 +155,7 @@ test("sanitizes task branches and builds the exact OMP invocation", () => {
     "Implement the approved scope.",
   ]);
 });
-test("labels remain readable, bounded, and distinguishable after objective normalization", () => {
+test("labels use readable role names while preserving normalized bounded identity", () => {
   const objective = `Fix parser\nwith hostile\u0000 controls and ${"界".repeat(120)}`;
   const first = taskWorkspaceLabel(
     "tandem-task-01M2TV2GZ4FG73A3GMVVSJ24S0",
@@ -168,19 +168,38 @@ test("labels remain readable, bounded, and distinguishable after objective norma
     "implementer",
   );
 
-  expect(first).toContain("Fix parser with hostile controls");
+  expect(first).toMatch(/^└ implement Fix parser with hostile controls/u);
   expect(first).toContain("A3GMVVSJ24S0");
-  expect(first).toContain("impl");
+  expect(first).not.toContain(" · impl");
   expect(first).not.toMatch(/\p{Cc}/u);
   expect(first.length).toBeLessThanOrEqual(96);
   expect(second).not.toBe(first);
+});
+
+test("labels use readable role names, avoid duplicates, and provide a fallback", () => {
+  const scoutLabel = taskWorkspaceLabel("tandem-task-research", "Research app standards", "scout");
+  const implementationLabel = taskWorkspaceLabel(
+    "tandem-task-implementation",
+    "implement app store review",
+    "implementer",
+  );
+  const reviewerLabel = taskWorkspaceLabel(
+    "tandem-task-review",
+    "inspect app store review",
+    "reviewer",
+  );
+
+  expect(scoutLabel).toMatch(/^└ Research app standards · /u);
+  expect(scoutLabel).not.toContain("research Research");
+  expect(reviewerLabel).toMatch(/^└ task inspect app store review · /u);
+  expect(implementationLabel).not.toContain("implement implement");
 });
 
 test("long labels retain complete graphemes and normalize combining marks", () => {
   const cluster = "\u{1F469}\u200d\u{1F4BB}";
   const label = taskWorkspaceLabel("tandem-task-1", `e\u0301${cluster.repeat(30)}`, "implementer");
   const title = label.slice(0, label.indexOf(" · "));
-  expect(title).toMatch(new RegExp(`^└ é(?:${cluster})*…$`, "u"));
+  expect(title).toMatch(new RegExp(`^└ implement é(?:${cluster})*…$`, "u"));
   expect(label.length).toBeLessThanOrEqual(96);
 });
 
@@ -364,7 +383,7 @@ test("creates a task workspace and best-effort moves it directly after its paren
       sessionId: "session-1",
       cwd: "/tmp/worktree",
       taskName: "Implement child",
-      workspaceLabel: "└ Implement child · child · impl",
+      workspaceLabel: "└ Implement child · child",
       role: "implementer",
       generation: 1,
       parentWorkspaceId: "workspace-parent",
@@ -384,7 +403,7 @@ test("creates a task workspace and best-effort moves it directly after its paren
 
   expect(created.endpoint.paneId).toBe("pane-child");
   expect(created.warnings).toEqual([]);
-  expect(runner.calls[0]?.argv).toContain("└ Implement child · child · impl");
+  expect(runner.calls[0]?.argv).toContain("└ Implement child · child");
   expect(moved[0]?.request).toEqual({
     socketPath: "/tmp/herdr.sock",
     workspaceId: "workspace-child",
@@ -411,7 +430,7 @@ test("reports workspace-order warnings separately from the endpoint", async () =
       sessionId: "session-1",
       cwd: "/tmp/worktree",
       taskName: "Implement child",
-      workspaceLabel: "└ Implement child · child · impl",
+      workspaceLabel: "└ Implement child · child",
       role: "implementer",
       generation: 1,
       parentWorkspaceId: "workspace-child",

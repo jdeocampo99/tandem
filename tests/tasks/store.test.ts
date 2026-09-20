@@ -52,6 +52,15 @@ const input: StoreTaskInput = {
   surfaces: ["store"],
   policy,
 };
+const researchHandoff = {
+  scoutTaskId: "scout-1",
+  scoutRepoPath: "/repo",
+  scoutSourceHead: "source-head",
+  scoutSourceBase: "source-head",
+  reportPath: "/home/jobs/scout-1/0/job-1/report.txt",
+  reportDigest: "a".repeat(64),
+  excerpt: "Verified scout evidence.",
+} as const;
 
 const worktree: WorktreeLease = {
   root: "/worktrees",
@@ -118,6 +127,27 @@ test("persists records with restrictive modes and reloads through a new store in
     expect(directoryStat.mode & 0o777).toBe(0o700);
     const lockStat = await stat(join(directory, ".state.lock"));
     expect(lockStat.mode & 0o777).toBe(0o600);
+  });
+});
+test("round-trips handoff snapshots and rejects oversized persisted excerpts", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const without = await store.create({ ...input, id: "without-handoff" });
+    const withHandoff = await store.create({
+      ...input,
+      id: "with-handoff",
+      researchHandoffs: [researchHandoff],
+    });
+    expect(without.researchHandoffs).toBeUndefined();
+    expect((await store.read(without.id))?.researchHandoffs).toBeUndefined();
+    expect((await store.read(withHandoff.id))?.researchHandoffs).toEqual([researchHandoff]);
+
+    const oversized = await store.create({
+      ...input,
+      id: "oversized-handoff",
+      researchHandoffs: [{ ...researchHandoff, excerpt: "x".repeat(4 * 1024 + 1) }],
+    });
+    await expect(store.read(oversized.id)).rejects.toBeInstanceOf(StateCorruptionError);
   });
 });
 

@@ -43,9 +43,10 @@ const MAX_TASK_WORKSPACE_LABEL_LENGTH = 96;
 const TASK_WORKSPACE_IDENTITY_LENGTH = 12;
 const workspaceGraphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 const TASK_ROLE_CUES: Readonly<Partial<Record<AgentRole, string>>> = {
-  scout: "scout",
-  implementer: "impl",
+  scout: "research",
+  implementer: "implement",
 };
+const FALLBACK_TASK_ROLE_CUE = "task";
 
 function normalizeWorkspaceText(value: string): string {
   return value
@@ -793,17 +794,20 @@ async function orderTaskWorkspace(
   }
   return warnings;
 }
-
 export function taskWorkspaceLabel(taskName: string, objective: string, role: AgentRole): string {
   const normalizedTaskName = normalizeWorkspaceText(checkedText(taskName, "taskName"));
   if (typeof objective !== "string" || objective.length === 0) {
     throw new TypeError("objective must be non-empty text");
   }
   const normalizedObjective = normalizeWorkspaceText(objective);
-  const title = normalizedObjective.length === 0 ? normalizedTaskName : normalizedObjective;
+  const objectiveTitle =
+    normalizedObjective.length === 0 ? normalizedTaskName : normalizedObjective;
   const identity = compactTaskIdentity(normalizedTaskName);
-  const roleCue = TASK_ROLE_CUES[role] ?? role;
-  const cue = ` · ${identity} · ${roleCue}`;
+  const roleCue = TASK_ROLE_CUES[role] ?? FALLBACK_TASK_ROLE_CUE;
+  const lowerTitle = objectiveTitle.toLowerCase();
+  const hasRolePrefix = lowerTitle === roleCue || lowerTitle.startsWith(`${roleCue} `);
+  const title = hasRolePrefix ? objectiveTitle : `${roleCue} ${objectiveTitle}`;
+  const cue = ` · ${identity}`;
   const titleLimit = Math.max(1, MAX_TASK_WORKSPACE_LABEL_LENGTH - 2 - cue.length);
   return `└ ${truncateWorkspaceText(title, titleLimit)}${cue}`;
 }

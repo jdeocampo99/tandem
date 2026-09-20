@@ -104,6 +104,7 @@ export function registerTandemOmp(
         objective: z.string(),
         acceptanceCriteria: z.array(z.string()),
         surfaces: z.array(z.string()),
+        researchTaskIds: z.array(z.string()).optional(),
       })
       .strict(),
     z.object({ action: z.literal("list") }).strict(),

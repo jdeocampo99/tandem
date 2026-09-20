@@ -361,6 +361,20 @@ test("restart CLI preserves the explicit managed-worker command contract", () =>
   expect(invocation.options.repo).toBe("/repo");
   expect(invocation.options.json).toBe(true);
 });
+test("cancel CLI exposes the durable stop command with explicit consent", () => {
+  const invocation = parseCliArgs([
+    "cancel",
+    "--task",
+    "task-1",
+    "--reason",
+    "stop the runaway worker",
+    "--yes",
+  ]);
+  expect(invocation.command).toBe("cancel");
+  expect(invocation.options.taskId).toBe("task-1");
+  expect(invocation.options.reason).toBe("stop the runaway worker");
+  expect(invocation.options.yes).toBe(true);
+});
 
 test("communication CLI syntax keeps repeatable supersedes and exact answer fields", () => {
   const steer = parseCliArgs([

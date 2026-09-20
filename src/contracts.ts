@@ -232,6 +232,21 @@ export type PullRequestMetadata = {
   readonly base: string;
 };
 
+export const MAX_RESEARCH_HANDOFF_COUNT = 4;
+export const MAX_RESEARCH_HANDOFF_EXCERPT_BYTES = 4 * 1024;
+export const MAX_RESEARCH_HANDOFF_TOTAL_BYTES =
+  MAX_RESEARCH_HANDOFF_COUNT * MAX_RESEARCH_HANDOFF_EXCERPT_BYTES;
+
+export type ResearchHandoff = {
+  readonly scoutTaskId: string;
+  readonly scoutRepoPath: string;
+  readonly scoutSourceHead: string;
+  readonly scoutSourceBase: string;
+  readonly reportPath: string;
+  readonly reportDigest: string;
+  readonly excerpt: string;
+};
+
 export type TaskRecord = {
   readonly schemaVersion: 1;
   readonly id: string;
@@ -252,9 +267,10 @@ export type TaskRecord = {
   readonly generation: number;
   readonly reviewRound: number;
   readonly reviewHead?: string;
+  readonly reportPath?: string;
   readonly validationEvidence: readonly ValidationEvidence[];
   readonly reviews: readonly ReviewResult[];
-  readonly reportPath?: string;
+  readonly researchHandoffs?: readonly ResearchHandoff[];
   readonly blockReason?: string;
   readonly notifications: readonly Notification[];
   readonly communication?: TaskCommunication;
