@@ -742,6 +742,27 @@ stale-generation, or missing-report scout discloses its blocker instead of enter
 follow-up. Task summaries and the durable digest print the disposition and its provenance, so the
 choice survives context compaction without an ephemeral model-memory flag.
 
+#### Following up after a scout reports
+
+The existing completed-scout coordinator notification remains the only wake mechanism. The
+notification text carries the follow-up decided from the persisted record, with the delivery path
+first proving the recorded report is still readable, so the same durable record produces the same
+wake text after compaction, restart, or coordinator replacement:
+
+| Follow-up | Coordinator behavior |
+| --- | --- |
+| `report-only` | Summarize the report and stop; propose no implementation work. |
+| `ask-intent` | Summarize the report, then ask only whether the user wants implementation work. |
+| `implementation-interview` | Summarize the report with its evidence, propose one initial direction, then ask focused questions about desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility, and approval, with a default for each. |
+| `answer-question` | An open `needs-decision` question outranks the disposition and is resolved first. |
+| `disclose-blocker` | A non-scout, blocked, cancelled, incomplete, stale-generation, or unreadable-report record has its exact blocker disclosed. |
+
+The interview stays inside the report and the user's request and never widens scope on its own.
+Only after the user answers may the coordinator create an implementation task citing that scout in
+`researchTaskIds`. That task is created `awaiting-approval` with `scopeApproved` false, still passes
+repository and source-checkpoint handoff validation, and does not launch until the concrete scope is
+explicitly approved. User answers travel through the existing steer/answer communication APIs.
+
 #### Classifying the disposition
 
 A narrow continuation classifier, separate from the read-only prompt router, chooses the
@@ -1007,7 +1028,7 @@ The extension also registers `/tandem`. Arguments use shell-style quoting for pa
 /tandem cleanup TASK [--discard]
 ```
 
-The extension scheduler starts at session start with a 2,000 ms default interval and reconciles once immediately. It refreshes the durable digest before an agent turn, during OMP-native compaction, and after compaction. Routine notices, receipts, heartbeats, and passive progress are shown with `ctx.ui.notify` and appended to the durable UI log without a model turn. The newest actionable notices in one delivery batch are coalesced into at most one follow-up/model wake; routine backlog is excluded from that wake. Current blocked tasks, completed scout reports, and PR-ready coordinator notices are the judgment-needed cases. Progress is not death: after roughly five minutes without meaningful activity, or about 60 seconds without a startup heartbeat, Tandem emits one actionable inspection warning per inactivity episode and resets the episode when progress resumes; it does not kill a worker merely because time elapsed. Actual process exit or error still follows the existing failed/blocked path.
+The extension scheduler starts at session start with a 2,000 ms default interval and reconciles once immediately. It refreshes the durable digest before an agent turn, during OMP-native compaction, and after compaction. Routine notices, receipts, heartbeats, and passive progress are shown with `ctx.ui.notify` and appended to the durable UI log without a model turn. The newest actionable notices in one delivery batch are coalesced into at most one follow-up/model wake; routine backlog is excluded from that wake. Current blocked tasks, completed scout reports, and PR-ready coordinator notices are the judgment-needed cases. A judgment-needed notice on a scout also carries that scout's [post-research follow-up](#following-up-after-a-scout-reports), rebuilt from the durable record on every delivery. Progress is not death: after roughly five minutes without meaningful activity, or about 60 seconds without a startup heartbeat, Tandem emits one actionable inspection warning per inactivity episode and resets the episode when progress resumes; it does not kill a worker merely because time elapsed. Actual process exit or error still follows the existing failed/blocked path.
 
 A scout is completed research only when durable state records its `completed` stage and report; queued or blocked scout work is not completion.
 

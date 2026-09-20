@@ -893,8 +893,22 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
   );
   const delivered = new Set<string>();
 
-  await deliverPendingNotifications(sink, service, [blocked], delivered, context);
-  await deliverPendingNotifications(sink, service, [blocked], delivered, context);
+  await deliverPendingNotifications({
+    pi: sink,
+    service: service,
+    tasks: [blocked],
+    delivered: delivered,
+    ctx: context,
+    reportReadable: async () => true,
+  });
+  await deliverPendingNotifications({
+    pi: sink,
+    service: service,
+    tasks: [blocked],
+    delivered: delivered,
+    ctx: context,
+    reportReadable: async () => true,
+  });
 
   expect(blocked.stage).toBe("blocked");
   expect(blocked.notifications.at(-1)?.kind).toBe("coordinator");
@@ -964,8 +978,22 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
       idFactory: () => "service-id",
     });
     try {
-      await deliverPendingNotifications(sink, service, [completed], delivered, context);
-      await deliverPendingNotifications(sink, service, [completed], delivered, context);
+      await deliverPendingNotifications({
+        pi: sink,
+        service: service,
+        tasks: [completed],
+        delivered: delivered,
+        ctx: context,
+        reportReadable: async () => true,
+      });
+      await deliverPendingNotifications({
+        pi: sink,
+        service: service,
+        tasks: [completed],
+        delivered: delivered,
+        ctx: context,
+        reportReadable: async () => true,
+      });
       expect(sent).toHaveLength(1);
       expect(sent[0]?.content).toContain("/tmp/tandem/scout-report.txt");
       expect(sent[0]?.options).toEqual({ deliverAs: "followUp", triggerTurn: true });
@@ -983,7 +1011,14 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
     try {
       const persisted = await reopened.get("scout-task");
       expect(persisted.notifications.at(-1)?.acknowledged).toBe(true);
-      await deliverPendingNotifications(sink, reopened, [persisted], new Set<string>(), context);
+      await deliverPendingNotifications({
+        pi: sink,
+        service: reopened,
+        tasks: [persisted],
+        delivered: new Set<string>(),
+        ctx: context,
+        reportReadable: async () => true,
+      });
       expect(sent).toHaveLength(1);
 
       let retryScouting = await store.create({
@@ -1026,18 +1061,26 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
       );
       const retryDelivered = new Set<string>();
       await expect(
-        deliverPendingNotifications(retrySink, reopened, [retryTask], retryDelivered, context),
+        deliverPendingNotifications({
+          pi: retrySink,
+          service: reopened,
+          tasks: [retryTask],
+          delivered: retryDelivered,
+          ctx: context,
+          reportReadable: async () => true,
+        }),
       ).rejects.toThrow("coordinator bridge unavailable");
       const pendingRetry = await reopened.get("scout-retry");
       expect(pendingRetry.notifications.at(-1)?.id).toBe("scout-retry");
       expect(pendingRetry.notifications.at(-1)?.acknowledged).toBe(false);
-      await deliverPendingNotifications(
-        retrySink,
-        reopened,
-        [pendingRetry],
-        retryDelivered,
-        context,
-      );
+      await deliverPendingNotifications({
+        pi: retrySink,
+        service: reopened,
+        tasks: [pendingRetry],
+        delivered: retryDelivered,
+        ctx: context,
+        reportReadable: async () => true,
+      });
       expect(retrySent).toHaveLength(1);
       expect(retrySent[0]).toContain("/tmp/tandem/scout-retry-report.txt");
       expect((await reopened.get("scout-retry")).notifications.at(-1)?.acknowledged).toBe(true);
@@ -1077,8 +1120,22 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
   });
   const delivered = new Set<string>();
 
-  await deliverPendingNotifications(sink, service, [routine], delivered, context);
-  await deliverPendingNotifications(sink, service, [routine], delivered, context);
+  await deliverPendingNotifications({
+    pi: sink,
+    service: service,
+    tasks: [routine],
+    delivered: delivered,
+    ctx: context,
+    reportReadable: async () => true,
+  });
+  await deliverPendingNotifications({
+    pi: sink,
+    service: service,
+    tasks: [routine],
+    delivered: delivered,
+    ctx: context,
+    reportReadable: async () => true,
+  });
 
   expect(sent).toHaveLength(0);
   expect(notices).toHaveLength(1);
@@ -1130,8 +1187,22 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
   });
   const delivered = new Set<string>();
 
-  await deliverPendingNotifications(sink, service, [scout, blocked], delivered, context);
-  await deliverPendingNotifications(sink, service, [scout, blocked], delivered, context);
+  await deliverPendingNotifications({
+    pi: sink,
+    service: service,
+    tasks: [scout, blocked],
+    delivered: delivered,
+    ctx: context,
+    reportReadable: async () => true,
+  });
+  await deliverPendingNotifications({
+    pi: sink,
+    service: service,
+    tasks: [scout, blocked],
+    delivered: delivered,
+    ctx: context,
+    reportReadable: async () => true,
+  });
 
   expect(sent).toHaveLength(1);
   expect(sent[0]?.content).toContain("Latest scout report needs review.");
@@ -1152,7 +1223,14 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
       acknowledged: notification.id === "scout-latest",
     })),
   });
-  await deliverPendingNotifications(sink, service, [recovered], new Set<string>(), context);
+  await deliverPendingNotifications({
+    pi: sink,
+    service: service,
+    tasks: [recovered],
+    delivered: new Set<string>(),
+    ctx: context,
+    reportReadable: async () => true,
+  });
   expect(sent).toHaveLength(1);
   expect(modelTurns).toBe(1);
   expect(acknowledged).toHaveLength(4);
@@ -1197,13 +1275,14 @@ test("notification kind controls whether presentation bookkeeping wakes the coor
       },
     ],
   });
-  await deliverPendingNotifications(
-    sink,
-    service,
-    [routine, coordinator],
-    new Set<string>(),
-    context,
-  );
+  await deliverPendingNotifications({
+    pi: sink,
+    service: service,
+    tasks: [routine, coordinator],
+    delivered: new Set<string>(),
+    ctx: context,
+    reportReadable: async () => true,
+  });
   expect(sent).toHaveLength(1);
   expect(sent[0]).toContain("[task-coordinator]");
   expect(notices).toHaveLength(1);
@@ -1255,7 +1334,14 @@ test("legacy scout recovery survives a later routine presentation notice", async
     ],
   });
 
-  await deliverPendingNotifications(sink, service, [recovered], new Set<string>(), context);
+  await deliverPendingNotifications({
+    pi: sink,
+    service: service,
+    tasks: [recovered],
+    delivered: new Set<string>(),
+    ctx: context,
+    reportReadable: async () => true,
+  });
 
   expect(sent).toHaveLength(1);
   expect(sent[0]?.content).toContain("Legacy scout report requires coordinator review.");
@@ -1275,7 +1361,14 @@ test("legacy scout recovery survives a later routine presentation notice", async
       },
     ],
   });
-  await deliverPendingNotifications(sink, service, [routineOnly], new Set<string>(), context);
+  await deliverPendingNotifications({
+    pi: sink,
+    service: service,
+    tasks: [routineOnly],
+    delivered: new Set<string>(),
+    ctx: context,
+    reportReadable: async () => true,
+  });
 
   expect(sent).toHaveLength(1);
   expect(modelTurns).toBe(1);

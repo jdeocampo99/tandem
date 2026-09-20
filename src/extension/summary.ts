@@ -6,6 +6,7 @@ import {
   researchContinuationFor,
 } from "../tasks/research-continuation.ts";
 import type { TandemAction } from "./actions.ts";
+import { describeResearchDisposition } from "./research-follow-up.ts";
 
 export const DIGEST_MAX_TASKS = 12;
 export const DIGEST_MAX_TEXT = 180;
@@ -248,6 +249,7 @@ function summarizeTask(task: TaskRecord): string {
           ? ""
           : `; classifier ${compactText(continuation.classifierVersion, 100)}`
       })`,
+      `When this report lands: ${describeResearchDisposition(continuation.disposition)}. An open needs-decision question is answered first, and a blocked, cancelled, incomplete, stale, or unreadable-report scout has its blocker disclosed instead.`,
     );
   }
   if (task.pullRequest !== undefined) {
