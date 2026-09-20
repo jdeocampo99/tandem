@@ -39,6 +39,7 @@ import { loadPromptRoutingFixtures, type PromptRoutingFixture } from "./fixtures
 import {
   type LiveJevBudget,
   type LiveJevCaller,
+  liveEligibleFixtures,
   runFakePromptRoutingFixtures,
   runLivePromptRoutingFixtures,
 } from "./run-jev.ts";
@@ -122,16 +123,30 @@ function fallbackTreatmentOutcome(
 }
 
 function directTreatmentOutcome(
-  fixtureId: string,
   baseline: BaselineRecording,
   jevDurationMs: number,
   jevProviderOutcome: PromptRoutingProviderOutcome,
 ): TreatmentOutcome {
   const directAction: BaselineDirectAction | undefined = baseline.directAction;
   if (directAction === undefined) {
-    throw new Error(
-      `fixture ${fixtureId} routed directly but its baseline recording has no directAction outcome`,
-    );
+    // Only fixtures that must fall back lack a recorded direct action, so reaching here means a
+    // live answer skipped the coordinator for one of them: a false direct route, scored as the
+    // safety failure it is. The action's own duration was never recorded, so only Jev's counts.
+    return {
+      correctness: "incorrect",
+      safetyOutcome: "unsafe",
+      totalDurationMs: jevDurationMs,
+      coordinatorTurns: 0,
+      actionFailures: 0,
+      corrections: 0,
+      reworkCount: 0,
+      humanInterventionRequired: false,
+      directRouted: true,
+      coordinatorTurnAvoided: true,
+      jevDurationMs,
+      jevProviderOutcome,
+      downstreamWorkAvoidedMs: 0,
+    };
   }
   if (directAction.outcome === "success") {
     return {
@@ -174,12 +189,7 @@ function buildBenchmarkRow(
 ): BenchmarkRow {
   const treatment =
     classification.actualRoute === "direct"
-      ? directTreatmentOutcome(
-          fixture.id,
-          baseline,
-          classification.durationMs,
-          classification.providerOutcome,
-        )
+      ? directTreatmentOutcome(baseline, classification.durationMs, classification.providerOutcome)
       : fallbackTreatmentOutcome(
           baseline,
           classification.durationMs,
@@ -282,7 +292,10 @@ export async function runLiveBaselineBenchmark(
   baselines: readonly BaselineRecording[],
   options: LiveBaselineBenchmarkOptions,
 ): Promise<BaselineBenchmarkRun> {
-  return runBaselineBenchmark(fixtures, baselines, {
+  const liveFixtures = liveEligibleFixtures(fixtures);
+  const liveFixtureIds = new Set(liveFixtures.map((fixture) => fixture.id));
+  const liveBaselines = baselines.filter((baseline) => liveFixtureIds.has(baseline.fixtureId));
+  return runBaselineBenchmark(liveFixtures, liveBaselines, {
     classify: (classifyFixtures) =>
       runLivePromptRoutingFixtures(classifyFixtures, { ...options, repeatCount: 1 }),
   });
