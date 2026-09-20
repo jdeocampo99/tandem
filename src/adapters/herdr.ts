@@ -105,6 +105,13 @@ export type HerdrWorkspaceMoveRequest = Readonly<{
   workspaceId: string;
   insertIndex: number;
 }>;
+export type HerdrWorkspaceOrderInput = Readonly<{
+  sessionId: string;
+  cwd: string;
+  workspaceId: string;
+  parentWorkspaceId: string;
+  insertIndex?: number;
+}>;
 
 export type CreateTaskEndpointInput = Readonly<{
   sessionId: string;
@@ -678,16 +685,15 @@ function parseWorkspaceMoveResponse(
   return { type: "workspace_list", workspaces: parseWorkspaceList(value, operation, response) };
 }
 
-async function orderTaskWorkspace(
+export async function moveWorkspaceAfterParent(
   run: CommandRunner,
-  input: CreateTaskEndpointInput,
-  endpoint: Endpoint,
-  options: HerdrAdapterOptions,
+  input: HerdrWorkspaceOrderInput,
+  options: HerdrAdapterOptions = {},
 ): Promise<readonly string[]> {
   const warnings: string[] = [];
-  if (input.parentWorkspaceId === undefined) return warnings;
   const parentWorkspaceId = checkedText(input.parentWorkspaceId, "parentWorkspaceId");
-  if (parentWorkspaceId === endpoint.workspaceId) {
+  const workspaceId = checkedText(input.workspaceId, "workspaceId");
+  if (parentWorkspaceId === workspaceId) {
     recordWarning(
       options,
       warnings,
@@ -708,7 +714,7 @@ async function orderTaskWorkspace(
   }
   let status: HerdrSessionStatus;
   try {
-    status = await readHerdrStatus(run, endpoint.sessionId, input.cwd);
+    status = await readHerdrStatus(run, input.sessionId, input.cwd);
   } catch (error) {
     recordWarning(
       options,
@@ -720,7 +726,7 @@ async function orderTaskWorkspace(
 
   let workspaces: readonly HerdrWorkspace[];
   try {
-    const request = herdrRequest(endpoint.sessionId, input.cwd, ["workspace", "list"]);
+    const request = herdrRequest(input.sessionId, input.cwd, ["workspace", "list"]);
     const result = await runChecked(run, request, "herdr workspace list");
     workspaces = parseWorkspaceList(
       parseJson(result.stdout, "herdr workspace list"),
@@ -739,14 +745,12 @@ async function orderTaskWorkspace(
   const parentMatches = workspaces.filter(
     (workspace) => workspace.workspaceId === parentWorkspaceId,
   );
-  const createdMatches = workspaces.filter(
-    (workspace) => workspace.workspaceId === endpoint.workspaceId,
-  );
-  if (parentMatches.length !== 1 || createdMatches.length !== 1) {
+  const targetMatches = workspaces.filter((workspace) => workspace.workspaceId === workspaceId);
+  if (parentMatches.length !== 1 || targetMatches.length !== 1) {
     recordWarning(
       options,
       warnings,
-      `workspace.move skipped because parent (${parentMatches.length}) or created workspace (${createdMatches.length}) identity was ambiguous`,
+      `workspace.move skipped because parent (${parentMatches.length}) or target (${targetMatches.length}) identity was ambiguous`,
     );
     return warnings;
   }
@@ -765,7 +769,7 @@ async function orderTaskWorkspace(
 
   const moveRequest: HerdrWorkspaceMoveRequest = {
     socketPath: status.socketPath,
-    workspaceId: endpoint.workspaceId,
+    workspaceId,
     insertIndex,
   };
   try {
@@ -773,7 +777,7 @@ async function orderTaskWorkspace(
     const responseText = JSON.stringify(response) ?? String(response);
     const parsed = parseWorkspaceMoveResponse(response, "herdr workspace.move", responseText);
     const targetCount = parsed.workspaces.filter(
-      (workspace) => workspace.workspaceId === endpoint.workspaceId,
+      (workspace) => workspace.workspaceId === workspaceId,
     ).length;
     const parentCount = parsed.workspaces.filter(
       (workspace) => workspace.workspaceId === parentWorkspaceId,
@@ -794,6 +798,7 @@ async function orderTaskWorkspace(
   }
   return warnings;
 }
+
 export function taskWorkspaceLabel(taskName: string, objective: string, role: AgentRole): string {
   const normalizedTaskName = normalizeWorkspaceText(checkedText(taskName, "taskName"));
   if (typeof objective !== "string" || objective.length === 0) {
@@ -836,7 +841,20 @@ export async function createTaskEndpoint(
     "herdr workspace create",
     result.stdout,
   );
-  const warnings = await orderTaskWorkspace(run, input, endpoint, options);
+  const warnings =
+    input.parentWorkspaceId === undefined
+      ? []
+      : await moveWorkspaceAfterParent(
+          run,
+          {
+            sessionId: endpoint.sessionId,
+            cwd: input.cwd,
+            workspaceId: endpoint.workspaceId,
+            parentWorkspaceId: input.parentWorkspaceId,
+            ...(input.insertIndex === undefined ? {} : { insertIndex: input.insertIndex }),
+          },
+          options,
+        );
   return { endpoint, warnings };
 }
 

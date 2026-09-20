@@ -136,6 +136,14 @@ export async function restartCoordinator(
       },
       dependencies,
     );
+    if (launch.workspaceId !== undefined && dependencies.rehomeTaskWorkspaces !== undefined) {
+      await dependencies.rehomeTaskWorkspaces({
+        home: request.home,
+        cwd: request.cwd,
+        sessionId: request.sessionId,
+        parentWorkspaceId: launch.workspaceId,
+      });
+    }
     return {
       ...launch,
       restarted: prior !== undefined,
