@@ -19,6 +19,7 @@ import {
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
   type ResolvedPolicy,
+  type ReviewLens,
   type TaskRecord,
   type WorkerReceipt,
   type WorktreeLease,
@@ -41,6 +42,7 @@ import type {
   RuntimeTaskState,
 } from "../../src/runtime/schema.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
+import { FINAL_REVIEW_LENSES } from "../../src/tasks/acceptance.ts";
 import {
   readTaskInbox,
   taskInboxPath,
@@ -48,7 +50,15 @@ import {
 } from "../../src/tasks/communication-persistence.ts";
 import { taskInbox } from "../../src/tasks/communication-protocol.ts";
 import { type TaskEvent, transitionTask } from "../../src/tasks/lifecycle.ts";
+import {
+  type ReviewAssistanceRuntime,
+  reviewAssistanceRuntime,
+} from "../../src/tasks/review-assistance.ts";
 import { REVIEW_BRIEF_LIMITS } from "../../src/tasks/review-brief.ts";
+import {
+  DEFAULT_REVIEW_LEVEL_POLICY,
+  requiredReviewLenses,
+} from "../../src/tasks/review-levels.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
@@ -81,6 +91,12 @@ const policy: ResolvedPolicy = {
     ],
     maxWorkers: 4,
     maxFixRounds: 1,
+    reviewLevels: {
+      reducedRouting: false,
+      deepScrutiny: false,
+      jevAssistance: "off",
+      sourceTransmission: false,
+    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -491,6 +507,7 @@ type FixtureOptions = Readonly<{
     readonly previousStage?: TaskRecord["stage"];
     readonly reviewHead?: string;
     readonly reviewRound?: number;
+    readonly reviews?: TaskRecord["reviews"];
     readonly worktree?: WorktreeLease;
     readonly clearWorktree?: boolean;
   }>;
@@ -498,6 +515,7 @@ type FixtureOptions = Readonly<{
   readonly runner?: FakeRunnerOptions;
   /** Attach the fixture's worktree lease to the task record, as delivery paths require. */
   readonly attachLease?: boolean;
+  readonly reviewAssistance?: ReviewAssistanceRuntime;
 }>;
 
 type Fixture = Readonly<{
@@ -556,6 +574,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
         ...(edits?.previousStage === undefined ? {} : { previousStage: edits.previousStage }),
         ...(edits?.reviewHead === undefined ? {} : { reviewHead: edits.reviewHead }),
         ...(edits?.reviewRound === undefined ? {} : { reviewRound: edits.reviewRound }),
+        ...(edits?.reviews === undefined ? {} : { reviews: edits.reviews }),
         ...(edits?.worktree === undefined ? {} : { worktree: edits.worktree }),
       };
       if (edits?.clearWorktree === true) {
@@ -597,6 +616,9 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     run: runner.run,
     clock,
     idFactory,
+    ...(options.reviewAssistance === undefined
+      ? {}
+      : { reviewAssistance: options.reviewAssistance }),
   });
   return { home, task, lease, endpoint, run: runner.run, runnerState: runner.state, service };
 }
@@ -3126,6 +3148,87 @@ test("a launched review job receives a bounded deterministic review brief", asyn
       expect(brief).toContain("## Evidence-backed blockers");
       expect(brief).toContain("## Advisory leads (untrusted; never blockers)");
       expect(brief).toContain("## Fix-round budget");
+      expect(brief).toContain("- review level: ");
+    },
+  );
+});
+
+function passingReview(lens: ReviewLens): TaskRecord["reviews"][number] {
+  return {
+    lens,
+    head: "review-head",
+    generation: 0,
+    pass: true,
+    findings: [],
+    summary: `no ${lens} findings`,
+  };
+}
+
+test("the default policy launches today's four review lenses and never calls the helper", async () => {
+  let evaluatorCalls = 0;
+  const assistance = reviewAssistanceRuntime({
+    apiKey: "would-be-used-if-opted-in",
+    timeoutMs: 1_000,
+    evaluate: async () => {
+      evaluatorCalls += 1;
+      throw new Error("the evaluator must not be called under the default policy");
+    },
+  });
+  const launchedLenses: string[] = [];
+  for (const recorded of [
+    [],
+    [passingReview("behavior")],
+    [passingReview("behavior"), passingReview("design")],
+    [passingReview("behavior"), passingReview("design"), passingReview("coverage")],
+  ]) {
+    await withFixture(
+      {
+        kind: "implementation",
+        stage: "reviewing",
+        taskEdits: { reviewHead: "review-head", reviews: recorded },
+        runner: { active: false, checkoutHead: "review-head" },
+        reviewAssistance: assistance,
+      },
+      async ({ home, lease, service }) => {
+        await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+        await service.tick();
+        const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
+        if (launched?.reviewLens === undefined) throw new Error("no review job was launched");
+        launchedLenses.push(launched.reviewLens);
+
+        const persisted = await service.get("task-1");
+        expect(persisted.reviewLevel?.level).toBe("standard");
+        expect(persisted.reviewLevel?.reason.length).toBeGreaterThan(0);
+        expect(persisted.reviewLevel?.assistance).toBeUndefined();
+        expect(persisted.policy.config.reviewLevels).toEqual(DEFAULT_REVIEW_LEVEL_POLICY);
+        expect(requiredReviewLenses(persisted, "review-head")).toEqual(FINAL_REVIEW_LENSES);
+      },
+    );
+  }
+  expect(launchedLenses).toEqual([...FINAL_REVIEW_LENSES]);
+  expect(evaluatorCalls).toBe(0);
+});
+
+test("classification leaves a running task's pinned policy and model choices unchanged", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "reviewing",
+      taskEdits: { reviewHead: "review-head" },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, service, task }) => {
+      await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+      const before = await service.get("task-1");
+      await service.tick();
+      const after = await service.get("task-1");
+
+      expect(after.reviewLevel).toBeDefined();
+      expect(after.policy).toEqual(before.policy);
+      expect(after.policy.config.models).toEqual(task.policy.config.models);
+      expect(after.policy.config.maxFixRounds).toBe(task.policy.config.maxFixRounds);
+      expect(after.policy.config.maxWorkers).toBe(task.policy.config.maxWorkers);
+      expect(after.policy.config.validationCommands).toEqual(task.policy.config.validationCommands);
     },
   );
 });

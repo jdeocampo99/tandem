@@ -35,6 +35,12 @@ const policy: ResolvedPolicy = {
     validationCommands: [{ name: "smoke", argv: ["true"], surfaces: ["*"], timeoutMs: 1_000 }],
     maxWorkers: 4,
     maxFixRounds: 1,
+    reviewLevels: {
+      reducedRouting: false,
+      deepScrutiny: false,
+      jevAssistance: "off",
+      sourceTransmission: false,
+    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };

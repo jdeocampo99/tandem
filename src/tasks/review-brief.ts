@@ -2,6 +2,7 @@ import type {
   FindingLedgerEntry,
   IterationScope,
   ReviewLens,
+  ReviewLevelRecord,
   ReviewResult,
   TaskRecord,
   ValidationEvidence,
@@ -15,6 +16,7 @@ import {
   ledgerSuggestions,
   settledFindings,
 } from "./findings.ts";
+import { deepScrutinyRequirements, recordedReviewLevel } from "./review-levels.ts";
 
 /** Named bounds every review brief is built and rendered within. */
 export const REVIEW_BRIEF_LIMITS = {
@@ -48,6 +50,20 @@ export type ReviewBriefDiffReference = Readonly<{
 export type ReviewBriefObservations = Readonly<{
   readonly cumulative: ReviewBriefDiffReference;
   readonly sinceLastReview?: ReviewBriefDiffReference;
+  readonly affectedCallers: readonly string[];
+}>;
+
+/**
+ * The part of the observations an impact assessment reads. Narrower than the brief's own
+ * observations so a caller that has not yet chosen where the patches will be written can still
+ * assess impact from the same facts.
+ */
+export type ReviewImpactObservations = Readonly<{
+  readonly sinceLastReview?: Readonly<{
+    readonly range: DiffRange;
+    readonly changedFiles: readonly string[];
+    readonly truncated: boolean;
+  }>;
   readonly affectedCallers: readonly string[];
 }>;
 
@@ -127,6 +143,9 @@ export type ReviewBrief = Readonly<{
   readonly affectedCallers: readonly string[];
   readonly sourceLinks: readonly string[];
   readonly evidence: ReviewBriefEvidence;
+  readonly reviewLevel: ReviewLevelRecord;
+  /** Floor scrutiny a deep round must record; empty unless the repository enabled deep scrutiny. */
+  readonly deepScrutiny: readonly string[];
   readonly impact: ReviewBriefImpact;
   readonly blockers: readonly FindingLedgerEntry[];
   readonly suggestions: readonly FindingLedgerEntry[];
@@ -221,11 +240,15 @@ function authorizedSurface(
   return [...files, ...input.affectedCallers.filter((file) => !files.includes(file))];
 }
 
-function assessImpact(
+/**
+ * How wide this round's review must be. Exported so the review-level classifier reads the same
+ * assessment the brief renders instead of deriving a second, possibly different one.
+ */
+export function assessReviewImpact(
   input: Readonly<{
     readonly task: TaskRecord;
     readonly ledger: readonly FindingLedgerEntry[];
-    readonly observations: ReviewBriefObservations;
+    readonly observations: ReviewImpactObservations;
     readonly escalation: EscalationReason | undefined;
   }>,
 ): ReviewBriefImpact {
@@ -402,7 +425,9 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       recorded: evidence.kept.map(evidenceBullet),
       legacyRecords: task.validationEvidence.filter((entry) => !isPinnedEvidence(entry)).length,
     },
-    impact: assessImpact({ task, ledger, observations, escalation }),
+    reviewLevel: recordedReviewLevel(task),
+    deepScrutiny: deepScrutinyRequirements(task.reviewLevel, task.policy.config.reviewLevels),
+    impact: assessReviewImpact({ task, ledger, observations, escalation }),
     blockers: blockers.kept,
     suggestions: suggestions.kept,
     settled: settled.kept,
@@ -502,6 +527,20 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
       : ["- source links:", ...brief.sourceLinks.map((entry) => `  - ${entry}`)]),
     "",
     "## Review breadth",
+    `- review level: ${brief.reviewLevel.level}`,
+    `- level reason: ${brief.reviewLevel.reason}`,
+    `- safety floors in force: ${brief.reviewLevel.floors.length === 0 ? "none" : brief.reviewLevel.floors.join(", ")}`,
+    ...(brief.reviewLevel.assistance === undefined
+      ? []
+      : [
+          `- shadow helper recommendation (recorded only; it did not change the level): ${brief.reviewLevel.assistance.recommendation}; ${brief.reviewLevel.assistance.reason}`,
+        ]),
+    ...(brief.deepScrutiny.length === 0
+      ? []
+      : [
+          "- deep scrutiny required for this round; record an explicit disposition for each:",
+          ...brief.deepScrutiny.map((entry) => `  - ${entry}`),
+        ]),
     `- impact: ${brief.impact.assessment}${brief.impact.escalation === undefined ? "" : ` (${brief.impact.escalation})`}`,
     `- reason: ${brief.impact.reason}`,
     ...(brief.impact.outsideScopeFiles.length === 0

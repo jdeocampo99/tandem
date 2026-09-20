@@ -136,6 +136,56 @@ export type ValidationCommand = {
   readonly timeoutMs: number;
 };
 
+/** How much review scrutiny a change is classified for, ordered from least to most. */
+export const REVIEW_LEVEL_ORDER = ["light", "standard", "deep"] as const;
+
+export type ReviewLevel = (typeof REVIEW_LEVEL_ORDER)[number];
+
+/**
+ * Change kinds that always force at least their own documented level, whatever the rest of the
+ * diff shows. A floor is fixed: no classifier input, helper, or policy setting can lower it.
+ */
+export const SAFETY_FLOOR_ORDER = [
+  "permissions-security",
+  "data-integrity",
+  "shared-contracts-concurrency",
+  "dependency-build-infra",
+] as const;
+
+export type SafetyFloor = (typeof SAFETY_FLOOR_ORDER)[number];
+
+/**
+ * A depth recommendation a helper offered for the same change. In shadow mode it is recorded
+ * beside the deterministic level for later comparison and never becomes the level that is used.
+ */
+export type ReviewLevelAssistance = {
+  readonly mode: "shadow";
+  readonly recommendation: ReviewLevel | "unavailable";
+  readonly reason: string;
+  readonly requestIdentity: string;
+  readonly resultIdentity: string;
+};
+
+/** The durable classification of a task's change, with the reason and floors that produced it. */
+export type ReviewLevelRecord = {
+  readonly level: ReviewLevel;
+  readonly reason: string;
+  readonly floors: readonly SafetyFloor[];
+  readonly assistance?: ReviewLevelAssistance;
+};
+
+/**
+ * Repository settings that decide whether a review level may change what actually runs. Every
+ * field defaults to the value that reproduces the review behavior Tandem had before levels
+ * existed, so a repository only opts in deliberately.
+ */
+export type ReviewLevelPolicy = {
+  readonly reducedRouting: boolean;
+  readonly deepScrutiny: boolean;
+  readonly jevAssistance: "off" | "shadow";
+  readonly sourceTransmission: boolean;
+};
+
 export type RepoPolicy = {
   readonly version: 1;
   readonly models: Readonly<Record<AgentRole, ModelSpec>>;
@@ -144,6 +194,7 @@ export type RepoPolicy = {
   readonly validationCommands: readonly ValidationCommand[];
   readonly maxWorkers: number;
   readonly maxFixRounds: number;
+  readonly reviewLevels: ReviewLevelPolicy;
 };
 
 export type GuidanceProvenance = {
@@ -356,6 +407,7 @@ export type TaskRecord = {
   readonly reviewRound: number;
   readonly reviewHead?: string;
   readonly iterationScope?: IterationScope;
+  readonly reviewLevel?: ReviewLevelRecord;
   readonly reportPath?: string;
   readonly validationEvidence: readonly ValidationEvidence[];
   readonly reviews: readonly ReviewResult[];

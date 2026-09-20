@@ -1,9 +1,4 @@
-import type {
-  PinnedValidationEvidence,
-  ResolvedPolicy,
-  TaskRecord,
-  TaskStage,
-} from "../contracts.ts";
+import type { PinnedValidationEvidence, TaskRecord, TaskStage } from "../contracts.ts";
 import { LEGACY_EVIDENCE_CONTRACT } from "../contracts.ts";
 import { renderDraftPrDescription, renderPrDescription } from "../instructions.ts";
 import {
@@ -13,6 +8,7 @@ import {
   finalAcceptanceStatus,
   ValidationConfigurationError,
 } from "../tasks/acceptance.ts";
+import { recordedReviewLevel } from "../tasks/review-levels.ts";
 
 export type PrSummary = Readonly<{
   readonly tldr: readonly string[];
@@ -219,6 +215,8 @@ export type DraftTaskShape = Readonly<{
 export type ReviewLevelSummary = Readonly<{
   readonly level: string;
   readonly reason: string;
+  /** What the pinned policy still demands at final acceptance, whatever the level is. */
+  readonly finalRequirements: string;
 }>;
 
 export type DraftProgress = Readonly<{
@@ -243,18 +241,22 @@ function draftText(value: string): string {
 }
 
 /**
- * Report the review contract the currently pinned repository policy demands. A later risk-based
- * classification may supply the level instead; the final gates this describes do not change.
+ * Report the review level the task is actually recorded under, together with the classifier's own
+ * reason and any safety floors, plus what the pinned policy demands at that level. Showing the
+ * level is visibility only; it never changes the final gates below it.
  */
-export function pinnedReviewLevel(policy: ResolvedPolicy): ReviewLevelSummary {
-  const config = policy?.config;
+export function pinnedReviewLevel(task: TaskRecord): ReviewLevelSummary {
+  const config = task.policy?.config;
   if (config === undefined || !Number.isSafeInteger(config.maxFixRounds)) {
     throw new TypeError("draft progress requires a pinned repository policy");
   }
-  const commands = config.validationCommands.length;
+  const recorded = recordedReviewLevel(task);
+  const floors =
+    recorded.floors.length === 0 ? "" : `; safety floors: ${recorded.floors.join(", ")}`;
   return {
-    level: "standard",
-    reason: `the pinned repository policy requires ${REQUIRED_LENSES.join(", ")} review by fresh read-only reviewers, ${commands} pinned validation command(s), and at most ${config.maxFixRounds} bounded fix round(s)`,
+    level: recorded.level,
+    reason: `${recorded.reason}${floors}`,
+    finalRequirements: `Whatever the level, the pinned repository policy requires ${REQUIRED_LENSES.join(", ")} review at final acceptance by fresh read-only reviewers, ${config.validationCommands.length} pinned validation command(s), and at most ${config.maxFixRounds} bounded fix round(s).`,
   };
 }
 
@@ -420,7 +422,7 @@ export function summarizeDraftProgress(
 ): DraftProgress {
   assertDraftTaskShape(task);
   return {
-    reviewLevel: pinnedReviewLevel(task.policy),
+    reviewLevel: pinnedReviewLevel(task),
     activity: draftActivity(task),
     blockers: draftBlockers(task),
     remainingChecks: [
@@ -470,6 +472,7 @@ export function describeTaskDraftPr(input: DraftDescriptionInput): string {
     reviewLevel: [
       `Review level: ${progress.reviewLevel.level}.`,
       `Reason: ${draftText(progress.reviewLevel.reason)}`,
+      progress.reviewLevel.finalRequirements,
     ],
     activity: progress.activity.map(draftText),
     blockers: progress.blockers,

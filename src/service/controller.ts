@@ -93,6 +93,11 @@ import { TaskControlWorkflow } from "../tasks/control.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
 import {
+  type ReviewAssistanceRuntime,
+  reviewAssistanceConfig,
+  reviewAssistanceRuntime,
+} from "../tasks/review-assistance.ts";
+import {
   createTaskStore,
   type TaskStore,
   type TaskStoreTransaction,
@@ -158,6 +163,8 @@ export type TandemServiceOptions = Readonly<{
   readonly run?: CommandRunner;
   readonly clock?: Clock;
   readonly idFactory?: IdFactory;
+  /** The Jev transport, cache, and diagnostics sink review-level assistance is allowed to use. */
+  readonly reviewAssistance?: ReviewAssistanceRuntime;
 }>;
 export type TandemService = Readonly<{
   readonly onboard: (repoPath: string, write?: boolean) => Promise<OnboardRepoResult>;
@@ -258,6 +265,7 @@ type ServiceDependencies = Readonly<{
   runtimePath: string;
   workerPath: string;
   validationWorkerPath: string;
+  reviewAssistance: ReviewAssistanceRuntime;
 }>;
 
 function assertTaskId(id: unknown): string {
@@ -544,6 +552,7 @@ class TandemController {
       removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
+      reviewAssistance: deps.reviewAssistance,
     });
     this.#control = new TaskControlWorkflow({
       home: deps.home,
@@ -1861,6 +1870,18 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     runtimePath: runtimeFile(home),
     workerPath: fileURLToPath(new URL("../worker.ts", import.meta.url)),
     validationWorkerPath: fileURLToPath(new URL("../validation-worker.ts", import.meta.url)),
+    reviewAssistance:
+      options.reviewAssistance ??
+      reviewAssistanceRuntime({
+        ...reviewAssistanceConfig(process.env),
+        recordDiagnostic: async (event, details) => {
+          try {
+            await appendDiagnosticEvent(home, { event, details });
+          } catch {
+            // Assistance diagnostics are best effort and never change review behavior.
+          }
+        },
+      }),
   };
 }
 

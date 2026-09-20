@@ -57,6 +57,12 @@ const policyConfig: RepoPolicy = {
   ],
   maxWorkers: 3,
   maxFixRounds: 3,
+  reviewLevels: {
+    reducedRouting: false,
+    deepScrutiny: false,
+    jevAssistance: "off",
+    sourceTransmission: false,
+  },
 };
 
 const policy: ResolvedPolicy = {
@@ -681,7 +687,10 @@ test("a draft body reports review level, activity, blockers, and remaining check
     "it is not a claim that the work is ready, mergeable, deployable, or accepted",
   );
   expect(body).toContain("Review level: standard.");
-  expect(body).toContain("the pinned repository policy requires behavior, design, coverage");
+  expect(body).toContain("no review level is recorded for this task");
+  expect(body).toContain(
+    "the pinned repository policy requires behavior, design, coverage, verification review at final acceptance",
+  );
   expect(body).toContain("at most 3 bounded fix round(s)");
   expect(body).toContain("# Current activity");
   expect(body).toContain("fix round 3 of 3 has been used");
@@ -691,8 +700,29 @@ test("a draft body reports review level, activity, blockers, and remaining check
   expect(body).toContain("A passing design review by a fresh independent read-only reviewer");
   expect(body).toContain("Runner-owned required GitHub checks");
   expect(body).toContain("remain separate explicit approvals");
+  expect(body).toContain("Final acceptance requirement check (local check)");
   expect(body).not.toContain("audit");
-  expect(body).not.toContain("Pinned validation command check");
+});
+
+test("a draft shows the task's recorded review level and its safety floors", () => {
+  const body = describeTaskDraftPr({
+    task: {
+      ...draftTask({ stage: "reviewing" }),
+      reviewLevel: {
+        level: "deep",
+        reason: "the change touches the permission boundary",
+        floors: ["permissions-security"],
+      },
+    },
+    publishedHead: "head-1",
+    worktreeHead: "head-1",
+    uncommittedChanges: false,
+  });
+
+  expect(body).toContain("Review level: deep.");
+  expect(body).toContain("Reason: the change touches the permission boundary");
+  expect(body).toContain("safety floors: permissions-security");
+  expect(body).toContain("Whatever the level, the pinned repository policy requires");
 });
 
 test("a ready task's draft still refuses to claim acceptance", () => {

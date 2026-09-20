@@ -34,6 +34,12 @@ const policy: ResolvedPolicy = {
     ],
     maxWorkers: 3,
     maxFixRounds: 2,
+    reviewLevels: {
+      reducedRouting: false,
+      deepScrutiny: false,
+      jevAssistance: "off",
+      sourceTransmission: false,
+    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
