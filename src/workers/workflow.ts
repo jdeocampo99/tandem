@@ -82,6 +82,14 @@ import {
 } from "../service/records.ts";
 import { taskSourcePath } from "../service/source.ts";
 import {
+  FINAL_REVIEW_LENSES,
+  iterationScopeFor,
+  type PlannedValidation,
+  planValidation,
+  policyIdentity,
+  ValidationConfigurationError,
+} from "../tasks/acceptance.ts";
+import {
   readWorkerReceipt,
   taskInboxPath,
   workerReceiptPath,
@@ -110,12 +118,7 @@ import { prepareWorkerTerminal, workerJobForEndpoint } from "./terminal-control.
 
 const DEFAULT_STALL_WARNING_MS = 5 * 60 * 1000;
 const DEFAULT_HEARTBEAT_GRACE_MS = 60 * 1000;
-const REQUIRED_REVIEW_LENSES: readonly ["behavior", "design", "coverage", "verification"] = [
-  "behavior",
-  "design",
-  "coverage",
-  "verification",
-];
+const REQUIRED_REVIEW_LENSES = FINAL_REVIEW_LENSES;
 export type OperationClaim = Readonly<{
   readonly id: string;
   readonly fencingRevision: number;
@@ -272,11 +275,16 @@ export class WorkerWorkflow {
     let result: ValidationResult;
     try {
       if (job.head === undefined) throw new Error("validation job is missing expected HEAD");
+      if (job.contract === undefined || job.policyDigest === undefined) {
+        throw new Error("validation job is missing its contract identity");
+      }
       result = await readValidationResult(job.resultPath, {
         id: job.id,
         taskId: job.taskId,
         generation: job.generation,
         head: job.head,
+        contract: job.contract,
+        policyDigest: job.policyDigest,
       });
     } catch (error) {
       if (isMissing(error)) {
@@ -640,6 +648,21 @@ export class WorkerWorkflow {
       await this.failJob(task, job, "validation job has no expected HEAD", claim);
       return;
     }
+    const contract = job.contract;
+    const policyDigest = job.policyDigest;
+    if (contract === undefined || policyDigest === undefined) {
+      await this.failJob(task, job, "validation job has no contract identity", claim);
+      return;
+    }
+    if (policyIdentity(task.policy) !== policyDigest) {
+      await this.failJob(
+        task,
+        job,
+        "validation evidence was produced under a different policy identity",
+        claim,
+      );
+      return;
+    }
     const checkout = await this.readWorkerCheckout(runtime, job);
     if (
       checkout.checkpoint.dirty ||
@@ -654,6 +677,8 @@ export class WorkerWorkflow {
           type: "validation-failed",
           head: expectedHead,
           generation: job.generation,
+          contract,
+          policyDigest,
           evidence: [
             ...result.evidence,
             {
@@ -663,6 +688,9 @@ export class WorkerWorkflow {
               stdout: checkout.checkpoint.head,
               stderr: "worktree changed while validation was running",
               head: expectedHead,
+              contract,
+              origin: "local",
+              policyDigest,
             },
           ],
         },
@@ -677,12 +705,16 @@ export class WorkerWorkflow {
             type: "validation-succeeded",
             head: expectedHead,
             generation: job.generation,
+            contract,
+            policyDigest,
             evidence: result.evidence,
           }
         : {
             type: "validation-failed",
             head: expectedHead,
             generation: job.generation,
+            contract,
+            policyDigest,
             evidence: result.evidence,
           };
     await this.consumeJob(task.id, job.id, claim, event, {
@@ -1789,6 +1821,19 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, "validation requires a task worktree and reviewed HEAD");
       return;
     }
+    let planned: PlannedValidation;
+    try {
+      planned = planValidation(task, task.reviewHead);
+    } catch (error) {
+      await this.#deps.blockTask(
+        task.id,
+        error instanceof ValidationConfigurationError
+          ? `validation refused: ${error.message}`
+          : `validation contract could not be planned: ${describeError(error)}`,
+      );
+      return;
+    }
+    const plan = planned.plan;
     const reservation = reserved ?? (await this.reserveTask(task.id, "validation"));
     if (reservation === undefined) return;
     const runtime = reservation.runtime;
@@ -1862,13 +1907,16 @@ export class WorkerWorkflow {
               receiptPaneId = undefined;
             }
           }
-          const existingEndpoint = currentRuntime.endpoints.find(
-            (entry) =>
-              entry.paneId === receiptPaneId ||
-              (receiptPaneId === undefined &&
-                entry.generation === task.generation &&
-                entry.role === "reviewer"),
-          );
+          const existingEndpoint =
+            existingEffect === undefined
+              ? undefined
+              : currentRuntime.endpoints.find(
+                  (entry) =>
+                    entry.paneId === receiptPaneId ||
+                    (receiptPaneId === undefined &&
+                      entry.generation === task.generation &&
+                      entry.role === "reviewer"),
+                );
           if (existingEndpoint !== undefined) return existingEndpoint;
           if (existingEffect !== undefined) {
             if (existingEffect.phase !== "succeeded" || existingEffect.receipt === undefined) {
@@ -1954,8 +2002,10 @@ export class WorkerWorkflow {
         generation: task.generation,
         repoPath: validationCwd,
         head: task.reviewHead,
-        surfaces: task.surfaces,
-        commands: task.policy.config.validationCommands,
+        contract: plan.contract,
+        policyDigest: plan.identity.policyDigest,
+        surfaces: plan.surfaces,
+        commands: plan.commands,
         resultPath: paths.resultPath,
         ...(reservation.runtime.operation === undefined
           ? {}
@@ -2002,6 +2052,9 @@ export class WorkerWorkflow {
           : { operationId: reservation.runtime.operation.id }),
         endpoint: validationEndpointReady,
         head: task.reviewHead,
+        contract: plan.contract,
+        policyDigest: plan.identity.policyDigest,
+        ...(planned.escalation === undefined ? {} : { escalation: planned.escalation }),
         ...(task.communication === undefined
           ? {}
           : { instructionRevision: task.communication.revision }),
@@ -2788,11 +2841,17 @@ export class WorkerWorkflow {
       if (runtime.jobs.some(activeRuntimeJob)) return undefined;
       if (activeReservations(state) >= task.policy.config.maxWorkers) return undefined;
       const inputHead = task.reviewHead ?? runtime.sourceCheckpoint.head;
+      const iterationScope = isFix ? iterationScopeFor(task) : undefined;
       const targetTask = isFix
         ? (() => {
             const transitioned = transitionTask(
               task,
-              { type: "begin-fixes", head: inputHead, generation: task.generation },
+              {
+                type: "begin-fixes",
+                head: inputHead,
+                generation: task.generation,
+                ...(iterationScope === undefined ? {} : { iterationScope }),
+              },
               this.#deps.context(),
             );
             return {
@@ -2836,9 +2895,7 @@ export class WorkerWorkflow {
           role,
           targetTask.generation,
           inputHead,
-          createHash("sha256")
-            .update(serializedIdentity(targetTask.policy, "task policy"))
-            .digest("hex"),
+          policyIdentity(targetTask.policy),
           targetTask.communication?.revision ?? 0,
           jobId,
           this.#claimOwner,

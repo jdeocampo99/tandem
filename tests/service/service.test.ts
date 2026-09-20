@@ -74,7 +74,9 @@ const policy: ResolvedPolicy = {
     },
     instructions: { implementation: [], validation: [], review: [] },
     instructionFiles: { implementation: [], validation: [], review: [] },
-    validationCommands: [],
+    validationCommands: [
+      { name: "check", argv: ["bun", "run", "check"], surfaces: [], timeoutMs: 10_000 },
+    ],
     maxWorkers: 4,
     maxFixRounds: 1,
   },

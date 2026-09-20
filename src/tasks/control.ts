@@ -719,7 +719,12 @@ export class TaskControlWorkflow {
   private async probeTerminalResult(job: DurableJob): Promise<TerminalResultProbe> {
     try {
       if (job.kind === "validation") {
-        if (job.role !== "validation" || job.head === undefined) {
+        if (
+          job.role !== "validation" ||
+          job.head === undefined ||
+          job.contract === undefined ||
+          job.policyDigest === undefined
+        ) {
           return { status: "invalid", detail: "validation job has no complete identity" };
         }
         await readValidationResult(job.resultPath, {
@@ -727,6 +732,8 @@ export class TaskControlWorkflow {
           taskId: job.taskId,
           generation: job.generation,
           head: job.head,
+          contract: job.contract,
+          policyDigest: job.policyDigest,
         });
       } else {
         if (job.role === "validation") {

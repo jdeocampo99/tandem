@@ -1,11 +1,14 @@
 import {
   type AgentRole,
+  type CheckOrigin,
   type Endpoint,
   type Finding,
   type FindingSeverity,
   type FindingVerdict,
   type GuidanceProvenance,
   type InstructionChannel,
+  type IterationScope,
+  LEGACY_EVIDENCE_CONTRACT,
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
   MAX_RESEARCH_HANDOFF_TOTAL_BYTES,
@@ -26,9 +29,11 @@ import {
   type TaskRecord,
   type TaskStage,
   type ValidationCommand,
+  type ValidationContractName,
   type ValidationEvidence,
   type WorktreeLease,
 } from "../contracts.ts";
+import { FINAL_REVIEW_LENSES } from "./acceptance.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
 import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
@@ -66,7 +71,9 @@ const THINKING_LEVELS = [
 ] as const;
 const FINDING_SEVERITIES: readonly FindingSeverity[] = ["P0", "P1", "P2", "P3"];
 const FINDING_VERDICTS: readonly FindingVerdict[] = ["confirmed", "plausible"];
-const REVIEW_LENSES: readonly ReviewLens[] = ["behavior", "design", "coverage", "verification"];
+const REVIEW_LENSES: readonly ReviewLens[] = FINAL_REVIEW_LENSES;
+const VALIDATION_CONTRACT_NAMES: readonly ValidationContractName[] = ["iteration", "final"];
+const CHECK_ORIGINS: readonly CheckOrigin[] = ["local", "github"];
 const TOP_LEVEL_KEYS = [
   "schemaVersion",
   "id",
@@ -87,6 +94,7 @@ const TOP_LEVEL_KEYS = [
   "generation",
   "reviewRound",
   "reviewHead",
+  "iterationScope",
   "validationEvidence",
   "reviews",
   "researchHandoffs",
@@ -486,23 +494,78 @@ function parseReview(value: unknown, source: string): ReviewResult {
   };
 }
 
+/**
+ * Records written before validation contracts existed carry none of `contract`, `origin`, or
+ * `policyDigest`. Those load unchanged and are marked legacy, which no contract accepts, so the
+ * candidate must run the complete final manifest again. A record carrying only some of the three
+ * is a corrupt shape rather than a recoverable one, and fails closed.
+ */
 function parseValidationEvidence(value: unknown, source: string): ValidationEvidence {
   if (!isRecord(value)) {
     failState(source, "validation evidence must be an object");
   }
-  assertExactKeys(value, ["name", "argv", "exitCode", "stdout", "stderr", "head"], source);
+  assertExactKeys(
+    value,
+    ["name", "argv", "exitCode", "stdout", "stderr", "head", "contract", "origin", "policyDigest"],
+    source,
+  );
   const stdout = requiredValue(value, "stdout", source);
   const stderr = requiredValue(value, "stderr", source);
   if (typeof stdout !== "string" || typeof stderr !== "string") {
     failState(source, "stdout and stderr must be strings");
   }
-  return {
+  const recorded = {
     name: requiredText(value, "name", source),
     argv: requiredTextArray(value, "argv", source),
     exitCode: requiredInteger(value, "exitCode", source),
     stdout,
     stderr,
     head: requiredText(value, "head", source),
+  };
+
+  const pinningKeys = ["contract", "origin", "policyDigest"] as const;
+  const present = pinningKeys.filter((key) => Object.hasOwn(value, key));
+  if (present.length === 0) {
+    return { ...recorded, contract: LEGACY_EVIDENCE_CONTRACT };
+  }
+  if (value.contract === LEGACY_EVIDENCE_CONTRACT) {
+    if (present.length !== 1) {
+      failState(source, "legacy validation evidence must not carry an origin or policy digest");
+    }
+    return { ...recorded, contract: LEGACY_EVIDENCE_CONTRACT };
+  }
+  if (present.length !== pinningKeys.length) {
+    failState(
+      source,
+      `validation evidence must name its contract, origin, and policy digest together; missing ${pinningKeys
+        .filter((key) => !present.includes(key))
+        .join(", ")}`,
+    );
+  }
+  return {
+    ...recorded,
+    contract: requiredEnum(value, "contract", VALIDATION_CONTRACT_NAMES, source),
+    origin: requiredEnum(value, "origin", CHECK_ORIGINS, source),
+    policyDigest: requiredText(value, "policyDigest", source),
+  };
+}
+
+function parseIterationScope(value: unknown, source: string): IterationScope {
+  if (!isRecord(value)) {
+    failState(source, "iteration scope must be an object");
+  }
+  assertExactKeys(
+    value,
+    ["head", "generation", "policyDigest", "reproduces", "surfaces", "findingIds"],
+    source,
+  );
+  return {
+    head: requiredText(value, "head", source),
+    generation: requiredInteger(value, "generation", source),
+    policyDigest: requiredText(value, "policyDigest", source),
+    reproduces: requiredTextArray(value, "reproduces", source),
+    surfaces: requiredTextArray(value, "surfaces", source),
+    findingIds: requiredTextArray(value, "findingIds", source),
   };
 }
 
@@ -674,6 +737,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     }
   }
   const reviewHead = optionalText(value, "reviewHead", source);
+  const iterationScopeValue = Object.hasOwn(value, "iterationScope")
+    ? requiredValue(value, "iterationScope", source)
+    : undefined;
   const pullRequestValue = Object.hasOwn(value, "pullRequest")
     ? requiredValue(value, "pullRequest", source)
     : undefined;
@@ -728,6 +794,11 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
           ),
         }),
     ...(reviewHead === undefined ? {} : { reviewHead }),
+    ...(iterationScopeValue === undefined
+      ? {}
+      : {
+          iterationScope: parseIterationScope(iterationScopeValue, `${source}.iterationScope`),
+        }),
     ...(reportPath === undefined ? {} : { reportPath }),
     ...(blockReason === undefined ? {} : { blockReason }),
     ...(communication === undefined ? {} : { communication }),
