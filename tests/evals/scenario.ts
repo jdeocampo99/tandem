@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JEV_MODEL, type JevFetch } from "../../src/adapters/typesafe.ts";
@@ -14,6 +14,7 @@ import type {
   TaskRecord,
   WorktreeLease,
 } from "../../src/contracts.ts";
+import { COORDINATOR_QUARANTINE_DIRECTORY } from "../../src/coordinator/resources.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type {
   DurableJob,
@@ -47,6 +48,12 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
     validationCommands: [],
     maxWorkers: 2,
     maxFixRounds: 1,
+    reviewLevels: {
+      reducedRouting: false,
+      deepScrutiny: false,
+      jevAssistance: "off",
+      sourceTransmission: false,
+    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -139,7 +146,7 @@ export type ScenarioWorld = Readonly<{
   readonly paneIsPresent: (paneId: string) => boolean;
   readonly grantLease: (
     input: Readonly<{ readonly name: string; readonly holder: string }>,
-  ) => WorktreeLease;
+  ) => Promise<WorktreeLease>;
   readonly patchCheckout: (path: string, patch: ScenarioCheckoutPatch) => void;
   readonly providerFetch: (behavior: ScenarioProviderBehavior) => JevFetch;
   readonly trace: () => readonly ScenarioEvent[];
@@ -287,12 +294,13 @@ export async function createScenarioWorld(
     return { sessionId, workspaceId, tabId, paneId: input.paneId, role: "scout", generation: 0 };
   };
 
-  const grantLease = (
+  const grantLease = async (
     input: Readonly<{ readonly name: string; readonly holder: string }>,
-  ): WorktreeLease => {
+  ): Promise<WorktreeLease> => {
     nextLeaseNumber += 1;
     const path = join(poolRoot, `worktree-${nextLeaseNumber}`);
     const leaseId = `lease-${nextLeaseNumber}`;
+    await mkdir(path, { recursive: true });
     leases.set(leaseId, {
       name: input.name,
       path,
@@ -474,11 +482,10 @@ export async function createScenarioWorld(
     }
     if (verb === "get") {
       const holderIndex = argv.indexOf("--lease-holder");
-      const lease = grantLease({
+      const lease = await grantLease({
         name: `pool-${nextLeaseNumber + 1}`,
         holder: argv[holderIndex + 1] ?? "unknown",
       });
-      await mkdir(lease.path, { recursive: true });
       checkoutFor(lease.path).branch = "";
       return commandResult(
         JSON.stringify({
@@ -581,7 +588,7 @@ export async function createScenarioWorld(
     return {
       tasks,
       runtime,
-      resources: await classifyResources({ panes, leases, runtime, tasks }),
+      resources: await classifyResources({ home, panes, leases, runtime, tasks }),
       trace: [...trace],
     };
   };
@@ -651,8 +658,25 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/** Reads the durable notes a refused coordinator launch leaves under the Tandem home. */
+async function coordinatorQuarantineIds(home: string): Promise<readonly string[]> {
+  let entries: readonly string[];
+  try {
+    entries = await readdir(join(home, COORDINATOR_QUARANTINE_DIRECTORY));
+  } catch {
+    return [];
+  }
+  const identifiers: string[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    identifiers.push(`coordinator-quarantine:${entry.slice(0, -".json".length)}`);
+  }
+  return identifiers;
+}
+
 async function classifyResources(
   input: Readonly<{
+    readonly home: string;
     readonly panes: ReadonlyMap<string, PaneState>;
     readonly leases: ReadonlyMap<string, LeaseState>;
     readonly runtime: RuntimeState;
@@ -693,7 +717,14 @@ async function classifyResources(
     if (task.reportPath !== undefined && (await fileExists(task.reportPath))) {
       retained.push(`report:${task.id}`);
     }
+    const cleanup = task.cleanup;
+    if (cleanup === undefined) continue;
+    const identifier = `cleanup:${task.id}`;
+    if (cleanup.status === "released") released.push(identifier);
+    else if (cleanup.status === "quarantined") quarantined.push(identifier);
+    else retained.push(identifier);
   }
+  quarantined.push(...(await coordinatorQuarantineIds(input.home)));
   return { retained, released, failed, quarantined };
 }
 
@@ -703,6 +734,7 @@ export type SeedTaskInput = Readonly<{
   readonly previousStage?: TaskRecord["stage"];
   readonly reviewHead?: string;
   readonly reviewRound?: number;
+  readonly reportPath?: string;
   readonly worktree?: WorktreeLease;
   readonly endpoints?: readonly Endpoint[];
 }>;
@@ -742,6 +774,7 @@ export async function seedScenarioTask(
     ...(input.previousStage === undefined ? {} : { previousStage: input.previousStage }),
     ...(input.reviewHead === undefined ? {} : { reviewHead: input.reviewHead }),
     ...(input.reviewRound === undefined ? {} : { reviewRound: input.reviewRound }),
+    ...(input.reportPath === undefined ? {} : { reportPath: input.reportPath }),
     ...(input.worktree === undefined ? {} : { worktree: input.worktree }),
     ...(input.endpoints === undefined ? {} : { endpoints: input.endpoints }),
   }));

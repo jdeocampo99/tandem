@@ -98,7 +98,7 @@ test("restarting an owned coordinator replaces only its pane and keeps the same 
   });
 });
 
-test("a launch interrupted at the Herdr boundary records no owner and recovers onto the same lease", async () => {
+test("a launch interrupted at the Herdr boundary leaves no owner, no orphan pane, and no stray lease", async () => {
   await withScenario({}, async (world) => {
     const rehomed: RehomeCall[] = [];
     world.failAt({
@@ -115,8 +115,10 @@ test("a launch interrupted at the Herdr boundary records no owner and recovers o
     expect(
       await readCoordinatorRecord(recordPath(world.home, world.sessionId, world.repoPath)),
     ).toBeUndefined();
-    expect(interrupted.resources.retained).toContain("lease:lease-1");
-    expect(interrupted.resources.released).toEqual([]);
+    expect(interrupted.resources.retained).toEqual([]);
+    expect(interrupted.resources.quarantined).toEqual([]);
+    expect(interrupted.resources.released).toContain("pane:pane-1");
+    expect(interrupted.resources.released).toContain("lease:lease-1");
 
     const recovered = await restartCoordinator(
       launchRequest(world),
@@ -126,12 +128,44 @@ test("a launch interrupted at the Herdr boundary records no owner and recovers o
     const record = await readCoordinatorRecord(
       recordPath(world.home, world.sessionId, world.repoPath),
     );
-    expect(recovered.worktree.leaseId).toBe("lease-1");
     expect(record?.endpoint.paneId).toBe(recovered.paneId ?? "");
-    expect(snapshot.resources.retained).toContain("lease:lease-1");
+    expect(record?.worktree.leaseId).toBe(recovered.worktree.leaseId);
+    expect(snapshot.resources.retained).toContain(`lease:${recovered.worktree.leaseId}`);
     expect(snapshot.resources.retained.filter((entry) => entry.startsWith("lease:"))).toHaveLength(
       1,
     );
+    expect(snapshot.resources.quarantined).toEqual([]);
+  });
+});
+
+test("a rollback that cannot retire its new pane quarantines the lease instead of returning it", async () => {
+  await withScenario({}, async (world) => {
+    const rehomed: RehomeCall[] = [];
+    world.failAt({
+      boundary: "herdr",
+      action: "herdr pane run",
+      stderr: "herdr dropped the launch request",
+    });
+    world.failAt({
+      boundary: "herdr",
+      action: "herdr pane close",
+      stderr: "herdr refused to close the pane",
+    });
+
+    await expect(
+      restartCoordinator(launchRequest(world), launchDependencies(world, rehomed)),
+    ).rejects.toThrow(/pane run/);
+
+    const snapshot = await world.snapshot();
+    expect(
+      await readCoordinatorRecord(recordPath(world.home, world.sessionId, world.repoPath)),
+    ).toBeUndefined();
+    expect(snapshot.resources.retained).toContain("lease:lease-1");
+    expect(snapshot.resources.retained).toContain("pane:pane-1");
+    expect(snapshot.resources.released).toEqual([]);
+    expect(
+      snapshot.resources.quarantined.some((entry) => entry.startsWith("coordinator-quarantine:")),
+    ).toBe(true);
     expect(snapshot.trace.some((event) => event.action === "treehouse return")).toBe(false);
   });
 });
