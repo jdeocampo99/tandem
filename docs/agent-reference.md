@@ -329,13 +329,20 @@ coordinators in the same batch have already closed, reset stops closing further 
 error naming the coordinators already closed and the failure that stopped it; it does not force-close
 the affected pane, retry, or roll back the earlier closes. It does not stop a server, clear a registry,
 mutate tasks, recover task work, or wipe settings, history, worktrees, or files.
-Herdr removes a workspace when its last pane closes. Extra panes are never closed merely because
-they share the coordinator workspace: they remain open, and only Tandem's generated coordinator label
-is changed to `Retained terminals`. Custom labels remain unchanged. A normal launch without reset
-also retires the old generated label when replacing a stopped coordinator, but retains its shell.
-Retirement happens before the replacement workspace is created or the record is overwritten; if it
-fails, the launch rejects, the old record and terminals stay, and the next launch retries it.
-Workspace labels alone never prove ownership or authorize terminal deletion.
+Herdr removes a workspace when its last pane closes. Retiring a superseded or stopped coordinator's
+workspace closes its own owned pane by default once exact ownership and a stopped process are
+proven, which removes the workspace when it was the last pane. A workspace is retained instead
+(renamed to `Retained terminals · <repo>`) only when the caller explicitly asks for that, or when
+another pane still shares the coordinator workspace and keeps it alive after the owned pane closes;
+extra panes are never closed merely because they share the coordinator workspace, and they are
+reported alongside the retained outcome. A workspace someone gave a custom label is left entirely
+untouched, pane included. Ownership that cannot be proven exactly and as stopped, such as a pane
+whose foreground directory or process no longer matches the record, is quarantined: neither closed
+nor renamed, and reported so it can be inspected by hand. A normal launch without reset also retires
+the old generated label this same way when replacing a stopped coordinator. Retirement happens
+before the replacement workspace is created or the record is overwritten; if it fails, the launch
+rejects, the old record and terminals stay, and the next launch retries it. Workspace labels alone
+never prove ownership or authorize terminal deletion.
 Run it from a separate normal terminal, and add `--continue` only when the fresh launch should
 resume the saved coordinator conversation.
 

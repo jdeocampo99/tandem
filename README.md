@@ -105,10 +105,12 @@ subset. It preflights all selected roots, stops only idle coordinators that Tand
 and then performs the normal launch so each selected coordinator is recreated and attached once.
 Unrelated Herdr terminals are left untouched.
 Reset also closes a recorded coordinator pane that has returned to its shell, provided its native
-identity and worktree still match. Herdr removes a workspace when its last pane closes. Extra panes
-remain open; Tandem changes only its generated old coordinator label to `Retained terminals`.
-Custom labels are preserved. A normal relaunch without reset keeps the old shell and retires its
-coordinator label instead. Labels alone never authorize closing a workspace or pane.
+identity and worktree still match. Herdr removes a workspace when its last pane closes, so closing
+that owned pane is the default outcome. A workspace is retained (renamed to `Retained terminals`)
+only on explicit request, or when another pane still shares the coordinator workspace after the
+owned pane closes; that extra pane is left open and reported. Custom labels are preserved untouched.
+A normal relaunch without reset retires a previous stopped coordinator's pane the same way. Labels
+alone never authorize closing a workspace or pane.
 Busy, unknown, foreign, or otherwise unsafe work refuses before any pane is closed; if a coordinator
 changes state or fails to close after earlier ones in the same run already closed, reset stops and
 reports exactly which coordinators it already closed. Reset retains
