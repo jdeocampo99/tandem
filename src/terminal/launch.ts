@@ -1,5 +1,6 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import type { CommandRunner } from "../contracts.ts";
+import type { CoordinatorWorkspaceRetirement } from "../coordinator/workspace.ts";
 import type { TandemService } from "../service/controller.ts";
 import type { TerminalInvocation } from "./arguments.ts";
 import {
@@ -38,6 +39,35 @@ function workspaceIdFromLaunch(value: unknown): string | undefined {
   return typeof value.workspaceId === "string" && value.workspaceId.trim().length > 0
     ? value.workspaceId
     : undefined;
+}
+
+/** Reads a coordinator launch result's workspace retirement report, if it carried one. */
+export function workspaceRetirementFromLaunch(
+  value: unknown,
+): CoordinatorWorkspaceRetirement | undefined {
+  if (!isRecord(value)) return undefined;
+  const retirement = value.workspaceRetirement;
+  if (!isRecord(retirement) || typeof retirement.outcome !== "string") return undefined;
+  return retirement as CoordinatorWorkspaceRetirement;
+}
+
+/**
+ * Formats a user-facing notice for a retained or quarantined coordinator workspace. Returns
+ * undefined for the silent, default outcomes (closed, already-clear).
+ */
+export function workspaceRetirementNotice(
+  repoPath: string,
+  retirement: CoordinatorWorkspaceRetirement,
+): string | undefined {
+  if (retirement.outcome === "closed" || retirement.outcome === "already-clear") return undefined;
+  const reason = retirement.reason === undefined ? "" : `: ${retirement.reason}`;
+  const leftOpen =
+    retirement.extraPaneIds === undefined || retirement.extraPaneIds.length === 0
+      ? ""
+      : ` Left open: ${retirement.extraPaneIds.join(", ")}.`;
+  return retirement.outcome === "retained"
+    ? `Tandem retained the previous coordinator workspace for ${repoPath}${reason}.${leftOpen}\n`
+    : `Tandem left an ambiguous previous coordinator pane or workspace untouched for ${repoPath}${reason}.\n`;
 }
 
 export async function launchProjects(

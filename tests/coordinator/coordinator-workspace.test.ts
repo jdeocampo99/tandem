@@ -384,33 +384,3 @@ test("quarantines a pane occupied by a foreign active process instead of the rec
     await cleanup(root);
   }
 });
-
-test("explicit retain request renames the workspace without attempting to close the pane", async () => {
-  const { root, repoPath, worktree } = await fixture();
-  try {
-    const record = { repoPath, endpoint: endpoint(), worktree };
-    const label = coordinatorWorkspaceLabel(repoPath);
-    const runner = fakeRunner(
-      {
-        "pane-a": {
-          present: true,
-          workspaceId: "workspace-a",
-          tabId: "tab-a",
-          foregroundCwd: worktree.path,
-          shellPid: 100,
-          processes: stoppedShell,
-        },
-      },
-      { "workspace-a": label },
-    );
-
-    const result = await retireCoordinatorWorkspace(runner.run, record, { retain: true });
-
-    expect(result).toEqual({ outcome: "retained", reason: "retention was explicitly requested" });
-    expect(runner.panes.get("pane-a")?.present).toBe(true);
-    expect(runner.workspaceLabel.get("workspace-a")).toBe(`Retained terminals · repo`);
-    expect(runner.calls.some((call) => call.argv.includes("close"))).toBe(false);
-  } finally {
-    await cleanup(root);
-  }
-});

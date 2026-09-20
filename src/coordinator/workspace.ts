@@ -21,11 +21,6 @@ export type CoordinatorWorkspaceRetirement = Readonly<{
   readonly extraPaneIds?: readonly string[];
 }>;
 
-export type RetireCoordinatorWorkspaceOptions = Readonly<{
-  /** Explicit user request to keep the workspace instead of closing it. */
-  readonly retain?: boolean;
-}>;
-
 type RetiredRecord = Pick<CoordinatorRecord, "repoPath" | "endpoint" | "worktree">;
 
 export function coordinatorWorkspaceLabel(repoPath: string): string {
@@ -161,15 +156,18 @@ async function proveCoordinatorStopped(
  * stop has already proven it is safe to replace.
  *
  * Closes the coordinator's own pane by default, which removes the workspace once it was the
- * last pane. A workspace is retained (its generated label renamed to "Retained terminals ·
- * <repo>") only when the caller explicitly asks for that, or when other panes still share the
- * workspace and keep it alive. A custom label, or ownership that cannot be proven exactly and
- * as stopped, is left entirely untouched and reported rather than closed or renamed.
+ * last pane. A workspace is retained instead (its generated label renamed to "Retained
+ * terminals · <repo>") only when another pane still shares the workspace and keeps it alive.
+ * A custom label, or ownership that cannot be proven exactly and as stopped, is left entirely
+ * untouched and reported rather than closed or renamed.
+ *
+ * There is no explicit-retention option: nothing in Tandem yet asks a user whether to keep a
+ * coordinator's workspace, so that knob would have no caller. Add one only alongside a real
+ * surface for it.
  */
 export async function retireCoordinatorWorkspace(
   run: CommandRunner,
   record: RetiredRecord,
-  options: RetireCoordinatorWorkspaceOptions = {},
 ): Promise<CoordinatorWorkspaceRetirement> {
   const label = await currentWorkspaceLabel(run, record);
   if (label === undefined) return { outcome: "already-clear" };
@@ -182,11 +180,6 @@ export async function retireCoordinatorWorkspace(
 
   if (label !== coordinatorWorkspaceLabel(record.repoPath)) {
     return withExtras({ outcome: "retained", reason: "workspace has a custom label" });
-  }
-
-  if (options.retain === true) {
-    await renameToRetained(run, record);
-    return withExtras({ outcome: "retained", reason: "retention was explicitly requested" });
   }
 
   const proof = await proveCoordinatorStopped(run, record);
