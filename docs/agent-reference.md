@@ -574,7 +574,13 @@ handling. Jev cannot generate shell commands, authorize actions, mutate state, o
 arbitrary model.
 
 Append-only route diagnostics are written to `<home>/logs/tandem.jsonl` with a short prompt hash,
-route facts, confidence, reason, and latency. Raw prompts and API keys are excluded. See the
+route facts, confidence, reason, and latency. When a Jev request was attempted, the event also
+carries a bounded usage record: provider, pinned model, input/output tokens (or an explicit
+`unavailable` marker, never zero), request duration, timeout status, route reason, and a pricing
+snapshot or `unavailable`, all schema-versioned for `src/runtime/usage.ts`. Raw prompts, API keys,
+and full provider payloads are excluded; a route event joins to an evaluation result through the
+shared prompt hash alone. Cost figures are informational only and never authorize or block work.
+Existing readers of this log remain compatible with events recorded before usage existed. See the
 [prompt-routing PRD](jev-prompt-routing-prd.md), [integration overview](jev-prd.md), and
 [evaluation plan](jev-evaluation.md).
 

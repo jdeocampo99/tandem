@@ -1,5 +1,6 @@
 import { appendFile, chmod, mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { UsageRecord } from "./usage.ts";
 
 export type DiagnosticValue = string | number | boolean | null;
 
@@ -11,6 +12,8 @@ export type DiagnosticEvent = Readonly<{
   readonly role?: string;
   readonly phase?: string;
   readonly details?: Readonly<Record<string, DiagnosticValue>>;
+  /** Optional bounded provider usage; absent on events with no provider call and on events written before this field existed. */
+  readonly usage?: UsageRecord;
 }>;
 
 export function diagnosticsPath(home: string): string {
