@@ -18,14 +18,21 @@ import {
   type ModelSpec,
   type Notification,
   type PullRequestMetadata,
+  REVIEW_LEVEL_ORDER,
   type RepoPolicy,
   type ResearchContinuation,
   type ResearchHandoff,
   type ResolvedGuidance,
   type ResolvedPolicy,
   type ReviewLens,
+  type ReviewLevel,
+  type ReviewLevelAssistance,
+  type ReviewLevelPolicy,
+  type ReviewLevelRecord,
   type ReviewMode,
   type ReviewResult,
+  SAFETY_FLOOR_ORDER,
+  type SafetyFloor,
   type TaskCleanupState,
   type TaskCleanupStatus,
   type TaskKind,
@@ -41,6 +48,7 @@ import { parseTaskCommunication } from "./communication-protocol.ts";
 import { FINDING_STATUSES } from "./findings.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
+import { DEFAULT_REVIEW_LEVEL_POLICY } from "./review-levels.ts";
 import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
 
 const TASK_STAGES: readonly TaskStage[] = [
@@ -100,6 +108,7 @@ const TOP_LEVEL_KEYS = [
   "reviewRound",
   "reviewHead",
   "iterationScope",
+  "reviewLevel",
   "validationEvidence",
   "reviews",
   "findingLedger",
@@ -289,6 +298,7 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       "validationCommands",
       "maxWorkers",
       "maxFixRounds",
+      "reviewLevels",
     ],
     source,
   );
@@ -348,6 +358,31 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
     ),
     maxWorkers: requiredInteger(value, "maxWorkers", source, 1),
     maxFixRounds: requiredInteger(value, "maxFixRounds", source, 0),
+    reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`),
+  };
+}
+
+/**
+ * Reads the review-level opt-ins from a pinned policy. A record written before review levels
+ * existed carries none, and it loads with every opt-in off, which is exactly the review behavior
+ * that record was pinned under. A present but malformed section fails closed.
+ */
+function parseReviewLevelPolicy(record: UnknownRecord, source: string): ReviewLevelPolicy {
+  if (!Object.hasOwn(record, "reviewLevels")) return { ...DEFAULT_REVIEW_LEVEL_POLICY };
+  const value = requiredValue(record, "reviewLevels", source);
+  if (!isRecord(value)) {
+    failState(source, "reviewLevels must be an object");
+  }
+  assertExactKeys(
+    value,
+    ["reducedRouting", "deepScrutiny", "jevAssistance", "sourceTransmission"],
+    source,
+  );
+  return {
+    reducedRouting: requiredBoolean(value, "reducedRouting", source),
+    deepScrutiny: requiredBoolean(value, "deepScrutiny", source),
+    jevAssistance: requiredEnum(value, "jevAssistance", ["off", "shadow"] as const, source),
+    sourceTransmission: requiredBoolean(value, "sourceTransmission", source),
   };
 }
 
@@ -630,6 +665,58 @@ function parseIterationScope(value: unknown, source: string): IterationScope {
   };
 }
 
+function parseReviewLevelAssistance(value: unknown, source: string): ReviewLevelAssistance {
+  if (!isRecord(value)) {
+    failState(source, "review level assistance must be an object");
+  }
+  assertExactKeys(
+    value,
+    ["mode", "recommendation", "reason", "requestIdentity", "resultIdentity"],
+    source,
+  );
+  const recommendation = requiredText(value, "recommendation", source);
+  if (
+    recommendation !== "unavailable" &&
+    !REVIEW_LEVEL_ORDER.includes(recommendation as ReviewLevel)
+  ) {
+    failState(source, `unsupported assistance recommendation ${recommendation}`);
+  }
+  return {
+    mode: requiredEnum(value, "mode", ["shadow"] as const, source),
+    recommendation: recommendation as ReviewLevel | "unavailable",
+    reason: requiredText(value, "reason", source),
+    requestIdentity: requiredText(value, "requestIdentity", source),
+    resultIdentity: requiredText(value, "resultIdentity", source),
+  };
+}
+
+/** Parses a recorded classification. A present section must be complete and well formed. */
+function parseReviewLevelRecord(value: unknown, source: string): ReviewLevelRecord {
+  if (!isRecord(value)) {
+    failState(source, "review level must be an object");
+  }
+  assertExactKeys(value, ["level", "reason", "floors", "assistance"], source);
+  const floors = requiredTextArray(value, "floors", source);
+  for (const floor of floors) {
+    if (!SAFETY_FLOOR_ORDER.includes(floor as SafetyFloor)) {
+      failState(source, `unsupported safety floor ${floor}`);
+    }
+  }
+  const assistanceValue = Object.hasOwn(value, "assistance")
+    ? requiredValue(value, "assistance", source)
+    : undefined;
+  return {
+    level: requiredEnum(value, "level", REVIEW_LEVEL_ORDER, source),
+    reason: requiredText(value, "reason", source),
+    floors: floors as readonly SafetyFloor[],
+    ...(assistanceValue === undefined
+      ? {}
+      : {
+          assistance: parseReviewLevelAssistance(assistanceValue, `${source}.assistance`),
+        }),
+  };
+}
+
 function parseNotification(value: unknown, source: string): Notification {
   if (!isRecord(value)) {
     failState(source, "notification must be an object");
@@ -832,6 +919,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   const iterationScopeValue = Object.hasOwn(value, "iterationScope")
     ? requiredValue(value, "iterationScope", source)
     : undefined;
+  const reviewLevelValue = Object.hasOwn(value, "reviewLevel")
+    ? requiredValue(value, "reviewLevel", source)
+    : undefined;
   const pullRequestValue = Object.hasOwn(value, "pullRequest")
     ? requiredValue(value, "pullRequest", source)
     : undefined;
@@ -901,6 +991,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
       : {
           iterationScope: parseIterationScope(iterationScopeValue, `${source}.iterationScope`),
         }),
+    ...(reviewLevelValue === undefined
+      ? {}
+      : { reviewLevel: parseReviewLevelRecord(reviewLevelValue, `${source}.reviewLevel`) }),
     ...(reportPath === undefined ? {} : { reportPath }),
     ...(blockReason === undefined ? {} : { blockReason }),
     ...(communication === undefined ? {} : { communication }),

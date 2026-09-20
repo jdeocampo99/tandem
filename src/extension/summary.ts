@@ -217,6 +217,16 @@ function summarizeTask(task: TaskRecord): string {
       )}`,
     );
   }
+  if (task.reviewLevel !== undefined) {
+    const level = task.reviewLevel;
+    const assistance =
+      level.assistance === undefined
+        ? ""
+        : `; shadow helper recommended ${level.assistance.recommendation} (recorded only, not applied)`;
+    lines.push(
+      `Review level: ${level.level}; floors ${level.floors.length === 0 ? "none" : level.floors.join(", ")}; reason ${compactText(level.reason, ACTION_SUMMARY_MAX_TEXT)}${assistance}`,
+    );
+  }
   if (currentReviews.length > 0) {
     const reviewMode = currentReviews.find((review) => review.mode !== undefined)?.mode;
     lines.push(

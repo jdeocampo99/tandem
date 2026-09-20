@@ -27,6 +27,7 @@ import {
 } from "./acceptance.ts";
 import { recordReviewFindings } from "./findings.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
+import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
 
 export type TaskInput = Readonly<{
   readonly id: string;
@@ -635,25 +636,20 @@ function activeReviews(task: TaskRecord): readonly ReviewResult[] {
   );
 }
 
-function allReviewLensesPass(task: TaskRecord): boolean {
+function allReviewLensesPass(task: TaskRecord, required: readonly ReviewLens[]): boolean {
   const current = activeReviews(task);
-  if (current.length !== REVIEW_LENSES.length) {
-    return false;
-  }
-  return REVIEW_LENSES.every((lens) =>
-    current.some((review) => review.lens === lens && review.pass),
-  );
+  return required.every((lens) => current.some((review) => review.lens === lens && review.pass));
 }
 
 function describeRequirements(requirements: readonly FinalRequirement[]): string {
   return requirements.map((entry) => `${entry.name} (${entry.origin})`).join(", ");
 }
 
-function reviewSummary(task: TaskRecord): string {
+function reviewSummary(task: TaskRecord, required: readonly ReviewLens[]): string {
   const current = activeReviews(task);
   const failed = current.filter((review) => !review.pass).map((review) => review.lens);
   return failed.length === 0
-    ? `Task ${task.id} passed behavior, design, coverage, and verification review`
+    ? `Task ${task.id} passed ${required.join(", ")} review at the ${recordedReviewLevel(task).level} review level`
     : `Task ${task.id} requires fixes after ${failed.join(", ")} review`;
 }
 
@@ -721,6 +717,7 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
       })),
       maxWorkers: policy.config.maxWorkers,
       maxFixRounds: policy.config.maxFixRounds,
+      reviewLevels: { ...policy.config.reviewLevels },
     },
     guidance: {
       implementation: cloneGuidanceEntries(policy.guidance.implementation),
@@ -943,22 +940,20 @@ export function transitionTask(
         );
       }
       const current = activeReviews(task);
-      if (
-        current.length !== REVIEW_LENSES.length ||
-        REVIEW_LENSES.some((lens) => !current.some((review) => review.lens === lens))
-      ) {
+      const required = requiredReviewLenses(task, event.head);
+      if (required.some((lens) => !current.some((review) => review.lens === lens))) {
         throw new TaskTransitionError(
           "review-incomplete",
           task,
-          "Review completion requires behavior, design, coverage, and verification lenses",
+          `Review completion requires the ${required.join(", ")} lens(es) for this round`,
         );
       }
-      if (!allReviewLensesPass(task)) {
+      if (!allReviewLensesPass(task, required)) {
         return commitWithNotification(
           task,
           context,
           { stage: "awaiting-fixes" },
-          reviewSummary(task),
+          reviewSummary(task, required),
         );
       }
       const acceptance = finalAcceptanceStatus(task, event.head);
@@ -967,7 +962,7 @@ export function transitionTask(
           clearIterationScope(task),
           context,
           { stage: "ready" },
-          reviewSummary(task),
+          reviewSummary(task, required),
           "coordinator",
         );
       }

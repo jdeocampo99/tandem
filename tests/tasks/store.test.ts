@@ -7,13 +7,23 @@ import type {
   InstructionChannels,
   RepoPolicy,
   ResolvedPolicy,
+  ReviewLevelRecord,
   WorktreeLease,
 } from "../../src/contracts.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { emptyRuntimeState } from "../../src/runtime/schema.ts";
-import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
+import {
+  FINAL_REVIEW_LENSES,
+  finalAcceptanceStatus,
+  policyIdentity,
+} from "../../src/tasks/acceptance.ts";
 import { ledgerBlockers } from "../../src/tasks/findings.ts";
 import { type TaskTransitionContext, transitionTask } from "../../src/tasks/lifecycle.ts";
+import {
+  DEFAULT_REVIEW_LEVEL_POLICY,
+  recordedReviewLevel,
+  requiredReviewLenses,
+} from "../../src/tasks/review-levels.ts";
 import { createTaskStore, type StoreTaskInput, type TaskStore } from "../../src/tasks/store.ts";
 import {
   StaleTaskRevisionError,
@@ -42,6 +52,12 @@ const policy: ResolvedPolicy = {
     ],
     maxWorkers: 3,
     maxFixRounds: 1,
+    reviewLevels: {
+      reducedRouting: false,
+      deepScrutiny: false,
+      jevAssistance: "off",
+      sourceTransmission: false,
+    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -591,27 +607,6 @@ const scoutInput: StoreTaskInput = {
   policy,
 };
 
-async function rewriteTaskPayload(
-  directory: string,
-  taskId: string,
-  edit: (payload: Record<string, unknown>) => void,
-): Promise<void> {
-  const database = new Database(join(directory, "state.sqlite"));
-  try {
-    const row = database.query("SELECT revision, payload FROM tasks WHERE id = ?").get(taskId) as {
-      revision: number;
-      payload: string;
-    };
-    const payload = JSON.parse(row.payload) as Record<string, unknown>;
-    edit(payload);
-    database
-      .query("UPDATE tasks SET payload = ? WHERE id = ?")
-      .run(JSON.stringify(payload), taskId);
-  } finally {
-    database.close();
-  }
-}
-
 test("persists an explicit scout disposition across restart and later transitions", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory, "continuation");
@@ -658,7 +653,7 @@ test("loads scout records written without a disposition using the conservative d
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory, "legacy");
     const created = await store.create({ ...scoutInput, id: "legacy-scout" });
-    await rewriteTaskPayload(directory, created.id, (payload) => {
+    rewritePayload(directory, created.id, (payload) => {
       delete payload.researchContinuation;
     });
 
@@ -677,18 +672,10 @@ test("upgrades a scout row that has old-shape evidence and no continuation toget
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory, "legacy-both");
     const created = await store.create({ ...scoutInput, id: "legacy-both-scout" });
-    await rewriteTaskPayload(directory, created.id, (payload) => {
+    rewritePayload(directory, created.id, (payload) => {
       delete payload.researchContinuation;
-      payload.validationEvidence = [
-        {
-          name: "check",
-          argv: ["bun", "run", "check"],
-          exitCode: 0,
-          stdout: "ok",
-          stderr: "",
-          head: "legacy-head",
-        },
-      ];
+      payload.reviewHead = LEGACY_EVIDENCE.head;
+      payload.validationEvidence = [{ ...LEGACY_EVIDENCE }];
     });
 
     const reloaded = await makeStore(directory, "legacy-both-reload").read(created.id);
@@ -697,7 +684,7 @@ test("upgrades a scout row that has old-shape evidence and no continuation toget
       disposition: "ask-intent",
       selectedBy: "deterministic",
     });
-    expect(reloaded?.validationEvidence.map((entry) => entry.contract)).toEqual(["legacy"]);
+    expect(reloaded?.validationEvidence).toEqual([{ ...LEGACY_EVIDENCE, contract: "legacy" }]);
     expect(reloaded?.scopeApproved).toBe(true);
   });
 });
@@ -706,7 +693,7 @@ test("fails closed on invalid dispositions, malformed provenance, and non-scout 
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory, "invalid");
     const scout = await store.create({ ...scoutInput, id: "invalid-scout" });
-    await rewriteTaskPayload(directory, scout.id, (payload) => {
+    rewritePayload(directory, scout.id, (payload) => {
       payload.researchContinuation = {
         schemaVersion: 1,
         disposition: "implement-now",
@@ -715,7 +702,7 @@ test("fails closed on invalid dispositions, malformed provenance, and non-scout 
     });
     await expect(store.read(scout.id)).rejects.toBeInstanceOf(StateCorruptionError);
 
-    await rewriteTaskPayload(directory, scout.id, (payload) => {
+    rewritePayload(directory, scout.id, (payload) => {
       payload.researchContinuation = {
         schemaVersion: 1,
         disposition: "implementation-interview",
@@ -725,7 +712,7 @@ test("fails closed on invalid dispositions, malformed provenance, and non-scout 
     await expect(store.read(scout.id)).rejects.toBeInstanceOf(StateCorruptionError);
 
     const implementation = await store.create({ ...input, id: "invalid-implementation" });
-    await rewriteTaskPayload(directory, implementation.id, (payload) => {
+    rewritePayload(directory, implementation.id, (payload) => {
       payload.researchContinuation = {
         schemaVersion: 1,
         disposition: "implementation-interview",
@@ -733,6 +720,106 @@ test("fails closed on invalid dispositions, malformed provenance, and non-scout 
       };
     });
     await expect(store.read(implementation.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("a record written before review levels existed loads at the conservative default", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-review-level" });
+    rewritePayload(directory, created.id, (payload) => {
+      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
+      delete policyValue.config?.reviewLevels;
+      delete payload.reviewLevel;
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("the upgraded record did not reload");
+    expect(reloaded.reviewLevel).toBeUndefined();
+    expect(recordedReviewLevel(reloaded).level).toBe("standard");
+    expect(reloaded.policy.config.reviewLevels).toEqual(DEFAULT_REVIEW_LEVEL_POLICY);
+    expect(requiredReviewLenses(reloaded, "any-head")).toEqual(FINAL_REVIEW_LENSES);
+  });
+});
+
+test("a recorded review level round-trips with its reason, floors, and shadow assistance", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "review-level-roundtrip" });
+    const record: ReviewLevelRecord = {
+      level: "deep",
+      reason: "the permissions and security floor fired",
+      floors: ["permissions-security"],
+      assistance: {
+        mode: "shadow",
+        recommendation: "light",
+        reason: "the helper recommended light at confidence 0.990",
+        requestIdentity: "request-1",
+        resultIdentity: "result-1",
+      },
+    };
+    rewritePayload(directory, created.id, (payload) => {
+      payload.reviewLevel = record;
+    });
+
+    expect((await store.read(created.id))?.reviewLevel).toEqual(record);
+  });
+});
+
+test("refuses a review level that names an unsupported level", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "review-level-unknown" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.reviewLevel = { level: "skim", reason: "fast", floors: [] };
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("refuses a review level that names an unsupported safety floor", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "review-level-floor" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.reviewLevel = { level: "deep", reason: "broad", floors: ["vibes"] };
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("refuses a review level missing its recorded reason", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "review-level-reason" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.reviewLevel = { level: "standard", floors: [] };
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("refuses a pinned review-level policy with an unsupported assistance mode", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "review-policy-mode" });
+    rewritePayload(directory, created.id, (payload) => {
+      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
+      policyValue.config = {
+        ...policyValue.config,
+        reviewLevels: {
+          reducedRouting: false,
+          deepScrutiny: false,
+          jevAssistance: "active",
+          sourceTransmission: false,
+        },
+      };
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
   });
 });
 

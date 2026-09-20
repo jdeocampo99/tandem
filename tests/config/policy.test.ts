@@ -348,3 +348,43 @@ test("a configured home inside the target repository fails closed without creati
     expect(await pathExists(home)).toBe(false);
   });
 });
+
+test("every review-level opt-in is off by default", () => {
+  expect(defaultPolicy().reviewLevels).toEqual({
+    reducedRouting: false,
+    deepScrutiny: false,
+    jevAssistance: "off",
+    sourceTransmission: false,
+  });
+  expect(parsePolicy({}).reviewLevels).toEqual(defaultPolicy().reviewLevels);
+});
+
+test("a repository can opt into each review-level setting explicitly", () => {
+  const parsed = parsePolicy({
+    reviewLevels: {
+      reducedRouting: true,
+      deepScrutiny: true,
+      jevAssistance: "shadow",
+      sourceTransmission: true,
+    },
+  });
+  expect(parsed.reviewLevels).toEqual({
+    reducedRouting: true,
+    deepScrutiny: true,
+    jevAssistance: "shadow",
+    sourceTransmission: true,
+  });
+  expect(parsePolicy({ reviewLevels: { deepScrutiny: true } }).reviewLevels).toEqual({
+    reducedRouting: false,
+    deepScrutiny: true,
+    jevAssistance: "off",
+    sourceTransmission: false,
+  });
+});
+
+test("review-level settings reject unknown keys, wrong types, and unsupported modes", () => {
+  expect(() => parsePolicy({ reviewLevels: { reduceEverything: true } })).toThrow(TypeError);
+  expect(() => parsePolicy({ reviewLevels: { reducedRouting: "yes" } })).toThrow(TypeError);
+  expect(() => parsePolicy({ reviewLevels: { jevAssistance: "active" } })).toThrow(TypeError);
+  expect(() => parsePolicy({ reviewLevels: [] })).toThrow(TypeError);
+});

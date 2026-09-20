@@ -46,6 +46,12 @@ const policyConfig: RepoPolicy = {
   ],
   maxWorkers: 3,
   maxFixRounds: 3,
+  reviewLevels: {
+    reducedRouting: false,
+    deepScrutiny: false,
+    jevAssistance: "off",
+    sourceTransmission: false,
+  },
 };
 
 const policy: ResolvedPolicy = {

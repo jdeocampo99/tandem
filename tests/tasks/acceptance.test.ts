@@ -38,6 +38,12 @@ function policyWith(commands: readonly ValidationCommand[]): ResolvedPolicy {
       validationCommands: commands,
       maxWorkers: 3,
       maxFixRounds: 3,
+      reviewLevels: {
+        reducedRouting: false,
+        deepScrutiny: false,
+        jevAssistance: "off",
+        sourceTransmission: false,
+      },
     },
     guidance: { implementation: [], validation: [], review: [] },
   };
