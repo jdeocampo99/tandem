@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { chmod, lstat, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { ensurePrivateDirectoryTree } from "./lock.ts";
@@ -8,11 +8,13 @@ import {
   canonicalHome,
   canonicalizeRecord,
   canonicalPath,
+  digest,
   isMissing,
   ownershipFailure,
   parseStoredRecord,
   pathIsWithin,
   RECORD_SUFFIX,
+  REGISTRY_DIRECTORY,
   recordPath,
   registrySessionDirectory,
   sessionText,
@@ -93,6 +95,95 @@ export async function removeCoordinatorRecord(
   const sessionId = sessionText(sessionInput);
   const repoPath = await canonicalPath(repoPathInput, "repoPath");
   await rm(recordPath(home, sessionId, repoPath), { force: true });
+}
+
+/** Whether a stored record sits in the registry directory of the session its endpoint names. */
+export type CoordinatorRecordPlacement = "session-directory" | "foreign-directory";
+
+/** One stored coordinator record, with the session it came from and where it was found. */
+export type DiscoveredCoordinatorRecord = Readonly<{
+  readonly path: string;
+  /** Session of origin, taken from the record's own endpoint. */
+  readonly sessionId: string;
+  readonly placement: CoordinatorRecordPlacement;
+  readonly record: CoordinatorRecord;
+}>;
+
+/** A registry entry Tandem could not read or parse, reported rather than guessed at. */
+export type UnreadableCoordinatorRecord = Readonly<{
+  readonly path: string;
+  readonly reason: string;
+}>;
+
+export type CoordinatorRecordDiscovery = Readonly<{
+  readonly records: readonly DiscoveredCoordinatorRecord[];
+  readonly unreadable: readonly UnreadableCoordinatorRecord[];
+}>;
+
+function describeFailure(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Finds coordinator records across every session directory of one Tandem home, so a launch sees
+ * records written under other sessions, including by earlier builds. Discovery reads only: it
+ * never moves, rewrites, or removes a record, and an entry it cannot parse is reported instead of
+ * being skipped silently.
+ *
+ * With a `repoPath`, records are matched on their own canonical repository path rather than on
+ * their file name, so records stored under an older spelling of the same repository are still
+ * found; unreadable entries are then limited to the file name this repository's record uses.
+ */
+export async function discoverCoordinatorRecords(
+  input: Readonly<{ readonly home: string; readonly repoPath?: string }>,
+): Promise<CoordinatorRecordDiscovery> {
+  const home = await canonicalHome(input.home);
+  const repoPath =
+    input.repoPath === undefined ? undefined : await canonicalPath(input.repoPath, "repoPath");
+  const repositoryFileName =
+    repoPath === undefined ? undefined : `${digest(repoPath)}${RECORD_SUFFIX}`;
+  const registryDirectory = join(home, REGISTRY_DIRECTORY);
+  let sessionEntries: Dirent[];
+  try {
+    sessionEntries = await readdir(registryDirectory, { withFileTypes: true });
+  } catch (error) {
+    if (isMissing(error)) return { records: [], unreadable: [] };
+    throw error;
+  }
+  const records: DiscoveredCoordinatorRecord[] = [];
+  const unreadable: UnreadableCoordinatorRecord[] = [];
+  for (const sessionEntry of sessionEntries.sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
+    if (!sessionEntry.isDirectory()) continue;
+    const directory = join(registryDirectory, sessionEntry.name);
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (!entry.isFile() || !entry.name.endsWith(RECORD_SUFFIX)) continue;
+      const path = join(directory, entry.name);
+      let record: CoordinatorRecord | undefined;
+      try {
+        record = await readCoordinatorRecord(path);
+      } catch (error) {
+        if (repositoryFileName === undefined || entry.name === repositoryFileName) {
+          unreadable.push({ path, reason: describeFailure(error) });
+        }
+        continue;
+      }
+      if (record === undefined) continue;
+      if (repoPath !== undefined && record.repoPath !== repoPath) continue;
+      records.push({
+        path,
+        sessionId: record.endpoint.sessionId,
+        placement:
+          digest(record.endpoint.sessionId) === sessionEntry.name
+            ? "session-directory"
+            : "foreign-directory",
+        record,
+      });
+    }
+  }
+  return { records, unreadable };
 }
 
 /** Lists stored records for one session without probing panes or processes. */

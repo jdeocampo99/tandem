@@ -23,8 +23,11 @@ export const COORDINATOR_QUARANTINE_DIRECTORY = "coordinator-quarantine";
 const QUARANTINE_SUFFIX = ".json";
 const QUARANTINE_SCHEMA_VERSION = 1 as const;
 
-/** Whether a quarantine came from replacing a previous coordinator or from rolling a new one back. */
-export type CoordinatorQuarantineStage = "replacement" | "rollback";
+/**
+ * Where a quarantine came from: replacing a previous coordinator, rolling a new one back, or
+ * refusing a repository claim whose ownership could not be proved.
+ */
+export type CoordinatorQuarantineStage = "replacement" | "rollback" | "exclusivity";
 
 /** A durable note that one exact coordinator lease was left in place and why. */
 export type CoordinatorQuarantineRecord = Readonly<{
@@ -144,8 +147,8 @@ function parseQuarantineRecord(value: unknown, source: string): CoordinatorQuara
     throw new TypeError(`${source}.schemaVersion must be ${QUARANTINE_SCHEMA_VERSION}`);
   }
   const stage = value.stage;
-  if (stage !== "replacement" && stage !== "rollback") {
-    throw new TypeError(`${source}.stage must be "replacement" or "rollback"`);
+  if (stage !== "replacement" && stage !== "rollback" && stage !== "exclusivity") {
+    throw new TypeError(`${source}.stage must be "replacement", "rollback", or "exclusivity"`);
   }
   const endpoint =
     value.endpoint === undefined ? undefined : parseEndpoint(value.endpoint, `${source}.endpoint`);
@@ -411,7 +414,11 @@ export async function releaseCoordinatorLease(
   return "released";
 }
 
-async function quarantineCoordinatorLease(
+/**
+ * Writes the durable note that says one exact coordinator lease was left in place, and why.
+ * Callers use it instead of releasing or closing anything when ownership cannot be proved.
+ */
+export async function quarantineCoordinatorLease(
   input: Readonly<{
     readonly home: string;
     readonly sessionId: string;

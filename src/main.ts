@@ -17,6 +17,7 @@ import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal
 import {
   hasActiveHerdrContext,
   launchProjects,
+  otherSessionReconciliationNotices,
   previousResourcesFromLaunch,
   previousResourcesNotice,
   workspaceRetirementFromLaunch,
@@ -238,6 +239,7 @@ async function runProjectFlow({
     const resourceNotice =
       resources === undefined ? undefined : previousResourcesNotice(repoPath, resources);
     if (resourceNotice !== undefined) stdout(resourceNotice);
+    for (const notice of otherSessionReconciliationNotices(repoPath, launch)) stdout(notice);
   }
   return {
     exitCode: 0,

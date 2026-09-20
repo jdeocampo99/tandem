@@ -18,7 +18,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | --- | --- |
 | Normal `tandem`, onboarding, project selection | [main.ts](src/main.ts) → [terminal/](src/terminal/) |
 | Action CLI / JSON automation | [cli.ts](src/cli.ts) → [terminal/cli-application.ts](src/terminal/cli-application.ts) |
-| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `reset.ts`, `workspace.ts`, `resources.ts` |
+| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts` |
 | Models, environment, policy | [config/](src/config/) |
 | Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `store.ts`, `control.ts` |
 | Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/workflow.ts](src/recovery/workflow.ts) |
