@@ -2,6 +2,7 @@ import { TextDecoder } from "node:util";
 
 const TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const JEV_MODEL = "jev-1.13.0" as const;
+export const JEV_PROVIDER = "typesafe" as const;
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_QUESTIONS = 64;
