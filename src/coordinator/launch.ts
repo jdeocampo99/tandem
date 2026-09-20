@@ -26,7 +26,7 @@ import {
 } from "./exclusivity.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
-import { type CoordinatorRecord, recordPath } from "./record.ts";
+import { COORDINATOR_LEASE_HOLDER_PREFIX, type CoordinatorRecord, recordPath } from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
 import {
   applyCoordinatorReplacement,
@@ -209,7 +209,7 @@ function coordinatorLeaseIdentity(
   const sessionKey = coordinatorHash(sessionId);
   const sourceKey = coordinatorHash(sourceHead);
   return {
-    tandemId: `coordinator:${repositoryKey}:${sessionKey}:${sourceKey}`,
+    tandemId: `${COORDINATOR_LEASE_HOLDER_PREFIX}${repositoryKey}:${sessionKey}:${sourceKey}`,
     taskName: `coordinator-${repositoryKey}-${sessionKey}-${sourceKey}`,
   };
 }
