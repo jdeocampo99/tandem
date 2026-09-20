@@ -1053,7 +1053,33 @@ Normal users do not need to tune a pool cap or approve routine safe cleanup. The
 - active or otherwise protected task paths are never pruned;
 - ambiguous metadata, missing physical identity, failed safety checks, ignored files, dirty files, unmerged paths, and non-ancestor work are retained with warnings.
 
-Automatic terminal cleanup closes stopped owned endpoints and attempts a lease-checked Treehouse return for `cancelled`, `completed`, or `merged` tasks. Live interactive child terminals and their checkouts are retained for inspection and follow-up. Explicit cleanup can cooperatively close an idle completed or paused child, but refuses busy conversations, queued input, editor drafts, and unproven ownership. Worktree return still requires stopped processes, exact lease metadata, the expected task branch, a clean/unmerged-free checkout, and task HEAD ancestry. If proof fails, Tandem retains the worktree instead of deleting it.
+Automatic terminal cleanup closes stopped owned endpoints and attempts a lease-checked Treehouse return for `cancelled`, `completed`, or `merged` tasks. It runs in the same scheduler pass that settled the task, so a completed scout does not hold its pane and worktree until a later coordinator turn. Live interactive child terminals and their checkouts are retained for inspection and follow-up. Explicit cleanup can cooperatively close an idle completed or paused child, but refuses busy conversations, queued input, editor drafts, and unproven ownership. Worktree return still requires stopped processes, exact lease metadata, the expected task branch, a clean/unmerged-free checkout, and task HEAD ancestry. If proof fails, Tandem retains the worktree instead of deleting it.
+
+### Releasing settled scout resources
+
+A scout only reads, so its lease is returned only after its checkout is proven to be the untouched
+pinned source commit on its own lease branch. Any difference at all, an untracked file included, is
+somebody's work: the worktree is retained and the reason is reported. A checkout that cannot be
+read, or that sits on a branch the lease does not name, is quarantined with every resource kept.
+Blocked, paused, and decision-waiting scouts keep their pane and worktree, because those are the
+evidence a coordinator needs to answer them; completed scouts with a durable report and safely
+cancelled scouts are released.
+
+Cleanup never touches what a scout produced. The report, the source checkpoint, the consumed scout
+job, and the task's notifications and history all live in the Tandem home, so a later
+implementation task can still cite a released scout through `researchTaskIds`.
+
+Each attempt leaves a durable `cleanup` note on the task record with a status and a reason:
+
+| Status | Meaning |
+| --- | --- |
+| `released` | The pane was closed and the exact lease returned. |
+| `retained` | Cleanup deliberately kept a resource, for example a changed or dirty scout checkout. |
+| `pending` | A transient failure; the next scheduler tick or reconciliation retries it, including after a coordinator restart. |
+| `quarantined` | Ownership could not be proven; resources are kept and nothing is retried automatically. |
+
+Records written before cleanup notes existed simply omit the field and load unchanged; a present
+but malformed note fails the read as state corruption rather than being coerced into a status.
 
 Pool housekeeping keeps the policy-derived idle set and removes only additional proven-disposable copies. This is safe pool maintenance, not an automatic destructive discard of user work. Explicit discard is the only path that bypasses the Git safety proof.
 
@@ -1121,7 +1147,7 @@ are Tandem-owned state, not files in target repositories:
 | `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. Launch discovers these across every session directory, so one repository keeps one active coordinator. |
 | `<home>/coordinator-registry/repository-<digest>.lock` | Native `O_EXLOCK` coordination lock for one canonical repository, shared by every session in this home and acquired before the per-session launch lock. |
 | `<home>/coordinator-scripts/*.sh` | Atomically written `0700` launch scripts containing the coordinator command and scoped environment overrides; kept outside project checkouts. |
-| `<home>/state.sqlite` | Canonical SQLite source of truth for task records, policy snapshots, lifecycle/evidence/review/delivery metadata, runtime reservations, endpoint identities, durable jobs and operations, stop requests, presentations, and migration metadata. |
+| `<home>/state.sqlite` | Canonical SQLite source of truth for task records, policy snapshots, lifecycle/evidence/review/delivery metadata, cleanup notes, runtime reservations, endpoint identities, durable jobs and operations, stop requests, presentations, and migration metadata. |
 | `<home>/communications/<safe-task-id>/inbox.json` | Derived bounded task-message projection; canonical communication remains in the task row in `state.sqlite`. |
 | `<home>/tasks/*.json` (legacy input only) | Pre-migration task snapshots. A successful migration archives the original bytes under `<home>/.tandem-migration/archive/tasks/` and replaces `<home>/tasks` with an old-writer fence file. |
 | `<home>/runtime.json` (legacy input only) | Pre-migration runtime snapshot. A successful migration archives the original bytes under `<home>/.tandem-migration/archive/runtime.json` and replaces `<home>/runtime.json` with an old-writer fence directory. |
