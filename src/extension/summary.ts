@@ -195,8 +195,12 @@ function summarizeTask(task: TaskRecord): string {
   }
   if (task.validationEvidence.length > 0) {
     const successful = task.validationEvidence.filter((entry) => entry.exitCode === 0).length;
+    const iteration = task.validationEvidence.filter(
+      (entry) => entry.contract === "iteration",
+    ).length;
+    const remote = task.validationEvidence.filter((entry) => entry.origin === "github").length;
     lines.push(
-      `Validation evidence: ${successful}/${task.validationEvidence.length} passing; commands ${compactList(
+      `Validation evidence: ${successful}/${task.validationEvidence.length} passing; ${iteration} iteration, ${task.validationEvidence.length - iteration} final; ${task.validationEvidence.length - remote} local, ${remote} remote; commands ${compactList(
         task.validationEvidence.map((entry) => entry.name),
         4,
         100,
@@ -658,7 +662,10 @@ function isTaskValidationEvidence(
     record !== undefined &&
     typeof record.name === "string" &&
     typeof record.exitCode === "number" &&
-    typeof record.head === "string"
+    typeof record.head === "string" &&
+    (record.contract === "iteration" || record.contract === "final") &&
+    (record.origin === "local" || record.origin === "github") &&
+    typeof record.policyDigest === "string"
   );
 }
 

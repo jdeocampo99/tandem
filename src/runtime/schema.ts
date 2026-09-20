@@ -6,9 +6,11 @@ import type {
   IsoTimestamp,
   ReviewLens,
   ReviewMode,
+  ValidationContractName,
   WorktreeLease,
 } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
+import type { EscalationReason } from "../tasks/acceptance.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 
 const RUNTIME_SCHEMA_VERSION = 1;
@@ -103,6 +105,11 @@ export type DurableJob = Readonly<{
   readonly consumedAt?: IsoTimestamp;
   readonly endpoint?: Endpoint;
   readonly head?: string;
+  /** Validation jobs carry the contract and policy identity their evidence is pinned to. */
+  readonly contract?: ValidationContractName;
+  readonly policyDigest?: string;
+  /** Present when targeted iteration checks were refused for the complete manifest. */
+  readonly escalation?: EscalationReason;
   readonly reviewLens?: ReviewLens;
   readonly receiptPath?: string;
   readonly instructionRevision?: number;

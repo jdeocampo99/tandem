@@ -11,6 +11,7 @@ import type {
 } from "../../src/contracts.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { emptyRuntimeState } from "../../src/runtime/schema.ts";
+import { policyIdentity } from "../../src/tasks/acceptance.ts";
 import { type TaskTransitionContext, transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore, type StoreTaskInput, type TaskStore } from "../../src/tasks/store.ts";
 import {
@@ -380,6 +381,8 @@ test("persists notification state before acknowledgement is observable after rel
           type: "validation-failed",
           head: "head-1",
           generation: 0,
+          contract: "final",
+          policyDigest: policyIdentity(input.policy),
           evidence: [
             {
               name: "check",
@@ -388,6 +391,9 @@ test("persists notification state before acknowledgement is observable after rel
               stdout: "",
               stderr: "failure",
               head: "head-1",
+              contract: "final",
+              origin: "local",
+              policyDigest: policyIdentity(input.policy),
             },
           ],
         },

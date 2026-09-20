@@ -2,8 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandResult, ValidationCommand } from "../../src/contracts.ts";
-import { runValidation, ValidationConfigurationError } from "../../src/workers/validation.ts";
+import type { CommandResult, ContractIdentity, ValidationCommand } from "../../src/contracts.ts";
+import { ValidationConfigurationError } from "../../src/tasks/acceptance.ts";
+import { runValidation } from "../../src/workers/validation.ts";
 
 const command = (
   name: string,
@@ -16,22 +17,23 @@ const command = (
   timeoutMs: 1000,
 });
 
+const identity = (head: string): ContractIdentity => ({
+  head,
+  generation: 2,
+  policyDigest: "policy-digest",
+});
+
 function result(code: number, stdout = "", stderr = ""): CommandResult {
   return { code, stdout, stderr };
 }
 
-test("runValidation selects matching, wildcard, and globally-scoped commands in declaration order", async () => {
-  const commands = [
-    command("global", []),
-    command("lint", ["lint"]),
-    command("test", ["test"]),
-    command("wildcard", ["*"]),
-  ];
+test("runValidation runs the contract's commands in declaration order and stamps the contract", async () => {
+  const commands = [command("global", []), command("test", ["test"]), command("wildcard", ["*"])];
   const calls: string[][] = [];
   const evidence = await runValidation({
     repoPath: "/virtual/repo",
-    head: "abc123",
-    surfaces: ["test"],
+    contract: "final",
+    identity: identity("abc123"),
     commands,
     run: async (request) => {
       calls.push([...request.argv]);
@@ -45,15 +47,35 @@ test("runValidation selects matching, wildcard, and globally-scoped commands in 
     ["bun", "run", "wildcard"],
   ]);
   expect(evidence.map((entry) => entry.name)).toEqual(["global", "test", "wildcard"]);
-  expect(evidence.every((entry) => entry.head === "abc123")).toBe(true);
+  expect(
+    evidence.every(
+      (entry) =>
+        entry.head === "abc123" &&
+        entry.contract === "final" &&
+        entry.origin === "local" &&
+        entry.policyDigest === "policy-digest",
+    ),
+  ).toBe(true);
+});
+
+test("runValidation stamps iteration evidence so a targeted pass cannot read as a final one", async () => {
+  const evidence = await runValidation({
+    repoPath: "/virtual/repo",
+    contract: "iteration",
+    identity: identity("abc123"),
+    commands: [command("test", ["test"])],
+    run: async () => result(0),
+  });
+
+  expect(evidence.map((entry) => entry.contract)).toEqual(["iteration"]);
 });
 
 test("runValidation records a failed check and stops before later commands", async () => {
   const calls: string[] = [];
   const evidence = await runValidation({
     repoPath: "/virtual/repo",
-    head: "failed-head",
-    surfaces: ["test"],
+    contract: "final",
+    identity: identity("failed-head"),
     commands: [command("test", ["test"]), command("later", ["test"])],
     run: async (request) => {
       calls.push(request.argv[2] ?? "");
@@ -70,6 +92,9 @@ test("runValidation records a failed check and stops before later commands", asy
       stdout: "partial output",
       stderr: "assertion failed",
       head: "failed-head",
+      contract: "final",
+      origin: "local",
+      policyDigest: "policy-digest",
     },
   ]);
 });
@@ -81,8 +106,8 @@ test("runValidation records cancellation evidence without invoking an aborted co
 
   const evidence = await runValidation({
     repoPath: "/virtual/repo",
-    head: "cancelled-head",
-    surfaces: ["test"],
+    contract: "final",
+    identity: identity("cancelled-head"),
     commands: [command("test", ["test"])],
     signal: controller.signal,
     run: async () => {
@@ -104,8 +129,8 @@ test("runValidation records a timeout after the runner observes abort", async ()
   let observedAbort = false;
   const evidence = await runValidation({
     repoPath: "/virtual/repo",
-    head: "timed-out-head",
-    surfaces: ["test"],
+    contract: "final",
+    identity: identity("timed-out-head"),
     commands: [{ ...command("test", ["test"]), timeoutMs: 1 }],
     run: async ({ signal }) => {
       if (signal === undefined) throw new Error("runner did not receive a signal");
@@ -137,8 +162,8 @@ test("runValidation waits for runner cleanup before returning timeout evidence",
   let commandSettled = false;
   const validation = runValidation({
     repoPath: "/virtual/repo",
-    head: "timed-out-head",
-    surfaces: ["test"],
+    contract: "final",
+    identity: identity("timed-out-head"),
     commands: [{ ...command("test", ["test"]), timeoutMs: 1 }],
     run: async ({ signal }) => {
       if (signal === undefined) throw new Error("runner did not receive a signal");
@@ -177,12 +202,12 @@ test("runValidation waits for runner cleanup before returning timeout evidence",
   });
 });
 
-test("runValidation rejects when no configured command applies", async () => {
+test("runValidation rejects an empty contract instead of reporting a pass", async () => {
   await expect(
     runValidation({
       repoPath: "/virtual/repo",
-      head: "head",
-      surfaces: ["docs"],
+      contract: "final",
+      identity: identity("head"),
       commands: [],
       run: async () => result(0),
     }),
@@ -214,6 +239,8 @@ test("persists cancellation when SIGINT arrives while loading a validation job",
       generation: 1,
       repoPath: root,
       head: "abc123",
+      contract: "final",
+      policyDigest: "policy-digest",
       surfaces: ["test"],
       commands: [
         {

@@ -1,5 +1,10 @@
-import type { ReviewLens, TaskRecord, ValidationEvidence } from "../contracts.ts";
+import type { TaskRecord, ValidationEvidence } from "../contracts.ts";
 import { renderPrDescription } from "../instructions.ts";
+import {
+  FINAL_REVIEW_LENSES,
+  finalAcceptanceContract,
+  finalAcceptanceStatus,
+} from "../tasks/acceptance.ts";
 
 export type PrSummary = Readonly<{
   readonly tldr: readonly string[];
@@ -13,7 +18,7 @@ export type DeliveryTaskShape = Readonly<{
   readonly head: string;
 }>;
 
-const REQUIRED_LENSES: readonly ReviewLens[] = ["behavior", "design", "coverage", "verification"];
+const REQUIRED_LENSES = FINAL_REVIEW_LENSES;
 const MAX_EVIDENCE_OUTPUT = 512;
 
 export function readText(value: unknown, field: string): string {
@@ -47,6 +52,8 @@ export function assertEvidence(task: TaskRecord, head: string): readonly Validat
     const exitCode = candidateRecord.exitCode;
     const stdout = candidateRecord.stdout;
     const stderr = candidateRecord.stderr;
+    const contract = candidateRecord.contract;
+    const origin = candidateRecord.origin;
     if (
       typeof name !== "string" ||
       name.trim().length === 0 ||
@@ -57,7 +64,11 @@ export function assertEvidence(task: TaskRecord, head: string): readonly Validat
       !Number.isSafeInteger(exitCode) ||
       typeof stdout !== "string" ||
       typeof stderr !== "string" ||
-      candidateRecord.head !== head
+      candidateRecord.head !== head ||
+      (contract !== "iteration" && contract !== "final") ||
+      (origin !== "local" && origin !== "github") ||
+      typeof candidateRecord.policyDigest !== "string" ||
+      candidateRecord.policyDigest.trim().length === 0
     ) {
       throw new Error("delivery requires complete validation evidence bound to the reviewed HEAD");
     }
@@ -67,6 +78,23 @@ export function assertEvidence(task: TaskRecord, head: string): readonly Validat
     evidence.push(candidateRecord as ValidationEvidence);
   }
   return evidence;
+}
+
+/** Refuses delivery unless the complete final manifest passed for the delivered code and policy. */
+export function assertFinalAcceptance(task: TaskRecord, head: string): void {
+  const status = finalAcceptanceStatus(task, head);
+  if (status.satisfied) return;
+  const outstanding = [...status.missing, ...status.failed, ...status.stale]
+    .map((requirement) => `${requirement.name} (${requirement.origin})`)
+    .join(", ");
+  if (outstanding.length > 0) {
+    throw new Error(
+      `delivery requires a complete final acceptance run at HEAD ${head}; outstanding: ${outstanding}`,
+    );
+  }
+  throw new Error(
+    `delivery requires passing ${status.pendingLenses.join(", ")} review at HEAD ${head}`,
+  );
 }
 
 export function assertCurrentReviews(task: TaskRecord, head: string): void {
@@ -105,6 +133,7 @@ export function assertTaskShape(task: TaskRecord): DeliveryTaskShape {
   }
   assertEvidence(task, head);
   assertCurrentReviews(task, head);
+  assertFinalAcceptance(task, head);
   return { cwd, branch, head };
 }
 
@@ -119,7 +148,7 @@ function evidenceOutput(value: string): string {
 
 function evidenceBullet(entry: ValidationEvidence): string {
   const argv = entry.argv.map((argument) => JSON.stringify(argument)).join(" ");
-  return `${entry.name}: exit code ${entry.exitCode} at reviewed HEAD ${entry.head}; argv ${argv}; stdout ${evidenceOutput(entry.stdout)}; stderr ${evidenceOutput(entry.stderr)}`;
+  return `${entry.name} [${entry.contract} contract, ${entry.origin} check]: exit code ${entry.exitCode} at reviewed HEAD ${entry.head}; argv ${argv}; stdout ${evidenceOutput(entry.stdout)}; stderr ${evidenceOutput(entry.stderr)}`;
 }
 
 function validateSummary(summary: PrSummary): PrSummary {
@@ -132,11 +161,15 @@ function validateSummary(summary: PrSummary): PrSummary {
 export function describeTaskPr(task: TaskRecord, summary: PrSummary): string {
   const shape = assertTaskShape(task);
   const evidence = assertEvidence(task, shape.head);
+  const manifest = finalAcceptanceContract(task, shape.head);
   const validatedSummary = validateSummary(summary);
   return renderPrDescription({
     tldr: validatedSummary.tldr,
     what: validatedSummary.what,
     why: validatedSummary.why,
-    validation: evidence.map(evidenceBullet),
+    validation: [
+      `final acceptance manifest at HEAD ${shape.head}: ${manifest.requirements.length} required checks, ${manifest.lenses.length} review lenses, ${manifest.criteria.length} acceptance criteria`,
+      ...evidence.map(evidenceBullet),
+    ],
   });
 }

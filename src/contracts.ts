@@ -206,6 +206,29 @@ export type ReviewResult = {
   readonly mode?: ReviewMode;
 };
 
+/** Names the two validation contracts: targeted fix-time checks and the complete final gate. */
+export type ValidationContractName = "iteration" | "final";
+
+/** Keeps runner-owned local checks distinguishable from GitHub or other remote checks. */
+export type CheckOrigin = "local" | "github";
+
+/** The delivered code and policy a contract result is pinned to. */
+export type ContractIdentity = {
+  readonly head: string;
+  readonly generation: number;
+  readonly policyDigest: string;
+};
+
+/** What an authorized fix round targets, recorded when the round is admitted. */
+export type IterationScope = {
+  readonly head: string;
+  readonly generation: number;
+  readonly policyDigest: string;
+  readonly reproduces: readonly string[];
+  readonly surfaces: readonly string[];
+  readonly findingIds: readonly string[];
+};
+
 export type ValidationEvidence = {
   readonly name: string;
   readonly argv: readonly string[];
@@ -213,6 +236,9 @@ export type ValidationEvidence = {
   readonly stdout: string;
   readonly stderr: string;
   readonly head: string;
+  readonly contract: ValidationContractName;
+  readonly origin: CheckOrigin;
+  readonly policyDigest: string;
 };
 
 export type NotificationKind = "routine" | "coordinator";
@@ -269,6 +295,7 @@ export type TaskRecord = {
   readonly generation: number;
   readonly reviewRound: number;
   readonly reviewHead?: string;
+  readonly iterationScope?: IterationScope;
   readonly reportPath?: string;
   readonly validationEvidence: readonly ValidationEvidence[];
   readonly reviews: readonly ReviewResult[];

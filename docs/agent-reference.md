@@ -705,10 +705,10 @@ The durable stages are:
 | `awaiting-approval` | Implementation scope exists but has not been approved. |
 | `queued` | Approved work is waiting for scheduler capacity; it is not proof of an active worker or completed research. |
 | `scouting` / `implementing` | A worker is active in its owned workspace. |
-| `validating` | Implementation has produced a checkpoint and the runner is checking that exact HEAD. |
-| `reviewing` | Validation succeeded; fresh reviewers are recording the required lenses. |
+| `validating` | The runner is executing one named validation contract at that exact HEAD: targeted iteration checks between fix rounds, or the complete final acceptance manifest once the candidate is otherwise ready. |
+| `reviewing` | The contract's checks passed; fresh reviewers are recording the required lenses. |
 | `awaiting-fixes` | Validation or review found a failure; a bounded fix round may be started. |
-| `ready` | Current validation and all required review lenses pass. |
+| `ready` | The complete final acceptance manifest and all required review lenses pass for the delivered code and policy at the current HEAD. |
 | `paused` | Work is stopped with a resumable previous stage. |
 | `blocked` | Work cannot safely proceed; a reason is durable, requires coordinator judgment, and is surfaced as an actionable blocker. |
 | `cancelled` / `completed` / `merged` | Terminal states. A scout is research-complete only in durable `completed` state with its report; implementation reaches `merged` only after verified delivery. |
@@ -726,7 +726,21 @@ Review is independent and sequential. Tandem stops or pauses the implementer, op
 
 All four lenses are required. A failed lens sends the task to `awaiting-fixes`; passing all four sends it to `ready`. Reviewers remain read-only and do not invent command output.
 
-Validation commands are argv-only and execute in declaration order. A command runs when its `surfaces` is empty, contains `*`, or intersects the task surfaces; a task surface of `*` matches every command. The runner stops after the first non-zero, timeout, or cancellation result. Every evidence record includes the command name, argv, exit code, captured stdout/stderr, and exact HEAD. No configured command or no matching command is a validation configuration failure, not a pass.
+Validation commands are argv-only and execute in declaration order. A command belongs to the manifest when its `surfaces` is empty, contains `*`, or intersects the task surfaces; a task surface of `*` matches every command. The runner stops after the first non-zero, timeout, or cancellation result. Every evidence record includes the command name, argv, exit code, captured stdout/stderr, exact HEAD, the contract it ran under, the check origin, and the policy digest it was pinned to. No configured command or no matching command is a validation configuration failure, not a pass.
+
+### Iteration and final acceptance contracts
+
+Validation runs under one of two named contracts. `src/tasks/acceptance.ts` owns both decisions; the runner and the task lifecycle only execute and record them.
+
+The **iteration contract** covers targeted reproduction between authorized fix rounds. When a fix round is admitted, Tandem records a durable `iterationScope` on the task naming the checks that reported the failure, the surfaces those checks cover, the findings the round must resolve, and the code and policy identity the scope was derived under. The next validation run then executes only those checks and records evidence stamped `contract: "iteration"`. A contained fix reaches review without rerunning the whole suite, and a targeted pass is useful progress that never satisfies acceptance.
+
+The **final acceptance contract** is the complete command and criterion manifest pinned to the delivered code, the pinned policy digest, and the current HEAD. It lists every required check, the four review lenses, and the recorded acceptance criteria. It runs in full only when the candidate is otherwise ready, meaning every required lens already passes at that HEAD and generation. Review completion with all lenses passing sends the task back to `validating` for that final run instead of straight to `ready`; `ready` is reached only once every manifest item passed under the same code and policy identity. Delivery repeats the check and refuses a branch whose manifest is incomplete, failed, or stale.
+
+Targeted checks are refused for the complete manifest when the scope was recorded under a different policy identity (`stale-identity`), when a reviewer rejected a candidate whose checks all passed (`disputed-result`), when the scope names a check the manifest does not configure (`unknown-impact`), or when the scope already covers every configured check (`broad-impact`). The escalation reason is durable on the validation job and visible through `tandem inspect`.
+
+Any relevant change invalidates prior evidence. A fix round increments the generation and clears validation evidence; `invalidate-evidence` additionally clears the recorded scope and the reviews. Evidence carrying a policy digest other than the one the run reported is refused rather than recorded, and final evidence recorded at another HEAD or policy digest reads as stale, never as a pass. After a candidate fails the complete manifest it returns to the authorized fix phase, runs targeted checks between fix rounds, and re-enters the complete manifest from the beginning once it is ready again.
+
+Local runner checks and GitHub checks stay distinct. Runner evidence is stamped `origin: "local"` and satisfies only local manifest requirements; remote required checks remain the GitHub-observed `RemoteCheck` rollup asserted at merge. A local pass cannot be relabeled as a remote check, and `tandem inspect` reports the iteration/final and local/remote split alongside the passing count.
 
 Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Textual scout and implementer results must start with exactly one role-appropriate `Outcome: completed|needs-decision|failed` (scouts) or `Outcome: implemented|needs-decision|failed` (implementers) line. Reviewer, verifier, and presentation workers may use `Outcome: needs-decision` for a genuine blocker; otherwise reviewer/verifier success remains the strict `ReviewResult` JSON contract and presentation success remains its `Artifact: <absolute path>` contract. Any `needs-decision` result emits exactly one bounded single-line `Question: ...` and optional bounded single-line `Recommendation: ...` (each no more than 1,000 characters); durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
 

@@ -1,11 +1,13 @@
 import {
   type AgentRole,
+  type CheckOrigin,
   type Endpoint,
   type Finding,
   type FindingSeverity,
   type FindingVerdict,
   type GuidanceProvenance,
   type InstructionChannel,
+  type IterationScope,
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
   MAX_RESEARCH_HANDOFF_TOTAL_BYTES,
@@ -24,9 +26,11 @@ import {
   type TaskRecord,
   type TaskStage,
   type ValidationCommand,
+  type ValidationContractName,
   type ValidationEvidence,
   type WorktreeLease,
 } from "../contracts.ts";
+import { FINAL_REVIEW_LENSES } from "./acceptance.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
 import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
@@ -64,7 +68,9 @@ const THINKING_LEVELS = [
 ] as const;
 const FINDING_SEVERITIES: readonly FindingSeverity[] = ["P0", "P1", "P2", "P3"];
 const FINDING_VERDICTS: readonly FindingVerdict[] = ["confirmed", "plausible"];
-const REVIEW_LENSES: readonly ReviewLens[] = ["behavior", "design", "coverage", "verification"];
+const REVIEW_LENSES: readonly ReviewLens[] = FINAL_REVIEW_LENSES;
+const VALIDATION_CONTRACT_NAMES: readonly ValidationContractName[] = ["iteration", "final"];
+const CHECK_ORIGINS: readonly CheckOrigin[] = ["local", "github"];
 const TOP_LEVEL_KEYS = [
   "schemaVersion",
   "id",
@@ -85,6 +91,7 @@ const TOP_LEVEL_KEYS = [
   "generation",
   "reviewRound",
   "reviewHead",
+  "iterationScope",
   "validationEvidence",
   "reviews",
   "researchHandoffs",
@@ -481,7 +488,11 @@ function parseValidationEvidence(value: unknown, source: string): ValidationEvid
   if (!isRecord(value)) {
     failState(source, "validation evidence must be an object");
   }
-  assertExactKeys(value, ["name", "argv", "exitCode", "stdout", "stderr", "head"], source);
+  assertExactKeys(
+    value,
+    ["name", "argv", "exitCode", "stdout", "stderr", "head", "contract", "origin", "policyDigest"],
+    source,
+  );
   const stdout = requiredValue(value, "stdout", source);
   const stderr = requiredValue(value, "stderr", source);
   if (typeof stdout !== "string" || typeof stderr !== "string") {
@@ -494,6 +505,28 @@ function parseValidationEvidence(value: unknown, source: string): ValidationEvid
     stdout,
     stderr,
     head: requiredText(value, "head", source),
+    contract: requiredEnum(value, "contract", VALIDATION_CONTRACT_NAMES, source),
+    origin: requiredEnum(value, "origin", CHECK_ORIGINS, source),
+    policyDigest: requiredText(value, "policyDigest", source),
+  };
+}
+
+function parseIterationScope(value: unknown, source: string): IterationScope {
+  if (!isRecord(value)) {
+    failState(source, "iteration scope must be an object");
+  }
+  assertExactKeys(
+    value,
+    ["head", "generation", "policyDigest", "reproduces", "surfaces", "findingIds"],
+    source,
+  );
+  return {
+    head: requiredText(value, "head", source),
+    generation: requiredInteger(value, "generation", source),
+    policyDigest: requiredText(value, "policyDigest", source),
+    reproduces: requiredTextArray(value, "reproduces", source),
+    surfaces: requiredTextArray(value, "surfaces", source),
+    findingIds: requiredTextArray(value, "findingIds", source),
   };
 }
 
@@ -643,6 +676,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     }
   }
   const reviewHead = optionalText(value, "reviewHead", source);
+  const iterationScopeValue = Object.hasOwn(value, "iterationScope")
+    ? requiredValue(value, "iterationScope", source)
+    : undefined;
   const pullRequestValue = Object.hasOwn(value, "pullRequest")
     ? requiredValue(value, "pullRequest", source)
     : undefined;
@@ -694,6 +730,11 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
           ),
         }),
     ...(reviewHead === undefined ? {} : { reviewHead }),
+    ...(iterationScopeValue === undefined
+      ? {}
+      : {
+          iterationScope: parseIterationScope(iterationScopeValue, `${source}.iterationScope`),
+        }),
     ...(reportPath === undefined ? {} : { reportPath }),
     ...(blockReason === undefined ? {} : { blockReason }),
     ...(communication === undefined ? {} : { communication }),

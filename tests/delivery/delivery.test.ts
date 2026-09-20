@@ -20,6 +20,7 @@ import type {
 } from "../../src/contracts.ts";
 import { describeTaskPr, type PrSummary } from "../../src/delivery/evidence.ts";
 import { mergeReviewedTask, publishReviewedTask } from "../../src/delivery/pull-requests.ts";
+import { policyIdentity } from "../../src/tasks/acceptance.ts";
 
 const models: Readonly<
   Record<
@@ -40,7 +41,9 @@ const policyConfig: RepoPolicy = {
   models,
   instructions: { implementation: [], validation: [], review: [] },
   instructionFiles: { implementation: [], validation: [], review: [] },
-  validationCommands: [],
+  validationCommands: [
+    { name: "check", argv: ["bun", "run", "check"], surfaces: ["delivery"], timeoutMs: 10_000 },
+  ],
   maxWorkers: 3,
   maxFixRounds: 3,
 };
@@ -86,6 +89,9 @@ function evidence(reviewedHead = "head-1"): ValidationEvidence {
     stdout: "56 tests passed",
     stderr: "",
     head: reviewedHead,
+    contract: "final",
+    origin: "local",
+    policyDigest: policyIdentity(policy),
   };
 }
 
@@ -268,10 +274,31 @@ test("refuses remote delivery without explicit approval and does not invoke the 
 
 test("renders validation bullets from recorded evidence rather than supplied claims", () => {
   const rendered = describeTaskPr(task(), summary);
-  expect(rendered).toContain("check: exit code 0");
+  expect(rendered).toContain("check [final contract, local check]: exit code 0");
   expect(rendered).toContain("reviewed HEAD head-1");
   expect(rendered).toContain('argv "bun" "run" "check"');
+  expect(rendered).toContain("final acceptance manifest at HEAD head-1");
   expect(rendered).not.toContain("all tests passed by user claim");
+});
+
+test("refuses delivery when only targeted iteration checks passed at the reviewed head", () => {
+  const iterationOnly: TaskRecord = {
+    ...task(),
+    validationEvidence: [{ ...evidence(), contract: "iteration" }],
+  };
+  expect(() => describeTaskPr(iterationOnly, summary)).toThrow(
+    /complete final acceptance run at HEAD head-1/u,
+  );
+});
+
+test("refuses delivery when final evidence was recorded under a superseded policy identity", () => {
+  const superseded: TaskRecord = {
+    ...task(),
+    validationEvidence: [{ ...evidence(), policyDigest: "superseded-policy" }],
+  };
+  expect(() => describeTaskPr(superseded, summary)).toThrow(
+    /complete final acceptance run at HEAD head-1/u,
+  );
 });
 
 test("publishes the exact task branch only after identity checks and avoids duplicate pull requests", async () => {

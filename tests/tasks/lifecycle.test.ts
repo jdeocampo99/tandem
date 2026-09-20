@@ -9,6 +9,7 @@ import type {
   ValidationEvidence,
   WorktreeLease,
 } from "../../src/contracts.ts";
+import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
 import {
   ALL_REVIEW_LENSES,
   createTask,
@@ -43,7 +44,7 @@ const policy: ResolvedPolicy = {
     instructions: channels,
     instructionFiles: channels,
     validationCommands: [
-      { name: "check", argv: ["bun", "run", "check"], surfaces: ["source"], timeoutMs: 10_000 },
+      { name: "check", argv: ["bun", "run", "check"], surfaces: ["service"], timeoutMs: 10_000 },
     ],
     maxWorkers: 3,
     maxFixRounds: 1,
@@ -106,24 +107,47 @@ function startImplementation(): TaskRecord {
   );
 }
 
-function implementationToReviewing(head = "head-1"): TaskRecord {
+const policyDigest = policyIdentity(policy);
+
+function evidence(
+  head: string,
+  contract: ValidationEvidence["contract"],
+  exitCode = 0,
+  name = "check",
+): ValidationEvidence {
+  return {
+    name,
+    argv: ["bun", "run", "check"],
+    exitCode,
+    stdout: exitCode === 0 ? "ok" : "",
+    stderr: exitCode === 0 ? "" : "failure",
+    head,
+    contract,
+    origin: "local",
+    policyDigest,
+  };
+}
+
+function implementationToReviewing(
+  head = "head-1",
+  contract: ValidationEvidence["contract"] = "final",
+): TaskRecord {
   let task = startImplementation();
   task = transitionTask(
     task,
     { type: "implementation-complete", head, generation: task.generation },
     context(),
   );
-  const evidence: ValidationEvidence = {
-    name: "check",
-    argv: ["bun", "run", "check"],
-    exitCode: 0,
-    stdout: "ok",
-    stderr: "",
-    head,
-  };
   return transitionTask(
     task,
-    { type: "validation-succeeded", head, generation: task.generation, evidence: [evidence] },
+    {
+      type: "validation-succeeded",
+      head,
+      generation: task.generation,
+      contract,
+      policyDigest,
+      evidence: [evidence(head, contract)],
+    },
     context(),
   );
 }
@@ -314,17 +338,16 @@ test("records failed validation, bounds fix rounds, and invalidates old review a
     { type: "implementation-complete", head: "head-1", generation: 0 },
     context(),
   );
-  const failedEvidence: ValidationEvidence = {
-    name: "check",
-    argv: ["bun", "run", "check"],
-    exitCode: 1,
-    stdout: "",
-    stderr: "failure",
-    head: "head-1",
-  };
   task = transitionTask(
     task,
-    { type: "validation-failed", head: "head-1", generation: 0, evidence: [failedEvidence] },
+    {
+      type: "validation-failed",
+      head: "head-1",
+      generation: 0,
+      contract: "final",
+      policyDigest,
+      evidence: [evidence("head-1", "final", 1)],
+    },
     context(),
   );
   expect(task.stage).toBe("awaiting-fixes");
@@ -427,6 +450,172 @@ test("acknowledges notifications through a single revisioned mutation and expose
     transitionTask(
       acknowledged,
       { type: "acknowledge-notification", notificationId: task.notifications[0]?.id ?? "missing" },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+});
+
+test("a passing iteration contract reaches review but never reaches ready on its own", () => {
+  let task = implementationToReviewing("head-1", "iteration");
+  expect(task.stage).toBe("reviewing");
+  for (const lens of ALL_REVIEW_LENSES) {
+    task = transitionTask(task, { type: "record-review", review: review(lens) }, context());
+  }
+  task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
+
+  expect(task.stage).toBe("validating");
+  expect(notificationDigest(task)).toContain("final acceptance manifest");
+  expect(finalAcceptanceStatus(task, "head-1").satisfied).toBe(false);
+});
+
+test("the complete final manifest at the reviewed head accepts the candidate", () => {
+  let task = implementationToReviewing("head-1", "iteration");
+  for (const lens of ALL_REVIEW_LENSES) {
+    task = transitionTask(task, { type: "record-review", review: review(lens) }, context());
+  }
+  task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
+  task = transitionTask(
+    task,
+    {
+      type: "validation-succeeded",
+      head: "head-1",
+      generation: 0,
+      contract: "final",
+      policyDigest,
+      evidence: [evidence("head-1", "final")],
+    },
+    context(),
+  );
+  expect(task.stage).toBe("reviewing");
+
+  task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
+  expect(task.stage).toBe("ready");
+  expect(task.validationEvidence.map((entry) => entry.contract)).toEqual(["iteration", "final"]);
+});
+
+test("evidence produced under another policy identity is refused rather than recorded", () => {
+  const task = implementationToReviewing("head-1", "final");
+  expect(() =>
+    transitionTask(
+      task,
+      {
+        type: "validation-succeeded",
+        head: "head-1",
+        generation: 0,
+        contract: "final",
+        policyDigest: "superseded-policy",
+        evidence: [{ ...evidence("head-1", "final"), policyDigest: "superseded-policy" }],
+      },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+});
+
+test("evidence whose contract disagrees with the reported run is refused", () => {
+  const task = startImplementation();
+  const validating = transitionTask(
+    task,
+    { type: "implementation-complete", head: "head-1", generation: 0 },
+    context(),
+  );
+  expect(() =>
+    transitionTask(
+      validating,
+      {
+        type: "validation-succeeded",
+        head: "head-1",
+        generation: 0,
+        contract: "final",
+        policyDigest,
+        evidence: [evidence("head-1", "iteration")],
+      },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+});
+
+test("a fix round records the targeted scope and clears it when evidence is invalidated", () => {
+  let task = startImplementation();
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head: "head-1", generation: 0 },
+    context(),
+  );
+  task = transitionTask(
+    task,
+    {
+      type: "validation-failed",
+      head: "head-1",
+      generation: 0,
+      contract: "final",
+      policyDigest,
+      evidence: [evidence("head-1", "final", 1)],
+    },
+    context(),
+  );
+  const scope = {
+    head: "head-1",
+    generation: 0,
+    policyDigest,
+    reproduces: ["check"],
+    surfaces: ["service"],
+    findingIds: [],
+  };
+  task = transitionTask(
+    task,
+    { type: "begin-fixes", head: "head-1", generation: 0, iterationScope: scope },
+    context(),
+  );
+  expect(task.iterationScope).toEqual(scope);
+
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head: "head-2", generation: 1 },
+    context(),
+  );
+  task = transitionTask(
+    task,
+    { type: "invalidate-evidence", head: "head-2", generation: 1 },
+    context(),
+  );
+  expect(task.iterationScope).toBeUndefined();
+});
+
+test("a fix scope bound to another head or generation is refused", () => {
+  let task = startImplementation();
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head: "head-1", generation: 0 },
+    context(),
+  );
+  task = transitionTask(
+    task,
+    {
+      type: "validation-failed",
+      head: "head-1",
+      generation: 0,
+      contract: "final",
+      policyDigest,
+      evidence: [evidence("head-1", "final", 1)],
+    },
+    context(),
+  );
+  expect(() =>
+    transitionTask(
+      task,
+      {
+        type: "begin-fixes",
+        head: "head-1",
+        generation: 0,
+        iterationScope: {
+          head: "head-0",
+          generation: 0,
+          policyDigest,
+          reproduces: ["check"],
+          surfaces: ["service"],
+          findingIds: [],
+        },
+      },
       context(),
     ),
   ).toThrow(TaskTransitionError);
