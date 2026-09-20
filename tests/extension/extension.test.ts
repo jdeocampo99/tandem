@@ -854,6 +854,144 @@ test("scout summaries and the durable digest carry the post-research disposition
   expect(buildDurableDigest([task({ id: "implementation-task" })])).not.toContain("continuation:");
 });
 
+test("draft publication needs interactive human approval and never runs without it", async () => {
+  const unfinished = task({ stage: "implementing" });
+  const prompts: string[] = [];
+  const published: unknown[] = [];
+  const service = {
+    get: async () => unfinished,
+    publishDraft: async (taskId: string, input: unknown) => {
+      published.push({ taskId, input });
+      return unfinished;
+    },
+  } as unknown as TandemService;
+  const parsed = parseTandemCommand("pr-draft task-1 acme/repo Draft-title main");
+  expect(parsed).toEqual({
+    action: "draft",
+    taskId: "task-1",
+    repository: "acme/repo",
+    title: "Draft-title",
+    base: "main",
+  });
+
+  const refusingContext = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      confirm: async (_title: string, message: string) => {
+        prompts.push(message);
+        return false;
+      },
+    },
+  } as unknown as ExtensionContext;
+  const refused = await executeTandemAction(parsed, service, refusingContext);
+  expect(refused.approved).toBe(false);
+  expect(published).toHaveLength(0);
+  expect(prompts[0]).toContain("unfinished draft");
+  expect(prompts[0]).toContain("it does not merge, deploy, or accept anything");
+
+  const headless = await executeTandemAction(parsed, service, {
+    hasUI: false,
+    mode: "rpc",
+  } as unknown as ExtensionContext);
+  expect(headless.approved).toBe(false);
+  expect(published).toHaveLength(0);
+
+  const approvingContext = {
+    hasUI: true,
+    mode: "tui",
+    ui: { confirm: async () => true },
+  } as unknown as ExtensionContext;
+  const accepted = await executeTandemAction(parsed, service, approvingContext);
+  expect(accepted.approved).toBe(true);
+  expect(published).toEqual([
+    {
+      taskId: "task-1",
+      input: { repository: "acme/repo", title: "Draft-title", base: "main", approved: true },
+    },
+  ]);
+});
+
+test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct messages", async () => {
+  const sent: string[] = [];
+  const turns: unknown[] = [];
+  const acknowledged: string[] = [];
+  const service: Pick<TandemService, "acknowledge"> = {
+    acknowledge: async (taskId, notificationId) => {
+      acknowledged.push(`${taskId}:${notificationId}`);
+      return task({ id: taskId });
+    },
+  };
+  const sink = notificationSink(
+    (content, options) => {
+      sent.push(content);
+      turns.push(options);
+    },
+    () => undefined,
+  );
+  const context = notificationContext(() => undefined);
+  const readyTask = task({
+    id: "task-ready",
+    stage: "ready",
+    notifications: [
+      {
+        id: "ready-1",
+        message:
+          "Ready: task task-ready passed behavior, design, coverage, and verification review at HEAD head-1. Ready is not publication, merge, or deploy approval; each remains explicit.",
+        acknowledged: false,
+        kind: "coordinator",
+      },
+    ],
+  });
+  const exhausted = transitionTask(
+    task({ id: "task-exhausted", stage: "awaiting-fixes", reviewRound: 3 }),
+    {
+      type: "block",
+      reason:
+        "bounded review loop exhausted after 3 of 3 fix round(s); no new fix operation was admitted and the task is not ready or accepted",
+    },
+    { now: "2030-01-02T03:04:06.000Z", notificationId: "exhausted-1" },
+  );
+
+  await deliverPendingNotifications(
+    sink,
+    service,
+    [readyTask, exhausted],
+    new Set<string>(),
+    context,
+  );
+
+  expect(sent).toHaveLength(1);
+  const content = sent[0] ?? "";
+  expect(content).toContain("[task-ready] Ready: task task-ready passed");
+  expect(content).toContain("Ready is not publication, merge, or deploy approval");
+  expect(content).toContain("[task-exhausted] Task task-exhausted blocked: bounded review loop");
+  expect(content).toContain("the task is not ready or accepted");
+  expect(turns[0]).toMatchObject({ triggerTurn: true });
+  expect(acknowledged.sort()).toEqual(["task-exhausted:exhausted-1", "task-ready:ready-1"]);
+});
+
+test("a draft pull request is summarized as unfinished visibility, never as acceptance", () => {
+  const summary = summarizeTandemActionValue(
+    "draft",
+    task({
+      stage: "implementing",
+      pullRequest: {
+        repository: "acme/repo",
+        number: 11,
+        state: "draft",
+        head: "head-1",
+        base: "main",
+      },
+    }),
+  );
+
+  expect(summary).toContain("Pull request: acme/repo#11 draft");
+  expect(summary).toContain(
+    "Draft visibility only: the draft is unfinished and is not evidence of readiness",
+  );
+});
+
 test("fresh block transitions wake the coordinator once through the bridge", async () => {
   const sent: Array<{ readonly content: string; readonly options: unknown }> = [];
   const notices: string[] = [];

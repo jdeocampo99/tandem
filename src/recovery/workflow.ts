@@ -251,6 +251,8 @@ export type DeliveryPreflightResult = Readonly<{
   }>[];
   readonly refusals: readonly string[];
   readonly duplicatePullRequest?: TaskRecord["pullRequest"];
+  /** The task's own draft, which final publication updates in place rather than duplicating. */
+  readonly draftPullRequest?: TaskRecord["pullRequest"];
 }>;
 
 type EndpointObservation = RecoveryInspection["endpoints"][number];
@@ -1411,12 +1413,19 @@ export class RecoveryWorkflow {
       }
     }
     let duplicatePullRequest: TaskRecord["pullRequest"];
-    if (task.pullRequest !== undefined) {
+    let draftPullRequest: TaskRecord["pullRequest"];
+    const ownDraft =
+      task.pullRequest !== undefined &&
+      task.pullRequest.state === "draft" &&
+      task.pullRequest.repository === repository &&
+      task.pullRequest.base === base;
+    if (task.pullRequest !== undefined && !ownDraft) {
       refusals.push(
         `task already has pull request #${task.pullRequest.number}; duplicate publication is refused`,
       );
       duplicatePullRequest = task.pullRequest;
     } else {
+      if (task.pullRequest !== undefined) draftPullRequest = task.pullRequest;
       try {
         const lookup = await this.#deps.run({
           argv: [
@@ -1445,7 +1454,7 @@ export class RecoveryWorkflow {
               typeof entry.headRefOid === "string" &&
               typeof entry.baseRefName === "string"
             ) {
-              duplicatePullRequest = {
+              const observed: NonNullable<TaskRecord["pullRequest"]> = {
                 repository,
                 number: entry.number as number,
                 state: entry.isDraft === true ? "draft" : "open",
@@ -1454,9 +1463,14 @@ export class RecoveryWorkflow {
                 ...(typeof entry.url === "string" ? { url: entry.url } : {}),
                 ...(typeof entry.title === "string" ? { title: entry.title } : {}),
               };
-              refusals.push(
-                `open pull request #${entry.number} already exists for ${worktree.branch}`,
-              );
+              if (draftPullRequest?.number === observed.number) {
+                draftPullRequest = observed;
+              } else {
+                duplicatePullRequest = observed;
+                refusals.push(
+                  `open pull request #${entry.number} already exists for ${worktree.branch}`,
+                );
+              }
             } else {
               refusals.push("duplicate pull-request lookup returned malformed metadata");
             }
@@ -1480,6 +1494,7 @@ export class RecoveryWorkflow {
       checks,
       refusals,
       ...(duplicatePullRequest === undefined ? {} : { duplicatePullRequest }),
+      ...(draftPullRequest === undefined ? {} : { draftPullRequest }),
     };
   }
 

@@ -40,6 +40,14 @@ export type PublishPullRequestInput = Readonly<{
   body: string;
   base: string;
   head: string;
+  draft?: boolean;
+}>;
+
+export type EditPullRequestBodyInput = Readonly<{
+  cwd: string;
+  repository: string;
+  number: number;
+  body: string;
 }>;
 
 export type MergePullRequestInput = Readonly<{
@@ -265,6 +273,9 @@ export async function publishPullRequest(
   const body = checkedText(input.body, "body");
   const base = checkedText(input.base, "base");
   const head = checkedText(input.head, "head");
+  if (input.draft !== undefined && typeof input.draft !== "boolean") {
+    throw new TypeError("draft must be a boolean when supplied");
+  }
   const request: CommandRequest = {
     argv: [
       "gh",
@@ -280,6 +291,7 @@ export async function publishPullRequest(
       base,
       "--head",
       head,
+      ...(input.draft === true ? ["--draft"] : []),
     ],
     cwd,
   };
@@ -292,6 +304,26 @@ export async function publishPullRequest(
       result.stdout,
     );
   }
+  return readPullRequest(run, cwd, repository, selector, "github pull request observe");
+}
+
+/** Replace an existing pull request's body without touching its draft state, base, or head. */
+export async function editPullRequestBody(
+  run: CommandRunner,
+  input: EditPullRequestBodyInput,
+): Promise<PullRequestMetadata> {
+  const cwd = checkedPath(input.cwd, "cwd");
+  const repository = checkedText(input.repository, "repository");
+  const body = checkedText(input.body, "body");
+  if (!Number.isSafeInteger(input.number) || input.number < 1) {
+    throw new TypeError("pull request number must be a positive integer");
+  }
+  const selector = String(input.number);
+  const request: CommandRequest = {
+    argv: ["gh", "pr", "edit", selector, "--repo", repository, "--body", body],
+    cwd,
+  };
+  await runChecked(run, request, "github pull request body update");
   return readPullRequest(run, cwd, repository, selector, "github pull request observe");
 }
 

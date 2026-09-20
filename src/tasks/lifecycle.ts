@@ -653,6 +653,14 @@ function reviewSummary(task: TaskRecord, required: readonly ReviewLens[]): strin
     : `Task ${task.id} requires fixes after ${failed.join(", ")} review`;
 }
 
+/**
+ * The outcome announced only at true readiness: every required lens passes and the final acceptance
+ * manifest is satisfied for the delivered code and policy. It never implies delivery.
+ */
+function readySummary(task: TaskRecord, head: string, required: readonly ReviewLens[]): string {
+  return `Ready: task ${task.id} passed ${required.join(", ")} review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}. Ready is not publication, merge, or deploy approval; each remains explicit.`;
+}
+
 function hasSuccessfulCurrentValidation(task: TaskRecord): boolean {
   return (
     task.stage === "reviewing" &&
@@ -962,7 +970,7 @@ export function transitionTask(
           clearIterationScope(task),
           context,
           { stage: "ready" },
-          reviewSummary(task, required),
+          readySummary(task, event.head, required),
           "coordinator",
         );
       }

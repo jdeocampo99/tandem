@@ -1,4 +1,9 @@
-import { mergePullRequest, publishPullRequest, readCheckpoint } from "../adapters/git.ts";
+import {
+  editPullRequestBody,
+  mergePullRequest,
+  publishPullRequest,
+  readCheckpoint,
+} from "../adapters/git.ts";
 import {
   AdapterCommandError,
   AdapterProtocolError,
@@ -12,7 +17,13 @@ import type {
   TaskRecord,
 } from "../contracts.ts";
 import type { PrSummary } from "./evidence.ts";
-import { assertTaskShape, describeTaskPr, readSingleLine } from "./evidence.ts";
+import {
+  assertDraftTaskShape,
+  assertTaskShape,
+  describeTaskDraftPr,
+  describeTaskPr,
+  readSingleLine,
+} from "./evidence.ts";
 
 type RemoteCheck = Readonly<{
   readonly name: string;
@@ -472,6 +483,260 @@ export async function publishReviewedTask(input: {
     head: ready.branch,
   });
   return assertPublishedMetadata(created, repository, base, ready.head);
+}
+
+type DraftCheckout = Readonly<{
+  readonly cwd: string;
+  readonly branch: string;
+  readonly head: string;
+  readonly remote: string;
+  readonly uncommittedChanges: boolean;
+}>;
+
+export type DraftPublication = Readonly<{
+  readonly pullRequest: PullRequestMetadata;
+  readonly created: boolean;
+  /** False when the remote branch could not be advanced to the task worktree HEAD. */
+  readonly branchAdvanced: boolean;
+}>;
+
+async function assertDraftCheckout(run: CommandRunner, task: TaskRecord): Promise<DraftCheckout> {
+  const shape = assertDraftTaskShape(task);
+  const checkpoint = await readCheckpoint(run, { repo: shape.cwd });
+  if (checkpoint.unmerged) {
+    throw new Error("a draft requires a task worktree with no unmerged paths");
+  }
+  const actualBranch = await readGitText(
+    run,
+    shape.cwd,
+    ["symbolic-ref", "--quiet", "--short", "HEAD"],
+    "draft worktree branch",
+  );
+  if (actualBranch !== shape.branch) {
+    throw new Error(
+      `task worktree branch ${JSON.stringify(actualBranch)} does not match task branch ${JSON.stringify(shape.branch)}`,
+    );
+  }
+  const remote = await readGitText(
+    run,
+    shape.cwd,
+    ["remote", "get-url", "origin"],
+    "draft remote identity",
+  );
+  return {
+    cwd: shape.cwd,
+    branch: shape.branch,
+    head: checkpoint.head,
+    remote,
+    uncommittedChanges: checkpoint.dirty,
+  };
+}
+
+function assertDraftMetadata(
+  metadata: PullRequestMetadata,
+  repository: string,
+  base: string,
+): PullRequestMetadata {
+  if (metadata.repository !== repository || metadata.base !== base) {
+    throw new Error("draft pull request metadata does not match the task repository or base");
+  }
+  if (metadata.state !== "draft") {
+    throw new Error(
+      `pull request #${metadata.number} is ${metadata.state}; a draft must stay marked unfinished`,
+    );
+  }
+  return metadata;
+}
+
+function draftBody(input: {
+  readonly task: TaskRecord;
+  readonly checkout: DraftCheckout;
+  readonly publishedHead: string;
+}): string {
+  return describeTaskDraftPr({
+    task: input.task,
+    publishedHead: input.publishedHead,
+    worktreeHead: input.checkout.head,
+    uncommittedChanges: input.checkout.uncommittedChanges,
+  });
+}
+
+/**
+ * Advance the remote branch to the worktree HEAD without forcing. A refused push leaves the draft
+ * on its older commit, which the body then discloses, rather than rewriting published history.
+ */
+async function advanceDraftBranch(run: CommandRunner, checkout: DraftCheckout): Promise<boolean> {
+  try {
+    await pushExactBranch(run, checkout.cwd, checkout.branch, checkout.head);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function updateDraftBody(input: {
+  readonly run: CommandRunner;
+  readonly task: TaskRecord;
+  readonly checkout: DraftCheckout;
+  readonly existing: PullRequestMetadata;
+  readonly branchAdvanced: boolean;
+}): Promise<PullRequestMetadata> {
+  const { checkout, existing } = input;
+  const updated = await editPullRequestBody(input.run, {
+    cwd: checkout.cwd,
+    repository: existing.repository,
+    number: existing.number,
+    body: draftBody({
+      task: input.task,
+      checkout,
+      publishedHead: input.branchAdvanced ? checkout.head : existing.head,
+    }),
+  });
+  if (updated.number !== existing.number) {
+    throw new Error("draft pull request identity changed while updating its body");
+  }
+  return assertDraftMetadata(updated, existing.repository, existing.base);
+}
+
+/**
+ * Create or update the task's single draft pull request, visibly unfinished. Explicit publishing
+ * approval is required; scope approval never authorizes publication, and this never merges or
+ * deploys. Task-to-PR identity is idempotent: an existing pull request on the task branch is
+ * reused, and an uncertain create is reconciled by re-observing rather than retried.
+ */
+export async function publishTaskDraft(input: {
+  readonly task: TaskRecord;
+  readonly repository: string;
+  readonly title: string;
+  readonly base: string;
+  readonly approved: boolean;
+  readonly run: CommandRunner;
+}): Promise<DraftPublication> {
+  if (!input.approved) throw new ApprovalRequiredError("draft pull request publish");
+  const run = readRunner(input.run);
+  const repository = readSingleLine(input.repository, "repository");
+  const title = readSingleLine(input.title, "title");
+  const base = readSingleLine(input.base, "base");
+  if (!/^[^\s/]+\/[^\s/]+$/u.test(repository)) {
+    throw new TypeError("repository must be an owner/repository name");
+  }
+
+  const checkout = await assertDraftCheckout(run, input.task);
+  assertRepositoryIdentity(checkout.remote, repository);
+  const existing = await observeExistingPullRequest(
+    run,
+    checkout.cwd,
+    repository,
+    checkout.branch,
+    base,
+  );
+  if (existing !== undefined) {
+    assertDraftMetadata(existing, repository, base);
+    const branchAdvanced = await advanceDraftBranch(run, checkout);
+    return {
+      pullRequest: await updateDraftBody({
+        run,
+        task: input.task,
+        checkout,
+        existing,
+        branchAdvanced,
+      }),
+      created: false,
+      branchAdvanced,
+    };
+  }
+
+  await pushExactBranch(run, checkout.cwd, checkout.branch, checkout.head);
+  const raced = await observeExistingPullRequest(
+    run,
+    checkout.cwd,
+    repository,
+    checkout.branch,
+    base,
+  );
+  if (raced !== undefined) {
+    assertDraftMetadata(raced, repository, base);
+    return {
+      pullRequest: await updateDraftBody({
+        run,
+        task: input.task,
+        checkout,
+        existing: raced,
+        branchAdvanced: true,
+      }),
+      created: false,
+      branchAdvanced: true,
+    };
+  }
+
+  let created: PullRequestMetadata;
+  try {
+    created = await publishPullRequest(run, {
+      cwd: checkout.cwd,
+      repository,
+      title,
+      body: draftBody({ task: input.task, checkout, publishedHead: checkout.head }),
+      base,
+      head: checkout.branch,
+      draft: true,
+    });
+  } catch (error) {
+    const reconciled = await observeExistingPullRequest(
+      run,
+      checkout.cwd,
+      repository,
+      checkout.branch,
+      base,
+    );
+    if (reconciled === undefined) throw error;
+    assertDraftMetadata(reconciled, repository, base);
+    return { pullRequest: reconciled, created: false, branchAdvanced: true };
+  }
+  if (created.head !== checkout.head) {
+    throw new Error("published draft does not point at the pushed task HEAD");
+  }
+  return {
+    pullRequest: assertDraftMetadata(created, repository, base),
+    created: true,
+    branchAdvanced: true,
+  };
+}
+
+/**
+ * Refresh an already approved draft so it keeps showing current durable task state. It never
+ * creates a pull request, never changes draft state, and never requests a new approval.
+ */
+export async function refreshTaskDraft(input: {
+  readonly task: TaskRecord;
+  readonly run: CommandRunner;
+}): Promise<DraftPublication | undefined> {
+  const run = readRunner(input.run);
+  const recorded = input.task.pullRequest;
+  if (recorded === undefined || recorded.state !== "draft") return undefined;
+
+  const checkout = await assertDraftCheckout(run, input.task);
+  assertRepositoryIdentity(checkout.remote, recorded.repository);
+  const existing = await observeExistingPullRequest(
+    run,
+    checkout.cwd,
+    recorded.repository,
+    checkout.branch,
+    recorded.base,
+  );
+  if (existing === undefined || existing.number !== recorded.number) return undefined;
+  if (existing.state !== "draft") return undefined;
+  const branchAdvanced = await advanceDraftBranch(run, checkout);
+  return {
+    pullRequest: await updateDraftBody({
+      run,
+      task: input.task,
+      checkout,
+      existing,
+      branchAdvanced,
+    }),
+    created: false,
+    branchAdvanced,
+  };
 }
 
 function parseRemoteCheck(value: unknown, index: number, response: string): RemoteCheck {

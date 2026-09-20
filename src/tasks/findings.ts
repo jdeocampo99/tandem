@@ -146,8 +146,9 @@ export function describeFindingEntry(entry: FindingLedgerEntry): string {
 }
 
 /**
- * The durable reason recorded when the configured fix-round budget is spent. It names the blockers
- * that remain and the decision that is available, so no round is retried silently and no unresolved
+ * The durable reason recorded when the configured fix-round budget is spent. It names the exhausted
+ * bounded loop, states that the task is neither ready nor accepted, and names the blockers that
+ * remain and the decision that is available, so no round is retried silently and no unresolved
  * blocker is quietly downgraded to a suggestion.
  */
 export function describeFixRoundExhaustion(task: TaskRecord): string {
@@ -161,5 +162,5 @@ export function describeFixRoundExhaustion(task: TaskRecord): string {
     blockers.length === 0
       ? "no evidence-backed blocker is recorded on the finding ledger, so the remaining work is whatever the last review round refused"
       : `${blockers.length} evidence-backed blocker(s) remain: ${named}${remainder === 0 ? "" : `; and ${remainder} more on the finding ledger`}`;
-  return `fix round budget exhausted at ${task.reviewRound} of ${task.policy.config.maxFixRounds}; no new fix operation was admitted. ${remaining}. Decide explicitly: stop for a human decision, or revise and re-approve the task scope. No blocker is downgraded to a suggestion and no round is retried automatically.`;
+  return `Bounded review loop exhausted: fix round budget spent at ${task.reviewRound} of ${task.policy.config.maxFixRounds}; no new fix operation was admitted and the task is not ready and not accepted. ${remaining}. Decide explicitly: stop for a human decision, or revise and re-approve the task scope. No blocker is downgraded to a suggestion and no round is retried automatically.`;
 }

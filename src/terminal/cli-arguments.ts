@@ -54,6 +54,7 @@ const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
   feedback: "feedback",
   describe: "describe",
   publish: "publish",
+  draft: "draft",
   cleanup: "cleanup",
   inspect: "inspect",
   "recovery-plan": "recovery-plan",
@@ -67,6 +68,7 @@ const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
 const PR_COMMANDS: Readonly<Record<string, CliCommand>> = {
   describe: "describe",
   publish: "publish",
+  draft: "draft",
   merge: "merge",
 };
 const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
@@ -94,6 +96,7 @@ const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
   feedback: 1,
   describe: 2,
   publish: 5,
+  draft: 4,
   merge: 2,
   cleanup: 1,
   inspect: 1,
@@ -133,6 +136,7 @@ export type CliCommand =
   | "feedback"
   | "describe"
   | "publish"
+  | "draft"
   | "merge"
   | "cleanup"
   | "inspect"
