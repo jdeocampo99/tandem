@@ -103,6 +103,16 @@ test("explicit cues resolve deterministically without any provider call", async 
       reason: "explicit-implementation",
     },
     {
+      objective: "Investigate the login bug and implement a fix",
+      disposition: "implementation-interview",
+      reason: "explicit-implementation",
+    },
+    {
+      objective: "Research this, then implement it",
+      disposition: "implementation-interview",
+      reason: "explicit-implementation",
+    },
+    {
       objective: "Research only, do not change anything, then implement the fix",
       disposition: "ask-intent",
       reason: "contradictory-cues",
@@ -124,9 +134,19 @@ test("explicit cues resolve deterministically without any provider call", async 
 });
 
 test("ambiguous wording is unresolved by the rules and answered through the classifier seam", async () => {
-  const ambiguous = ["Research this ticket", "Research TAN-42 and recommend an approach"] as const;
+  const ambiguous = [
+    "Research this ticket",
+    "Research TAN-42 and recommend an approach",
+    "Research how retries are implemented in the worker",
+    "Investigate the current implementation of the scheduler",
+    "Research how the pool implements worktree leases",
+    "Research whether we should implement the retry queue",
+  ] as const;
   for (const objective of ambiguous) {
     expect(classifyContinuationCues(objective)).toEqual({ resolved: false });
+    const offline = researchContinuationClassifier({ timeoutMs: 1_500 });
+    const withoutJev = await offline({ objective, taskKind: "scout" });
+    expect(withoutJev.continuation.disposition).toBe("ask-intent");
   }
 
   const provider = counting(async () => jevChoice("implementation-interview"));

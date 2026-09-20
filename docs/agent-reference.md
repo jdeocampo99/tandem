@@ -750,7 +750,9 @@ disposition for a scout created without an explicit one:
 1. A pure deterministic cue table decides first and makes no provider call. Explicit
    information-only wording records `report-only`; explicit investigate-then-fix, implement, or
    prepare-a-patch wording records `implementation-interview`; wording carrying both cues records
-   `ask-intent`, so an explicit report-only request can never be upgraded.
+   `ask-intent`, so an explicit report-only request can never be upgraded. Only imperative requests
+   count: descriptive or hypothetical wording such as "how retries are implemented" or "whether we
+   should implement the queue" stays unresolved for step 2.
 2. Only wording the rules leave unresolved, such as an unqualified "research this ticket", reaches
    Jev, as one typed closed-set choice over the three dispositions. The request state contains only
    the sanitized, single-line, length-bounded objective and the task kind: never the repository, a

@@ -94,10 +94,14 @@ const REPORT_ONLY_CUES: readonly RegExp[] = [
   /^(?:what|which|why|how|when|where|who)\b/u,
 ];
 
+/**
+ * Only imperative requests count. Descriptive and hypothetical wording ("how retries are
+ * implemented", "whether we should implement the queue") stays unresolved so the classifier seam,
+ * not the rule table, decides it.
+ */
 const IMPLEMENTATION_CUES: readonly RegExp[] = [
   /\b(?:then|and|afterwards?|next|finally)[,\s]+(?:fix|implement|patch|repair|refactor|resolve|correct)\b/u,
-  /\b(?:fix|patch|repair|refactor)\s+(?:it|this|that|them|these|those|the|our|my)\b/u,
-  /\bimplement(?:s|ing|ed)?\b/u,
+  /\b(?<!\b(?:should|could|would|might|may|can|must|to|whether)\s)(?:fix|implement|patch|repair|refactor)\s+(?:it|this|that|them|these|those|the|our|my)\b/u,
   /\b(?:prepare|write|produce|open|draft|make|submit)\s+(?:a|an|the)?\s*(?:patch|fix|pull request|pr|code change|changes?|implementation)\b/u,
 ];
 
