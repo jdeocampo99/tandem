@@ -11,6 +11,7 @@ import type {
   CommandRequest,
   CommandResult,
   CommandRunner,
+  Endpoint,
   ModelSpec,
   WorktreeLease,
 } from "../contracts.ts";
@@ -22,6 +23,13 @@ import { withCoordinatorLaunchLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
 import { type CoordinatorRecord, recordPath } from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
+import {
+  applyCoordinatorReplacement,
+  type CoordinatorResourceOutcome,
+  decideCoordinatorReplacement,
+  observeCoordinatorCheckout,
+  rollbackCoordinatorAllocation,
+} from "./resources.ts";
 import { resolveCoordinatorSourceHead } from "./source.ts";
 import {
   type CoordinatorWorkspaceRetirement,
@@ -33,6 +41,10 @@ const DEFAULT_COORDINATOR_CONFIG = "worker-config.yml";
 const HERDR_READY_ATTEMPTS = 40;
 const HERDR_READY_DELAY_MS = 250;
 const COORDINATOR_TOOLS = ["read", "grep", "glob", "ask", "tandem"] as const;
+
+function defaultClock(): string {
+  return new Date().toISOString();
+}
 
 export type CoordinatorLaunchInput = Readonly<{
   readonly cwd: string;
@@ -81,6 +93,8 @@ export type CoordinatorLaunchResult = Readonly<{
   readonly processExitCode?: number;
   /** What happened to a previous coordinator's Herdr workspace, when one was retired. */
   readonly workspaceRetirement?: CoordinatorWorkspaceRetirement;
+  /** What happened to a previous coordinator's worktree lease, when one was replaced. */
+  readonly previousResources?: CoordinatorResourceOutcome;
 }>;
 
 export type CoordinatorLaunchDependencies = Readonly<{
@@ -89,6 +103,10 @@ export type CoordinatorLaunchDependencies = Readonly<{
   readonly runInteractive: RunInteractive;
   readonly sleep: Sleep;
   readonly processEnvironment: TandemEnvironmentSource;
+  /** Timestamps quarantine notes; defaults to the wall clock. */
+  readonly clock?: () => string;
+  /** Names quarantine notes; defaults to a random UUID. */
+  readonly newId?: () => string;
   readonly rehomeTaskWorkspaces?: (
     input: Readonly<{
       readonly home: string;
@@ -171,11 +189,6 @@ function coordinatorPaths(request: CoordinatorLaunchRequest): CoordinatorPaths {
   };
 }
 
-type CoordinatorWorkspace = Readonly<{
-  readonly repoPath: string;
-  readonly worktree: WorktreeLease;
-}>;
-
 function coordinatorHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
@@ -244,21 +257,29 @@ async function validateBoundCoordinatorSource(
   return normalizedBoundSourcePath;
 }
 
-async function acquireCoordinatorWorktree(
+async function acquireCoordinatorLease(
   request: CoordinatorLaunchRequest,
   paths: CoordinatorPaths,
   dependencies: CoordinatorLaunchDependencies,
   sourceHead: string,
-  normalizedBoundSourcePath: string | undefined,
-): Promise<CoordinatorWorkspace> {
+): Promise<WorktreeLease> {
   const identity = coordinatorLeaseIdentity(paths.repo, request.sessionId, sourceHead);
-  const worktree = await acquireWorktree(dependencies.run, {
+  return acquireWorktree(dependencies.run, {
     repo: paths.repo,
     root: paths.poolRoot,
     tandemId: identity.tandemId,
     taskName: identity.taskName,
     sourceHead,
   });
+}
+
+/** Proves an acquired coordinator lease is the clean, commit-pinned checkout the launch asked for. */
+async function validateCoordinatorLease(
+  dependencies: CoordinatorLaunchDependencies,
+  worktree: WorktreeLease,
+  sourceHead: string,
+  normalizedBoundSourcePath: string | undefined,
+): Promise<void> {
   if (worktree.baseHead !== sourceHead) {
     throw new Error(
       `coordinator lease ${JSON.stringify(worktree.leaseId)} is pinned to ${worktree.baseHead}, expected captured source HEAD ${sourceHead}`,
@@ -274,7 +295,6 @@ async function acquireCoordinatorWorktree(
       `coordinator source ${JSON.stringify(normalizedBoundSourcePath)} does not match owned lease worktree ${JSON.stringify(worktree.path)}`,
     );
   }
-  return { repoPath: paths.repo, worktree };
 }
 
 function coordinatorEnvironmentOverrides(
@@ -584,8 +604,25 @@ export async function launchCoordinatorUnlocked(
   const previous =
     running ?? (await readCoordinatorRecord(recordPath(paths.home, request.sessionId, paths.repo)));
   let workspaceRetirement: CoordinatorWorkspaceRetirement | undefined;
+  let previousResources: CoordinatorResourceOutcome | undefined;
   if (previous !== undefined) {
     workspaceRetirement = await retireCoordinatorWorkspace(dependencies.run, previous);
+    previousResources = await applyCoordinatorReplacement({
+      run: dependencies.run,
+      home: paths.home,
+      sessionId: request.sessionId,
+      repoPath: paths.repo,
+      clock: dependencies.clock ?? defaultClock,
+      newId: dependencies.newId ?? randomUUID,
+      decision: decideCoordinatorReplacement({
+        previous,
+        paneRetirement: workspaceRetirement,
+        checkout: await observeCoordinatorCheckout(dependencies.run, previous.worktree.path),
+        requestedSourceHead: sourceHead,
+        replacementLeaseHolder: coordinatorLeaseIdentity(paths.repo, request.sessionId, sourceHead)
+          .tandemId,
+      }),
+    });
   }
   const boundSourcePath = await validateBoundCoordinatorSource(
     request,
@@ -593,14 +630,125 @@ export async function launchCoordinatorUnlocked(
     sourceHead,
     context,
   );
-  const coordinator = await acquireCoordinatorWorktree(
-    request,
-    paths,
-    dependencies,
-    sourceHead,
-    boundSourcePath,
-  );
-  const coordinatorCwd = coordinator.worktree.path;
+  const worktree = await acquireCoordinatorLease(request, paths, dependencies, sourceHead);
+  // A lease the previous record still names is not this launch's to undo.
+  const rollbackEligible = previous === undefined || previous.worktree.leaseId !== worktree.leaseId;
+  let ownedEndpoint: Endpoint | undefined;
+  let startup: CoordinatorStartupResult;
+  try {
+    await validateCoordinatorLease(dependencies, worktree, sourceHead, boundSourcePath);
+    startup = await startCoordinator({
+      request,
+      dependencies,
+      paths,
+      context,
+      headless,
+      worktree,
+      previous,
+      workspaceRetirement,
+      onEndpointCreated: (endpoint) => {
+        ownedEndpoint = endpoint;
+      },
+    });
+  } catch (error) {
+    if (!rollbackEligible) throw error;
+    const quarantined = await coordinatorStartupFailure({
+      request,
+      dependencies,
+      paths,
+      worktree,
+      ...(ownedEndpoint === undefined ? {} : { endpoint: ownedEndpoint }),
+      error,
+    });
+    if (quarantined !== undefined) throw quarantined;
+    throw error;
+  }
+  return {
+    sessionId: request.sessionId,
+    repoPath: paths.repo,
+    worktree,
+    command: startup.command,
+    direct: startup.direct,
+    workspaceId: startup.workspaceId,
+    paneId: startup.paneId,
+    ...(startup.tabId === undefined ? {} : { tabId: startup.tabId }),
+    ...(startup.processExitCode === undefined ? {} : { processExitCode: startup.processExitCode }),
+    ...(startup.workspaceRetirement === undefined
+      ? {}
+      : { workspaceRetirement: startup.workspaceRetirement }),
+    ...(previousResources === undefined ? {} : { previousResources }),
+  };
+}
+
+/**
+ * Undoes or durably quarantines the pane and lease a failed startup acquired. Returns a
+ * replacement error only when something was quarantined and the caller must say so; otherwise
+ * the original startup failure still describes what happened.
+ */
+async function coordinatorStartupFailure(
+  input: Readonly<{
+    readonly request: CoordinatorLaunchRequest;
+    readonly dependencies: CoordinatorLaunchDependencies;
+    readonly paths: CoordinatorPaths;
+    readonly worktree: WorktreeLease;
+    readonly endpoint?: Endpoint;
+    readonly error: unknown;
+  }>,
+): Promise<Error | undefined> {
+  const failure = input.error instanceof Error ? input.error.message : String(input.error);
+  let rollback: CoordinatorResourceOutcome;
+  try {
+    rollback = await rollbackCoordinatorAllocation({
+      run: input.dependencies.run,
+      home: input.paths.home,
+      sessionId: input.request.sessionId,
+      repoPath: input.paths.repo,
+      lease: input.worktree,
+      ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
+      failure,
+      clock: input.dependencies.clock ?? defaultClock,
+      newId: input.dependencies.newId ?? randomUUID,
+    });
+  } catch (rollbackError) {
+    return new Error(
+      `${failure}; rolling back the new coordinator lease also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+      { cause: input.error },
+    );
+  }
+  if (rollback.outcome !== "quarantined") return undefined;
+  return new Error(`${rollback.reason}; quarantine record ${rollback.quarantinePath}`, {
+    cause: input.error,
+  });
+}
+
+type CoordinatorStartup = Readonly<{
+  readonly request: CoordinatorLaunchRequest;
+  readonly dependencies: CoordinatorLaunchDependencies;
+  readonly paths: CoordinatorPaths;
+  readonly context: HerdrContext | undefined;
+  readonly headless: boolean;
+  readonly worktree: WorktreeLease;
+  readonly previous: CoordinatorRecord | undefined;
+  readonly workspaceRetirement: CoordinatorWorkspaceRetirement | undefined;
+  /** Reports the replacement pane the moment it exists, so a later failure can retire it. */
+  readonly onEndpointCreated: (endpoint: Endpoint) => void;
+}>;
+
+type CoordinatorStartupResult = Readonly<{
+  readonly command: readonly string[];
+  readonly direct: boolean;
+  readonly workspaceId: string;
+  readonly paneId: string;
+  readonly tabId?: string;
+  readonly processExitCode?: number;
+  readonly workspaceRetirement?: CoordinatorWorkspaceRetirement;
+}>;
+
+/** Runs the coordinator in the caller's pane or in a freshly created owned workspace. */
+async function startCoordinator(startup: CoordinatorStartup): Promise<CoordinatorStartupResult> {
+  const { request, dependencies, paths, context, headless, worktree, previous } = startup;
+  let workspaceRetirement = startup.workspaceRetirement;
+  const coordinatorCwd = worktree.path;
   const argv = buildCoordinatorArgv({
     cwd: coordinatorCwd,
     model: request.model,
@@ -628,9 +776,6 @@ export async function launchCoordinatorUnlocked(
     });
     if (processExitCode !== 0) throw new Error(`coordinator exited with code ${processExitCode}`);
     return {
-      sessionId: request.sessionId,
-      repoPath: coordinator.repoPath,
-      worktree: coordinator.worktree,
       command: argv,
       direct: true,
       workspaceId: context.workspaceId,
@@ -678,6 +823,15 @@ export async function launchCoordinatorUnlocked(
     env: serverEnvironment,
   });
   const workspace = parseCreatedWorkspace(workspaceResult.stdout);
+  const endpoint: Endpoint = {
+    sessionId: request.sessionId,
+    workspaceId: workspace.workspaceId,
+    tabId: workspace.tabId,
+    paneId: workspace.paneId,
+    role: "coordinator",
+    generation: 0,
+  };
+  startup.onEndpointCreated(endpoint);
   const coordinatorEnvironment = coordinatorEnvironmentOverrides(
     paths,
     request,
@@ -705,16 +859,9 @@ export async function launchCoordinatorUnlocked(
   });
   await saveCoordinatorRecord(paths.home, {
     schemaVersion: 1,
-    repoPath: coordinator.repoPath,
-    endpoint: {
-      sessionId: request.sessionId,
-      workspaceId: workspace.workspaceId,
-      tabId: workspace.tabId,
-      paneId: workspace.paneId,
-      role: "coordinator",
-      generation: 0,
-    },
-    worktree: coordinator.worktree,
+    repoPath: paths.repo,
+    endpoint,
+    worktree,
     command: argv,
   });
   await waitForCoordinatorOwnership(
@@ -722,12 +869,9 @@ export async function launchCoordinatorUnlocked(
     dependencies.sleep,
     paths.home,
     request.sessionId,
-    coordinator.repoPath,
+    paths.repo,
   );
   return {
-    sessionId: request.sessionId,
-    repoPath: coordinator.repoPath,
-    worktree: coordinator.worktree,
     command: argv,
     direct: false,
     workspaceId: workspace.workspaceId,

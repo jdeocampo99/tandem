@@ -349,6 +349,30 @@ never prove ownership or authorize terminal deletion.
 Run it from a separate normal terminal, and add `--continue` only when the fresh launch should
 resume the saved coordinator conversation.
 
+Coordinator replacement is transactional, so repeated launches and restarts converge on one
+coordinator worktree lease instead of accumulating them. Once the previous pane retirement above
+reports `closed` or `already-clear`, launch reads the previous coordinator checkout and decides
+from that evidence alone: reuse the existing lease when it is clean and already pinned to the
+commit the replacement wants, release that exact lease and drop its record when the replacement
+needs a different commit, retain it when the checkout has uncommitted changes or unmerged paths,
+and quarantine it when the state cannot be explained (an unreadable checkout, a branch other than
+the recorded lease branch, a HEAD that is neither the recorded lease base nor a recorded refresh
+target, or a pane that was itself quarantined). A release always names the exact lease id, holder,
+and path; a lease is never matched by label, pool position, or path guess, and task worktrees are
+never inspected or returned by this path. Only after that cleanup does launch allocate the
+replacement.
+
+If a later startup step fails after a new lease was acquired, that launch rolls its own resources
+back: it retires the replacement pane it created through the same ownership-proving path, then
+releases the lease it acquired. Anything it cannot prove safe to undo (a pane still running an
+unidentified process, a checkout that changed, a return Treehouse refused) becomes a durable
+quarantine note under `<home>/coordinator-quarantine/`, naming the lease, the pane, and the
+reason. The launch error then names that note. A lease the previous record still points at is
+never rolled back, because the record remains its durable owner. A previous lease that cannot be
+released becomes a quarantine note too rather than blocking the launch, so no coordinator lease is
+ever left untracked and the user is never locked out of their coordinator. Launch prints a notice
+for a retained or quarantined worktree outcome and stays silent when nothing accumulated.
+
 `--reset --force` is the explicit interruption mode; `--force` alone and `configure --force` are
 invalid. It preflights selected task and presentation endpoints, including retained terminals,
 against durable job identities and native process state. Unknown ownership, foreign-session work,

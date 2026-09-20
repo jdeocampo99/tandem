@@ -17,6 +17,8 @@ import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal
 import {
   hasActiveHerdrContext,
   launchProjects,
+  previousResourcesFromLaunch,
+  previousResourcesNotice,
   workspaceRetirementFromLaunch,
   workspaceRetirementNotice,
 } from "./terminal/launch.ts";
@@ -227,10 +229,15 @@ async function runProjectFlow({
   );
   for (const [index, launch] of launches.entries()) {
     const repoPath = roots[index];
+    if (repoPath === undefined) continue;
     const retirement = workspaceRetirementFromLaunch(launch);
-    if (repoPath === undefined || retirement === undefined) continue;
-    const notice = workspaceRetirementNotice(repoPath, retirement);
-    if (notice !== undefined) stdout(notice);
+    const retirementNotice =
+      retirement === undefined ? undefined : workspaceRetirementNotice(repoPath, retirement);
+    if (retirementNotice !== undefined) stdout(retirementNotice);
+    const resources = previousResourcesFromLaunch(launch);
+    const resourceNotice =
+      resources === undefined ? undefined : previousResourcesNotice(repoPath, resources);
+    if (resourceNotice !== undefined) stdout(resourceNotice);
   }
   return {
     exitCode: 0,

@@ -1,5 +1,6 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import type { CommandRunner } from "../contracts.ts";
+import type { CoordinatorResourceOutcome } from "../coordinator/resources.ts";
 import type { CoordinatorWorkspaceRetirement } from "../coordinator/workspace.ts";
 import type { TandemService } from "../service/controller.ts";
 import type { TerminalInvocation } from "./arguments.ts";
@@ -68,6 +69,33 @@ export function workspaceRetirementNotice(
   return retirement.outcome === "retained"
     ? `Tandem retained the previous coordinator workspace for ${repoPath}${reason}.${leftOpen}\n`
     : `Tandem left an ambiguous previous coordinator pane or workspace untouched for ${repoPath}${reason}.\n`;
+}
+
+/** Reads a coordinator launch result's previous-resource report, if it carried one. */
+export function previousResourcesFromLaunch(
+  value: unknown,
+): CoordinatorResourceOutcome | undefined {
+  if (!isRecord(value)) return undefined;
+  const resources = value.previousResources;
+  if (!isRecord(resources) || typeof resources.outcome !== "string") return undefined;
+  return resources as CoordinatorResourceOutcome;
+}
+
+/**
+ * Formats a user-facing notice for a previous coordinator worktree lease Tandem kept or
+ * quarantined. Returns undefined for the silent outcomes, where nothing accumulated.
+ */
+export function previousResourcesNotice(
+  repoPath: string,
+  resources: CoordinatorResourceOutcome,
+): string | undefined {
+  if (resources.outcome === "retained") {
+    return `Tandem kept the previous coordinator worktree for ${repoPath}: ${resources.reason}.\n`;
+  }
+  if (resources.outcome !== "quarantined") return undefined;
+  const where =
+    resources.quarantinePath === undefined ? "" : ` Recorded at ${resources.quarantinePath}.`;
+  return `Tandem quarantined the previous coordinator worktree lease for ${repoPath}: ${resources.reason}.${where}\n`;
 }
 
 export async function launchProjects(
