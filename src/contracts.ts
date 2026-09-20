@@ -196,6 +196,34 @@ export type Finding = {
   readonly description: string;
 };
 
+/** Where a finding status was established: the reviewed code and the fix round that observed it. */
+export type FindingObservation = {
+  readonly head: string;
+  readonly generation: number;
+  readonly reviewRound: number;
+};
+
+/**
+ * What a finding identity is currently known to be. `addressed` means a later review of the same
+ * lens stopped reporting it, `regressed` means an addressed identity came back, and `disputed`
+ * means two reviews of the same identity recorded contradicting verdicts.
+ */
+export type FindingStatus = "addressed" | "unresolved" | "regressed" | "disputed";
+
+/** One finding identity carried across review rounds, with the change supporting its status. */
+export type FindingLedgerEntry = {
+  readonly id: string;
+  readonly lens: ReviewLens;
+  readonly severity: FindingSeverity;
+  readonly verdict: FindingVerdict;
+  readonly description: string;
+  readonly file?: string;
+  readonly line?: number;
+  readonly status: FindingStatus;
+  readonly raisedAt: FindingObservation;
+  readonly statusAt: FindingObservation;
+};
+
 export type ReviewResult = {
   readonly lens: ReviewLens;
   readonly head: string;
@@ -206,7 +234,33 @@ export type ReviewResult = {
   readonly mode?: ReviewMode;
 };
 
-export type ValidationEvidence = {
+/** Names the two validation contracts: targeted fix-time checks and the complete final gate. */
+export type ValidationContractName = "iteration" | "final";
+
+/** Keeps runner-owned local checks distinguishable from GitHub or other remote checks. */
+export type CheckOrigin = "local" | "github";
+
+/** The delivered code and policy a contract result is pinned to. */
+export type ContractIdentity = {
+  readonly head: string;
+  readonly generation: number;
+  readonly policyDigest: string;
+};
+
+/** What an authorized fix round targets, recorded when the round is admitted. */
+export type IterationScope = {
+  readonly head: string;
+  readonly generation: number;
+  readonly policyDigest: string;
+  readonly reproduces: readonly string[];
+  readonly surfaces: readonly string[];
+  readonly findingIds: readonly string[];
+};
+
+/** Marks evidence written before validation contracts existed, so it can never prove acceptance. */
+export const LEGACY_EVIDENCE_CONTRACT = "legacy";
+
+type RecordedCheck = {
   readonly name: string;
   readonly argv: readonly string[];
   readonly exitCode: number;
@@ -214,6 +268,23 @@ export type ValidationEvidence = {
   readonly stderr: string;
   readonly head: string;
 };
+
+/** A check recorded under a named contract and pinned to one code and policy identity. */
+export type PinnedValidationEvidence = RecordedCheck & {
+  readonly contract: ValidationContractName;
+  readonly origin: CheckOrigin;
+  readonly policyDigest: string;
+};
+
+/**
+ * A check recovered from a durable record written before contracts existed. It carries no contract,
+ * origin, or policy identity, so it stays readable as history and never satisfies either contract.
+ */
+export type LegacyValidationEvidence = RecordedCheck & {
+  readonly contract: typeof LEGACY_EVIDENCE_CONTRACT;
+};
+
+export type ValidationEvidence = PinnedValidationEvidence | LegacyValidationEvidence;
 
 export type NotificationKind = "routine" | "coordinator";
 
@@ -249,6 +320,21 @@ export type ResearchHandoff = {
   readonly excerpt: string;
 };
 
+/**
+ * How far automatic release of a terminal task's child pane and worktree got, and why it stopped
+ * there. `released` and `retained` are settled outcomes, `pending` is retried by reconciliation,
+ * and `quarantined` waits for a human because ownership could not be proven.
+ */
+export type TaskCleanupStatus = "released" | "retained" | "pending" | "quarantined";
+
+/** The durable note a cleanup attempt leaves on the task it inspected. */
+export type TaskCleanupState = {
+  readonly schemaVersion: 1;
+  readonly status: TaskCleanupStatus;
+  readonly reason: string;
+  readonly observedAt: IsoTimestamp;
+};
+
 export type TaskRecord = {
   readonly schemaVersion: 1;
   readonly id: string;
@@ -269,14 +355,17 @@ export type TaskRecord = {
   readonly generation: number;
   readonly reviewRound: number;
   readonly reviewHead?: string;
+  readonly iterationScope?: IterationScope;
   readonly reportPath?: string;
   readonly validationEvidence: readonly ValidationEvidence[];
   readonly reviews: readonly ReviewResult[];
+  readonly findingLedger?: readonly FindingLedgerEntry[];
   readonly researchHandoffs?: readonly ResearchHandoff[];
   readonly blockReason?: string;
   readonly notifications: readonly Notification[];
   readonly communication?: TaskCommunication;
   readonly pullRequest?: PullRequestMetadata;
+  readonly cleanup?: TaskCleanupState;
 };
 
 export type CommandRequest = {

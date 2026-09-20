@@ -69,7 +69,7 @@ export function commandErrorCode(stdout: string, stderr: string): string | undef
   return nativeErrorCode(stdout) ?? nativeErrorCode(stderr);
 }
 
-function isMissingEndpointError(error: unknown): boolean {
+export function isMissingEndpointError(error: unknown): boolean {
   if (error instanceof EndpointOwnershipError) return error.reason === "missing";
   if (!(error instanceof AdapterCommandError)) return false;
   const code = commandErrorCode(error.result.stdout, error.result.stderr);

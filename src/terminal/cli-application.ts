@@ -7,6 +7,7 @@ import {
   type TandemEnvironmentSource,
 } from "../config/environment.ts";
 import type { CommandRequest, CommandResult, CommandRunner, ModelSpec } from "../contracts.ts";
+import { PARALLEL_COORDINATORS_VARIABLE } from "../coordinator/exclusivity.ts";
 import {
   type CoordinatorLaunchDependencies,
   coordinatorFiles,
@@ -80,6 +81,7 @@ function environmentSource(): TandemEnvironmentSource {
     "TANDEM_POOL_ROOT",
     "TANDEM_REPO",
     "TANDEM_SOURCE_REPO",
+    PARALLEL_COORDINATORS_VARIABLE,
     "HERDR_ENV",
     "HERDR_SESSION",
     "HERDR_SESSION_NAME",

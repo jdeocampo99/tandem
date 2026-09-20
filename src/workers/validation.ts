@@ -3,26 +3,25 @@ import type {
   CommandRequest,
   CommandResult,
   CommandRunner,
+  ContractIdentity,
   ValidationCommand,
+  ValidationContractName,
   ValidationEvidence,
 } from "../contracts.ts";
+import { ValidationConfigurationError } from "../tasks/acceptance.ts";
 
-/** Runs selected policy commands sequentially through an argv-only runner and returns head-bound evidence. */
+/**
+ * Runs the commands one validation contract selected, sequentially through an argv-only runner, and
+ * returns evidence stamped with that contract and the code and policy identity it is pinned to.
+ */
 export type ValidationOptions = Readonly<{
   repoPath: string;
-  head: string;
-  surfaces: readonly string[];
+  contract: ValidationContractName;
+  identity: ContractIdentity;
   commands: readonly ValidationCommand[];
   run: CommandRunner;
   signal?: AbortSignal;
 }>;
-
-export class ValidationConfigurationError extends Error {
-  public constructor(message: string) {
-    super(message);
-    this.name = "ValidationConfigurationError";
-  }
-}
 
 class ValidationTimeoutError extends Error {
   public constructor(message: string) {
@@ -49,26 +48,30 @@ function readRepositoryPath(repoPath: string): string {
   return path.resolve(repoPath);
 }
 
-function readHead(head: string): string {
-  if (typeof head !== "string" || head.trim().length === 0) {
-    throw new TypeError("head must be a non-empty string");
-  }
-  return head;
-}
+/** The contract a run executes under; every evidence record is stamped with it. */
+type ContractRun = Readonly<{
+  contract: ValidationContractName;
+  identity: ContractIdentity;
+}>;
 
-function readSurfaces(surfaces: readonly string[]): readonly string[] {
-  if (!Array.isArray(surfaces)) {
-    throw new TypeError("surfaces must be an array of strings");
+function readContractRun(options: ValidationOptions): ContractRun {
+  if (options.contract !== "iteration" && options.contract !== "final") {
+    throw new TypeError("contract must be iteration or final");
   }
-  const parsed: string[] = [];
-  for (let index = 0; index < surfaces.length; index += 1) {
-    const surface = surfaces[index];
-    if (typeof surface !== "string" || surface.length === 0) {
-      throw new TypeError(`surfaces[${index}] must be a non-empty string`);
-    }
-    parsed.push(surface);
+  const identity = options.identity;
+  if (!isRecord(identity)) {
+    throw new TypeError("identity must be a contract identity");
   }
-  return parsed;
+  if (typeof identity.head !== "string" || identity.head.trim().length === 0) {
+    throw new TypeError("identity.head must be a non-empty string");
+  }
+  if (typeof identity.policyDigest !== "string" || identity.policyDigest.trim().length === 0) {
+    throw new TypeError("identity.policyDigest must be a non-empty string");
+  }
+  if (!Number.isSafeInteger(identity.generation) || identity.generation < 0) {
+    throw new TypeError("identity.generation must be a non-negative integer");
+  }
+  return { contract: options.contract, identity: options.identity };
 }
 
 function readCommand(command: ValidationCommand, index: number): ValidationCommand {
@@ -114,16 +117,6 @@ function readCommand(command: ValidationCommand, index: number): ValidationComma
   };
 }
 
-export function commandMatchesSurfaces(
-  command: ValidationCommand,
-  surfaces: readonly string[],
-): boolean {
-  if (command.surfaces.length === 0 || command.surfaces.includes("*") || surfaces.includes("*")) {
-    return true;
-  }
-  return command.surfaces.some((surface) => surfaces.includes(surface));
-}
-
 function cancellationMessage(reason: unknown, fallback: string): string {
   if (reason instanceof Error && reason.message.length > 0) {
     return reason.message;
@@ -162,7 +155,7 @@ function isTimeout(error: unknown): boolean {
 
 function cancellationEvidence(
   command: ValidationCommand,
-  head: string,
+  run: ContractRun,
   message: string,
   exitCode: number,
 ): ValidationEvidence {
@@ -172,13 +165,16 @@ function cancellationEvidence(
     exitCode,
     stdout: "",
     stderr: message,
-    head,
+    head: run.identity.head,
+    contract: run.contract,
+    origin: "local",
+    policyDigest: run.identity.policyDigest,
   };
 }
 
 function resultEvidence(
   command: ValidationCommand,
-  head: string,
+  run: ContractRun,
   result: CommandResult,
 ): ValidationEvidence {
   return {
@@ -187,7 +183,10 @@ function resultEvidence(
     exitCode: result.code,
     stdout: result.stdout,
     stderr: result.stderr,
-    head,
+    head: run.identity.head,
+    contract: run.contract,
+    origin: "local",
+    policyDigest: run.identity.policyDigest,
   };
 }
 
@@ -248,14 +247,14 @@ function makeCommandLifetime(
 
 function interruptedOutcome(
   command: ValidationCommand,
-  head: string,
+  contractRun: ContractRun,
   interruption: CommandInterruption,
 ): { evidence: ValidationEvidence; stop: true } {
   const timeout = interruption.kind === "timeout";
   return {
     evidence: cancellationEvidence(
       command,
-      head,
+      contractRun,
       cancellationMessage(
         interruption.error,
         timeout
@@ -271,7 +270,7 @@ function interruptedOutcome(
 async function runCommand(
   command: ValidationCommand,
   repoPath: string,
-  head: string,
+  contractRun: ContractRun,
   run: CommandRunner,
   signal: AbortSignal | undefined,
 ): Promise<{ evidence: ValidationEvidence; stop: boolean }> {
@@ -279,7 +278,7 @@ async function runCommand(
     return {
       evidence: cancellationEvidence(
         command,
-        head,
+        contractRun,
         cancellationMessage(signal.reason, "validation was cancelled"),
         130,
       ),
@@ -291,7 +290,7 @@ async function runCommand(
   try {
     const initialInterruption = lifetime.interruption();
     if (initialInterruption !== undefined) {
-      return interruptedOutcome(command, head, initialInterruption);
+      return interruptedOutcome(command, contractRun, initialInterruption);
     }
 
     const request: CommandRequest = {
@@ -303,21 +302,21 @@ async function runCommand(
     const result = await run(request);
     const interruption = lifetime.interruption();
     if (interruption !== undefined) {
-      return interruptedOutcome(command, head, interruption);
+      return interruptedOutcome(command, contractRun, interruption);
     }
 
-    const evidence = resultEvidence(command, head, result);
+    const evidence = resultEvidence(command, contractRun, result);
     return { evidence, stop: result.code !== 0 };
   } catch (error) {
     const interruption = lifetime.interruption();
     if (interruption !== undefined) {
-      return interruptedOutcome(command, head, interruption);
+      return interruptedOutcome(command, contractRun, interruption);
     }
     if (isTimeout(error)) {
       return {
         evidence: cancellationEvidence(
           command,
-          head,
+          contractRun,
           cancellationMessage(error, `validation command timed out after ${command.timeoutMs}ms`),
           124,
         ),
@@ -328,7 +327,7 @@ async function runCommand(
       return {
         evidence: cancellationEvidence(
           command,
-          head,
+          contractRun,
           cancellationMessage(signal?.reason ?? error, "validation was cancelled"),
           130,
         ),
@@ -337,7 +336,7 @@ async function runCommand(
     }
     const message = error instanceof Error ? error.message : String(error);
     return {
-      evidence: cancellationEvidence(command, head, message, 127),
+      evidence: cancellationEvidence(command, contractRun, message, 127),
       stop: true,
     };
   } finally {
@@ -345,13 +344,16 @@ async function runCommand(
   }
 }
 
-/** Executes matching commands in declaration order and stops after the first non-zero or cancelled result. */
+/**
+ * Executes the contract's commands in declaration order and stops after the first non-zero or
+ * cancelled result. Surface selection belongs to the contract planner, so an empty command list
+ * reaching the runner is a configuration failure rather than a pass.
+ */
 export async function runValidation(
   options: ValidationOptions,
 ): Promise<readonly ValidationEvidence[]> {
   const repoPath = readRepositoryPath(options.repoPath);
-  const head = readHead(options.head);
-  const surfaces = readSurfaces(options.surfaces);
+  const contractRun = readContractRun(options);
   if (typeof options.run !== "function") {
     throw new TypeError("run must be an argv command runner");
   }
@@ -361,22 +363,17 @@ export async function runValidation(
 
   const selected: ValidationCommand[] = [];
   for (let index = 0; index < options.commands.length; index += 1) {
-    const command = readCommand(options.commands[index], index);
-    if (commandMatchesSurfaces(command, surfaces)) {
-      selected.push(command);
-    }
+    selected.push(readCommand(options.commands[index], index));
   }
   if (selected.length === 0) {
     throw new ValidationConfigurationError(
-      surfaces.length === 0
-        ? "no validation commands are configured"
-        : `no validation commands match surfaces: ${surfaces.join(", ")}`,
+      `the ${contractRun.contract} contract selected no validation commands`,
     );
   }
 
   const evidence: ValidationEvidence[] = [];
   for (const command of selected) {
-    const outcome = await runCommand(command, repoPath, head, options.run, options.signal);
+    const outcome = await runCommand(command, repoPath, contractRun, options.run, options.signal);
     evidence.push(outcome.evidence);
     if (outcome.stop) {
       break;

@@ -1,4 +1,9 @@
-export type TerminalCommand = "launch" | "configure" | "migrate-state" | "logs";
+export type TerminalCommand =
+  | "launch"
+  | "configure"
+  | "migrate-state"
+  | "logs"
+  | "reconcile-resources";
 
 export type TerminalInvocation = Readonly<{
   readonly command: TerminalCommand;
@@ -18,8 +23,17 @@ export type TerminalInvocation = Readonly<{
 }>;
 export type TerminalRunResult = Readonly<{
   readonly exitCode: number;
-  readonly status: "help" | "launched" | "configured" | "migrated" | "logs" | "cancelled" | "error";
+  readonly status:
+    | "help"
+    | "launched"
+    | "configured"
+    | "migrated"
+    | "logs"
+    | "reconciled"
+    | "cancelled"
+    | "error";
   readonly migration?: unknown;
+  readonly reconciliation?: unknown;
   readonly projects?: readonly string[];
   readonly sessionId?: string;
   readonly launches?: readonly unknown[];
@@ -140,6 +154,10 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       command = "migrate-state";
       continue;
     }
+    if (parseOptions && command === undefined && token === "reconcile-resources") {
+      command = "reconcile-resources";
+      continue;
+    }
     if (command === undefined) command = "launch";
     paths.push(token);
   }
@@ -150,6 +168,9 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   }
   if (resolvedCommand === "migrate-state" && paths.length > 0) {
     throw new Error("tandem migrate-state does not accept project paths");
+  }
+  if (resolvedCommand === "reconcile-resources" && paths.length > 0) {
+    throw new Error("tandem reconcile-resources does not accept project paths");
   }
   if (resolvedCommand === "configure" && paths.length > 1) {
     throw new Error("tandem configure accepts at most one project path");

@@ -6,9 +6,11 @@ import type {
   IsoTimestamp,
   ReviewLens,
   ReviewMode,
+  ValidationContractName,
   WorktreeLease,
 } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
+import type { EscalationReason } from "../tasks/acceptance.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 
 const RUNTIME_SCHEMA_VERSION = 1;
@@ -103,6 +105,11 @@ export type DurableJob = Readonly<{
   readonly consumedAt?: IsoTimestamp;
   readonly endpoint?: Endpoint;
   readonly head?: string;
+  /** Validation jobs carry the contract and policy identity their evidence is pinned to. */
+  readonly contract?: ValidationContractName;
+  readonly policyDigest?: string;
+  /** Present when targeted iteration checks were refused for the complete manifest. */
+  readonly escalation?: EscalationReason;
   readonly reviewLens?: ReviewLens;
   readonly receiptPath?: string;
   readonly instructionRevision?: number;
@@ -508,6 +515,25 @@ function parseJob(value: unknown, field: string): DurableJob {
   const endpointValue =
     value.endpoint === undefined ? undefined : endpoint(value.endpoint, `${field}.endpoint`);
   const head = value.head === undefined ? undefined : singleLine(value.head, `${field}.head`);
+  const contract =
+    value.contract === undefined
+      ? undefined
+      : enumValue(value.contract, ["iteration", "final"] as const, `${field}.contract`);
+  const policyDigest =
+    value.policyDigest === undefined
+      ? undefined
+      : singleLine(value.policyDigest, `${field}.policyDigest`);
+  const escalation =
+    value.escalation === undefined
+      ? undefined
+      : enumValue(
+          value.escalation,
+          ["unknown-impact", "broad-impact", "stale-identity", "disputed-result"] as const,
+          `${field}.escalation`,
+        );
+  if ((contract === undefined) !== (policyDigest === undefined)) {
+    throw new TypeError(`${field} must name its contract and policy digest together`);
+  }
   const reviewLens =
     value.reviewLens === undefined
       ? undefined
@@ -563,6 +589,9 @@ function parseJob(value: unknown, field: string): DurableJob {
     ...(consumedAt === undefined ? {} : { consumedAt }),
     ...(endpointValue === undefined ? {} : { endpoint: endpointValue }),
     ...(head === undefined ? {} : { head }),
+    ...(contract === undefined ? {} : { contract }),
+    ...(policyDigest === undefined ? {} : { policyDigest }),
+    ...(escalation === undefined ? {} : { escalation }),
     ...(reviewLens === undefined ? {} : { reviewLens }),
     ...(receiptPath === undefined ? {} : { receiptPath }),
     ...(instructionRevision === undefined ? {} : { instructionRevision }),

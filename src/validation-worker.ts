@@ -2,16 +2,24 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { runCommand } from "./adapters/commands.ts";
 import { createHerdrStatusReporter } from "./adapters/herdr-status.ts";
-import type { CommandRunner, ValidationCommand, ValidationEvidence } from "./contracts.ts";
+import type {
+  CheckOrigin,
+  CommandRunner,
+  ValidationCommand,
+  ValidationContractName,
+  ValidationEvidence,
+} from "./contracts.ts";
 import { writeJsonAtomically } from "./runtime/persistence.ts";
+import { ValidationConfigurationError } from "./tasks/acceptance.ts";
 import {
   claimExecutionStart,
   type ExecutionAdmission,
   type ExecutionGateInput,
   type ExecutionIdentity,
 } from "./workers/execution-gate.ts";
-import { runValidation, ValidationConfigurationError } from "./workers/validation.ts";
+import { runValidation } from "./workers/validation.ts";
 
+/** One contract run handed to the runner: which checks, under which contract and identity. */
 export type ValidationJob = Readonly<{
   readonly schemaVersion: 1;
   readonly id: string;
@@ -19,6 +27,8 @@ export type ValidationJob = Readonly<{
   readonly generation: number;
   readonly repoPath: string;
   readonly head: string;
+  readonly contract: ValidationContractName;
+  readonly policyDigest: string;
   readonly surfaces: readonly string[];
   readonly commands: readonly ValidationCommand[];
   readonly resultPath: string;
@@ -33,6 +43,8 @@ export type ValidationResult = Readonly<{
   readonly taskId: string;
   readonly generation: number;
   readonly head: string;
+  readonly contract: ValidationContractName;
+  readonly policyDigest: string;
   readonly status: ValidationResultStatus;
   readonly evidence: readonly ValidationEvidence[];
   readonly finishedAt: string;
@@ -128,6 +140,20 @@ function parseCommand(value: unknown, index: number): ValidationCommand {
   return { name, argv, surfaces, timeoutMs: timeoutMs as number };
 }
 
+function contractName(value: unknown, field: string): ValidationContractName {
+  if (value !== "iteration" && value !== "final") {
+    throw new TypeError(`${field} must be iteration or final`);
+  }
+  return value;
+}
+
+function checkOrigin(value: unknown, field: string): CheckOrigin {
+  if (value !== "local" && value !== "github") {
+    throw new TypeError(`${field} must be local or github`);
+  }
+  return value;
+}
+
 export function parseValidationJob(value: unknown): ValidationJob {
   if (!isRecord(value)) throw new TypeError("validation job must be an object");
   if (value.schemaVersion !== 1) throw new TypeError("validation job schemaVersion must be 1");
@@ -146,6 +172,8 @@ export function parseValidationJob(value: unknown): ValidationJob {
     generation: nonNegativeInteger(value.generation, "generation"),
     repoPath: absolute(value.repoPath, "repoPath"),
     head: singleLine(value.head, "head"),
+    contract: contractName(value.contract, "contract"),
+    policyDigest: singleLine(value.policyDigest, "policyDigest"),
     surfaces,
     commands,
     resultPath: absolute(value.resultPath, "resultPath"),
@@ -165,6 +193,9 @@ function failureEvidence(
     stdout: "",
     stderr: message,
     head: job.head,
+    contract: job.contract,
+    origin: "local",
+    policyDigest: job.policyDigest,
   };
 }
 
@@ -181,6 +212,8 @@ function resultFor(
     taskId: job.taskId,
     generation: job.generation,
     head: job.head,
+    contract: job.contract,
+    policyDigest: job.policyDigest,
     status,
     evidence: evidence.map((entry) => ({ ...entry, argv: [...entry.argv] })),
     finishedAt: now(),
@@ -230,6 +263,9 @@ function validateResult(value: unknown): ValidationResult {
               throw new TypeError(`evidence[${index}].stderr must be text`);
             })(),
       head: singleLine(entry.head, `evidence[${index}].head`),
+      contract: contractName(entry.contract, `evidence[${index}].contract`),
+      origin: checkOrigin(entry.origin, `evidence[${index}].origin`),
+      policyDigest: singleLine(entry.policyDigest, `evidence[${index}].policyDigest`),
     });
   }
   const error = value.error === undefined ? undefined : text(value.error, "error");
@@ -239,6 +275,8 @@ function validateResult(value: unknown): ValidationResult {
     taskId: singleLine(value.taskId, "taskId"),
     generation: nonNegativeInteger(value.generation, "generation"),
     head: singleLine(value.head, "head"),
+    contract: contractName(value.contract, "contract"),
+    policyDigest: singleLine(value.policyDigest, "policyDigest"),
     status,
     evidence,
     finishedAt: singleLine(value.finishedAt, "finishedAt"),
@@ -253,6 +291,8 @@ export async function readValidationResult(
     readonly taskId: string;
     readonly generation: number;
     readonly head: string;
+    readonly contract: ValidationContractName;
+    readonly policyDigest: string;
   }>,
 ): Promise<ValidationResult> {
   const resultPath = absolute(path, "resultPath");
@@ -268,13 +308,20 @@ export async function readValidationResult(
     result.id !== expected.id ||
     result.taskId !== expected.taskId ||
     result.generation !== expected.generation ||
-    result.head !== expected.head
+    result.head !== expected.head ||
+    result.contract !== expected.contract ||
+    result.policyDigest !== expected.policyDigest
   ) {
-    throw new Error("validation result identity or HEAD does not match the job");
+    throw new Error("validation result identity, contract, or HEAD does not match the job");
   }
   for (const evidence of result.evidence) {
-    if (evidence.head !== expected.head)
-      throw new Error("validation evidence is not bound to the expected HEAD");
+    if (
+      evidence.head !== expected.head ||
+      evidence.contract !== expected.contract ||
+      evidence.policyDigest !== expected.policyDigest
+    ) {
+      throw new Error("validation evidence is not bound to the expected contract identity");
+    }
   }
   if (
     result.status === "completed" &&
@@ -291,6 +338,8 @@ async function existingValidationResult(job: ValidationJob): Promise<ValidationR
       taskId: job.taskId,
       generation: job.generation,
       head: job.head,
+      contract: job.contract,
+      policyDigest: job.policyDigest,
     });
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
@@ -351,8 +400,12 @@ export async function runValidationJob(
     try {
       const evidence = await runValidation({
         repoPath: job.repoPath,
-        head: job.head,
-        surfaces: job.surfaces,
+        contract: job.contract,
+        identity: {
+          head: job.head,
+          generation: job.generation,
+          policyDigest: job.policyDigest,
+        },
         commands: job.commands,
         run,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -382,7 +435,9 @@ export async function runValidationJob(
       validated.id !== job.id ||
       validated.taskId !== job.taskId ||
       validated.generation !== job.generation ||
-      validated.head !== job.head
+      validated.head !== job.head ||
+      validated.contract !== job.contract ||
+      validated.policyDigest !== job.policyDigest
     ) {
       throw new Error("validation worker produced an identity mismatch");
     }

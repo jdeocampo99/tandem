@@ -1,12 +1,18 @@
 import type {
+  PinnedValidationEvidence,
   ResolvedPolicy,
-  ReviewLens,
   TaskRecord,
   TaskStage,
-  ValidationEvidence,
 } from "../contracts.ts";
+import { LEGACY_EVIDENCE_CONTRACT } from "../contracts.ts";
 import { renderDraftPrDescription, renderPrDescription } from "../instructions.ts";
-import { commandMatchesSurfaces } from "../workers/validation.ts";
+import {
+  FINAL_REVIEW_LENSES,
+  type FinalRequirement,
+  finalAcceptanceContract,
+  finalAcceptanceStatus,
+  ValidationConfigurationError,
+} from "../tasks/acceptance.ts";
 
 export type PrSummary = Readonly<{
   readonly tldr: readonly string[];
@@ -20,7 +26,7 @@ export type DeliveryTaskShape = Readonly<{
   readonly head: string;
 }>;
 
-const REQUIRED_LENSES: readonly ReviewLens[] = ["behavior", "design", "coverage", "verification"];
+const REQUIRED_LENSES = FINAL_REVIEW_LENSES;
 const MAX_EVIDENCE_OUTPUT = 512;
 const MAX_DRAFT_ENTRY = 220;
 const MAX_DRAFT_BLOCKERS = 8;
@@ -54,12 +60,15 @@ export function readSingleLine(value: unknown, field: string): string {
   return text;
 }
 
-export function assertEvidence(task: TaskRecord, head: string): readonly ValidationEvidence[] {
+export function assertEvidence(
+  task: TaskRecord,
+  head: string,
+): readonly PinnedValidationEvidence[] {
   if (!Array.isArray(task.validationEvidence) || task.validationEvidence.length === 0) {
     throw new Error("delivery requires nonempty validation evidence");
   }
 
-  const evidence: ValidationEvidence[] = [];
+  const evidence: PinnedValidationEvidence[] = [];
   for (const candidate of task.validationEvidence) {
     if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
       throw new Error("delivery requires complete validation evidence bound to the reviewed HEAD");
@@ -70,6 +79,8 @@ export function assertEvidence(task: TaskRecord, head: string): readonly Validat
     const exitCode = candidateRecord.exitCode;
     const stdout = candidateRecord.stdout;
     const stderr = candidateRecord.stderr;
+    const contract = candidateRecord.contract;
+    const origin = candidateRecord.origin;
     if (
       typeof name !== "string" ||
       name.trim().length === 0 ||
@@ -84,12 +95,42 @@ export function assertEvidence(task: TaskRecord, head: string): readonly Validat
     ) {
       throw new Error("delivery requires complete validation evidence bound to the reviewed HEAD");
     }
+    if (contract === LEGACY_EVIDENCE_CONTRACT) {
+      throw new Error(
+        `delivery requires evidence pinned to a validation contract; ${name} predates validation contracts and the final acceptance manifest must run again at HEAD ${head}`,
+      );
+    }
+    if (
+      (contract !== "iteration" && contract !== "final") ||
+      (origin !== "local" && origin !== "github") ||
+      typeof candidateRecord.policyDigest !== "string" ||
+      candidateRecord.policyDigest.trim().length === 0
+    ) {
+      throw new Error("delivery requires complete validation evidence bound to the reviewed HEAD");
+    }
     if (exitCode !== 0) {
       throw new Error(`delivery requires successful validation; ${name} exited with ${exitCode}`);
     }
-    evidence.push(candidateRecord as ValidationEvidence);
+    evidence.push(candidateRecord as PinnedValidationEvidence);
   }
   return evidence;
+}
+
+/** Refuses delivery unless the complete final manifest passed for the delivered code and policy. */
+export function assertFinalAcceptance(task: TaskRecord, head: string): void {
+  const status = finalAcceptanceStatus(task, head);
+  if (status.satisfied) return;
+  const outstanding = [...status.missing, ...status.failed, ...status.stale]
+    .map((requirement) => `${requirement.name} (${requirement.origin})`)
+    .join(", ");
+  if (outstanding.length > 0) {
+    throw new Error(
+      `delivery requires a complete final acceptance run at HEAD ${head}; outstanding: ${outstanding}`,
+    );
+  }
+  throw new Error(
+    `delivery requires passing ${status.pendingLenses.join(", ")} review at HEAD ${head}`,
+  );
 }
 
 export function assertCurrentReviews(task: TaskRecord, head: string): void {
@@ -128,6 +169,7 @@ export function assertTaskShape(task: TaskRecord): DeliveryTaskShape {
   }
   assertEvidence(task, head);
   assertCurrentReviews(task, head);
+  assertFinalAcceptance(task, head);
   return { cwd, branch, head };
 }
 
@@ -140,9 +182,9 @@ function evidenceOutput(value: string): string {
   return JSON.stringify(bounded);
 }
 
-function evidenceBullet(entry: ValidationEvidence): string {
+function evidenceBullet(entry: PinnedValidationEvidence): string {
   const argv = entry.argv.map((argument) => JSON.stringify(argument)).join(" ");
-  return `${entry.name}: exit code ${entry.exitCode} at reviewed HEAD ${entry.head}; argv ${argv}; stdout ${evidenceOutput(entry.stdout)}; stderr ${evidenceOutput(entry.stderr)}`;
+  return `${entry.name} [${entry.contract} contract, ${entry.origin} check]: exit code ${entry.exitCode} at reviewed HEAD ${entry.head}; argv ${argv}; stdout ${evidenceOutput(entry.stdout)}; stderr ${evidenceOutput(entry.stderr)}`;
 }
 
 function validateSummary(summary: PrSummary): PrSummary {
@@ -155,12 +197,16 @@ function validateSummary(summary: PrSummary): PrSummary {
 export function describeTaskPr(task: TaskRecord, summary: PrSummary): string {
   const shape = assertTaskShape(task);
   const evidence = assertEvidence(task, shape.head);
+  const manifest = finalAcceptanceContract(task, shape.head);
   const validatedSummary = validateSummary(summary);
   return renderPrDescription({
     tldr: validatedSummary.tldr,
     what: validatedSummary.what,
     why: validatedSummary.why,
-    validation: evidence.map(evidenceBullet),
+    validation: [
+      `final acceptance manifest at HEAD ${shape.head}: ${manifest.requirements.length} required checks, ${manifest.lenses.length} review lenses, ${manifest.criteria.length} acceptance criteria`,
+      ...evidence.map(evidenceBullet),
+    ],
   });
 }
 
@@ -258,7 +304,9 @@ function draftActivity(task: TaskRecord): readonly string[] {
     case "implementing":
       return [`An implementer is working in the task worktree at generation ${task.generation}.`];
     case "validating":
-      return [`The runner is executing the pinned validation commands against ${head}.`];
+      return [
+        `The runner is executing the planned validation contract against ${head}; a targeted iteration run never substitutes for the final acceptance manifest.`,
+      ];
     case "reviewing": {
       const recorded = currentReviews(task);
       const detail =
@@ -277,7 +325,7 @@ function draftActivity(task: TaskRecord): readonly string[] {
       ];
     case "ready":
       return [
-        `Current validation and all ${REQUIRED_LENSES.length} review lenses pass at ${head}. Delivery acceptance is still a separate explicit step.`,
+        `The final acceptance manifest and all ${REQUIRED_LENSES.length} review lenses pass at ${head}. Delivery acceptance is still a separate explicit step.`,
       ];
     case "paused":
       return [
@@ -320,50 +368,65 @@ function draftBlockers(task: TaskRecord): readonly string[] {
   return blockers.slice(0, MAX_DRAFT_BLOCKERS).map(draftText);
 }
 
-function draftRemainingChecks(task: TaskRecord): readonly string[] {
+function describeRequirement(requirement: FinalRequirement, detail: string): string {
+  return `Final acceptance requirement ${requirement.name} (${requirement.origin} check) ${detail}.`;
+}
+
+/**
+ * Report what the final acceptance manifest still needs, read from the manifest owner in
+ * `tasks/acceptance.ts` so the draft shows exactly the checks the final gate will require.
+ */
+function draftRemainingChecks(task: TaskRecord, candidateHead: string | undefined): string[] {
+  if (candidateHead === undefined) {
+    return [
+      "The complete final acceptance manifest at the first validated candidate commit; no candidate commit has been recorded yet.",
+    ];
+  }
+  let status: ReturnType<typeof finalAcceptanceStatus>;
+  try {
+    status = finalAcceptanceStatus(task, candidateHead);
+  } catch (error) {
+    if (error instanceof ValidationConfigurationError) {
+      return [
+        `${error.message}; that is a validation configuration failure the final gate refuses, not a pass.`,
+      ];
+    }
+    throw error;
+  }
   const remaining: string[] = [];
-  const commands = task.policy.config.validationCommands.filter((command) =>
-    commandMatchesSurfaces(command, task.surfaces),
-  );
-  if (commands.length === 0) {
+  for (const requirement of status.missing) {
+    remaining.push(describeRequirement(requirement, "has no recorded evidence"));
+  }
+  for (const requirement of status.stale) {
     remaining.push(
-      "No pinned validation command matches this task's surfaces; that is a validation configuration failure, not a pass.",
+      describeRequirement(requirement, "has only stale evidence from another commit or policy"),
     );
   }
-  for (const command of commands) {
-    const passed = task.validationEvidence.some(
-      (evidence) =>
-        evidence.name === command.name &&
-        evidence.exitCode === 0 &&
-        task.reviewHead !== undefined &&
-        evidence.head === task.reviewHead,
+  for (const requirement of status.failed) {
+    remaining.push(describeRequirement(requirement, "recorded a failing result"));
+  }
+  for (const lens of status.pendingLenses) {
+    remaining.push(
+      `A passing ${lens} review by a fresh independent read-only reviewer at the candidate commit.`,
     );
-    if (!passed) {
-      remaining.push(
-        `Pinned validation command ${draftText(command.name)} has no passing evidence at the current HEAD.`,
-      );
-    }
   }
-  const passing = currentReviews(task).filter((review) => review.pass);
-  for (const lens of REQUIRED_LENSES) {
-    if (!passing.some((review) => review.lens === lens)) {
-      remaining.push(
-        `A passing ${lens} review by a fresh independent read-only reviewer at the current HEAD.`,
-      );
-    }
-  }
-  remaining.push("Runner-owned required GitHub checks on the delivered commit.");
-  return remaining.map(draftText);
+  return remaining;
 }
 
 /** Summarize durable task state for a draft. Pure: no checkout, remote, or runtime observation. */
-export function summarizeDraftProgress(task: TaskRecord): DraftProgress {
+export function summarizeDraftProgress(
+  task: TaskRecord,
+  candidateHead = task.reviewHead,
+): DraftProgress {
   assertDraftTaskShape(task);
   return {
     reviewLevel: pinnedReviewLevel(task.policy),
     activity: draftActivity(task),
     blockers: draftBlockers(task),
-    remainingChecks: draftRemainingChecks(task),
+    remainingChecks: [
+      ...draftRemainingChecks(task, candidateHead),
+      "Runner-owned required GitHub checks on the delivered commit.",
+    ].map(draftText),
   };
 }
 
@@ -386,7 +449,7 @@ export function describeTaskDraftPr(input: DraftDescriptionInput): string {
   const shape = assertDraftTaskShape(input.task);
   const publishedHead = readSingleLine(input.publishedHead, "publishedHead");
   const worktreeHead = readSingleLine(input.worktreeHead, "worktreeHead");
-  const progress = summarizeDraftProgress(input.task);
+  const progress = summarizeDraftProgress(input.task, input.task.reviewHead ?? publishedHead);
   const status = [
     `Task ${input.task.id} is ${input.task.stage} at generation ${shape.generation}, fix round ${input.task.reviewRound} of ${input.task.policy.config.maxFixRounds}.`,
     `Draft commit: ${publishedHead} on branch ${shape.branch}.`,

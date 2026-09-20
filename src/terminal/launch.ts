@@ -1,5 +1,7 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import type { CommandRunner } from "../contracts.ts";
+import type { CoordinatorResourceOutcome } from "../coordinator/resources.ts";
+import type { CoordinatorWorkspaceRetirement } from "../coordinator/workspace.ts";
 import type { TandemService } from "../service/controller.ts";
 import type { TerminalInvocation } from "./arguments.ts";
 import {
@@ -38,6 +40,88 @@ function workspaceIdFromLaunch(value: unknown): string | undefined {
   return typeof value.workspaceId === "string" && value.workspaceId.trim().length > 0
     ? value.workspaceId
     : undefined;
+}
+
+/** Reads a coordinator launch result's workspace retirement report, if it carried one. */
+export function workspaceRetirementFromLaunch(
+  value: unknown,
+): CoordinatorWorkspaceRetirement | undefined {
+  if (!isRecord(value)) return undefined;
+  const retirement = value.workspaceRetirement;
+  if (!isRecord(retirement) || typeof retirement.outcome !== "string") return undefined;
+  return retirement as CoordinatorWorkspaceRetirement;
+}
+
+/**
+ * Formats a user-facing notice for a retained or quarantined coordinator workspace. Returns
+ * undefined for the silent, default outcomes (closed, already-clear).
+ */
+export function workspaceRetirementNotice(
+  repoPath: string,
+  retirement: CoordinatorWorkspaceRetirement,
+): string | undefined {
+  if (retirement.outcome === "closed" || retirement.outcome === "already-clear") return undefined;
+  const reason = retirement.reason === undefined ? "" : `: ${retirement.reason}`;
+  const leftOpen =
+    retirement.extraPaneIds === undefined || retirement.extraPaneIds.length === 0
+      ? ""
+      : ` Left open: ${retirement.extraPaneIds.join(", ")}.`;
+  return retirement.outcome === "retained"
+    ? `Tandem retained the previous coordinator workspace for ${repoPath}${reason}.${leftOpen}\n`
+    : `Tandem left an ambiguous previous coordinator pane or workspace untouched for ${repoPath}${reason}.\n`;
+}
+
+/** Reads a coordinator launch result's previous-resource report, if it carried one. */
+export function previousResourcesFromLaunch(
+  value: unknown,
+): CoordinatorResourceOutcome | undefined {
+  if (!isRecord(value)) return undefined;
+  const resources = value.previousResources;
+  if (!isRecord(resources) || typeof resources.outcome !== "string") return undefined;
+  return resources as CoordinatorResourceOutcome;
+}
+
+/**
+ * Formats a user-facing notice for a previous coordinator worktree lease Tandem kept or
+ * quarantined. Returns undefined for the silent outcomes, where nothing accumulated.
+ */
+export function previousResourcesNotice(
+  repoPath: string,
+  resources: CoordinatorResourceOutcome,
+): string | undefined {
+  if (resources.outcome === "retained") {
+    return `Tandem kept the previous coordinator worktree for ${repoPath}: ${resources.reason}.\n`;
+  }
+  if (resources.outcome !== "quarantined") return undefined;
+  const where =
+    resources.quarantinePath === undefined ? "" : ` Recorded at ${resources.quarantinePath}.`;
+  return `Tandem quarantined the previous coordinator worktree lease for ${repoPath}: ${resources.reason}.${where}\n`;
+}
+
+/**
+ * Formats one notice per stopped coordinator a launch settled for another Tandem session, so a
+ * cross-session release, retention, or quarantine is never silent.
+ */
+export function otherSessionReconciliationNotices(
+  repoPath: string,
+  value: unknown,
+): readonly string[] {
+  if (!isRecord(value) || !Array.isArray(value.otherSessionReconciliations)) return [];
+  const notices: string[] = [];
+  for (const entry of value.otherSessionReconciliations) {
+    if (!isRecord(entry) || typeof entry.sessionId !== "string") continue;
+    const resources = entry.resources;
+    if (!isRecord(resources) || typeof resources.outcome !== "string") continue;
+    const reason = typeof resources.reason === "string" ? `: ${resources.reason}` : "";
+    const where =
+      typeof resources.quarantinePath === "string"
+        ? ` Recorded at ${resources.quarantinePath}.`
+        : "";
+    notices.push(
+      `Tandem settled a stopped coordinator for ${repoPath} from Herdr session ${entry.sessionId} (${resources.outcome})${reason}.${where}\n`,
+    );
+  }
+  return notices;
 }
 
 export async function launchProjects(
