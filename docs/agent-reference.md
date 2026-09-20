@@ -618,6 +618,7 @@ are:
 | `validationCommands` | Appendable `{ "name", "argv", "surfaces", "timeoutMs" }` objects; `argv` is non-empty, `surfaces` is a string array, `timeoutMs` is positive, and names do not conflict with inherited commands. |
 | `maxWorkers` | Positive integer concurrency limit. |
 | `maxFixRounds` | Positive integer review-fix limit. |
+| `reviewLevels` | Optional `{ "reducedRouting", "deepScrutiny", "jevAssistance", "sourceTransmission" }`; the two booleans and `sourceTransmission` default to `false` and `jevAssistance` defaults to `"off"` (the only other value is `"shadow"`). See [Risk-based review levels](#risk-based-review-levels); `reducedRouting` and any move past `shadow` require the documented evaluation first. |
 
 Custom approved policies use the same envelope and preserve every unrelated valid key and value.
 `instructionFiles` and all root guidance reads remain relative to the target repository; the
@@ -804,6 +805,139 @@ HEAD and the brief never replaces the final acceptance contract.
 Records written before the finding ledger existed load unchanged with no ledger, so no prior status
 is claimed without evidence. A ledger entry naming an unknown status, or missing the observation that
 supports its status, is a corrupt shape and fails closed.
+
+### Risk-based review levels
+
+Every review round classifies the change it is about to review. `src/tasks/review-levels.ts` does it
+as a pure function of the observed diff and the affected context: the changed paths, the content
+observed for each of them, the files at HEAD that reference a changed file, and the round's impact
+assessment. A line count, a task title, and a file extension are never sufficient on their own. A
+path categorizes a file only when it names an enumerated sensitive location such as `package.json`,
+a `migrations/` directory, or `.github/`; every other category comes from the diff content.
+
+The level is `light`, `standard`, or `deep`, and it is recorded on the task with the reason that
+produced it and the safety floors that fired. `tandem show` prints all three.
+
+Four fixed safety floors force a minimum level whatever else the diff shows:
+
+| Floor | Fires on | Minimum level |
+| --- | --- | --- |
+| `permissions-security` | authentication, authorization, credential, or cryptographic content | `deep` |
+| `data-integrity` | migrations, schema or serialization changes, durable-record content | `deep` |
+| `shared-contracts-concurrency` | changed exported declarations, locking, ordering, or interleaving | `deep` |
+| `dependency-build-infra` | manifests, lockfiles, build configuration, deployment definitions | `standard` |
+
+Uncertainty classifies conservatively. Unknown impact classifies `deep`. A diff whose content could
+not be observed, a truncated patch, a binary file, and a round with no observed changed file classify
+`standard`. A change that reached outside the surface its round was authorized to touch classifies
+`standard`. `light` requires all of: contained impact, every changed file observed, no floor fired,
+every file categorized as contained implementation, tests, or documentation, and the changed-file and
+affected-caller counts within `LIGHT_CLASSIFICATION_LIMITS`. Reclassification only ever raises: a
+later round that observes a wider or more sensitive change raises the recorded level and says so, and
+a later round that observes a narrower change keeps the recorded level. Classification never touches
+the task's pinned policy or model choices.
+
+Records written before review levels existed load with no recorded level and read as the conservative
+`standard` default, and their pinned policy loads with every review-level opt-in off, which is the
+review behavior they were pinned under. A recorded level naming an unknown level or safety floor, or
+missing its reason, is a corrupt shape and fails closed.
+
+#### What a level changes, and what must happen first
+
+**With the default policy, classification records the level and its reason and changes nothing else.
+Every task reviews exactly as it did before levels existed: the behavior, design, coverage, and
+verification lenses all run, in that order, at every round.** The `reviewLevels` policy section
+controls the rest, and every field defaults to off:
+
+```json
+{ "policy": { "reviewLevels": {
+  "reducedRouting": false,
+  "deepScrutiny": false,
+  "jevAssistance": "off",
+  "sourceTransmission": false
+} } }
+```
+
+- `reducedRouting` lets a `light` iteration round review one focused lens instead of four. It applies
+  only between authorized fix rounds and only before the final acceptance manifest has run at that
+  HEAD; once the manifest is recorded, the complete lens set is required again. **Do not enable it
+  until the documented end-to-end evaluation in issue #20 has been run and published.** See
+  "Evidence required before enabling reduced routing" below.
+- `deepScrutiny` adds the fired floors to a `deep` round's brief as mandatory scrutiny a reviewer must
+  dispose of explicitly. It adds work; it never removes any.
+- `jevAssistance` is `off` or `shadow`. Shadow records a helper's depth recommendation beside the
+  deterministic level for later comparison and never uses it.
+- `sourceTransmission` is the separate, explicit opt-in for sending changed source to an external
+  provider. It is distinct from having a `TYPESAFE_API_KEY` present.
+
+Issue #17's final acceptance contract is unchanged at every level. The final manifest always requires
+all four lenses and every configured required check for the delivered code at the current HEAD, so no
+level can make a candidate acceptable on less evidence.
+
+#### Shadow helper assistance
+
+`src/tasks/review-assistance.ts` asks the existing Jev transport in `src/adapters/typesafe.ts` two
+bounded questions, batched into one call: recommend a depth, and flag a small set of focus areas tied
+to the applicable principles (a hidden effect, a weakened test, an authorization change). There is no
+second provider path, memory, or handoff system.
+
+The helper is called only when `jevAssistance` is `shadow`, `sourceTransmission` is true, and a
+credential is configured. With any of those absent the injected evaluator is never invoked and zero
+source bytes leave the process.
+
+Flags enter the review brief through its existing advisory-lead slot, each with its provenance: the
+diff it was attributed to, the applicable principle, the exact question, the request identity
+(separate code, context, question, schema, policy, and model digests), and the result identity. They
+render under an untrusted heading. A lead never becomes a finding or a blocker, never excuses dropping
+an applicable dimension, and never authorizes acceptance.
+
+A recommendation can only raise a level. `raiseReviewLevel` takes the greater of the deterministic
+level and the recommendation, so a confident `light` answer on a security-floor change leaves the
+level at `deep`. In shadow mode the recommendation is recorded and the deterministic level is used
+unchanged. Provider failure, timeout, a malformed or adversarial answer, a confidence below the
+provisional bound, and missing or stale context all yield no recommendation and no lead, and none of
+them blocks or downgrades the baseline flow.
+
+Every threshold in `REVIEW_ASSISTANCE_LIMITS` is a provisional placeholder, not a calibrated value.
+The transmission bounds are hard limits enforced regardless.
+
+#### Privacy boundary
+
+Sending changed source to an external provider is new beyond prompt-only routing, so it is opt-in and
+screened. Screening refuses a file whose path looks secret-bearing (`.env`, `secrets/`,
+`credentials/`, `*.pem`, `*.key`, `id_rsa`, `.npmrc`, `.netrc`, `.aws/`, `.ssh/`) and a file whose
+observed content matches an obvious secret pattern (a PEM private key header, an AWS access key id, a
+GitHub or OpenAI or Slack token shape, a bearer token, or a key-value assignment of a long opaque
+secret). What survives screening is bounded by `maxTransmittedFiles`, `maxTransmittedLinesPerFile`,
+and `maxTransmittedBytes`. A refusal or a provider failure appends a bounded diagnostic to
+`<home>/logs/tandem.jsonl` carrying counts, byte totals, and a request-identity prefix, and no source
+content.
+
+Answers are cached in memory on an exact match of every identity at once: code, context, question,
+schema, policy, and model. Any difference is a fresh request.
+
+#### Evidence required before enabling reduced routing or helper assistance
+
+`evals/review-levels/` holds a deterministic, credential-free comparison that runs under `bun test`.
+It covers low-risk, high-risk, Tagalog-language, and adversarial synthetic changes, and reports missed
+serious issues, false-safe routing, escalation, and rework, plus latency and cost fields that stay
+`unavailable` when nothing reported them. False-safe routing is a safety failure counted and reported
+on its own; it is never averaged into an agreement or accuracy rate.
+
+Before anyone sets `reducedRouting` or moves `jevAssistance` past `shadow`, the following must exist
+and be published:
+
+1. The end-to-end benchmark from issue #20, over equivalent snapshots, measuring the whole path to a
+   verified result rather than classifier latency alone.
+2. Zero false-safe routing across the high-risk, Tagalog, and adversarial fixtures for the proposed
+   configuration, with the safety count reported separately from any agreement rate.
+3. A confidence and threshold sweep showing the proposed bounds were chosen from data rather than
+   assumed, since every bound shipped here is provisional.
+4. A recorded comparison of missed serious issues, escalation, rework, and cost against the
+   deterministic baseline, with the deterministic path retained if it is not clearly worse.
+
+No speed or quality claim is made for any of this work. The reported CI durations that motivated the
+tracking issue are user observations, not a measured baseline.
 
 ### Interactive child terminals
 
