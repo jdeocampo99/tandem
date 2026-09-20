@@ -5,7 +5,10 @@
  */
 
 import type { JEV_MODEL, JevEvaluationResponse } from "../src/adapters/typesafe.ts";
-import type { ResearchContinuationDisposition, ResearchContinuationSelector } from "../src/contracts.ts";
+import type {
+  ResearchContinuationDisposition,
+  ResearchContinuationSelector,
+} from "../src/contracts.ts";
 import type { PromptRoutingDecision } from "../src/extension/prompt-routing.ts";
 import type { UsageRecord } from "../src/runtime/usage.ts";
 import type {

@@ -166,7 +166,8 @@ function validateFixture(value: unknown, lineNumber: number): ResearchContinuati
   const description = requireString(value.description, "description", context);
   const scenario = requireOneOf(value.scenario, SCENARIOS, "scenario", context);
   const objective = requireString(value.objective, "objective", context);
-  const jevConfigured = value.jevConfigured === undefined ? undefined : Boolean(value.jevConfigured);
+  const jevConfigured =
+    value.jevConfigured === undefined ? undefined : Boolean(value.jevConfigured);
   const jevResponse = value.jevResponse as JevEvaluationResponse | undefined;
   const jevFailureCode =
     value.jevFailureCode === undefined

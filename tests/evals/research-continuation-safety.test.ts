@@ -19,17 +19,20 @@ import type { Endpoint, ResolvedPolicy, WorktreeLease } from "../../src/contract
 import { buildResearchFollowUpContent } from "../../src/extension/research-follow-up.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import {
-  classifyResearchContinuation,
-  type ResearchContinuationClassifierConfig,
-} from "../../src/tasks/research-continuation-classifier.ts";
-import {
   checkResearchContinuation,
   decideResearchFollowUp,
 } from "../../src/tasks/research-continuation.ts";
+import {
+  classifyResearchContinuation,
+  type ResearchContinuationClassifierConfig,
+} from "../../src/tasks/research-continuation-classifier.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 
 const NOW = "2030-01-02T03:04:05.000Z";
-const CONFIG: ResearchContinuationClassifierConfig = { apiKey: "adversarial-key", timeoutMs: 1_500 };
+const CONFIG: ResearchContinuationClassifierConfig = {
+  apiKey: "adversarial-key",
+  timeoutMs: 1_500,
+};
 
 const POLICY: ResolvedPolicy = {
   config: {
@@ -137,7 +140,7 @@ test("an adversarial classifier result cannot approve scope, create, or start an
           scoutSourceHead: "deadbeef",
           scoutSourceBase: "cafebabe",
           reportPath: "/reports/fixture.md",
-          reportDigest: "sha256:test",
+          reportDigest: "a".repeat(64),
           excerpt: "The throttling window drops the final batch.",
         },
       ],
@@ -156,22 +159,46 @@ test("an adversarial classifier result cannot approve scope, create, or start an
       leasedAt: NOW,
     };
     const endpoints: readonly Endpoint[] = [
-      { sessionId: "s1", workspaceId: "w1", tabId: "t1", paneId: "p1", role: "implementer", generation: 0 },
+      {
+        sessionId: "s1",
+        workspaceId: "w1",
+        tabId: "t1",
+        paneId: "p1",
+        role: "implementer",
+        generation: 0,
+      },
     ];
+
+    // Nothing in this pipeline ever issues an "approve" event, so the task never leaves
+    // "awaiting-approval"; "start" refuses it purely on stage.
     expect(() =>
       transitionTask(
         implementationTask,
         { type: "start", worktree, endpoints },
         { now: NOW, notificationId: "n1" },
       ),
+    ).toThrow(/awaiting-approval/);
+
+    // Even simulating a caller that skipped straight to "queued" without ever approving scope
+    // (bypassing the stage gate above), "start" still refuses on the separate scopeApproved check.
+    const queuedWithoutApproval = await store.update(
+      implementationTask.id,
+      implementationTask.revision,
+      (current) => ({ ...current, revision: current.revision + 1, stage: "queued" }),
+    );
+    expect(queuedWithoutApproval.scopeApproved).toBe(false);
+    expect(() =>
+      transitionTask(
+        queuedWithoutApproval,
+        { type: "start", worktree, endpoints },
+        { now: NOW, notificationId: "n2" },
+      ),
     ).toThrow(/approval-required|has not received scope approval/);
 
     const final = await store.list();
-    expect(final.every((task) => task.stage !== "implementing" && task.stage !== "scouting" || task.id === "scout-task")).toBe(
-      true,
-    );
-    expect(final.find((task) => task.id === "implementation-task")?.stage).toBe("awaiting-approval");
+    expect(final.find((task) => task.id === "scout-task")?.kind).toBe("scout");
     expect(final.find((task) => task.id === "implementation-task")?.scopeApproved).toBe(false);
+    expect(final.find((task) => task.id === "implementation-task")?.stage).not.toBe("implementing");
   } finally {
     await rm(home, { recursive: true, force: true });
   }

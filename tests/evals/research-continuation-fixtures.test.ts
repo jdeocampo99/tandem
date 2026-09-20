@@ -5,10 +5,8 @@ import {
   RESEARCH_CONTINUATION_FIXTURE_SET_VERSION,
 } from "../../evals/research-continuation-fixtures.ts";
 
-const FIXTURE_PATH = new URL(
-  "../../evals/fixtures/research-continuation.jsonl",
-  import.meta.url,
-).pathname;
+const FIXTURE_PATH = new URL("../../evals/fixtures/research-continuation.jsonl", import.meta.url)
+  .pathname;
 
 const VALID_LINE = JSON.stringify({
   id: "sample",
@@ -64,7 +62,14 @@ test("covers every scout stage precedence outcome and both restart fixtures", as
   const fixtures = await loadResearchContinuationFixtures(FIXTURE_PATH);
   const scoutOutcomes = new Set(fixtures.map((fixture) => fixture.scoutOutcome));
   expect(scoutOutcomes).toEqual(
-    new Set(["completed", "blocked", "cancelled", "needs-decision", "missing-report", "stale-generation"]),
+    new Set([
+      "completed",
+      "blocked",
+      "cancelled",
+      "needs-decision",
+      "missing-report",
+      "stale-generation",
+    ]),
   );
   expect(fixtures.filter((fixture) => fixture.restartCheck === true)).toHaveLength(2);
   expect(fixtures.some((fixture) => fixture.jevFailureCode === "unavailable")).toBe(true);

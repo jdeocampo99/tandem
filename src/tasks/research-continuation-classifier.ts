@@ -84,6 +84,9 @@ export type JevEvaluator = (
   options: JevEvaluationOptions,
 ) => Promise<JevEvaluationResponse>;
 
+/** A monotonic duration clock, injected so evaluation tooling can produce deterministic durations. */
+export type ResearchContinuationClock = () => number;
+
 const REPORT_ONLY_CUES: readonly RegExp[] = [
   /\b(?:research|investigation|report|analysis|reading|review)[\s-]only\b/u,
   /\b(?:just|only) (?:research|investigate|look|read|report|summar(?:ize|ise))\b/u,
@@ -189,14 +192,15 @@ function parseTimeout(source: string | undefined): number {
     : DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS;
 }
 
-function elapsedMs(startedAt: number): number {
-  return Math.max(0, Math.round(performance.now() - startedAt));
+function elapsedMs(startedAt: number, now: ResearchContinuationClock): number {
+  return Math.max(0, Math.round(now() - startedAt));
 }
 
 function selected(
   disposition: ResearchContinuationDisposition,
   reason: ResearchContinuationReason,
   startedAt: number,
+  now: ResearchContinuationClock,
 ): ResearchContinuationClassification {
   return {
     continuation: {
@@ -205,7 +209,7 @@ function selected(
       selectedBy: "deterministic",
     },
     reason,
-    durationMs: elapsedMs(startedAt),
+    durationMs: elapsedMs(startedAt, now),
   };
 }
 
@@ -213,10 +217,11 @@ function selected(
 function conservative(
   reason: ResearchContinuationReason,
   startedAt: number,
+  now: ResearchContinuationClock,
   usage?: JevUsage,
 ): ResearchContinuationClassification {
   return {
-    ...selected("ask-intent", reason, startedAt),
+    ...selected("ask-intent", reason, startedAt, now),
     ...(usage === undefined ? {} : { usage }),
   };
 }
@@ -251,14 +256,15 @@ export async function classifyResearchContinuation(
   request: ResearchContinuationRequest,
   config: ResearchContinuationClassifierConfig,
   evaluate: JevEvaluator = evaluateJev,
+  now: ResearchContinuationClock = () => performance.now(),
 ): Promise<ResearchContinuationClassification> {
-  const startedAt = performance.now();
+  const startedAt = now();
   const objective = sanitizeObjective(request.objective);
   const deterministic = classifyContinuationCues(objective);
   if (deterministic.resolved) {
-    return selected(deterministic.disposition, deterministic.reason, startedAt);
+    return selected(deterministic.disposition, deterministic.reason, startedAt, now);
   }
-  if (config.apiKey === undefined) return conservative("jev-not-configured", startedAt);
+  if (config.apiKey === undefined) return conservative("jev-not-configured", startedAt, now);
 
   const input: JevEvaluationInput = {
     model: JEV_MODEL,
@@ -278,15 +284,16 @@ export async function classifyResearchContinuation(
     return conservative(
       error instanceof JevEvaluationError ? `jev-${error.code}` : "jev-error",
       startedAt,
+      now,
     );
   }
 
   const choice = classifiedChoice(response);
   if (choice === undefined) {
-    return conservative("jev-invalid-classification", startedAt, response.usage);
+    return conservative("jev-invalid-classification", startedAt, now, response.usage);
   }
   if (choice.confidence < RESEARCH_CONTINUATION_CONFIDENCE_THRESHOLD) {
-    return conservative("jev-low-confidence", startedAt, response.usage);
+    return conservative("jev-low-confidence", startedAt, now, response.usage);
   }
   return {
     continuation: {
@@ -296,7 +303,7 @@ export async function classifyResearchContinuation(
       classifierVersion: RESEARCH_CONTINUATION_CLASSIFIER_VERSION,
     },
     reason: "jev-classified",
-    durationMs: elapsedMs(startedAt),
+    durationMs: elapsedMs(startedAt, now),
     usage: response.usage,
   };
 }

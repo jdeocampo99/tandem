@@ -7,10 +7,8 @@ import { runFakeResearchContinuationFixtures } from "../../evals/run-research-co
 import { summarizeResearchContinuationRun } from "../../evals/summarize.ts";
 import { writeEvalResults } from "../../evals/write-results.ts";
 
-const FIXTURE_PATH = new URL(
-  "../../evals/fixtures/research-continuation.jsonl",
-  import.meta.url,
-).pathname;
+const FIXTURE_PATH = new URL("../../evals/fixtures/research-continuation.jsonl", import.meta.url)
+  .pathname;
 
 /**
  * The one fixture deliberately crafted with a miscalibrated recorded Jev response: a report-only
@@ -24,9 +22,22 @@ test("fake mode runs every fixture deterministically with no network and no cred
   const fixtures = await loadResearchContinuationFixtures(FIXTURE_PATH);
   const first = await runFakeResearchContinuationFixtures(fixtures);
   const second = await runFakeResearchContinuationFixtures(fixtures);
-  const strip = (outcomes: typeof first) =>
-    outcomes.map(({ durationMs: _durationMs, usage: _usage, ...rest }) => rest);
-  expect(strip(first)).toEqual(strip(second));
+  // A full comparison, including every nested duration: fake mode injects a fixed clock into
+  // classifyResearchContinuation (so its own duration and its nested usage record's duration both
+  // come from it), so two runs over the same fixtures are byte-identical, not merely equal once
+  // durations are set aside.
+  expect(first).toEqual(second);
+});
+
+test("fake mode's injected clock makes every duration, including the nested usage record's, exactly zero", async () => {
+  const fixtures = await loadResearchContinuationFixtures(FIXTURE_PATH);
+  const outcomes = await runFakeResearchContinuationFixtures(fixtures);
+  for (const outcome of outcomes) {
+    expect(outcome.durationMs, `${outcome.fixtureId} durationMs`).toBe(0);
+    if (outcome.usage !== undefined) {
+      expect(outcome.usage.durationMs, `${outcome.fixtureId} usage.durationMs`).toBe(0);
+    }
+  }
 });
 
 test("every fixture except the adversarial one reaches its expected disposition and follow-up", async () => {
@@ -74,9 +85,11 @@ test("deterministic and jev-failure fixtures never leave usage as zero when unav
   const fixtures = await loadResearchContinuationFixtures(FIXTURE_PATH);
   const outcomes = await runFakeResearchContinuationFixtures(fixtures);
   const providerFailures = outcomes.filter((outcome) =>
-    ["jev-unavailable-ambiguous", "jev-timeout-ambiguous", "jev-invalid-response-ambiguous"].includes(
-      outcome.fixtureId,
-    ),
+    [
+      "jev-unavailable-ambiguous",
+      "jev-timeout-ambiguous",
+      "jev-invalid-response-ambiguous",
+    ].includes(outcome.fixtureId),
   );
   expect(providerFailures).toHaveLength(3);
   for (const outcome of providerFailures) {
@@ -84,7 +97,9 @@ test("deterministic and jev-failure fixtures never leave usage as zero when unav
     expect(outcome.usage?.inputTokens).toBe("unavailable");
     expect(outcome.usage?.outputTokens).toBe("unavailable");
   }
-  const deterministic = outcomes.find((outcome) => outcome.fixtureId === "explicit-web-research-report-only");
+  const deterministic = outcomes.find(
+    (outcome) => outcome.fixtureId === "explicit-web-research-report-only",
+  );
   expect(deterministic?.providerOutcome).toBe("not-attempted");
   expect(deterministic?.usage).toBeUndefined();
 });

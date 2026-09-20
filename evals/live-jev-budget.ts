@@ -4,7 +4,11 @@
  * in exactly one place, on top of the one pricing/cost function in `src/runtime/usage.ts`.
  */
 
-import { evaluateJev, type JevEvaluationInput, type JevEvaluationOptions } from "../src/adapters/typesafe.ts";
+import type {
+  evaluateJev,
+  JevEvaluationInput,
+  JevEvaluationOptions,
+} from "../src/adapters/typesafe.ts";
 import { calculateUsageCost, type PricingSnapshot } from "../src/runtime/usage.ts";
 
 export type LiveJevBudget = Readonly<{
@@ -71,10 +75,7 @@ export function costTrackingEvaluate(
 }
 
 /** Called immediately before each live call; throws once cumulative spend has reached the budget. */
-export function budgetGuard(
-  spentTracker: { totalUsd: number },
-  budget: LiveJevBudget,
-): () => void {
+export function budgetGuard(spentTracker: { totalUsd: number }, budget: LiveJevBudget): () => void {
   return () => {
     if (spentTracker.totalUsd >= budget.maxTotalCostUsd) {
       throw new LiveJevBudgetExceededError(spentTracker.totalUsd, budget.maxTotalCostUsd);

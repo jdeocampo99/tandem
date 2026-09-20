@@ -31,8 +31,17 @@ import {
 } from "../src/adapters/typesafe.ts";
 import type { ResearchContinuation, ResolvedPolicy } from "../src/contracts.ts";
 import { buildResearchFollowUpContent } from "../src/extension/research-follow-up.ts";
-import { JEV_PRICING_SNAPSHOT, USAGE_RECORD_SCHEMA_VERSION, type UsageRecord } from "../src/runtime/usage.ts";
+import {
+  JEV_PRICING_SNAPSHOT,
+  USAGE_RECORD_SCHEMA_VERSION,
+  type UsageRecord,
+} from "../src/runtime/usage.ts";
 import { transitionTask } from "../src/tasks/lifecycle.ts";
+import {
+  decideResearchFollowUp,
+  type ResearchFollowUpDecision,
+  type ResearchFollowUpInput,
+} from "../src/tasks/research-continuation.ts";
 import {
   classifyContinuationCues,
   classifyResearchContinuation,
@@ -40,33 +49,28 @@ import {
   type JevEvaluator,
   type ResearchContinuationClassification,
   type ResearchContinuationClassifierConfig,
+  type ResearchContinuationClock,
 } from "../src/tasks/research-continuation-classifier.ts";
-import {
-  decideResearchFollowUp,
-  type ResearchFollowUpDecision,
-  type ResearchFollowUpInput,
-} from "../src/tasks/research-continuation.ts";
 import { createTaskStore } from "../src/tasks/store.ts";
-import { createEphemeralHome, type EphemeralHome } from "./run-jev.ts";
 import {
   budgetGuard,
   checkLiveJevRunOptions,
   costTrackingEvaluate,
-  LiveJevBudgetExceededError,
   type LiveJevBudget,
+  LiveJevBudgetExceededError,
   type LiveJevRunOptions,
 } from "./live-jev-budget.ts";
 import {
   loadResearchContinuationFixtures,
   type ResearchContinuationFixture,
 } from "./research-continuation-fixtures.ts";
+import { createEphemeralHome, type EphemeralHome } from "./run-jev.ts";
 import { summarizeResearchContinuationRun } from "./summarize.ts";
 import type { PromptRoutingProviderOutcome, ResearchContinuationRunOutcome } from "./types.ts";
 import { realEvalResultIo, writeEvalResults } from "./write-results.ts";
 
-export type { LiveJevBudget, LiveJevRunOptions };
+export type { LiveJevBudget, LiveJevRunOptions, ResearchContinuationRunOutcome };
 export { LiveJevBudgetExceededError };
-export type { ResearchContinuationRunOutcome };
 
 const FAKE_API_KEY = "fixture-key";
 const NOW = "2030-01-02T03:04:05.000Z";
@@ -81,7 +85,10 @@ type ClassifyDeps = Readonly<{
 function fakeEvaluatorFor(fixture: ResearchContinuationFixture): JevEvaluator {
   return async () => {
     if (fixture.jevFailureCode !== undefined) {
-      throw new JevEvaluationError(fixture.jevFailureCode, `fixture ${fixture.id} simulated failure`);
+      throw new JevEvaluationError(
+        fixture.jevFailureCode,
+        `fixture ${fixture.id} simulated failure`,
+      );
     }
     if (fixture.jevResponse === undefined) {
       throw new Error(`fixture ${fixture.id} has no recorded jevResponse or jevFailureCode`);
@@ -101,7 +108,12 @@ function fakeDepsFor(fixture: ResearchContinuationFixture): ClassifyDeps {
   };
 }
 
-const PROVIDER_FAILURE_REASONS = ["jev-unavailable", "jev-invalid-response", "jev-invalid-request", "jev-error"];
+const PROVIDER_FAILURE_REASONS = [
+  "jev-unavailable",
+  "jev-invalid-response",
+  "jev-invalid-request",
+  "jev-error",
+];
 
 function classifierProviderOutcome(
   jevCallMade: boolean,
@@ -204,7 +216,9 @@ const FIXTURE_POLICY: ResolvedPolicy = {
 async function decideRestartedFollowUp(
   fixture: ResearchContinuationFixture,
   researchContinuation: ResearchContinuation,
-): Promise<Readonly<{ decision: ResearchFollowUpDecision; content: string; restartContent: string }>> {
+): Promise<
+  Readonly<{ decision: ResearchFollowUpDecision; content: string; restartContent: string }>
+> {
   const { home, cleanup }: EphemeralHome = await createEphemeralHome();
   try {
     const directory = join(home, "tasks");
@@ -238,7 +252,8 @@ async function decideRestartedFollowUp(
 
     const first = createTaskStore({ directory, clock: () => NOW, idFactory: () => "unused" });
     const firstRecord = await first.read("scout-task");
-    if (firstRecord === undefined) throw new Error(`fixture ${fixture.id}: scout was not persisted`);
+    if (firstRecord === undefined)
+      throw new Error(`fixture ${fixture.id}: scout was not persisted`);
     const decision = decideResearchFollowUp({ task: firstRecord, reportReadable: true });
     const content = buildResearchFollowUpContent(decision);
 
@@ -273,7 +288,10 @@ function checkContent(fixture: ResearchContinuationFixture, content: string): re
  * one way this pure, non-authorizing content could itself misrepresent the safety invariant.
  */
 function hasSafetyFailure(decision: ResearchFollowUpDecision, content: string): boolean {
-  return decision.followUp === "implementation-interview" && !content.includes(IMPLEMENTATION_APPROVAL_DISCLAIMER);
+  return (
+    decision.followUp === "implementation-interview" &&
+    !content.includes(IMPLEMENTATION_APPROVAL_DISCLAIMER)
+  );
 }
 
 async function runResearchContinuationFixture(
@@ -281,6 +299,7 @@ async function runResearchContinuationFixture(
   mode: "fake" | "live",
   runIndex: number,
   deps: ClassifyDeps,
+  now: ResearchContinuationClock,
 ): Promise<ResearchContinuationRunOutcome> {
   let jevCallMade = false;
   const wrapped: JevEvaluator = async (input, options) => {
@@ -291,6 +310,7 @@ async function runResearchContinuationFixture(
     { objective: fixture.objective, taskKind: "scout" },
     deps.config,
     wrapped,
+    now,
   );
   const jevCallExpected =
     !classifyContinuationCues(fixture.objective).resolved && deps.config.apiKey !== undefined;
@@ -339,7 +359,9 @@ async function runResearchContinuationFixture(
     jevCallMade,
     expectedFollowUp: fixture.expectedFollowUp,
     actualFollowUp: decision.followUp,
-    ...(fixture.expectedOverride === undefined ? {} : { expectedOverride: fixture.expectedOverride }),
+    ...(fixture.expectedOverride === undefined
+      ? {}
+      : { expectedOverride: fixture.expectedOverride }),
     ...(decision.override === undefined ? {} : { actualOverride: decision.override }),
     content,
     ...(restartContent === undefined ? {} : { restartContent }),
@@ -350,13 +372,21 @@ async function runResearchContinuationFixture(
   };
 }
 
-/** Fake mode: deterministic, no network, safe for `bun test`. */
+/**
+ * Fake mode: deterministic, no network, safe for `bun test`. Uses a fixed clock rather than the
+ * real one, since fake mode never makes a real provider call and so has no real latency to
+ * measure: every duration (the outcome's own and its nested usage record's) is therefore always
+ * zero, and two fake runs over the same fixtures are byte-identical.
+ */
 export async function runFakeResearchContinuationFixtures(
   fixtures: readonly ResearchContinuationFixture[],
 ): Promise<readonly ResearchContinuationRunOutcome[]> {
+  const now: ResearchContinuationClock = () => 0;
   const outcomes: ResearchContinuationRunOutcome[] = [];
   for (const fixture of fixtures) {
-    outcomes.push(await runResearchContinuationFixture(fixture, "fake", 0, fakeDepsFor(fixture)));
+    outcomes.push(
+      await runResearchContinuationFixture(fixture, "fake", 0, fakeDepsFor(fixture), now),
+    );
   }
   return outcomes;
 }
@@ -379,18 +409,23 @@ export async function runLiveResearchContinuationFixtures(
     config: { apiKey: options.apiKey, timeoutMs: options.timeoutMs },
     evaluate,
   };
+  const now: ResearchContinuationClock = () => performance.now();
   const outcomes: ResearchContinuationRunOutcome[] = [];
   for (const fixture of fixtures) {
     for (let runIndex = 0; runIndex < options.repeatCount; runIndex += 1) {
       if (!classifyContinuationCues(fixture.objective).resolved) guard();
-      outcomes.push(await runResearchContinuationFixture(fixture, "live", runIndex, deps));
+      outcomes.push(await runResearchContinuationFixture(fixture, "live", runIndex, deps, now));
     }
   }
   return outcomes;
 }
 
-const FIXTURE_PATH = fileURLToPath(new URL("./fixtures/research-continuation.jsonl", import.meta.url));
-const DEFAULT_OUTPUT_DIR = fileURLToPath(new URL("./results-research-continuation", import.meta.url));
+const FIXTURE_PATH = fileURLToPath(
+  new URL("./fixtures/research-continuation.jsonl", import.meta.url),
+);
+const DEFAULT_OUTPUT_DIR = fileURLToPath(
+  new URL("./results-research-continuation", import.meta.url),
+);
 
 function readFlag(args: readonly string[], name: string): string | undefined {
   const index = args.indexOf(name);

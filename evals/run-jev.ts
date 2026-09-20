@@ -45,8 +45,8 @@ import {
   budgetGuard,
   checkLiveJevRunOptions,
   costTrackingEvaluate,
-  LiveJevBudgetExceededError,
   type LiveJevBudget,
+  LiveJevBudgetExceededError,
   type LiveJevCaller,
   type LiveJevRunOptions,
 } from "./live-jev-budget.ts";
@@ -58,9 +58,15 @@ import type {
 } from "./types.ts";
 import { type EvalResultIo, realEvalResultIo, writeEvalResults } from "./write-results.ts";
 
-export type { PromptRoutingFieldMatches, PromptRoutingProviderOutcome, PromptRoutingRunOutcome };
+export type {
+  LiveJevBudget,
+  LiveJevCaller,
+  LiveJevRunOptions,
+  PromptRoutingFieldMatches,
+  PromptRoutingProviderOutcome,
+  PromptRoutingRunOutcome,
+};
 export { LiveJevBudgetExceededError };
-export type { LiveJevBudget, LiveJevCaller, LiveJevRunOptions };
 
 export type EphemeralHome = Readonly<{
   readonly home: string;

@@ -433,9 +433,8 @@ export function computeJevCallDiscipline(
     unexpectedCallCount: outcomes.filter(
       (outcome) => outcome.jevCallMade && !outcome.jevCallExpected,
     ).length,
-    missingCallCount: outcomes.filter(
-      (outcome) => !outcome.jevCallMade && outcome.jevCallExpected,
-    ).length,
+    missingCallCount: outcomes.filter((outcome) => !outcome.jevCallMade && outcome.jevCallExpected)
+      .length,
   };
 }
 
@@ -487,7 +486,9 @@ export type AvoidedCoordinatorWorkReport = Readonly<{
 export function computeAvoidedCoordinatorWork(
   outcomes: readonly ResearchContinuationRunOutcome[],
 ): AvoidedCoordinatorWorkReport {
-  const avoided = outcomes.filter((outcome) => outcome.actualFollowUp !== "implementation-interview");
+  const avoided = outcomes.filter(
+    (outcome) => outcome.actualFollowUp !== "implementation-interview",
+  );
   return { count: avoided.length, rate: rate(avoided.length, outcomes.length) };
 }
 
