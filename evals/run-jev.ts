@@ -360,6 +360,17 @@ export async function runFakePromptRoutingFixtures(
  * is never called by `bun test`, and the CLI entry point below only reaches it behind an explicit
  * `--live` flag plus a `TYPESAFE_API_KEY`.
  */
+/**
+ * A `provider-failure` fixture scripts an outage for an otherwise ordinary prompt. The real
+ * provider cannot be made to fail on demand, so live it would answer normally and be scored as
+ * a false direct route. Live runs therefore leave these fixtures to fake mode.
+ */
+export function liveEligibleFixtures(
+  fixtures: readonly PromptRoutingFixture[],
+): readonly PromptRoutingFixture[] {
+  return fixtures.filter((fixture) => fixture.safety !== "provider-failure");
+}
+
 export async function runLivePromptRoutingFixtures(
   fixtures: readonly PromptRoutingFixture[],
   options: LiveJevRunOptions,
@@ -368,7 +379,7 @@ export async function runLivePromptRoutingFixtures(
   const spentTracker = { totalUsd: 0 };
   const pricing = options.budget.pricing ?? JEV_PRICING_SNAPSHOT;
   const evaluate = costTrackingEvaluate(options.evaluate ?? evaluateJev, pricing, spentTracker);
-  return runPromptRoutingFixtures(fixtures, {
+  return runPromptRoutingFixtures(liveEligibleFixtures(fixtures), {
     mode: "live",
     config: { apiKey: options.apiKey, timeoutMs: options.timeoutMs },
     buildEvaluate: () => evaluate,

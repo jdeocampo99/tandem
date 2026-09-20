@@ -101,7 +101,11 @@ extension actually does.
   reaches live mode behind an explicit `--live` flag plus `TYPESAFE_API_KEY`, `--repeat`,
   `--timeout`, and `--budget`; fake mode is the default. `writePromptRoutingResults` writes JSONL
   results plus a JSON summary under `evals/results/` (git-ignored), never into a production
-  Tandem home's diagnostics.
+  Tandem home's diagnostics. Live runs skip `provider-failure` fixtures (`liveEligibleFixtures`):
+  they script an outage for an ordinary prompt, and the real provider cannot be made to fail on
+  demand, so live it would answer normally and be miscounted as a false direct route. The live
+  benchmark skips the same fixtures, and scores any live direct route that has no recorded direct
+  action as incorrect and unsafe, since only must-fall-back fixtures lack that recording.
 - `evals/summarize.ts`: pure metric functions over `PromptRoutingRunOutcome[]` (no filesystem,
   network, or clock access): per-field classification accuracy (graded against Jev's raw answers,
   independent of routing), direct-route precision/recall with an explicit false-direct-route count

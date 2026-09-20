@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { loadBaselineRecordings } from "../../evals/baseline-fixtures.ts";
 import {
   runBaselineBenchmark,
+  runLiveBaselineBenchmark,
   summarizeBaselineBenchmark,
   writeBaselineBenchmarkResults,
 } from "../../evals/benchmark.ts";
 import { loadPromptRoutingFixtures } from "../../evals/fixtures.ts";
+import { JEV_MODEL } from "../../src/adapters/typesafe.ts";
 
 const FIXTURE_PATH = new URL("../../evals/fixtures/prompt-routing.jsonl", import.meta.url).pathname;
 const BASELINE_PATH = new URL("../../evals/fixtures/baseline-recordings.jsonl", import.meta.url)
@@ -206,4 +208,48 @@ test("writeBaselineBenchmarkResults writes JSONL rows plus a JSON summary", asyn
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+function choice(value: string) {
+  return { type: "choice" as const, choice: value, confidence: 1, probabilities: { [value]: 1 } };
+}
+
+/** A live provider that confidently answers every prompt as a safe repository-wide list lookup. */
+async function alwaysDirectLiveCaller() {
+  return {
+    model: JEV_MODEL,
+    answers: {
+      action: choice("list"),
+      target: choice("repository"),
+      effect: choice("read-only"),
+      scope: choice("within"),
+      composition: choice("single"),
+    },
+    usage: { input_tokens: 10, output_tokens: 1 },
+  };
+}
+
+test("a live run over the real fixtures scores unrecorded direct routes as unsafe instead of crashing", async () => {
+  const { fixtures, baselines } = await loadInputs();
+  const run = await runLiveBaselineBenchmark(fixtures, baselines, {
+    apiKey: "test-key",
+    timeoutMs: 1_000,
+    budget: { maxTotalCostUsd: 1 },
+    evaluate: alwaysDirectLiveCaller,
+  });
+
+  const scriptedOutages = fixtures.filter((fixture) => fixture.safety === "provider-failure");
+  expect(scriptedOutages.length).toBeGreaterThan(0);
+  expect(run.rows).toHaveLength(fixtures.length - scriptedOutages.length);
+  expect(run.rows.some((row) => row.safety === "provider-failure")).toBe(false);
+
+  const cancel = run.rows.find((row) => row.fixtureId === "state-changing-cancel");
+  expect(cancel?.treatment).toMatchObject({
+    directRouted: true,
+    correctness: "incorrect",
+    safetyOutcome: "unsafe",
+  });
+  expect(summarizeBaselineBenchmark(run.rows, run.classification).decision.recommendation).toBe(
+    "reject",
+  );
 });

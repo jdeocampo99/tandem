@@ -172,3 +172,22 @@ test("stops before the call that would exceed the budget and fails the run", asy
   // 3 calls succeed ($0.126 spent); the 4th is blocked before it would be made.
   expect(calls).toHaveLength(3);
 });
+
+test("live runs leave scripted provider-failure fixtures to fake mode", async () => {
+  const calls: Call[] = [];
+  const scriptedOutage: PromptRoutingFixture = {
+    ...fixture("scripted-outage"),
+    expectedRoute: "fallback",
+    expectedReason: "jev-unavailable",
+    safety: "provider-failure",
+  };
+  const outcomes = await runLivePromptRoutingFixtures([fixture("a"), scriptedOutage], {
+    apiKey: "test-key",
+    repeatCount: 2,
+    timeoutMs: 1_000,
+    budget: { maxTotalCostUsd: 1 },
+    evaluate: fakeLiveCaller({ inputTokens: 10, outputTokens: 1 }, calls),
+  });
+  expect(outcomes.map((outcome) => outcome.fixtureId)).toEqual(["a", "a"]);
+  expect(calls).toHaveLength(2);
+});
