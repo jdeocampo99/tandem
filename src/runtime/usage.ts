@@ -1,0 +1,198 @@
+/**
+ * Bounded usage telemetry for evaluation and cost accounting.
+ *
+ * This module is the single source for the usage record shape, pricing data, cost
+ * calculation, and cross-run aggregation shared by production route diagnostics and
+ * evaluation artifacts. Missing provider usage is always the literal "unavailable",
+ * never zero, so a report can tell "no tokens reported" apart from "zero tokens used".
+ * Cost figures produced here are informational only; nothing in this module authorizes
+ * or blocks work.
+ */
+
+export const USAGE_RECORD_SCHEMA_VERSION = 1;
+
+/** A reported token count, or the explicit marker used when a provider did not report one. */
+export type TokenCount = number | "unavailable";
+
+export type PricingSnapshot = Readonly<{
+  readonly schemaVersion: number;
+  readonly source: string;
+  readonly effectiveDate: string;
+  readonly currency: "USD";
+  readonly inputPerMillionTokens: number;
+  readonly outputPerMillionTokens: number;
+}>;
+
+/** TypeSafe's published Jev rate as of 2026-09-20 (https://docs.typesafe.ai/pricing): output is free. */
+export const JEV_PRICING_SNAPSHOT: PricingSnapshot = {
+  schemaVersion: 1,
+  source: "typesafe-jev-published-rate",
+  effectiveDate: "2026-09-20",
+  currency: "USD",
+  inputPerMillionTokens: 0.042,
+  outputPerMillionTokens: 0,
+};
+
+export type UsageRecord = Readonly<{
+  readonly schemaVersion: typeof USAGE_RECORD_SCHEMA_VERSION;
+  readonly provider: string;
+  readonly model: string;
+  readonly inputTokens: TokenCount;
+  readonly outputTokens: TokenCount;
+  readonly durationMs: number;
+  readonly timedOut: boolean;
+  readonly reason: string;
+  readonly pricing: PricingSnapshot | "unavailable";
+}>;
+
+export type UsageCost = Readonly<{
+  readonly currency: "USD";
+  readonly amount: number;
+  readonly pricingVersion: number;
+  readonly pricingSource: string;
+}>;
+
+/**
+ * Pure cost estimate for informational reporting only. `pricing` is an explicit input
+ * rather than read off a `UsageRecord` so callers can re-price recorded usage under a
+ * different, later pricing snapshot.
+ */
+export function calculateUsageCost(
+  tokens: Readonly<{ readonly inputTokens: TokenCount; readonly outputTokens: TokenCount }>,
+  pricing: PricingSnapshot | "unavailable",
+): UsageCost | "unavailable" {
+  if (pricing === "unavailable") return "unavailable";
+  if (tokens.inputTokens === "unavailable" || tokens.outputTokens === "unavailable") {
+    return "unavailable";
+  }
+  const amount =
+    (tokens.inputTokens / 1_000_000) * pricing.inputPerMillionTokens +
+    (tokens.outputTokens / 1_000_000) * pricing.outputPerMillionTokens;
+  return {
+    currency: pricing.currency,
+    amount,
+    pricingVersion: pricing.schemaVersion,
+    pricingSource: pricing.source,
+  };
+}
+
+/** Grouping tags for one usage sample. Each is optional; an absent tag aggregates as "unknown". */
+export type UsageContext = Readonly<{
+  readonly fixture?: string;
+  readonly role?: string;
+  readonly taskId?: string;
+  readonly runId?: string;
+}>;
+
+export type TaggedUsageRecord = Readonly<{
+  readonly context: UsageContext;
+  readonly usage: UsageRecord;
+}>;
+
+export type UsageAggregateKey = Readonly<{
+  readonly fixture: string;
+  readonly role: string;
+  readonly taskId: string;
+  readonly runId: string;
+}>;
+
+export type UsageAggregate = Readonly<{
+  readonly key: UsageAggregateKey;
+  readonly sampleCount: number;
+  readonly knownInputTokens: number;
+  readonly knownOutputTokens: number;
+  readonly unavailableInputSamples: number;
+  readonly unavailableOutputSamples: number;
+  readonly timedOutSamples: number;
+  readonly totalDurationMs: number;
+  readonly knownCost: number;
+  readonly costUnavailableSamples: number;
+}>;
+
+const UNKNOWN_USAGE_TAG = "unknown";
+const AGGREGATE_KEY_SEPARATOR = "\u0000";
+
+type MutableUsageAggregate = {
+  key: UsageAggregateKey;
+  sampleCount: number;
+  knownInputTokens: number;
+  knownOutputTokens: number;
+  unavailableInputSamples: number;
+  unavailableOutputSamples: number;
+  timedOutSamples: number;
+  totalDurationMs: number;
+  knownCost: number;
+  costUnavailableSamples: number;
+};
+
+function tagOrUnknown(value: string | undefined): string {
+  return value === undefined || value.length === 0 ? UNKNOWN_USAGE_TAG : value;
+}
+
+function aggregateKeyFor(context: UsageContext): UsageAggregateKey {
+  return {
+    fixture: tagOrUnknown(context.fixture),
+    role: tagOrUnknown(context.role),
+    taskId: tagOrUnknown(context.taskId),
+    runId: tagOrUnknown(context.runId),
+  };
+}
+
+function aggregateGroupId(key: UsageAggregateKey): string {
+  return [key.fixture, key.role, key.taskId, key.runId].join(AGGREGATE_KEY_SEPARATOR);
+}
+
+function newAggregate(key: UsageAggregateKey): MutableUsageAggregate {
+  return {
+    key,
+    sampleCount: 0,
+    knownInputTokens: 0,
+    knownOutputTokens: 0,
+    unavailableInputSamples: 0,
+    unavailableOutputSamples: 0,
+    timedOutSamples: 0,
+    totalDurationMs: 0,
+    knownCost: 0,
+    costUnavailableSamples: 0,
+  };
+}
+
+function addSample(group: MutableUsageAggregate, sample: TaggedUsageRecord): void {
+  group.sampleCount += 1;
+  group.totalDurationMs += sample.usage.durationMs;
+  if (sample.usage.timedOut) group.timedOutSamples += 1;
+  if (typeof sample.usage.inputTokens === "number") {
+    group.knownInputTokens += sample.usage.inputTokens;
+  } else {
+    group.unavailableInputSamples += 1;
+  }
+  if (typeof sample.usage.outputTokens === "number") {
+    group.knownOutputTokens += sample.usage.outputTokens;
+  } else {
+    group.unavailableOutputSamples += 1;
+  }
+  const cost = calculateUsageCost(sample.usage, sample.usage.pricing);
+  if (cost === "unavailable") {
+    group.costUnavailableSamples += 1;
+  } else {
+    group.knownCost += cost.amount;
+  }
+}
+
+/**
+ * Groups usage samples by fixture, role, task, and run. A tag missing from a sample's
+ * context becomes the explicit "unknown" bucket rather than being dropped or merged with
+ * unrelated samples, and unavailable token/cost samples are counted rather than treated as
+ * zero, so a report never understates how much usage it could not observe.
+ */
+export function aggregateUsage(samples: readonly TaggedUsageRecord[]): readonly UsageAggregate[] {
+  const groups = new Map<string, MutableUsageAggregate>();
+  for (const sample of samples) {
+    const key = aggregateKeyFor(sample.context);
+    const id = aggregateGroupId(key);
+    const group = groups.get(id) ?? newAggregate(key);
+    addSample(group, sample);
+    groups.set(id, group);
+  }
+  return Array.from(groups.values());
+}

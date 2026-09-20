@@ -104,13 +104,22 @@ task identity, ownership, current state, and action behavior remain service resp
 Events append to `<home>/logs/tandem.jsonl`:
 
 - `prompt-route-bypassed`: known command or attachments;
-- `prompt-route-evaluated`: classifier, bounded reason, latency, prompt hash, and route facts;
+- `prompt-route-evaluated`: classifier, bounded reason, latency, prompt hash, route facts, and a
+  bounded usage record when a Jev request was attempted;
 - `prompt-route-fallback`: why no direct route was selected;
 - `prompt-route-dispatched`: selected action and optional explicit task ID;
 - `prompt-route-failed`: direct action failed, without persisting the error text.
 
 The prompt hash is a short SHA-256 prefix. Raw prompts, API keys, full provider payloads, and
 full action errors are not recorded. Diagnostic failure never changes prompt handling.
+
+The usage record on `prompt-route-evaluated` (see [`src/runtime/usage.ts`](../src/runtime/usage.ts))
+carries the provider, pinned model, input/output tokens or an explicit `unavailable` marker,
+request duration, timeout status, the route reason, and a pricing snapshot or `unavailable`. It is
+schema-versioned and never fabricates a token count or price. Any diagnostic reader can join a
+route event to an evaluation result through the shared prompt hash without ever seeing the prompt
+itself. Cost figures derived from this record are informational only and never authorize or block
+work.
 
 ## Pilot and evaluation
 

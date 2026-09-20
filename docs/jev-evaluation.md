@@ -45,6 +45,31 @@ Measure the whole task, not only the initial input:
 
 Missing usage must be reported as unavailable, not counted as zero.
 
+### Usage telemetry module
+
+`src/runtime/usage.ts` is the single source for the bounded usage record, pricing data, cost
+calculation, and cross-run aggregation used by both production route diagnostics and evaluation
+artifacts:
+
+- `UsageRecord`: provider, pinned model, input/output tokens (`number` or the literal
+  `"unavailable"`, never a fabricated zero), request duration, timeout status, route/fallback
+  reason, a `PricingSnapshot` or `"unavailable"`, and a schema version.
+- `PricingSnapshot` / `JEV_PRICING_SNAPSHOT`: versioned, sourced, dated pricing data, kept as
+  configurable data rather than a hardcoded number. Jev's published rate today is $0.042 per
+  million input tokens with output free.
+- `calculateUsageCost`: a pure function that takes token counts and a `PricingSnapshot` (or
+  `"unavailable"`) and returns a cost estimate or `"unavailable"`. It is for reporting only and is
+  never used to authorize or block work.
+- `aggregateUsage`: a pure function that groups `TaggedUsageRecord` samples by fixture, role, task,
+  and run, preserving an explicit `"unknown"` bucket for missing tags and counting unavailable
+  token/cost samples instead of treating them as zero.
+
+A route event on the prompt-routing path (see [prompt-routing PRD](jev-prompt-routing-prd.md))
+carries its `UsageRecord` alongside the same prompt hash used to bypass and dispatch diagnostics,
+so a report can join production route usage to an evaluation result without ever needing the
+prompt text itself. Future evaluation and benchmark work import these same exports rather than
+building a second accounting path.
+
 ## Decision rules
 
 - Deterministic exact actions are the preferred fast path.
