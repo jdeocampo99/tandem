@@ -1,5 +1,12 @@
-import type { AgentRole, ModelSpec, RepoPolicy, ValidationCommand } from "../contracts.ts";
+import type {
+  AgentRole,
+  ModelSpec,
+  RepoPolicy,
+  ReviewLevelPolicy,
+  ValidationCommand,
+} from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
+import { DEFAULT_REVIEW_LEVEL_POLICY } from "../tasks/review-levels.ts";
 import {
   AGENT_ROLE_KEYS,
   assertKnownKeys,
@@ -26,6 +33,7 @@ const POLICY_KEYS: Readonly<Record<string, true>> = {
   validationCommands: true,
   maxWorkers: true,
   maxFixRounds: true,
+  reviewLevels: true,
 };
 
 const COMMAND_KEYS: Readonly<Record<string, true>> = {
@@ -33,6 +41,13 @@ const COMMAND_KEYS: Readonly<Record<string, true>> = {
   argv: true,
   surfaces: true,
   timeoutMs: true,
+};
+
+const REVIEW_LEVEL_KEYS: Readonly<Record<string, true>> = {
+  reducedRouting: true,
+  deepScrutiny: true,
+  jevAssistance: true,
+  sourceTransmission: true,
 };
 
 const DEFAULT_MODELS: Readonly<Record<AgentRole, ModelSpec>> = {
@@ -137,6 +152,41 @@ function readValidationCommands(
   return [...base, ...parsed];
 }
 
+function readBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") throw new TypeError(`${field} must be a boolean`);
+  return value;
+}
+
+/**
+ * Reads the review-level opt-ins. Each one is off unless the repository names it, and each one
+ * is documented in `docs/agent-reference.md` as requiring the end-to-end evaluation from issue
+ * #20 before it is turned on, because turning one on changes what review actually runs.
+ */
+function readReviewLevels(value: unknown, base: ReviewLevelPolicy): ReviewLevelPolicy {
+  if (!isRecord(value)) {
+    throw new TypeError("reviewLevels must be an object");
+  }
+  assertKnownKeys(value, REVIEW_LEVEL_KEYS, "reviewLevels");
+  const jevAssistance = hasKey(value, "jevAssistance")
+    ? readNonEmptyString(value.jevAssistance, "reviewLevels.jevAssistance")
+    : base.jevAssistance;
+  if (jevAssistance !== "off" && jevAssistance !== "shadow") {
+    throw new TypeError("reviewLevels.jevAssistance must be off or shadow");
+  }
+  return {
+    reducedRouting: hasKey(value, "reducedRouting")
+      ? readBoolean(value.reducedRouting, "reviewLevels.reducedRouting")
+      : base.reducedRouting,
+    deepScrutiny: hasKey(value, "deepScrutiny")
+      ? readBoolean(value.deepScrutiny, "reviewLevels.deepScrutiny")
+      : base.deepScrutiny,
+    jevAssistance,
+    sourceTransmission: hasKey(value, "sourceTransmission")
+      ? readBoolean(value.sourceTransmission, "reviewLevels.sourceTransmission")
+      : base.sourceTransmission,
+  };
+}
+
 export function copyPolicy(policy: PolicyBase): RepoPolicy {
   const models = {} as Record<AgentRole, ModelSpec>;
   for (const role of MODEL_ROLE_ORDER) {
@@ -155,6 +205,7 @@ export function copyPolicy(policy: PolicyBase): RepoPolicy {
     })),
     maxWorkers: policy.maxWorkers,
     maxFixRounds: policy.maxFixRounds,
+    reviewLevels: { ...policy.reviewLevels },
   };
 }
 
@@ -207,6 +258,9 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
   const maxFixRounds = hasKey(input, "maxFixRounds")
     ? readPositiveInteger(input.maxFixRounds, "maxFixRounds")
     : base.maxFixRounds;
+  const reviewLevels = hasKey(input, "reviewLevels")
+    ? readReviewLevels(input.reviewLevels, base.reviewLevels)
+    : { ...base.reviewLevels };
 
   return {
     version: 1,
@@ -216,6 +270,7 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     validationCommands,
     maxWorkers,
     maxFixRounds,
+    reviewLevels,
   };
 }
 
@@ -243,6 +298,7 @@ function buildDefaultPolicy(): RepoPolicy {
     validationCommands: [],
     maxWorkers: 3,
     maxFixRounds: 3,
+    reviewLevels: { ...DEFAULT_REVIEW_LEVEL_POLICY },
   };
 }
 

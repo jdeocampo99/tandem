@@ -43,6 +43,12 @@ const policy: ResolvedPolicy = {
     validationCommands: [],
     maxWorkers: 3,
     maxFixRounds: 3,
+    reviewLevels: {
+      reducedRouting: false,
+      deepScrutiny: false,
+      jevAssistance: "off",
+      sourceTransmission: false,
+    },
   } satisfies RepoPolicy,
   guidance: {
     implementation: [],
