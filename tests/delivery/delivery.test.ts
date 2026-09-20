@@ -753,6 +753,34 @@ test("an uncertain create with no observable pull request fails closed without a
   expect(runner.calls.filter((call) => call.argv[2] === "create")).toHaveLength(1);
 });
 
+test("a retry after an unreconciled create observes the remote first and never creates twice", async () => {
+  const runner = draftRunner({
+    createFails: true,
+    listResponses: [[], [], [], [draftRemotePullRequest(true)]],
+  });
+  const request = {
+    task: draftTask(),
+    repository: "acme/repo",
+    title: "Draft: deliver the reviewed change",
+    base: "main",
+    approved: true,
+    run: runner.run,
+  } as const;
+
+  await expect(publishTaskDraft(request)).rejects.toThrow();
+  const createsBeforeRetry = runner.calls.filter((call) => call.argv[2] === "create").length;
+  expect(createsBeforeRetry).toBe(1);
+
+  const retryFrom = runner.calls.length;
+  const retry = await publishTaskDraft(request);
+  expect(retry.created).toBe(false);
+  expect(retry.pullRequest.number).toBe(11);
+  expect(runner.calls.filter((call) => call.argv[2] === "create")).toHaveLength(1);
+  const retryCalls = runner.calls.slice(retryFrom).filter((call) => call.argv[0] === "gh");
+  expect(retryCalls[0]?.argv[2]).toBe("list");
+  expect(retryCalls.some((call) => call.argv[2] === "create")).toBe(false);
+});
+
 test("a refused branch push leaves the published commit alone and discloses the lag", async () => {
   const runner = draftRunner({
     pushFails: true,

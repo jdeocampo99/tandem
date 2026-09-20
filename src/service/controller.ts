@@ -34,6 +34,7 @@ import {
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { describeTaskPr, draftProgressDigest, type PrSummary } from "../delivery/evidence.ts";
 import {
+  type DraftPublication,
   mergeReviewedTask,
   publishReviewedTask,
   publishTaskDraft,
@@ -70,6 +71,7 @@ import {
   unreleasedReservation,
 } from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
+import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import {
   defaultIdFactory,
   readRuntimeState,
@@ -438,6 +440,20 @@ function sameReservationIdentity(
     left.createdAt === right.createdAt &&
     left.releasedAt === right.releasedAt
   );
+}
+
+/** A task advanced while a remote publication was in flight; the published result is retained. */
+class TaskRevisionConflictError extends Error {
+  constructor(taskId: string) {
+    super(`Task ${taskId} changed while publishing; remote publication is retained`);
+    this.name = "TaskRevisionConflictError";
+  }
+}
+
+/** Bounded, privacy-safe failure label: a class name, never message text or command payloads. */
+function errorClassName(error: unknown): string {
+  if (error instanceof Error) return error.name.slice(0, 64);
+  return typeof error;
 }
 
 function samePullRequest(left: PullRequestMetadata, right: PullRequestMetadata): boolean {
@@ -1336,7 +1352,7 @@ class TandemController {
         throw new Error(`Task ${taskId} was not found`);
       }
       if (current.revision !== expectedRevision) {
-        throw new Error(`Task ${taskId} changed while publishing; remote publication is retained`);
+        throw new TaskRevisionConflictError(taskId);
       }
       return store.update(current.id, current.revision, (candidate) => ({
         ...candidate,
@@ -1345,6 +1361,34 @@ class TandemController {
         pullRequest: metadata,
       }));
     });
+  }
+
+  /**
+   * Record a draft-refresh failure so a stale draft is observable, without letting observability
+   * change workflow behavior. Details stay bounded: task id, pull request number, which step
+   * failed, and the error class name. No message text, stdout, stderr, or command payload.
+   */
+  private async recordDraftRefreshFailure(input: {
+    readonly taskId: string;
+    readonly step: "digest" | "remote-refresh" | "record";
+    readonly pullRequestNumber?: number;
+    readonly error: unknown;
+  }): Promise<void> {
+    await appendDiagnosticEvent(
+      this.#deps.home,
+      {
+        event: "draft-refresh-failed",
+        taskId: input.taskId,
+        details: {
+          step: input.step,
+          errorClass: errorClassName(input.error),
+          ...(input.pullRequestNumber === undefined
+            ? {}
+            : { pullRequest: input.pullRequestNumber }),
+        },
+      },
+      this.#deps.clock,
+    );
   }
 
   /**
@@ -1361,20 +1405,45 @@ class TandemController {
     let digest: string;
     try {
       digest = draftProgressDigest(task);
-    } catch {
+    } catch (error) {
+      await this.recordDraftRefreshFailure({
+        taskId: task.id,
+        step: "digest",
+        pullRequestNumber: recorded.number,
+        error,
+      });
       return false;
     }
     if (this.#draftDigests.get(task.id) === digest) return false;
+    // Consume this durable state before attempting it, so one failure is one bounded attempt and
+    // one diagnostic rather than a per-tick retry loop against an unavailable remote.
+    this.#draftDigests.set(task.id, digest);
+
+    let publication: DraftPublication | undefined;
     try {
-      const publication = await refreshTaskDraft({ task, run: this.#deps.run });
-      this.#draftDigests.set(task.id, digest);
-      if (publication === undefined || samePullRequest(publication.pullRequest, recorded)) {
-        return false;
-      }
+      publication = await refreshTaskDraft({ task, run: this.#deps.run });
+    } catch (error) {
+      await this.recordDraftRefreshFailure({
+        taskId: task.id,
+        step: "remote-refresh",
+        pullRequestNumber: recorded.number,
+        error,
+      });
+      return false;
+    }
+    if (publication === undefined || samePullRequest(publication.pullRequest, recorded)) {
+      return false;
+    }
+    try {
       await this.recordPullRequest(task.id, task.revision, publication.pullRequest);
       return true;
-    } catch {
-      // Draft visibility is never authority; durable work does not depend on the remote.
+    } catch (error) {
+      await this.recordDraftRefreshFailure({
+        taskId: task.id,
+        step: "record",
+        pullRequestNumber: publication.pullRequest.number,
+        error,
+      });
       return false;
     }
   }

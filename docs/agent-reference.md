@@ -1025,6 +1025,13 @@ draft state, never asks for a new approval, and never blocks durable work when t
 unavailable. The branch advances by pushing the exact task HEAD without forcing; a refused push
 leaves the published commit alone and the body discloses the lag.
 
+Each durable state is attempted at most once, so an unavailable remote cannot turn into a per-tick
+retry loop; the next durable change retries. A failed refresh is not silent: it appends a bounded
+`draft-refresh-failed` event to the durable diagnostics log with the task id, the pull request
+number, which step failed (`digest`, `remote-refresh`, or `record`), and the error class name. No
+message text, command output, or payload is recorded. A task that advanced while the refresh was in
+flight is recorded the same way, under the `record` step.
+
 Task-to-PR identity is idempotent. Publication observes the task branch before and after the push
 and reuses any pull request it finds, so a retry or restart updates rather than duplicates. An
 uncertain `gh pr create` outcome is reconciled by re-observing once: an observed pull request is
