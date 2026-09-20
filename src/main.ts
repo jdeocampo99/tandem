@@ -14,7 +14,12 @@ import {
 import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
 import type { RunInteractive } from "./terminal/cli-process.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
-import { hasActiveHerdrContext, launchProjects } from "./terminal/launch.ts";
+import {
+  hasActiveHerdrContext,
+  launchProjects,
+  workspaceRetirementFromLaunch,
+  workspaceRetirementNotice,
+} from "./terminal/launch.ts";
 import type { TerminalPrompt, TerminalPrompter } from "./terminal/onboarding.ts";
 import {
   createServiceFor,
@@ -211,11 +216,22 @@ async function runProjectFlow({
         ? `Tandem force reset stopped ${stopped.length} coordinator${stopped.length === 1 ? "" : "s"}; selected active work was cancelled where present.\n`
         : `Tandem reset stopped ${stopped.length} coordinator${stopped.length === 1 ? "" : "s"}.\n`,
     );
+    for (const record of stopped) {
+      const notice = workspaceRetirementNotice(record.repoPath, record.workspaceRetirement);
+      if (notice !== undefined) stdout(notice);
+    }
   }
   const launches = await launchProjects(roots, invocation, environment, dependencies, service, run);
   stdout(
     `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared Herdr session ${environment.sessionId}.\n`,
   );
+  for (const [index, launch] of launches.entries()) {
+    const repoPath = roots[index];
+    const retirement = workspaceRetirementFromLaunch(launch);
+    if (repoPath === undefined || retirement === undefined) continue;
+    const notice = workspaceRetirementNotice(repoPath, retirement);
+    if (notice !== undefined) stdout(notice);
+  }
   return {
     exitCode: 0,
     status: "launched",

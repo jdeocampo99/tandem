@@ -23,7 +23,11 @@ import { findRunningCoordinator } from "./ownership.ts";
 import { type CoordinatorRecord, recordPath } from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
 import { resolveCoordinatorSourceHead } from "./source.ts";
-import { coordinatorWorkspaceLabel, retireCoordinatorWorkspace } from "./workspace.ts";
+import {
+  type CoordinatorWorkspaceRetirement,
+  coordinatorWorkspaceLabel,
+  retireCoordinatorWorkspace,
+} from "./workspace.ts";
 
 const DEFAULT_COORDINATOR_CONFIG = "worker-config.yml";
 const HERDR_READY_ATTEMPTS = 40;
@@ -75,6 +79,8 @@ export type CoordinatorLaunchResult = Readonly<{
   readonly tabId?: string;
   readonly reused?: boolean;
   readonly processExitCode?: number;
+  /** What happened to a previous coordinator's Herdr workspace, when one was retired. */
+  readonly workspaceRetirement?: CoordinatorWorkspaceRetirement;
 }>;
 
 export type CoordinatorLaunchDependencies = Readonly<{
@@ -577,7 +583,10 @@ export async function launchCoordinatorUnlocked(
     request.sourceHead ?? (await resolveCoordinatorSourceHead(dependencies.run, paths.repo)).head;
   const previous =
     running ?? (await readCoordinatorRecord(recordPath(paths.home, request.sessionId, paths.repo)));
-  if (previous !== undefined) await retireCoordinatorWorkspace(dependencies.run, previous);
+  let workspaceRetirement: CoordinatorWorkspaceRetirement | undefined;
+  if (previous !== undefined) {
+    workspaceRetirement = await retireCoordinatorWorkspace(dependencies.run, previous);
+  }
   const boundSourcePath = await validateBoundCoordinatorSource(
     request,
     dependencies,
@@ -627,6 +636,7 @@ export async function launchCoordinatorUnlocked(
       workspaceId: context.workspaceId,
       paneId: context.paneId,
       processExitCode,
+      ...(workspaceRetirement === undefined ? {} : { workspaceRetirement }),
     };
   }
   const herdrLauncher = headless
@@ -647,7 +657,9 @@ export async function launchCoordinatorUnlocked(
     });
     await waitForHerdr(dependencies.run, dependencies.sleep, request.sessionId, coordinatorCwd);
     // Starting Herdr can restore the previous workspace and its saved label.
-    if (previous !== undefined) await retireCoordinatorWorkspace(dependencies.run, previous);
+    if (previous !== undefined) {
+      workspaceRetirement = await retireCoordinatorWorkspace(dependencies.run, previous);
+    }
   }
   const workspaceResult = await runExternal(dependencies.run, {
     argv: [
@@ -721,6 +733,7 @@ export async function launchCoordinatorUnlocked(
     workspaceId: workspace.workspaceId,
     tabId: workspace.tabId,
     paneId: workspace.paneId,
+    ...(workspaceRetirement === undefined ? {} : { workspaceRetirement }),
   };
 }
 

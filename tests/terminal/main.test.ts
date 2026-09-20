@@ -843,6 +843,100 @@ test("reset stops only the selected coordinators before fresh launch and one att
   await rm(join(first, ".."), { recursive: true, force: true });
 });
 
+test("launch prints a notice when the previous coordinator workspace is retained for an extra pane", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const home = join(repo, "..", "home");
+  const fake = onboardingService({ existingConfig: true, configured: true });
+  const invocations: CliInvocation[] = [];
+  const output: string[] = [];
+  const result = await runTerminal([repo, "--home", home], {
+    cwd: repo,
+    run: runCommand,
+    service: fake.service,
+    application: {
+      invoke: async (invocation) => {
+        invocations.push(invocation);
+        return {
+          command: invocation.command,
+          value: {
+            workspaceId: "workspace-1",
+            workspaceRetirement: {
+              outcome: "retained",
+              reason: "extra panes still share this workspace",
+              extraPaneIds: ["extra-pane"],
+            },
+          },
+        };
+      },
+      shutdown: async () => undefined,
+    },
+    isTTY: false,
+    stdout: (text) => output.push(text),
+    stderr: (text) => output.push(text),
+  });
+  expect(result.status).toBe("launched");
+  expect(invocations).toHaveLength(1);
+  const rendered = output.join("");
+  expect(rendered).toContain(`retained the previous coordinator workspace for ${repo}`);
+  expect(rendered).toContain("extra-pane");
+  await rm(join(repo, ".."), { recursive: true, force: true });
+});
+
+test("reset prints a notice when a coordinator's workspace is quarantined", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const home = join(repo, "..", "home");
+  const fake = onboardingService({ existingConfig: true, configured: true });
+  const invocations: CliInvocation[] = [];
+  const output: string[] = [];
+  const result = await runTerminal([repo, "--reset", "--home", home], {
+    cwd: repo,
+    run: runCommand,
+    service: fake.service,
+    application: fakeApplication(invocations),
+    resetCoordinators: async (_run, input) => {
+      return input.repoPaths.map((repoPath) => ({
+        schemaVersion: 1 as const,
+        repoPath,
+        endpoint: {
+          sessionId: "tandem",
+          workspaceId: "workspace-a",
+          tabId: "tab-a",
+          paneId: "pane-a",
+          role: "coordinator" as const,
+          generation: 0,
+        },
+        worktree: {
+          root: "/pool",
+          path: "/pool/coordinator-a",
+          name: "coordinator-a",
+          baseHead: "abc123",
+          branch: "tandem/coordinator-a",
+          leaseId: "lease-a",
+          leaseHolder: "coordinator-a",
+          leasedAt: "2030-01-02T03:04:05.000Z",
+        },
+        command: ["omp"],
+        workspaceRetirement: {
+          outcome: "quarantined" as const,
+          reason: "coordinator pane moved outside its recorded worktree",
+        },
+      }));
+    },
+    isTTY: false,
+    stdout: (text) => output.push(text),
+    stderr: (text) => output.push(text),
+  });
+  expect(result.status).toBe("launched");
+  const rendered = output.join("");
+  expect(rendered).toContain(
+    `left an ambiguous previous coordinator pane or workspace untouched for ${repo}`,
+  );
+  expect(rendered).toContain("moved outside its recorded worktree");
+  await rm(join(repo, ".."), { recursive: true, force: true });
+});
+
 test("terminal argument boundaries keep force launch-only and -- positional", () => {
   expect(parseTerminalArgs(["--reset", "--force", "/repo"]).force).toBe(true);
   expect(parseTerminalArgs(["--force", "--reset", "/repo"]).paths).toEqual(["/repo"]);
