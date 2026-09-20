@@ -29,6 +29,7 @@ import {
   extractPromptTaskId,
   handlePromptInput,
   PROMPT_ROUTING_QUESTION_SCHEMA_VERSION,
+  type PromptRoutingClock,
   type PromptRoutingConfig,
   type PromptRoutingDependencies,
   type PromptRoutingEvaluation,
@@ -75,6 +76,13 @@ export type PromptRoutingRunOptions = Readonly<{
    * `classifyPrompt` catches and reinterprets anything `evaluate` throws as a provider failure.
    */
   readonly beforeClassify?: () => void;
+  /**
+   * The duration clock for every outcome in this run, threaded into `classifyPrompt` itself (so
+   * its nested usage record's duration comes from the same clock) and used for bypass-fixture
+   * timing. Defaults to the real monotonic clock; fake mode passes a fixed clock so two runs with
+   * the same fixtures are byte-identical.
+   */
+  readonly now?: PromptRoutingClock;
 }>;
 
 const FAKE_CONTEXT = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
@@ -187,9 +195,10 @@ async function runClassificationFixture(
   buildEvaluate: BuildEvaluate,
   mode: "fake" | "live",
   runIndex: number,
+  now: PromptRoutingClock,
 ): Promise<PromptRoutingRunOutcome> {
   const { evaluate, getRawResponse } = recordingEvaluate(buildEvaluate(fixture));
-  const evaluation = await classifyPrompt(fixture.prompt, config, evaluate);
+  const evaluation = await classifyPrompt(fixture.prompt, config, evaluate, now);
   const rawResponse = getRawResponse();
   const fieldMatches = computeFieldMatches(fixture.expectedDecision, rawResponse, fixture.prompt);
   const combinedConfidence = computeCombinedConfidence(rawResponse);
@@ -222,9 +231,10 @@ async function runBypassFixture(
   fixture: PromptRoutingFixture,
   createHome: () => Promise<EphemeralHome>,
   mode: "fake" | "live",
+  now: PromptRoutingClock,
 ): Promise<PromptRoutingRunOutcome> {
   const { home, cleanup } = await createHome();
-  const startedAt = performance.now();
+  const startedAt = now();
   let evaluateCalls = 0;
   try {
     const event = {
@@ -247,6 +257,7 @@ async function runBypassFixture(
         evaluateCalls += 1;
         throw new Error(`fixture ${fixture.id}: a bypassed prompt must never call Jev`);
       },
+      now,
     });
     if (evaluateCalls > 0) {
       throw new Error(`fixture ${fixture.id}: bypass leaked into Jev evaluation`);
@@ -255,7 +266,7 @@ async function runBypassFixture(
     const bypassed = log
       .map((line) => JSON.parse(line) as { event: string; details?: { reason?: string } })
       .find((entry) => entry.event === "prompt-route-bypassed");
-    const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+    const durationMs = Math.max(0, Math.round(now() - startedAt));
     return {
       fixtureId: fixture.id,
       fixtureSetVersion: fixture.fixtureSetVersion,
@@ -286,10 +297,11 @@ export async function runPromptRoutingFixtures(
     throw new RangeError("repeatCount must be a positive integer");
   }
   const createHome = options.createHome ?? createEphemeralHome;
+  const now = options.now ?? (() => performance.now());
   const outcomes: PromptRoutingRunOutcome[] = [];
   for (const fixture of fixtures) {
     if (fixture.bypass !== undefined) {
-      outcomes.push(await runBypassFixture(fixture, createHome, options.mode));
+      outcomes.push(await runBypassFixture(fixture, createHome, options.mode, now));
       continue;
     }
     for (let runIndex = 0; runIndex < repeatCount; runIndex += 1) {
@@ -301,6 +313,7 @@ export async function runPromptRoutingFixtures(
           options.buildEvaluate,
           options.mode,
           runIndex,
+          now,
         ),
       );
     }
@@ -308,7 +321,12 @@ export async function runPromptRoutingFixtures(
   return outcomes;
 }
 
-/** Fake mode: deterministic, no network, safe for `bun test`. */
+/**
+ * Fake mode: deterministic, no network, safe for `bun test`. Uses a fixed clock rather than the
+ * real one, since fake mode never makes a real provider call and so has no real latency to
+ * measure: every duration (the outcome's own and its nested usage record's) is therefore always
+ * zero, and two fake runs over the same fixtures are byte-identical.
+ */
 export async function runFakePromptRoutingFixtures(
   fixtures: readonly PromptRoutingFixture[],
 ): Promise<readonly PromptRoutingRunOutcome[]> {
@@ -316,6 +334,7 @@ export async function runFakePromptRoutingFixtures(
     mode: "fake",
     config: FAKE_FIXTURE_CONFIG,
     buildEvaluate: fakeEvaluatorFor,
+    now: () => 0,
   });
 }
 
