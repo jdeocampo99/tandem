@@ -66,6 +66,15 @@ tandem restart /absolute/path/to/repo
 
 `tandem --restart` remains accepted as a compatibility spelling.
 
+To view the most recent prompt-routing events without locating the durable home manually:
+
+```sh
+tandem logs
+```
+
+Use `tandem logs --json` for machine-readable output or add `--home PATH` for an explicit home.
+The command is read-only and prints the resolved log path even when no routing events exist.
+
 The frontdoor verifies exact Tandem ownership, revalidates the pane cwd/process immediately before
 close, confirms close acknowledgement and pane absence, then launches a replacement with the same
 lease/session directory and `--continue`. Child panes, task IDs and generations, worktrees,
@@ -104,7 +113,7 @@ Busy, unknown, foreign, or otherwise unsafe work refuses before any pane is clos
 changes state or fails to close after earlier ones in the same run already closed, reset stops and
 reports exactly which coordinators it already closed. Reset retains
 settings, conversation history, task records, worktrees, and repository files; it is not task recovery,
-a factory reset, or data wiping. Add `--continue` only when you want the reopened coordinators to
+a factory reset or data wiping. Add `--continue` only when you want the reopened coordinators to
 resume their saved conversations; without it they start fresh conversations. Never run `--reset` from
 inside Herdr, because Tandem refuses that unsafe context.
 
@@ -292,51 +301,29 @@ must bring genuine product choices, ambiguity, scope changes, credentials, destr
 publishing, merging, or deployment decisions to you. A receipt is not proof that implementation is
 finished.
 
-## Optional Jev shadow recommendations
+## Jev integration and prompt routing
 
-TypeSafe Jev integration is off by default and recommendation-only. To opt in for a Tandem
-coordinator, set `TANDEM_JEV_MODE=shadow` and `TYPESAFE_API_KEY` before launching Tandem; a key
-alone does not enable it. The pinned endpoint/model is Jev `1.13.0`. An optional
-`TANDEM_JEV_TIMEOUT_MS` sets a bounded 1–10,000ms timeout (default 2,000ms).
+TypeSafe Jev is an optional classifier for unmatched natural-language coordinator input. Set
+`TYPESAFE_API_KEY` before launching Tandem to enable it; without a key, prompts use the normal
+coordinator path. `TANDEM_JEV_TIMEOUT_MS` sets a bounded 100–10,000ms timeout (default 1,500ms).
+The pinned provider model is Jev `1.13.0`.
 
-Candidate alternatives are configured in the selected home's `<home>/jev.json`, not the repository:
+Exact slash commands bypass classification. For other prompts, Jev returns five typed facts:
+supported action, target, effect, scope, and composition. Code remains authoritative for task
+identity, ownership, approvals, state, and execution. Only these read-only actions can terminate
+directly: `list`, `presentations`, `show`, `messages`, `inspect`, and `recovery-plan`. Task-specific
+lookups require an explicit `task-...` identifier or UUID in the prompt. The direct path calls the
+existing Tandem service and displays its bounded result.
 
-```json
-{
-  "schemaVersion": 1,
-  "routingCandidates": {
-    "implementer": [
-      {
-        "id": "coding-fast",
-        "model": "openai-codex/gpt-5.6-luna",
-        "thinking": "high",
-        "description": "Configured coding alternative for shadow comparison."
-      }
-    ]
-  }
-}
-```
+Low confidence (below `0.80`), missing facts, mixed requests, unclear scope, state-changing or
+sensitive effects, missing task identity, provider failure, timeout, and malformed output all
+fall back to the normal coordinator. Jev never generates shell commands, authorizes an effect,
+changes task state, or receives the full conversation transcript.
 
-Tandem validates candidates against the existing OMP catalogue, evaluates at most once per
-prepared job, and records a local `jev-recommendation-<job-id>.json` beside that job. Records contain only
-bounded status, model choice/confidence, ranked supplemental-context IDs/source references, usage,
-and latency—not keys, raw requests, or full excerpts. Routine notifications point the main
-conversation to the evidence. Mandatory instructions, scope, questions, answers, safety, and
-review findings are never optionalized. Jev advice never changes dispatch, prompts, context,
-approval, or task transitions; it provides no proven savings or automatic switching.
-Shadow checks run for model-backed scout, implementer, reviewer, verifier, and presentation jobs;
-validation is a non-model runner job. The presentation workflow invokes the same recorder before
-each durable presentation launch.
-Only bounded task state and eligible saved scout/surface evidence is shared when opted in.
-Provider failures, malformed configuration, missing keys, and unavailable catalogue data retain
-normal dispatch. Set these variables in the environment that starts the Herdr server.
-Already-running Herdr/OMP processes do not acquire newly exported variables; a coordinator-only
-restart does not update the server's environment. Enable Jev when starting a fresh server session.
-
-See the [Jev integration overview](docs/jev-prd.md) for current status. Focused documents cover the
-[shadow contract](docs/jev-shadow.md), [context reuse](docs/jev-context-reuse-prd.md),
-[coordinator prompt routing](docs/jev-prompt-routing-prd.md), and the
-[evaluation plan](docs/jev-evaluation.md).
+Routing events are append-only JSONL at `<home>/logs/tandem.jsonl`. They contain a short prompt
+hash, route facts, confidence, bounded reason, and latency; raw prompts and API keys are not
+recorded. See the [Jev integration overview](docs/jev-prd.md), [prompt-routing PRD](docs/jev-prompt-routing-prd.md),
+[context reuse PRD](docs/jev-context-reuse-prd.md), and [evaluation plan](docs/jev-evaluation.md).
 
 ## What approval means
 

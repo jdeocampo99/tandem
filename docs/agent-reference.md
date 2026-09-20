@@ -88,6 +88,15 @@ It preserves task IDs, generations, worktrees, reports, messages, and coordinato
 `tandem --restart [PATH ...]` remains accepted for compatibility. Never invoke restart from inside
 Herdr.
 
+To view recent prompt-routing events without locating the durable home:
+
+```sh
+tandem logs
+tandem logs --json
+```
+
+Add `--home PATH` when inspecting a specific Tandem home. The command is read-only.
+
 
 To deliberately cleanly reopen only Tandem-owned coordinators, run the reset launch from a separate
 normal terminal:
@@ -297,8 +306,8 @@ coordinator workspace, clean source worktree, and child-worker group. When no pa
 saved records exist, the launch set is those valid registry projects; when the registry is empty,
 selection follows the current-Git or outside-Git fallback above. Coordinators scope durable task
 operations to their original project identities, so one coordinator cannot claim another project's
-work. The saved-project path does not use arbitrary disk discovery or a project picker, including in
-non-TTY/headless launches.
+work. The saved-project path does not use arbitrary disk discovery or a project picker, including
+in non-TTY/headless launches.
 
 The terminal command attaches once after all selected coordinators are ready; `--headless` and
 `--no-attach` leave the shared session prepared without that attachment.
@@ -543,56 +552,31 @@ existing task policy snapshots.
 Changing the main conversation model takes effect on the next Tandem launch; it never hot-swaps an
 already-running OMP conversation.
 
-### Optional TypeSafe Jev shadow recommendations
+### TypeSafe Jev prompt routing
 
-Jev integration is an explicit, recommendation-only shadow path. It is disabled by default and
-does not switch a model, remove context, approve scope, answer a question, or transition a task.
-Opt in for a coordinator process with `TANDEM_JEV_MODE=shadow` and `TYPESAFE_API_KEY`; a key alone
-does not opt in. The provider is pinned to Jev `1.13.0` at `https://api.typesafe.ai/v1/systemone`.
-`TANDEM_JEV_TIMEOUT_MS` may set a bounded timeout (default 2,000ms; accepted range 1–10,000ms).
+Jev is an optional classifier for unmatched natural-language coordinator prompts. Set
+`TYPESAFE_API_KEY` before launching Tandem to enable classification; without a key, the normal
+coordinator path remains unchanged. The pinned model is Jev `1.13.0` at
+`https://api.typesafe.ai/v1/systemone`. `TANDEM_JEV_TIMEOUT_MS` accepts 100–10,000ms and defaults
+to 1,500ms.
 
-Optional per-role candidates live outside the repository at `<home>/jev.json`:
+Exact slash commands bypass Jev. Other prompts receive one bounded request containing only the
+prompt, an explicit task identifier when present, and the supported lookup list. Jev returns
+typed action, target, effect, scope, and composition facts. Tandem code validates identity,
+ownership, state, approvals, and policy before any action.
 
-```json
-{
-  "schemaVersion": 1,
-  "routingCandidates": {
-    "implementer": [
-      {
-        "id": "coding-fast",
-        "model": "openai-codex/gpt-5.6-luna",
-        "thinking": "high",
-        "description": "A configured coding model for comparison with the pinned baseline."
-      }
-    ]
-  }
-}
-```
+Only `list`, `presentations`, `show`, `messages`, `inspect`, and `recovery-plan` may dispatch
+directly. The first two are repository lookups; task-specific lookups require an explicit
+`task-...` identifier or UUID. The direct path is read-only and uses the existing service.
+Low confidence (<0.80), incomplete or malformed output, mixed or unclear requests, state-changing
+or sensitive effects, provider errors, and missing task identifiers use normal coordinator
+handling. Jev cannot generate shell commands, authorize actions, mutate state, or select an
+arbitrary model.
 
-Candidate selectors and thinking levels are checked against the existing `omp models --json`
-catalogue before they can be recommended. A model-choice question is sent only when at least one
-validated alternative differs from the pinned role model; there is no singleton or invented
-alternative. Saved scout reports and safely resolved explicit task-surface files may be evaluated
-as optional supplemental context. Mandatory instructions, task scope, current questions and
-answers, safety constraints, and review findings are never reclassified as removable context.
-
-At most one bounded shadow evaluation is made for each prepared durable job. The private
-`<home>/jobs/<task-id>/.../jev-recommendation-<job-id>.json` record contains the status, approved candidate
-ID/model/confidence, ranked context IDs/source references, Jev model, usage, and elapsed time; it
-never stores the API key, raw request, or full excerpts. A routine notification points the main
-conversation to the local evidence path. Provider failure, malformed candidates, missing keys, or
-unavailable catalogue/service leave normal dispatch unchanged and record a bounded unavailable
-reason where applicable.
-
-Shadow evaluation is attached to model-backed scout, implementer, reviewer, verifier, and
-presentation dispatches. Validation is a non-model runner job and is not evaluated; presentation's
-separate artifact workflow invokes the same bounded recorder before each durable presentation launch.
-This sends the bounded task state and selected supplemental excerpts to TypeSafe only when shadow
-mode and a key are present. It is not a proof of savings, quality, or latency improvements, and
-it never enables automatic switching. Set these variables in the environment that starts the
-Herdr server. Already-running Herdr/OMP processes do not acquire newly exported variables;
-a coordinator-only restart does not update the server's environment. Enable Jev when starting
-a fresh server session.
+Append-only route diagnostics are written to `<home>/logs/tandem.jsonl` with a short prompt hash,
+route facts, confidence, reason, and latency. Raw prompts and API keys are excluded. See the
+[prompt-routing PRD](jev-prompt-routing-prd.md), [integration overview](jev-prd.md), and
+[evaluation plan](jev-evaluation.md).
 
 ### Central config envelope
 

@@ -1,99 +1,92 @@
 # Jev integration
 
-This is the entry point for Tandem's TypeSafe Jev documentation. It records the product
-goal, current status, non-negotiable boundaries, and links to the focused documents.
+This is the entry point for Tandem's TypeSafe Jev documentation. It records the product goal,
+current status, non-negotiable boundaries, and links to the focused documents.
 
 ## Status
 
 | Capability | Status | Document |
 | --- | --- | --- |
-| Opt-in shadow recommendations | Implemented; off by default | [Jev shadow integration](jev-shadow.md) |
-| Supplemental context reuse | Proposed; not authorized for activation | [Context reuse PRD](jev-context-reuse-prd.md) |
-| Coordinator prompt routing | Proposed; not authorized for activation | [Coordinator prompt-routing PRD](jev-prompt-routing-prd.md) |
-| Experiments and rollout evidence | Measurement plan; no active behavior authorized | [Evaluation plan](jev-evaluation.md) |
+| TypeSafe Jev transport | Retained; bounded and typed | [adapter](../src/adapters/typesafe.ts) |
+| Coordinator prompt routing | v0 active when `TYPESAFE_API_KEY` is present | [prompt-routing PRD](jev-prompt-routing-prd.md) |
+| Supplemental context reuse | Proposed; not active | [context reuse PRD](jev-context-reuse-prd.md) |
+| Experiments and rollout evidence | Measurement plan for routing and future context reuse | [evaluation plan](jev-evaluation.md) |
 
-Operational instructions remain in the [README](../README.md#optional-jev-shadow-recommendations)
-and [agent reference](agent-reference.md#optional-typesafe-jev-shadow-recommendations).
+Operational instructions live in the [README](../README.md#jev-integration-and-prompt-routing)
+and [agent reference](agent-reference.md#typesafe-jev-prompt-routing).
 
 ## Product goal
 
-Reduce the total tokens and wall-clock time required to complete a Tandem task without
-worsening correctness or increasing rework.
+Reduce unnecessary coordinator-model turns for safe, read-only Tandem lookups without worsening
+correctness, hiding ambiguity, or weakening approval and ownership boundaries.
 
-The current product priority is useful context reuse. Automatic model switching and
-coordinator prompt routing are separate proposed directions. Neither token savings nor
-speed improvements have been demonstrated yet.
+The v0 route is intentionally narrower than general intent routing. It optimizes existing
+deterministic service actions; it does not select models, create work, research topics, or mutate
+state.
 
 ## System boundary
 
 Jev supplies bounded, typed semantic judgments. Tandem code remains authoritative for:
 
-- exact lookups, parsing, calculations, and command construction;
-- task state, scope approval, permissions, ownership, and lifecycle transitions;
+- exact lookups, parsing, calculations, and action construction;
+- task identity, state, scope, ownership, permissions, and approvals;
 - validation, review, delivery, publication, merge, cancellation, and cleanup;
 - worktree, endpoint, operation, reservation, and process safety;
 - prompt construction, worker launch, recovery, and durable writes.
 
 Jev must never directly authorize or perform an effect. Provider failure, timeout, malformed
-output, low confidence, stale evidence, or unavailable configuration must follow an explicit
-code-owned fallback.
+output, low confidence, stale information, or unavailable configuration follows a code-owned
+fallback.
 
 ## Current shipped behavior
 
-The integration is opt-in shadow evaluation:
+The extension intercepts interactive prompts before the coordinator turn:
 
-- `TANDEM_JEV_MODE` is `off` by default; `shadow` is the only enabled mode.
-- Recommendations are recorded beside prepared jobs and may produce a routine notification.
-- Model, prompt, context, approval, task transitions, and normal worker dispatch are unchanged.
-- Jev evaluates bounded task state and eligible supplemental evidence only when enabled.
-- No active model switching or active context delivery is implemented.
+1. Slash commands and prompts with images bypass classification.
+2. Unmatched text is normalized and sent once to Jev with the prompt, any explicit task ID, and
+   the fixed supported-lookup list. The full transcript and repository contents are not sent.
+3. Jev answers independent typed questions for action, target, effect, scope, and composition.
+4. Code requires complete answers, confidence of at least `0.80`, a single operation, in-scope
+   read-only effect, and an explicit task ID for task-specific actions.
+5. Allowlisted direct actions are `list`, `presentations`, `show`, `messages`, `inspect`, and
+   `recovery-plan`. They call the existing `TandemService` and display a bounded result.
+6. Every other case returns `undefined` so the normal coordinator handles the original prompt.
 
-See [Jev shadow integration](jev-shadow.md) for the complete shipped contract and
-implementation map.
+Route events are append-only diagnostics at `<home>/logs/tandem.jsonl`. They record a short prompt
+hash, bounded route facts, reason, confidence, and latency; raw prompts and API keys are excluded.
+The provider model is pinned to Jev `1.13.0`, with a default 1,500ms timeout configurable through
+`TANDEM_JEV_TIMEOUT_MS` within 100–10,000ms.
 
-## Proposed directions
+## Proposed direction: supplemental context reuse
 
-### Supplemental context reuse
-
-Tandem could gather authorized prior findings, have Jev judge relevance, and deliver a
-bounded, provenance-checked supplemental handoff. Mandatory instructions, approved scope,
-current questions, safety constraints, and required review findings remain unchanged.
+Tandem may later gather authorized prior findings, have Jev judge relevance among those candidates,
+and deliver a bounded, provenance-checked supplemental handoff. Mandatory instructions, approved
+scope, current questions, safety constraints, and required review findings remain unchanged.
 
 See the [context reuse PRD](jev-context-reuse-prd.md).
 
-### Coordinator prompt routing
-
-A future front-door route could use deterministic parsing first, then Jev typed judgments
-for unmatched natural-language prompts. Code would select a direct action, scout workflow,
-normal coordinator, or clarification. Jev would not execute commands or choose authority.
-
-See the [coordinator prompt-routing PRD](jev-prompt-routing-prd.md).
-
 ## Decision summary
 
-- Prefer a deterministic handoff when it achieves the same result as Jev selection.
-- Use Jev only when it prevents a more expensive or unnecessary model turn.
+- Prefer a deterministic service action when it achieves the requested result.
+- Route only the fixed allowlist of read-only lookups in v0.
 - Keep inferred route judgments separate from observed durable state.
-- Cache classifications only; never cache authorization or execution decisions.
-- Measure total task cost, latency, correctness, escalation, correction, and rework before
-  activating either proposed direction.
-- Keep active behavior explicit, reversible, and separately approved.
+- Treat low confidence, ambiguity, state change, sensitivity, and provider failure as coordinator
+  inputs.
+- Cache classifications only if a future implementation proves state and policy keys stable;
+  never cache authorization or execution decisions.
+- Measure total cost, latency, correctness, escalation, correction, and rework before widening
+  the route.
 
-See the [evaluation plan](jev-evaluation.md) for baselines, metrics, experiments, and rollout
-gates.
+See the [evaluation plan](jev-evaluation.md) for baselines, metrics, and rollout gates.
 
 ## Source of truth
 
-For shipped behavior, source code and focused tests are authoritative. This documentation
-describes the current contract and proposed work; a proposal is not authorization to
-implement or enable a feature.
+Source code and focused tests are authoritative. This documentation describes the current v0
+contract and proposed work; the proposed context-reuse path is not implemented or enabled.
 
 Current implementation areas:
 
-- [Jev configuration](../src/config/jev.ts)
 - [TypeSafe transport](../src/adapters/typesafe.ts)
-- [Context candidate collection](../src/service/jev-context.ts)
-- [Shadow evaluator](../src/service/jev.ts)
-- [Service composition](../src/service/controller.ts)
-- [Worker dispatch](../src/workers/workflow.ts)
-- [Presentation dispatch](../src/presentations/workflow.ts)
+- [Prompt routing](../src/extension/prompt-routing.ts)
+- [Extension registration](../src/extension/registration.ts)
+- [Diagnostic persistence](../src/runtime/diagnostics.ts)
