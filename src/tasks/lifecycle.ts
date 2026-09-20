@@ -4,6 +4,7 @@ import type {
   FindingSeverity,
   FindingVerdict,
   IsoTimestamp,
+  IterationScope,
   Notification,
   PullRequestMetadata,
   ResearchContinuation,
@@ -14,9 +15,17 @@ import type {
   TaskKind,
   TaskRecord,
   TaskStage,
+  ValidationContractName,
   ValidationEvidence,
   WorktreeLease,
 } from "../contracts.ts";
+import {
+  FINAL_REVIEW_LENSES,
+  type FinalRequirement,
+  finalAcceptanceStatus,
+  isPinnedEvidence,
+} from "./acceptance.ts";
+import { recordReviewFindings } from "./findings.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 
 export type TaskInput = Readonly<{
@@ -57,6 +66,8 @@ type ImplementationCompleteEvent = Readonly<{
 type ValidationEvent = Readonly<{
   readonly head: string;
   readonly generation: number;
+  readonly contract: ValidationContractName;
+  readonly policyDigest: string;
   readonly evidence: readonly ValidationEvidence[];
 }>;
 
@@ -104,6 +115,7 @@ type BeginFixesEvent = Readonly<{
   readonly type: "begin-fixes";
   readonly head: string;
   readonly generation: number;
+  readonly iterationScope?: IterationScope;
 }>;
 
 type ScoutReportCompleteEvent = Readonly<{
@@ -172,6 +184,7 @@ export type TaskTransitionErrorCode =
   | "invalid-review"
   | "review-incomplete"
   | "validation-mismatch"
+  | "final-acceptance-incomplete"
   | "max-fix-rounds"
   | "approval-required"
   | "merge-not-verified"
@@ -208,7 +221,7 @@ const TASK_STAGES: readonly TaskStage[] = [
   "merged",
 ];
 
-const REVIEW_LENSES: readonly ReviewLens[] = ["behavior", "design", "coverage", "verification"];
+const REVIEW_LENSES: readonly ReviewLens[] = FINAL_REVIEW_LENSES;
 
 const FINDING_SEVERITIES: readonly FindingSeverity[] = ["P0", "P1", "P2", "P3"];
 const FINDING_VERDICTS: readonly FindingVerdict[] = ["confirmed", "plausible"];
@@ -446,19 +459,29 @@ function assertHeadEvent(task: TaskRecord, head: string, generation: number, det
   }
 }
 
-function assertEvidence(
-  task: TaskRecord,
-  evidence: readonly ValidationEvidence[],
-  head: string,
-): void {
-  if (!Array.isArray(evidence) || evidence.length === 0) {
+function assertEvidence(task: TaskRecord, event: ValidationEvent): void {
+  if (!Array.isArray(event.evidence) || event.evidence.length === 0) {
     throw new TaskTransitionError(
       "validation-mismatch",
       task,
       "Validation requires at least one evidence record",
     );
   }
-  for (const entry of evidence) {
+  if (event.contract !== "iteration" && event.contract !== "final") {
+    throw new TaskTransitionError(
+      "validation-mismatch",
+      task,
+      "Validation must name the iteration or final contract",
+    );
+  }
+  if (!isNonEmptyText(event.policyDigest)) {
+    throw new TaskTransitionError(
+      "validation-mismatch",
+      task,
+      "Validation must carry the policy identity it ran under",
+    );
+  }
+  for (const entry of event.evidence) {
     if (
       !entry ||
       typeof entry !== "object" ||
@@ -469,15 +492,64 @@ function assertEvidence(
       entry.exitCode < 0 ||
       typeof entry.stdout !== "string" ||
       typeof entry.stderr !== "string" ||
-      entry.head !== head
+      entry.head !== event.head ||
+      entry.contract !== event.contract ||
+      entry.policyDigest !== event.policyDigest ||
+      (entry.origin !== "local" && entry.origin !== "github")
     ) {
       throw new TaskTransitionError(
         "validation-mismatch",
         task,
-        "Validation evidence must be complete and bound to one head",
+        "Validation evidence must be complete and bound to one contract, head, and policy identity",
       );
     }
   }
+  const conflicting = task.validationEvidence
+    .filter(isPinnedEvidence)
+    .find((entry) => entry.head === event.head && entry.policyDigest !== event.policyDigest);
+  if (conflicting !== undefined) {
+    throw new TaskTransitionError(
+      "validation-mismatch",
+      task,
+      `Evidence at head ${event.head} already exists under a different policy identity`,
+    );
+  }
+}
+
+function assertIterationScope(task: TaskRecord, scope: IterationScope): void {
+  if (
+    !scope ||
+    typeof scope !== "object" ||
+    !isNonEmptyText(scope.head) ||
+    !isNonEmptyText(scope.policyDigest) ||
+    !isInteger(scope.generation) ||
+    scope.generation < 0 ||
+    !Array.isArray(scope.reproduces) ||
+    scope.reproduces.some((name) => !isNonEmptyText(name)) ||
+    !Array.isArray(scope.surfaces) ||
+    scope.surfaces.some((surface) => !isNonEmptyText(surface)) ||
+    !Array.isArray(scope.findingIds) ||
+    scope.findingIds.some((id) => !isNonEmptyText(id))
+  ) {
+    throw new TaskTransitionError(
+      "invalid-input",
+      task,
+      "An iteration scope must name its head, policy identity, targeted checks, and findings",
+    );
+  }
+  if (scope.head !== task.reviewHead || scope.generation !== task.generation) {
+    staleResult(
+      task,
+      `iteration scope ${scope.head}/${scope.generation} does not match ${String(task.reviewHead)}/${task.generation}`,
+    );
+  }
+}
+
+function clearIterationScope<Task extends { readonly iterationScope?: IterationScope }>(
+  task: Task,
+): Omit<Task, "iterationScope"> {
+  const { iterationScope: _iterationScope, ...rest } = task;
+  return rest;
 }
 
 function assertFinding(finding: Finding, task: TaskRecord): void {
@@ -573,6 +645,10 @@ function allReviewLensesPass(task: TaskRecord): boolean {
   );
 }
 
+function describeRequirements(requirements: readonly FinalRequirement[]): string {
+  return requirements.map((entry) => `${entry.name} (${entry.origin})`).join(", ");
+}
+
 function reviewSummary(task: TaskRecord): string {
   const current = activeReviews(task);
   const failed = current.filter((review) => !review.pass).map((review) => review.lens);
@@ -599,6 +675,12 @@ function clearPreviousAndBlock(
   task: TaskRecord,
 ): Omit<TaskRecord, "previousStage" | "blockReason"> {
   const { previousStage: _previousStage, blockReason: _blockReason, ...rest } = task;
+  return rest;
+}
+
+/** Leaving a terminal stage invalidates the cleanup note written about that stage's resources. */
+function clearCleanup(task: TaskRecord): Omit<TaskRecord, "cleanup"> {
+  const { cleanup: _cleanup, ...rest } = task;
   return rest;
 }
 
@@ -766,7 +848,7 @@ export function transitionTask(
         );
       }
       assertCurrentGeneration(task, event.generation, `${event.type} generation`);
-      const withoutBlock = clearPreviousAndBlock(task);
+      const withoutBlock = clearIterationScope(clearPreviousAndBlock(task));
       return commitTask(withoutBlock, context.now, {
         stage: "validating",
         reviewHead: event.head,
@@ -780,7 +862,7 @@ export function transitionTask(
       }
       assertHeadEvent(task, event.head, event.generation, "Validation");
       assertCurrentHead(task, event.head, "Validation");
-      assertEvidence(task, event.evidence, event.head);
+      assertEvidence(task, event);
       if (event.evidence.some((entry) => entry.exitCode !== 0)) {
         throw new TaskTransitionError(
           "validation-mismatch",
@@ -799,7 +881,7 @@ export function transitionTask(
       }
       assertHeadEvent(task, event.head, event.generation, "Validation");
       assertCurrentHead(task, event.head, "Validation");
-      assertEvidence(task, event.evidence, event.head);
+      assertEvidence(task, event);
       if (event.evidence.every((entry) => entry.exitCode === 0)) {
         throw new TaskTransitionError(
           "validation-mismatch",
@@ -814,7 +896,7 @@ export function transitionTask(
           stage: "awaiting-fixes",
           validationEvidence: [...task.validationEvidence, ...event.evidence],
         },
-        `Validation failed for task ${task.id}; fixes are required`,
+        `The ${event.contract} contract failed for task ${task.id}; fixes are required`,
       );
     }
     case "record-review": {
@@ -838,7 +920,14 @@ export function transitionTask(
           `Review lens ${event.review.lens} already exists for head ${event.review.head} generation ${event.review.generation}`,
         );
       }
-      return commitTask(task, context.now, { reviews: [...task.reviews, event.review] });
+      return commitTask(task, context.now, {
+        reviews: [...task.reviews, event.review],
+        findingLedger: recordReviewFindings({
+          ledger: task.findingLedger ?? [],
+          review: event.review,
+          reviewRound: task.reviewRound,
+        }),
+      });
     }
     case "finish-review": {
       if (task.stage !== "reviewing") {
@@ -864,20 +953,43 @@ export function transitionTask(
           "Review completion requires behavior, design, coverage, and verification lenses",
         );
       }
-      if (allReviewLensesPass(task)) {
+      if (!allReviewLensesPass(task)) {
         return commitWithNotification(
           task,
+          context,
+          { stage: "awaiting-fixes" },
+          reviewSummary(task),
+        );
+      }
+      const acceptance = finalAcceptanceStatus(task, event.head);
+      if (acceptance.satisfied) {
+        return commitWithNotification(
+          clearIterationScope(task),
           context,
           { stage: "ready" },
           reviewSummary(task),
           "coordinator",
         );
       }
+      const outstanding = [...acceptance.missing, ...acceptance.failed, ...acceptance.stale];
+      const finalRunRecorded = task.validationEvidence.some(
+        (entry) =>
+          entry.contract === "final" &&
+          entry.head === acceptance.identity.head &&
+          entry.policyDigest === acceptance.identity.policyDigest,
+      );
+      if (acceptance.failed.length > 0 || acceptance.stale.length > 0 || finalRunRecorded) {
+        throw new TaskTransitionError(
+          "final-acceptance-incomplete",
+          task,
+          `Task ${task.id} cannot be accepted: ${describeRequirements(outstanding)} did not pass under the delivered code and policy`,
+        );
+      }
       return commitWithNotification(
         task,
         context,
-        { stage: "awaiting-fixes" },
-        reviewSummary(task),
+        { stage: "validating" },
+        `Task ${task.id} is otherwise ready; running the final acceptance manifest for ${describeRequirements(outstanding)}`,
       );
     }
     case "invalidate-evidence": {
@@ -888,7 +1000,7 @@ export function transitionTask(
         invalidStage(task, event.type, ["validating", "reviewing", "awaiting-fixes", "ready"]);
       }
       assertHeadEvent(task, event.head, event.generation, "Evidence invalidation");
-      const withoutHead = clearReviewHead(task);
+      const withoutHead = clearIterationScope(clearReviewHead(task));
       return commitTask(withoutHead, context.now, {
         stage: "implementing",
         generation: task.generation + 1,
@@ -900,7 +1012,8 @@ export function transitionTask(
       if (task.kind !== "scout" || task.stage !== "completed") {
         invalidStage(task, event.type, ["completed"]);
       }
-      return commitTask(task, context.now, {
+      const withoutCleanup = clearCleanup(task);
+      return commitTask(withoutCleanup, context.now, {
         stage: "queued",
         generation: task.generation + 1,
       });
@@ -925,12 +1038,16 @@ export function transitionTask(
           `Task ${task.id} has exhausted maxFixRounds=${String(task.policy.config.maxFixRounds)}`,
         );
       }
-      const withoutHead = clearReviewHead(task);
+      if (event.iterationScope !== undefined) {
+        assertIterationScope(task, event.iterationScope);
+      }
+      const withoutHead = clearIterationScope(clearReviewHead(task));
       return commitTask(withoutHead, context.now, {
         stage: "implementing",
         reviewRound: task.reviewRound + 1,
         generation: task.generation + 1,
         validationEvidence: [],
+        ...(event.iterationScope === undefined ? {} : { iterationScope: event.iterationScope }),
       });
     }
     case "scout-report-complete": {

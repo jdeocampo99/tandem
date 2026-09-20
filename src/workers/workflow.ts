@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
+import {
+  type GitCheckpoint,
+  readCheckpoint,
+  readDiffRange,
+  readReferencingFiles,
+} from "../adapters/git.ts";
 import {
   closeEndpoint,
   createReviewerEndpoint,
@@ -82,6 +87,14 @@ import {
 } from "../service/records.ts";
 import { taskSourcePath } from "../service/source.ts";
 import {
+  FINAL_REVIEW_LENSES,
+  iterationScopeFor,
+  type PlannedValidation,
+  planValidation,
+  policyIdentity,
+  ValidationConfigurationError,
+} from "../tasks/acceptance.ts";
+import {
   readWorkerReceipt,
   taskInboxPath,
   workerReceiptPath,
@@ -91,7 +104,16 @@ import {
   formatTaskMessages,
   MAX_TASK_MESSAGE_CHARS,
 } from "../tasks/communication-protocol.ts";
+import { describeFixRoundExhaustion } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
+import {
+  buildReviewBrief,
+  lastReviewedHead,
+  REVIEW_BRIEF_LIMITS,
+  type ReviewBriefDiffReference,
+  type ReviewBriefObservations,
+  renderReviewBrief,
+} from "../tasks/review-brief.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import {
   readValidationResult,
@@ -110,12 +132,7 @@ import { prepareWorkerTerminal, workerJobForEndpoint } from "./terminal-control.
 
 const DEFAULT_STALL_WARNING_MS = 5 * 60 * 1000;
 const DEFAULT_HEARTBEAT_GRACE_MS = 60 * 1000;
-const REQUIRED_REVIEW_LENSES: readonly ["behavior", "design", "coverage", "verification"] = [
-  "behavior",
-  "design",
-  "coverage",
-  "verification",
-];
+const REQUIRED_REVIEW_LENSES = FINAL_REVIEW_LENSES;
 export type OperationClaim = Readonly<{
   readonly id: string;
   readonly fencingRevision: number;
@@ -272,11 +289,16 @@ export class WorkerWorkflow {
     let result: ValidationResult;
     try {
       if (job.head === undefined) throw new Error("validation job is missing expected HEAD");
+      if (job.contract === undefined || job.policyDigest === undefined) {
+        throw new Error("validation job is missing its contract identity");
+      }
       result = await readValidationResult(job.resultPath, {
         id: job.id,
         taskId: job.taskId,
         generation: job.generation,
         head: job.head,
+        contract: job.contract,
+        policyDigest: job.policyDigest,
       });
     } catch (error) {
       if (isMissing(error)) {
@@ -640,6 +662,21 @@ export class WorkerWorkflow {
       await this.failJob(task, job, "validation job has no expected HEAD", claim);
       return;
     }
+    const contract = job.contract;
+    const policyDigest = job.policyDigest;
+    if (contract === undefined || policyDigest === undefined) {
+      await this.failJob(task, job, "validation job has no contract identity", claim);
+      return;
+    }
+    if (policyIdentity(task.policy) !== policyDigest) {
+      await this.failJob(
+        task,
+        job,
+        "validation evidence was produced under a different policy identity",
+        claim,
+      );
+      return;
+    }
     const checkout = await this.readWorkerCheckout(runtime, job);
     if (
       checkout.checkpoint.dirty ||
@@ -654,6 +691,8 @@ export class WorkerWorkflow {
           type: "validation-failed",
           head: expectedHead,
           generation: job.generation,
+          contract,
+          policyDigest,
           evidence: [
             ...result.evidence,
             {
@@ -663,6 +702,9 @@ export class WorkerWorkflow {
               stdout: checkout.checkpoint.head,
               stderr: "worktree changed while validation was running",
               head: expectedHead,
+              contract,
+              origin: "local",
+              policyDigest,
             },
           ],
         },
@@ -677,12 +719,16 @@ export class WorkerWorkflow {
             type: "validation-succeeded",
             head: expectedHead,
             generation: job.generation,
+            contract,
+            policyDigest,
             evidence: result.evidence,
           }
         : {
             type: "validation-failed",
             head: expectedHead,
             generation: job.generation,
+            contract,
+            policyDigest,
             evidence: result.evidence,
           };
     await this.consumeJob(task.id, job.id, claim, event, {
@@ -1504,10 +1550,7 @@ export class WorkerWorkflow {
       return;
     }
     if (!recoveryFix && task.reviewRound >= task.policy.config.maxFixRounds) {
-      await this.#deps.blockTask(
-        task.id,
-        `fix round budget exhausted at ${task.reviewRound}; no new fix operation was admitted`,
-      );
+      await this.#deps.blockTask(task.id, describeFixRoundExhaustion(task));
       return;
     }
     const reservation = reserved ?? (await this.reserveTask(task.id, "implementer"));
@@ -1789,6 +1832,19 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, "validation requires a task worktree and reviewed HEAD");
       return;
     }
+    let planned: PlannedValidation;
+    try {
+      planned = planValidation(task, task.reviewHead);
+    } catch (error) {
+      await this.#deps.blockTask(
+        task.id,
+        error instanceof ValidationConfigurationError
+          ? `validation refused: ${error.message}`
+          : `validation contract could not be planned: ${describeError(error)}`,
+      );
+      return;
+    }
+    const plan = planned.plan;
     const reservation = reserved ?? (await this.reserveTask(task.id, "validation"));
     if (reservation === undefined) return;
     const runtime = reservation.runtime;
@@ -1862,13 +1918,16 @@ export class WorkerWorkflow {
               receiptPaneId = undefined;
             }
           }
-          const existingEndpoint = currentRuntime.endpoints.find(
-            (entry) =>
-              entry.paneId === receiptPaneId ||
-              (receiptPaneId === undefined &&
-                entry.generation === task.generation &&
-                entry.role === "reviewer"),
-          );
+          const existingEndpoint =
+            existingEffect === undefined
+              ? undefined
+              : currentRuntime.endpoints.find(
+                  (entry) =>
+                    entry.paneId === receiptPaneId ||
+                    (receiptPaneId === undefined &&
+                      entry.generation === task.generation &&
+                      entry.role === "reviewer"),
+                );
           if (existingEndpoint !== undefined) return existingEndpoint;
           if (existingEffect !== undefined) {
             if (existingEffect.phase !== "succeeded" || existingEffect.receipt === undefined) {
@@ -1954,8 +2013,10 @@ export class WorkerWorkflow {
         generation: task.generation,
         repoPath: validationCwd,
         head: task.reviewHead,
-        surfaces: task.surfaces,
-        commands: task.policy.config.validationCommands,
+        contract: plan.contract,
+        policyDigest: plan.identity.policyDigest,
+        surfaces: plan.surfaces,
+        commands: plan.commands,
         resultPath: paths.resultPath,
         ...(reservation.runtime.operation === undefined
           ? {}
@@ -2002,6 +2063,9 @@ export class WorkerWorkflow {
           : { operationId: reservation.runtime.operation.id }),
         endpoint: validationEndpointReady,
         head: task.reviewHead,
+        contract: plan.contract,
+        policyDigest: plan.identity.policyDigest,
+        ...(planned.escalation === undefined ? {} : { escalation: planned.escalation }),
         ...(task.communication === undefined
           ? {}
           : { instructionRevision: task.communication.revision }),
@@ -2024,6 +2088,78 @@ export class WorkerWorkflow {
       workerCommand(this.#deps.validationWorkerPath, durableJob.jobPath),
       claim,
     );
+  }
+
+  /**
+   * Reads the git facts the review brief needs: the cumulative range from the worktree base, the
+   * range since the last reviewed HEAD, and the files at HEAD that reference a changed file.
+   */
+  private async readReviewObservations(
+    input: Readonly<{
+      readonly task: TaskRecord;
+      readonly head: string;
+      readonly repo: string;
+      readonly baseHead: string;
+      readonly cumulativePatchPath: string;
+      readonly incrementalPatchPath: string;
+    }>,
+  ): Promise<
+    Readonly<{
+      readonly observations: ReviewBriefObservations;
+      readonly cumulativePatch: string;
+      readonly incrementalPatch?: string;
+    }>
+  > {
+    const maxBytes = REVIEW_BRIEF_LIMITS.maxDiffPatchBytes;
+    const cumulative = await readDiffRange(this.#deps.run, {
+      repo: input.repo,
+      fromRef: input.baseHead,
+      toRef: input.head,
+      maxBytes,
+    });
+    const cumulativeReference: ReviewBriefDiffReference = {
+      range: "cumulative",
+      fromRef: input.baseHead,
+      toRef: input.head,
+      patchPath: input.cumulativePatchPath,
+      changedFiles: cumulative.files,
+      truncated: cumulative.truncated,
+    };
+    const affectedCallers = await readReferencingFiles(this.#deps.run, {
+      repo: input.repo,
+      ref: input.head,
+      files: cumulative.files.slice(0, REVIEW_BRIEF_LIMITS.maxChangedFiles),
+      maxResults: REVIEW_BRIEF_LIMITS.maxAffectedCallers,
+    });
+    const previousHead = lastReviewedHead(input.task);
+    if (previousHead === undefined || previousHead === input.head) {
+      return {
+        observations: { cumulative: cumulativeReference, affectedCallers },
+        cumulativePatch: cumulative.patch,
+      };
+    }
+    const incremental = await readDiffRange(this.#deps.run, {
+      repo: input.repo,
+      fromRef: previousHead,
+      toRef: input.head,
+      maxBytes,
+    });
+    return {
+      observations: {
+        cumulative: cumulativeReference,
+        sinceLastReview: {
+          range: "since-last-review",
+          fromRef: previousHead,
+          toRef: input.head,
+          patchPath: input.incrementalPatchPath,
+          changedFiles: incremental.files,
+          truncated: incremental.truncated,
+        },
+        affectedCallers,
+      },
+      cumulativePatch: cumulative.patch,
+      incrementalPatch: incremental.patch,
+    };
   }
 
   async advanceReview(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
@@ -2208,7 +2344,26 @@ export class WorkerWorkflow {
       const paths = jobPaths(directory);
       const diffPath = join(directory, "diff.patch");
       const evidencePath = join(directory, "validation-evidence.json");
+      const briefPath = join(directory, "review-brief.md");
+      const cumulativePatchPath = join(directory, "cumulative.patch");
+      const incrementalPatchPath = join(directory, "since-last-review.patch");
       const reviewMode: ReviewMode = reservedRuntime.reviewMode ?? "review_changed_diff";
+      const reviewContext = await this.readReviewObservations({
+        task,
+        head: task.reviewHead,
+        repo: task.worktree.path,
+        baseHead: task.worktree.baseHead,
+        cumulativePatchPath: reviewMode === "review_existing_head" ? cumulativePatchPath : diffPath,
+        incrementalPatchPath,
+      });
+      const brief = renderReviewBrief(
+        buildReviewBrief({
+          task,
+          head: task.reviewHead,
+          lens: nextLens,
+          observations: reviewContext.observations,
+        }),
+      );
       const artifactsWritten = await this.withOperationEffect(
         task.id,
         claim,
@@ -2219,6 +2374,13 @@ export class WorkerWorkflow {
             diffPath,
             reviewMode === "review_existing_head" ? "" : currentCheckout.diff,
           );
+          if (reviewMode === "review_existing_head") {
+            await writeTextAtomically(cumulativePatchPath, reviewContext.cumulativePatch);
+          }
+          if (reviewContext.incrementalPatch !== undefined) {
+            await writeTextAtomically(incrementalPatchPath, reviewContext.incrementalPatch);
+          }
+          await writeTextAtomically(briefPath, brief);
           await writeJsonAtomically(evidencePath, task.validationEvidence);
           return true;
         },
@@ -2236,7 +2398,10 @@ export class WorkerWorkflow {
         role,
         reportPath,
         [
+          briefPath,
           diffPath,
+          ...(reviewMode === "review_existing_head" ? [cumulativePatchPath] : []),
+          ...(reviewContext.incrementalPatch === undefined ? [] : [incrementalPatchPath]),
           evidencePath,
           ...(task.reportPath === undefined ? [] : [task.reportPath]),
           ...(reservedRuntime.reviewProvenancePath === undefined
@@ -2246,6 +2411,9 @@ export class WorkerWorkflow {
         { head: task.reviewHead, generation: task.generation, pass: nextLens },
         [
           `Review only the selected ${nextLens} lens. The immutable diff is at ${diffPath}.`,
+          `The deterministic review brief for this round is at ${briefPath}. It reuses the recorded scope, identities, diffs, evidence, and prior finding status so you do not rebuild them; it never replaces your own reading of the source at this HEAD.`,
+          "An implementer assertion, summary, report, or claimed fix is not proof. Confirm every claim against the source, the diff, or runner-produced evidence before you rely on it.",
+          "Reuse the exact finding id the brief lists when you report the same issue again, so its identity and status stay stable across rounds. Do not reopen a settled finding without new evidence observed at this HEAD and generation.",
           `Validation evidence is at ${evidencePath}; treat it as runner-produced evidence only.`,
           ...(reviewMode === "review_existing_head"
             ? [
@@ -2788,11 +2956,17 @@ export class WorkerWorkflow {
       if (runtime.jobs.some(activeRuntimeJob)) return undefined;
       if (activeReservations(state) >= task.policy.config.maxWorkers) return undefined;
       const inputHead = task.reviewHead ?? runtime.sourceCheckpoint.head;
+      const iterationScope = isFix ? iterationScopeFor(task) : undefined;
       const targetTask = isFix
         ? (() => {
             const transitioned = transitionTask(
               task,
-              { type: "begin-fixes", head: inputHead, generation: task.generation },
+              {
+                type: "begin-fixes",
+                head: inputHead,
+                generation: task.generation,
+                ...(iterationScope === undefined ? {} : { iterationScope }),
+              },
               this.#deps.context(),
             );
             return {
@@ -2836,9 +3010,7 @@ export class WorkerWorkflow {
           role,
           targetTask.generation,
           inputHead,
-          createHash("sha256")
-            .update(serializedIdentity(targetTask.policy, "task policy"))
-            .digest("hex"),
+          policyIdentity(targetTask.policy),
           targetTask.communication?.revision ?? 0,
           jobId,
           this.#claimOwner,

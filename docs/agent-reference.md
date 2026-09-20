@@ -274,6 +274,7 @@ The installed `tandem` command uses the following terminal options and environme
 | Coordinator reset | `--reset`; preflight and reopen only selected idle Tandem-owned coordinators; launch-only and rejected inside Herdr |
 | Coordinator restart | `--restart`; replace only the owned coordinator while preserving tasks, generations, conversations, questions/messages, reports, worktrees, leases, and child panes |
 | Forced cancellation | `--reset --force`; cancel selected active work, stop owned terminals, and reopen coordinators while preserving files/worktrees |
+| Parallel coordinators | `TANDEM_ALLOW_PARALLEL_COORDINATORS=1` (or `true`); off by default, and the only way to run more than one coordinator for one repository in a shared home |
 
 ### Remembered setup
 
@@ -329,15 +330,92 @@ coordinators in the same batch have already closed, reset stops closing further 
 error naming the coordinators already closed and the failure that stopped it; it does not force-close
 the affected pane, retry, or roll back the earlier closes. It does not stop a server, clear a registry,
 mutate tasks, recover task work, or wipe settings, history, worktrees, or files.
-Herdr removes a workspace when its last pane closes. Extra panes are never closed merely because
-they share the coordinator workspace: they remain open, and only Tandem's generated coordinator label
-is changed to `Retained terminals`. Custom labels remain unchanged. A normal launch without reset
-also retires the old generated label when replacing a stopped coordinator, but retains its shell.
-Retirement happens before the replacement workspace is created or the record is overwritten; if it
-fails, the launch rejects, the old record and terminals stay, and the next launch retries it.
-Workspace labels alone never prove ownership or authorize terminal deletion.
+Herdr removes a workspace when its last pane closes. Retiring a superseded or stopped coordinator's
+workspace closes its own owned pane by default once exact ownership and a stopped process are
+proven, which removes the workspace when it was the last pane. A workspace is retained instead
+(renamed to `Retained terminals · <repo>`) only when another pane still shares the coordinator
+workspace and keeps it alive after the owned pane closes; extra panes are never closed merely
+because they share the coordinator workspace, and they are reported alongside the retained outcome.
+A workspace someone gave a custom label is left entirely untouched, pane included. Ownership that
+cannot be proven exactly and as stopped, such as a pane whose foreground directory or process no
+longer matches the record, is quarantined: neither closed nor renamed, and reported so it can be
+inspected, and listed again by `tandem reconcile-resources`. There is no explicit-retention option
+yet; nothing asks a user whether to keep a coordinator's workspace. A normal launch without reset also retires the old generated label this
+same way when replacing a stopped coordinator. Launch and reset print a notice for a retained or
+quarantined outcome (silent otherwise); force reset's quarantine outcomes still surface through the
+same reset notice path. Retirement happens before the replacement workspace is created or the
+record is overwritten; if it fails, the launch rejects, the old record and terminals stay, and the
+next launch retries it. Workspace labels alone
+never prove ownership or authorize terminal deletion.
 Run it from a separate normal terminal, and add `--continue` only when the fresh launch should
 resume the saved coordinator conversation.
+
+Coordinator replacement is transactional, so repeated launches and restarts converge on one
+coordinator worktree lease instead of accumulating them. Once the previous pane retirement above
+reports `closed` or `already-clear`, launch reads the previous coordinator checkout and decides
+from that evidence alone: reuse the existing lease when it is clean and already pinned to the
+commit the replacement wants, release that exact lease and drop its record when the replacement
+needs a different commit, retain it when the checkout has uncommitted changes or unmerged paths,
+and quarantine it when the state cannot be explained (an unreadable checkout, a branch other than
+the recorded lease branch, a HEAD that is neither the recorded lease base nor a recorded refresh
+target, or a pane that was itself quarantined). A release always names the exact lease id, holder,
+and path; a lease is never matched by label, pool position, or path guess, and task worktrees are
+never inspected or returned by this path. Only after that cleanup does launch allocate the
+replacement.
+
+If a later startup step fails after a new lease was acquired, that launch rolls its own resources
+back: it retires the replacement pane it created through the same ownership-proving path, then
+releases the lease it acquired. Anything it cannot prove safe to undo (a pane still running an
+unidentified process, a checkout that changed, a return Treehouse refused) becomes a durable
+quarantine note under `<home>/coordinator-quarantine/`, naming the lease, the pane, and the
+reason. The launch error then names that note. A lease the previous record still points at is
+never rolled back, because the record remains its durable owner. A previous lease that cannot be
+released becomes a quarantine note too rather than blocking the launch, so no coordinator lease is
+ever left untracked and the user is never locked out of their coordinator. Launch prints a notice
+for a retained or quarantined worktree outcome and stays silent when nothing accumulated.
+
+### One coordinator per repository
+
+By default one canonical repository has one active coordinator across every Tandem session that
+shares a home, so sessions such as `tandem` and `tandem-fresh` cannot each start their own. Launch
+and restart take a repository-scoped coordination lock at
+`<home>/coordinator-registry/repository-<digest>.lock`, keyed by the canonical repository path, so
+two spellings of one repository (a symlinked checkout, a differently written path) share one lock.
+
+Lock ordering, which is what keeps two launches from deadlocking: the repository lock is acquired
+first, then the launching session's own launch lock, then the launch lock of any other session whose
+records are being reconciled. Callers that hold only a session lock, namely coordinator reset and
+coordinator source refresh, never acquire the repository lock, so no cycle exists.
+
+Holding that lock, a launch reconciles the repository across every session directory under
+`<home>/coordinator-registry/`. Discovery is read-time and non-destructive: records earlier builds
+wrote under per-session directories are still found, matched on their own canonical repository path
+rather than on their file name, and nothing is moved or rewritten to a new layout. Each record
+carries the session of origin, so no session's record is mistaken for another's.
+
+What the launch does with what it finds:
+
+- Its own session's record follows the ordinary reconnect and replacement path above.
+- A coordinator another session still runs refuses the launch, naming that session and its pane. A
+  live coordinator is never stopped, adopted, or force-closed by a launch, and no second coordinator
+  is started beside it. Reconnect in that session, or stop it there and launch again.
+- A stopped or orphaned coordinator from another session runs through exactly the retire, decide,
+  and apply path above, under that session's own launch lock: its pane is retired only with proven
+  stopped ownership, its exact lease is released and its record removed, or the lease is retained or
+  quarantined when the checkout is dirty, unmerged, or unexplained. A retained or quarantined record
+  stays as the durable owner of what Tandem refused to discard and is reported again on the next
+  launch; it never blocks the new coordinator.
+- A record stored under a session directory it does not belong to, or a record for this repository
+  that cannot be read, refuses the launch rather than duplicating a coordinator. A misplaced record
+  also gets a durable quarantine note under `<home>/coordinator-quarantine/` with stage
+  `exclusivity`, naming its lease and pane; an unreadable file names no lease identity, so the
+  refusal names the file to inspect instead. Nothing is released or closed by a refusal.
+
+Every refusal names `TANDEM_ALLOW_PARALLEL_COORDINATORS`. Setting it to `1` or `true` is the
+explicit opt-in for parallel coordinators on one repository; it is off by default, it still takes
+both locks so launches stay serialized, and it skips only the cross-session claim. Task worktrees
+are never inspected, returned, or renamed by this path, and a workspace label still never proves
+ownership. Launch prints one notice per stopped coordinator it settled for another session.
 
 `--reset --force` is the explicit interruption mode; `--force` alone and `configure --force` are
 invalid. It preflights selected task and presentation endpoints, including retained terminals,
@@ -705,10 +783,10 @@ The durable stages are:
 | `awaiting-approval` | Implementation scope exists but has not been approved. |
 | `queued` | Approved work is waiting for scheduler capacity; it is not proof of an active worker or completed research. |
 | `scouting` / `implementing` | A worker is active in its owned workspace. |
-| `validating` | Implementation has produced a checkpoint and the runner is checking that exact HEAD. |
-| `reviewing` | Validation succeeded; fresh reviewers are recording the required lenses. |
+| `validating` | The runner is executing one named validation contract at that exact HEAD: targeted iteration checks between fix rounds, or the complete final acceptance manifest once the candidate is otherwise ready. |
+| `reviewing` | The contract's checks passed; fresh reviewers are recording the required lenses. |
 | `awaiting-fixes` | Validation or review found a failure; a bounded fix round may be started. |
-| `ready` | Current validation and all required review lenses pass. |
+| `ready` | The complete final acceptance manifest and all required review lenses pass for the delivered code and policy at the current HEAD. |
 | `paused` | Work is stopped with a resumable previous stage. |
 | `blocked` | Work cannot safely proceed; a reason is durable, requires coordinator judgment, and is surfaced as an actionable blocker. |
 | `cancelled` / `completed` / `merged` | Terminal states. A scout is research-complete only in durable `completed` state with its report; implementation reaches `merged` only after verified delivery. |
@@ -753,9 +831,84 @@ Review is independent and sequential. Tandem stops or pauses the implementer, op
 
 All four lenses are required. A failed lens sends the task to `awaiting-fixes`; passing all four sends it to `ready`. Reviewers remain read-only and do not invent command output.
 
-Validation commands are argv-only and execute in declaration order. A command runs when its `surfaces` is empty, contains `*`, or intersects the task surfaces; a task surface of `*` matches every command. The runner stops after the first non-zero, timeout, or cancellation result. Every evidence record includes the command name, argv, exit code, captured stdout/stderr, and exact HEAD. No configured command or no matching command is a validation configuration failure, not a pass.
+Validation commands are argv-only and execute in declaration order. A command belongs to the manifest when its `surfaces` is empty, contains `*`, or intersects the task surfaces; a task surface of `*` matches every command. The runner stops after the first non-zero, timeout, or cancellation result. Every evidence record includes the command name, argv, exit code, captured stdout/stderr, exact HEAD, the contract it ran under, the check origin, and the policy digest it was pinned to. No configured command or no matching command is a validation configuration failure, not a pass.
+
+### Iteration and final acceptance contracts
+
+Validation runs under one of two named contracts. `src/tasks/acceptance.ts` owns both decisions; the runner and the task lifecycle only execute and record them.
+
+The **iteration contract** covers targeted reproduction between authorized fix rounds. When a fix round is admitted, Tandem records a durable `iterationScope` on the task naming the checks that reported the failure, the surfaces those checks cover, the findings the round must resolve, and the code and policy identity the scope was derived under. The next validation run then executes only those checks and records evidence stamped `contract: "iteration"`. A contained fix reaches review without rerunning the whole suite, and a targeted pass is useful progress that never satisfies acceptance.
+
+The **final acceptance contract** is the complete command and criterion manifest pinned to the delivered code, the pinned policy digest, and the current HEAD. It lists every required check, the four review lenses, and the recorded acceptance criteria. It runs in full only when the candidate is otherwise ready, meaning every required lens already passes at that HEAD and generation. Review completion with all lenses passing sends the task back to `validating` for that final run instead of straight to `ready`; `ready` is reached only once every manifest item passed under the same code and policy identity. Delivery repeats the check and refuses a branch whose manifest is incomplete, failed, or stale.
+
+Targeted checks are refused for the complete manifest when the scope was recorded under a different policy identity (`stale-identity`), when a reviewer rejected a candidate whose checks all passed (`disputed-result`), when the scope names a check the manifest does not configure (`unknown-impact`), or when the scope already covers every configured check (`broad-impact`). The escalation reason is durable on the validation job and visible through `tandem inspect`.
+
+Any relevant change invalidates prior evidence. A fix round increments the generation and clears validation evidence; `invalidate-evidence` additionally clears the recorded scope and the reviews. Evidence carrying a policy digest other than the one the run reported is refused rather than recorded, and final evidence recorded at another HEAD or policy digest reads as stale, never as a pass. After a candidate fails the complete manifest it returns to the authorized fix phase, runs targeted checks between fix rounds, and re-enters the complete manifest from the beginning once it is ready again.
+
+Validation evidence written before contracts existed loads unchanged and is marked legacy. Legacy records stay readable as durable history, including on completed and cancelled tasks, and satisfy neither contract, so a candidate carrying them must run the complete final manifest again before it can be delivered. A record naming only part of its contract identity, or marked legacy while also claiming an origin or policy digest, is a corrupt shape and fails closed. A validation job persisted without its contract identity is refused for the same reason and the task is blocked with that cause, rather than being consumed as if it were pinned.
+
+Local runner checks and GitHub checks stay distinct. Runner evidence is stamped `origin: "local"` and satisfies only local manifest requirements; remote required checks remain the GitHub-observed `RemoteCheck` rollup asserted at merge. A local pass cannot be relabeled as a remote check, and `tandem inspect` reports the iteration/final and local/remote split alongside the passing count.
 
 Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Textual scout and implementer results must start with exactly one role-appropriate `Outcome: completed|needs-decision|failed` (scouts) or `Outcome: implemented|needs-decision|failed` (implementers) line. Reviewer, verifier, and presentation workers may use `Outcome: needs-decision` for a genuine blocker; otherwise reviewer/verifier success remains the strict `ReviewResult` JSON contract and presentation success remains its `Artifact: <absolute path>` contract. Any `needs-decision` result emits exactly one bounded single-line `Question: ...` and optional bounded single-line `Recommendation: ...` (each no more than 1,000 characters); durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
+
+### Incremental review briefs and finding status
+
+Each bounded review round writes one deterministic review brief next to the immutable diff in the
+reviewer's job directory, at `review-brief.md`. `src/tasks/review-brief.ts` builds it as a pure
+function of durable task state plus injected git observations, so the same task, HEAD, and worktree
+always produce the same brief. It is reused context, not a second memory, handoff, or provider
+system: every field comes from the records the task already keeps.
+
+The brief carries the approved scope, the acceptance criteria, the five applicable principles as
+mandatory blocking requirements, and explicit non-goals; the exact source, policy, instruction, and
+configuration identities (HEAD, branch, base, generation, review round, policy digest, review-channel
+instruction provenance, `maxFixRounds`, `maxWorkers`, and the configured command names); references
+to the cumulative range from the worktree base and the range since the last reviewed HEAD, each as a
+patch path plus its changed-file list; the files at HEAD that reference a changed file; source links
+pinned to HEAD; the current final-acceptance status and iteration scope; the recorded checks; and the
+prior finding status with the change that supports it. Reviewers keep full source access and an
+independent context. The brief says so explicitly: an implementer assertion, summary, report, or
+claimed fix is never proof, and every claim is confirmed against the source, the diff, or
+runner-produced evidence.
+
+Findings keep a stable identity across rounds on the durable `findingLedger`, which `record-review`
+is the only writer of. An identity is `lens:id`, and the reviewer is instructed to reuse the exact id
+the brief lists when it reports the same issue again. Each entry carries `unresolved`, `addressed`,
+`regressed`, or `disputed`, together with the round that raised it and the round and HEAD that set
+its current status. A review of the same lens at a later generation that stops reporting an identity
+settles it as `addressed`; only a later review that reports it again reopens it as `regressed`, so a
+settled finding is never reopened without new evidence. Two reviews of one identity that record
+contradicting verdicts mark it `disputed`. Blockers and suggestions are split by the rule a review
+already enforces: a confirmed P0, P1, or P2, or a plausible P0 or P1, blocks, and everything else is
+an optional suggestion. A violation of a mandatory design rule or applicable principle blocks through
+the same rule.
+
+The brief also states how wide this round must be. Impact is `contained`, `expanded`, or `unknown`,
+and it reuses the existing `EscalationReason` vocabulary rather than adding a parallel one. A fix that
+reaches files outside the surface the round was authorized to touch reports `broad-impact`; a fix
+whose surface cannot be bounded, a truncated incremental patch, or a missing prior reviewed HEAD
+reports `unknown-impact`; and an escalated validation contract carries its own reason through. Any
+assessment other than `contained` tells the reviewer to read the cumulative diff and the affected
+callers in full.
+
+The brief is bounded by named limits in `REVIEW_BRIEF_LIMITS`, covering the findings, changed files,
+affected callers, source links, advisory leads, evidence entries, per-field text, the patch byte
+budget, and the rendered brief itself. Suggestions, settled findings, long descriptions, and the bulky
+file lists are compacted first; blocker identities and their status are never elided, and an elision
+is stated with a pointer to the complete durable record. The brief input also carries an optional,
+typed slot for advisory review leads. Those render with their provenance under an untrusted heading
+and can never become blockers, drop mandatory context, or authorize acceptance; Tandem produces none
+of them today.
+
+When the configured fix-round budget is spent, the durable block reason names the blockers that
+remain and the decision that is available: stop for a human decision, or revise and re-approve the
+task scope. No round is retried automatically, nothing auto-passes, and no unresolved blocker is
+downgraded to a suggestion. The final review still runs against the delivered code at the current
+HEAD and the brief never replaces the final acceptance contract.
+
+Records written before the finding ledger existed load unchanged with no ledger, so no prior status
+is claimed without evidence. A ledger entry naming an unknown status, or missing the observation that
+supports its status, is a corrupt shape and fails closed.
 
 ### Interactive child terminals
 
@@ -1002,7 +1155,33 @@ Normal users do not need to tune a pool cap or approve routine safe cleanup. The
 - active or otherwise protected task paths are never pruned;
 - ambiguous metadata, missing physical identity, failed safety checks, ignored files, dirty files, unmerged paths, and non-ancestor work are retained with warnings.
 
-Automatic terminal cleanup closes stopped owned endpoints and attempts a lease-checked Treehouse return for `cancelled`, `completed`, or `merged` tasks. Live interactive child terminals and their checkouts are retained for inspection and follow-up. Explicit cleanup can cooperatively close an idle completed or paused child, but refuses busy conversations, queued input, editor drafts, and unproven ownership. Worktree return still requires stopped processes, exact lease metadata, the expected task branch, a clean/unmerged-free checkout, and task HEAD ancestry. If proof fails, Tandem retains the worktree instead of deleting it.
+Automatic terminal cleanup closes stopped owned endpoints and attempts a lease-checked Treehouse return for `cancelled`, `completed`, or `merged` tasks. It runs in the same scheduler pass that settled the task, so a completed scout does not hold its pane and worktree until a later coordinator turn. Live interactive child terminals and their checkouts are retained for inspection and follow-up. Explicit cleanup can cooperatively close an idle completed or paused child, but refuses busy conversations, queued input, editor drafts, and unproven ownership. Worktree return still requires stopped processes, exact lease metadata, the expected task branch, a clean/unmerged-free checkout, and task HEAD ancestry. If proof fails, Tandem retains the worktree instead of deleting it.
+
+### Releasing settled scout resources
+
+A scout only reads, so its lease is returned only after its checkout is proven to be the untouched
+pinned source commit on its own lease branch. Any difference at all, an untracked file included, is
+somebody's work: the worktree is retained and the reason is reported. A checkout that cannot be
+read, or that sits on a branch the lease does not name, is quarantined with every resource kept.
+Blocked, paused, and decision-waiting scouts keep their pane and worktree, because those are the
+evidence a coordinator needs to answer them; completed scouts with a durable report and safely
+cancelled scouts are released.
+
+Cleanup never touches what a scout produced. The report, the source checkpoint, the consumed scout
+job, and the task's notifications and history all live in the Tandem home, so a later
+implementation task can still cite a released scout through `researchTaskIds`.
+
+Each attempt leaves a durable `cleanup` note on the task record with a status and a reason:
+
+| Status | Meaning |
+| --- | --- |
+| `released` | The pane was closed and the exact lease returned. |
+| `retained` | Cleanup deliberately kept a resource, for example a changed or dirty scout checkout. |
+| `pending` | A transient failure; the next scheduler tick or reconciliation retries it, including after a coordinator restart. |
+| `quarantined` | Ownership could not be proven; resources are kept and nothing is retried automatically. |
+
+Records written before cleanup notes existed simply omit the field and load unchanged; a present
+but malformed note fails the read as state corruption rather than being coerced into a status.
 
 Pool housekeeping keeps the policy-derived idle set and removes only additional proven-disposable copies. This is safe pool maintenance, not an automatic destructive discard of user work. Explicit discard is the only path that bypasses the Git safety proof.
 
@@ -1067,9 +1246,10 @@ are Tandem-owned state, not files in target repositories:
 | --- | --- |
 | `<home>/models.json` | Strict global model preference envelope for all six roles; approved updates atomically replace it with mode `0600`. |
 | `<home>/repositories/<key>/config.json` | Private central policy envelope for the canonical repository root; `<key>` is the first 24 hex characters of its SHA-256 realpath digest. |
-| `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. |
+| `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. Launch discovers these across every session directory, so one repository keeps one active coordinator. |
+| `<home>/coordinator-registry/repository-<digest>.lock` | Native `O_EXLOCK` coordination lock for one canonical repository, shared by every session in this home and acquired before the per-session launch lock. |
 | `<home>/coordinator-scripts/*.sh` | Atomically written `0700` launch scripts containing the coordinator command and scoped environment overrides; kept outside project checkouts. |
-| `<home>/state.sqlite` | Canonical SQLite source of truth for task records, policy snapshots, lifecycle/evidence/review/delivery metadata, runtime reservations, endpoint identities, durable jobs and operations, stop requests, presentations, and migration metadata. |
+| `<home>/state.sqlite` | Canonical SQLite source of truth for task records, policy snapshots, lifecycle/evidence/review/delivery metadata, cleanup notes, runtime reservations, endpoint identities, durable jobs and operations, stop requests, presentations, and migration metadata. |
 | `<home>/communications/<safe-task-id>/inbox.json` | Derived bounded task-message projection; canonical communication remains in the task row in `state.sqlite`. |
 | `<home>/tasks/*.json` (legacy input only) | Pre-migration task snapshots. A successful migration archives the original bytes under `<home>/.tandem-migration/archive/tasks/` and replaces `<home>/tasks` with an old-writer fence file. |
 | `<home>/runtime.json` (legacy input only) | Pre-migration runtime snapshot. A successful migration archives the original bytes under `<home>/.tandem-migration/archive/runtime.json` and replaces `<home>/runtime.json` with an old-writer fence directory. |
@@ -1225,6 +1405,47 @@ classifies infrastructure, validation-configuration, and task-code failures. `ev
 reconstructs only reports/provenance proven by durable task/generation/HEAD-matching records; stale
 reports are refused.
 
+### Reconciling Tandem resources across sessions
+
+`tandem reconcile-resources [--home PATH] [--yes] [--json]` is the front door's home-wide cleanup
+surface, and the supported alternative to deleting coordinator records, panes, or lock files by
+hand. It is distinct from the advanced CLI's per-task `tandem reconcile TASK_ID`, which repairs one
+task's durable runtime.
+
+It runs in two stages. The scan reads every coordinator record across every session directory under
+the home, asks Herdr whether each recorded coordinator still answers, reads the checkout behind a
+record no live coordinator answers for, lists each Treehouse pool's leases, lists the terminal
+scouts whose cleanup never settled, and lists the durable quarantine notes and unreadable record
+files already present. The scan issues read-only commands only. The plan is then a pure function of
+those observations, so nothing is classified from a resource Tandem changed on the way.
+
+Classification:
+
+- a live owned coordinator, and its pane and lease, are retained and named with their session;
+- a stopped owned coordinator is cleaned: its workspace is retired through the same proof-then-close
+  owner a replacement launch uses, then its exact lease is released and its record removed;
+- an orphaned coordinator lease, held under the coordinator lease-holder identity with no record
+  naming it, is released by exact lease id, holder, and path when its checkout is clean;
+- a dirty, unmerged, unlanded, foreign, or ownership-uncertain worktree is retained and reported
+  with the reason; leases held by anything other than a coordinator are never released here, so
+  implementation task worktrees with unlanded commits are untouched;
+- completed and safely cancelled scout resources are finished through the durable task cleanup
+  owner, which keeps the report, provenance, and task history;
+- a record Tandem cannot place or prove, such as one stored under a session directory it does not
+  name, is quarantined with a durable note and nothing is closed or released;
+- existing quarantine notes and unreadable record files are listed with their path and reason, and
+  are never deleted.
+
+Without `--yes` the command changes nothing and reports what it would clean. Applying takes the
+shared repository lock for each repository first, then that session's launch lock, so a concurrent
+launch cannot allocate underneath it; a dry run takes no lock and never disturbs a live coordinator.
+A `clean` plan item is a prediction: applying re-reads the resource and hands it back to its owner,
+which may still retain or quarantine it. Applying twice plans nothing to clean the second time, and
+a quarantine note is written once per lease rather than on every run. `--json` prints a versioned
+report (`schemaVersion`, `mode`, `home`, `cleaned`, `retained`, `quarantined`, `failed`) whose
+entries carry the resource kind, id, repository, session, path, and reason. The exit code is
+non-zero only when the scan or an apply failed, never because a resource was deliberately retained.
+
 `delivery-preflight` must pass before approved publication. It checks the exact reviewed HEAD,
 clean/unmerged state, generated database types, formatting, lint/pre-push checks, diff whitespace,
 branch and remote identity, and duplicate pull-request metadata. Publication never bypasses a
@@ -1342,6 +1563,6 @@ question metadata, activity timestamps, and full message text.
 
 Tandem's orchestration, durable state, worker processes, Herdr workspaces, Treehouse pool, and Lavish control are local to the machine running the coordinator. It does not create remote fleets, alternate terminal/harness backends, social relays, or hosted Tandem state. GitHub PR publish/merge necessarily use the configured remote through the local `gh` and Git commands when explicitly requested.
 
-The repository lock is a Darwin native `O_EXLOCK` lock at the task-store directory, with a five-second default acquisition timeout. Lock corruption, lock replacement, filesystem failures, ambiguous external identities, and unknown disk capacity fail closed rather than weakening the safety proof. The lock and durable state are local filesystem primitives; they are not a distributed lock for multiple machines or network filesystems.
+The repository lock is a Darwin native `O_EXLOCK` lock at the task-store directory, with a five-second default acquisition timeout. Coordinator launches use the same native primitive for their own locks under `<home>/coordinator-registry/`: one per canonical repository, acquired before the per-session launch lock. Lock corruption, lock replacement, filesystem failures, ambiguous external identities, and unknown disk capacity fail closed rather than weakening the safety proof. The lock and durable state are local filesystem primitives; they are not a distributed lock for multiple machines or network filesystems.
 
 The authoritative implementation contracts live in `src/contracts.ts`, with configuration and policy in `src/config/`, lifecycle rules in `src/tasks/lifecycle.ts`, native adapters in `src/adapters/`, service composition in `src/service/controller.ts`, and OMP integration in `src/extension.ts`, `src/extension/`, and `src/instructions.ts`. See [AGENTS.md](../AGENTS.md#source-layout) for the domain directory map and placement rules. This reference describes those current contracts and does not claim that an external Herdr, OMP provider, GitHub, or Lavish scenario has been run in every environment.

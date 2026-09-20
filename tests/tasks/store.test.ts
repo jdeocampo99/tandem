@@ -11,6 +11,8 @@ import type {
 } from "../../src/contracts.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { emptyRuntimeState } from "../../src/runtime/schema.ts";
+import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
+import { ledgerBlockers } from "../../src/tasks/findings.ts";
 import { type TaskTransitionContext, transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore, type StoreTaskInput, type TaskStore } from "../../src/tasks/store.ts";
 import {
@@ -36,7 +38,7 @@ const policy: ResolvedPolicy = {
     instructions: channels,
     instructionFiles: channels,
     validationCommands: [
-      { name: "check", argv: ["bun", "run", "check"], surfaces: ["source"], timeoutMs: 10_000 },
+      { name: "check", argv: ["bun", "run", "check"], surfaces: ["store"], timeoutMs: 10_000 },
     ],
     maxWorkers: 3,
     maxFixRounds: 1,
@@ -111,6 +113,172 @@ async function withTemporaryDirectory(run: (directory: string) => Promise<void>)
     await rm(directory, { recursive: true, force: true });
   }
 }
+
+/** Rewrites a stored record's payload in place, standing in for state written by an older build. */
+function rewritePayload(
+  directory: string,
+  taskId: string,
+  edit: (payload: Record<string, unknown>) => void,
+): void {
+  const database = new Database(join(directory, "state.sqlite"));
+  const row = database.query("SELECT payload FROM tasks WHERE id = ?").get(taskId) as {
+    payload: string;
+  };
+  const payload = JSON.parse(row.payload) as Record<string, unknown>;
+  edit(payload);
+  database.query("UPDATE tasks SET payload = ? WHERE id = ?").run(JSON.stringify(payload), taskId);
+  database.close();
+}
+
+const LEGACY_EVIDENCE = {
+  name: "check",
+  argv: ["bun", "run", "check"],
+  exitCode: 0,
+  stdout: "56 tests passed",
+  stderr: "",
+  head: "legacy-head",
+} as const;
+
+test("loads validation evidence written before contracts existed and marks it legacy", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-evidence" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.stage = "reviewing";
+      payload.reviewHead = LEGACY_EVIDENCE.head;
+      payload.validationEvidence = [{ ...LEGACY_EVIDENCE }];
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("legacy task did not reload");
+    expect(reloaded.validationEvidence[0]).toEqual({ ...LEGACY_EVIDENCE, contract: "legacy" });
+    expect(finalAcceptanceStatus(reloaded, LEGACY_EVIDENCE.head).satisfied).toBe(false);
+  });
+});
+
+test("keeps a completed record with legacy evidence readable", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-completed" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.stage = "completed";
+      payload.reviewHead = LEGACY_EVIDENCE.head;
+      payload.validationEvidence = [{ ...LEGACY_EVIDENCE }];
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("legacy task did not reload");
+    expect(reloaded.stage).toBe("completed");
+    expect(reloaded.validationEvidence).toHaveLength(1);
+  });
+});
+
+const LEDGER_ENTRY = {
+  id: "f-1",
+  lens: "behavior",
+  severity: "P1",
+  verdict: "confirmed",
+  description: "The retry loop drops the cancellation signal.",
+  file: "src/service/controller.ts",
+  line: 42,
+  status: "unresolved",
+  raisedAt: { head: "head-1", generation: 0, reviewRound: 0 },
+  statusAt: { head: "head-1", generation: 0, reviewRound: 0 },
+} as const;
+
+test("loads a record written before the finding ledger existed with no prior finding status", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-ledger" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.stage = "reviewing";
+      payload.reviewHead = "head-1";
+      delete payload.findingLedger;
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("legacy task did not reload");
+    expect(reloaded.findingLedger).toBeUndefined();
+    expect(ledgerBlockers(reloaded.findingLedger ?? [])).toEqual([]);
+  });
+});
+
+test("reloads a recorded finding ledger unchanged", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "ledger-roundtrip" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.findingLedger = [{ ...LEDGER_ENTRY }];
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("ledger task did not reload");
+    expect(reloaded.findingLedger).toEqual([LEDGER_ENTRY]);
+  });
+});
+
+test("refuses a finding ledger entry with an unknown status", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "ledger-status" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.findingLedger = [{ ...LEDGER_ENTRY, status: "probably-fine" }];
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("refuses a finding ledger entry missing the change that supports its status", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "ledger-observation" });
+    rewritePayload(directory, created.id, (payload) => {
+      const { statusAt: _dropped, ...withoutStatusAt } = LEDGER_ENTRY;
+      payload.findingLedger = [withoutStatusAt];
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("refuses a finding ledger that is not an array", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "ledger-shape" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.findingLedger = { "f-1": LEDGER_ENTRY };
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("refuses validation evidence that names only part of its contract identity", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "partial-evidence" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.validationEvidence = [{ ...LEGACY_EVIDENCE, contract: "final" }];
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("refuses legacy-marked validation evidence that also claims a policy identity", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "mixed-evidence" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.validationEvidence = [
+        { ...LEGACY_EVIDENCE, contract: "legacy", origin: "local", policyDigest: "digest" },
+      ];
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
 
 test("persists records with restrictive modes and reloads through a new store instance", async () => {
   await withTemporaryDirectory(async (directory) => {
@@ -380,6 +548,8 @@ test("persists notification state before acknowledgement is observable after rel
           type: "validation-failed",
           head: "head-1",
           generation: 0,
+          contract: "final",
+          policyDigest: policyIdentity(input.policy),
           evidence: [
             {
               name: "check",
@@ -388,6 +558,9 @@ test("persists notification state before acknowledgement is observable after rel
               stdout: "",
               stderr: "failure",
               head: "head-1",
+              contract: "final",
+              origin: "local",
+              policyDigest: policyIdentity(input.policy),
             },
           ],
         },
@@ -500,6 +673,35 @@ test("loads scout records written without a disposition using the conservative d
   });
 });
 
+test("upgrades a scout row that has old-shape evidence and no continuation together", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory, "legacy-both");
+    const created = await store.create({ ...scoutInput, id: "legacy-both-scout" });
+    await rewriteTaskPayload(directory, created.id, (payload) => {
+      delete payload.researchContinuation;
+      payload.validationEvidence = [
+        {
+          name: "check",
+          argv: ["bun", "run", "check"],
+          exitCode: 0,
+          stdout: "ok",
+          stderr: "",
+          head: "legacy-head",
+        },
+      ];
+    });
+
+    const reloaded = await makeStore(directory, "legacy-both-reload").read(created.id);
+    expect(reloaded?.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "ask-intent",
+      selectedBy: "deterministic",
+    });
+    expect(reloaded?.validationEvidence.map((entry) => entry.contract)).toEqual(["legacy"]);
+    expect(reloaded?.scopeApproved).toBe(true);
+  });
+});
+
 test("fails closed on invalid dispositions, malformed provenance, and non-scout records", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory, "invalid");
@@ -531,5 +733,52 @@ test("fails closed on invalid dispositions, malformed provenance, and non-scout 
       };
     });
     await expect(store.read(implementation.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("loads records written before cleanup notes existed and rejects malformed ones", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "cleanup-upgrade" });
+    expect(created.cleanup).toBeUndefined();
+
+    const readPayload = (): Record<string, unknown> => {
+      const database = new Database(join(directory, "state.sqlite"));
+      const row = database.query("SELECT payload FROM tasks WHERE id = ?").get(created.id) as {
+        payload: string;
+      };
+      database.close();
+      return JSON.parse(row.payload) as Record<string, unknown>;
+    };
+    const writePayload = (payload: Record<string, unknown>): void => {
+      const database = new Database(join(directory, "state.sqlite"));
+      database
+        .query("UPDATE tasks SET payload = ? WHERE id = ?")
+        .run(JSON.stringify(payload), created.id);
+      database.close();
+    };
+
+    const legacy = readPayload();
+    expect(Object.hasOwn(legacy, "cleanup")).toBe(false);
+    expect(await store.read(created.id)).toEqual(created);
+
+    writePayload({
+      ...legacy,
+      cleanup: {
+        schemaVersion: 1,
+        status: "quarantined",
+        reason: "pane ownership could not be proven",
+        observedAt: "2030-01-01T00:00:00.000Z",
+      },
+    });
+    const upgraded = await store.read(created.id);
+    expect(upgraded?.cleanup?.status).toBe("quarantined");
+    expect(upgraded?.cleanup?.reason).toBe("pane ownership could not be proven");
+
+    writePayload({ ...legacy, cleanup: { schemaVersion: 1, status: "sort-of-done" } });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+
+    writePayload({ ...legacy, cleanup: "released" });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
   });
 });

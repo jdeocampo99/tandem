@@ -830,6 +830,10 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
     let startPersistentCalls = 0;
     let serverRunning = false;
     let restoredLabel = "Tandem coordinator · repo";
+    // The previous coordinator's pane/process state before its owned pane closes, distinct
+    // from the freshly created replacement pane the underlying coordinatorRunner simulates.
+    let oldPaneClosed = false;
+    let newWorkspaceCreated = false;
     const run: CommandRunner = async (call) => {
       if (call.argv[0] === "herdr" && !serverRunning) {
         if (call.argv.includes("status")) {
@@ -864,6 +868,53 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
           stderr: "",
         };
       }
+      if (!newWorkspaceCreated && call.argv[0] === "herdr" && call.argv[3] === "pane") {
+        if (call.argv[4] === "get") {
+          if (oldPaneClosed) {
+            return {
+              code: 1,
+              stdout: "",
+              stderr: JSON.stringify({ error: { code: "pane_not_found" } }),
+            };
+          }
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                pane: {
+                  pane_id: "pane-2",
+                  tab_id: "tab-2",
+                  workspace_id: "workspace-2",
+                  foreground_cwd: cleanRepo,
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (call.argv[4] === "process-info") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                process_info: {
+                  pane_id: "pane-2",
+                  shell_pid: 999,
+                  foreground_processes: [{ pid: 999, name: "zsh", argv: ["-zsh"], argv0: "-zsh" }],
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (call.argv[4] === "close") {
+          oldPaneClosed = true;
+          return { code: 0, stdout: JSON.stringify({ result: { type: "ok" } }), stderr: "" };
+        }
+      }
+      if (call.argv[0] === "herdr" && call.argv[3] === "workspace" && call.argv[4] === "create") {
+        newWorkspaceCreated = true;
+      }
       return runner.run(call);
     };
     const result = await withProcessEnvironment(
@@ -895,12 +946,15 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
           existingLease: { leaseHolder, branch: first.worktree.branch },
         });
         serverRunning = false;
+        newWorkspaceCreated = false;
         return launchCoordinator(request, dependencies);
       },
     );
     expect(startPersistentCalls).toBe(2);
     expect(result.reused).toBeUndefined();
-    expect(restoredLabel).toBe("Retained terminals · repo");
+    // The default behavior closes the previous coordinator's owned pane instead of retaining it.
+    expect(oldPaneClosed).toBe(true);
+    expect(restoredLabel).toBe("Tandem coordinator · repo");
 
     expect(result.direct).toBe(false);
     expect(result.repoPath).toBe(repo);
@@ -1134,6 +1188,73 @@ test("launchCoordinator retires the old generated workspace label before replaci
           };
         }
         if (argv.includes("create")) creates += 1;
+      }
+      // The previous coordinator's workspace still has another pane in it, which is why
+      // retiring it renames the workspace instead of closing it outright.
+      if (argv[0] === "herdr" && argv.includes("api") && argv.includes("snapshot")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            result: {
+              type: "session_snapshot",
+              snapshot: {
+                panes: [
+                  {
+                    workspace_id: "old-workspace",
+                    tab_id: "old-sibling-tab",
+                    pane_id: "old-sibling",
+                  },
+                ],
+              },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (
+        argv[0] === "herdr" &&
+        argv[3] === "pane" &&
+        argv[4] === "get" &&
+        argv.at(-1) === "old-pane"
+      ) {
+        return {
+          code: 1,
+          stdout: "",
+          stderr: JSON.stringify({ error: { code: "pane_not_found" } }),
+        };
+      }
+      if (argv[0] === "herdr" && argv[3] === "pane" && argv.at(-1)?.includes("old-sibling")) {
+        if (argv[4] === "get") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                pane: {
+                  pane_id: "old-sibling",
+                  tab_id: "old-sibling-tab",
+                  workspace_id: "old-workspace",
+                  foreground_cwd: cleanRepo,
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        if (argv[4] === "process-info") {
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                process_info: {
+                  pane_id: "old-sibling",
+                  shell_pid: 111,
+                  foreground_processes: [{ pid: 111, name: "zsh", argv: ["-zsh"], argv0: "-zsh" }],
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
       }
       return base(call);
     };
