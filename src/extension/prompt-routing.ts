@@ -45,6 +45,9 @@ export type PromptRoutingConfig = Readonly<{
   readonly fetch?: JevFetch;
 }>;
 
+/** A monotonic duration clock, injected so evaluation tooling can produce deterministic durations. */
+export type PromptRoutingClock = () => number;
+
 export type PromptRoutingDecision = Readonly<{
   readonly action: ReadOnlyAction;
   readonly target: RouteTarget;
@@ -73,6 +76,7 @@ export type PromptRoutingDependencies = Readonly<{
     input: JevEvaluationInput,
     options: JevEvaluationOptions,
   ) => Promise<JevEvaluationResponse>;
+  readonly now?: PromptRoutingClock;
 }>;
 
 /** Bumped whenever the shape or meaning of {@link ROUTING_QUESTIONS} changes. */
@@ -269,10 +273,11 @@ function evaluationResult(
   classifier: PromptRoutingEvaluation["classifier"],
   reason: string,
   startedAt: number,
+  now: PromptRoutingClock,
   outcome?: JevAttemptOutcome,
   decision?: PromptRoutingDecision,
 ): PromptRoutingEvaluation {
-  const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+  const durationMs = Math.max(0, Math.round(now() - startedAt));
   return {
     classifier,
     reason,
@@ -286,15 +291,16 @@ export async function classifyPrompt(
   prompt: string,
   config: PromptRoutingConfig,
   evaluate: PromptRoutingDependencies["evaluate"] = evaluateJev,
+  now: PromptRoutingClock = () => performance.now(),
 ): Promise<PromptRoutingEvaluation> {
-  const startedAt = performance.now();
+  const startedAt = now();
   const normalized = normalizePrompt(prompt);
-  if (normalized.length === 0) return evaluationResult("disabled", "empty-prompt", startedAt);
+  if (normalized.length === 0) return evaluationResult("disabled", "empty-prompt", startedAt, now);
   if (normalized.length > MAX_ROUTABLE_PROMPT_CHARS) {
-    return evaluationResult("disabled", "prompt-too-long", startedAt);
+    return evaluationResult("disabled", "prompt-too-long", startedAt, now);
   }
   if (config.apiKey === undefined) {
-    return evaluationResult("disabled", "jev-not-configured", startedAt);
+    return evaluationResult("disabled", "jev-not-configured", startedAt, now);
   }
 
   const taskId = extractPromptTaskId(normalized);
@@ -319,7 +325,7 @@ export async function classifyPrompt(
   } catch (error) {
     const code = error instanceof JevEvaluationError ? error.code : "unavailable";
     const reason = error instanceof JevEvaluationError ? `jev-${error.code}` : "jev-error";
-    return evaluationResult("jev", reason, startedAt, { kind: "failure", code });
+    return evaluationResult("jev", reason, startedAt, now, { kind: "failure", code });
   }
   const outcome: JevAttemptOutcome = { kind: "success", response };
 
@@ -338,7 +344,7 @@ export async function classifyPrompt(
     scopeAnswer === undefined ||
     compositionAnswer === undefined
   ) {
-    return evaluationResult("jev", "incomplete-classification", startedAt, outcome);
+    return evaluationResult("jev", "incomplete-classification", startedAt, now, outcome);
   }
   if (
     !knownAction(actionAnswer.choice) ||
@@ -347,7 +353,7 @@ export async function classifyPrompt(
     !knownScope(scopeAnswer.choice) ||
     !knownComposition(compositionAnswer.choice)
   ) {
-    return evaluationResult("jev", "invalid-classification", startedAt, outcome);
+    return evaluationResult("jev", "invalid-classification", startedAt, now, outcome);
   }
 
   const confidence = Math.min(
@@ -358,14 +364,14 @@ export async function classifyPrompt(
     compositionAnswer.confidence,
   );
   if (confidence < PROMPT_ROUTING_CONFIDENCE_THRESHOLD) {
-    return evaluationResult("jev", "low-confidence", startedAt, outcome);
+    return evaluationResult("jev", "low-confidence", startedAt, now, outcome);
   }
   const targetMatchesAction =
     actionAnswer.choice === "list" || actionAnswer.choice === "presentations"
       ? targetAnswer.choice === "repository"
       : targetAnswer.choice === "task";
   if (!targetMatchesAction) {
-    return evaluationResult("jev", "classification-mismatch", startedAt, outcome);
+    return evaluationResult("jev", "classification-mismatch", startedAt, now, outcome);
   }
   if (
     actionAnswer.choice === "none" ||
@@ -375,14 +381,14 @@ export async function classifyPrompt(
     scopeAnswer.choice !== "within" ||
     compositionAnswer.choice !== "single"
   ) {
-    return evaluationResult("jev", "normal-coordinator", startedAt, outcome);
+    return evaluationResult("jev", "normal-coordinator", startedAt, now, outcome);
   }
   if (
     actionAnswer.choice !== "list" &&
     actionAnswer.choice !== "presentations" &&
     taskId === undefined
   ) {
-    return evaluationResult("jev", "missing-explicit-task-id", startedAt, outcome);
+    return evaluationResult("jev", "missing-explicit-task-id", startedAt, now, outcome);
   }
   const decision: PromptRoutingDecision = {
     action: actionAnswer.choice,
@@ -393,7 +399,7 @@ export async function classifyPrompt(
     ...(taskId === undefined ? {} : { taskId }),
     confidence,
   };
-  return evaluationResult("jev", "direct-read-only", startedAt, outcome, decision);
+  return evaluationResult("jev", "direct-read-only", startedAt, now, outcome, decision);
 }
 
 export function actionForPromptDecision(
@@ -489,7 +495,7 @@ export async function handlePromptInput(
     return undefined;
   }
 
-  const evaluation = await classifyPrompt(prompt, deps.config, deps.evaluate);
+  const evaluation = await classifyPrompt(prompt, deps.config, deps.evaluate, deps.now);
   await recordDiagnostic(
     deps,
     ctx,

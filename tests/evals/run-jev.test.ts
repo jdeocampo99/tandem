@@ -20,9 +20,22 @@ test("fake mode runs every fixture deterministically with no network and no cred
   const fixtures = await loadPromptRoutingFixtures(FIXTURE_PATH);
   const first = await runFakePromptRoutingFixtures(fixtures);
   const second = await runFakePromptRoutingFixtures(fixtures);
-  const strip = (outcomes: typeof first) =>
-    outcomes.map(({ durationMs: _durationMs, ...rest }) => rest);
-  expect(strip(first)).toEqual(strip(second));
+  // A full comparison, including every nested duration: fake mode injects a fixed clock into
+  // classifyPrompt (so its own duration and its nested usage record's duration both come from
+  // it), so two runs over the same fixtures are byte-identical, not merely equal once durations
+  // are set aside.
+  expect(first).toEqual(second);
+});
+
+test("fake mode's injected clock makes every duration, including the nested usage record's, exactly zero", async () => {
+  const fixtures = await loadPromptRoutingFixtures(FIXTURE_PATH);
+  const outcomes = await runFakePromptRoutingFixtures(fixtures);
+  for (const outcome of outcomes) {
+    expect(outcome.durationMs, `${outcome.fixtureId} durationMs`).toBe(0);
+    if (outcome.usage !== undefined) {
+      expect(outcome.usage.durationMs, `${outcome.fixtureId} usage.durationMs`).toBe(0);
+    }
+  }
 });
 
 test("every fixture except the adversarial one reaches its expected route and reason", async () => {
