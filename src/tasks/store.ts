@@ -180,6 +180,9 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
       surfaces: input.surfaces,
       policy: input.policy,
       ...(input.researchHandoffs === undefined ? {} : { researchHandoffs: input.researchHandoffs }),
+      ...(input.researchContinuation === undefined
+        ? {}
+        : { researchContinuation: input.researchContinuation }),
     };
     const task = createTask(taskInput, options.clock());
     writeTaskPayload(db, task.id, task.revision, task);

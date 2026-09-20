@@ -3,6 +3,7 @@ import type {
   Endpoint,
   InstructionChannels,
   RepoPolicy,
+  ResearchContinuation,
   ResolvedPolicy,
   ReviewResult,
   TaskRecord,
@@ -430,4 +431,156 @@ test("acknowledges notifications through a single revisioned mutation and expose
       context(),
     ),
   ).toThrow(TaskTransitionError);
+});
+
+const scoutInput: TaskInput = {
+  id: "scout-task",
+  repoPath: "/repo",
+  kind: "scout",
+  objective: "Investigate the reported defect",
+  acceptanceCriteria: ["The findings are durable"],
+  surfaces: ["service"],
+  policy,
+};
+
+function completedScout(continuation?: ResearchContinuation): TaskRecord {
+  let task = createTask(
+    {
+      ...scoutInput,
+      ...(continuation === undefined ? {} : { researchContinuation: continuation }),
+    },
+    "2026-09-15T00:00:00.000Z",
+  );
+  task = transitionTask(
+    task,
+    { type: "start", worktree, endpoints: [{ ...endpoint(task.generation), role: "scout" }] },
+    context(),
+  );
+  return transitionTask(
+    task,
+    { type: "scout-report-complete", reportPath: "/reports/scout.md", generation: task.generation },
+    context(),
+  );
+}
+
+test("creates scouts with the conservative post-research disposition by default", () => {
+  const task = createTask(scoutInput, "2026-09-15T00:00:00.000Z");
+  expect(task.researchContinuation).toEqual({
+    schemaVersion: 1,
+    disposition: "ask-intent",
+    selectedBy: "deterministic",
+  });
+});
+
+test("creates scouts with an explicitly supplied disposition and its provenance", () => {
+  const task = createTask(
+    {
+      ...scoutInput,
+      researchContinuation: {
+        schemaVersion: 1,
+        disposition: "implementation-interview",
+        selectedBy: "explicit",
+      },
+    },
+    "2026-09-15T00:00:00.000Z",
+  );
+  expect(task.researchContinuation?.disposition).toBe("implementation-interview");
+  expect(task.researchContinuation?.selectedBy).toBe("explicit");
+});
+
+test("refuses invalid dispositions, malformed provenance, and non-scout continuations", () => {
+  const invalidDisposition = {
+    ...scoutInput,
+    researchContinuation: {
+      schemaVersion: 1,
+      disposition: "implement-now",
+      selectedBy: "explicit",
+    },
+  } as unknown as TaskInput;
+  expect(() => createTask(invalidDisposition, "2026-09-15T00:00:00.000Z")).toThrow(TypeError);
+
+  const explicitWithClassifier: TaskInput = {
+    ...scoutInput,
+    researchContinuation: {
+      schemaVersion: 1,
+      disposition: "report-only",
+      selectedBy: "explicit",
+      classifierVersion: "continuation-1",
+    },
+  };
+  expect(() => createTask(explicitWithClassifier, "2026-09-15T00:00:00.000Z")).toThrow(TypeError);
+
+  const jevWithoutClassifier: TaskInput = {
+    ...scoutInput,
+    researchContinuation: { schemaVersion: 1, disposition: "ask-intent", selectedBy: "jev" },
+  };
+  expect(() => createTask(jevWithoutClassifier, "2026-09-15T00:00:00.000Z")).toThrow(TypeError);
+
+  const implementationContinuation: TaskInput = {
+    ...implementationInput,
+    researchContinuation: {
+      schemaVersion: 1,
+      disposition: "implementation-interview",
+      selectedBy: "explicit",
+    },
+  };
+  expect(() => createTask(implementationContinuation, "2026-09-15T00:00:00.000Z")).toThrow(
+    TypeError,
+  );
+});
+
+test("an implementation-interview disposition never approves scope or starts implementation", () => {
+  const scout = completedScout({
+    schemaVersion: 1,
+    disposition: "implementation-interview",
+    selectedBy: "explicit",
+  });
+  expect(scout.stage).toBe("completed");
+  expect(scout.researchContinuation?.disposition).toBe("implementation-interview");
+
+  const implementation = createTask(
+    {
+      ...implementationInput,
+      id: "interview-follow-up",
+      researchHandoffs: [
+        {
+          scoutTaskId: scout.id,
+          scoutRepoPath: scout.repoPath,
+          scoutSourceHead: "source-head",
+          scoutSourceBase: "source-head",
+          reportPath: "/reports/scout.md",
+          reportDigest: "b".repeat(64),
+          excerpt: "Scout evidence",
+        },
+      ],
+    },
+    "2026-09-15T00:00:00.000Z",
+  );
+  expect(implementation.scopeApproved).toBe(false);
+  expect(implementation.stage).toBe("awaiting-approval");
+  expect(implementation.researchContinuation).toBeUndefined();
+  expect(() =>
+    transitionTask(
+      implementation,
+      { type: "start", worktree, endpoints: [endpoint(implementation.generation)] },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+});
+
+test("scout transitions preserve the disposition without touching scope approval", () => {
+  const scout = completedScout({
+    schemaVersion: 1,
+    disposition: "report-only",
+    selectedBy: "deterministic",
+    classifierVersion: "continuation-rules-1",
+  });
+  const requeued = transitionTask(scout, { type: "follow-up-research" }, context());
+  expect(requeued.stage).toBe("queued");
+  expect(requeued.researchContinuation).toEqual(scout.researchContinuation);
+
+  const blocked = transitionTask(requeued, { type: "block", reason: "source moved" }, context());
+  expect(blocked.stage).toBe("blocked");
+  expect(blocked.researchContinuation).toEqual(scout.researchContinuation);
+  expect(blocked.scopeApproved).toBe(scout.scopeApproved);
 });

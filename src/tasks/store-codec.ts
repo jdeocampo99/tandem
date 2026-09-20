@@ -14,6 +14,7 @@ import {
   type Notification,
   type PullRequestMetadata,
   type RepoPolicy,
+  type ResearchContinuation,
   type ResearchHandoff,
   type ResolvedGuidance,
   type ResolvedPolicy,
@@ -29,6 +30,7 @@ import {
 } from "../contracts.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
+import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
 
 const TASK_STAGES: readonly TaskStage[] = [
@@ -88,6 +90,7 @@ const TOP_LEVEL_KEYS = [
   "validationEvidence",
   "reviews",
   "researchHandoffs",
+  "researchContinuation",
   "reportPath",
   "blockReason",
   "notifications",
@@ -566,6 +569,29 @@ function parseResearchHandoff(value: unknown, source: string): ResearchHandoff {
   };
 }
 
+/**
+ * Scout records carry a durable post-research disposition. Records written before the field
+ * existed load with the conservative default; anything else present is rejected rather than
+ * repaired, and non-scout records may never carry one.
+ */
+function parseResearchContinuation(
+  value: UnknownRecord,
+  kind: TaskKind,
+  source: string,
+): ResearchContinuation | undefined {
+  const present = Object.hasOwn(value, "researchContinuation");
+  if (kind !== "scout") {
+    if (present) {
+      failState(source, "only scout tasks may record a research continuation disposition");
+    }
+    return undefined;
+  }
+  if (!present) return defaultResearchContinuation();
+  const check = checkResearchContinuation(value.researchContinuation);
+  if (!check.valid) failState(`${source}.researchContinuation`, check.defect);
+  return check.continuation;
+}
+
 export function parseTaskRecord(value: unknown, source = "task record"): TaskRecord {
   if (!isRecord(value)) {
     failState(source, "task record must be an object");
@@ -649,12 +675,14 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   const worktreeValue = Object.hasOwn(value, "worktree")
     ? requiredValue(value, "worktree", source)
     : undefined;
+  const kind = requiredEnum(value, "kind", TASK_KINDS, source);
+  const researchContinuation = parseResearchContinuation(value, kind, source);
   const taskBase = {
     schemaVersion: 1 as const,
     id,
     revision: requiredInteger(value, "revision", source),
     repoPath: requiredText(value, "repoPath", source),
-    kind: requiredEnum(value, "kind", TASK_KINDS, source),
+    kind,
     objective: requiredText(value, "objective", source),
     acceptanceCriteria: requiredTextArray(value, "acceptanceCriteria", source),
     surfaces: requiredTextArray(value, "surfaces", source),
@@ -679,6 +707,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
             parseResearchHandoff(entry, `${source}.researchHandoffs[${index}]`),
           ),
         }),
+    ...(researchContinuation === undefined ? {} : { researchContinuation }),
   };
   return {
     ...taskBase,

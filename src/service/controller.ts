@@ -25,6 +25,7 @@ import {
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
   MAX_RESEARCH_HANDOFF_TOTAL_BYTES,
   type RepoPolicy,
+  type ResearchContinuation,
   type ResearchHandoff,
   type SteerTaskInput,
   type TaskCommunicationView,
@@ -123,6 +124,8 @@ export type CreateTaskRequest = Readonly<{
   readonly acceptanceCriteria: readonly string[];
   readonly surfaces: readonly string[];
   readonly researchTaskIds?: readonly string[];
+  /** Explicitly selected post-research disposition; scouts otherwise take the safe default. */
+  readonly researchContinuation?: ResearchContinuation;
 }>;
 export type ModelOptionsResult = Readonly<{
   readonly modelSettings: ModelSettings;
@@ -671,6 +674,9 @@ class TandemController {
           : readTextList(input.researchTaskIds, "researchTaskIds");
       if (researchTaskIds !== undefined && input.kind !== "implementation") {
         throw new Error("research task references are only valid for implementation tasks");
+      }
+      if (input.researchContinuation !== undefined && input.kind !== "scout") {
+        throw new Error("a research continuation disposition is only valid for scout tasks");
       }
       const checkpoint = await readCheckpoint(this.#deps.run, { repo: source.checkoutPath });
       const runtime = await readRuntimeState(this.#deps.runtimePath);

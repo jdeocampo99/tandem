@@ -249,6 +249,34 @@ export type ResearchHandoff = {
   readonly excerpt: string;
 };
 
+export const RESEARCH_CONTINUATION_DISPOSITIONS = [
+  "report-only",
+  "ask-intent",
+  "implementation-interview",
+] as const;
+
+/** What a completed scout should lead to; routing metadata only, never permission. */
+export type ResearchContinuationDisposition = (typeof RESEARCH_CONTINUATION_DISPOSITIONS)[number];
+
+export const RESEARCH_CONTINUATION_SELECTORS = ["explicit", "deterministic", "jev"] as const;
+
+export type ResearchContinuationSelector = (typeof RESEARCH_CONTINUATION_SELECTORS)[number];
+
+export const RESEARCH_CONTINUATION_SCHEMA_VERSION = 1;
+
+/** Scout records created or loaded without a disposition use this conservative value. */
+export const DEFAULT_RESEARCH_CONTINUATION_DISPOSITION: ResearchContinuationDisposition =
+  "ask-intent";
+
+export const MAX_CLASSIFIER_VERSION_CHARS = 100;
+
+export type ResearchContinuation = {
+  readonly schemaVersion: typeof RESEARCH_CONTINUATION_SCHEMA_VERSION;
+  readonly disposition: ResearchContinuationDisposition;
+  readonly selectedBy: ResearchContinuationSelector;
+  readonly classifierVersion?: string;
+};
+
 export type TaskRecord = {
   readonly schemaVersion: 1;
   readonly id: string;
@@ -273,6 +301,7 @@ export type TaskRecord = {
   readonly validationEvidence: readonly ValidationEvidence[];
   readonly reviews: readonly ReviewResult[];
   readonly researchHandoffs?: readonly ResearchHandoff[];
+  readonly researchContinuation?: ResearchContinuation;
   readonly blockReason?: string;
   readonly notifications: readonly Notification[];
   readonly communication?: TaskCommunication;

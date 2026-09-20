@@ -820,6 +820,34 @@ test("model-facing action summaries are bounded and retain current task evidence
   expect(summary).not.toContain("maxFixRounds");
 });
 
+test("scout summaries and the durable digest carry the post-research disposition", () => {
+  const scout = task({
+    id: "scout-continuation",
+    kind: "scout",
+    stage: "completed",
+    objective: "Investigate the reported defect",
+    reportPath: "/reports/scout.md",
+    researchContinuation: {
+      schemaVersion: 1,
+      disposition: "implementation-interview",
+      selectedBy: "jev",
+      classifierVersion: "jev-continuation-1",
+    },
+  });
+  const summary = summarizeTandemActionValue("show", scout);
+  expect(summary).toContain("Post-research disposition: implementation-interview");
+  expect(summary).toContain("routing only");
+  expect(summary).toContain("selected by jev");
+  expect(summary).toContain("jev-continuation-1");
+
+  const digest = buildDurableDigest([scout]);
+  expect(digest).toContain("continuation: implementation-interview (jev; routing only)");
+
+  const legacyScout = task({ id: "legacy-scout", kind: "scout", stage: "completed" });
+  expect(buildDurableDigest([legacyScout])).toContain("continuation: ask-intent");
+  expect(buildDurableDigest([task({ id: "implementation-task" })])).not.toContain("continuation:");
+});
+
 test("fresh block transitions wake the coordinator once through the bridge", async () => {
   const sent: Array<{ readonly content: string; readonly options: unknown }> = [];
   const notices: string[] = [];

@@ -40,6 +40,7 @@ const policy: ResolvedPolicy = {
 };
 
 type FixtureOptions = Readonly<{
+  readonly taskKind?: TaskRecord["kind"];
   readonly stage?: TaskRecord["stage"];
   readonly currentHead?: string;
   readonly diff?: string;
@@ -82,7 +83,7 @@ async function fixture(options: FixtureOptions = {}) {
   const taskInput = {
     id: "task-1",
     repoPath: repo,
-    kind: "implementation" as const,
+    kind: options.taskKind ?? ("implementation" as const),
     objective: "recover a durable task",
     acceptanceCriteria: ["recovery is bounded"],
     surfaces: ["runtime"],
@@ -415,6 +416,28 @@ test("evidence repair uses reports without inspecting a worker pane", async () =
     const value = await f.workflow.repairEvidence("task-1", true);
     expect(value.changed).toBe(true);
     expect((await f.store.read("task-1"))?.reportPath).toBe(reportPath(consumed.jobPath));
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("evidence repair preserves the durable scout continuation disposition", async () => {
+  const consumed = {
+    ...job("consumed"),
+    role: "scout" as const,
+    jobPath: join(await mkdtemp(join(tmpdir(), "tandem-scout-job-")), "job.json"),
+  };
+  await writeFile(reportPath(consumed.jobPath), "durable scout report\n");
+  const f = await fixture({ job: consumed, taskKind: "scout" });
+  try {
+    const before = await f.store.read("task-1");
+    expect(before?.researchContinuation?.disposition).toBe("ask-intent");
+    const value = await f.workflow.repairEvidence("task-1", true);
+    expect(value.changed).toBe(true);
+    const after = await f.store.read("task-1");
+    expect(after?.reportPath).toBe(reportPath(consumed.jobPath));
+    expect(after?.researchContinuation).toEqual(before?.researchContinuation);
+    expect(after?.scopeApproved).toBe(before?.scopeApproved);
   } finally {
     await f.cleanup();
   }

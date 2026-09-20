@@ -6,6 +6,7 @@ import type {
   IsoTimestamp,
   Notification,
   PullRequestMetadata,
+  ResearchContinuation,
   ResearchHandoff,
   ResolvedGuidance,
   ReviewLens,
@@ -16,6 +17,7 @@ import type {
   ValidationEvidence,
   WorktreeLease,
 } from "../contracts.ts";
+import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 
 export type TaskInput = Readonly<{
   readonly id: string;
@@ -26,6 +28,8 @@ export type TaskInput = Readonly<{
   readonly surfaces: readonly string[];
   readonly policy: TaskRecord["policy"];
   readonly researchHandoffs?: readonly ResearchHandoff[];
+  /** Explicit post-research disposition; scouts fall back to the conservative default. */
+  readonly researchContinuation?: ResearchContinuation;
 }>;
 
 export type TaskTransitionContext = Readonly<{
@@ -251,10 +255,20 @@ function assertTaskInput(input: TaskInput): void {
   }
   assertTextList(input.acceptanceCriteria, "acceptanceCriteria");
   assertTextList(input.surfaces, "surfaces");
+  assertResearchContinuationInput(input);
   const maxFixRounds = input.policy?.config?.maxFixRounds;
   if (!isInteger(maxFixRounds) || maxFixRounds < 0) {
     throw new TypeError("Task policy must define a non-negative integer maxFixRounds");
   }
+}
+
+function assertResearchContinuationInput(input: TaskInput): void {
+  if (input.researchContinuation === undefined) return;
+  if (input.kind !== "scout") {
+    throw new TypeError("Only scout tasks accept a research continuation disposition");
+  }
+  const check = checkResearchContinuation(input.researchContinuation);
+  if (!check.valid) throw new TypeError(`Task researchContinuation is invalid: ${check.defect}`);
 }
 
 function assertTextList(values: readonly string[], field: string): void {
@@ -660,6 +674,14 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     ...(input.researchHandoffs === undefined
       ? {}
       : { researchHandoffs: [...input.researchHandoffs] }),
+    ...(input.kind === "scout"
+      ? {
+          researchContinuation:
+            input.researchContinuation === undefined
+              ? defaultResearchContinuation()
+              : { ...input.researchContinuation },
+        }
+      : {}),
   };
 }
 
