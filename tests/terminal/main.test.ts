@@ -853,6 +853,65 @@ test("terminal argument boundaries keep force launch-only and -- positional", ()
   expect(() => parseTerminalArgs(["--force"])).toThrow();
   expect(() => parseTerminalArgs(["configure", "--reset", "--force"])).toThrow();
 });
+test("logs prints recent prompt-routing events without launching a project", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-logs-test-"));
+  const logPath = join(home, "logs", "tandem.jsonl");
+  await mkdir(join(home, "logs"), { recursive: true });
+  await writeFile(
+    logPath,
+    [
+      JSON.stringify({
+        timestamp: "2030-01-02T03:04:05.000Z",
+        pid: 1,
+        event: "prompt-route-evaluated",
+        details: { classifier: "jev", reason: "direct-read-only" },
+      }),
+      JSON.stringify({ timestamp: "2030-01-02T03:04:06.000Z", pid: 1, event: "worker-event" }),
+      JSON.stringify({
+        timestamp: "2030-01-02T03:04:07.000Z",
+        pid: 1,
+        event: "prompt-route-dispatched",
+        details: { action: "list" },
+      }),
+    ].join("\n"),
+  );
+  try {
+    expect(parseTerminalArgs(["logs", "--home", home])).toMatchObject({
+      command: "logs",
+      paths: [],
+      home,
+    });
+    expect(() => parseTerminalArgs(["logs", "/repo"])).toThrow(
+      "tandem logs does not accept project paths",
+    );
+    const output: string[] = [];
+    const result = await runTerminal(["logs", "--home", home], {
+      cwd: home,
+      processEnvironment: {},
+      isTTY: false,
+      stdout: (text) => output.push(text),
+      stderr: (text) => output.push(text),
+    });
+    expect(result).toMatchObject({ exitCode: 0, status: "logs" });
+    expect(output.join("")).toContain(`Tandem prompt-routing log: ${logPath}`);
+    expect(output.join("")).toContain("prompt-route-evaluated");
+    expect(output.join("")).toContain("prompt-route-dispatched");
+    expect(output.join("")).not.toContain("worker-event");
+
+    const jsonOutput: string[] = [];
+    await runTerminal(["logs", "--home", home, "--json"], {
+      cwd: home,
+      processEnvironment: {},
+      isTTY: false,
+      stdout: (text) => jsonOutput.push(text),
+      stderr: (text) => jsonOutput.push(text),
+    });
+    expect(JSON.parse(jsonOutput.join(""))).toHaveLength(2);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("restart is a command alias for the coordinator restart flag", () => {
   expect(parseTerminalArgs(["restart"])).toMatchObject({
     command: "launch",

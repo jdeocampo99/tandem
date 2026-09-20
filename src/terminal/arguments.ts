@@ -1,4 +1,4 @@
-export type TerminalCommand = "launch" | "configure" | "migrate-state";
+export type TerminalCommand = "launch" | "configure" | "migrate-state" | "logs";
 
 export type TerminalInvocation = Readonly<{
   readonly command: TerminalCommand;
@@ -18,7 +18,7 @@ export type TerminalInvocation = Readonly<{
 }>;
 export type TerminalRunResult = Readonly<{
   readonly exitCode: number;
-  readonly status: "help" | "launched" | "configured" | "migrated" | "cancelled" | "error";
+  readonly status: "help" | "launched" | "configured" | "migrated" | "logs" | "cancelled" | "error";
   readonly migration?: unknown;
   readonly projects?: readonly string[];
   readonly sessionId?: string;
@@ -132,6 +132,10 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       command = "configure";
       continue;
     }
+    if (parseOptions && command === undefined && token === "logs") {
+      command = "logs";
+      continue;
+    }
     if (parseOptions && command === undefined && token === "migrate-state") {
       command = "migrate-state";
       continue;
@@ -141,6 +145,9 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   }
 
   const resolvedCommand = command ?? "launch";
+  if (resolvedCommand === "logs" && paths.length > 0) {
+    throw new Error("tandem logs does not accept project paths");
+  }
   if (resolvedCommand === "migrate-state" && paths.length > 0) {
     throw new Error("tandem migrate-state does not accept project paths");
   }
