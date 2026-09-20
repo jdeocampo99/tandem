@@ -1006,6 +1006,58 @@ test("logs prints recent prompt-routing events without launching a project", asy
   }
 });
 
+test("reconcile-resources inspects Tandem resources and applies nothing without --yes", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-reconcile-test-"));
+  try {
+    expect(parseTerminalArgs(["reconcile-resources", "--home", home])).toMatchObject({
+      command: "reconcile-resources",
+      paths: [],
+      home,
+      yes: false,
+    });
+    expect(parseTerminalArgs(["reconcile-resources", "--home", home, "--yes"]).yes).toBe(true);
+    expect(() => parseTerminalArgs(["reconcile-resources", "/repo"])).toThrow(
+      "tandem reconcile-resources does not accept project paths",
+    );
+
+    const run = async (request: CommandRequest): Promise<CommandResult> => {
+      throw new Error(`an empty Tandem home needs no commands: ${request.argv.join(" ")}`);
+    };
+    const output: string[] = [];
+    const result = await runTerminal(["reconcile-resources", "--home", home], {
+      cwd: home,
+      processEnvironment: {},
+      isTTY: false,
+      run,
+      stdout: (text) => output.push(text),
+      stderr: (text) => output.push(text),
+    });
+    expect(result).toMatchObject({ exitCode: 0, status: "reconciled" });
+    expect(output.join("")).toContain("changed nothing; rerun with --yes to apply");
+    expect(output.join("")).toContain("Nothing to reconcile.");
+
+    const jsonOutput: string[] = [];
+    await runTerminal(["reconcile-resources", "--home", home, "--json"], {
+      cwd: home,
+      processEnvironment: {},
+      isTTY: false,
+      run,
+      stdout: (text) => jsonOutput.push(text),
+      stderr: (text) => jsonOutput.push(text),
+    });
+    expect(JSON.parse(jsonOutput.join(""))).toMatchObject({
+      schemaVersion: 1,
+      mode: "dry-run",
+      cleaned: [],
+      retained: [],
+      quarantined: [],
+      failed: [],
+    });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("restart is a command alias for the coordinator restart flag", () => {
   expect(parseTerminalArgs(["restart"])).toMatchObject({
     command: "launch",

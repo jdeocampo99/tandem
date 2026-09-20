@@ -89,6 +89,23 @@ export type CoordinatorReplacementDecision =
       readonly lease: WorktreeLease;
     }>;
 
+/**
+ * What may happen to one coordinator lease when nothing will take its place. It is the
+ * replacement decision without the `allocate` and `reuse` answers, both of which only make sense
+ * to a caller that is about to allocate a coordinator of its own.
+ */
+export type CoordinatorLeaseSettlement = Extract<
+  CoordinatorReplacementDecision,
+  Readonly<{ readonly kind: "release" | "retain" | "quarantine" }>
+>;
+
+/** Everything the lease settlement is allowed to look at. */
+export type CoordinatorLeaseSettlementObservation = Readonly<{
+  readonly previous: CoordinatorRecord;
+  readonly paneRetirement: CoordinatorWorkspaceRetirement | undefined;
+  readonly checkout: CoordinatorCheckoutObservation | undefined;
+}>;
+
 export type CoordinatorReplacementInput = Readonly<{
   readonly run: CommandRunner;
   readonly home: string;
@@ -274,39 +291,17 @@ function settledHeads(previous: CoordinatorRecord): readonly string[] {
 }
 
 /**
- * Decides what a replacement launch may do with the previous coordinator's worktree lease.
+ * Judges one coordinator checkout on its own, before any pane is considered.
  *
- * Releasing or reusing requires a pane Tandem proved stopped and then closed, plus a checkout
- * that still carries exactly the pinned commit Tandem put there. Anything a user could still
- * want is retained; anything Tandem cannot explain is quarantined rather than guessed at.
+ * A release answer means only that the checkout still carries exactly what Tandem put there, or
+ * is gone entirely. Anything a user could still want is retained, and anything Tandem cannot
+ * explain is quarantined rather than guessed at.
  */
-export function decideCoordinatorReplacement(
-  observation: CoordinatorReplacementObservation,
-): CoordinatorReplacementDecision {
-  const previous = observation.previous;
-  if (previous === undefined) {
-    return { kind: "allocate", reason: "no previous coordinator record" };
-  }
+export function judgeCoordinatorCheckout(
+  previous: CoordinatorRecord,
+  checkout: CoordinatorCheckoutObservation | undefined,
+): CoordinatorLeaseSettlement {
   const lease = previous.worktree;
-  const retirement = observation.paneRetirement;
-  if (retirement === undefined) {
-    return { kind: "quarantine", reason: "previous coordinator pane was never inspected", lease };
-  }
-  if (retirement.outcome === "quarantined") {
-    return {
-      kind: "quarantine",
-      reason: `previous coordinator pane was quarantined: ${retirement.reason ?? "no reason reported"}`,
-      lease,
-    };
-  }
-  if (retirement.outcome === "retained") {
-    return {
-      kind: "retain",
-      reason: `previous coordinator workspace was retained: ${retirement.reason ?? "no reason reported"}`,
-      lease,
-    };
-  }
-  const checkout = observation.checkout;
   if (checkout === undefined) {
     return { kind: "quarantine", reason: "previous coordinator checkout was never read", lease };
   }
@@ -345,6 +340,68 @@ export function decideCoordinatorReplacement(
       lease,
     };
   }
+  return {
+    kind: "release",
+    reason: `previous coordinator lease is clean at ${checkout.head} and still on a recorded lease commit`,
+    lease,
+  };
+}
+
+/**
+ * Decides what may happen to one coordinator's worktree lease when nothing will take its place.
+ *
+ * Releasing requires a pane Tandem proved stopped and then closed, plus a checkout that still
+ * carries exactly the pinned commit Tandem put there. Reconciliation uses this answer directly; a
+ * replacement launch refines the release answer through `decideCoordinatorReplacement`, which may
+ * keep a matching lease instead of returning it.
+ */
+export function decideCoordinatorLeaseSettlement(
+  observation: CoordinatorLeaseSettlementObservation,
+): CoordinatorLeaseSettlement {
+  const lease = observation.previous.worktree;
+  const retirement = observation.paneRetirement;
+  if (retirement === undefined) {
+    return { kind: "quarantine", reason: "previous coordinator pane was never inspected", lease };
+  }
+  if (retirement.outcome === "quarantined") {
+    return {
+      kind: "quarantine",
+      reason: `previous coordinator pane was quarantined: ${retirement.reason ?? "no reason reported"}`,
+      lease,
+    };
+  }
+  if (retirement.outcome === "retained") {
+    return {
+      kind: "retain",
+      reason: `previous coordinator workspace was retained: ${retirement.reason ?? "no reason reported"}`,
+      lease,
+    };
+  }
+  return judgeCoordinatorCheckout(observation.previous, observation.checkout);
+}
+
+/**
+ * Decides what a replacement launch may do with the previous coordinator's worktree lease.
+ *
+ * Everything a settlement refuses is refused here too. The one thing a replacement may do that
+ * reconciliation may not is keep a clean lease that is already pinned to the commit this launch
+ * wants and already held under this launch's own identity.
+ */
+export function decideCoordinatorReplacement(
+  observation: CoordinatorReplacementObservation,
+): CoordinatorReplacementDecision {
+  const previous = observation.previous;
+  if (previous === undefined) {
+    return { kind: "allocate", reason: "no previous coordinator record" };
+  }
+  const settlement = decideCoordinatorLeaseSettlement({
+    previous,
+    paneRetirement: observation.paneRetirement,
+    checkout: observation.checkout,
+  });
+  const checkout = observation.checkout;
+  if (settlement.kind !== "release" || checkout?.status !== "observed") return settlement;
+  const lease = previous.worktree;
   if (
     checkout.head === observation.requestedSourceHead &&
     lease.leaseHolder === observation.replacementLeaseHolder
