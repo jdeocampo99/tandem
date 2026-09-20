@@ -20,6 +20,8 @@ import {
   type ReviewLens,
   type ReviewMode,
   type ReviewResult,
+  type TaskCleanupState,
+  type TaskCleanupStatus,
   type TaskKind,
   type TaskRecord,
   type TaskStage,
@@ -93,7 +95,14 @@ const TOP_LEVEL_KEYS = [
   "notifications",
   "communication",
   "pullRequest",
+  "cleanup",
 ] as const;
+const TASK_CLEANUP_STATUSES: readonly TaskCleanupStatus[] = [
+  "released",
+  "retained",
+  "pending",
+  "quarantined",
+];
 type UnknownRecord = Record<string, unknown>;
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -531,6 +540,28 @@ function parsePullRequest(value: unknown, source: string): PullRequestMetadata {
     ...(title === undefined ? {} : { title }),
   };
 }
+/**
+ * Reads the cleanup note written by a newer build. Records written before cleanup notes existed
+ * simply omit the field and load unchanged; a present-but-malformed note is state corruption and
+ * fails the read rather than being coerced into a plausible-looking status.
+ */
+function parseTaskCleanup(value: unknown, source: string): TaskCleanupState {
+  if (!isRecord(value)) {
+    failState(source, "cleanup state must be an object");
+  }
+  assertExactKeys(value, ["schemaVersion", "status", "reason", "observedAt"], source);
+  const schemaVersion = requiredInteger(value, "schemaVersion", source, 1);
+  if (schemaVersion !== 1) {
+    failState(source, `unsupported cleanup schemaVersion ${schemaVersion}`);
+  }
+  return {
+    schemaVersion: 1,
+    status: requiredEnum(value, "status", TASK_CLEANUP_STATUSES, source),
+    reason: requiredText(value, "reason", source),
+    observedAt: requiredText(value, "observedAt", source),
+  };
+}
+
 function parseResearchHandoff(value: unknown, source: string): ResearchHandoff {
   if (!isRecord(value)) failState(source, "research handoff must be an object");
   assertExactKeys(
@@ -649,6 +680,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   const worktreeValue = Object.hasOwn(value, "worktree")
     ? requiredValue(value, "worktree", source)
     : undefined;
+  const cleanupValue = Object.hasOwn(value, "cleanup")
+    ? requiredValue(value, "cleanup", source)
+    : undefined;
   const taskBase = {
     schemaVersion: 1 as const,
     id,
@@ -700,6 +734,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     ...(pullRequestValue === undefined
       ? {}
       : { pullRequest: parsePullRequest(pullRequestValue, `${source}.pullRequest`) }),
+    ...(cleanupValue === undefined
+      ? {}
+      : { cleanup: parseTaskCleanup(cleanupValue, `${source}.cleanup`) }),
   };
 }
 

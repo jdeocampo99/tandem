@@ -588,6 +588,12 @@ function clearPreviousAndBlock(
   return rest;
 }
 
+/** Leaving a terminal stage invalidates the cleanup note written about that stage's resources. */
+function clearCleanup(task: TaskRecord): Omit<TaskRecord, "cleanup"> {
+  const { cleanup: _cleanup, ...rest } = task;
+  return rest;
+}
+
 function cloneGuidanceEntries(entries: readonly ResolvedGuidance[]): readonly ResolvedGuidance[] {
   return entries.map((entry) => ({
     text: entry.text,
@@ -878,7 +884,8 @@ export function transitionTask(
       if (task.kind !== "scout" || task.stage !== "completed") {
         invalidStage(task, event.type, ["completed"]);
       }
-      return commitTask(task, context.now, {
+      const withoutCleanup = clearCleanup(task);
+      return commitTask(withoutCleanup, context.now, {
         stage: "queued",
         generation: task.generation + 1,
       });
