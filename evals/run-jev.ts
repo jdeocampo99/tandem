@@ -12,7 +12,7 @@
  * `calculateUsageCost`, `JEV_PRICING_SNAPSHOT`) rather than a second accounting path.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,24 +35,38 @@ import {
   type PromptRoutingEvaluation,
 } from "../src/extension/prompt-routing.ts";
 import { readPromptRoutingLog } from "../src/runtime/diagnostics.ts";
-import {
-  calculateUsageCost,
-  JEV_PRICING_SNAPSHOT,
-  type PricingSnapshot,
-} from "../src/runtime/usage.ts";
+import { JEV_PRICING_SNAPSHOT } from "../src/runtime/usage.ts";
 import {
   loadPromptRoutingFixtures,
   type PromptRoutingExpectedDecision,
   type PromptRoutingFixture,
 } from "./fixtures.ts";
+import {
+  budgetGuard,
+  checkLiveJevRunOptions,
+  costTrackingEvaluate,
+  type LiveJevBudget,
+  LiveJevBudgetExceededError,
+  type LiveJevCaller,
+  type LiveJevRunOptions,
+} from "./live-jev-budget.ts";
 import { summarizePromptRoutingRun } from "./summarize.ts";
 import type {
   PromptRoutingFieldMatches,
   PromptRoutingProviderOutcome,
   PromptRoutingRunOutcome,
 } from "./types.ts";
+import { type EvalResultIo, realEvalResultIo, writeEvalResults } from "./write-results.ts";
 
-export type { PromptRoutingFieldMatches, PromptRoutingProviderOutcome, PromptRoutingRunOutcome };
+export type {
+  LiveJevBudget,
+  LiveJevCaller,
+  LiveJevRunOptions,
+  PromptRoutingFieldMatches,
+  PromptRoutingProviderOutcome,
+  PromptRoutingRunOutcome,
+};
+export { LiveJevBudgetExceededError };
 
 export type EphemeralHome = Readonly<{
   readonly home: string;
@@ -338,49 +352,6 @@ export async function runFakePromptRoutingFixtures(
   });
 }
 
-export type LiveJevBudget = Readonly<{
-  readonly maxTotalCostUsd: number;
-  readonly pricing?: PricingSnapshot;
-}>;
-
-export class LiveJevBudgetExceededError extends Error {
-  constructor(spentUsd: number, maxTotalCostUsd: number) {
-    super(
-      `Jev live evaluation budget exceeded: spent $${spentUsd.toFixed(6)} of a ` +
-        `$${maxTotalCostUsd.toFixed(6)} budget`,
-    );
-    this.name = "LiveJevBudgetExceededError";
-  }
-}
-
-export type LiveJevCaller = typeof evaluateJev;
-
-export type LiveJevRunOptions = Readonly<{
-  readonly apiKey: string;
-  readonly timeoutMs: number;
-  readonly repeatCount: number;
-  readonly budget: LiveJevBudget;
-  /** Injected Jev caller; defaults to the real network call. Tests inject a fake caller. */
-  readonly evaluate?: LiveJevCaller;
-}>;
-
-/** Measures and accumulates spend per call. Never throws: the budget is enforced by the caller. */
-function costTrackingEvaluate(
-  evaluate: LiveJevCaller,
-  pricing: PricingSnapshot,
-  spentTracker: { totalUsd: number },
-): NonNullable<PromptRoutingDependencies["evaluate"]> {
-  return async (input, options) => {
-    const response = await evaluate(input, options);
-    const cost = calculateUsageCost(
-      { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
-      pricing,
-    );
-    if (cost !== "unavailable") spentTracker.totalUsd += cost.amount;
-    return response;
-  };
-}
-
 /**
  * Live mode: calls the pinned `jev-1.13.0` model through `evaluateJev()` (via `classifyPrompt`,
  * never reimplemented) with an explicit repeat count, timeout, and budget. Stops before any call
@@ -393,18 +364,7 @@ export async function runLivePromptRoutingFixtures(
   fixtures: readonly PromptRoutingFixture[],
   options: LiveJevRunOptions,
 ): Promise<readonly PromptRoutingRunOutcome[]> {
-  if (options.apiKey.trim().length === 0) {
-    throw new Error("live Jev evaluation requires a non-empty API key");
-  }
-  if (!Number.isSafeInteger(options.repeatCount) || options.repeatCount < 1) {
-    throw new RangeError("live Jev evaluation requires a positive integer repeat count");
-  }
-  if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 1) {
-    throw new RangeError("live Jev evaluation requires a positive timeout");
-  }
-  if (!Number.isFinite(options.budget.maxTotalCostUsd) || options.budget.maxTotalCostUsd <= 0) {
-    throw new RangeError("live Jev evaluation requires a positive budget");
-  }
+  checkLiveJevRunOptions(options);
   const spentTracker = { totalUsd: 0 };
   const pricing = options.budget.pricing ?? JEV_PRICING_SNAPSHOT;
   const evaluate = costTrackingEvaluate(options.evaluate ?? evaluateJev, pricing, spentTracker);
@@ -413,33 +373,17 @@ export async function runLivePromptRoutingFixtures(
     config: { apiKey: options.apiKey, timeoutMs: options.timeoutMs },
     buildEvaluate: () => evaluate,
     repeatCount: options.repeatCount,
-    beforeClassify: () => {
-      if (spentTracker.totalUsd >= options.budget.maxTotalCostUsd) {
-        throw new LiveJevBudgetExceededError(spentTracker.totalUsd, options.budget.maxTotalCostUsd);
-      }
-    },
+    beforeClassify: budgetGuard(spentTracker, options.budget),
   });
 }
-
-export type PromptRoutingResultIo = Readonly<{
-  readonly writeFile: (path: string, contents: string) => Promise<void>;
-  readonly mkdir: (path: string) => Promise<void>;
-}>;
 
 /** Writes JSONL results plus a concise, comparable summary. Never called by `bun test`. */
 export async function writePromptRoutingResults(
   outcomes: readonly PromptRoutingRunOutcome[],
   outputDir: string,
-  io: PromptRoutingResultIo,
+  io: EvalResultIo,
 ): Promise<Readonly<{ resultsPath: string; summaryPath: string }>> {
-  await io.mkdir(outputDir);
-  const resultsPath = join(outputDir, "results.jsonl");
-  const summaryPath = join(outputDir, "summary.json");
-  const lines = outcomes.map((outcome) => JSON.stringify(outcome));
-  await io.writeFile(resultsPath, lines.length === 0 ? "" : `${lines.join("\n")}\n`);
-  const summary = summarizePromptRoutingRun(outcomes);
-  await io.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
-  return { resultsPath, summaryPath };
+  return writeEvalResults(outcomes, outputDir, io, summarizePromptRoutingRun);
 }
 
 const FIXTURE_PATH = fileURLToPath(new URL("./fixtures/prompt-routing.jsonl", import.meta.url));
@@ -450,21 +394,10 @@ function readFlag(args: readonly string[], name: string): string | undefined {
   return index === -1 ? undefined : args[index + 1];
 }
 
-async function realIo(): Promise<PromptRoutingResultIo> {
-  return {
-    mkdir: async (path) => {
-      await mkdir(path, { recursive: true });
-    },
-    writeFile: async (path, contents) => {
-      await writeFile(path, contents, "utf8");
-    },
-  };
-}
-
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const fixtures = await loadPromptRoutingFixtures(FIXTURE_PATH);
-  const io = await realIo();
+  const io = await realEvalResultIo();
   if (!args.includes("--live")) {
     const outcomes = await runFakePromptRoutingFixtures(fixtures);
     const { resultsPath, summaryPath } = await writePromptRoutingResults(

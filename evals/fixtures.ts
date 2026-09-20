@@ -81,18 +81,18 @@ const JEV_FAILURE_CODES: readonly JevEvaluationError["code"][] = [
   "timeout",
 ];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function requireString(value: unknown, field: string, context: string): string {
+export function requireString(value: unknown, field: string, context: string): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`fixture ${context}: ${field} must be a non-empty string`);
   }
   return value;
 }
 
-function requireOneOf<T extends string>(
+export function requireOneOf<T extends string>(
   value: unknown,
   allowed: readonly T[],
   field: string,
@@ -102,6 +102,45 @@ function requireOneOf<T extends string>(
     throw new Error(`fixture ${context}: ${field} must be one of ${allowed.join(", ")}`);
   }
   return value as T;
+}
+
+/**
+ * Parses a JSONL fixture set generically: split into lines, parse and validate each one, enforce a
+ * single declared fixture-set version, and reject duplicate ids. Shared by every fixture-driven
+ * harness (prompt-routing, research-continuation, and any later one) so the line-splitting, JSON
+ * parsing, version check, and duplicate-id check live in exactly one place.
+ */
+export function parseFixtureLines<T extends Readonly<{ id: string; fixtureSetVersion: string }>>(
+  jsonl: string,
+  expectedVersion: string,
+  validateOne: (value: unknown, lineNumber: number) => T,
+): readonly T[] {
+  const fixtures: T[] = [];
+  const seenIds = new Set<string>();
+  const lines = jsonl.split("\n");
+  for (const [index, rawLine] of lines.entries()) {
+    const line = rawLine.trim();
+    if (line.length === 0) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`fixture at line ${index + 1} is not valid JSON: ${message}`);
+    }
+    const fixture = validateOne(parsed, index + 1);
+    if (fixture.fixtureSetVersion !== expectedVersion) {
+      throw new Error(
+        `fixture ${fixture.id} declares version ${fixture.fixtureSetVersion}, ` +
+          `expected ${expectedVersion}`,
+      );
+    }
+    if (seenIds.has(fixture.id)) throw new Error(`duplicate fixture id ${fixture.id}`);
+    seenIds.add(fixture.id);
+    fixtures.push(fixture);
+  }
+  if (fixtures.length === 0) throw new Error("fixture set is empty");
+  return fixtures;
 }
 
 function validateExpectedDecision(
@@ -168,32 +207,7 @@ function validateFixture(value: unknown, lineNumber: number): PromptRoutingFixtu
 
 /** Parses and validates a prompt-routing fixture set from JSONL text. Pure: no filesystem access. */
 export function parsePromptRoutingFixtures(jsonl: string): readonly PromptRoutingFixture[] {
-  const fixtures: PromptRoutingFixture[] = [];
-  const seenIds = new Set<string>();
-  const lines = jsonl.split("\n");
-  for (const [index, rawLine] of lines.entries()) {
-    const line = rawLine.trim();
-    if (line.length === 0) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`prompt-routing fixture at line ${index + 1} is not valid JSON: ${message}`);
-    }
-    const fixture = validateFixture(parsed, index + 1);
-    if (fixture.fixtureSetVersion !== PROMPT_ROUTING_FIXTURE_SET_VERSION) {
-      throw new Error(
-        `fixture ${fixture.id} declares version ${fixture.fixtureSetVersion}, ` +
-          `expected ${PROMPT_ROUTING_FIXTURE_SET_VERSION}`,
-      );
-    }
-    if (seenIds.has(fixture.id)) throw new Error(`duplicate fixture id ${fixture.id}`);
-    seenIds.add(fixture.id);
-    fixtures.push(fixture);
-  }
-  if (fixtures.length === 0) throw new Error("prompt-routing fixture set is empty");
-  return fixtures;
+  return parseFixtureLines(jsonl, PROMPT_ROUTING_FIXTURE_SET_VERSION, validateFixture);
 }
 
 /** Reads and validates a prompt-routing fixture set from disk. */

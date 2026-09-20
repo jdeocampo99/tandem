@@ -239,6 +239,119 @@ repeats fixtures to measure calibration). **It has not been run.** This environm
 `TYPESAFE_API_KEY` and none was sought out; live mode is exercised only by type-checking and by the
 fake-mode tests that inject a classifier, never by an actual network call.
 
+## Fixture-driven post-research continuation evaluation harness (issue #28)
+
+`evals/` also holds a fixture-driven harness for the post-research continuation behavior built by
+#25/#26/#27/#33/#35/#37: given a completed (or otherwise durably terminated) scout, does the
+coordinator correctly stay report-only, ask one intent question, or start a focused implementation
+interview, without ever authorizing implementation on its own. It exercises the production seams
+directly — `classifyResearchContinuation` (`src/tasks/research-continuation-classifier.ts`) and
+`decideResearchFollowUp` / `buildResearchFollowUpContent`
+(`src/tasks/research-continuation.ts`, `src/extension/research-follow-up.ts`) — instead of
+reimplementing them, and reuses the prompt-routing harness's fixture-parsing shell, live-Jev
+budget/cost tracking, JSONL/summary writer, and generalized percentile/usage-summary functions
+rather than building a second copy of any of them.
+
+- `evals/research-continuation-fixtures.ts`: the fixture schema and a pure loader
+  (`parseResearchContinuationFixtures`) plus a filesystem loader
+  (`loadResearchContinuationFixtures`), built on the same generic `parseFixtureLines` shell
+  `evals/fixtures.ts` exports. A fixture records a sanitized request objective, an optional
+  recorded typed Jev response or simulated provider failure code, the expected classifier
+  disposition/selector/reason, the scout's durable stage to build (`scoutOutcome`: `completed`,
+  `blocked`, `cancelled`, `needs-decision`, `missing-report`, or `stale-generation`), the expected
+  final follow-up and override, and substrings the rendered follow-up content must and must not
+  contain.
+- `evals/fixtures/research-continuation.jsonl`: the versioned, sanitized, synthetic fixture set
+  (`RESEARCH_CONTINUATION_FIXTURE_SET_VERSION`), covering explicit web/information research,
+  explicit research-then-fix/implement requests, ambiguous ticket research resolved by an injected
+  Jev response, contradictory/mixed requests, a missing API key, provider `unavailable` and
+  `timeout` failures, a malformed Jev answer shape, a low-confidence Jev answer, every scout stage
+  precedence outcome (`completed`, `blocked`, `cancelled` standing in for "failed" — Tandem has no
+  separate failed `TaskStage` — `needs-decision`, `missing-report`, `stale-generation`), two
+  restart/compaction fixtures, and one deliberately miscalibrated fixture
+  (`adversarial-miscalibrated-report-only`) that proves the false-interview-rate metric actually
+  detects a quality miss.
+- `evals/run-research-continuation.ts`: the runner. `runFakeResearchContinuationFixtures` runs
+  deterministically with no network access and no credentials inside the normal `bun test` (see
+  `tests/evals/run-research-continuation.test.ts`); it derives whether Jev should be called at all
+  from `classifyContinuationCues` itself, so a fixture never has to restate that prediction, and it
+  injects a fixed clock (mirroring `classifyPrompt`'s clock seam) so two fake runs, including every
+  nested usage-record duration, are byte-identical. Restart/compaction fixtures build a real,
+  disk-backed scout through `createTaskStore`/`transitionTask` (the same pattern
+  `tests/extension/research-follow-up.test.ts` uses), decide the follow-up, then reopen the
+  directory with a **fresh task-store instance** and decide again, asserting byte-identical
+  content. `runLiveResearchContinuationFixtures` calls the pinned Jev model for every fixture whose
+  deterministic cues leave it unresolved, sharing `evals/live-jev-budget.ts`'s budget/cost tracking
+  (extracted from the prompt-routing runner so there is exactly one live-Jev budget mechanism) and
+  `evals/write-results.ts`'s generic JSONL/summary writer. **Live mode has not been run for this
+  harness**: this repository has no `TYPESAFE_API_KEY` available in this environment, so live-mode
+  wiring is covered only by an injected fake evaluator standing in for `evaluateJev`, never by an
+  actual TypeSafe request. Treat it as unverified against the real model until someone with a
+  pinned key runs it.
+- `evals/summarize.ts`: `summarizeResearchContinuationRun` and its component functions
+  (`computeResearchContinuationAccuracy`, `computeInterviewRateMetrics`,
+  `computeContentInvariants`, `computeRestartConsistency`, `computeJevCallDiscipline`,
+  `computeClassifierOverhead`, `computeAvoidedCoordinatorWork`, `computeSafetyFailures`) reuse the
+  same generic `percentile`/`computeLatencyPercentiles`, and the provider-reliability and
+  usage-summary functions generalized to accept any outcome shaped like theirs, so no metric is
+  computed twice. The report separates **classifier overhead** (latency and token/cost usage only
+  for fixtures that actually attempted a Jev call) from **useful avoided coordinator work**
+  (fixtures that correctly stayed at `report-only`/`ask-intent` instead of opening a full
+  implementation interview), and reports **safety failures on their own count, never averaged into
+  the accuracy or interview-rate metrics**.
+
+### Thresholds in force
+
+The harness asserts against, and never overrides, the constants already pinned in
+`src/tasks/research-continuation-classifier.ts`:
+
+- `RESEARCH_CONTINUATION_CONFIDENCE_THRESHOLD` — a Jev choice below this confidence is discarded
+  for the conservative `ask-intent` default; the `jev-low-confidence` fixture is built specifically
+  below this threshold.
+- `RESEARCH_CONTINUATION_CLASSIFIER_VERSION` (built from `RESEARCH_CONTINUATION_QUESTION_VERSION`
+  and the pinned `JEV_MODEL`) — recorded as `classifierVersion` on every Jev-selected disposition;
+  the harness never fabricates or bumps this version.
+- `DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS` — the timeout fake-mode fixtures configure the
+  classifier with.
+- `MAX_CLASSIFIED_OBJECTIVE_CHARS` — the bound `sanitizeObjective` enforces before anything reaches
+  Jev; fixture objectives stay well under it.
+
+### Safety invariant
+
+`classifyResearchContinuation` and `decideResearchFollowUp`/`buildResearchFollowUpContent` are pure
+and take no task-store dependency, so no injected classifier result — however confidently
+miscalibrated or however many extra fields it tries to smuggle in — can itself create, approve, or
+start an implementation task. `tests/evals/research-continuation-safety.test.ts` proves this against
+a deliberately adversarial injected result (full-confidence `implementation-interview` plus bogus
+extra response fields): the persisted continuation carries only the four allowed fields, the
+rendered content still carries its approval disclaimer, and the real lifecycle machinery
+(`transitionTask`) still refuses `start` on an implementation task with no `approve` event and no
+`scopeApproved`. A false implementation transition is a **safety failure**, reported and gated
+separately from the accuracy metrics above; a false or missed interview is a quality miss, not a
+safety failure.
+
+### Failure examples to review before enabling broadly
+
+These are synthetic, sanitized fixtures, not measurements of production quality. Before enabling
+Jev-assisted continuation classification broadly, review at least:
+
+- `adversarial-miscalibrated-report-only` — a confident (0.95) Jev answer of
+  `implementation-interview` for a request whose ground truth is `report-only`. This is exactly the
+  shape of a false interview: it costs the user an unwanted, unnecessary interview turn. The
+  fixture set's `falseInterviewRate` must stay at the single expected miscalibrated case; any other
+  fixture landing here is a regression.
+- `scout-blocked-overrides-interview` / `scout-failed-overrides-interview` /
+  `scout-needs-decision-outranks-interview` / `scout-missing-report-blocks-interview` /
+  `scout-stale-generation-blocks-interview` — five ways a recorded `implementation-interview`
+  disposition must never reach the user as an interview: a blocked, cancelled ("failed"),
+  needs-decision, missing-report, or stale-generation scout must each disclose its own blocker (or
+  answer its open question) instead. A regression here would start an interview the coordinator has
+  no trustworthy report to support.
+- `jev-low-confidence-ambiguous` / `jev-malformed-answer-shape` / `jev-invalid-response-ambiguous` /
+  `jev-timeout-ambiguous` / `jev-unavailable-ambiguous` / `jev-not-configured-ambiguous` — six ways
+  a provider response can be unusable; every one must fall back to the conservative `ask-intent`
+  disposition with `selectedBy: "deterministic"`, never a fabricated confident answer.
+
 ## Decision rules
 
 - Deterministic exact actions are the preferred fast path.
