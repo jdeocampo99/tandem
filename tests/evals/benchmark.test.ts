@@ -39,12 +39,9 @@ test("control and treatment are deterministic and reproducible across runs", asy
   const { fixtures, baselines } = await loadInputs();
   const first = await runBaselineBenchmark(fixtures, baselines);
   const second = await runBaselineBenchmark(fixtures, baselines);
-  const strip = (rows: typeof first.rows) =>
-    rows.map((row) => ({
-      ...row,
-      treatment: { ...row.treatment, jevDurationMs: 0, totalDurationMs: 0 },
-    }));
-  expect(strip(first.rows)).toEqual(strip(second.rows));
+  // The default classifier (runFakePromptRoutingFixtures) injects a fixed clock, so jevDurationMs
+  // is always exactly 0 and every row is byte-identical across runs with nothing to strip.
+  expect(first.rows).toEqual(second.rows);
 });
 
 test("a successful direct route avoids the coordinator turn entirely", async () => {
@@ -57,6 +54,23 @@ test("a successful direct route avoids the coordinator turn entirely", async () 
   expect(directListTasks?.treatment.totalDurationMs).toBeLessThan(
     directListTasks?.control.totalDurationMs ?? Number.POSITIVE_INFINITY,
   );
+});
+
+test("replay-mode treatment latency comes entirely from recorded fixture data, not from timing", async () => {
+  const { fixtures, baselines } = await loadInputs();
+  const { rows } = await runBaselineBenchmark(fixtures, baselines);
+  for (const row of rows) {
+    // The default classifier injects a fixed clock (see evals/run-jev.ts), so every Jev latency
+    // sample in replay mode is exactly 0; total duration must still equal the baseline recording's
+    // own numbers, never a measured or fabricated figure.
+    expect(row.treatment.jevDurationMs, `${row.fixtureId} jevDurationMs`).toBe(0);
+  }
+  const directListTasks = rows.find((row) => row.fixtureId === "direct-list-tasks");
+  expect(directListTasks?.treatment.totalDurationMs).toBe(900);
+  const missingTaskIdShow = rows.find((row) => row.fixtureId === "missing-task-id-show");
+  expect(missingTaskIdShow?.treatment.totalDurationMs).toBe(60_000);
+  const recoveryPlan = rows.find((row) => row.fixtureId === "direct-recovery-plan-task");
+  expect(recoveryPlan?.treatment.totalDurationMs).toBe(900 + 55_000);
 });
 
 test("a failed direct action falls back to the coordinator path and counts one action failure", async () => {
