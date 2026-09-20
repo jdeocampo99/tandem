@@ -8,6 +8,8 @@ import type {
 import {
   evaluateJev,
   JEV_MODEL,
+  JEV_PROVIDER,
+  type JevChoiceAnswer,
   JevEvaluationError,
   type JevEvaluationInput,
   type JevEvaluationOptions,
@@ -16,6 +18,11 @@ import {
   type JevQuestions,
 } from "../adapters/typesafe.ts";
 import { appendDiagnosticEvent, type DiagnosticValue } from "../runtime/diagnostics.ts";
+import {
+  JEV_PRICING_SNAPSHOT,
+  USAGE_RECORD_SCHEMA_VERSION,
+  type UsageRecord,
+} from "../runtime/usage.ts";
 import type { TandemService } from "../service/controller.ts";
 import { executeTandemAction, type TandemAction } from "./actions.ts";
 import { ACTION_RESULT_MAX_CHARS, compactText, summarizeTandemActionValue } from "./summary.ts";
@@ -53,6 +60,8 @@ export type PromptRoutingEvaluation = Readonly<{
   readonly reason: string;
   readonly durationMs: number;
   readonly decision?: PromptRoutingDecision;
+  /** Bounded Jev usage for this evaluation; present only when a provider request was attempted. */
+  readonly usage?: UsageRecord;
 }>;
 
 export type PromptRoutingDependencies = Readonly<{
@@ -65,6 +74,9 @@ export type PromptRoutingDependencies = Readonly<{
     options: JevEvaluationOptions,
   ) => Promise<JevEvaluationResponse>;
 }>;
+
+/** Bumped whenever the shape or meaning of {@link ROUTING_QUESTIONS} changes. */
+export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 1;
 
 const ROUTING_QUESTIONS: JevQuestions = {
   action: {
@@ -154,12 +166,12 @@ export function extractPromptTaskId(prompt: string): string | undefined {
   return prompt.match(TASK_ID_PATTERN)?.[0];
 }
 
-function choiceAnswer(
-  response: JevEvaluationResponse,
-  id: string,
-): Readonly<{ choice: string; confidence: number }> | undefined {
-  const answer = response.answers[id];
-  if (answer === undefined || answer.type !== "choice") return undefined;
+/**
+ * The routed confidence for one choice answer: the lesser of the model's stated confidence
+ * and the probability it assigned to its own chosen option. Exported so evaluation tooling can
+ * reproduce the same confidence figure from a saved response without a second accounting path.
+ */
+export function choiceConfidence(answer: JevChoiceAnswer): number | undefined {
   const probability = answer.probabilities[answer.choice];
   if (
     probability === undefined ||
@@ -168,10 +180,18 @@ function choiceAnswer(
   ) {
     return undefined;
   }
-  return {
-    choice: answer.choice,
-    confidence: Math.min(answer.confidence, probability),
-  };
+  return Math.min(answer.confidence, probability);
+}
+
+function choiceAnswer(
+  response: JevEvaluationResponse,
+  id: string,
+): Readonly<{ choice: string; confidence: number }> | undefined {
+  const answer = response.answers[id];
+  if (answer === undefined || answer.type !== "choice") return undefined;
+  const confidence = choiceConfidence(answer);
+  if (confidence === undefined) return undefined;
+  return { choice: answer.choice, confidence };
 }
 
 function knownAction(choice: string): choice is ReadOnlyAction | "none" {
@@ -212,16 +232,52 @@ function knownComposition(choice: string): choice is RouteComposition {
   return choice === "single" || choice === "homogeneous-batch" || choice === "mixed";
 }
 
+type JevAttemptOutcome =
+  | Readonly<{ readonly kind: "success"; readonly response: JevEvaluationResponse }>
+  | Readonly<{ readonly kind: "failure"; readonly code: JevEvaluationError["code"] }>;
+
+function jevUsageRecord(
+  outcome: JevAttemptOutcome,
+  durationMs: number,
+  reason: string,
+): UsageRecord {
+  const shared = {
+    schemaVersion: USAGE_RECORD_SCHEMA_VERSION,
+    provider: JEV_PROVIDER,
+    model: JEV_MODEL,
+    durationMs,
+    reason,
+    pricing: JEV_PRICING_SNAPSHOT,
+  } as const;
+  if (outcome.kind === "success") {
+    return {
+      ...shared,
+      inputTokens: outcome.response.usage.input_tokens,
+      outputTokens: outcome.response.usage.output_tokens,
+      timedOut: false,
+    };
+  }
+  return {
+    ...shared,
+    inputTokens: "unavailable",
+    outputTokens: "unavailable",
+    timedOut: outcome.code === "timeout",
+  };
+}
+
 function evaluationResult(
   classifier: PromptRoutingEvaluation["classifier"],
   reason: string,
   startedAt: number,
+  outcome?: JevAttemptOutcome,
   decision?: PromptRoutingDecision,
 ): PromptRoutingEvaluation {
+  const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
   return {
     classifier,
     reason,
-    durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+    durationMs,
+    ...(outcome === undefined ? {} : { usage: jevUsageRecord(outcome, durationMs, reason) }),
     ...(decision === undefined ? {} : { decision }),
   };
 }
@@ -261,9 +317,11 @@ export async function classifyPrompt(
   try {
     response = await evaluate(input, options);
   } catch (error) {
+    const code = error instanceof JevEvaluationError ? error.code : "unavailable";
     const reason = error instanceof JevEvaluationError ? `jev-${error.code}` : "jev-error";
-    return evaluationResult("jev", reason, startedAt);
+    return evaluationResult("jev", reason, startedAt, { kind: "failure", code });
   }
+  const outcome: JevAttemptOutcome = { kind: "success", response };
 
   const answers = [
     choiceAnswer(response, "action"),
@@ -280,7 +338,7 @@ export async function classifyPrompt(
     scopeAnswer === undefined ||
     compositionAnswer === undefined
   ) {
-    return evaluationResult("jev", "incomplete-classification", startedAt);
+    return evaluationResult("jev", "incomplete-classification", startedAt, outcome);
   }
   if (
     !knownAction(actionAnswer.choice) ||
@@ -289,7 +347,7 @@ export async function classifyPrompt(
     !knownScope(scopeAnswer.choice) ||
     !knownComposition(compositionAnswer.choice)
   ) {
-    return evaluationResult("jev", "invalid-classification", startedAt);
+    return evaluationResult("jev", "invalid-classification", startedAt, outcome);
   }
 
   const confidence = Math.min(
@@ -300,14 +358,14 @@ export async function classifyPrompt(
     compositionAnswer.confidence,
   );
   if (confidence < PROMPT_ROUTING_CONFIDENCE_THRESHOLD) {
-    return evaluationResult("jev", "low-confidence", startedAt);
+    return evaluationResult("jev", "low-confidence", startedAt, outcome);
   }
   const targetMatchesAction =
     actionAnswer.choice === "list" || actionAnswer.choice === "presentations"
       ? targetAnswer.choice === "repository"
       : targetAnswer.choice === "task";
   if (!targetMatchesAction) {
-    return evaluationResult("jev", "classification-mismatch", startedAt);
+    return evaluationResult("jev", "classification-mismatch", startedAt, outcome);
   }
   if (
     actionAnswer.choice === "none" ||
@@ -317,14 +375,14 @@ export async function classifyPrompt(
     scopeAnswer.choice !== "within" ||
     compositionAnswer.choice !== "single"
   ) {
-    return evaluationResult("jev", "normal-coordinator", startedAt);
+    return evaluationResult("jev", "normal-coordinator", startedAt, outcome);
   }
   if (
     actionAnswer.choice !== "list" &&
     actionAnswer.choice !== "presentations" &&
     taskId === undefined
   ) {
-    return evaluationResult("jev", "missing-explicit-task-id", startedAt);
+    return evaluationResult("jev", "missing-explicit-task-id", startedAt, outcome);
   }
   const decision: PromptRoutingDecision = {
     action: actionAnswer.choice,
@@ -335,7 +393,7 @@ export async function classifyPrompt(
     ...(taskId === undefined ? {} : { taskId }),
     confidence,
   };
-  return evaluationResult("jev", "direct-read-only", startedAt, decision);
+  return evaluationResult("jev", "direct-read-only", startedAt, outcome, decision);
 }
 
 export function actionForPromptDecision(
@@ -378,9 +436,14 @@ async function recordDiagnostic(
   ctx: ExtensionContext,
   event: string,
   details: Record<string, DiagnosticValue>,
+  usage?: UsageRecord,
 ): Promise<void> {
   try {
-    await appendDiagnosticEvent(deps.getHome(ctx), { event, details });
+    await appendDiagnosticEvent(deps.getHome(ctx), {
+      event,
+      details,
+      ...(usage === undefined ? {} : { usage }),
+    });
   } catch {
     // Diagnostics are best effort and must never alter prompt handling.
   }
@@ -427,7 +490,13 @@ export async function handlePromptInput(
   }
 
   const evaluation = await classifyPrompt(prompt, deps.config, deps.evaluate);
-  await recordDiagnostic(deps, ctx, "prompt-route-evaluated", routeDetails(prompt, evaluation));
+  await recordDiagnostic(
+    deps,
+    ctx,
+    "prompt-route-evaluated",
+    routeDetails(prompt, evaluation),
+    evaluation.usage,
+  );
   const decision = evaluation.decision;
   if (decision === undefined) {
     await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
