@@ -26,6 +26,12 @@ export function parallelCoordinatorsAllowed(source: TandemEnvironmentSource): bo
   return value === "1" || value === "true";
 }
 
+/** One Tandem home and one canonical repository inside it, both already resolved. */
+type CanonicalRepositoryLocation = Readonly<{
+  readonly home: string;
+  readonly repoPath: string;
+}>;
+
 /** Whether another session's recorded coordinator still proves it is running. */
 export type SessionCoordinatorLiveness =
   | Readonly<{ readonly status: "live" }>
@@ -163,15 +169,14 @@ export function decideRepositoryCoordinatorClaim(
 
 async function observeSessionCoordinator(
   run: CommandRunner,
-  home: string,
-  repoPath: string,
+  location: CanonicalRepositoryLocation,
   found: DiscoveredCoordinatorRecord,
 ): Promise<ObservedSessionCoordinator> {
   try {
     const running = await findRunningCoordinator(run, {
-      home,
+      home: location.home,
       sessionId: found.sessionId,
-      repoPath,
+      repoPath: location.repoPath,
     });
     return { found, liveness: running === undefined ? { status: "stopped" } : { status: "live" } };
   } catch (error) {
@@ -185,12 +190,11 @@ async function observeSessionCoordinator(
  */
 async function reconcileSessionCoordinator(
   input: RepositoryCoordinatorClaimInput,
-  home: string,
-  repoPath: string,
+  location: CanonicalRepositoryLocation,
   found: DiscoveredCoordinatorRecord,
 ): Promise<CoordinatorSessionReconciliation> {
   const sourceHead = await input.requestedSourceHead();
-  return withCoordinatorLaunchLock(home, found.sessionId, async () => {
+  return withCoordinatorLaunchLock(location.home, found.sessionId, async () => {
     const workspace = await retireCoordinatorWorkspace(input.run, found.record);
     const decision = decideCoordinatorReplacement({
       previous: found.record,
@@ -206,9 +210,9 @@ async function reconcileSessionCoordinator(
     }
     const resources = await applyCoordinatorReplacement({
       run: input.run,
-      home,
+      home: location.home,
       sessionId: found.sessionId,
-      repoPath,
+      repoPath: location.repoPath,
       clock: input.clock,
       newId: input.newId,
       decision,
@@ -223,16 +227,15 @@ async function reconcileSessionCoordinator(
  */
 async function repositoryClaimRefusal(
   input: RepositoryCoordinatorClaimInput,
-  home: string,
-  repoPath: string,
+  location: CanonicalRepositoryLocation,
   claim: Extract<RepositoryCoordinatorClaim, { kind: "refuse" }>,
 ): Promise<Error> {
   const quarantinePaths: string[] = [];
   for (const found of claim.quarantine) {
     const outcome = await quarantineCoordinatorLease({
-      home,
+      home: location.home,
       sessionId: found.sessionId,
-      repoPath,
+      repoPath: location.repoPath,
       stage: "exclusivity",
       reason: claim.reason,
       lease: found.record.worktree,
@@ -259,30 +262,32 @@ async function repositoryClaimRefusal(
 export async function claimRepositoryCoordinator(
   input: RepositoryCoordinatorClaimInput,
 ): Promise<readonly CoordinatorSessionReconciliation[]> {
-  const home = await canonicalHome(input.home);
   const sessionId = sessionText(input.sessionId);
-  const repoPath = await canonicalPath(input.repoPath, "repoPath");
-  const discovery = await discoverCoordinatorRecords({ home, repoPath });
+  const location: CanonicalRepositoryLocation = {
+    home: await canonicalHome(input.home),
+    repoPath: await canonicalPath(input.repoPath, "repoPath"),
+  };
+  const discovery = await discoverCoordinatorRecords(location);
   const misplaced = discovery.records.filter((found) => found.placement === "foreign-directory");
   const otherSessionRecords = discovery.records.filter(
     (found) => found.placement === "session-directory" && found.sessionId !== sessionId,
   );
   const otherSessions: ObservedSessionCoordinator[] = [];
   for (const found of otherSessionRecords) {
-    otherSessions.push(await observeSessionCoordinator(input.run, home, repoPath, found));
+    otherSessions.push(await observeSessionCoordinator(input.run, location, found));
   }
   const claim = decideRepositoryCoordinatorClaim({
-    repoPath,
+    repoPath: location.repoPath,
     sessionId,
     misplaced,
     unreadable: discovery.unreadable,
     otherSessions,
   });
-  if (claim.kind === "refuse") throw await repositoryClaimRefusal(input, home, repoPath, claim);
+  if (claim.kind === "refuse") throw await repositoryClaimRefusal(input, location, claim);
   if (claim.kind === "allocate") return [];
   const reconciliations: CoordinatorSessionReconciliation[] = [];
   for (const found of claim.stale) {
-    reconciliations.push(await reconcileSessionCoordinator(input, home, repoPath, found));
+    reconciliations.push(await reconcileSessionCoordinator(input, location, found));
   }
   return reconciliations;
 }

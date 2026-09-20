@@ -274,6 +274,7 @@ The installed `tandem` command uses the following terminal options and environme
 | Coordinator reset | `--reset`; preflight and reopen only selected idle Tandem-owned coordinators; launch-only and rejected inside Herdr |
 | Coordinator restart | `--restart`; replace only the owned coordinator while preserving tasks, generations, conversations, questions/messages, reports, worktrees, leases, and child panes |
 | Forced cancellation | `--reset --force`; cancel selected active work, stop owned terminals, and reopen coordinators while preserving files/worktrees |
+| Parallel coordinators | `TANDEM_ALLOW_PARALLEL_COORDINATORS=1` (or `true`); off by default, and the only way to run more than one coordinator for one repository in a shared home |
 
 ### Remembered setup
 
@@ -372,6 +373,49 @@ never rolled back, because the record remains its durable owner. A previous leas
 released becomes a quarantine note too rather than blocking the launch, so no coordinator lease is
 ever left untracked and the user is never locked out of their coordinator. Launch prints a notice
 for a retained or quarantined worktree outcome and stays silent when nothing accumulated.
+
+### One coordinator per repository
+
+By default one canonical repository has one active coordinator across every Tandem session that
+shares a home, so sessions such as `tandem` and `tandem-fresh` cannot each start their own. Launch
+and restart take a repository-scoped coordination lock at
+`<home>/coordinator-registry/repository-<digest>.lock`, keyed by the canonical repository path, so
+two spellings of one repository (a symlinked checkout, a differently written path) share one lock.
+
+Lock ordering, which is what keeps two launches from deadlocking: the repository lock is acquired
+first, then the launching session's own launch lock, then the launch lock of any other session whose
+records are being reconciled. Callers that hold only a session lock, namely coordinator reset and
+coordinator source refresh, never acquire the repository lock, so no cycle exists.
+
+Holding that lock, a launch reconciles the repository across every session directory under
+`<home>/coordinator-registry/`. Discovery is read-time and non-destructive: records earlier builds
+wrote under per-session directories are still found, matched on their own canonical repository path
+rather than on their file name, and nothing is moved or rewritten to a new layout. Each record
+carries the session of origin, so no session's record is mistaken for another's.
+
+What the launch does with what it finds:
+
+- Its own session's record follows the ordinary reconnect and replacement path above.
+- A coordinator another session still runs refuses the launch, naming that session and its pane. A
+  live coordinator is never stopped, adopted, or force-closed by a launch, and no second coordinator
+  is started beside it. Reconnect in that session, or stop it there and launch again.
+- A stopped or orphaned coordinator from another session runs through exactly the retire, decide,
+  and apply path above, under that session's own launch lock: its pane is retired only with proven
+  stopped ownership, its exact lease is released and its record removed, or the lease is retained or
+  quarantined when the checkout is dirty, unmerged, or unexplained. A retained or quarantined record
+  stays as the durable owner of what Tandem refused to discard and is reported again on the next
+  launch; it never blocks the new coordinator.
+- A record stored under a session directory it does not belong to, or a record for this repository
+  that cannot be read, refuses the launch rather than duplicating a coordinator. A misplaced record
+  also gets a durable quarantine note under `<home>/coordinator-quarantine/` with stage
+  `exclusivity`, naming its lease and pane; an unreadable file names no lease identity, so the
+  refusal names the file to inspect instead. Nothing is released or closed by a refusal.
+
+Every refusal names `TANDEM_ALLOW_PARALLEL_COORDINATORS`. Setting it to `1` or `true` is the
+explicit opt-in for parallel coordinators on one repository; it is off by default, it still takes
+both locks so launches stay serialized, and it skips only the cross-session claim. Task worktrees
+are never inspected, returned, or renamed by this path, and a workspace label still never proves
+ownership. Launch prints one notice per stopped coordinator it settled for another session.
 
 `--reset --force` is the explicit interruption mode; `--force` alone and `configure --force` are
 invalid. It preflights selected task and presentation endpoints, including retained terminals,
@@ -1074,7 +1118,8 @@ are Tandem-owned state, not files in target repositories:
 | --- | --- |
 | `<home>/models.json` | Strict global model preference envelope for all six roles; approved updates atomically replace it with mode `0600`. |
 | `<home>/repositories/<key>/config.json` | Private central policy envelope for the canonical repository root; `<key>` is the first 24 hex characters of its SHA-256 realpath digest. |
-| `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. |
+| `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. Launch discovers these across every session directory, so one repository keeps one active coordinator. |
+| `<home>/coordinator-registry/repository-<digest>.lock` | Native `O_EXLOCK` coordination lock for one canonical repository, shared by every session in this home and acquired before the per-session launch lock. |
 | `<home>/coordinator-scripts/*.sh` | Atomically written `0700` launch scripts containing the coordinator command and scoped environment overrides; kept outside project checkouts. |
 | `<home>/state.sqlite` | Canonical SQLite source of truth for task records, policy snapshots, lifecycle/evidence/review/delivery metadata, runtime reservations, endpoint identities, durable jobs and operations, stop requests, presentations, and migration metadata. |
 | `<home>/communications/<safe-task-id>/inbox.json` | Derived bounded task-message projection; canonical communication remains in the task row in `state.sqlite`. |
@@ -1349,6 +1394,6 @@ question metadata, activity timestamps, and full message text.
 
 Tandem's orchestration, durable state, worker processes, Herdr workspaces, Treehouse pool, and Lavish control are local to the machine running the coordinator. It does not create remote fleets, alternate terminal/harness backends, social relays, or hosted Tandem state. GitHub PR publish/merge necessarily use the configured remote through the local `gh` and Git commands when explicitly requested.
 
-The repository lock is a Darwin native `O_EXLOCK` lock at the task-store directory, with a five-second default acquisition timeout. Lock corruption, lock replacement, filesystem failures, ambiguous external identities, and unknown disk capacity fail closed rather than weakening the safety proof. The lock and durable state are local filesystem primitives; they are not a distributed lock for multiple machines or network filesystems.
+The repository lock is a Darwin native `O_EXLOCK` lock at the task-store directory, with a five-second default acquisition timeout. Coordinator launches use the same native primitive for their own locks under `<home>/coordinator-registry/`: one per canonical repository, acquired before the per-session launch lock. Lock corruption, lock replacement, filesystem failures, ambiguous external identities, and unknown disk capacity fail closed rather than weakening the safety proof. The lock and durable state are local filesystem primitives; they are not a distributed lock for multiple machines or network filesystems.
 
 The authoritative implementation contracts live in `src/contracts.ts`, with configuration and policy in `src/config/`, lifecycle rules in `src/tasks/lifecycle.ts`, native adapters in `src/adapters/`, service composition in `src/service/controller.ts`, and OMP integration in `src/extension.ts`, `src/extension/`, and `src/instructions.ts`. See [AGENTS.md](../AGENTS.md#source-layout) for the domain directory map and placement rules. This reference describes those current contracts and does not claim that an external Herdr, OMP provider, GitHub, or Lavish scenario has been run in every environment.

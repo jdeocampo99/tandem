@@ -184,6 +184,13 @@ original checkout may be dirty and remains untouched; source reads and delegated
 clean snapshots, while settings, task records, and delivery retain the original project identity.
 When several projects are opened, Tandem attaches once every coordinator is ready.
 
+One repository gets one coordinator across every session that shares a Tandem home, so switching
+from `tandem` to a session such as `tandem-fresh` reconnects or reconciles instead of starting a
+second coordinator. A coordinator another session still runs is never stopped or adopted: the
+launch refuses and names the session holding it. Set `TANDEM_ALLOW_PARALLEL_COORDINATORS=1` when
+you deliberately want parallel coordinators for one repository; it is off by default. See
+[one coordinator per repository](docs/agent-reference.md#launching-the-coordinator).
+
 Child agents run in real interactive OMP terminals, not JSON-log panes. Open their Herdr subtree
 to watch the work or chat directly. Completed agents stay open for read-only follow-up; their
 delegated result is recorded independently of terminal output. Further implementation goes through
