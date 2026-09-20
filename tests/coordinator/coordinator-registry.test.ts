@@ -1117,8 +1117,9 @@ test("force reset cancels stale scouting work while preserving files and unselec
       surfaces: ["example.ts"],
       policy: resetPolicy,
     });
+    const { researchContinuation: _scoutContinuation, ...unselectedFields } = unselected;
     const awaitingApproval = await store.create({
-      ...unselected,
+      ...unselectedFields,
       id: "awaiting-approval",
       repoPath: values.repoA,
       kind: "implementation",

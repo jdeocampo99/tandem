@@ -7,6 +7,10 @@ import {
 } from "../contracts.ts";
 import { isPinnedEvidence } from "../tasks/acceptance.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
+import {
+  checkResearchContinuation,
+  researchContinuationFor,
+} from "../tasks/research-continuation.ts";
 import type { TandemAction } from "./actions.ts";
 
 export const DIGEST_MAX_TASKS = 12;
@@ -256,6 +260,16 @@ function summarizeTask(task: TaskRecord): string {
   }
   if (task.reportPath !== undefined)
     lines.push(`Report evidence: ${compactText(task.reportPath, ACTION_SUMMARY_MAX_TEXT)}`);
+  const continuation = researchContinuationFor(task);
+  if (continuation !== undefined) {
+    lines.push(
+      `Post-research disposition: ${continuation.disposition} (routing only; selected by ${continuation.selectedBy}${
+        continuation.classifierVersion === undefined
+          ? ""
+          : `; classifier ${compactText(continuation.classifierVersion, 100)}`
+      })`,
+    );
+  }
   if (task.pullRequest !== undefined) {
     lines.push(
       `Pull request: ${task.pullRequest.repository}#${task.pullRequest.number} ${task.pullRequest.state}; head ${task.pullRequest.head}; base ${task.pullRequest.base}`,
@@ -752,6 +766,8 @@ function isTaskRecord(value: unknown): value is TaskRecord {
     (record.worktree === undefined || isTaskWorktree(record.worktree)) &&
     (record.reportPath === undefined || typeof record.reportPath === "string") &&
     (record.researchHandoffs === undefined || Array.isArray(record.researchHandoffs)) &&
+    (record.researchContinuation === undefined ||
+      checkResearchContinuation(record.researchContinuation).valid) &&
     (record.blockReason === undefined || typeof record.blockReason === "string") &&
     (record.pullRequest === undefined || isTaskPullRequest(record.pullRequest))
   );
@@ -826,8 +842,13 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
       task.blockReason === undefined ? "" : `; blocker: ${compactText(task.blockReason)}`;
     const reportSuffix =
       task.reportPath === undefined ? "" : `; report: ${compactText(task.reportPath, 140)}`;
+    const continuation = researchContinuationFor(task);
+    const continuationSuffix =
+      continuation === undefined
+        ? ""
+        : `; continuation: ${continuation.disposition} (${continuation.selectedBy}; routing only)`;
     lines.push(
-      `- ${task.id}: ${task.stage}; ${compactText(task.objective)}${notificationSuffix}${blockerSuffix}${headSuffix}${reportSuffix}`,
+      `- ${task.id}: ${task.stage}; ${compactText(task.objective)}${notificationSuffix}${blockerSuffix}${headSuffix}${reportSuffix}${continuationSuffix}`,
     );
     const question = task.communication?.question;
     if (question !== undefined) {

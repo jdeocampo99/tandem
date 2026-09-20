@@ -598,6 +598,131 @@ test("persists notification state before acknowledgement is observable after rel
   });
 });
 
+const scoutInput: StoreTaskInput = {
+  repoPath: "/repo",
+  kind: "scout",
+  objective: "Research the reported defect",
+  acceptanceCriteria: ["The findings are durable"],
+  surfaces: ["store"],
+  policy,
+};
+
+test("persists an explicit scout disposition across restart and later transitions", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory, "continuation");
+    const created = await store.create({
+      ...scoutInput,
+      id: "explicit-scout",
+      researchContinuation: {
+        schemaVersion: 1,
+        disposition: "implementation-interview",
+        selectedBy: "jev",
+        classifierVersion: "jev-continuation-1",
+      },
+    });
+    expect(created.researchContinuation?.disposition).toBe("implementation-interview");
+
+    const transitioned = await store.update(created.id, created.revision, (task) =>
+      transitionTask(
+        task,
+        {
+          type: "start",
+          worktree,
+          endpoints: [
+            {
+              sessionId: "session-1",
+              workspaceId: "workspace-1",
+              tabId: "tab-1",
+              paneId: "pane-1",
+              role: "scout",
+              generation: task.generation,
+            },
+          ],
+        },
+        transitionContext("scout-start"),
+      ),
+    );
+    expect(transitioned.researchContinuation?.classifierVersion).toBe("jev-continuation-1");
+
+    const reloaded = await makeStore(directory, "continuation-reload").read(created.id);
+    expect(reloaded?.researchContinuation).toEqual(created.researchContinuation);
+  });
+});
+
+test("loads scout records written without a disposition using the conservative default", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory, "legacy");
+    const created = await store.create({ ...scoutInput, id: "legacy-scout" });
+    rewritePayload(directory, created.id, (payload) => {
+      delete payload.researchContinuation;
+    });
+
+    const reloaded = await makeStore(directory, "legacy-reload").read(created.id);
+    expect(reloaded?.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "ask-intent",
+      selectedBy: "deterministic",
+    });
+    expect(reloaded?.scopeApproved).toBe(true);
+    expect(reloaded?.stage).toBe("queued");
+  });
+});
+
+test("upgrades a scout row that has old-shape evidence and no continuation together", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory, "legacy-both");
+    const created = await store.create({ ...scoutInput, id: "legacy-both-scout" });
+    rewritePayload(directory, created.id, (payload) => {
+      delete payload.researchContinuation;
+      payload.reviewHead = LEGACY_EVIDENCE.head;
+      payload.validationEvidence = [{ ...LEGACY_EVIDENCE }];
+    });
+
+    const reloaded = await makeStore(directory, "legacy-both-reload").read(created.id);
+    expect(reloaded?.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "ask-intent",
+      selectedBy: "deterministic",
+    });
+    expect(reloaded?.validationEvidence).toEqual([{ ...LEGACY_EVIDENCE, contract: "legacy" }]);
+    expect(reloaded?.scopeApproved).toBe(true);
+  });
+});
+
+test("fails closed on invalid dispositions, malformed provenance, and non-scout records", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory, "invalid");
+    const scout = await store.create({ ...scoutInput, id: "invalid-scout" });
+    rewritePayload(directory, scout.id, (payload) => {
+      payload.researchContinuation = {
+        schemaVersion: 1,
+        disposition: "implement-now",
+        selectedBy: "deterministic",
+      };
+    });
+    await expect(store.read(scout.id)).rejects.toBeInstanceOf(StateCorruptionError);
+
+    rewritePayload(directory, scout.id, (payload) => {
+      payload.researchContinuation = {
+        schemaVersion: 1,
+        disposition: "implementation-interview",
+        selectedBy: "jev",
+      };
+    });
+    await expect(store.read(scout.id)).rejects.toBeInstanceOf(StateCorruptionError);
+
+    const implementation = await store.create({ ...input, id: "invalid-implementation" });
+    rewritePayload(directory, implementation.id, (payload) => {
+      payload.researchContinuation = {
+        schemaVersion: 1,
+        disposition: "implementation-interview",
+        selectedBy: "explicit",
+      };
+    });
+    await expect(store.read(implementation.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
 test("a record written before review levels existed loads at the conservative default", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);

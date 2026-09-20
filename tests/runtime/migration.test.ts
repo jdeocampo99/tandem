@@ -333,6 +333,44 @@ test("imports nonempty legacy task and runtime state without losing identity or 
   }
 });
 
+test("legacy scout records migrate to the conservative post-research disposition", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-migration-scout-"));
+  try {
+    const scout = createTask(
+      {
+        id: "legacy-scout",
+        repoPath: join(home, "repo"),
+        kind: "scout",
+        objective: "Preserve this legacy research task",
+        acceptanceCriteria: ["Keep its durable state"],
+        surfaces: ["src/example.ts"],
+        policy,
+      },
+      "2030-01-02T03:04:05.000Z",
+    );
+    const { researchContinuation: _absentBeforeMigration, ...withoutContinuation } = scout;
+    await writeLegacySnapshot(home, withoutContinuation, legacyRuntime(home, scout));
+
+    const result = await migrateState(home);
+    expect(result.status).toBe("complete");
+
+    const store = createTaskStore({
+      directory: join(home, "tasks"),
+      clock: () => "2030-01-02T03:04:07.000Z",
+      idFactory: () => "unused",
+    });
+    const migrated = await store.read(scout.id);
+    expect(migrated?.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "ask-intent",
+      selectedBy: "deterministic",
+    });
+    expect(migrated?.scopeApproved).toBe(true);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("resumes an interrupted runtime-only archive and commits imported state before fencing", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-migration-runtime-archive-"));
   const task = legacyTask(home);

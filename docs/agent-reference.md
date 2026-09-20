@@ -809,6 +809,33 @@ spent and configured rounds, states that the task is not ready and not accepted,
 evidence-backed blockers that remain, and names the explicit decision available. Neither message
 claims delivery.
 
+### Post-research continuation disposition
+
+Every scout record carries a durable `researchContinuation` describing what its completed report
+should lead to. It is routing metadata for the coordinator's follow-up turn rather than permission:
+it does not set `scopeApproved`, create an implementation task, or replace explicit scope approval.
+Only scout records may carry one; a continuation on an implementation record is refused.
+
+| Field | Meaning |
+| --- | --- |
+| `schemaVersion` | Always `1`; any other value is refused rather than repaired. |
+| `disposition` | `report-only`, `ask-intent`, or `implementation-interview`. |
+| `selectedBy` | `explicit` (supplied with the task request), `deterministic` (rule table), or `jev`. |
+| `classifierVersion` | Required for `jev`, optional for `deterministic`, refused for `explicit`. |
+
+Task creation accepts an explicitly supplied disposition; a scout created without one records the
+conservative `ask-intent` with `deterministic` provenance. Scout records written before the field
+existed load with that same conservative default, so restart, compaction, legacy JSON migration,
+and bounded recovery all keep one disposition per task. Unsupported dispositions, unsupported
+selectors, unknown fields, and malformed provenance fail closed as state corruption instead of
+being downgraded to a default.
+
+Durable state outranks the recorded disposition when a completed scout wakes the coordinator. An
+open `needs-decision` question is answered first; a failed, blocked, cancelled, incomplete,
+stale-generation, or missing-report scout discloses its blocker instead of entering the generic
+follow-up. Task summaries and the durable digest print the disposition and its provenance, so the
+choice survives context compaction without an ephemeral model-memory flag.
+
 ### Review and validation
 
 Review is independent and sequential. Tandem stops or pauses the implementer, opens one fresh read-only reviewer pane in the same task worktree, and records one current result per lens:
