@@ -697,3 +697,50 @@ test("refuses a pinned review-level policy with an unsupported assistance mode",
     await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
   });
 });
+
+test("loads records written before cleanup notes existed and rejects malformed ones", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "cleanup-upgrade" });
+    expect(created.cleanup).toBeUndefined();
+
+    const readPayload = (): Record<string, unknown> => {
+      const database = new Database(join(directory, "state.sqlite"));
+      const row = database.query("SELECT payload FROM tasks WHERE id = ?").get(created.id) as {
+        payload: string;
+      };
+      database.close();
+      return JSON.parse(row.payload) as Record<string, unknown>;
+    };
+    const writePayload = (payload: Record<string, unknown>): void => {
+      const database = new Database(join(directory, "state.sqlite"));
+      database
+        .query("UPDATE tasks SET payload = ? WHERE id = ?")
+        .run(JSON.stringify(payload), created.id);
+      database.close();
+    };
+
+    const legacy = readPayload();
+    expect(Object.hasOwn(legacy, "cleanup")).toBe(false);
+    expect(await store.read(created.id)).toEqual(created);
+
+    writePayload({
+      ...legacy,
+      cleanup: {
+        schemaVersion: 1,
+        status: "quarantined",
+        reason: "pane ownership could not be proven",
+        observedAt: "2030-01-01T00:00:00.000Z",
+      },
+    });
+    const upgraded = await store.read(created.id);
+    expect(upgraded?.cleanup?.status).toBe("quarantined");
+    expect(upgraded?.cleanup?.reason).toBe("pane ownership could not be proven");
+
+    writePayload({ ...legacy, cleanup: { schemaVersion: 1, status: "sort-of-done" } });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+
+    writePayload({ ...legacy, cleanup: "released" });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});

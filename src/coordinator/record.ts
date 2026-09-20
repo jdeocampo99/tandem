@@ -4,6 +4,8 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Endpoint, WorktreeLease } from "../contracts.ts";
 
 export const REGISTRY_DIRECTORY = "coordinator-registry";
+/** Prefix of every Treehouse lease holder Tandem uses for a coordinator, and for nothing else. */
+export const COORDINATOR_LEASE_HOLDER_PREFIX = "coordinator:";
 export const RECORD_SUFFIX = ".json";
 export const SCHEMA_VERSION = 1 as const;
 
@@ -117,7 +119,7 @@ function positiveInteger(value: unknown, field: string): number {
   return value as number;
 }
 
-function parseEndpoint(value: unknown, field: string): Endpoint {
+export function parseEndpoint(value: unknown, field: string): Endpoint {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   ensureExactKeys(
     value,
@@ -134,7 +136,7 @@ function parseEndpoint(value: unknown, field: string): Endpoint {
   return { sessionId, workspaceId, tabId, paneId, role: "coordinator", generation };
 }
 
-function parseWorktree(value: unknown, field: string): WorktreeLease {
+export function parseWorktree(value: unknown, field: string): WorktreeLease {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   ensureExactKeys(
     value,

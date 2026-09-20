@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
-import { closeEndpoint, inspectEndpoint } from "../adapters/herdr.ts";
+import { closeEndpoint } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
@@ -120,6 +120,7 @@ import {
   validateModelAssignments,
   workerRoleForTask,
 } from "./records.ts";
+import { releaseTerminalTaskResources } from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskSourcePath } from "./source.ts";
 
 export type CreateTaskRequest = Readonly<{
@@ -1292,6 +1293,7 @@ class TandemController {
     let runtime = loadedRuntime;
     if (runtime.stopRequest !== undefined) {
       await this.#control.reconcileStopRequest(task, runtime);
+      await this.cleanupSettledTask(task.id);
       return;
     }
     if (isTerminalTask(task)) {
@@ -1314,6 +1316,7 @@ class TandemController {
     const active = runtime.jobs.find(activeRuntimeJob);
     if (active !== undefined) {
       await this.#worker.reconcileJob(task, runtime, active);
+      await this.cleanupSettledTask(task.id);
       return;
     }
     if (unreleasedReservation(runtime.reservation)) {
@@ -1504,56 +1507,26 @@ class TandemController {
   }
 
   private async cleanupTerminalTask(task: TaskRecord): Promise<void> {
-    await withStateLock(this.#deps.home, async () => {
-      const current = await this.#deps.store.read(task.id);
-      if (current?.revision !== task.revision || !isTerminalTask(current)) return;
-      const state = await this.readState();
-      const runtime = taskRuntime(state, task.id);
-      if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) return;
-      if (runtime.endpointLaunch !== undefined || runtime.jobs.some(activeRuntimeJob)) return;
-      if (unreleasedReservation(runtime.reservation)) return;
-      if (
-        state.presentations.some(
-          (presentation) =>
-            presentation.taskId === task.id &&
-            (activeRuntimeJob(presentation.job) || unreleasedReservation(presentation.reservation)),
-        )
-      )
-        return;
-      const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
-      for (const endpoint of runtime.endpoints) {
-        try {
-          const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-          if (inspection.activeWorker) return;
-          await closeEndpoint(this.#deps.run, { endpoint, cwd });
-        } catch (error) {
-          if (!isMissingEndpoint(error)) {
-            await this.setRuntimeError(
-              task.id,
-              `terminal cleanup could not close pane ${endpoint.paneId}: ${describeError(error)}`,
-            );
-            return;
-          }
-        }
-        await this.removeEndpoint(task.id, endpoint.paneId);
-      }
-      if (runtime.worktree !== undefined) {
-        try {
-          await releaseWorktree(this.#deps.run, {
-            repo: task.repoPath,
-            lease: runtime.worktree,
-            childWorkerStopped: true,
-          });
-        } catch (error) {
-          await this.setRuntimeError(
-            task.id,
-            `terminal cleanup retained worktree: ${describeError(error)}`,
-          );
-          return;
-        }
-      }
-      await this.removeRuntimeResources(task.id, task.revision);
-    });
+    await releaseTerminalTaskResources(
+      {
+        home: this.#deps.home,
+        store: this.#deps.store,
+        runtimePath: this.#deps.runtimePath,
+        run: this.#deps.run,
+        clock: this.#deps.clock,
+      },
+      task,
+    );
+  }
+
+  /**
+   * Releases a task's child resources in the same pass that settled it, so a completed scout does
+   * not hold its pane and worktree until a later coordinator turn.
+   */
+  private async cleanupSettledTask(taskId: string): Promise<void> {
+    const current = await this.#deps.store.read(taskId);
+    if (current === undefined || !isTerminalTask(current)) return;
+    await this.cleanupTerminalTask(current);
   }
 
   private async removeEndpoint(taskId: string, paneId: string): Promise<void> {

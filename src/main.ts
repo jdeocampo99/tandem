@@ -2,6 +2,11 @@
 import { runCommand } from "./adapters/commands.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
+import {
+  type ReconcileReport,
+  type ReconcileReportEntry,
+  reconcileTandemResources,
+} from "./coordinator/reconcile.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
 import { migrateState, planMigration } from "./runtime/migration.ts";
@@ -14,7 +19,15 @@ import {
 import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
 import type { RunInteractive } from "./terminal/cli-process.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
-import { hasActiveHerdrContext, launchProjects } from "./terminal/launch.ts";
+import {
+  hasActiveHerdrContext,
+  launchProjects,
+  otherSessionReconciliationNotices,
+  previousResourcesFromLaunch,
+  previousResourcesNotice,
+  workspaceRetirementFromLaunch,
+  workspaceRetirementNotice,
+} from "./terminal/launch.ts";
 import type { TerminalPrompt, TerminalPrompter } from "./terminal/onboarding.ts";
 import {
   createServiceFor,
@@ -23,9 +36,14 @@ import {
   runConfigure,
 } from "./terminal/preparation.ts";
 import { createReadlineResources, type ReadlineResources, writeText } from "./terminal/process.ts";
-import { interactiveFor, noTtyError, selectProjects } from "./terminal/projects.ts";
+import {
+  interactiveFor,
+  noTtyError,
+  readRegisteredProjects,
+  selectProjects,
+} from "./terminal/projects.ts";
 
-const HELP_TEXT = `Tandem\n\nUsage:\n  tandem [PATH ...]              Open or reconnect project coordinators\n  tandem logs [--home PATH] [--json]\n                                 Show recent prompt-routing events\n  tandem migrate-state [--home PATH] [--yes] [--json]\n                                 Inspect legacy JSON or apply offline SQLite migration\n  tandem restart [PATH ...]      Replace owned coordinators without cancelling work\n  tandem --restart [PATH ...]    Compatibility spelling for restart\n  tandem --reset [PATH ...]      Stop idle Tandem coordinators, then reopen them\n  tandem --reset --force [PATH ...]  Cancel selected active work, then reopen coordinators\n  tandem configure [PATH]        Choose and save all six global role models\n  tandem --help                  Show this help\n\nWith no PATH for a launch, Tandem opens all saved projects under ~/.tandem/repositories. If no projects\nare saved, it opens the current Git project; outside a Git project it offers registered projects or an\nexplicit path. Explicit PATH values override the saved registry and select only those projects. Multiple\nPATH values share one Herdr session and are attached once after every coordinator is ready.\n\nrestart replaces selected owned coordinators in a fresh owned pane while retaining the saved coordinator\nconversation, task IDs and generations, worker/presentation panes, worktrees, reports, messages, and pending\nquestions. Ownership is proven before any old pane is closed; ambiguous or foreign panes are refused.\nRestart does not resurrect cancelled or completed tasks. Run it from a separate normal terminal. The\ncoordinator's /tandem restart TASK_ID action restarts one managed worker through its durable bridge.\n\n--reset applies only to the selected Tandem coordinators: with no PATH it selects all saved projects,\nand explicit PATH values select only that subset. It stops and reopens idle owned coordinators while\nretaining settings, conversation history, task records, worktrees, and repository files. Preflight refuses\nbusy, unknown, foreign, or unsafe coordinators before any pane closes. A later race or native close failure\ncan leave a partial reset; errors identify already-stopped projects. Reset never recovers tasks or wipes data.\n--reset --force additionally cancels selected active owned work and terminates its workers, validation,\npresentations, and coordinators before reopening them. It preserves settings, conversation history, task\nrecords, worktrees, and repository files; it never deletes projects or data. Force reset still refuses\nunknown, foreign, or unsafe ownership and must run from a separate normal terminal, not from inside Herdr.\nRun it from a separate normal terminal, not from inside Herdr. Add --continue only to resume each saved\nconversation, without it, the reopened coordinators start fresh conversations.\n\nThe configure command always uses one project as its catalogue anchor; with no PATH it keeps the\ncurrent-Git or interactive one-project flow and never expands to all saved projects.\n\nOptions:\n  --reset                       Reopen only selected idle Tandem coordinators (launch only)\n  --restart                     Compatibility spelling for restart\n  --force                       Cancel selected active owned work during --reset (launch only)\n  --home PATH                    Tandem durable home (default: TANDEM_HOME or ~/.tandem)\n  --session ID                  Shared Herdr/OMP session (default: TANDEM_SESSION or tandem)\n  --pool-root PATH               Private Treehouse pool (default: <home>/pool)\n  --continue                    Resume each project's coordinator conversation\n  --headless                    Prepare coordinators without attaching Herdr\n  --no-attach                   Do not attach Herdr after preparing coordinators\n  --yes                         Apply migrate-state; otherwise only inspect\n  --json                        Emit migration result as JSON\n\nThe first setup asks explicitly for a catalogue-backed model and thinking level for each of the six\nroles. Blank answers, cancellation, or declining the recap never chooses a default and never launches.\nGlobal choices are saved only in <home>/models.json; project settings are saved only in\n<home>/repositories/<key>/config.json. Neither operation changes application files.\n`;
+const HELP_TEXT = `Tandem\n\nUsage:\n  tandem [PATH ...]              Open or reconnect project coordinators\n  tandem logs [--home PATH] [--json]\n                                 Show recent prompt-routing events\n  tandem migrate-state [--home PATH] [--yes] [--json]\n                                 Inspect legacy JSON or apply offline SQLite migration\n  tandem reconcile-resources [--home PATH] [--yes] [--json]\n                                 Inspect stale coordinator records, panes, and leases; apply with --yes\n  tandem restart [PATH ...]      Replace owned coordinators without cancelling work\n  tandem --restart [PATH ...]    Compatibility spelling for restart\n  tandem --reset [PATH ...]      Stop idle Tandem coordinators, then reopen them\n  tandem --reset --force [PATH ...]  Cancel selected active work, then reopen coordinators\n  tandem configure [PATH]        Choose and save all six global role models\n  tandem --help                  Show this help\n\nWith no PATH for a launch, Tandem opens all saved projects under ~/.tandem/repositories. If no projects\nare saved, it opens the current Git project; outside a Git project it offers registered projects or an\nexplicit path. Explicit PATH values override the saved registry and select only those projects. Multiple\nPATH values share one Herdr session and are attached once after every coordinator is ready.\n\nrestart replaces selected owned coordinators in a fresh owned pane while retaining the saved coordinator\nconversation, task IDs and generations, worker/presentation panes, worktrees, reports, messages, and pending\nquestions. Ownership is proven before any old pane is closed; ambiguous or foreign panes are refused.\nRestart does not resurrect cancelled or completed tasks. Run it from a separate normal terminal. The\ncoordinator's /tandem restart TASK_ID action restarts one managed worker through its durable bridge.\n\nreconcile-resources is the supported alternative to deleting Tandem state by hand. It scans every Tandem\nsession under the home and classifies each coordinator record, Herdr pane, and Treehouse lease before it\ntouches anything: live coordinators are retained, stopped owned coordinators are closed and released, an\norphaned clean coordinator lease is returned by its exact identity, completed scout resources are finished\nthrough the normal task cleanup rules, and anything dirty, unmerged, foreign, or unexplained is kept and\nreported. It is a dry run unless --yes is given, it is safe to rerun, and it never deletes reports, task\nhistory, provenance, unmerged branches, quarantine notes, or unreadable record files. It is home-wide, and\nseparate from the advanced CLI's per-task tandem reconcile TASK_ID recovery action.\n\n--reset applies only to the selected Tandem coordinators: with no PATH it selects all saved projects,\nand explicit PATH values select only that subset. It stops and reopens idle owned coordinators while\nretaining settings, conversation history, task records, worktrees, and repository files. Preflight refuses\nbusy, unknown, foreign, or unsafe coordinators before any pane closes. A later race or native close failure\ncan leave a partial reset; errors identify already-stopped projects. Reset never recovers tasks or wipes data.\n--reset --force additionally cancels selected active owned work and terminates its workers, validation,\npresentations, and coordinators before reopening them. It preserves settings, conversation history, task\nrecords, worktrees, and repository files; it never deletes projects or data. Force reset still refuses\nunknown, foreign, or unsafe ownership and must run from a separate normal terminal, not from inside Herdr.\nRun it from a separate normal terminal, not from inside Herdr. Add --continue only to resume each saved\nconversation, without it, the reopened coordinators start fresh conversations.\n\nThe configure command always uses one project as its catalogue anchor; with no PATH it keeps the\ncurrent-Git or interactive one-project flow and never expands to all saved projects.\n\nOptions:\n  --reset                       Reopen only selected idle Tandem coordinators (launch only)\n  --restart                     Compatibility spelling for restart\n  --force                       Cancel selected active owned work during --reset (launch only)\n  --home PATH                    Tandem durable home (default: TANDEM_HOME or ~/.tandem)\n  --session ID                  Shared Herdr/OMP session (default: TANDEM_SESSION or tandem)\n  --pool-root PATH               Private Treehouse pool (default: <home>/pool)\n  --continue                    Resume each project's coordinator conversation\n  --headless                    Prepare coordinators without attaching Herdr\n  --no-attach                   Do not attach Herdr after preparing coordinators\n  --yes                         Apply migrate-state or reconcile-resources; otherwise only inspect\n  --json                        Emit the migration or reconciliation result as JSON\n\nThe first setup asks explicitly for a catalogue-backed model and thinking level for each of the six\nroles. Blank answers, cancellation, or declining the recap never chooses a default and never launches.\nGlobal choices are saved only in <home>/models.json; project settings are saved only in\n<home>/repositories/<key>/config.json. Neither operation changes application files.\n`;
 
 export type TerminalMainDependencies = Readonly<{
   readonly cwd?: string;
@@ -158,6 +176,67 @@ async function handlePromptRoutingLogs({
   return { exitCode: 0, status: "logs" };
 }
 
+function reconcileSection(
+  title: string,
+  entries: readonly ReconcileReportEntry[],
+): readonly string[] {
+  if (entries.length === 0) return [];
+  return [
+    `${title} ${entries.length} resource${entries.length === 1 ? "" : "s"}:`,
+    ...entries.map((entry) => {
+      const where = entry.path ?? entry.repoPath;
+      return `  - ${entry.kind} ${entry.id}${where === undefined ? "" : ` (${where})`}: ${entry.reason}`;
+    }),
+  ];
+}
+
+function renderReconcileReport(report: ReconcileReport): string {
+  const dryRun = report.mode === "dry-run";
+  const lines = [
+    dryRun
+      ? `Tandem reconcile inspected ${report.home} and changed nothing; rerun with --yes to apply.`
+      : `Tandem reconcile applied its plan for ${report.home}.`,
+    ...reconcileSection(dryRun ? "Would clean" : "Cleaned", report.cleaned),
+    ...reconcileSection("Retained", report.retained),
+    ...reconcileSection("Quarantined", report.quarantined),
+    ...reconcileSection("Failed", report.failed),
+  ];
+  if (lines.length === 1) lines.push("Nothing to reconcile.");
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Inspects every Tandem resource under the home, and settles them only when `--yes` says so.
+ * A resource Tandem deliberately retained or quarantined is a reported outcome, not a failure,
+ * so only a scan or apply that could not finish makes the command exit non-zero.
+ */
+async function handleReconcile({
+  invocation,
+  environment,
+  run,
+  stdout,
+}: Readonly<{
+  readonly invocation: TerminalInvocation;
+  readonly environment: TerminalEnvironment;
+  readonly run: CommandRunner;
+  readonly stdout: (text: string) => void;
+}>): Promise<TerminalRunResult | undefined> {
+  if (invocation.command !== "reconcile-resources") return undefined;
+  const report = await reconcileTandemResources({
+    run,
+    home: environment.home,
+    poolRoot: environment.poolRoot,
+    repoPaths: await readRegisteredProjects(environment.home),
+    apply: invocation.yes,
+  });
+  stdout(invocation.json ? `${JSON.stringify(report)}\n` : renderReconcileReport(report));
+  return {
+    exitCode: report.failed.length === 0 ? 0 : 1,
+    status: "reconciled",
+    reconciliation: report,
+  };
+}
+
 async function runProjectFlow({
   invocation,
   environment,
@@ -211,11 +290,28 @@ async function runProjectFlow({
         ? `Tandem force reset stopped ${stopped.length} coordinator${stopped.length === 1 ? "" : "s"}; selected active work was cancelled where present.\n`
         : `Tandem reset stopped ${stopped.length} coordinator${stopped.length === 1 ? "" : "s"}.\n`,
     );
+    for (const record of stopped) {
+      const notice = workspaceRetirementNotice(record.repoPath, record.workspaceRetirement);
+      if (notice !== undefined) stdout(notice);
+    }
   }
   const launches = await launchProjects(roots, invocation, environment, dependencies, service, run);
   stdout(
     `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared Herdr session ${environment.sessionId}.\n`,
   );
+  for (const [index, launch] of launches.entries()) {
+    const repoPath = roots[index];
+    if (repoPath === undefined) continue;
+    const retirement = workspaceRetirementFromLaunch(launch);
+    const retirementNotice =
+      retirement === undefined ? undefined : workspaceRetirementNotice(repoPath, retirement);
+    if (retirementNotice !== undefined) stdout(retirementNotice);
+    const resources = previousResourcesFromLaunch(launch);
+    const resourceNotice =
+      resources === undefined ? undefined : previousResourcesNotice(repoPath, resources);
+    if (resourceNotice !== undefined) stdout(resourceNotice);
+    for (const notice of otherSessionReconciliationNotices(repoPath, launch)) stdout(notice);
+  }
   return {
     exitCode: 0,
     status: "launched",
@@ -253,6 +349,8 @@ export async function runTerminal(
       stdout,
     });
     if (promptRoutingLogs !== undefined) return promptRoutingLogs;
+    const reconciliation = await handleReconcile({ invocation, environment, run, stdout });
+    if (reconciliation !== undefined) return reconciliation;
     const interaction = createTerminalInteraction(dependencies, stdout);
     try {
       return await runProjectFlow({

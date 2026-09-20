@@ -371,6 +371,21 @@ export type ResearchHandoff = {
   readonly excerpt: string;
 };
 
+/**
+ * How far automatic release of a terminal task's child pane and worktree got, and why it stopped
+ * there. `released` and `retained` are settled outcomes, `pending` is retried by reconciliation,
+ * and `quarantined` waits for a human because ownership could not be proven.
+ */
+export type TaskCleanupStatus = "released" | "retained" | "pending" | "quarantined";
+
+/** The durable note a cleanup attempt leaves on the task it inspected. */
+export type TaskCleanupState = {
+  readonly schemaVersion: 1;
+  readonly status: TaskCleanupStatus;
+  readonly reason: string;
+  readonly observedAt: IsoTimestamp;
+};
+
 export type TaskRecord = {
   readonly schemaVersion: 1;
   readonly id: string;
@@ -402,6 +417,7 @@ export type TaskRecord = {
   readonly notifications: readonly Notification[];
   readonly communication?: TaskCommunication;
   readonly pullRequest?: PullRequestMetadata;
+  readonly cleanup?: TaskCleanupState;
 };
 
 export type CommandRequest = {

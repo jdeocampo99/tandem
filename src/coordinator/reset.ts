@@ -54,7 +54,11 @@ import {
   sessionText,
 } from "./record.ts";
 import { listCoordinatorRecords } from "./registry.ts";
-import { retireCoordinatorWorkspace } from "./workspace.ts";
+import { type CoordinatorWorkspaceRetirement, retireCoordinatorWorkspace } from "./workspace.ts";
+
+/** A stopped coordinator plus what happened to its Herdr workspace when it was retired. */
+export type RetiredCoordinator = CoordinatorRecord &
+  Readonly<{ workspaceRetirement: CoordinatorWorkspaceRetirement }>;
 
 const RESET_ACTIVE_TASK_STAGES: readonly TaskRecord["stage"][] = [
   "queued",
@@ -404,7 +408,7 @@ async function forceResetCoordinators(
   selectedTaskIds: ReadonlySet<string>,
   state: RuntimeState,
   lockedPresentationPaths: ReadonlySet<string> | undefined,
-): Promise<readonly CoordinatorRecord[]> {
+): Promise<readonly RetiredCoordinator[]> {
   const selectedPresentations: RuntimePresentation[] = [];
   for (const presentation of state.presentations) {
     const task = tasks.find((entry) => entry.id === presentation.taskId);
@@ -574,7 +578,7 @@ async function forceResetCoordinators(
   await writeRuntimeState(runtimeFile(home), currentState);
 
   const stoppedEndpointKeys = new Set<string>();
-  const stopped: CoordinatorRecord[] = [];
+  const stopped: RetiredCoordinator[] = [];
   const cancelledTaskIds: string[] = [];
   try {
     for (const entry of endpointEntries.values()) {
@@ -706,8 +710,8 @@ async function forceResetCoordinators(
         );
       }
       await closeCoordinatorPane(run, latest);
-      stopped.push(latest);
-      await retireCoordinatorWorkspace(run, latest);
+      const workspaceRetirement = await retireCoordinatorWorkspace(run, latest);
+      stopped.push({ ...latest, workspaceRetirement });
     }
   } catch (error) {
     if (stoppedEndpointKeys.size === 0 && stopped.length === 0 && cancelledTaskIds.length === 0)
@@ -733,7 +737,7 @@ async function resetCoordinatorsUnlocked(
   transaction: TaskStoreTransaction,
   force: boolean,
   lockedPresentationPaths?: ReadonlySet<string>,
-): Promise<readonly CoordinatorRecord[]> {
+): Promise<readonly RetiredCoordinator[]> {
   await listCoordinatorRecords(home, sessionId);
   const tasks = await transaction.list();
   const state: RuntimeState = await readRuntimeState(runtimeFile(home));
@@ -877,7 +881,7 @@ async function resetCoordinatorsUnlocked(
     assertNoLiveSelectedEndpoint(endpoint, sessionId, snapshot, "presentation");
   }
 
-  const stopped: CoordinatorRecord[] = [];
+  const stopped: RetiredCoordinator[] = [];
   for (const record of liveRecords) {
     try {
       const latest = await findResetCoordinator(run, {
@@ -901,8 +905,8 @@ async function resetCoordinatorsUnlocked(
       const latestSnapshot = await readSessionSnapshot(run, sessionId, latest.worktree.path);
       await assertIdleResetCoordinator(run, latestSnapshot, latest);
       await closeCoordinatorPane(run, latest);
-      stopped.push(latest);
-      await retireCoordinatorWorkspace(run, latest);
+      const workspaceRetirement = await retireCoordinatorWorkspace(run, latest);
+      stopped.push({ ...latest, workspaceRetirement });
     } catch (error) {
       if (stopped.length === 0) throw error;
       const stoppedRepos = stopped.map((entry) => entry.repoPath).join(", ");
@@ -958,7 +962,7 @@ export async function resetCoordinators(
     readonly repoPaths: readonly string[];
     readonly force?: boolean;
   }>,
-): Promise<readonly CoordinatorRecord[]> {
+): Promise<readonly RetiredCoordinator[]> {
   if (typeof run !== "function") throw new TypeError("run must be an argv command runner");
   if (!input || typeof input !== "object") throw new TypeError("reset input must be an object");
   if (!Array.isArray(input.repoPaths)) throw new TypeError("repoPaths must be an array");
