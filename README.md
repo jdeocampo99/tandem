@@ -61,8 +61,10 @@ To reload the coordinator extension without canceling or resetting work, use the
 restart from a separate normal terminal:
 
 ```sh
-tandem --restart /absolute/path/to/repo
+tandem restart /absolute/path/to/repo
 ```
+
+`tandem --restart` remains accepted as a compatibility spelling.
 
 The frontdoor verifies exact Tandem ownership, revalidates the pane cwd/process immediately before
 close, confirms close acknowledgement and pane absence, then launches a replacement with the same

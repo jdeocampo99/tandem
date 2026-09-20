@@ -94,6 +94,10 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       restart = true;
       continue;
     }
+    if (parseOptions && command === undefined && token === "restart" && !reset && !restart) {
+      restart = true;
+      continue;
+    }
     if (parseOptions && token === "--force") {
       force = true;
       continue;
