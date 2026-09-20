@@ -9,6 +9,7 @@ import type {
   ResolvedPolicy,
   WorktreeLease,
 } from "../../src/contracts.ts";
+import { withStateLock } from "../../src/runtime/database.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { emptyRuntimeState } from "../../src/runtime/schema.ts";
 import { type TaskTransitionContext, transitionTask } from "../../src/tasks/lifecycle.ts";
@@ -127,9 +128,18 @@ test("persists records with restrictive modes and reloads through a new store in
     expect(directoryStat.mode & 0o777).toBe(0o700);
     const lockStat = await stat(join(directory, ".state.lock"));
     expect(lockStat.mode & 0o777).toBe(0o600);
+    await expect(stat(join(directory, "logs", "tandem.jsonl"))).rejects.toThrow();
+  });
+});
+
+test("logs state lock holds only when slow", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    await withStateLock(directory, async () => {
+      await Bun.sleep(300);
+    });
     const diagnosticsLog = await readFile(join(directory, "logs", "tandem.jsonl"), "utf8");
-    expect(diagnosticsLog).toContain('"event":"state-lock-acquired"');
     expect(diagnosticsLog).toContain('"event":"state-lock-released"');
+    expect(diagnosticsLog).not.toContain('"event":"state-lock-acquired"');
   });
 });
 test("round-trips handoff snapshots and rejects oversized persisted excerpts", async () => {

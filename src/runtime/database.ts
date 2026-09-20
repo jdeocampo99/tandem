@@ -227,6 +227,8 @@ export function currentStateDatabase(home: string): StateDatabase | undefined {
   return current.db;
 }
 
+const SLOW_STATE_LOCK_MS = 250;
+
 export async function withStateLock<Result>(
   home: string,
   operation: () => Result | PromiseLike<Result>,
@@ -251,6 +253,8 @@ export async function withStateLock<Result>(
     }
     return operation();
   }
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  await chmod(root, 0o700);
   const waitStartedAt = Date.now();
   let release: (() => Promise<void>) | undefined;
   try {
@@ -266,19 +270,23 @@ export async function withStateLock<Result>(
     throw error;
   }
   const acquiredAt = Date.now();
-  await appendDiagnosticEvent(root, {
-    event: "state-lock-acquired",
-    details: { waitMs: acquiredAt - waitStartedAt },
-  });
+  if (acquiredAt - waitStartedAt >= SLOW_STATE_LOCK_MS) {
+    await appendDiagnosticEvent(root, {
+      event: "state-lock-acquired",
+      details: { waitMs: acquiredAt - waitStartedAt },
+    });
+  }
   try {
     return await nativeLockContext.run({ home: root, release }, operation);
   } finally {
     const heldMs = Date.now() - acquiredAt;
     await release();
-    await appendDiagnosticEvent(root, {
-      event: "state-lock-released",
-      details: { heldMs },
-    });
+    if (heldMs >= SLOW_STATE_LOCK_MS) {
+      await appendDiagnosticEvent(root, {
+        event: "state-lock-released",
+        details: { heldMs },
+      });
+    }
   }
 }
 
