@@ -729,8 +729,8 @@ Only scout records may carry one; a continuation on an implementation record is 
 | `selectedBy` | `explicit` (supplied with the task request), `deterministic` (rule table), or `jev`. |
 | `classifierVersion` | Required for `jev`, optional for `deterministic`, refused for `explicit`. |
 
-Task creation accepts an explicitly supplied disposition; a scout created without one records the
-conservative `ask-intent` with `deterministic` provenance. Scout records written before the field
+Task creation accepts an explicitly supplied disposition; a scout created without one is classified
+before the record is written. Scout records written before the field
 existed load with that same conservative default, so restart, compaction, legacy JSON migration,
 and bounded recovery all keep one disposition per task. Unsupported dispositions, unsupported
 selectors, unknown fields, and malformed provenance fail closed as state corruption instead of
@@ -741,6 +741,26 @@ open `needs-decision` question is answered first; a failed, blocked, cancelled, 
 stale-generation, or missing-report scout discloses its blocker instead of entering the generic
 follow-up. Task summaries and the durable digest print the disposition and its provenance, so the
 choice survives context compaction without an ephemeral model-memory flag.
+
+#### Classifying the disposition
+
+A narrow continuation classifier, separate from the read-only prompt router, chooses the
+disposition for a scout created without an explicit one:
+
+1. A pure deterministic cue table decides first and makes no provider call. Explicit
+   information-only wording records `report-only`; explicit investigate-then-fix, implement, or
+   prepare-a-patch wording records `implementation-interview`; wording carrying both cues records
+   `ask-intent`, so an explicit report-only request can never be upgraded.
+2. Only wording the rules leave unresolved, such as an unqualified "research this ticket", reaches
+   Jev, as one typed closed-set choice over the three dispositions. The request state contains only
+   the sanitized, single-line, length-bounded objective and the task kind: never the repository, a
+   scout report, credentials, or transcript. The model and the question/schema version are pinned
+   and recorded together in `classifierVersion`.
+3. A missing `TYPESAFE_API_KEY`, a timeout, a provider outage, a malformed answer, or a confidence
+   below the classifier threshold records the conservative `ask-intent` with `deterministic`
+   provenance. Research is never blocked or delayed past the bounded `TANDEM_JEV_TIMEOUT_MS`
+   request timeout, and Jev never creates tasks, approves scope, selects implementation details, or
+   relaxes any safety policy.
 
 ### Review and validation
 

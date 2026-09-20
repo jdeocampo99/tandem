@@ -47,6 +47,10 @@ import {
 } from "../../src/tasks/communication-persistence.ts";
 import { taskInbox } from "../../src/tasks/communication-protocol.ts";
 import { type TaskEvent, transitionTask } from "../../src/tasks/lifecycle.ts";
+import {
+  RESEARCH_CONTINUATION_CLASSIFIER_VERSION,
+  type ResearchContinuationRequest,
+} from "../../src/tasks/research-continuation-classifier.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
@@ -678,6 +682,113 @@ test("bound task creation normalizes clean input to the original identity and pe
     expect(runtime.tasks[0]?.sourceRepoPath).toBe(await realpath(source));
   } finally {
     await service.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("new scouts persist a classified continuation and an explicit disposition still wins", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-service-continuation-"));
+  const home = join(root, "home");
+  const original = join(root, "original");
+  const source = join(root, "clean-source");
+  const common = join(root, "git-common");
+  await Promise.all([mkdir(original), mkdir(source), mkdir(common)]);
+  const runner = fakeRunner({ commonDirectory: common });
+  const requests: ResearchContinuationRequest[] = [];
+  let sequence = 0;
+  const serviceOptions = {
+    home,
+    sessionId: "session-a",
+    poolRoot: join(root, "pool"),
+    sourceWorkspace: { repoPath: original, path: source },
+    run: runner.run,
+    clock: () => TIMESTAMP,
+    idFactory: () => {
+      sequence += 1;
+      return `task-${sequence}`;
+    },
+  } as const;
+  const classified = createTandemService({
+    ...serviceOptions,
+    classifyResearchContinuation: async (request) => {
+      requests.push(request);
+      return {
+        continuation: {
+          schemaVersion: 1,
+          disposition: "implementation-interview",
+          selectedBy: "jev",
+          classifierVersion: RESEARCH_CONTINUATION_CLASSIFIER_VERSION,
+        },
+        reason: "jev-classified",
+        durationMs: 4,
+      };
+    },
+  });
+  try {
+    const scout = await classified.create({
+      repoPath: source,
+      kind: "scout",
+      objective: "Research the flaky worker timeout",
+      acceptanceCriteria: ["Report the cause"],
+      surfaces: ["src"],
+    });
+    expect(scout.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "implementation-interview",
+      selectedBy: "jev",
+      classifierVersion: RESEARCH_CONTINUATION_CLASSIFIER_VERSION,
+    });
+    expect(requests).toEqual([
+      { objective: "Research the flaky worker timeout", taskKind: "scout" },
+    ]);
+
+    const explicit = await classified.create({
+      repoPath: source,
+      kind: "scout",
+      objective: "Research the flaky worker timeout once more",
+      acceptanceCriteria: ["Report the cause"],
+      surfaces: ["src"],
+      researchContinuation: {
+        schemaVersion: 1,
+        disposition: "report-only",
+        selectedBy: "explicit",
+      },
+    });
+    expect(explicit.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "report-only",
+      selectedBy: "explicit",
+    });
+    expect(requests.length).toBe(1);
+
+    const implementation = await classified.create({
+      repoPath: source,
+      kind: "implementation",
+      objective: "Apply the approved scheduler change",
+      acceptanceCriteria: ["The change lands"],
+      surfaces: ["src"],
+    });
+    expect(implementation.researchContinuation).toBeUndefined();
+    expect(requests.length).toBe(1);
+  } finally {
+    await classified.shutdown();
+  }
+
+  const deterministic = createTandemService(serviceOptions);
+  try {
+    const scout = await deterministic.create({
+      repoPath: source,
+      kind: "scout",
+      objective: "Investigate the flaky worker timeout and then fix it",
+      acceptanceCriteria: ["Report the cause"],
+      surfaces: ["src"],
+    });
+    expect(scout.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "implementation-interview",
+      selectedBy: "deterministic",
+    });
+  } finally {
+    await deterministic.shutdown();
     await rm(root, { recursive: true, force: true });
   }
 });
