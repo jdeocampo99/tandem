@@ -36,11 +36,15 @@ const TANDEM_COMMAND_ARITY: Readonly<
   merge: { min: 3, max: 3 },
   "pr-merge": { min: 3, max: 3 },
   cleanup: { min: 2, max: 3 },
-  steer: { min: 3, max: Number.POSITIVE_INFINITY },
-  answer: { min: 4, max: Number.POSITIVE_INFINITY },
   messages: { min: 2, max: 2 },
+  inspect: { min: 2, max: 2 },
+  "recovery-plan": { min: 2, max: 2 },
+  reconcile: { min: 2, max: 2 },
+  "review-existing": { min: 3, max: 3 },
+  "validation-retry": { min: 2, max: 2 },
+  "evidence-repair": { min: 2, max: 2 },
+  "delivery-preflight": { min: 4, max: 4 },
 };
-
 export type TandemAction =
   | Readonly<{ readonly action: "restart"; readonly taskId: string }>
   | Readonly<{ readonly action: "setup"; readonly repoPath: string }>
@@ -80,6 +84,22 @@ export type TandemAction =
       readonly text: string;
     }>
   | Readonly<{ readonly action: "messages"; readonly taskId: string }>
+  | Readonly<{ readonly action: "inspect"; readonly taskId: string }>
+  | Readonly<{ readonly action: "recovery-plan"; readonly taskId: string }>
+  | Readonly<{ readonly action: "reconcile"; readonly taskId: string }>
+  | Readonly<{
+      readonly action: "review-existing";
+      readonly taskId: string;
+      readonly head: string;
+    }>
+  | Readonly<{ readonly action: "validation-retry"; readonly taskId: string }>
+  | Readonly<{ readonly action: "evidence-repair"; readonly taskId: string }>
+  | Readonly<{
+      readonly action: "delivery-preflight";
+      readonly taskId: string;
+      readonly repository: string;
+      readonly base: string;
+    }>
   | Readonly<{ readonly action: "approve"; readonly taskId: string }>
   | Readonly<{ readonly action: "tick" }>
   | Readonly<{
@@ -149,10 +169,13 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "approve" ||
     action.action === "cancel" ||
     action.action === "publish" ||
-    action.action === "merge"
+    action.action === "merge" ||
+    action.action === "reconcile" ||
+    action.action === "review-existing" ||
+    action.action === "validation-retry" ||
+    action.action === "evidence-repair"
   );
 }
-
 function taskApprovalDetails(task: TaskRecord, includeDirections = false): string {
   const checkpoint =
     task.reviewHead ??
@@ -244,6 +267,26 @@ async function approvalPrompt(
         title: "Merge reviewed pull request?",
         message: `Merge task ${action.taskId} using ${action.method}: ${details}?`,
       };
+    case "reconcile":
+      return {
+        title: "Reconcile Tandem recovery state?",
+        message: `Clear only proven stale resources for task ${action.taskId}; preserve its worktree: ${details}?`,
+      };
+    case "review-existing":
+      return {
+        title: "Review the existing exact HEAD?",
+        message: `Run worker-free validation and read-only reviews at ${action.head} for task ${action.taskId}: ${details}?`,
+      };
+    case "validation-retry":
+      return {
+        title: "Retry validation without an implementer?",
+        message: `Run bounded validation again for task ${action.taskId}: ${details}?`,
+      };
+    case "evidence-repair":
+      return {
+        title: "Repair durable evidence?",
+        message: `Reconstruct only HEAD-matching reports for task ${action.taskId}: ${details}?`,
+      };
     case "cleanup":
       return {
         title: "Discard Tandem task worktree?",
@@ -321,6 +364,42 @@ export async function executeTandemAction(
           taskId: action.taskId,
           text: action.text,
           ...(action.supersedes === undefined ? {} : { supersedes: action.supersedes }),
+        }),
+        action.action,
+      );
+    case "inspect":
+      return textResult(await service.inspect(action.taskId), action.action);
+    case "recovery-plan":
+      return textResult(await service.recoveryPlan(action.taskId), action.action);
+    case "reconcile":
+      return textResult(
+        await service.reconcile(action.taskId, { approved: true }),
+        action.action,
+        true,
+      );
+    case "review-existing":
+      return textResult(
+        await service.reviewExisting(action.taskId, { head: action.head, approved: true }),
+        action.action,
+        true,
+      );
+    case "validation-retry":
+      return textResult(
+        await service.validationRetry(action.taskId, { approved: true }),
+        action.action,
+        true,
+      );
+    case "evidence-repair":
+      return textResult(
+        await service.repairEvidence(action.taskId, { approved: true }),
+        action.action,
+        true,
+      );
+    case "delivery-preflight":
+      return textResult(
+        await service.deliveryPreflight(action.taskId, {
+          repository: action.repository,
+          base: action.base,
         }),
         action.action,
       );
@@ -538,6 +617,29 @@ export function parseTandemCommand(input: string): TandemAction {
       };
     case "messages":
       return { action: "messages", taskId: value(1, "messages") };
+    case "inspect":
+      return { action: "inspect", taskId: value(1, "inspect") };
+    case "recovery-plan":
+      return { action: "recovery-plan", taskId: value(1, "recovery-plan") };
+    case "reconcile":
+      return { action: "reconcile", taskId: value(1, "reconcile") };
+    case "review-existing":
+      return {
+        action: "review-existing",
+        taskId: value(1, "review-existing"),
+        head: value(2, "review-existing head"),
+      };
+    case "validation-retry":
+      return { action: "validation-retry", taskId: value(1, "validation-retry") };
+    case "evidence-repair":
+      return { action: "evidence-repair", taskId: value(1, "evidence-repair") };
+    case "delivery-preflight":
+      return {
+        action: "delivery-preflight",
+        taskId: value(1, "delivery-preflight"),
+        repository: value(2, "delivery-preflight repository"),
+        base: value(3, "delivery-preflight base"),
+      };
     case "approve":
       return { action: "approve", taskId: value(1, "approve") };
     case "tick":

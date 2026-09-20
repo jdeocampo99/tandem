@@ -346,6 +346,21 @@ test("parseCliArgs keeps PR commands explicit and records consent separately", (
   expect(invocation.options.yes).toBe(true);
   expect(invocation.options.json).toBe(true);
 });
+test("recovery CLI commands expose dry-run, consent, exact HEAD, and delivery inputs", () => {
+  const inspection = parseCliArgs(["inspect", "task-1", "--json"]);
+  expect(inspection.command).toBe("inspect");
+  expect(inspection.options.yes).toBe(false);
+
+  const existing = parseCliArgs(["review-existing", "task-1", "--head", "abc123", "--yes"]);
+  expect(existing.command).toBe("review-existing");
+  expect(existing.options.head).toBe("abc123");
+  expect(existing.options.yes).toBe(true);
+
+  const preflight = parseCliArgs(["delivery-preflight", "task-1", "org/repo", "main"]);
+  expect(preflight.command).toBe("delivery-preflight");
+  expect(preflight.positionals).toEqual(["task-1", "org/repo", "main"]);
+});
+
 test("restart CLI preserves the explicit managed-worker command contract", () => {
   const invocation = parseCliArgs([
     "restart",
@@ -1224,6 +1239,13 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     create: unused,
     list: unused,
     get: unused,
+    inspect: unused,
+    recoveryPlan: unused,
+    reconcile: unused,
+    reviewExisting: unused,
+    validationRetry: unused,
+    repairEvidence: unused,
+    deliveryPreflight: unused,
     approve: unused,
     tick: unused,
     pause: unused,

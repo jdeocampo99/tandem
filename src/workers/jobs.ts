@@ -9,6 +9,7 @@ import {
   isAgentRole,
   type ModelSpec,
   type ReviewLens,
+  type ReviewMode,
   type ReviewResult,
   type ThinkingLevel,
 } from "../contracts.ts";
@@ -292,8 +293,24 @@ export function parseReviewResult(value: unknown): ReviewResult {
   for (let index = 0; index < value.findings.length; index += 1) {
     findings.push(readFinding(value.findings[index], index));
   }
+  const mode =
+    value.mode === undefined
+      ? undefined
+      : value.mode === "review_changed_diff" || value.mode === "review_existing_head"
+        ? (value.mode as ReviewMode)
+        : (() => {
+            throw new TypeError("review.mode must be review_changed_diff or review_existing_head");
+          })();
   const summary = readNonEmptyText(value.summary, "review.summary");
-  return { lens: value.lens, head, generation, pass: value.pass, findings, summary };
+  return {
+    lens: value.lens,
+    head,
+    generation,
+    pass: value.pass,
+    findings,
+    summary,
+    ...(mode === undefined ? {} : { mode }),
+  };
 }
 
 export function parseWorkerJob(value: unknown): WorkerJob {

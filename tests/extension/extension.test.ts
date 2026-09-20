@@ -309,6 +309,31 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
     researchTaskIds: ["scout-a", "scout-b"],
   });
 });
+test("recovery slash commands preserve exact-head and delivery arguments", () => {
+  expect(parseTandemCommand("inspect task-1")).toEqual({
+    action: "inspect",
+    taskId: "task-1",
+  });
+  expect(parseTandemCommand("review-existing task-1 head-1")).toEqual({
+    action: "review-existing",
+    taskId: "task-1",
+    head: "head-1",
+  });
+  expect(parseTandemCommand("delivery-preflight task-1 owner/repo main")).toEqual({
+    action: "delivery-preflight",
+    taskId: "task-1",
+    repository: "owner/repo",
+    base: "main",
+  });
+  expect(
+    summarizeTandemActionValue("recovery-plan", {
+      taskId: "task-1",
+      operation: { name: "review-existing" },
+      budget: { recoveryRemaining: 2 },
+      refusals: [],
+    }),
+  ).toContain("dry-run review-existing");
+});
 
 test("communication slash commands join quoted deltas and reject extra message arguments", () => {
   expect(parseTandemCommand('steer task-1 "preserve the API" now')).toEqual({

@@ -18,6 +18,7 @@ import type {
   CommandRunner,
   Endpoint,
   IdFactory,
+  ReviewMode,
   TaskQuestion,
   TaskRecord,
 } from "../contracts.ts";
@@ -601,11 +602,22 @@ export class WorkerWorkflow {
       );
       return;
     }
+    const expectedReviewMode: ReviewMode = runtime.reviewMode ?? "review_changed_diff";
+    if (review.mode !== undefined && review.mode !== expectedReviewMode) {
+      await this.failJob(
+        task,
+        job,
+        `review result mode ${review.mode} does not match ${expectedReviewMode}`,
+        claim,
+        true,
+      );
+      return;
+    }
     await this.consumeJob(
       task.id,
       job.id,
       claim,
-      { type: "record-review", review },
+      { type: "record-review", review: { ...review, mode: expectedReviewMode } },
       instructionOptions(result.instructionRevision),
     );
   }
@@ -1071,17 +1083,21 @@ export class WorkerWorkflow {
                 },
               }),
         };
-        if (completed.reservation !== undefined && !completed.jobs.some(activeRuntimeJob)) {
+        const modeAdjusted =
+          job.role === "implementer"
+            ? { ...completed, reviewMode: "review_changed_diff" as const }
+            : completed;
+        if (modeAdjusted.reservation !== undefined && !modeAdjusted.jobs.some(activeRuntimeJob)) {
           return {
-            ...completed,
+            ...modeAdjusted,
             reservation: {
-              ...completed.reservation,
+              ...modeAdjusted.reservation,
               phase: "released",
               releasedAt: this.#deps.clock(),
             },
           };
         }
-        return completed;
+        return modeAdjusted;
       });
       await writeRuntimeState(this.#deps.runtimePath, nextRuntime);
       await this.#deps.publishTaskInbox(nextTask);
@@ -2095,7 +2111,7 @@ export class WorkerWorkflow {
       return;
     }
     const writer = currentWriter(reservedRuntime);
-    if (writer === undefined) {
+    if (writer === undefined && reservedRuntime.reviewMode !== "review_existing_head") {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
       await this.blockIfOperationClaim(task.id, "review has no writer endpoint", claim);
       return;
@@ -2112,27 +2128,58 @@ export class WorkerWorkflow {
             (entry) => entry.role === role && entry.generation === task.generation,
           );
           if (existingEndpoint !== undefined) return existingEndpoint;
-          const currentWriterEndpoint = currentWriter(currentRuntime);
-          if (currentWriterEndpoint === undefined) throw new Error("review has no writer endpoint");
-          const writerJob = workerJobForEndpoint(currentRuntime.jobs, currentWriterEndpoint);
+          const reviewExisting = currentRuntime.reviewMode === "review_existing_head";
+          const currentWriterEndpoint = reviewExisting ? undefined : currentWriter(currentRuntime);
           const reviewCwd = currentRuntime.worktree?.path ?? task.worktree?.path;
           if (reviewCwd === undefined) throw new Error("review has no worktree");
-          await this.recordOperationEffect(
-            task.id,
-            claim,
-            `endpoint:${claim.id}`,
-            "endpoint",
-            "intent",
-            `review:${task.id}:${task.generation}`,
-          );
-          const result = await createReviewerEndpoint(this.#deps.run, {
-            sessionId: this.#deps.sessionId,
-            cwd: reviewCwd,
-            writer: currentWriterEndpoint,
-            ...(writerJob === undefined ? {} : { writerJob }),
-            generation: task.generation,
-          });
-          const createdEndpoint: Endpoint = { ...result.endpoint, role };
+          let createdEndpoint: Endpoint;
+          if (currentWriterEndpoint === undefined) {
+            if (currentRuntime.reviewMode !== "review_existing_head") {
+              throw new Error("review has no writer endpoint");
+            }
+            await this.recordOperationEffect(
+              task.id,
+              claim,
+              `endpoint:${claim.id}`,
+              "endpoint",
+              "intent",
+              `review:${task.id}:${task.generation}`,
+            );
+            const created = await createTaskEndpoint(this.#deps.run, {
+              sessionId: this.#deps.sessionId,
+              cwd: reviewCwd,
+              taskName: `${currentRuntime.taskName}-${nextLens}`,
+              workspaceLabel: taskWorkspaceLabel(
+                `${currentRuntime.taskName}-${nextLens}`,
+                task.objective,
+                role,
+              ),
+              role,
+              generation: task.generation,
+              ...(this.#deps.parentWorkspaceId === undefined
+                ? {}
+                : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
+            });
+            createdEndpoint = created.endpoint;
+          } else {
+            const writerJob = workerJobForEndpoint(currentRuntime.jobs, currentWriterEndpoint);
+            await this.recordOperationEffect(
+              task.id,
+              claim,
+              `endpoint:${claim.id}`,
+              "endpoint",
+              "intent",
+              `review:${task.id}:${task.generation}`,
+            );
+            const created = await createReviewerEndpoint(this.#deps.run, {
+              sessionId: this.#deps.sessionId,
+              cwd: reviewCwd,
+              writer: currentWriterEndpoint,
+              ...(writerJob === undefined ? {} : { writerJob }),
+              generation: task.generation,
+            });
+            createdEndpoint = { ...created.endpoint, role };
+          }
           await this.recordOperationEffect(
             task.id,
             claim,
@@ -2167,13 +2214,17 @@ export class WorkerWorkflow {
       const paths = jobPaths(directory);
       const diffPath = join(directory, "diff.patch");
       const evidencePath = join(directory, "validation-evidence.json");
+      const reviewMode: ReviewMode = reservedRuntime.reviewMode ?? "review_changed_diff";
       const artifactsWritten = await this.withOperationEffect(
         task.id,
         claim,
         task.generation,
         ["reviewing"],
         async () => {
-          await writeTextAtomically(diffPath, currentCheckout.diff);
+          await writeTextAtomically(
+            diffPath,
+            reviewMode === "review_existing_head" ? "" : currentCheckout.diff,
+          );
           await writeJsonAtomically(evidencePath, task.validationEvidence);
           return true;
         },
@@ -2190,11 +2241,25 @@ export class WorkerWorkflow {
         task,
         role,
         reportPath,
-        [diffPath, evidencePath, ...(task.reportPath === undefined ? [] : [task.reportPath])],
+        [
+          diffPath,
+          evidencePath,
+          ...(task.reportPath === undefined ? [] : [task.reportPath]),
+          ...(reservedRuntime.reviewProvenancePath === undefined
+            ? []
+            : [reservedRuntime.reviewProvenancePath]),
+        ],
         { head: task.reviewHead, generation: task.generation, pass: nextLens },
         [
           `Review only the selected ${nextLens} lens. The immutable diff is at ${diffPath}.`,
           `Validation evidence is at ${evidencePath}; treat it as runner-produced evidence only.`,
+          ...(reviewMode === "review_existing_head"
+            ? [
+                "Review mode is review_existing_head. Do not treat an empty diff as a substantive review.",
+                `Inspect the full implementation subject at the exact committed HEAD ${task.reviewHead}.`,
+                "Record findings from the complete implementation, repository behavior, and acceptance criteria.",
+              ]
+            : []),
           ...(instructionRevision === 0
             ? []
             : [

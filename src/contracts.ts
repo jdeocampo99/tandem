@@ -185,6 +185,7 @@ export type FindingSeverity = "P0" | "P1" | "P2" | "P3";
 
 export type FindingVerdict = "confirmed" | "plausible";
 export type ReviewLens = "behavior" | "design" | "coverage" | "verification";
+export type ReviewMode = "review_changed_diff" | "review_existing_head";
 
 export type Finding = {
   readonly id: string;
@@ -202,6 +203,7 @@ export type ReviewResult = {
   readonly pass: boolean;
   readonly findings: readonly Finding[];
   readonly summary: string;
+  readonly mode?: ReviewMode;
 };
 
 export type ValidationEvidence = {
