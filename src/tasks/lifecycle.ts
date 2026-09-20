@@ -18,7 +18,12 @@ import type {
   ValidationEvidence,
   WorktreeLease,
 } from "../contracts.ts";
-import { FINAL_REVIEW_LENSES, type FinalRequirement, finalAcceptanceStatus } from "./acceptance.ts";
+import {
+  FINAL_REVIEW_LENSES,
+  type FinalRequirement,
+  finalAcceptanceStatus,
+  isPinnedEvidence,
+} from "./acceptance.ts";
 
 export type TaskInput = Readonly<{
   readonly id: string;
@@ -484,9 +489,9 @@ function assertEvidence(task: TaskRecord, event: ValidationEvent): void {
       );
     }
   }
-  const conflicting = task.validationEvidence.find(
-    (entry) => entry.head === event.head && entry.policyDigest !== event.policyDigest,
-  );
+  const conflicting = task.validationEvidence
+    .filter(isPinnedEvidence)
+    .find((entry) => entry.head === event.head && entry.policyDigest !== event.policyDigest);
   if (conflicting !== undefined) {
     throw new TaskTransitionError(
       "validation-mismatch",

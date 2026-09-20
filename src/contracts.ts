@@ -229,17 +229,34 @@ export type IterationScope = {
   readonly findingIds: readonly string[];
 };
 
-export type ValidationEvidence = {
+/** Marks evidence written before validation contracts existed, so it can never prove acceptance. */
+export const LEGACY_EVIDENCE_CONTRACT = "legacy";
+
+type RecordedCheck = {
   readonly name: string;
   readonly argv: readonly string[];
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
   readonly head: string;
+};
+
+/** A check recorded under a named contract and pinned to one code and policy identity. */
+export type PinnedValidationEvidence = RecordedCheck & {
   readonly contract: ValidationContractName;
   readonly origin: CheckOrigin;
   readonly policyDigest: string;
 };
+
+/**
+ * A check recovered from a durable record written before contracts existed. It carries no contract,
+ * origin, or policy identity, so it stays readable as history and never satisfies either contract.
+ */
+export type LegacyValidationEvidence = RecordedCheck & {
+  readonly contract: typeof LEGACY_EVIDENCE_CONTRACT;
+};
+
+export type ValidationEvidence = PinnedValidationEvidence | LegacyValidationEvidence;
 
 export type NotificationKind = "routine" | "coordinator";
 

@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import type {
+  PinnedValidationEvidence,
   ResolvedPolicy,
   ReviewResult,
   TaskRecord,
   ValidationCommand,
-  ValidationEvidence,
 } from "../../src/contracts.ts";
 import {
   finalAcceptanceContract,
@@ -52,12 +52,12 @@ const defaultPolicy = policyWith([
 function evidence(
   input: Readonly<{
     name: string;
-    contract: ValidationEvidence["contract"];
+    contract: PinnedValidationEvidence["contract"];
     exitCode?: number;
     head?: string;
     policyDigest?: string;
   }>,
-): ValidationEvidence {
+): PinnedValidationEvidence {
   return {
     name: input.name,
     argv: ["bun", "run", input.name],

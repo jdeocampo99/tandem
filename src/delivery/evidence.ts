@@ -1,4 +1,5 @@
-import type { TaskRecord, ValidationEvidence } from "../contracts.ts";
+import type { PinnedValidationEvidence, TaskRecord } from "../contracts.ts";
+import { LEGACY_EVIDENCE_CONTRACT } from "../contracts.ts";
 import { renderPrDescription } from "../instructions.ts";
 import {
   FINAL_REVIEW_LENSES,
@@ -36,12 +37,15 @@ export function readSingleLine(value: unknown, field: string): string {
   return text;
 }
 
-export function assertEvidence(task: TaskRecord, head: string): readonly ValidationEvidence[] {
+export function assertEvidence(
+  task: TaskRecord,
+  head: string,
+): readonly PinnedValidationEvidence[] {
   if (!Array.isArray(task.validationEvidence) || task.validationEvidence.length === 0) {
     throw new Error("delivery requires nonempty validation evidence");
   }
 
-  const evidence: ValidationEvidence[] = [];
+  const evidence: PinnedValidationEvidence[] = [];
   for (const candidate of task.validationEvidence) {
     if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
       throw new Error("delivery requires complete validation evidence bound to the reviewed HEAD");
@@ -64,7 +68,16 @@ export function assertEvidence(task: TaskRecord, head: string): readonly Validat
       !Number.isSafeInteger(exitCode) ||
       typeof stdout !== "string" ||
       typeof stderr !== "string" ||
-      candidateRecord.head !== head ||
+      candidateRecord.head !== head
+    ) {
+      throw new Error("delivery requires complete validation evidence bound to the reviewed HEAD");
+    }
+    if (contract === LEGACY_EVIDENCE_CONTRACT) {
+      throw new Error(
+        `delivery requires evidence pinned to a validation contract; ${name} predates validation contracts and the final acceptance manifest must run again at HEAD ${head}`,
+      );
+    }
+    if (
       (contract !== "iteration" && contract !== "final") ||
       (origin !== "local" && origin !== "github") ||
       typeof candidateRecord.policyDigest !== "string" ||
@@ -75,7 +88,7 @@ export function assertEvidence(task: TaskRecord, head: string): readonly Validat
     if (exitCode !== 0) {
       throw new Error(`delivery requires successful validation; ${name} exited with ${exitCode}`);
     }
-    evidence.push(candidateRecord as ValidationEvidence);
+    evidence.push(candidateRecord as PinnedValidationEvidence);
   }
   return evidence;
 }
@@ -146,7 +159,7 @@ function evidenceOutput(value: string): string {
   return JSON.stringify(bounded);
 }
 
-function evidenceBullet(entry: ValidationEvidence): string {
+function evidenceBullet(entry: PinnedValidationEvidence): string {
   const argv = entry.argv.map((argument) => JSON.stringify(argument)).join(" ");
   return `${entry.name} [${entry.contract} contract, ${entry.origin} check]: exit code ${entry.exitCode} at reviewed HEAD ${entry.head}; argv ${argv}; stdout ${evidenceOutput(entry.stdout)}; stderr ${evidenceOutput(entry.stderr)}`;
 }

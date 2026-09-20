@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import type {
   Endpoint,
   InstructionChannels,
+  PinnedValidationEvidence,
   RepoPolicy,
   ResolvedPolicy,
   ReviewResult,
   TaskRecord,
-  ValidationEvidence,
   WorktreeLease,
 } from "../../src/contracts.ts";
 import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
@@ -111,10 +111,10 @@ const policyDigest = policyIdentity(policy);
 
 function evidence(
   head: string,
-  contract: ValidationEvidence["contract"],
+  contract: PinnedValidationEvidence["contract"],
   exitCode = 0,
   name = "check",
-): ValidationEvidence {
+): PinnedValidationEvidence {
   return {
     name,
     argv: ["bun", "run", "check"],
@@ -130,7 +130,7 @@ function evidence(
 
 function implementationToReviewing(
   head = "head-1",
-  contract: ValidationEvidence["contract"] = "final",
+  contract: PinnedValidationEvidence["contract"] = "final",
 ): TaskRecord {
   let task = startImplementation();
   task = transitionTask(

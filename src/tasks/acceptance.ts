@@ -3,11 +3,14 @@ import type {
   CheckOrigin,
   ContractIdentity,
   IterationScope,
+  PinnedValidationEvidence,
   ResolvedPolicy,
   ReviewLens,
   TaskRecord,
   ValidationCommand,
+  ValidationEvidence,
 } from "../contracts.ts";
+import { LEGACY_EVIDENCE_CONTRACT } from "../contracts.ts";
 
 /** Review lenses the final acceptance manifest requires, in verification order. */
 export const FINAL_REVIEW_LENSES: readonly ReviewLens[] = [
@@ -90,6 +93,11 @@ function commandCoversSurfaces(command: ValidationCommand, surfaces: readonly st
     return true;
   }
   return command.surfaces.some((surface) => surfaces.includes(surface));
+}
+
+/** Narrows to evidence that names a contract and identity; legacy records never qualify. */
+export function isPinnedEvidence(entry: ValidationEvidence): entry is PinnedValidationEvidence {
+  return entry.contract !== LEGACY_EVIDENCE_CONTRACT;
 }
 
 /** Digests the pinned policy so evidence recorded under a different policy is detectable. */
@@ -180,8 +188,9 @@ export function finalAcceptanceStatus(task: TaskRecord, head: string): FinalAcce
   const failed: FinalRequirement[] = [];
   const stale: FinalRequirement[] = [];
 
+  const pinned = task.validationEvidence.filter(isPinnedEvidence);
   for (const requirement of manifest.requirements) {
-    const recorded = task.validationEvidence.filter(
+    const recorded = pinned.filter(
       (entry) =>
         entry.contract === "final" &&
         entry.name === requirement.name &&

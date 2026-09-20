@@ -515,6 +515,25 @@ function parseJob(value: unknown, field: string): DurableJob {
   const endpointValue =
     value.endpoint === undefined ? undefined : endpoint(value.endpoint, `${field}.endpoint`);
   const head = value.head === undefined ? undefined : singleLine(value.head, `${field}.head`);
+  const contract =
+    value.contract === undefined
+      ? undefined
+      : enumValue(value.contract, ["iteration", "final"] as const, `${field}.contract`);
+  const policyDigest =
+    value.policyDigest === undefined
+      ? undefined
+      : singleLine(value.policyDigest, `${field}.policyDigest`);
+  const escalation =
+    value.escalation === undefined
+      ? undefined
+      : enumValue(
+          value.escalation,
+          ["unknown-impact", "broad-impact", "stale-identity", "disputed-result"] as const,
+          `${field}.escalation`,
+        );
+  if ((contract === undefined) !== (policyDigest === undefined)) {
+    throw new TypeError(`${field} must name its contract and policy digest together`);
+  }
   const reviewLens =
     value.reviewLens === undefined
       ? undefined
@@ -570,6 +589,9 @@ function parseJob(value: unknown, field: string): DurableJob {
     ...(consumedAt === undefined ? {} : { consumedAt }),
     ...(endpointValue === undefined ? {} : { endpoint: endpointValue }),
     ...(head === undefined ? {} : { head }),
+    ...(contract === undefined ? {} : { contract }),
+    ...(policyDigest === undefined ? {} : { policyDigest }),
+    ...(escalation === undefined ? {} : { escalation }),
     ...(reviewLens === undefined ? {} : { reviewLens }),
     ...(receiptPath === undefined ? {} : { receiptPath }),
     ...(instructionRevision === undefined ? {} : { instructionRevision }),

@@ -11,7 +11,7 @@ import type {
 } from "../../src/contracts.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { emptyRuntimeState } from "../../src/runtime/schema.ts";
-import { policyIdentity } from "../../src/tasks/acceptance.ts";
+import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
 import { type TaskTransitionContext, transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore, type StoreTaskInput, type TaskStore } from "../../src/tasks/store.ts";
 import {
@@ -37,7 +37,7 @@ const policy: ResolvedPolicy = {
     instructions: channels,
     instructionFiles: channels,
     validationCommands: [
-      { name: "check", argv: ["bun", "run", "check"], surfaces: ["source"], timeoutMs: 10_000 },
+      { name: "check", argv: ["bun", "run", "check"], surfaces: ["store"], timeoutMs: 10_000 },
     ],
     maxWorkers: 3,
     maxFixRounds: 1,
@@ -112,6 +112,91 @@ async function withTemporaryDirectory(run: (directory: string) => Promise<void>)
     await rm(directory, { recursive: true, force: true });
   }
 }
+
+/** Rewrites a stored record's payload in place, standing in for state written by an older build. */
+function rewritePayload(
+  directory: string,
+  taskId: string,
+  edit: (payload: Record<string, unknown>) => void,
+): void {
+  const database = new Database(join(directory, "state.sqlite"));
+  const row = database.query("SELECT payload FROM tasks WHERE id = ?").get(taskId) as {
+    payload: string;
+  };
+  const payload = JSON.parse(row.payload) as Record<string, unknown>;
+  edit(payload);
+  database.query("UPDATE tasks SET payload = ? WHERE id = ?").run(JSON.stringify(payload), taskId);
+  database.close();
+}
+
+const LEGACY_EVIDENCE = {
+  name: "check",
+  argv: ["bun", "run", "check"],
+  exitCode: 0,
+  stdout: "56 tests passed",
+  stderr: "",
+  head: "legacy-head",
+} as const;
+
+test("loads validation evidence written before contracts existed and marks it legacy", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-evidence" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.stage = "reviewing";
+      payload.reviewHead = LEGACY_EVIDENCE.head;
+      payload.validationEvidence = [{ ...LEGACY_EVIDENCE }];
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("legacy task did not reload");
+    expect(reloaded.validationEvidence[0]).toEqual({ ...LEGACY_EVIDENCE, contract: "legacy" });
+    expect(finalAcceptanceStatus(reloaded, LEGACY_EVIDENCE.head).satisfied).toBe(false);
+  });
+});
+
+test("keeps a completed record with legacy evidence readable", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-completed" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.stage = "completed";
+      payload.reviewHead = LEGACY_EVIDENCE.head;
+      payload.validationEvidence = [{ ...LEGACY_EVIDENCE }];
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("legacy task did not reload");
+    expect(reloaded.stage).toBe("completed");
+    expect(reloaded.validationEvidence).toHaveLength(1);
+  });
+});
+
+test("refuses validation evidence that names only part of its contract identity", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "partial-evidence" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.validationEvidence = [{ ...LEGACY_EVIDENCE, contract: "final" }];
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("refuses legacy-marked validation evidence that also claims a policy identity", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "mixed-evidence" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.validationEvidence = [
+        { ...LEGACY_EVIDENCE, contract: "legacy", origin: "local", policyDigest: "digest" },
+      ];
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
 
 test("persists records with restrictive modes and reloads through a new store instance", async () => {
   await withTemporaryDirectory(async (directory) => {

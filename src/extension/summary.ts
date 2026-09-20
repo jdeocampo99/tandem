@@ -1,5 +1,11 @@
 import { basename } from "node:path";
-import { MODEL_ROLE_LABELS, MODEL_ROLE_ORDER, type TaskRecord } from "../contracts.ts";
+import {
+  LEGACY_EVIDENCE_CONTRACT,
+  MODEL_ROLE_LABELS,
+  MODEL_ROLE_ORDER,
+  type TaskRecord,
+} from "../contracts.ts";
+import { isPinnedEvidence } from "../tasks/acceptance.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import type { TandemAction } from "./actions.ts";
 
@@ -195,12 +201,12 @@ function summarizeTask(task: TaskRecord): string {
   }
   if (task.validationEvidence.length > 0) {
     const successful = task.validationEvidence.filter((entry) => entry.exitCode === 0).length;
-    const iteration = task.validationEvidence.filter(
-      (entry) => entry.contract === "iteration",
-    ).length;
-    const remote = task.validationEvidence.filter((entry) => entry.origin === "github").length;
+    const pinned = task.validationEvidence.filter(isPinnedEvidence);
+    const iteration = pinned.filter((entry) => entry.contract === "iteration").length;
+    const remote = pinned.filter((entry) => entry.origin === "github").length;
+    const legacy = task.validationEvidence.length - pinned.length;
     lines.push(
-      `Validation evidence: ${successful}/${task.validationEvidence.length} passing; ${iteration} iteration, ${task.validationEvidence.length - iteration} final; ${task.validationEvidence.length - remote} local, ${remote} remote; commands ${compactList(
+      `Validation evidence: ${successful}/${task.validationEvidence.length} passing; ${iteration} iteration, ${pinned.length - iteration} final, ${legacy} legacy; ${pinned.length - remote} local, ${remote} remote; commands ${compactList(
         task.validationEvidence.map((entry) => entry.name),
         4,
         100,
@@ -663,9 +669,11 @@ function isTaskValidationEvidence(
     typeof record.name === "string" &&
     typeof record.exitCode === "number" &&
     typeof record.head === "string" &&
-    (record.contract === "iteration" || record.contract === "final") &&
-    (record.origin === "local" || record.origin === "github") &&
-    typeof record.policyDigest === "string"
+    (record.contract === LEGACY_EVIDENCE_CONTRACT
+      ? record.origin === undefined && record.policyDigest === undefined
+      : (record.contract === "iteration" || record.contract === "final") &&
+        (record.origin === "local" || record.origin === "github") &&
+        typeof record.policyDigest === "string")
   );
 }
 

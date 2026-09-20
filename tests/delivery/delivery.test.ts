@@ -9,13 +9,13 @@ import type {
   CommandResult,
   CommandRunner,
   ModelSpec,
+  PinnedValidationEvidence,
   PullRequestMetadata,
   RepoPolicy,
   ResolvedPolicy,
   ReviewLens,
   ReviewResult,
   TaskRecord,
-  ValidationEvidence,
   WorktreeLease,
 } from "../../src/contracts.ts";
 import { describeTaskPr, type PrSummary } from "../../src/delivery/evidence.ts";
@@ -81,7 +81,7 @@ function review(lens: ReviewLens, reviewedHead = "head-1"): ReviewResult {
   };
 }
 
-function evidence(reviewedHead = "head-1"): ValidationEvidence {
+function evidence(reviewedHead = "head-1"): PinnedValidationEvidence {
   return {
     name: "check",
     argv: ["bun", "run", "check"],
@@ -288,6 +288,22 @@ test("refuses delivery when only targeted iteration checks passed at the reviewe
   };
   expect(() => describeTaskPr(iterationOnly, summary)).toThrow(
     /complete final acceptance run at HEAD head-1/u,
+  );
+});
+
+test("refuses to publish a ready task whose evidence predates validation contracts", () => {
+  const {
+    contract: _contract,
+    origin: _origin,
+    policyDigest: _policyDigest,
+    ...recorded
+  } = evidence();
+  const legacyReady: TaskRecord = {
+    ...task(),
+    validationEvidence: [{ ...recorded, contract: "legacy" }],
+  };
+  expect(() => describeTaskPr(legacyReady, summary)).toThrow(
+    /predates validation contracts and the final acceptance manifest must run again at HEAD head-1/u,
   );
 });
 
