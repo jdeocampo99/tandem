@@ -649,6 +649,28 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
           approved: true,
         };
       }
+      case "draft": {
+        const taskId = taskIdFor(invocation);
+        requireYes(invocation, `publishing an unfinished draft for ${taskId}`);
+        const repository = requiredPositionOrOption(
+          invocation,
+          invocation.options.repository,
+          1,
+          "repository",
+        );
+        const title = requiredPositionOrOption(invocation, invocation.options.title, 2, "title");
+        const base = requiredPositionOrOption(invocation, invocation.options.base, 3, "base");
+        return {
+          command: invocation.command,
+          value: await getService(environment).publishDraft(taskId, {
+            repository,
+            title,
+            base,
+            approved: true,
+          }),
+          approved: true,
+        };
+      }
       case "merge": {
         const taskId = taskIdFor(invocation);
         requireYes(invocation, `merging ${taskId}`);

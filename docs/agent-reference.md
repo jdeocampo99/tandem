@@ -715,6 +715,12 @@ The durable stages are:
 
 For implementation, each completion and fix cycle is bound to the current generation and HEAD. A fix cycle increments the generation, clears stale review/validation evidence, and returns to `implementing`. The default `maxFixRounds` is three; once exhausted, the task remains unresolved rather than looping indefinitely.
 
+Reaching `ready` and exhausting the bounded fix-round loop are both surfaced promptly as distinct
+coordinator notifications through the existing notification path, so neither needs a follow-up
+prompt. The ready message names the reviewed HEAD and says that ready is not publication, merge, or
+deploy approval. Exhaustion blocks the task with a reason naming the used and configured rounds and
+stating that the task is neither ready nor accepted. Neither message claims delivery.
+
 ### Review and validation
 
 Review is independent and sequential. Tandem stops or pauses the implementer, opens one fresh read-only reviewer pane in the same task worktree, and records one current result per lens:
@@ -876,12 +882,13 @@ commands; already-running workers are not hot-upgraded with the new control exte
 - `onboard --write --yes` writes a missing central repository policy record;
 - `approve TASK --yes` approves implementation scope;
 - `cancel TASK --yes` cancels owned work;
+- `draft ... --yes` publishes or updates an unfinished draft pull request;
 - `publish ... --yes` publishes a reviewed pull request;
 - `merge ... --yes` merges a reviewed pull request;
 - `cleanup TASK --discard --yes` permits destructive discard.
 
 Safe cleanup does not require `--yes`. In the OMP extension, configure-models, setup, approve, cancel,
-publish, merge, and discard cleanup require a live TUI confirmation; without an interactive UI those
+draft, publish, merge, and discard cleanup require a live TUI confirmation; without an interactive UI those
 actions fail closed. The extension's tool is registered with OMP's write approval and uses the same
 runtime checks.
 
@@ -986,6 +993,48 @@ The default minimum free-space threshold is 2 GiB (`2 * 1024 * 1024 * 1024` byte
 Safe cleanup does not require user approval. `--discard` is different: it requires `--yes` in the CLI or a live TUI confirmation in the extension, then uses Treehouse's force return. Do not use discard to resolve an ambiguous, dirty, ignored, or unmerged worktree unless the human explicitly accepts losing that work.
 
 ## Pull-request delivery
+
+### Early draft visibility
+
+An unfinished draft PR can be published before final acceptance so review progress is visible while
+work is still running. It requires its own explicit publishing approval; scope approval is never
+publication approval, and the draft itself never becomes an approval for anything else:
+
+```sh
+bun src/cli.ts pr draft TASK_ID OWNER/REPO "Draft title" main --yes
+```
+
+Draft eligibility is separate from delivery acceptance. A draft needs an implementation task with
+approved scope, a durable worktree lease, and a stage of `implementing`, `validating`, `reviewing`,
+`awaiting-fixes`, `ready`, `paused`, or `blocked`. It does not need a reviewed HEAD, successful
+validation evidence, or passing review lenses, and it never satisfies any of them. Unmerged paths in
+the task worktree refuse the draft; uncommitted changes do not, and the body discloses that the
+draft shows committed work only.
+
+The draft is marked unfinished by GitHub's draft state and by a banner that says it is visibility
+only, not a claim that the work is ready, mergeable, deployable, or accepted. Its body reports the
+review level and reason taken from the currently pinned repository policy, current activity for the
+durable stage, blockers (durable block reason, bounded-loop exhaustion, an unanswered question,
+failed validation evidence, and recorded review findings), the remaining pinned checks, and the
+unchanged final-acceptance contract. A later risk-based classification may supply the level without
+changing those gates.
+
+The draft refreshes when durable task state changes: the scheduler recomputes the body from the task
+record and updates the existing PR in place. The refresh never creates a pull request, never changes
+draft state, never asks for a new approval, and never blocks durable work when the remote is
+unavailable. The branch advances by pushing the exact task HEAD without forcing; a refused push
+leaves the published commit alone and the body discloses the lag.
+
+Task-to-PR identity is idempotent. Publication observes the task branch before and after the push
+and reuses any pull request it finds, so a retry or restart updates rather than duplicates. An
+uncertain `gh pr create` outcome is reconciled by re-observing once: an observed pull request is
+adopted, and otherwise the failure is raised so the operation is quarantined. Nothing is retried
+blindly, no second pull request is created, and no reservation is cleared to make a retry look safe.
+`tandem delivery-preflight` treats the task's own draft on the same repository and base as the pull
+request that final publication updates, not as a duplicate; any other recorded or observed pull
+request is still refused.
+
+### Final delivery
 
 A task must be `ready` before delivery. Describe the PR without publishing it:
 
@@ -1255,7 +1304,7 @@ Commands:
   tick/watch  Advance bounded scheduler work
   pause/resume/cancel  Control owned task work
   present/feedback/presentations  Route and inspect visual work
-  pr describe/publish/merge  Record or publish reviewed PR work
+  pr describe/draft/publish/merge  Record, show progress on, or publish PR work
   cleanup      Release owned resources; --discard requires --yes
 
 Safety options:
@@ -1304,7 +1353,7 @@ All parser-supported options are global; use only the ones relevant to the comma
 | `--surface TEXT` | Repeatable create surface. |
 | `--artifact PATH` | Repeatable presentation artifact path. |
 
-Command aliases are `status` for `list`, top-level `describe`/`publish`/`merge`, and nested `pr describe`, `pr publish`, and `pr merge`. The CLI accepts options without executing or mutating anything while parsing; execution and approval checks happen afterward.
+Command aliases are `status` for `list`, top-level `describe`/`draft`/`publish`/`merge`, and nested `pr describe`, `pr draft`, `pr publish`, and `pr merge`. The CLI accepts options without executing or mutating anything while parsing; execution and approval checks happen afterward.
 
 Communication output is intentionally split: without `--json`, `steer`, `answer`, and `messages`
 print a compact plain-language summary; with `--json`, the CLI emits the raw structured value

@@ -345,6 +345,14 @@ test("parseCliArgs keeps PR commands explicit and records consent separately", (
   ]);
   expect(invocation.options.yes).toBe(true);
   expect(invocation.options.json).toBe(true);
+
+  const draft = parseCliArgs(["pr", "draft", "task-1", "org/repo", "Draft title", "main", "--yes"]);
+  expect(draft.command).toBe("draft");
+  expect(draft.positionals).toEqual(["task-1", "org/repo", "Draft title", "main"]);
+  expect(draft.options.yes).toBe(true);
+  expect(
+    parseCliArgs(["pr", "draft", "task-1", "org/repo", "Draft title", "main"]).options.yes,
+  ).toBe(false);
 });
 test("recovery CLI commands expose dry-run, consent, exact HEAD, and delivery inputs", () => {
   const inspection = parseCliArgs(["inspect", "task-1", "--json"]);
@@ -1258,6 +1266,7 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     acknowledge: unused,
     describePr: unused,
     publish: unused,
+    publishDraft: unused,
     merge: unused,
     cleanup: async (_taskId, input = {}) => {
       cleanupInputs.push(input);

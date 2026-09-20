@@ -33,6 +33,8 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "pr-describe": { min: 3, max: 3 },
   publish: { min: 6, max: 6 },
   "pr-publish": { min: 6, max: 6 },
+  draft: { min: 5, max: 5 },
+  "pr-draft": { min: 5, max: 5 },
   merge: { min: 3, max: 3 },
   "pr-merge": { min: 3, max: 3 },
   cleanup: { min: 2, max: 3 },
@@ -130,6 +132,13 @@ export type TandemAction =
       readonly summary: PrSummary;
     }>
   | Readonly<{
+      readonly action: "draft";
+      readonly taskId: string;
+      readonly repository: string;
+      readonly title: string;
+      readonly base: string;
+    }>
+  | Readonly<{
       readonly action: "merge";
       readonly taskId: string;
       readonly method: "merge" | "squash" | "rebase";
@@ -169,6 +178,7 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "approve" ||
     action.action === "cancel" ||
     action.action === "publish" ||
+    action.action === "draft" ||
     action.action === "merge" ||
     action.action === "reconcile" ||
     action.action === "review-existing" ||
@@ -261,6 +271,11 @@ async function approvalPrompt(
       return {
         title: "Publish reviewed pull request?",
         message: `Publish ${action.repository} (${action.title}, base ${action.base}) for task ${action.taskId}: ${details}?`,
+      };
+    case "draft":
+      return {
+        title: "Publish unfinished draft pull request?",
+        message: `Publish or update an unfinished draft on ${action.repository} (${action.title}, base ${action.base}) for task ${action.taskId}. A draft shows progress only; it does not merge, deploy, or accept anything: ${details}?`,
       };
     case "merge":
       return {
@@ -443,6 +458,17 @@ export async function executeTandemAction(
           title: action.title,
           base: action.base,
           summary: action.summary,
+          approved: true,
+        }),
+        action.action,
+        true,
+      );
+    case "draft":
+      return textResult(
+        await service.publishDraft(action.taskId, {
+          repository: action.repository,
+          title: action.title,
+          base: action.base,
           approved: true,
         }),
         action.action,
@@ -688,6 +714,15 @@ export function parseTandemCommand(input: string): TandemAction {
         title: value(3, "publish title"),
         base: value(4, "publish base"),
         summary: parseSummaryJson(value(5, "publish summary")),
+      };
+    case "draft":
+    case "pr-draft":
+      return {
+        action: "draft",
+        taskId: value(1, "draft"),
+        repository: value(2, "draft repository"),
+        title: value(3, "draft title"),
+        base: value(4, "draft base"),
       };
     case "merge":
     case "pr-merge": {

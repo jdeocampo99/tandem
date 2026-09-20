@@ -114,7 +114,10 @@ function readCommand(command: ValidationCommand, index: number): ValidationComma
   };
 }
 
-function commandMatchesSurfaces(command: ValidationCommand, surfaces: readonly string[]): boolean {
+export function commandMatchesSurfaces(
+  command: ValidationCommand,
+  surfaces: readonly string[],
+): boolean {
   if (command.surfaces.length === 0 || command.surfaces.includes("*") || surfaces.includes("*")) {
     return true;
   }

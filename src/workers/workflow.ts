@@ -1506,7 +1506,7 @@ export class WorkerWorkflow {
     if (!recoveryFix && task.reviewRound >= task.policy.config.maxFixRounds) {
       await this.#deps.blockTask(
         task.id,
-        `fix round budget exhausted at ${task.reviewRound}; no new fix operation was admitted`,
+        `bounded review loop exhausted after ${task.reviewRound} of ${task.policy.config.maxFixRounds} fix round(s); no new fix operation was admitted and the task is not ready or accepted`,
       );
       return;
     }

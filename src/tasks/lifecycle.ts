@@ -563,7 +563,7 @@ function reviewSummary(task: TaskRecord): string {
   const current = activeReviews(task);
   const failed = current.filter((review) => !review.pass).map((review) => review.lens);
   return failed.length === 0
-    ? `Task ${task.id} passed behavior, design, coverage, and verification review`
+    ? `Ready: task ${task.id} passed behavior, design, coverage, and verification review at HEAD ${String(task.reviewHead)}. Ready is not publication, merge, or deploy approval; each remains explicit.`
     : `Task ${task.id} requires fixes after ${failed.join(", ")} review`;
 }
 

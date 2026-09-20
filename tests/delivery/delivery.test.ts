@@ -18,8 +18,19 @@ import type {
   ValidationEvidence,
   WorktreeLease,
 } from "../../src/contracts.ts";
-import { describeTaskPr, type PrSummary } from "../../src/delivery/evidence.ts";
-import { mergeReviewedTask, publishReviewedTask } from "../../src/delivery/pull-requests.ts";
+import {
+  assertDraftTaskShape,
+  assertTaskShape,
+  describeTaskDraftPr,
+  describeTaskPr,
+  type PrSummary,
+} from "../../src/delivery/evidence.ts";
+import {
+  mergeReviewedTask,
+  publishReviewedTask,
+  publishTaskDraft,
+  refreshTaskDraft,
+} from "../../src/delivery/pull-requests.ts";
 
 const models: Readonly<
   Record<
@@ -466,4 +477,353 @@ test("merges only after nonempty required CI and pins the immutable reviewed SHA
     "--match-head-commit",
     "head-1",
   ]);
+});
+
+type DraftTaskOptions = Readonly<{
+  readonly stage?: TaskRecord["stage"];
+  readonly reviewRound?: number;
+  readonly reviews?: readonly ReviewResult[];
+  readonly validationEvidence?: readonly ValidationEvidence[];
+  readonly pullRequest?: PullRequestMetadata;
+  readonly maxFixRounds?: number;
+}>;
+
+function draftPolicy(maxFixRounds: number): ResolvedPolicy {
+  return {
+    config: {
+      ...policyConfig,
+      maxFixRounds,
+      validationCommands: [
+        { name: "check", argv: ["bun", "run", "check"], surfaces: ["delivery"], timeoutMs: 60_000 },
+        {
+          name: "audit",
+          argv: ["bun", "run", "audit"],
+          surfaces: ["unrelated"],
+          timeoutMs: 60_000,
+        },
+      ],
+    },
+    guidance: policy.guidance,
+  };
+}
+
+function draftTask(options: DraftTaskOptions = {}): TaskRecord {
+  return {
+    ...task(),
+    stage: options.stage ?? "implementing",
+    policy: draftPolicy(options.maxFixRounds ?? 3),
+    reviewRound: options.reviewRound ?? 0,
+    reviews: options.reviews ?? [],
+    validationEvidence: options.validationEvidence ?? [],
+    ...(options.pullRequest === undefined ? {} : { pullRequest: options.pullRequest }),
+  };
+}
+
+const draftMetadata: PullRequestMetadata = {
+  repository: "acme/repo",
+  number: 11,
+  url: "https://github.com/acme/repo/pull/11",
+  title: "Draft: deliver the reviewed change",
+  state: "draft",
+  head: "head-1",
+  base: "main",
+};
+
+function draftRemotePullRequest(isDraft: boolean): Record<string, unknown> {
+  return {
+    number: 11,
+    url: "https://github.com/acme/repo/pull/11",
+    state: "OPEN",
+    isDraft,
+    headRefName: "tandem/delivery-task",
+    headRefOid: "head-1",
+    baseRefName: "main",
+    title: "Draft: deliver the reviewed change",
+  };
+}
+
+type DraftRunnerOptions = Readonly<{
+  /** Pull requests the remote reports for the task branch, one entry per observation. */
+  readonly listResponses?: readonly (readonly Record<string, unknown>[])[];
+  readonly createFails?: boolean;
+  readonly pushFails?: boolean;
+}>;
+
+function draftRunner(options: DraftRunnerOptions = {}): Readonly<{
+  readonly calls: CommandRequest[];
+  readonly run: CommandRunner;
+}> {
+  const calls: CommandRequest[] = [];
+  const listResponses = options.listResponses ?? [[]];
+  let listIndex = 0;
+  const run: CommandRunner = async (request) => {
+    calls.push(request);
+    const argv = request.argv;
+    if (argv[0] === "git" && argv.includes("status")) return result();
+    if (argv[0] === "git" && argv.includes("rev-parse")) return result("head-1\n");
+    if (argv[0] === "git" && argv.includes("diff")) return result();
+    if (argv[0] === "git" && argv.includes("symbolic-ref")) return result("tandem/delivery-task\n");
+    if (argv[0] === "git" && argv.includes("remote"))
+      return result("git@github.com:acme/repo.git\n");
+    if (argv[0] === "git" && argv.includes("push")) {
+      if (options.pushFails === true) return result("", 1, "non-fast-forward");
+      return result();
+    }
+    if (argv[0] === "gh" && argv[1] === "pr" && argv[2] === "list") {
+      const response = listResponses[Math.min(listIndex, listResponses.length - 1)] ?? [];
+      listIndex += 1;
+      return result(JSON.stringify(response));
+    }
+    if (argv[0] === "gh" && argv[1] === "pr" && argv[2] === "create") {
+      if (options.createFails === true) return result("", 1, "remote outcome is unknown");
+      return result("https://github.com/acme/repo/pull/11\n");
+    }
+    if (argv[0] === "gh" && argv[1] === "pr" && argv[2] === "edit") return result();
+    if (argv[0] === "gh" && argv[1] === "pr" && argv[2] === "view") {
+      return result(JSON.stringify(draftRemotePullRequest(true)));
+    }
+    throw new Error(`unexpected command ${JSON.stringify(argv)}`);
+  };
+  return { calls, run };
+}
+
+test("a draft refuses publication without explicit publishing approval even when scope is approved", async () => {
+  const runner = draftRunner();
+  const scopeApproved = draftTask();
+  expect(scopeApproved.scopeApproved).toBe(true);
+  await expect(
+    publishTaskDraft({
+      task: scopeApproved,
+      repository: "acme/repo",
+      title: "Draft: deliver the reviewed change",
+      base: "main",
+      approved: false,
+      run: runner.run,
+    }),
+  ).rejects.toBeInstanceOf(ApprovalRequiredError);
+  expect(runner.calls).toHaveLength(0);
+});
+
+test("a draft body reports review level, activity, blockers, and remaining checks", () => {
+  const body = describeTaskDraftPr({
+    task: draftTask({
+      stage: "awaiting-fixes",
+      reviewRound: 3,
+      maxFixRounds: 3,
+      reviews: [
+        {
+          lens: "behavior",
+          head: "head-1",
+          generation: 0,
+          pass: false,
+          findings: [
+            {
+              id: "F-1",
+              severity: "P1",
+              verdict: "confirmed",
+              description: "ordering regression on retry",
+            },
+          ],
+          summary: "behavior findings",
+        },
+      ],
+      validationEvidence: [evidence()],
+    }),
+    publishedHead: "head-1",
+    worktreeHead: "head-1",
+    uncommittedChanges: true,
+  });
+
+  expect(body).toContain(
+    "it is not a claim that the work is ready, mergeable, deployable, or accepted",
+  );
+  expect(body).toContain("Review level: standard.");
+  expect(body).toContain("the pinned repository policy requires behavior, design, coverage");
+  expect(body).toContain("at most 3 bounded fix round(s)");
+  expect(body).toContain("# Current activity");
+  expect(body).toContain("fix round 3 of 3 has been used");
+  expect(body).toContain("The bounded fix-round loop is exhausted at 3 of 3");
+  expect(body).toContain("F-1/P1: ordering regression on retry");
+  expect(body).toContain("uncommitted changes that are not part of this draft");
+  expect(body).toContain("A passing design review by a fresh independent read-only reviewer");
+  expect(body).toContain("Runner-owned required GitHub checks");
+  expect(body).toContain("remain separate explicit approvals");
+  expect(body).not.toContain("audit");
+  expect(body).not.toContain("Pinned validation command check");
+});
+
+test("a ready task's draft still refuses to claim acceptance", () => {
+  const body = describeTaskDraftPr({
+    task: draftTask({
+      stage: "ready",
+      reviews: [review("behavior"), review("design"), review("coverage"), review("verification")],
+      validationEvidence: [evidence()],
+    }),
+    publishedHead: "head-1",
+    worktreeHead: "head-1",
+    uncommittedChanges: false,
+  });
+
+  expect(body).toContain("Delivery acceptance is still a separate explicit step.");
+  expect(body).toContain("Runner-owned required GitHub checks on the delivered commit.");
+  expect(body).toContain("Tandem never merges or deploys automatically.");
+  expect(body).toContain("- None recorded in durable task state.");
+  expect(body).not.toContain("A passing behavior review");
+});
+
+test("a draft is created marked unfinished at the pushed task HEAD", async () => {
+  const runner = draftRunner();
+  const publication = await publishTaskDraft({
+    task: draftTask(),
+    repository: "acme/repo",
+    title: "Draft: deliver the reviewed change",
+    base: "main",
+    approved: true,
+    run: runner.run,
+  });
+
+  expect(publication).toEqual({
+    pullRequest: draftMetadata,
+    created: true,
+    branchAdvanced: true,
+  });
+  expect(runner.calls.find((call) => call.argv[2] === "create")?.argv).toContain("--draft");
+  expect(runner.calls.find((call) => call.argv.includes("push"))?.argv.at(-1)).toBe(
+    "head-1:refs/heads/tandem/delivery-task",
+  );
+  expect(runner.calls.some((call) => call.argv.includes("--force"))).toBe(false);
+  expect(runner.calls.some((call) => call.argv[2] === "merge")).toBe(false);
+});
+
+test("a second draft publication updates the same pull request instead of creating another", async () => {
+  const runner = draftRunner({ listResponses: [[draftRemotePullRequest(true)]] });
+  const publication = await publishTaskDraft({
+    task: draftTask({ stage: "reviewing", pullRequest: draftMetadata }),
+    repository: "acme/repo",
+    title: "Draft: deliver the reviewed change",
+    base: "main",
+    approved: true,
+    run: runner.run,
+  });
+
+  expect(publication.created).toBe(false);
+  expect(publication.pullRequest.number).toBe(11);
+  expect(runner.calls.some((call) => call.argv[2] === "create")).toBe(false);
+  expect(runner.calls.find((call) => call.argv[2] === "edit")?.argv.slice(0, 6)).toEqual([
+    "gh",
+    "pr",
+    "edit",
+    "11",
+    "--repo",
+    "acme/repo",
+  ]);
+});
+
+test("an uncertain create is reconciled to the observed pull request rather than retried", async () => {
+  const runner = draftRunner({
+    createFails: true,
+    listResponses: [[], [], [draftRemotePullRequest(true)]],
+  });
+  const publication = await publishTaskDraft({
+    task: draftTask(),
+    repository: "acme/repo",
+    title: "Draft: deliver the reviewed change",
+    base: "main",
+    approved: true,
+    run: runner.run,
+  });
+
+  expect(publication.created).toBe(false);
+  expect(publication.pullRequest.number).toBe(11);
+  expect(runner.calls.filter((call) => call.argv[2] === "create")).toHaveLength(1);
+});
+
+test("an uncertain create with no observable pull request fails closed without a second create", async () => {
+  const runner = draftRunner({ createFails: true });
+  await expect(
+    publishTaskDraft({
+      task: draftTask(),
+      repository: "acme/repo",
+      title: "Draft: deliver the reviewed change",
+      base: "main",
+      approved: true,
+      run: runner.run,
+    }),
+  ).rejects.toThrow();
+  expect(runner.calls.filter((call) => call.argv[2] === "create")).toHaveLength(1);
+});
+
+test("a refused branch push leaves the published commit alone and discloses the lag", async () => {
+  const runner = draftRunner({
+    pushFails: true,
+    listResponses: [[{ ...draftRemotePullRequest(true), headRefOid: "head-0" }]],
+  });
+  const publication = await publishTaskDraft({
+    task: draftTask({ pullRequest: draftMetadata }),
+    repository: "acme/repo",
+    title: "Draft: deliver the reviewed change",
+    base: "main",
+    approved: true,
+    run: runner.run,
+  });
+
+  expect(publication.branchAdvanced).toBe(false);
+  const body = runner.calls.find((call) => call.argv[2] === "edit")?.argv.at(-1) ?? "";
+  expect(body).toContain("Draft commit: head-0");
+  expect(body).toContain("the branch could not be advanced");
+  expect(runner.calls.some((call) => call.argv.includes("--force"))).toBe(false);
+});
+
+test("refreshing an approved draft never creates one and stops once it is no longer a draft", async () => {
+  const current = draftRunner({ listResponses: [[draftRemotePullRequest(true)]] });
+  const refreshed = await refreshTaskDraft({
+    task: draftTask({ stage: "reviewing", pullRequest: draftMetadata }),
+    run: current.run,
+  });
+  expect(refreshed?.created).toBe(false);
+  expect(current.calls.some((call) => call.argv[2] === "create")).toBe(false);
+
+  const promoted = draftRunner({ listResponses: [[draftRemotePullRequest(false)]] });
+  expect(
+    await refreshTaskDraft({
+      task: draftTask({ stage: "reviewing", pullRequest: draftMetadata }),
+      run: promoted.run,
+    }),
+  ).toBeUndefined();
+  expect(promoted.calls.some((call) => call.argv[2] === "edit")).toBe(false);
+  expect(promoted.calls.some((call) => call.argv[2] === "create")).toBe(false);
+
+  const undrafted = draftRunner();
+  expect(await refreshTaskDraft({ task: draftTask(), run: undrafted.run })).toBeUndefined();
+  expect(undrafted.calls).toHaveLength(0);
+});
+
+test("draft eligibility never satisfies delivery acceptance", async () => {
+  const unfinished = draftTask({ stage: "implementing", pullRequest: draftMetadata });
+  expect(() => assertDraftTaskShape(unfinished)).not.toThrow();
+  expect(() => assertTaskShape(unfinished)).toThrow("is not ready for delivery");
+
+  const runner = draftRunner();
+  await expect(
+    publishReviewedTask({
+      task: unfinished,
+      summary,
+      repository: "acme/repo",
+      title: "Reviewed delivery",
+      base: "main",
+      approved: true,
+      run: runner.run,
+    }),
+  ).rejects.toThrow("is not ready for delivery");
+  expect(runner.calls).toHaveLength(0);
+
+  expect(() => assertDraftTaskShape({ ...draftTask(), kind: "scout" })).toThrow(
+    "is not an implementation task",
+  );
+  expect(() => assertDraftTaskShape({ ...draftTask(), stage: "queued" })).toThrow(
+    "has no draft-eligible work",
+  );
+  expect(() => assertDraftTaskShape({ ...draftTask(), scopeApproved: false })).toThrow(
+    "has not received scope approval",
+  );
 });

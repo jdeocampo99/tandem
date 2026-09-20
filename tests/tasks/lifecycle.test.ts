@@ -272,6 +272,13 @@ test("requires current-head validation and all four current-generation lenses be
   expect(task.revision).toBe(8);
   task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
   expect(task.stage).toBe("ready");
+  const readyNotification = task.notifications.at(-1);
+  expect(readyNotification?.kind).toBe("coordinator");
+  expect(readyNotification?.acknowledged).toBe(false);
+  expect(readyNotification?.message).toContain("Ready: task");
+  expect(readyNotification?.message).toContain(
+    "Ready is not publication, merge, or deploy approval",
+  );
   expect(isActiveTask(task)).toBe(true);
   expect(() =>
     transitionTask(task, { type: "record-review", review: review("behavior") }, context()),
