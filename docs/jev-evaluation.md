@@ -45,6 +45,200 @@ Measure the whole task, not only the initial input:
 
 Missing usage must be reported as unavailable, not counted as zero.
 
+### Usage telemetry module
+
+`src/runtime/usage.ts` is the single source for the bounded usage record, pricing data, cost
+calculation, and cross-run aggregation used by both production route diagnostics and evaluation
+artifacts:
+
+- `UsageRecord`: provider, pinned model, input/output tokens (`number` or the literal
+  `"unavailable"`, never a fabricated zero), request duration, timeout status, route/fallback
+  reason, a `PricingSnapshot` or `"unavailable"`, and a schema version.
+- `PricingSnapshot` / `JEV_PRICING_SNAPSHOT`: versioned, sourced, dated pricing data, kept as
+  configurable data rather than a hardcoded number. Jev's published rate today is $0.042 per
+  million input tokens with output free.
+- `calculateUsageCost`: a pure function that takes token counts and a `PricingSnapshot` (or
+  `"unavailable"`) and returns a cost estimate or `"unavailable"`. It is for reporting only and is
+  never used to authorize or block work.
+- `aggregateUsage`: a pure function that groups `TaggedUsageRecord` samples by fixture, role, task,
+  and run, preserving an explicit `"unknown"` bucket for missing tags and counting unavailable
+  token/cost samples instead of treating them as zero.
+
+A route event on the prompt-routing path (see [prompt-routing PRD](jev-prompt-routing-prd.md))
+carries its `UsageRecord` alongside the same prompt hash used to bypass and dispatch diagnostics,
+so a report can join production route usage to an evaluation result without ever needing the
+prompt text itself. Future evaluation and benchmark work import these same exports rather than
+building a second accounting path.
+
+## Fixture-driven routing evaluation harness
+
+`evals/` holds a fixture-driven evaluation harness for the routing policy in
+`src/extension/prompt-routing.ts`. It exercises the production policy directly
+(`classifyPrompt` for classification fixtures, `handlePromptInput` for image/slash-command bypass
+fixtures) instead of reimplementing it, so an evaluation result can never drift from what the
+extension actually does.
+
+- `evals/fixtures.ts`: the fixture schema and a pure loader (`parsePromptRoutingFixtures`) plus a
+  filesystem loader (`loadPromptRoutingFixtures`). A fixture records a prompt, an optional explicit
+  task id, either a recorded typed Jev response or a simulated provider failure code (or a bypass
+  kind), the expected route (`direct` or `fallback`), the expected reason, an optional expected
+  decision (per-field ground truth for `action`/`target`/`effect`/`scope`/`composition`/`taskId`),
+  and a safety classification (`safe-direct`, `state-changing`, `sensitive`, `ambiguous`,
+  `provider-failure`, or `bypass`).
+- `evals/fixtures/prompt-routing.jsonl`: the versioned, sanitized, synthetic fixture set. Every
+  fixture carries the loader's `PROMPT_ROUTING_FIXTURE_SET_VERSION`; the loader rejects a mismatch.
+  It covers direct lookups, ambiguous requests, missing task ids, state-changing and sensitive
+  requests, mixed requests, image/slash-command bypasses, provider failures, and one deliberately
+  miscalibrated fixture that proves the false-direct-route metric actually detects a safety
+  failure. Fixtures contain no real secrets or repository contents.
+- `evals/run-jev.ts`: the runner. `runFakePromptRoutingFixtures` replays the fixture set
+  deterministically with no network access and no credentials; it runs inside the normal `bun test`
+  (see `tests/evals/run-jev.test.ts`). `runLivePromptRoutingFixtures` calls the pinned `jev-1.13.0`
+  model through `evaluateJev()` with an explicit repeat count, timeout, and USD budget (reusing
+  `calculateUsageCost`/`JEV_PRICING_SNAPSHOT` from `src/runtime/usage.ts`); it throws
+  `LiveJevBudgetExceededError` before making any call once cumulative spend has reached the budget,
+  and it is never called by `bun test`. The file's CLI entry point (`bun evals/run-jev.ts`) only
+  reaches live mode behind an explicit `--live` flag plus `TYPESAFE_API_KEY`, `--repeat`,
+  `--timeout`, and `--budget`; fake mode is the default. `writePromptRoutingResults` writes JSONL
+  results plus a JSON summary under `evals/results/` (git-ignored), never into a production
+  Tandem home's diagnostics.
+- `evals/summarize.ts`: pure metric functions over `PromptRoutingRunOutcome[]` (no filesystem,
+  network, or clock access): per-field classification accuracy (graded against Jev's raw answers,
+  independent of routing), direct-route precision/recall with an explicit false-direct-route count
+  (a safety failure) separate from a missed-direct-route count (an optimization miss), fallback
+  rate and abstention recall, provider error/timeout rate, latency p50/p95 (`percentile` is a
+  generic, reusable interpolated-percentile function), and a confidence-threshold sweep
+  (`sweepConfidenceThresholds`) computed only from probabilities already saved on each outcome,
+  never from an extra provider call. `summarizePromptRoutingRun` combines all of these into one
+  report shaped identically regardless of fixture mode, so two runs (or a fake run against a live
+  run) compare directly.
+
+The harness never changes `PROMPT_ROUTING_CONFIDENCE_THRESHOLD` or any other production routing
+threshold: the confidence sweep measures the saved combined-confidence score's predictive quality
+in isolation, it does not re-run the full multi-field routing decision at another threshold.
+
+Later stacked evaluation work (a baseline-vs-Jev efficiency benchmark, and deterministic scenario
+evals for other subsystems) reuses this fixture loader, the runner's fake/live seams, and
+`summarize.ts`'s percentile and aggregation functions rather than building parallel ones.
+
+## Baseline-vs-Jev benchmark (issue #20)
+
+`evals/benchmark.ts` answers the question the fixture-driven harness above cannot: a Jev call is
+only worth taking when it avoids more expensive work over the *whole* task, not just at the first
+request. It replays the same `evals/fixtures/prompt-routing.jsonl` fixture set used by the #22
+harness through two arms and reports which one reaches a verified result faster, cheaper, and at
+least as correctly and safely. It reuses `evals/fixtures.ts`, `evals/run-jev.ts`'s fake and live
+runners, and `evals/summarize.ts`'s percentile, aggregation, and threshold-sweep functions rather
+than a second copy of any of them; it only adds what those modules do not already provide: a
+control arm, a per-fixture treatment/control comparison, and a net-benefit decision rule.
+
+### Control arm: `evals/baseline-fixtures.ts`
+
+Classification is disabled for the control arm. The normal coordinator path is represented by one
+bounded, **synthetic** recording per fixture in `evals/fixtures/baseline-recordings.jsonl`, keyed
+1:1 to the matching `prompt-routing.jsonl` fixture id. These are not measured production numbers:
+default CI must never call TypeSafe, Herdr, Treehouse, GitHub, or OMP, so the control arm cannot be
+observed live inside `bun test`. Every recording's `description` says in plain language why its
+numbers were chosen (for example, "one coordinator turn" for a single read-only lookup, "two
+coordinator turns" for a request that needs a clarifying round trip). Treat every number in that
+file as illustrative scaffolding for the accounting logic, not as evidence that Jev routing is
+faster or cheaper in production. No speedup claim is made anywhere in this benchmark's code, tests,
+or output.
+
+Each recording carries: coordinator turns, coordinator duration, the verified correctness and
+safety outcome, action failures/corrections/rework/human-intervention counts, an optional
+`downstreamWorkAvoidedMs` (see accounting rules below), and an optional `directAction` outcome for
+the fixtures where fake-mode replay can route directly (the six safe-direct fixtures, plus the
+deliberately miscalibrated adversarial fixture that a misrouting sends directly by mistake).
+Coordinator token usage is always reported `"unavailable"`, never fabricated as zero or invented as
+a plausible-looking number: bounded production telemetry for the coordinator/worker path (issue
+#21) is not wired into this synthetic benchmark, so no real figure exists to report.
+
+### Treatment arm
+
+One Jev classification (replayed through the real `classifyPrompt`/`handlePromptInput`, never
+reimplemented) followed by the existing direct read-only action when policy permits, otherwise the
+same recorded coordinator path the control arm uses. `evals/benchmark.ts` measures the complete
+path to a verified result:
+
+- A **successful direct route** avoids the coordinator turn entirely: total time is Jev latency
+  plus a short recorded local-action duration, and the row's correctness/safety come from the
+  recorded direct-action outcome, not automatically from the control arm's outcome. This is why the
+  adversarial fixture matters: its recorded direct action is `incorrect`/`unsafe` even though it
+  executes without error, so it is neither a coordinator-turn-avoidance win nor silently graded as
+  correct just because nothing threw.
+- A **failed direct route** (the `direct-recovery-plan-task` fixture) still falls back to the full
+  recorded coordinator path to reach a verified result, and is counted as one action failure rather
+  than a silently dropped attempt.
+- A **classification fallback** pays Jev's latency and usage as overhead on top of the full
+  recorded coordinator path, unless the fixture's baseline recording documents downstream work the
+  fallback demonstrably avoided.
+
+### Accounting rules
+
+- Control and treatment always use the identical fixture prompt, task id, and recorded repository
+  state; only the routing decision differs.
+- **A fallback counts as pure classifier overhead unless the fixture demonstrates it avoided
+  downstream work.** Concretely: `treatmentDurationMs = jevDurationMs + max(0,
+  coordinatorDurationMs - downstreamWorkAvoidedMs)`. `downstreamWorkAvoidedMs` defaults to `0` (pure
+  overhead, the default assumption) and is set above zero on exactly one fixture,
+  `missing-task-id-inspect`, whose recording documents the rationale: Jev's precise
+  `missing-explicit-task-id` reason lets the extension surface exactly what is missing immediately,
+  avoiding a recorded exploratory coordinator turn that would otherwise run first.
+- **Cost is never reported as zero when it is unknown.** The control arm's coordinator cost is
+  always `"unavailable"`; a benchmark total cost is reported only when every priced sample in that
+  total is known, so one unpriceable Jev call (a provider failure or timeout) makes the aggregate
+  Jev cost `"unavailable"` too, rather than silently understating it.
+- Confidence/threshold sweeps are computed by reusing `evals/summarize.ts`'s
+  `sweepConfidenceThresholds` over probabilities already saved on each classification outcome; the
+  benchmark makes no additional provider calls to produce them.
+
+### Decision rule: `evals/decision.ts`
+
+`evaluateNetBenefit` is a pure function over the aggregate: no filesystem, network, or clock access,
+and it never reads or writes routing thresholds, review policy, or any other production behavior.
+It reports a recommendation only. The rule is checked in this order, and each step can reject the
+optimization regardless of what a later step would have shown:
+
+1. **Safety.** Any false direct route (`routing.directRoute.falseDirectRouteCount > 0`, from the
+   #22 harness's own routing-policy metric) or a drop in the verified-safe outcome rate rejects the
+   optimization outright, regardless of any time or cost improvement. This is checked first because
+   it is the one failure mode this benchmark exists to catch.
+2. **Correctness.** A drop in the verified-correct outcome rate rejects the optimization for the
+   same reason: a classifier that is faster but produces wrong results is a regression, not an
+   optimization, independent of latency or price. An unavailable treatment correctness rate is
+   treated as a regression against a known control rate rather than assumed acceptable.
+3. **Time.** Only once safety and correctness are unregressed does latency matter. Both the p50 and
+   p95 total wall-clock latency are compared, because classifier overhead that is invisible at the
+   median can still make the slow tail worse.
+4. **Cost.** Compared only when both arms report a known total cost; an unavailable cost is never
+   treated as free, so cost comparison is skipped rather than presenting the control arm's
+   `"unavailable"` coordinator cost as a $0 baseline that no treatment could ever beat honestly.
+5. **Rework.** Compared last as a tie-breaking measure of whole-task cost that time and price alone
+   do not capture.
+
+`tests/evals/decision.test.ts` includes three cases required by issue #20: a faster, cheaper
+treatment still **rejected** for a safety failure; a treatment **rejected** because fallback
+overhead makes the whole task slower even with no safety or correctness issue; and a treatment
+**accepted** because it is faster, cheaper, and at least as correct, safe, and rework-free.
+Applied to the checked-in fixture set, the real recommendation is **reject**, because the
+deliberately miscalibrated adversarial fixture produces exactly one false direct route; this is the
+intended outcome of including that fixture, not a defect in the pilot.
+
+### Output and live mode
+
+`bun evals/benchmark.ts` (fake mode, the default) writes per-fixture JSONL rows plus a JSON summary
+under `evals/results/baseline-benchmark/` (git-ignored), in the same shape the #22 harness uses:
+one row per fixture plus one comparable aggregate summary, so two runs (or a future scenario eval)
+compare directly.
+
+A live treatment mode (`runLiveBaselineBenchmark`) exists and reuses the #22 live runner's pinned
+`jev-1.13.0` model, timeout, and budget verbatim, always with a repeat count of 1 (a benchmark row
+compares exactly one classification per fixture, unlike #22's routing-accuracy harness, which
+repeats fixtures to measure calibration). **It has not been run.** This environment has no
+`TYPESAFE_API_KEY` and none was sought out; live mode is exercised only by type-checking and by the
+fake-mode tests that inject a classifier, never by an actual network call.
+
 ## Decision rules
 
 - Deterministic exact actions are the preferred fast path.
