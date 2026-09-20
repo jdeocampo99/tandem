@@ -101,6 +101,8 @@ export function processEnvironmentSnapshot(
     "TANDEM_POOL_ROOT",
     "TANDEM_REPO",
     "TANDEM_SOURCE_REPO",
+    "TANDEM_JEV_TIMEOUT_MS",
+    "TYPESAFE_API_KEY",
     "HERDR_ENV",
     "HERDR_SESSION",
     "HERDR_SESSION_NAME",

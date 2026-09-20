@@ -49,11 +49,6 @@ import type {
   RuntimeTaskState,
 } from "../runtime/schema.ts";
 import {
-  type JevShadowInput,
-  type JevShadowResult,
-  jevRecommendationNotification,
-} from "../service/jev.ts";
-import {
   appendTaskJob,
   buildPrompt,
   currentWriter,
@@ -175,7 +170,6 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
   readonly maintainPoolForAllocation: (task: TaskRecord) => Promise<boolean>;
-  readonly evaluateShadow?: (input: JevShadowInput) => Promise<JevShadowResult>;
 }>;
 export class WorkerWorkflow {
   readonly #deps: WorkerWorkflowDependencies;
@@ -2331,7 +2325,6 @@ export class WorkerWorkflow {
         },
       );
       await this.appendJob(task.id, durableJob, claim);
-      await this.recordShadowRecommendation(task, durableJob);
       await this.launchJob(
         task.id,
         durableJob.id,
@@ -2352,45 +2345,6 @@ export class WorkerWorkflow {
         `review job could not be prepared: ${describeError(error)}`,
         claim,
       );
-    }
-  }
-  async recordShadowRecommendation(task: TaskRecord, job: DurableJob): Promise<void> {
-    const evaluator = this.#deps.evaluateShadow;
-    if (evaluator === undefined) return;
-    let result: JevShadowResult;
-    try {
-      result = await evaluator({
-        task,
-        job,
-      });
-    } catch {
-      result = {
-        status: "unavailable",
-        message: "Jev shadow evaluator failed; normal dispatch continues",
-      };
-    }
-    if (result.status === "skipped" && result.artifactPath === undefined) return;
-    const message = jevRecommendationNotification(result);
-    try {
-      await this.#deps.updateTask(task.id, (current) => {
-        if (current.notifications.some((entry) => entry.message === message)) return current;
-        return {
-          ...current,
-          revision: current.revision + 1,
-          updatedAt: this.#deps.clock(),
-          notifications: [
-            ...current.notifications,
-            {
-              id: singleLine(this.#deps.idFactory(), "Jev shadow notification id"),
-              message,
-              acknowledged: false,
-              kind: "routine",
-            },
-          ],
-        };
-      });
-    } catch {
-      // Shadow metadata must never block or alter the normal worker launch.
     }
   }
 
@@ -2530,7 +2484,6 @@ export class WorkerWorkflow {
       if (currentRuntime?.jobs.some(activeRuntimeJob)) return;
       throw error;
     }
-    await this.recordShadowRecommendation(task, durableJob);
     await this.launchJob(
       task.id,
       durableJob.id,

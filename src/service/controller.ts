@@ -92,7 +92,6 @@ import {
 } from "../tasks/store.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
-import { createJevShadowEvaluator } from "./jev.ts";
 import {
   absoluteDirectory,
   currentWriter,
@@ -474,7 +473,6 @@ class TandemController {
       readTask: (taskId) => this.get(taskId),
       taskInScope: (task) => this.#source.taskInScope(task),
       feedback: this.#presentationFeedback,
-      recordShadowRecommendation: (task, job) => this.#worker.recordShadowRecommendation(task, job),
     });
     this.#worker = new WorkerWorkflow({
       home: deps.home,
@@ -502,11 +500,6 @@ class TandemController {
       removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
-      evaluateShadow: createJevShadowEvaluator({
-        home: deps.home,
-        run: deps.run,
-        listTasks: () => this.#source.scopedTasks(),
-      }),
     });
     this.#control = new TaskControlWorkflow({
       home: deps.home,

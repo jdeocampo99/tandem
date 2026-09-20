@@ -66,7 +66,6 @@ export type PresentationRuntimeDependencies = Readonly<{
   readonly readTask: (taskId: string) => Promise<TaskRecord>;
   readonly taskInScope: (task: TaskRecord) => Promise<boolean>;
   readonly feedback: PresentationFeedbackWorkflow;
-  readonly recordShadowRecommendation?: (task: TaskRecord, job: DurableJob) => Promise<void>;
 }>;
 export type PresentationFailureBinding = Readonly<{
   readonly jobId: string;
@@ -254,13 +253,9 @@ export class PresentationRuntimeWorkflow {
     if (task.stage === "cancelled") {
       throw new Error(`presentation ${id} cannot start for cancelled task ${task.id}`);
     }
-    const canRecordShadow = task.stage !== "paused" && task.stage !== "blocked";
     if (runtime.endpoint !== undefined) {
       const running = await this.markPresentationRunning(id);
       if (running === undefined) return;
-      if (canRecordShadow) {
-        await this.#deps.recordShadowRecommendation?.(task, running.job);
-      }
       const endpoint = running.endpoint ?? running.job.endpoint;
       if (endpoint === undefined) return;
       await this.launchPresentationJob(
@@ -352,9 +347,6 @@ export class PresentationRuntimeWorkflow {
     }
     const running = await this.markPresentationRunning(id);
     if (running === undefined) return;
-    if (canRecordShadow) {
-      await this.#deps.recordShadowRecommendation?.(task, running.job);
-    }
     const runningEndpoint = running.endpoint ?? running.job.endpoint;
     if (runningEndpoint === undefined) return;
     await this.launchPresentationJob(

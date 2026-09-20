@@ -7,6 +7,7 @@ import {
   type TandemAction,
   type TandemActionResult,
 } from "./actions.ts";
+import { handlePromptInput, type PromptRoutingConfig } from "./prompt-routing.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -17,6 +18,8 @@ import {
 
 export type TandemOmpRegistrationDependencies = Readonly<{
   readonly getService: (ctx: ExtensionContext) => TandemService;
+  readonly getHome: (ctx: ExtensionContext) => string;
+  readonly promptRouting: PromptRoutingConfig;
   readonly reconcile: (ctx: ExtensionContext, runTick: boolean) => Promise<void>;
   readonly postAction: (ctx: ExtensionContext) => Promise<void>;
 }>;
@@ -74,6 +77,14 @@ export function registerTandemOmp(
   dependencies: TandemOmpRegistrationDependencies,
 ): void {
   const z = pi.zod;
+  pi.on("input", (event, ctx) =>
+    handlePromptInput(event, ctx, {
+      config: dependencies.promptRouting,
+      getService: dependencies.getService,
+      getHome: dependencies.getHome,
+      sendMessage: pi.sendMessage.bind(pi),
+    }),
+  );
   const modelSpecSchema = z
     .object({
       model: z.string(),

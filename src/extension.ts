@@ -9,11 +9,13 @@ import {
 import {
   coordinatorSourceGuidance,
   environmentForContext,
+  processEnvironmentSnapshot,
   type TandemBoundaryEnvironment,
   type TandemEnvironmentSource,
 } from "./config/environment.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import { deliverPendingNotifications } from "./extension/notifications.ts";
+import { promptRoutingConfig } from "./extension/prompt-routing.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { buildDurableDigest } from "./extension/summary.ts";
 import { COORDINATOR_INSTRUCTIONS, COORDINATOR_TOOL_GUIDANCE } from "./instructions.ts";
@@ -82,6 +84,9 @@ function logExtensionError(pi: ExtensionAPI, error: unknown): void {
 /** Create the OMP extension factory; all mutable runtime state is per loaded extension instance. */
 export function createTandemExtension(options: TandemExtensionOptions = {}): ExtensionFactory {
   return (pi: ExtensionAPI): void => {
+    const promptRouting = promptRoutingConfig(
+      processEnvironmentSnapshot(options.processEnvironment),
+    );
     let service: TandemService | undefined;
     let boundaryEnvironment: TandemBoundaryEnvironment | undefined;
     const getEnvironment = (ctx: ExtensionContext): TandemBoundaryEnvironment => {
@@ -162,7 +167,13 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     const postAction = async (ctx: ExtensionContext): Promise<void> => {
       await reconcile(ctx, false);
     };
-    registerTandemOmp(pi, { getService, reconcile, postAction });
+    registerTandemOmp(pi, {
+      getService,
+      getHome: (ctx) => getEnvironment(ctx).home,
+      promptRouting,
+      reconcile,
+      postAction,
+    });
     pi.on("before_agent_start", async (event, ctx) => {
       const current = getService(ctx);
       try {
