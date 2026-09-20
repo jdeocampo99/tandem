@@ -9,6 +9,7 @@ import {
   evaluateJev,
   JEV_MODEL,
   JEV_PROVIDER,
+  type JevChoiceAnswer,
   JevEvaluationError,
   type JevEvaluationInput,
   type JevEvaluationOptions,
@@ -73,6 +74,9 @@ export type PromptRoutingDependencies = Readonly<{
     options: JevEvaluationOptions,
   ) => Promise<JevEvaluationResponse>;
 }>;
+
+/** Bumped whenever the shape or meaning of {@link ROUTING_QUESTIONS} changes. */
+export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 1;
 
 const ROUTING_QUESTIONS: JevQuestions = {
   action: {
@@ -162,12 +166,12 @@ export function extractPromptTaskId(prompt: string): string | undefined {
   return prompt.match(TASK_ID_PATTERN)?.[0];
 }
 
-function choiceAnswer(
-  response: JevEvaluationResponse,
-  id: string,
-): Readonly<{ choice: string; confidence: number }> | undefined {
-  const answer = response.answers[id];
-  if (answer === undefined || answer.type !== "choice") return undefined;
+/**
+ * The routed confidence for one choice answer: the lesser of the model's stated confidence
+ * and the probability it assigned to its own chosen option. Exported so evaluation tooling can
+ * reproduce the same confidence figure from a saved response without a second accounting path.
+ */
+export function choiceConfidence(answer: JevChoiceAnswer): number | undefined {
   const probability = answer.probabilities[answer.choice];
   if (
     probability === undefined ||
@@ -176,10 +180,18 @@ function choiceAnswer(
   ) {
     return undefined;
   }
-  return {
-    choice: answer.choice,
-    confidence: Math.min(answer.confidence, probability),
-  };
+  return Math.min(answer.confidence, probability);
+}
+
+function choiceAnswer(
+  response: JevEvaluationResponse,
+  id: string,
+): Readonly<{ choice: string; confidence: number }> | undefined {
+  const answer = response.answers[id];
+  if (answer === undefined || answer.type !== "choice") return undefined;
+  const confidence = choiceConfidence(answer);
+  if (confidence === undefined) return undefined;
+  return { choice: answer.choice, confidence };
 }
 
 function knownAction(choice: string): choice is ReadOnlyAction | "none" {

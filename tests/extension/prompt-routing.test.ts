@@ -15,8 +15,10 @@ import {
   type JevEvaluationResponse,
 } from "../../src/adapters/typesafe.ts";
 import {
+  choiceConfidence,
   classifyPrompt,
   handlePromptInput,
+  PROMPT_ROUTING_QUESTION_SCHEMA_VERSION,
   promptRoutingConfig,
 } from "../../src/extension/prompt-routing.ts";
 import { registerTandemOmp } from "../../src/extension/registration.ts";
@@ -79,6 +81,49 @@ const inspectFacts = response(
   { choice: "within" },
   { choice: "single" },
 );
+
+test("choiceConfidence combines stated confidence with the chosen option's own probability", () => {
+  expect(
+    choiceConfidence({
+      type: "choice",
+      choice: "list",
+      confidence: 0.9,
+      probabilities: { list: 0.7 },
+    }),
+  ).toBe(0.7);
+  expect(
+    choiceConfidence({
+      type: "choice",
+      choice: "list",
+      confidence: 0.6,
+      probabilities: { list: 0.95 },
+    }),
+  ).toBe(0.6);
+});
+
+test("choiceConfidence returns undefined for a probability or confidence that cannot be trusted", () => {
+  expect(
+    choiceConfidence({
+      type: "choice",
+      choice: "list",
+      confidence: 0.9,
+      probabilities: { other: 0.7 },
+    }),
+  ).toBeUndefined();
+  expect(
+    choiceConfidence({
+      type: "choice",
+      choice: "list",
+      confidence: Number.NaN,
+      probabilities: { list: 0.7 },
+    }),
+  ).toBeUndefined();
+});
+
+test("the routing question schema version is a stable positive integer", () => {
+  expect(Number.isInteger(PROMPT_ROUTING_QUESTION_SCHEMA_VERSION)).toBe(true);
+  expect(PROMPT_ROUTING_QUESTION_SCHEMA_VERSION).toBeGreaterThan(0);
+});
 
 test("prompt routing config enables only with a key and bounds the timeout", () => {
   expect(promptRoutingConfig({})).toEqual({ timeoutMs: 1_500 });
