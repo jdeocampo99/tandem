@@ -854,6 +854,17 @@ test("terminal argument boundaries keep force launch-only and -- positional", ()
   expect(() => parseTerminalArgs(["configure", "--reset", "--force"])).toThrow();
 });
 
+test("restart is a command alias for the coordinator restart flag", () => {
+  expect(parseTerminalArgs(["restart"])).toMatchObject({
+    command: "launch",
+    paths: [],
+    restart: true,
+  });
+  expect(parseTerminalArgs(["restart", "/repo"]).paths).toEqual(["/repo"]);
+  expect(parseTerminalArgs(["--", "restart"]).paths).toEqual(["restart"]);
+  expect(parseTerminalArgs(["--restart", "restart"]).paths).toEqual(["restart"]);
+});
+
 test("a reset refusal prevents every coordinator launch", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");

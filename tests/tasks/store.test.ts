@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -127,6 +127,9 @@ test("persists records with restrictive modes and reloads through a new store in
     expect(directoryStat.mode & 0o777).toBe(0o700);
     const lockStat = await stat(join(directory, ".state.lock"));
     expect(lockStat.mode & 0o777).toBe(0o600);
+    const diagnosticsLog = await readFile(join(directory, "logs", "tandem.jsonl"), "utf8");
+    expect(diagnosticsLog).toContain('"event":"state-lock-acquired"');
+    expect(diagnosticsLog).toContain('"event":"state-lock-released"');
   });
 });
 test("round-trips handoff snapshots and rejects oversized persisted excerpts", async () => {
@@ -331,6 +334,8 @@ test("preserves live lock leases and reacquires after the owner incarnation rele
     const lockPath = join(directory, ".state.lock");
     const liveLock = await stat(lockPath);
     await expect(blockedStore.list()).rejects.toBeInstanceOf(StoreLockTimeoutError);
+    const diagnosticsLog = await readFile(join(directory, "logs", "tandem.jsonl"), "utf8");
+    expect(diagnosticsLog).toContain('"event":"state-lock-acquisition-failed"');
     release.resolve();
     await held;
     const recovered = await blockedStore.create({ ...input, id: "recovered-task" });

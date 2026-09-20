@@ -1729,6 +1729,62 @@ test("pause waits behind launch proof and prevents a second dispatch", async () 
     },
   );
 });
+
+test("worker dispatch releases the state lock before startup proof completes", async () => {
+  await withFixture(
+    {
+      kind: "scout",
+      stage: "queued",
+      runner: { active: false, holdProof: true },
+      runtimeEdits: {},
+    },
+    async ({ home, lease, endpoint, service, runnerState }) => {
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const current = await store.read("task-1");
+      if (current === undefined) throw new Error("fixture task missing");
+      await store.update(current.id, current.revision, (task) => ({
+        ...task,
+        revision: task.revision + 1,
+        updatedAt: TIMESTAMP,
+        worktree: lease,
+      }));
+      await writeRuntimeState(runtimeFile(home), {
+        schemaVersion: 1,
+        tasks: [
+          {
+            schemaVersion: 1,
+            taskId: "task-1",
+            sourceCheckpoint: SOURCE_CHECKPOINT,
+            taskName: "tandem-task-1",
+            worktree: lease,
+            endpoints: [endpoint],
+            jobs: [],
+          },
+        ],
+        presentations: [],
+      });
+      const tick = service.tick();
+      await runnerState.proofStarted;
+      const observer = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "observer",
+        lockTimeoutMs: 100,
+        lockPollMs: 10,
+      });
+      try {
+        await expect(observer.read("task-1")).resolves.toMatchObject({ id: "task-1" });
+      } finally {
+        runnerState.releaseProof();
+        await tick;
+      }
+    },
+  );
+});
 test("pause treats a missing worker pane as already stopped", async () => {
   await withFixture(
     {

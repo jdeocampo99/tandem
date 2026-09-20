@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import type { TaskRecord } from "../contracts.ts";
 import { parseTaskRecord } from "../tasks/store-codec.ts";
 import { acquireDarwinFileLock } from "../tasks/store-lock.ts";
+import { appendDiagnosticEvent } from "./diagnostics.ts";
 import { parseRuntimeState, type RuntimeState } from "./schema.ts";
 
 export type MigrationStatus = "absent" | "pending" | "complete" | "failed";
@@ -250,13 +251,34 @@ export async function withStateLock<Result>(
     }
     return operation();
   }
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  await chmod(root, 0o700);
-  const release = await acquireDarwinFileLock(join(root, ".state.lock"), timeoutMs, pollMs);
+  const waitStartedAt = Date.now();
+  let release: (() => Promise<void>) | undefined;
+  try {
+    release = await acquireDarwinFileLock(join(root, ".state.lock"), timeoutMs, pollMs);
+  } catch (error) {
+    await appendDiagnosticEvent(root, {
+      event: "state-lock-acquisition-failed",
+      details: {
+        waitMs: Date.now() - waitStartedAt,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+    throw error;
+  }
+  const acquiredAt = Date.now();
+  await appendDiagnosticEvent(root, {
+    event: "state-lock-acquired",
+    details: { waitMs: acquiredAt - waitStartedAt },
+  });
   try {
     return await nativeLockContext.run({ home: root, release }, operation);
   } finally {
+    const heldMs = Date.now() - acquiredAt;
     await release();
+    await appendDiagnosticEvent(root, {
+      event: "state-lock-released",
+      details: { heldMs },
+    });
   }
 }
 

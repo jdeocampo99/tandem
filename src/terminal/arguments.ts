@@ -124,6 +124,10 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       index = parsed.next;
       continue;
     }
+    if (parseOptions && command === undefined && token === "restart" && !reset && !restart) {
+      restart = true;
+      continue;
+    }
     if (parseOptions && command === undefined && token === "configure") {
       command = "configure";
       continue;

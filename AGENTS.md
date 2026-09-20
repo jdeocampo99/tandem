@@ -50,6 +50,8 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 - Child agents run interactive OMP. Fresh reviewers are read-only; stop implementer mutation during
   validation/review. Validation runs separately without a model. No remote fleets or alternate harnesses.
 - When a session is bad or blocked, inspect durable state first with `tandem inspect TASK_ID --json`, then run the read-only `tandem recovery-plan TASK_ID --json`. Apply only the recommended approved action; never manually edit SQLite/runtime state, reuse the worktree for a new task, or override unknown ownership.
+- Operational diagnostics are best-effort append-only JSONL at `<home>/logs/tandem.jsonl`; read it alongside
+  `state.sqlite` when reconstructing lock, worker-launch, and cross-system timing.
 
 ## Change and verify
 

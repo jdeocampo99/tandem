@@ -78,6 +78,17 @@ tandem
 tandem --continue
 ```
 
+To replace owned coordinators without canceling tasks, use the restart command from a separate normal
+terminal:
+
+```sh
+tandem restart [PATH ...]
+```
+
+It preserves task IDs, generations, worktrees, reports, messages, and coordinator conversations.
+`tandem --restart [PATH ...]` remains accepted for compatibility. Never invoke restart from inside
+Herdr.
+
 To deliberately cleanly reopen only Tandem-owned coordinators, run the reset launch from a separate
 normal terminal:
 

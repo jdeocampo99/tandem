@@ -29,6 +29,7 @@ import {
   unreleasedReservation,
 } from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
+import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import {
   readRuntimeState,
   taskJobsDirectory,
@@ -2549,15 +2550,15 @@ export class WorkerWorkflow {
     command: readonly string[],
     claim: OperationClaim,
   ): Promise<void> {
-    return withStateLock(this.#deps.home, async () => {
-      let launch:
-        | Readonly<{
-            readonly task: TaskRecord;
-            readonly runtime: RuntimeTaskState;
-            readonly job: DurableJob;
-            readonly activeTask: boolean;
-          }>
-        | undefined;
+    let launch:
+      | Readonly<{
+          readonly task: TaskRecord;
+          readonly runtime: RuntimeTaskState;
+          readonly job: DurableJob;
+          readonly activeTask: boolean;
+        }>
+      | undefined;
+    await withStateLock(this.#deps.home, async () => {
       await this.#deps.store.exclusive(async (store) => {
         const state = await readRuntimeState(this.#deps.runtimePath);
         const runtime = taskRuntime(state, taskId);
@@ -2657,52 +2658,85 @@ export class WorkerWorkflow {
           activeTask,
         };
       });
-      if (launch === undefined) return;
-      if (launch.job.phase === "reserved" && claim !== undefined) {
-        try {
-          const parsed = JSON.parse(await readFile(launch.job.jobPath, "utf8")) as unknown;
-          if (
-            !isRecord(parsed) ||
-            parsed.id !== launch.job.id ||
-            parsed.taskId !== launch.job.taskId
-          ) {
-            throw new Error("prepared job spec identity does not match durable job");
-          }
-          if (parsed.generation !== launch.job.generation || !isRecord(parsed.execution)) {
-            throw new Error("prepared job spec execution identity is invalid");
-          }
-          await writeJsonAtomically(launch.job.jobPath, {
-            ...parsed,
-            execution: {
-              ...parsed.execution,
-              operationId: claim.id,
-              fencingRevision: claim.fencingRevision,
-              claimOwner: claim.claimOwner,
-            },
-          });
-        } catch (error) {
-          await this.quarantineOperation(
-            taskId,
-            `prepared job spec could not be refreshed: ${describeError(error)}`,
-            claim,
-          );
-          return;
-        }
-      }
+    });
+    if (launch === undefined) return;
+    await appendDiagnosticEvent(this.#deps.home, {
+      event: "worker-launch-started",
+      taskId,
+      jobId,
+      generation: launch.job.generation,
+      role: launch.job.role,
+      phase: "launching",
+      details: { cwd, paneId: endpoint.paneId },
+    });
+    if (launch.job.phase === "reserved" && claim !== undefined) {
       try {
-        const previousJob = workerJobForEndpoint(
-          launch.runtime.jobs.filter((entry) => entry.id !== jobId),
-          endpoint,
-        );
-        await prepareWorkerTerminal(this.#deps.run, {
-          endpoint,
-          cwd,
-          ...(previousJob === undefined ? {} : { job: previousJob }),
+        const parsed = JSON.parse(await readFile(launch.job.jobPath, "utf8")) as unknown;
+        if (
+          !isRecord(parsed) ||
+          parsed.id !== launch.job.id ||
+          parsed.taskId !== launch.job.taskId
+        ) {
+          throw new Error("prepared job spec identity does not match durable job");
+        }
+        if (parsed.generation !== launch.job.generation || !isRecord(parsed.execution)) {
+          throw new Error("prepared job spec execution identity is invalid");
+        }
+        await writeJsonAtomically(launch.job.jobPath, {
+          ...parsed,
+          execution: {
+            ...parsed.execution,
+            operationId: claim.id,
+            fencingRevision: claim.fencingRevision,
+            claimOwner: claim.claimOwner,
+          },
         });
-        await sendCommand(this.#deps.run, { endpoint, cwd, command });
-        await this.proveWorkerStartup(launch.job, endpoint, cwd);
       } catch (error) {
-        const reason = `worker launch could not be proven after launch intent: ${describeError(error)}`;
+        await this.quarantineOperation(
+          taskId,
+          `prepared job spec could not be refreshed: ${describeError(error)}`,
+          claim,
+        );
+        return;
+      }
+    }
+    try {
+      const previousJob = workerJobForEndpoint(
+        launch.runtime.jobs.filter((entry) => entry.id !== jobId),
+        endpoint,
+      );
+      await prepareWorkerTerminal(this.#deps.run, {
+        endpoint,
+        cwd,
+        ...(previousJob === undefined ? {} : { job: previousJob }),
+      });
+      await sendCommand(this.#deps.run, { endpoint, cwd, command });
+      await this.proveWorkerStartup(launch.job, endpoint, cwd);
+      await appendDiagnosticEvent(this.#deps.home, {
+        event: "worker-startup-proven",
+        taskId,
+        jobId,
+        generation: launch.job.generation,
+        role: launch.job.role,
+        phase: "launching",
+        details: { cwd, paneId: endpoint.paneId },
+      });
+    } catch (error) {
+      const reason = `worker launch could not be proven after launch intent: ${describeError(error)}`;
+      await appendDiagnosticEvent(this.#deps.home, {
+        event: "worker-launch-failed",
+        taskId,
+        jobId,
+        generation: launch.job.generation,
+        role: launch.job.role,
+        phase: "quarantining",
+        details: {
+          cwd,
+          paneId: endpoint.paneId,
+          error: describeError(error),
+        },
+      });
+      await withStateLock(this.#deps.home, async () => {
         await this.#deps.store.exclusive(async () => {
           const state = await readRuntimeState(this.#deps.runtimePath);
           const current = taskRuntime(state, taskId);
@@ -2736,9 +2770,11 @@ export class WorkerWorkflow {
           await writeRuntimeState(this.#deps.runtimePath, quarantined);
           await this.#deps.blockTask(taskId, reason);
         });
+      });
 
-        return;
-      }
+      return;
+    }
+    await withStateLock(this.#deps.home, async () => {
       await this.#deps.store.exclusive(async () => {
         const state = await readRuntimeState(this.#deps.runtimePath);
         const current = taskRuntime(state, taskId);
@@ -2781,6 +2817,15 @@ export class WorkerWorkflow {
         }));
         await writeRuntimeState(this.#deps.runtimePath, running);
       });
+    });
+    await appendDiagnosticEvent(this.#deps.home, {
+      event: "worker-running-recorded",
+      taskId,
+      jobId,
+      generation: launch.job.generation,
+      role: launch.job.role,
+      phase: "running",
+      details: { cwd, paneId: endpoint.paneId },
     });
   }
 
