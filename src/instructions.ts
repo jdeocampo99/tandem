@@ -85,6 +85,15 @@ export const COORDINATOR_TOOL_GUIDANCE = [
   "On repeat onboarding, show every saved role's exact catalogue selector and thinking level, then offer Keep all, Change roles, or Not now. Keep all is read-only reuse and may continue separately approved project setup without forcing re-selection; Change roles asks explicitly for every role, including keep-current answers for untouched roles, preserves them, and recaps all six before configure-models approval. Not now pauses onboarding without changing saved choices. Never silently reuse choices or start a model questionnaire from setup's post-save result.",
 ].join("\n");
 
+/** The five applicable principles, named so a review brief can list them as blocking requirements. */
+export const FUNCTION_REVIEW_PRINCIPLE_NAMES: readonly string[] = [
+  "Maximize Honesty: every meaningful dependency is visible in the signature and effects are separated from decisions",
+  "Empathic Signatures: each signature reads as an API for its caller, with precise names and honest optionality",
+  "Uniform Abstraction Layers: each function stays at one level of abstraction",
+  "Comment Hygiene: comments carry non-obvious rationale rather than restating the code",
+  "Reader-Oriented Declaration Order: public entry points precede private supporting detail",
+];
+
 export const FUNCTION_REVIEW_PRINCIPLES = `# Function review principles
 
 ## 1. Maximize Honesty

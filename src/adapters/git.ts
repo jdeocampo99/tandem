@@ -10,6 +10,7 @@ import {
   requiredInteger,
   requiredRecord,
   requiredString,
+  requireSuccess,
   runChecked,
 } from "./primitives.ts";
 
@@ -80,6 +81,108 @@ export async function readCheckpoint(
     dirty: status.trim().length !== 0,
     unmerged: unmerged.trim().length !== 0,
   };
+}
+
+export type DiffRangeInput = Readonly<{
+  repo: string;
+  fromRef: string;
+  toRef: string;
+  maxBytes: number;
+}>;
+
+export type DiffRangeObservation = Readonly<{
+  files: readonly string[];
+  patch: string;
+  truncated: boolean;
+}>;
+
+export type ReferencingFilesInput = Readonly<{
+  repo: string;
+  ref: string;
+  files: readonly string[];
+  maxResults: number;
+}>;
+
+function readPositiveCount(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${field} must be a positive integer`);
+  }
+  return value;
+}
+
+function splitLines(output: string): readonly string[] {
+  const lines: string[] = [];
+  for (const line of output.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) lines.push(trimmed);
+  }
+  return lines;
+}
+
+/** Reads one committed range as a bounded patch plus its changed-file list. */
+export async function readDiffRange(
+  run: CommandRunner,
+  input: DiffRangeInput,
+): Promise<DiffRangeObservation> {
+  const repo = checkedPath(input.repo, "repo");
+  const range = `${checkedText(input.fromRef, "fromRef")}..${checkedText(input.toRef, "toRef")}`;
+  const maxBytes = readPositiveCount(input.maxBytes, "maxBytes");
+  const namesRequest: CommandRequest = {
+    argv: ["git", "-C", repo, "diff", "--no-ext-diff", "--name-only", range],
+    cwd: repo,
+  };
+  const names = (await runChecked(run, namesRequest, "git diff range names")).stdout;
+  const patchRequest: CommandRequest = {
+    argv: ["git", "-C", repo, "diff", "--no-ext-diff", "--binary", range],
+    cwd: repo,
+  };
+  const patch = (await runChecked(run, patchRequest, "git diff range patch")).stdout;
+  const truncated = Buffer.byteLength(patch, "utf8") > maxBytes;
+  return {
+    files: splitLines(names),
+    patch: truncated ? patch.slice(0, maxBytes) : patch,
+    truncated,
+  };
+}
+
+/**
+ * Lists tracked files at `ref` that mention one of the changed files by module stem and were not
+ * themselves changed. This is an observation of the affected surface, not a proven call graph.
+ */
+export async function readReferencingFiles(
+  run: CommandRunner,
+  input: ReferencingFilesInput,
+): Promise<readonly string[]> {
+  const repo = checkedPath(input.repo, "repo");
+  const ref = checkedText(input.ref, "ref");
+  const maxResults = readPositiveCount(input.maxResults, "maxResults");
+  const changed = new Set(input.files);
+  const stems = new Set<string>();
+  for (const file of input.files) {
+    const stem = file
+      .split("/")
+      .at(-1)
+      ?.replace(/\.[^.]+$/u, "");
+    if (stem !== undefined && stem.length > 0) stems.add(stem);
+  }
+  if (stems.size === 0) return [];
+  const patterns = [...stems].flatMap((stem) => ["-e", stem]);
+  const request: CommandRequest = {
+    argv: ["git", "-C", repo, "grep", "--files-with-matches", "--fixed-strings", ...patterns, ref],
+    cwd: repo,
+  };
+  const result = await run(request);
+  if (result.code !== 0 && result.code !== 1) {
+    requireSuccess(result, request, "git grep referencing files");
+  }
+  const referencing: string[] = [];
+  for (const line of splitLines(result.stdout)) {
+    const file = line.startsWith(`${ref}:`) ? line.slice(ref.length + 1) : line;
+    if (changed.has(file) || referencing.includes(file)) continue;
+    referencing.push(file);
+    if (referencing.length >= maxResults) break;
+  }
+  return referencing;
 }
 
 function parsePullRequestMetadata(

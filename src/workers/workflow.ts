@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
+import {
+  type GitCheckpoint,
+  readCheckpoint,
+  readDiffRange,
+  readReferencingFiles,
+} from "../adapters/git.ts";
 import {
   closeEndpoint,
   createReviewerEndpoint,
@@ -99,7 +104,16 @@ import {
   formatTaskMessages,
   MAX_TASK_MESSAGE_CHARS,
 } from "../tasks/communication-protocol.ts";
+import { describeFixRoundExhaustion } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
+import {
+  buildReviewBrief,
+  lastReviewedHead,
+  REVIEW_BRIEF_LIMITS,
+  type ReviewBriefDiffReference,
+  type ReviewBriefObservations,
+  renderReviewBrief,
+} from "../tasks/review-brief.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import {
   readValidationResult,
@@ -1536,10 +1550,7 @@ export class WorkerWorkflow {
       return;
     }
     if (!recoveryFix && task.reviewRound >= task.policy.config.maxFixRounds) {
-      await this.#deps.blockTask(
-        task.id,
-        `fix round budget exhausted at ${task.reviewRound}; no new fix operation was admitted`,
-      );
+      await this.#deps.blockTask(task.id, describeFixRoundExhaustion(task));
       return;
     }
     const reservation = reserved ?? (await this.reserveTask(task.id, "implementer"));
@@ -2079,6 +2090,78 @@ export class WorkerWorkflow {
     );
   }
 
+  /**
+   * Reads the git facts the review brief needs: the cumulative range from the worktree base, the
+   * range since the last reviewed HEAD, and the files at HEAD that reference a changed file.
+   */
+  private async readReviewObservations(
+    input: Readonly<{
+      readonly task: TaskRecord;
+      readonly head: string;
+      readonly repo: string;
+      readonly baseHead: string;
+      readonly cumulativePatchPath: string;
+      readonly incrementalPatchPath: string;
+    }>,
+  ): Promise<
+    Readonly<{
+      readonly observations: ReviewBriefObservations;
+      readonly cumulativePatch: string;
+      readonly incrementalPatch?: string;
+    }>
+  > {
+    const maxBytes = REVIEW_BRIEF_LIMITS.maxDiffPatchBytes;
+    const cumulative = await readDiffRange(this.#deps.run, {
+      repo: input.repo,
+      fromRef: input.baseHead,
+      toRef: input.head,
+      maxBytes,
+    });
+    const cumulativeReference: ReviewBriefDiffReference = {
+      range: "cumulative",
+      fromRef: input.baseHead,
+      toRef: input.head,
+      patchPath: input.cumulativePatchPath,
+      changedFiles: cumulative.files,
+      truncated: cumulative.truncated,
+    };
+    const affectedCallers = await readReferencingFiles(this.#deps.run, {
+      repo: input.repo,
+      ref: input.head,
+      files: cumulative.files.slice(0, REVIEW_BRIEF_LIMITS.maxChangedFiles),
+      maxResults: REVIEW_BRIEF_LIMITS.maxAffectedCallers,
+    });
+    const previousHead = lastReviewedHead(input.task);
+    if (previousHead === undefined || previousHead === input.head) {
+      return {
+        observations: { cumulative: cumulativeReference, affectedCallers },
+        cumulativePatch: cumulative.patch,
+      };
+    }
+    const incremental = await readDiffRange(this.#deps.run, {
+      repo: input.repo,
+      fromRef: previousHead,
+      toRef: input.head,
+      maxBytes,
+    });
+    return {
+      observations: {
+        cumulative: cumulativeReference,
+        sinceLastReview: {
+          range: "since-last-review",
+          fromRef: previousHead,
+          toRef: input.head,
+          patchPath: input.incrementalPatchPath,
+          changedFiles: incremental.files,
+          truncated: incremental.truncated,
+        },
+        affectedCallers,
+      },
+      cumulativePatch: cumulative.patch,
+      incrementalPatch: incremental.patch,
+    };
+  }
+
   async advanceReview(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
     if (task.reviewHead === undefined || task.worktree === undefined) {
       await this.#deps.blockTask(task.id, "review requires a task worktree and reviewed HEAD");
@@ -2261,7 +2344,26 @@ export class WorkerWorkflow {
       const paths = jobPaths(directory);
       const diffPath = join(directory, "diff.patch");
       const evidencePath = join(directory, "validation-evidence.json");
+      const briefPath = join(directory, "review-brief.md");
+      const cumulativePatchPath = join(directory, "cumulative.patch");
+      const incrementalPatchPath = join(directory, "since-last-review.patch");
       const reviewMode: ReviewMode = reservedRuntime.reviewMode ?? "review_changed_diff";
+      const reviewContext = await this.readReviewObservations({
+        task,
+        head: task.reviewHead,
+        repo: task.worktree.path,
+        baseHead: task.worktree.baseHead,
+        cumulativePatchPath: reviewMode === "review_existing_head" ? cumulativePatchPath : diffPath,
+        incrementalPatchPath,
+      });
+      const brief = renderReviewBrief(
+        buildReviewBrief({
+          task,
+          head: task.reviewHead,
+          lens: nextLens,
+          observations: reviewContext.observations,
+        }),
+      );
       const artifactsWritten = await this.withOperationEffect(
         task.id,
         claim,
@@ -2272,6 +2374,13 @@ export class WorkerWorkflow {
             diffPath,
             reviewMode === "review_existing_head" ? "" : currentCheckout.diff,
           );
+          if (reviewMode === "review_existing_head") {
+            await writeTextAtomically(cumulativePatchPath, reviewContext.cumulativePatch);
+          }
+          if (reviewContext.incrementalPatch !== undefined) {
+            await writeTextAtomically(incrementalPatchPath, reviewContext.incrementalPatch);
+          }
+          await writeTextAtomically(briefPath, brief);
           await writeJsonAtomically(evidencePath, task.validationEvidence);
           return true;
         },
@@ -2289,7 +2398,10 @@ export class WorkerWorkflow {
         role,
         reportPath,
         [
+          briefPath,
           diffPath,
+          ...(reviewMode === "review_existing_head" ? [cumulativePatchPath] : []),
+          ...(reviewContext.incrementalPatch === undefined ? [] : [incrementalPatchPath]),
           evidencePath,
           ...(task.reportPath === undefined ? [] : [task.reportPath]),
           ...(reservedRuntime.reviewProvenancePath === undefined
@@ -2299,6 +2411,9 @@ export class WorkerWorkflow {
         { head: task.reviewHead, generation: task.generation, pass: nextLens },
         [
           `Review only the selected ${nextLens} lens. The immutable diff is at ${diffPath}.`,
+          `The deterministic review brief for this round is at ${briefPath}. It reuses the recorded scope, identities, diffs, evidence, and prior finding status so you do not rebuild them; it never replaces your own reading of the source at this HEAD.`,
+          "An implementer assertion, summary, report, or claimed fix is not proof. Confirm every claim against the source, the diff, or runner-produced evidence before you rely on it.",
+          "Reuse the exact finding id the brief lists when you report the same issue again, so its identity and status stay stable across rounds. Do not reopen a settled finding without new evidence observed at this HEAD and generation.",
           `Validation evidence is at ${evidencePath}; treat it as runner-produced evidence only.`,
           ...(reviewMode === "review_existing_head"
             ? [
