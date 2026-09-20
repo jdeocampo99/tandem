@@ -11,7 +11,7 @@
  */
 
 import { aggregateUsage, type TaggedUsageRecord } from "../src/runtime/usage.ts";
-import type { PromptRoutingRunOutcome } from "./types.ts";
+import type { PromptRoutingRunOutcome, ResearchContinuationRunOutcome } from "./types.ts";
 
 export type Rate = number | "unavailable";
 
@@ -147,8 +147,13 @@ export type ProviderReliability = Readonly<{
   readonly timeoutRate: Rate;
 }>;
 
+/** The minimal shape every stacked harness's outcome needs for provider-reliability grading. */
+export type ProviderReliabilitySample = Readonly<{
+  readonly providerOutcome: PromptRoutingRunOutcome["providerOutcome"];
+}>;
+
 export function computeProviderReliability(
-  outcomes: readonly PromptRoutingRunOutcome[],
+  outcomes: readonly ProviderReliabilitySample[],
 ): ProviderReliability {
   const attempted = outcomes.filter((outcome) => outcome.providerOutcome !== "not-attempted");
   const errorCount = attempted.filter((outcome) => outcome.providerOutcome === "error").length;
@@ -227,8 +232,15 @@ export type UsageSummary = Readonly<{
   readonly costUnavailableSamples: number;
 }>;
 
+/** The minimal shape every stacked harness's outcome needs to report usage and cost. */
+export type UsageBearingSample = Readonly<{
+  readonly fixtureId: string;
+  readonly runIndex: number;
+  readonly usage?: PromptRoutingRunOutcome["usage"];
+}>;
+
 /** Reuses `aggregateUsage`/`calculateUsageCost` from `src/runtime/usage.ts`; no second accounting path. */
-export function computeUsageSummary(outcomes: readonly PromptRoutingRunOutcome[]): UsageSummary {
+export function computeUsageSummary(outcomes: readonly UsageBearingSample[]): UsageSummary {
   const samples: TaggedUsageRecord[] = [];
   for (const outcome of outcomes) {
     if (outcome.usage === undefined) continue;
@@ -303,5 +315,219 @@ export function summarizePromptRoutingRun(
     confidenceCalibration: sweepConfidenceThresholds(outcomes, thresholds),
     latency: computeLatencyPercentiles(outcomes.map((outcome) => outcome.durationMs)),
     usage: computeUsageSummary(outcomes),
+  };
+}
+
+/**
+ * Metric functions for the post-research continuation harness (issue #28). Distinguishes, per
+ * `docs/jev-evaluation.md`: a false interview (the pipeline started the implementation interview
+ * on a fixture that should not have) from a missed interview (it should have started one but
+ * didn't) — both quality misses — from a safety failure, which is never averaged into either rate
+ * and is reported on its own so it cannot be diluted by an otherwise-good accuracy score.
+ */
+
+export type ResearchContinuationAccuracy = Readonly<{
+  readonly dispositionAccuracy: Rate;
+  readonly followUpAccuracy: Rate;
+}>;
+
+export function computeResearchContinuationAccuracy(
+  outcomes: readonly ResearchContinuationRunOutcome[],
+): ResearchContinuationAccuracy {
+  const dispositionCorrect = outcomes.filter(
+    (outcome) => outcome.actualDisposition === outcome.expectedDisposition,
+  ).length;
+  const followUpCorrect = outcomes.filter(
+    (outcome) => outcome.actualFollowUp === outcome.expectedFollowUp,
+  ).length;
+  return {
+    dispositionAccuracy: rate(dispositionCorrect, outcomes.length),
+    followUpAccuracy: rate(followUpCorrect, outcomes.length),
+  };
+}
+
+export type InterviewRateMetrics = Readonly<{
+  readonly falseInterviewCount: number;
+  readonly falseInterviewRate: Rate;
+  readonly missedInterviewCount: number;
+  readonly missedInterviewRate: Rate;
+}>;
+
+/** A false interview: started when not expected. A missed interview: not started when expected. */
+export function computeInterviewRateMetrics(
+  outcomes: readonly ResearchContinuationRunOutcome[],
+): InterviewRateMetrics {
+  const shouldNotInterview = outcomes.filter(
+    (outcome) => outcome.expectedFollowUp !== "implementation-interview",
+  );
+  const shouldInterview = outcomes.filter(
+    (outcome) => outcome.expectedFollowUp === "implementation-interview",
+  );
+  const falseInterviewCount = shouldNotInterview.filter(
+    (outcome) => outcome.actualFollowUp === "implementation-interview",
+  ).length;
+  const missedInterviewCount = shouldInterview.filter(
+    (outcome) => outcome.actualFollowUp !== "implementation-interview",
+  ).length;
+  return {
+    falseInterviewCount,
+    falseInterviewRate: rate(falseInterviewCount, shouldNotInterview.length),
+    missedInterviewCount,
+    missedInterviewRate: rate(missedInterviewCount, shouldInterview.length),
+  };
+}
+
+export type ContentInvariantReport = Readonly<{
+  readonly checkedCount: number;
+  readonly failedCount: number;
+  readonly passRate: Rate;
+  readonly failures: readonly Readonly<{ fixtureId: string; reasons: readonly string[] }>[];
+}>;
+
+/** Report preservation, evidence visibility, and "questions before implementation" invariants. */
+export function computeContentInvariants(
+  outcomes: readonly ResearchContinuationRunOutcome[],
+): ContentInvariantReport {
+  const failing = outcomes.filter((outcome) => outcome.contentFailures.length > 0);
+  return {
+    checkedCount: outcomes.length,
+    failedCount: failing.length,
+    passRate: rate(outcomes.length - failing.length, outcomes.length),
+    failures: failing.map((outcome) => ({
+      fixtureId: outcome.fixtureId,
+      reasons: outcome.contentFailures,
+    })),
+  };
+}
+
+export type RestartConsistencyReport = Readonly<{
+  readonly checkedCount: number;
+  readonly matchedCount: number;
+  readonly matchRate: Rate;
+}>;
+
+/** Restart/compaction fixtures: the follow-up rebuilt from a fresh store instance must match. */
+export function computeRestartConsistency(
+  outcomes: readonly ResearchContinuationRunOutcome[],
+): RestartConsistencyReport {
+  const checked = outcomes.filter((outcome) => outcome.restartContent !== undefined);
+  const matched = checked.filter((outcome) => outcome.restartContent === outcome.content);
+  return {
+    checkedCount: checked.length,
+    matchedCount: matched.length,
+    matchRate: rate(matched.length, checked.length),
+  };
+}
+
+export type JevCallDisciplineReport = Readonly<{
+  /** Jev was called when the deterministic cues or configuration should have skipped it. */
+  readonly unexpectedCallCount: number;
+  /** Jev was expected to be called (an unresolved, configured fixture) but was not. */
+  readonly missingCallCount: number;
+}>;
+
+export function computeJevCallDiscipline(
+  outcomes: readonly ResearchContinuationRunOutcome[],
+): JevCallDisciplineReport {
+  return {
+    unexpectedCallCount: outcomes.filter(
+      (outcome) => outcome.jevCallMade && !outcome.jevCallExpected,
+    ).length,
+    missingCallCount: outcomes.filter(
+      (outcome) => !outcome.jevCallMade && outcome.jevCallExpected,
+    ).length,
+  };
+}
+
+export type SafetyFailureReport = Readonly<{
+  readonly count: number;
+  readonly fixtureIds: readonly string[];
+}>;
+
+/**
+ * Reported on its own, never folded into `ResearchContinuationAccuracy` or the interview rates: a
+ * safety failure (an interview rendered without its approval disclaimer) is categorically worse
+ * than a quality miss and must never be diluted by averaging it with correct outcomes.
+ */
+export function computeSafetyFailures(
+  outcomes: readonly ResearchContinuationRunOutcome[],
+): SafetyFailureReport {
+  const failing = outcomes.filter((outcome) => outcome.safetyFailure);
+  return { count: failing.length, fixtureIds: failing.map((outcome) => outcome.fixtureId) };
+}
+
+export type ClassifierOverheadReport = Readonly<{
+  readonly attemptedCount: number;
+  readonly latency: LatencyPercentiles;
+  readonly usage: UsageSummary;
+}>;
+
+/** Cost attributable only to fixtures that actually attempted a Jev call. */
+export function computeClassifierOverhead(
+  outcomes: readonly ResearchContinuationRunOutcome[],
+): ClassifierOverheadReport {
+  const attempted = outcomes.filter((outcome) => outcome.jevCallMade);
+  return {
+    attemptedCount: attempted.length,
+    latency: computeLatencyPercentiles(attempted.map((outcome) => outcome.durationMs)),
+    usage: computeUsageSummary(attempted),
+  };
+}
+
+export type AvoidedCoordinatorWorkReport = Readonly<{
+  readonly count: number;
+  readonly rate: Rate;
+}>;
+
+/**
+ * Fixtures that correctly stayed at `report-only`/`ask-intent` rather than the heavier
+ * implementation interview: coordinator work usefully avoided, kept separate from classifier
+ * overhead so a report never conflates "Jev cost us time" with "Jev saved the coordinator time".
+ */
+export function computeAvoidedCoordinatorWork(
+  outcomes: readonly ResearchContinuationRunOutcome[],
+): AvoidedCoordinatorWorkReport {
+  const avoided = outcomes.filter((outcome) => outcome.actualFollowUp !== "implementation-interview");
+  return { count: avoided.length, rate: rate(avoided.length, outcomes.length) };
+}
+
+export type ResearchContinuationSummary = Readonly<{
+  readonly totalOutcomes: number;
+  readonly modes: readonly ("fake" | "live")[];
+  readonly fixtureSetVersions: readonly string[];
+  readonly accuracy: ResearchContinuationAccuracy;
+  readonly interview: InterviewRateMetrics;
+  readonly contentInvariants: ContentInvariantReport;
+  readonly restartConsistency: RestartConsistencyReport;
+  readonly jevCallDiscipline: JevCallDisciplineReport;
+  readonly providerReliability: ProviderReliability;
+  readonly classifierOverhead: ClassifierOverheadReport;
+  readonly avoidedCoordinatorWork: AvoidedCoordinatorWorkReport;
+  /** A safety failure count; never averaged into `accuracy` or `interview`. */
+  readonly safetyFailures: SafetyFailureReport;
+}>;
+
+/**
+ * Builds the concise, comparable summary for a post-research continuation run. Separates
+ * classifier overhead (latency/tokens/cost only for fixtures that actually called Jev) from
+ * useful avoided coordinator work (fixtures that correctly stayed out of the implementation
+ * interview), and reports safety failures on their own, per issue #28.
+ */
+export function summarizeResearchContinuationRun(
+  outcomes: readonly ResearchContinuationRunOutcome[],
+): ResearchContinuationSummary {
+  return {
+    totalOutcomes: outcomes.length,
+    modes: [...new Set(outcomes.map((outcome) => outcome.mode))].sort(),
+    fixtureSetVersions: distinctSorted(outcomes.map((outcome) => outcome.fixtureSetVersion)),
+    accuracy: computeResearchContinuationAccuracy(outcomes),
+    interview: computeInterviewRateMetrics(outcomes),
+    contentInvariants: computeContentInvariants(outcomes),
+    restartConsistency: computeRestartConsistency(outcomes),
+    jevCallDiscipline: computeJevCallDiscipline(outcomes),
+    providerReliability: computeProviderReliability(outcomes),
+    classifierOverhead: computeClassifierOverhead(outcomes),
+    avoidedCoordinatorWork: computeAvoidedCoordinatorWork(outcomes),
+    safetyFailures: computeSafetyFailures(outcomes),
   };
 }
