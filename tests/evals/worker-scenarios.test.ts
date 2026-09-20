@@ -24,7 +24,7 @@ type RunningImplementation = Readonly<{
 }>;
 
 async function seedRunningImplementation(world: ScenarioWorld): Promise<RunningImplementation> {
-  const lease = world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+  const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
   const endpoint = {
     ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
     role: "implementer" as const,

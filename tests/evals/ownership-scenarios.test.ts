@@ -28,7 +28,7 @@ function serviceFor(world: ScenarioWorld) {
 
 test("a foreign pane identity refuses resume and leaves the paused task untouched", async () => {
   await withScenario({}, async (world) => {
-    const lease = world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
     const endpoint = {
       ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
       workspaceId: "workspace-foreign",
@@ -70,7 +70,10 @@ test("a foreign pane identity refuses resume and leaves the paused task untouche
 
 test("a lease whose recorded holder no longer matches is retained rather than returned", async () => {
   await withScenario({}, async (world) => {
-    const granted = world.grantLease({ name: "scenario-task", holder: "another-coordinator" });
+    const granted = await world.grantLease({
+      name: "scenario-task",
+      holder: "another-coordinator",
+    });
     const lease = { ...granted, leaseHolder: "scenario-holder" };
     const endpoint = {
       ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
@@ -108,10 +111,13 @@ test("a lease whose recorded holder no longer matches is retained rather than re
     await service.tick();
 
     const snapshot = await world.snapshot();
-    expect((await service.get(SCENARIO_TASK_ID)).stage).toBe("completed");
+    const task = await service.get(SCENARIO_TASK_ID);
+    expect(task.stage).toBe("completed");
+    expect(task.cleanup?.status).toBe("quarantined");
+    expect(snapshot.resources.quarantined).toContain(`cleanup:${SCENARIO_TASK_ID}`);
     expect(snapshot.resources.retained).toContain("lease:lease-1");
+    expect(snapshot.resources.retained).toContain("worktree:lease-1");
     expect(snapshot.resources.retained).toContain(`report:${SCENARIO_TASK_ID}`);
-    expect(snapshot.runtime.tasks[0]?.lastError).toContain("retained worktree");
     expect(snapshot.trace.some((event) => event.action === "treehouse return")).toBe(false);
     await service.shutdown();
   });
@@ -119,7 +125,7 @@ test("a lease whose recorded holder no longer matches is retained rather than re
 
 test("an unreadable Herdr pane fences the task without releasing its capacity", async () => {
   await withScenario({}, async (world) => {
-    const lease = world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
     const endpoint = {
       ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
       role: "implementer" as const,
