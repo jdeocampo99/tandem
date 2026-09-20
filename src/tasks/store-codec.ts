@@ -18,6 +18,7 @@ import {
   type ResolvedGuidance,
   type ResolvedPolicy,
   type ReviewLens,
+  type ReviewMode,
   type ReviewResult,
   type TaskKind,
   type TaskRecord,
@@ -451,12 +452,20 @@ function parseReview(value: unknown, source: string): ReviewResult {
   if (!isRecord(value)) {
     failState(source, "review must be an object");
   }
-  assertExactKeys(value, ["lens", "head", "generation", "pass", "findings", "summary"], source);
+  assertExactKeys(
+    value,
+    ["lens", "head", "generation", "pass", "findings", "summary", "mode"],
+    source,
+  );
   const findingsValue = requiredValue(value, "findings", source);
   if (!Array.isArray(findingsValue)) {
     failState(`${source}.findings`, "findings must be an array");
   }
   const findings: readonly unknown[] = findingsValue;
+  const mode = optionalText(value, "mode", source);
+  if (mode !== undefined && mode !== "review_changed_diff" && mode !== "review_existing_head") {
+    failState(`${source}.mode`, `unsupported review mode ${mode}`);
+  }
   return {
     lens: requiredEnum(value, "lens", REVIEW_LENSES, source),
     head: requiredText(value, "head", source),
@@ -464,6 +473,7 @@ function parseReview(value: unknown, source: string): ReviewResult {
     pass: requiredBoolean(value, "pass", source),
     findings: findings.map((entry, index) => parseFinding(entry, `${source}.findings[${index}]`)),
     summary: requiredText(value, "summary", source),
+    ...(mode === undefined ? {} : { mode: mode as ReviewMode }),
   };
 }
 

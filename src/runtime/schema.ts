@@ -1,6 +1,13 @@
 import { isAbsolute, resolve } from "node:path";
 import type { GitCheckpoint } from "../adapters/git.ts";
-import type { Endpoint, Finding, IsoTimestamp, ReviewLens, WorktreeLease } from "../contracts.ts";
+import type {
+  Endpoint,
+  Finding,
+  IsoTimestamp,
+  ReviewLens,
+  ReviewMode,
+  WorktreeLease,
+} from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 
@@ -136,6 +143,15 @@ export type DurableReservation = Readonly<{
   readonly releasedAt?: IsoTimestamp;
 }>;
 
+export type RuntimeRecoveryState = Readonly<{
+  readonly schemaVersion: 1;
+  readonly recoveryAttempts: number;
+  readonly validationRetries: number;
+  readonly evidenceRepairs: number;
+  readonly lastOperation?: "reconcile" | "validation-retry" | "evidence-repair" | "review-existing";
+  readonly lastAt?: IsoTimestamp;
+}>;
+
 export type RuntimeTaskState = Readonly<{
   readonly schemaVersion: 1;
   readonly taskId: string;
@@ -150,6 +166,9 @@ export type RuntimeTaskState = Readonly<{
   readonly worktree?: WorktreeLease;
   readonly endpoints: readonly Endpoint[];
   readonly jobs: readonly DurableJob[];
+  readonly reviewMode?: ReviewMode;
+  readonly reviewProvenancePath?: string;
+  readonly recovery?: RuntimeRecoveryState;
   readonly sessionDirectory?: string;
   readonly fixContextPath?: string;
   readonly lastError?: string;
@@ -611,6 +630,53 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
       : nonNegativeInteger(value.terminalCleanupRevision, `${field}.terminalCleanupRevision`);
   const lastError =
     value.lastError === undefined ? undefined : text(value.lastError, `${field}.lastError`);
+  const reviewMode =
+    value.reviewMode === undefined
+      ? undefined
+      : enumValue(
+          value.reviewMode,
+          ["review_changed_diff", "review_existing_head"] as const,
+          `${field}.reviewMode`,
+        );
+  const reviewProvenancePath =
+    value.reviewProvenancePath === undefined
+      ? undefined
+      : absolutePath(value.reviewProvenancePath, `${field}.reviewProvenancePath`);
+  const recovery =
+    value.recovery === undefined
+      ? undefined
+      : (() => {
+          if (!isRecord(value.recovery)) throw new TypeError(`${field}.recovery must be an object`);
+          const lastOperation =
+            value.recovery.lastOperation === undefined
+              ? undefined
+              : enumValue(
+                  value.recovery.lastOperation,
+                  ["reconcile", "validation-retry", "evidence-repair", "review-existing"] as const,
+                  `${field}.recovery.lastOperation`,
+                );
+          const lastAt =
+            value.recovery.lastAt === undefined
+              ? undefined
+              : singleLine(value.recovery.lastAt, `${field}.recovery.lastAt`);
+          return {
+            schemaVersion: 1 as const,
+            recoveryAttempts: nonNegativeInteger(
+              value.recovery.recoveryAttempts,
+              `${field}.recovery.recoveryAttempts`,
+            ),
+            validationRetries: nonNegativeInteger(
+              value.recovery.validationRetries,
+              `${field}.recovery.validationRetries`,
+            ),
+            evidenceRepairs: nonNegativeInteger(
+              value.recovery.evidenceRepairs,
+              `${field}.recovery.evidenceRepairs`,
+            ),
+            ...(lastOperation === undefined ? {} : { lastOperation }),
+            ...(lastAt === undefined ? {} : { lastAt }),
+          };
+        })();
   const legacyQuarantine =
     value.legacyQuarantine === undefined
       ? undefined
@@ -644,8 +710,11 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
     ...(worktreeValue === undefined ? {} : { worktree: worktreeValue }),
     endpoints,
     jobs,
-    ...(sessionDirectory === undefined ? {} : { sessionDirectory }),
     ...(fixContextPath === undefined ? {} : { fixContextPath }),
+    ...(sessionDirectory === undefined ? {} : { sessionDirectory }),
+    ...(reviewMode === undefined ? {} : { reviewMode }),
+    ...(reviewProvenancePath === undefined ? {} : { reviewProvenancePath }),
+    ...(recovery === undefined ? {} : { recovery }),
     ...(lastError === undefined ? {} : { lastError }),
     ...(poolAdmissionKey === undefined ? {} : { poolAdmissionKey }),
     ...(legacyQuarantine === undefined ? {} : { legacyQuarantine }),
@@ -653,6 +722,7 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
     ...(terminalCleanupRevision === undefined ? {} : { terminalCleanupRevision }),
   };
 }
+
 function parsePresentation(value: unknown, field: string): RuntimePresentation {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   const operation =

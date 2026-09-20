@@ -43,6 +43,57 @@ export function boundedJson(value: unknown, limit: number): string {
   }
 }
 
+function summarizeRecoveryAction(action: TandemAction["action"], value: unknown): string {
+  const record = summaryRecord(value);
+  if (record === undefined) return boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  const taskId = recordText(record, "taskId") ?? "unknown task";
+  if (action === "inspect") {
+    const endpoints = Array.isArray(record.endpoints) ? record.endpoints.length : 0;
+    const jobs = Array.isArray(record.jobs) ? record.jobs.length : 0;
+    const stage = recordText(record, "stage") ?? "unknown stage";
+    const blocked = record.blocked === true ? "blocked" : "safe to inspect";
+    return boundedOutput(
+      `${taskId}: ${blocked}; stage ${stage}; ${endpoints} endpoint(s); ${jobs} durable job(s); ${recordText(record, "branch") ?? "branch unknown"}`,
+      ACTION_RESULT_MAX_CHARS,
+    );
+  }
+  if (action === "recovery-plan") {
+    const operation = summaryRecord(record.operation);
+    const budget = summaryRecord(record.budget);
+    const name = recordText(operation ?? {}, "name") ?? "none";
+    const refusals = Array.isArray(record.refusals)
+      ? record.refusals.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const recoveryRemaining =
+      typeof budget?.recoveryRemaining === "number" ? budget.recoveryRemaining : undefined;
+    return boundedOutput(
+      `${taskId}: dry-run ${name}; recovery remaining ${String(recoveryRemaining ?? "unknown")}${refusals.length === 0 ? "" : `; refusals: ${compactList(refusals)}`}`,
+      ACTION_RESULT_MAX_CHARS,
+    );
+  }
+  if (action === "delivery-preflight") {
+    const checks = Array.isArray(record.checks)
+      ? record.checks.filter(
+          (entry): entry is Record<string, unknown> => summaryRecord(entry) !== undefined,
+        )
+      : [];
+    const failed = checks
+      .filter((entry) => entry.passed !== true)
+      .map((entry) => (typeof entry.name === "string" ? entry.name : "unnamed check"));
+    return boundedOutput(
+      `${taskId}: delivery ${record.ready === true ? "ready" : "refused"}${failed.length === 0 ? "" : `; failed: ${failed.join(", ")}`}`,
+      ACTION_RESULT_MAX_CHARS,
+    );
+  }
+  const status =
+    recordText(record, "status") ?? (record.changed === true ? "changed" : "unchanged");
+  const reason = recordText(record, "reason");
+  return boundedOutput(
+    `${taskId}: ${status}${reason === undefined ? "" : `; ${reason}`}`,
+    ACTION_RESULT_MAX_CHARS,
+  );
+}
+
 export function pendingCount(task: Pick<TaskRecord, "notifications">): number {
   return task.notifications.reduce(
     (count, notification) => count + (notification.acknowledged ? 0 : 1),
@@ -153,8 +204,9 @@ function summarizeTask(task: TaskRecord): string {
     );
   }
   if (currentReviews.length > 0) {
+    const reviewMode = currentReviews.find((review) => review.mode !== undefined)?.mode;
     lines.push(
-      `Reviews: ${currentReviews.map((review) => `${review.lens}=${review.pass ? "pass" : "findings"}`).join(", ")}`,
+      `Reviews: ${currentReviews.map((review) => `${review.lens}=${review.pass ? "pass" : "findings"}`).join(", ")}${reviewMode === undefined ? "" : `; mode ${reviewMode}`}`,
     );
   }
   if (findings.length > 0) {
@@ -590,6 +642,9 @@ function isTaskReview(value: unknown): value is TaskReview {
     typeof record.head === "string" &&
     typeof record.generation === "number" &&
     typeof record.pass === "boolean" &&
+    (record.mode === undefined ||
+      record.mode === "review_changed_diff" ||
+      record.mode === "review_existing_head") &&
     Array.isArray(record.findings) &&
     record.findings.every(isTaskFinding)
   );
@@ -686,8 +741,21 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   if (action === "onboard" || action === "setup") return summarizeOnboard(value, action);
   if (action === "models") return summarizeModels(value);
   if (action === "configure-models") return summarizeConfiguredModels(value);
-  if (action === "steer" || action === "answer") return summarizeCommunication(value, "latest");
+  if (action === "steer" || action === "answer") {
+    return summarizeCommunication(value, "latest");
+  }
   if (action === "messages") return summarizeCommunication(value, "overview");
+  if (
+    action === "inspect" ||
+    action === "recovery-plan" ||
+    action === "reconcile" ||
+    action === "review-existing" ||
+    action === "validation-retry" ||
+    action === "evidence-repair" ||
+    action === "delivery-preflight"
+  ) {
+    return summarizeRecoveryAction(action, value);
+  }
   if (
     action === "create" ||
     action === "show" ||

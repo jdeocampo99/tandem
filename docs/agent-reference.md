@@ -1166,6 +1166,48 @@ Positive native identity or matching durable result evidence may continue recove
 conflicting, or ambiguous evidence quarantines the operation and retains its reservation/resources
 rather than guessing. A failure preserves reports and worktree state.
 
+### First-class bounded recovery actions
+
+The advanced CLI exposes the durable recovery workflow without editing SQLite or inspecting
+model output:
+
+```sh
+tandem inspect TASK_ID --json
+tandem recovery-plan TASK_ID --json
+tandem reconcile TASK_ID --yes --json
+tandem review-existing TASK_ID --head REVIEWED_HEAD --yes --json
+tandem validation-retry TASK_ID --yes --json
+tandem evidence-repair TASK_ID --yes --json
+tandem delivery-preflight TASK_ID OWNER/REPOSITORY BASE --json
+```
+
+`inspect` reports stage, generation, review round, separate recovery budgets, exact reviewed and
+current HEADs, clean/unmerged state, canonical repository identity, branch, preserved worktree and
+lease, endpoint ownership/liveness, durable jobs and result files, reports/provenance, reservations,
+operations, pull-request metadata, and recommended actions. `recovery-plan` is a read-only dry run;
+it reports checkpoint safety, stale resources, the selected bounded operation, remaining budgets, and
+refusal reasons.
+
+`reconcile` requires `--yes` and is idempotent. It clears only proven missing/stopped owned panes,
+quarantines jobs whose pane disappeared, and releases a reservation only after operation and jobs
+are terminal. It never releases a reservation or closes a foreign/unknown pane, never reuses a
+worktree for a new task, and always reports the worktree as preserved. Repeated reconciliation is a
+no-op after the proven state is recorded.
+
+`review-existing` requires the exact durable reviewed HEAD, a canonical repository identity, and a
+clean unmerged worktree. It records `review_existing_head` provenance, runs validation, and launches
+all required read-only review lenses without an implementer or code-fix budget. An empty diff is
+explicitly a full-implementation review subject, not proof that no implementation exists.
+`validation-retry` is runner-owned, worker-free, bounded separately from code-fix rounds, and
+classifies infrastructure, validation-configuration, and task-code failures. `evidence-repair`
+reconstructs only reports/provenance proven by durable task/generation/HEAD-matching records; stale
+reports are refused.
+
+`delivery-preflight` must pass before approved publication. It checks the exact reviewed HEAD,
+clean/unmerged state, generated database types, formatting, lint/pre-push checks, diff whitespace,
+branch and remote identity, and duplicate pull-request metadata. Publication never bypasses a
+failed preflight or publishes an unreviewed changed HEAD; merge and deploy remain human-approved.
+
 Task communication is canonical in the task row in `state.sqlite` and published as a small
 derived inbox under `<home>/communications/<safe-task-id>/inbox.json`. The service persists
 canonical state before publishing the projection and reconciles a stale or missing inbox after a

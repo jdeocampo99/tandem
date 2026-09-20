@@ -47,6 +47,16 @@ import { type PresentationRecord, readPresentationRecord } from "../presentation
 import { preparePresentation } from "../presentations/session.ts";
 import { PresentationRuntimeWorkflow } from "../presentations/workflow.ts";
 import {
+  type DeliveryPreflightResult,
+  type EvidenceRepairResult,
+  type ReconciliationResult,
+  type RecoveryInspection,
+  type RecoveryPlan,
+  RecoveryWorkflow,
+  type ReviewExistingResult,
+  type ValidationRetryResult,
+} from "../recovery/workflow.ts";
+import {
   activeReservations,
   activeRuntimeJob,
   presentationRuntime,
@@ -141,7 +151,6 @@ export type TandemServiceOptions = Readonly<{
   readonly clock?: Clock;
   readonly idFactory?: IdFactory;
 }>;
-
 export type TandemService = Readonly<{
   readonly onboard: (repoPath: string, write?: boolean) => Promise<OnboardRepoResult>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
@@ -152,6 +161,28 @@ export type TandemService = Readonly<{
   readonly refreshSource?: () => Promise<SourceRefreshResult | undefined>;
   readonly list: () => Promise<readonly TaskRecord[]>;
   readonly get: (id: string) => Promise<TaskRecord>;
+  readonly inspect: (id: string) => Promise<RecoveryInspection>;
+  readonly recoveryPlan: (id: string) => Promise<RecoveryPlan>;
+  readonly reconcile: (
+    id: string,
+    input: { readonly approved: boolean },
+  ) => Promise<ReconciliationResult>;
+  readonly reviewExisting: (
+    id: string,
+    input: { readonly head: string; readonly approved: boolean },
+  ) => Promise<ReviewExistingResult>;
+  readonly validationRetry: (
+    id: string,
+    input: { readonly approved: boolean },
+  ) => Promise<ValidationRetryResult>;
+  readonly repairEvidence: (
+    id: string,
+    input: { readonly approved: boolean },
+  ) => Promise<EvidenceRepairResult>;
+  readonly deliveryPreflight: (
+    id: string,
+    input: { readonly repository: string; readonly base: string },
+  ) => Promise<DeliveryPreflightResult>;
   readonly approve: (id: string) => Promise<TaskRecord>;
   readonly tick: () => Promise<readonly TaskRecord[]>;
   readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
@@ -402,6 +433,7 @@ class TandemController {
   readonly #presentationRuntime: PresentationRuntimeWorkflow;
   readonly #worker: WorkerWorkflow;
   readonly #control: TaskControlWorkflow;
+  readonly #recovery: RecoveryWorkflow;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
@@ -496,11 +528,31 @@ class TandemController {
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       saveEndpoint: (taskId, endpoint, claim) => this.#worker.saveEndpoint(taskId, endpoint, claim),
     });
+    this.#recovery = new RecoveryWorkflow({
+      home: deps.home,
+      sessionId: deps.sessionId,
+      run: deps.run,
+      clock: deps.clock,
+      idFactory: deps.idFactory,
+      store: deps.store,
+      runtimePath: deps.runtimePath,
+      getTask: (taskId) => this.get(taskId),
+      taskInScope: (task) => this.#source.taskInScope(task),
+      wake: (task) => this.reconcileTask(task),
+    });
   }
 
   api(): TandemService {
     return {
       onboard: (repoPath, write) => this.onboard(repoPath, write),
+      inspect: (id) => this.#recovery.inspect(id),
+      recoveryPlan: (id) => this.#recovery.plan(id),
+      reconcile: (id, input) => this.#recovery.reconcile(id, input.approved),
+      reviewExisting: (id, input) => this.#recovery.reviewExisting(id, input.head, input.approved),
+      validationRetry: (id, input) => this.#recovery.validationRetry(id, input.approved),
+      repairEvidence: (id, input) => this.#recovery.repairEvidence(id, input.approved),
+      deliveryPreflight: (id, input) =>
+        this.#recovery.deliveryPreflight(id, input.repository, input.base),
       models: (repoPath) => this.models(repoPath),
       configureModels: (input) => this.configureModels(input),
       create: (input) => this.create(input),
@@ -841,6 +893,12 @@ class TandemController {
     },
   ): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("publish input must be an object");
+    if (input.approved) {
+      const preflight = await this.#recovery.deliveryPreflight(id, input.repository, input.base);
+      if (!preflight.ready) {
+        throw new Error(`delivery preflight refused publication: ${preflight.refusals.join("; ")}`);
+      }
+    }
     const prepared = await this.#deps.store.serialized(async (store) => {
       const task = await store.read(id);
       if (task === undefined || !(await this.#source.taskInScope(task))) {

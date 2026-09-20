@@ -21,7 +21,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `reset.ts`, `workspace.ts` |
 | Models, environment, policy | [config/](src/config/) |
 | Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `store.ts`, `control.ts` |
-| Durable jobs, reservations, reconciliation | [runtime/](src/runtime/) + [service/](src/service/) |
+| Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/workflow.ts](src/recovery/workflow.ts) |
 | Worker execution, results, control, validation | [workers/](src/workers/); entry points: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [validation-worker.ts](src/validation-worker.ts) |
 | OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
 | Worktree capacity and maintenance | [pool/](src/pool/) |
@@ -49,6 +49,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
   not migration or recovery; `tandem --reset --force [PATH ...]` cancels selected active tasks.
 - Child agents run interactive OMP. Fresh reviewers are read-only; stop implementer mutation during
   validation/review. Validation runs separately without a model. No remote fleets or alternate harnesses.
+- When a session is bad or blocked, inspect durable state first with `tandem inspect TASK_ID --json`, then run the read-only `tandem recovery-plan TASK_ID --json`. Apply only the recommended approved action; never manually edit SQLite/runtime state, reuse the worktree for a new task, or override unknown ownership.
 
 ## Change and verify
 
@@ -83,6 +84,7 @@ Before changing behavior, read its contract:
 - Capacity/disk admission: [Safe automatic maintenance](docs/agent-reference.md#safe-automatic-maintenance).
 - PRs/artifacts: [Pull-request delivery](docs/agent-reference.md#pull-request-delivery), [Presentations and Lavish](docs/agent-reference.md#presentations-and-lavish).
 - Persistence/restart/locking: [Recovery and durable state](docs/agent-reference.md#recovery-durable-state-and-compaction), [Local limits](docs/agent-reference.md#local-limits-and-source-of-truth).
+- Recovery/rescue workflow: [First-class bounded recovery actions](docs/agent-reference.md#first-class-bounded-recovery-actions).
 
 Keep this file a routing map and cross-cutting rules. Update links when code moves; put detailed
 behavior in the reference instead of accumulating incident-specific instructions here.
