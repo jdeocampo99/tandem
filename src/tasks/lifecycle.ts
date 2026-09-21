@@ -13,6 +13,7 @@ import {
   type ResolvedGuidance,
   type ReviewLens,
   type ReviewResult,
+  type SkillInvocation,
   type TaskKind,
   type TaskRecord,
   type TaskStage,
@@ -29,6 +30,7 @@ import {
 import { recordReviewFindings } from "./findings.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
+import { checkSkillInvocation } from "./skill-invocation.ts";
 
 export type TaskInput = Readonly<{
   readonly id: string;
@@ -43,6 +45,8 @@ export type TaskInput = Readonly<{
   readonly researchHandoffs?: readonly ResearchHandoff[];
   /** Explicit post-research disposition; scouts fall back to the conservative default. */
   readonly researchContinuation?: ResearchContinuation;
+  /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
+  readonly skill?: SkillInvocation;
 }>;
 
 export type TaskTransitionContext = Readonly<{
@@ -288,6 +292,7 @@ function assertTaskInput(input: TaskInput): void {
     throw new TypeError(`Unsafe request id: ${String(input.requestId)}`);
   }
   assertResearchContinuationInput(input);
+  assertSkillInput(input);
   const maxFixRounds = input.policy?.config?.maxFixRounds;
   if (!isInteger(maxFixRounds) || maxFixRounds < 0) {
     throw new TypeError("Task policy must define a non-negative integer maxFixRounds");
@@ -301,6 +306,12 @@ function assertResearchContinuationInput(input: TaskInput): void {
   }
   const check = checkResearchContinuation(input.researchContinuation);
   if (!check.valid) throw new TypeError(`Task researchContinuation is invalid: ${check.defect}`);
+}
+
+function assertSkillInput(input: TaskInput): void {
+  if (input.skill === undefined) return;
+  const check = checkSkillInvocation(input.skill);
+  if (!check.valid) throw new TypeError(`Task skill is invalid: ${check.defect}`);
 }
 
 function assertTextList(values: readonly string[], field: string): void {
@@ -807,6 +818,7 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     ...(input.researchHandoffs === undefined
       ? {}
       : { researchHandoffs: [...input.researchHandoffs] }),
+    ...(input.skill === undefined ? {} : { skill: { ...input.skill } }),
     ...(input.kind === "scout"
       ? {
           researchContinuation:

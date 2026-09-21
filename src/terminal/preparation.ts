@@ -81,6 +81,7 @@ export async function runConfigure(
     mode: modelSettings.configured ? "saved" : "first",
     availableModels: modelOptions.availableModels,
     ...(modelSettings.models === undefined ? {} : { currentModels: modelSettings.models }),
+    enabledProviders: modelSettings.enabledProviders,
     prompter,
     home: environment.home,
   });
@@ -93,7 +94,13 @@ export async function runConfigure(
     };
   }
   if (decision.action === "save" || decision.action === "change") {
-    await service.configureModels({ repoPath: anchor, models: decision.models });
+    await service.configureModels({
+      repoPath: anchor,
+      models: decision.models,
+      ...(decision.enabledProviders === undefined
+        ? {}
+        : { enabledProviders: decision.enabledProviders }),
+    });
   }
   output(
     decision.action === "keep"
@@ -126,12 +133,19 @@ export async function prepareProjects(
       mode: settings.configured ? "saved" : "first",
       availableModels: modelOptions.availableModels,
       ...(settings.models === undefined ? {} : { currentModels: settings.models }),
+      enabledProviders: modelOptions.modelSettings.enabledProviders,
       prompter,
       home: environment.home,
     });
     if (decision.status === "cancelled" || decision.models === undefined) return undefined;
     if (decision.action === "save" || decision.action === "change") {
-      await service.configureModels({ repoPath: anchor.repoPath, models: decision.models });
+      await service.configureModels({
+        repoPath: anchor.repoPath,
+        models: decision.models,
+        ...(decision.enabledProviders === undefined
+          ? {}
+          : { enabledProviders: decision.enabledProviders }),
+      });
     }
   }
 

@@ -1,5 +1,11 @@
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { parseModelAssignments } from "../config/models.ts";
+import {
+  type BalancedProfileProposal,
+  type BalancedRoleGap,
+  discoveredProviders,
+  resolveBalancedProfile,
+} from "../config/operating-profile.ts";
 import { defaultPolicy } from "../config/policy.ts";
 import {
   type AgentRole,
@@ -32,6 +38,8 @@ export type ModelOnboardingInput = Readonly<{
   readonly mode: ModelOnboardingMode;
   readonly availableModels: readonly OmpModelRecord[];
   readonly currentModels?: RepoPolicy["models"];
+  /** Currently saved provider enablement, shown read-only on repeat onboarding. */
+  readonly enabledProviders?: readonly string[];
   readonly prompter: TerminalPrompter;
   readonly home: string;
 }>;
@@ -40,6 +48,8 @@ export type ModelOnboardingResult = Readonly<{
   readonly status: "approved" | "cancelled";
   readonly action: "save" | "keep" | "change" | "cancel";
   readonly models?: RepoPolicy["models"];
+  /** Present only when this run decided a new explicit provider set; absent preserves the saved one. */
+  readonly enabledProviders?: readonly string[];
 }>;
 
 const CANCEL_WORDS: Readonly<Record<string, true>> = {
@@ -290,17 +300,128 @@ function writeRecap(prompter: TerminalPrompter, models: RepoPolicy["models"], ho
   );
 }
 
+/**
+ * Asks, one provider at a time, whether the user grants it explicit spending permission. A plain
+ * choice list (rather than free-text multi-select) keeps this navigable with the same arrow-key
+ * and Enter interaction as every other onboarding prompt. Returns undefined only on cancellation;
+ * declining an individual provider is a normal "skip" answer, not a cancellation.
+ */
+async function askEnabledProviders(
+  prompter: TerminalPrompter,
+  discovered: readonly string[],
+  currentlyEnabled: readonly string[],
+): Promise<readonly string[] | undefined> {
+  if (discovered.length === 0) return [];
+  prompter.write(
+    "\nDiscovered providers (from the OMP catalogue only; discovery never authorizes spending):\n",
+  );
+  const enabled: string[] = [];
+  for (const provider of discovered) {
+    const wasEnabled = currentlyEnabled.includes(provider);
+    const answer = normalized(
+      await prompter.ask(`Enable ${provider} for automatic Balanced selection?`, {
+        choices: [
+          { name: "Enable", value: "enable" },
+          { name: "Skip", value: "skip" },
+        ],
+        default: wasEnabled ? "enable" : "skip",
+      }),
+    );
+    if (answer.length === 0 || isCancellation(answer)) return undefined;
+    if (answer === "enable") enabled.push(provider);
+  }
+  return enabled;
+}
+
+function writeBalancedRecap(
+  prompter: TerminalPrompter,
+  proposal: Extract<BalancedProfileProposal, { status: "resolved" }>,
+  home: string,
+): void {
+  prompter.write(
+    "\nBalanced proposal (exact selector and thinking level chosen from enabled providers):\n",
+  );
+  for (const role of MODEL_ROLE_ORDER) {
+    const assignment = proposal.roles[role].model;
+    prompter.write(
+      `  ${roleLabel(role)} (${role}): ${assignment.model} · thinking ${assignment.thinking}\n`,
+    );
+  }
+  prompter.write(
+    `Exact selectors, capability evidence, and reasons are shown above; accepting saves these choices in ${home}/models.json.\n`,
+  );
+}
+
+function writeUnresolvedGaps(prompter: TerminalPrompter, gaps: readonly BalancedRoleGap[]): void {
+  prompter.write(
+    "\nBalanced could not resolve every role; no built-in pin, fuzzy alias, or silent fallback is used:\n",
+  );
+  for (const gap of gaps) {
+    prompter.write(`  ${roleLabel(gap.role)} (${gap.role}): ${gap.reason}\n`);
+  }
+}
+
+function cancelledFirstRun(prompter: TerminalPrompter): ModelOnboardingResult {
+  prompter.write("Model setup paused; no model choices were saved and no project will launch.\n");
+  return { status: "cancelled", action: "cancel" };
+}
+
 async function firstTimeOnboarding(input: ModelOnboardingInput): Promise<ModelOnboardingResult> {
+  const usable = ensureUsableCatalogue(input.availableModels);
   input.prompter.write(
     "\nTandem needs an explicit model and supported thinking level for all six roles before it can start.\n",
   );
-  const models = await collectAssignments(input.prompter, input.availableModels, undefined);
-  if (models === undefined) {
-    input.prompter.write(
-      "Model setup paused; no model choices were saved and no project will launch.\n",
+  const enabledProviders = await askEnabledProviders(
+    input.prompter,
+    discoveredProviders(usable),
+    [],
+  );
+  if (enabledProviders === undefined) return cancelledFirstRun(input.prompter);
+
+  const proposal = resolveBalancedProfile({
+    catalogue: usable,
+    enabledProviders: new Set(enabledProviders),
+  });
+  let seed: RepoPolicy["models"] | undefined;
+  if (proposal.status === "unresolved") {
+    writeUnresolvedGaps(input.prompter, proposal.gaps);
+    input.prompter.write("Choose every role explicitly instead.\n");
+  } else {
+    writeBalancedRecap(input.prompter, proposal, input.home);
+    const choice = normalized(
+      await input.prompter.ask(
+        "Accept the Balanced proposal, inspect and override roles, or Not now",
+        {
+          choices: [
+            { name: "Accept Balanced", value: "accept" },
+            { name: "Inspect and override roles", value: "override" },
+            { name: "Not now", value: "not now" },
+          ],
+          default: "accept",
+        },
+      ),
     );
-    return { status: "cancelled", action: "cancel" };
+    if (choice.length === 0 || choice === "not now" || isCancellation(choice)) {
+      return cancelledFirstRun(input.prompter);
+    }
+    if (choice === "accept") {
+      return {
+        status: "approved",
+        action: "save",
+        models: proposal.assignments,
+        enabledProviders,
+      };
+    }
+    if (choice !== "override") {
+      throw new Error(
+        "first-run Balanced action must be Accept Balanced, Inspect and override roles, or Not now",
+      );
+    }
+    seed = proposal.assignments;
   }
+
+  const models = await collectAssignments(input.prompter, usable, seed);
+  if (models === undefined) return cancelledFirstRun(input.prompter);
   writeRecap(input.prompter, models, input.home);
   const save = await input.prompter.ask("Save these six choices?", {
     choices: [
@@ -309,13 +430,8 @@ async function firstTimeOnboarding(input: ModelOnboardingInput): Promise<ModelOn
     ],
     default: "not now",
   });
-  if (normalized(save) !== "save") {
-    input.prompter.write(
-      "Model setup paused; no model choices were saved and no project will launch.\n",
-    );
-    return { status: "cancelled", action: "cancel" };
-  }
-  return { status: "approved", action: "save", models };
+  if (normalized(save) !== "save") return cancelledFirstRun(input.prompter);
+  return { status: "approved", action: "save", models, enabledProviders };
 }
 
 async function savedOnboarding(input: ModelOnboardingInput): Promise<ModelOnboardingResult> {
@@ -329,6 +445,13 @@ async function savedOnboarding(input: ModelOnboardingInput): Promise<ModelOnboar
     const assignment = current[role];
     input.prompter.write(
       `  ${roleLabel(role)} (${role}): ${assignment.model} · thinking ${assignment.thinking}\n`,
+    );
+  }
+  if (input.enabledProviders !== undefined) {
+    input.prompter.write(
+      `Enabled providers (explicit spending permission): ${
+        input.enabledProviders.length === 0 ? "none" : input.enabledProviders.join(", ")
+      }\n`,
     );
   }
   const choice = normalized(

@@ -49,6 +49,52 @@ test("retains accepted ordinary briefs and rejects oversized multibyte briefs", 
   expect(() => buildAgentBrief(oversized)).toThrow(TypeError);
 });
 
+test("renders a skill section with its bounded context and a needs-decision reminder", () => {
+  const brief = buildAgentBrief({
+    role: "implementer",
+    objective: "Refactor the parser",
+    acceptanceCriteria: ["Keep behavior identical."],
+    instructions: ["Follow the guidance channel."],
+    reportPath: "/tmp/report.txt",
+    skill: { name: "refactor-functions", context: "Apply the five function-review principles." },
+  });
+
+  expect(brief).toContain("## Skill");
+  expect(brief).toContain("Requested skill: refactor-functions");
+  expect(brief).toContain("Apply the five function-review principles.");
+  expect(brief).toContain("do not load, infer, or run any other skill");
+  expect(brief).toContain("never open a separate user conversation or channel");
+});
+
+test("omits the skill section entirely when no skill is supplied", () => {
+  const brief = buildAgentBrief({
+    role: "reviewer",
+    objective: "Review the change",
+    acceptanceCriteria: ["Confirm behavior."],
+    instructions: ["Stay read-only."],
+    reportPath: "/tmp/report.txt",
+  });
+
+  expect(brief).not.toContain("## Skill");
+});
+
+test("rejects a malformed skill input", () => {
+  const base = {
+    role: "implementer" as const,
+    objective: "Refactor the parser",
+    acceptanceCriteria: ["Keep behavior identical."],
+    instructions: ["Follow the guidance channel."],
+    reportPath: "/tmp/report.txt",
+  };
+
+  expect(() => buildAgentBrief({ ...base, skill: { name: "", context: "context" } })).toThrow(
+    TypeError,
+  );
+  expect(() =>
+    buildAgentBrief({ ...base, skill: { name: "refactor-functions", context: "" } }),
+  ).toThrow(TypeError);
+});
+
 test("rejects missing, empty, or overlong TLDR and section input", () => {
   const invalidInputs: readonly PrDescriptionInput[] = [
     { ...validDescription, tldr: [] },
