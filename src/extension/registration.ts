@@ -118,6 +118,7 @@ export function registerTandemOmp(
         action: z.literal("configure-models"),
         repoPath: z.string(),
         models: modelAssignmentsSchema,
+        enabledProviders: z.array(z.string()).optional(),
       })
       .strict(),
     z

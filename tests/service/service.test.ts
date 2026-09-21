@@ -18,6 +18,7 @@ import {
   type Endpoint,
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
+  MODEL_ROLE_ORDER,
   type ResolvedPolicy,
   type ReviewLens,
   type TaskRecord,
@@ -128,6 +129,26 @@ const OMP_MODELS = [
     thinking: ["low", "high", "max"],
   },
 ] as const;
+
+/** A catalogue with explicit capability evidence, usable by every Balanced role once its provider is enabled. */
+const BALANCED_OMP_MODELS = [
+  {
+    selector: "test/balanced",
+    id: "balanced",
+    provider: "test",
+    thinking: ["low", "medium", "high", "max"],
+    reasoning: true,
+    contextWindow: 100_000,
+  },
+] as const;
+const BALANCED_MODELS = {
+  coordinator: { model: "test/balanced", thinking: "high" },
+  scout: { model: "test/balanced", thinking: "medium" },
+  implementer: { model: "test/balanced", thinking: "max" },
+  reviewer: { model: "test/balanced", thinking: "max" },
+  verifier: { model: "test/balanced", thinking: "high" },
+  presentation: { model: "test/balanced", thinking: "low" },
+} as const;
 
 /** Opt-in GitHub remote for draft-PR paths; absent by default so other fixtures are unaffected. */
 type DraftRemoteOptions = Readonly<{
@@ -1105,6 +1126,43 @@ test("approved model changes affect future tasks without mutating an existing po
       surfaces: ["service"],
     });
     expect(created.policy.config.models.coordinator).toEqual(updatedModels.coordinator);
+  });
+});
+
+test("models reports discovered providers and a Balanced proposal built only from enabled providers", async () => {
+  await withFixture({ runner: { ompModels: BALANCED_OMP_MODELS } }, async ({ task, service }) => {
+    const beforeEnable = await service.models(task.repoPath);
+    expect(beforeEnable.discoveredProviders).toEqual(["test"]);
+    expect(beforeEnable.balancedProfile.status).toBe("unresolved");
+
+    await service.configureModels({
+      repoPath: task.repoPath,
+      models: BALANCED_MODELS,
+      enabledProviders: ["test"],
+    });
+
+    const afterEnable = await service.models(task.repoPath);
+    expect(afterEnable.modelSettings.enabledProviders).toEqual(["test"]);
+    const proposal = afterEnable.balancedProfile;
+    expect(proposal.status).toBe("resolved");
+    if (proposal.status !== "resolved") throw new Error("expected resolved");
+    for (const role of MODEL_ROLE_ORDER) {
+      expect(proposal.assignments[role].model).toBe("test/balanced");
+    }
+  });
+});
+
+test("configureModels leaves enabled providers untouched when the call omits them", async () => {
+  await withFixture({ runner: { ompModels: BALANCED_OMP_MODELS } }, async ({ task, service }) => {
+    await service.configureModels({
+      repoPath: task.repoPath,
+      models: BALANCED_MODELS,
+      enabledProviders: ["test"],
+    });
+    await service.configureModels({ repoPath: task.repoPath, models: BALANCED_MODELS });
+
+    const options = await service.models(task.repoPath);
+    expect(options.modelSettings.enabledProviders).toEqual(["test"]);
   });
 });
 
