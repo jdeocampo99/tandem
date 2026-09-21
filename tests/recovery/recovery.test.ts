@@ -57,6 +57,8 @@ type FixtureOptions = Readonly<{
   readonly reviewRound?: number;
   readonly pullRequest?: TaskRecord["pullRequest"];
   readonly checkFailure?: boolean;
+  readonly detached?: boolean;
+  readonly separateSource?: boolean;
 }>;
 
 function result(stdout = "", code = 0, stderr = ""): CommandResult {
@@ -79,9 +81,15 @@ function lease(path: string): WorktreeLease {
 async function fixture(options: FixtureOptions = {}) {
   const home = await mkdtemp(join(tmpdir(), "tandem-recovery-"));
   const repo = join(home, "repo");
+  const sourceRepoPath = options.separateSource ? join(home, "source") : repo;
   const worktreePath = join(home, "worktree");
+  const commonPath = join(home, "common.git");
   await mkdir(repo, { recursive: true });
+  await mkdir(sourceRepoPath, { recursive: true });
   await mkdir(worktreePath, { recursive: true });
+  await mkdir(commonPath, { recursive: true });
+  let currentBranch: string | undefined = options.detached ? undefined : "task/task-1";
+  let branchHead = options.currentHead ?? BASE;
   const clock = (): string => NOW;
   let id = 0;
   const idFactory = (): string => `id-${++id}`;
@@ -127,7 +135,7 @@ async function fixture(options: FixtureOptions = {}) {
         schemaVersion: 1,
         taskId: task.id,
         sourceCheckpoint: { head: HEAD, base: HEAD, diff: "", dirty: false, unmerged: false },
-        sourceRepoPath: repo,
+        sourceRepoPath,
         taskName: "task-1",
         worktree,
         endpoints: options.endpoint === undefined ? [] : [endpoint],
@@ -171,7 +179,25 @@ async function fixture(options: FixtureOptions = {}) {
   await writeRuntimeState(runtimeFile(home), runtime);
   const runner = async (request: CommandRequest): Promise<CommandResult> => {
     if (request.argv[0] === "git") {
-      if (request.argv.includes("symbolic-ref")) return result("task/task-1\n");
+      if (request.argv.includes("symbolic-ref")) {
+        return currentBranch === undefined ? result("", 1) : result(`${currentBranch}\n`);
+      }
+      if (request.argv.includes("--show-toplevel")) return result(`${request.cwd}\n`);
+      if (request.argv.includes("--git-common-dir")) return result(`${commonPath}\n`);
+      if (request.argv.includes("merge-base")) return result();
+      if (request.argv.includes("--verify")) {
+        return branchHead === undefined ? result("", 1) : result(`${branchHead}\n`);
+      }
+      if (request.argv.includes("branch") && request.argv.includes("--force")) {
+        branchHead = request.argv.at(-1) as string;
+        return result();
+      }
+      if (request.argv.includes("switch")) {
+        const createIndex = request.argv.indexOf("--create");
+        currentBranch = createIndex >= 0 ? request.argv[createIndex + 1] : request.argv.at(-1);
+        branchHead = options.currentHead ?? HEAD;
+        return result();
+      }
       if (request.argv.includes("remote")) return result("git@github.com:owner/repo.git\n");
       if (request.argv.includes("rev-parse")) {
         return result(`${options.currentHead ?? HEAD}\n`);
@@ -191,7 +217,7 @@ async function fixture(options: FixtureOptions = {}) {
     if (
       request.argv[0] === "bun" &&
       request.argv[1] === "run" &&
-      request.argv[2] === "check" &&
+      request.argv[2] === "db:types:check" &&
       options.checkFailure
     ) {
       return result("", 1, "generated database types are stale");
@@ -285,6 +311,24 @@ test("recovery plan is dry-run and reports budgets", async () => {
   }
 });
 
+test("reconciliation repairs a detached reviewed worktree branch", async () => {
+  const f = await fixture({ detached: true, separateSource: true });
+  try {
+    const before = await f.workflow.inspect("task-1");
+    expect(before.repository.identity).toBe("proven");
+    expect(before.branch).toBeUndefined();
+
+    const value = await f.workflow.reconcile("task-1", true);
+
+    expect(value.repairedBranch).toBe("task/task-1");
+    const after = await f.workflow.inspect("task-1");
+    expect(after.branch).toBe("task/task-1");
+    expect(after.review.exactHead).toBe(true);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("terminal job with missing pane is reconciled without releasing worktree", async () => {
   const f = await fixture({ endpoint: "missing", job: job("consumed") });
   try {
@@ -306,6 +350,34 @@ test("stale active job is quarantined while reservation stays fenced", async () 
     const state = await readRuntimeState(f.runtimePath);
     expect(state.tasks[0]?.jobs[0]?.phase).toBe("failed");
     expect(state.tasks[0]?.reservation?.phase).toBe("endpoint");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("reconciliation quarantines an orphaned active job from a quarantined operation", async () => {
+  const f = await fixture({ endpoint: "missing", job: job("running") });
+  try {
+    const state = await readRuntimeState(f.runtimePath);
+    await writeRuntimeState(f.runtimePath, {
+      ...state,
+      tasks: state.tasks.map((entry) =>
+        entry.operation === undefined
+          ? entry
+          : {
+              ...entry,
+              endpoints: [],
+              operation: { ...entry.operation, phase: "quarantined" as const },
+            },
+      ),
+    });
+
+    const value = await f.workflow.reconcile("task-1", true);
+
+    expect(value.settledJobs).toEqual(["job-1"]);
+    const updated = await readRuntimeState(f.runtimePath);
+    expect(updated.tasks[0]?.jobs[0]?.phase).toBe("failed");
+    expect(updated.tasks[0]?.reservation?.phase).toBe("endpoint");
   } finally {
     await f.cleanup();
   }
@@ -366,7 +438,7 @@ test("validation retry writes a durable result when result artifact is missing",
 });
 
 test("review-existing preserves exact HEAD and records mode provenance", async () => {
-  const f = await fixture();
+  const f = await fixture({ separateSource: true });
   try {
     const value = await f.workflow.reviewExisting("task-1", HEAD, true);
     expect(value.status).toBe("started");
