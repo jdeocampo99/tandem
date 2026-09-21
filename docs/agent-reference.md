@@ -1035,6 +1035,16 @@ first, then the lower published cost, then the selector, so the same catalogue a
 same choice. A prior outcome that could not be proven stays quarantined with its capacity and
 resources: it is never retried or replaced.
 
+The request's own usage has to be observed as well. Catalogue figures say what a model is published
+to cost and draw; the accounting ledger says what this request has actually drawn, and a request
+carrying `unaccountedSamples` or `unmeasuredTokenSamples` has drawn an amount nobody reported. That
+is unknown consumption rather than small consumption, so no replacement can be proven to draw no
+more than the pinned model does, and the task stops on a `usage-evidence-unmeasured` decision naming
+the counts instead. A task with no governing request has no ledger at all and stops the same way. The
+charged total is never read as a measurement anywhere in the comparison: it is a floor on what the
+request cost. Because Tandem's provider surface reports so little, the honest consequence is that
+automatic reassignment is rare and the question is the normal outcome.
+
 Anything else is a question rather than a move. The task stops on a durable routing decision recorded
 in `routingPause`, the coordinator is notified exactly once, and nothing for that task starts until
 it is answered. The answer is pinning the model you want through the models configuration, which
@@ -1050,10 +1060,12 @@ the generation, or the input HEAD moves under it, and routing re-resolves agains
 | `pinned-model-thinking-level-unsupported` | The pinned model no longer supports the thinking level pinned for this role. |
 | `premium-tier-requires-approval` | The only available replacement costs more or draws more included allowance. |
 | `tier-evidence-indeterminate` | Tier evidence for the available replacements is missing or contradictory. |
+| `usage-evidence-unmeasured` | The request's own usage is not fully observed, so no replacement can be proven to draw no more. |
 
-The spending checkpoint runs first and wins: a request-wide budget pause, a planned-step cap, or the
-worker concurrency limit refuses the reservation before routing is resolved at all, and no routing
-choice can widen any of them. A catalogue that cannot be read, or that published no models at all,
+The spending checkpoint runs first and wins: a request-wide budget pause, whatever its reason,
+a planned-step cap, or the worker concurrency limit refuses the reservation before routing is
+resolved at all, and no routing choice can widen any of them. An `exposure-unaccounted` pause is
+answered by accepting that unmeasured work through `budget-approve`, never by rerouting. A catalogue that cannot be read, or that published no models at all,
 supplies no evidence either way: the pinned model continues and the transition records that no
 comparison was made, rather than treating silence as a contradiction or as headroom.
 

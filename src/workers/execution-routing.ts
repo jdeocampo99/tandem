@@ -12,6 +12,10 @@
  * pinned profile explicitly enabled. A higher-cost or higher-quota-consumption model is a question
  * for the user, including when it is prepaid, bundled, or expected to bill nothing extra, and so
  * is any move whose tier evidence is missing, ambiguous, or contradictory.
+ *
+ * Tiers are placed against each other on published catalogue figures alone. The ledger's charged
+ * total is never read as a measurement of anything: it is a floor on what a request cost, and the
+ * unaccounted and unmeasured sample counts beside it are what a move has to be proven against.
  */
 
 import { createHash } from "node:crypto";
@@ -95,8 +99,27 @@ export type ExecutionRoutingBoundary =
       readonly prior: PriorExecutionAttempt;
     }>;
 
-/** What the request's spending checkpoint already decided about this operation. */
-export type ExecutionSpendAdmission = "admitted" | "paused" | "no-governing-request";
+/**
+ * How much of a request's own spending nobody could observe. `unaccountedSamples` is unpriced work
+ * no reservation stands for and `unmeasuredTokenSamples` is work that reported no tokens at all;
+ * either one means the request's usage and allowance draw are unknown rather than small, so no
+ * tier move can be proven against them.
+ */
+export type RequestUsageExposure = Readonly<{
+  readonly unaccountedSamples: number;
+  readonly unmeasuredTokenSamples: number;
+}>;
+
+/**
+ * What the request's spending checkpoint already decided about this operation, and what it observed
+ * deciding it. Routing consumes this decision; it never re-derives, relaxes, or resolves one.
+ */
+export type ExecutionSpendAdmission =
+  | Readonly<{
+      readonly status: "admitted" | "paused";
+      readonly exposure: RequestUsageExposure;
+    }>
+  | Readonly<{ readonly status: "no-governing-request" }>;
 
 export type ExecutionRoutingRequest = Readonly<{
   readonly boundary: ExecutionRoutingBoundary;
@@ -150,7 +173,7 @@ export type ExecutionRoutingIdentity = Readonly<{
 export function resolveExecutionRouting(
   request: ExecutionRoutingRequest,
 ): ExecutionRoutingDecision {
-  if (request.admission === "paused") {
+  if (request.admission.status === "paused") {
     return routingQuestion(request, "spending-decision-pending", {});
   }
   const boundary = request.boundary;
@@ -159,12 +182,12 @@ export function resolveExecutionRouting(
   }
   const catalogue = publishedCatalogue(request.catalogue);
   if (catalogue === undefined) {
-    return continueWithPinnedModel(request, unreadEvidence());
+    return continueWithPinnedModel(request, unreadEvidence(request.admission));
   }
   const pinned = lookupModelTierEvidence(catalogue.models, request.pinned);
   if (boundary.kind === "job-launch") {
     return pinned.status === "known"
-      ? continueWithPinnedModel(request, readEvidence(catalogue))
+      ? continueWithPinnedModel(request, readEvidence(catalogue, request.admission))
       : routingQuestion(request, pinnedGapReason(pinned.gap), {
           evidenceGaps: [`incumbent-${pinned.gap}` as const],
           enabledProviders: catalogue.enabledProviders,
@@ -276,11 +299,13 @@ export function describeExecutionRoutingDecision(pause: DurableExecutionRoutingP
     pause.evidenceGaps.length === 0
       ? undefined
       : `Missing or conflicting tier evidence: ${pause.evidenceGaps.join(", ")}. Unpublished cost or allowance is evidence nobody reported, never evidence that a move is comparable.`;
+  const usage = describeUnobservedUsage(pause);
   return [
     `Routing decision ${pause.decisionId} for task ${pause.taskId} (${pause.role}, generation ${pause.generation}, attempt ${pause.attempt}): ${ROUTING_PAUSE_EXPLANATIONS[pause.reason]}.`,
     `The pinned model is ${pause.pinnedSelector} at thinking '${pause.pinnedThinking}'.`,
     candidate,
     gaps,
+    usage,
     pause.enabledProviders.length === 0
       ? "No provider is explicitly enabled for spending, so no alternative is authorized by discovery alone."
       : `Providers explicitly enabled for spending: ${pause.enabledProviders.join(", ")}.`,
@@ -288,6 +313,20 @@ export function describeExecutionRoutingDecision(pause: DurableExecutionRoutingP
   ]
     .filter((line): line is string => line !== undefined)
     .join(" ");
+}
+
+/**
+ * What this request has spent that nobody reported. It is stated as unmeasured work rather than as
+ * an amount, because the charged total beside it is a floor on the cost and not a measurement.
+ */
+function describeUnobservedUsage(pause: DurableExecutionRoutingPause): string | undefined {
+  if (pause.usageSource === "no-governing-request") {
+    return "No request governs this task, so there is no accounting ledger to prove what a different model would draw.";
+  }
+  const unaccounted = pause.unaccountedSamples ?? 0;
+  const unmeasured = pause.unmeasuredTokenSamples ?? 0;
+  if (unaccounted === 0 && unmeasured === 0) return undefined;
+  return `${unaccounted} recorded sample(s) under this request carry no published price and no reserved estimate, and ${unmeasured} reported no tokens, so what this request has actually drawn is unknown rather than small. Nothing about a different model's cost or allowance can be proven against that.`;
 }
 
 const DECISION_ID_PREFIX = "routing-";
@@ -312,6 +351,8 @@ const ROUTING_PAUSE_EXPLANATIONS: Readonly<Record<ExecutionRoutingPauseReason, s
     "the only available replacement is a higher tier, which needs your decision even when it is prepaid, bundled, or expected to bill nothing extra",
   "tier-evidence-indeterminate":
     "the tier evidence for the available replacements is missing or contradictory, so none of them can be treated as comparable",
+  "usage-evidence-unmeasured":
+    "this request's own usage is not fully observed, so no replacement can be proven to draw no more than the pinned model does",
 };
 
 type ClassifiedCandidate = Readonly<{
@@ -358,8 +399,34 @@ function publishedCatalogue(
   return snapshot;
 }
 
-function unreadEvidence(): ExecutionRoutingEvidence {
-  return { source: "catalogue-unavailable", enabledProviders: [] };
+/**
+ * Whether the request's own spending is fully observed. A governing request with any unaccounted or
+ * unmeasured sample has usage nobody reported, and a task with no governing request has no ledger
+ * to report one at all; neither is a basis for calling a move comparable.
+ */
+function usageIsFullyObserved(admission: ExecutionSpendAdmission): boolean {
+  if (admission.status !== "admitted") return false;
+  return (
+    admission.exposure.unaccountedSamples === 0 && admission.exposure.unmeasuredTokenSamples === 0
+  );
+}
+
+/** How much of the request's spending the boundary could actually see, recorded as it stood. */
+function observedUsage(
+  admission: ExecutionSpendAdmission,
+): Pick<ExecutionRoutingEvidence, "usageSource" | "unaccountedSamples" | "unmeasuredTokenSamples"> {
+  if (admission.status === "no-governing-request") {
+    return { usageSource: "no-governing-request" };
+  }
+  return {
+    usageSource: "request-ledger",
+    unaccountedSamples: admission.exposure.unaccountedSamples,
+    unmeasuredTokenSamples: admission.exposure.unmeasuredTokenSamples,
+  };
+}
+
+function unreadEvidence(admission: ExecutionSpendAdmission): ExecutionRoutingEvidence {
+  return { source: "catalogue-unavailable", enabledProviders: [], ...observedUsage(admission) };
 }
 
 /** The relations a comparison established; an indeterminate one established neither. */
@@ -375,6 +442,7 @@ function axisRelations(
 
 function readEvidence(
   catalogue: Extract<ModelCatalogueSnapshot, { readonly status: "read" }>,
+  admission: ExecutionSpendAdmission,
   chosen?: ClassifiedCandidate,
 ): ExecutionRoutingEvidence {
   const relations = axisRelations(chosen?.comparison);
@@ -386,6 +454,7 @@ function readEvidence(
     ...(relations.cost === undefined ? {} : { costRelation: relations.cost }),
     ...(relations.quota === undefined ? {} : { quotaRelation: relations.quota }),
     ...(plan === undefined ? {} : { includedAllowancePlan: plan }),
+    ...observedUsage(admission),
   };
 }
 
@@ -462,9 +531,17 @@ function resolveReplacementAttempt(
     });
   }
   if (prior.selector !== request.pinned.model) {
-    return continueWithPinnedModel(request, readEvidence(catalogue));
+    return continueWithPinnedModel(request, readEvidence(catalogue, request.admission));
   }
-  const classified = eligibleCandidates(catalogue, request.pinned, prior.selector).map(
+  const candidates = eligibleCandidates(catalogue, request.pinned, prior.selector);
+  const preferred = [...candidates].sort(compareCandidatePreference)[0];
+  if (preferred !== undefined && !usageIsFullyObserved(request.admission)) {
+    return routingQuestion(request, "usage-evidence-unmeasured", {
+      candidate: preferred,
+      enabledProviders: catalogue.enabledProviders,
+    });
+  }
+  const classified = candidates.map(
     (evidence): ClassifiedCandidate => ({
       evidence,
       comparison: compareModelTier(pinned.evidence, evidence),
@@ -490,7 +567,7 @@ function resolveReplacementAttempt(
       enabledProviders: catalogue.enabledProviders,
     });
   }
-  return continueWithPinnedModel(request, readEvidence(catalogue));
+  return continueWithPinnedModel(request, readEvidence(catalogue, request.admission));
 }
 
 function continueWithPinnedModel(
@@ -549,7 +626,7 @@ function reassignToComparableModel(
       selector: chosen.evidence.selector,
       thinking: chosen.evidence.thinking,
       replaces: { selector: prior.selector, thinking: request.pinned.thinking },
-      evidence: readEvidence(catalogue, chosen),
+      evidence: readEvidence(catalogue, request.admission, chosen),
       limits: request.limits,
       resolvedAt: request.now,
     },
@@ -585,6 +662,7 @@ function routingQuestion(
       ...(detail.premiumAxis === undefined ? {} : { premiumAxis: detail.premiumAxis }),
       evidenceGaps: detail.evidenceGaps ?? [],
       enabledProviders: detail.enabledProviders ?? [],
+      ...observedUsage(request.admission),
       limits: request.limits,
       observedAt: request.now,
     },

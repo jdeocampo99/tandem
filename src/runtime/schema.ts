@@ -73,6 +73,11 @@ export const EXECUTION_ROUTING_EVIDENCE_SOURCES = [
 
 export type ExecutionRoutingEvidenceSource = (typeof EXECUTION_ROUTING_EVIDENCE_SOURCES)[number];
 
+/** Where the usage evidence behind a routing choice came from, or that there was none to read. */
+export const EXECUTION_ROUTING_USAGE_SOURCES = ["request-ledger", "no-governing-request"] as const;
+
+export type ExecutionRoutingUsageSource = (typeof EXECUTION_ROUTING_USAGE_SOURCES)[number];
+
 /** The configured limits a routing choice was taken under, recorded as they stood. */
 export type ExecutionRoutingLimits = Readonly<{
   readonly capMicros: number | "unset";
@@ -80,7 +85,12 @@ export type ExecutionRoutingLimits = Readonly<{
   readonly maxWorkers: number;
 }>;
 
-/** What the boundary knew about the two models it placed against each other. */
+/**
+ * What the boundary knew about the two models it placed against each other, and how much of the
+ * request's own spending nobody could observe. The sample counts are present exactly when a
+ * governing request's ledger was read; they are what makes unmeasured work visible in the record
+ * instead of leaving a charged total to be misread as a measurement.
+ */
 export type ExecutionRoutingEvidence = Readonly<{
   readonly source: ExecutionRoutingEvidenceSource;
   readonly catalogueReadAt?: IsoTimestamp;
@@ -89,6 +99,9 @@ export type ExecutionRoutingEvidence = Readonly<{
   readonly costRelation?: ModelTierAxisRelation;
   readonly quotaRelation?: ModelTierAxisRelation;
   readonly includedAllowancePlan?: string;
+  readonly usageSource: ExecutionRoutingUsageSource;
+  readonly unaccountedSamples?: number;
+  readonly unmeasuredTokenSamples?: number;
 }>;
 
 /**
@@ -131,6 +144,7 @@ export const EXECUTION_ROUTING_PAUSE_REASONS = [
   "pinned-model-thinking-level-unsupported",
   "premium-tier-requires-approval",
   "tier-evidence-indeterminate",
+  "usage-evidence-unmeasured",
 ] as const;
 
 export type ExecutionRoutingPauseReason = (typeof EXECUTION_ROUTING_PAUSE_REASONS)[number];
@@ -160,6 +174,10 @@ export type DurableExecutionRoutingPause = Readonly<{
   readonly premiumAxis?: ModelTierPremiumAxis;
   readonly evidenceGaps: readonly ModelTierEvidenceGap[];
   readonly enabledProviders: readonly string[];
+  readonly usageSource: ExecutionRoutingUsageSource;
+  /** Work under this request whose cost or tokens nobody reported; present with a read ledger. */
+  readonly unaccountedSamples?: number;
+  readonly unmeasuredTokenSamples?: number;
   readonly limits: ExecutionRoutingLimits;
   readonly observedAt: IsoTimestamp;
 }>;
@@ -503,6 +521,26 @@ function parseAxisRelation(value: unknown, field: string): ModelTierAxisRelation
     : enumValue(value, ["lower", "equal", "higher"] as const, field);
 }
 
+/** The observed sample counts, present together exactly when a governing request's ledger was read. */
+function parseObservedSamples(
+  value: Record<string, unknown>,
+  field: string,
+): Readonly<{ unaccountedSamples?: number; unmeasuredTokenSamples?: number }> {
+  const source = enumValue(
+    value.usageSource,
+    EXECUTION_ROUTING_USAGE_SOURCES,
+    `${field}.usageSource`,
+  );
+  if (source === "no-governing-request") return {};
+  return {
+    unaccountedSamples: nonNegativeInteger(value.unaccountedSamples, `${field}.unaccountedSamples`),
+    unmeasuredTokenSamples: nonNegativeInteger(
+      value.unmeasuredTokenSamples,
+      `${field}.unmeasuredTokenSamples`,
+    ),
+  };
+}
+
 function parseRoutingEvidence(value: unknown, field: string): ExecutionRoutingEvidence {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   const catalogueReadAt =
@@ -522,6 +560,12 @@ function parseRoutingEvidence(value: unknown, field: string): ExecutionRoutingEv
     ...(costRelation === undefined ? {} : { costRelation }),
     ...(quotaRelation === undefined ? {} : { quotaRelation }),
     ...(includedAllowancePlan === undefined ? {} : { includedAllowancePlan }),
+    usageSource: enumValue(
+      value.usageSource,
+      EXECUTION_ROUTING_USAGE_SOURCES,
+      `${field}.usageSource`,
+    ),
+    ...parseObservedSamples(value, field),
   };
 }
 
@@ -607,6 +651,12 @@ function parseRoutingPause(value: unknown, field: string): DurableExecutionRouti
         enumValue(entry, MODEL_TIER_EVIDENCE_GAPS, `${field}.evidenceGaps[${index}]`),
     ),
     enabledProviders: parseProviderList(value.enabledProviders, `${field}.enabledProviders`),
+    usageSource: enumValue(
+      value.usageSource,
+      EXECUTION_ROUTING_USAGE_SOURCES,
+      `${field}.usageSource`,
+    ),
+    ...parseObservedSamples(value, field),
     limits: parseRoutingLimits(value.limits, `${field}.limits`),
     observedAt: singleLine(value.observedAt, `${field}.observedAt`),
   };

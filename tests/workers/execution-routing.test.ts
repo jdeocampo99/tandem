@@ -8,14 +8,21 @@ import {
   type ExecutionRoutingBoundary,
   type ExecutionRoutingDecision,
   type ExecutionRoutingRequest,
+  type ExecutionSpendAdmission,
   executionRoutingPauseStands,
   type ModelCatalogueSnapshot,
   type PriorExecutionAttempt,
+  type RequestUsageExposure,
   resolvedExecutionModel,
   resolveExecutionRouting,
 } from "../../src/workers/execution-routing.ts";
 
 const PINNED: ModelSpec = { model: "alpha/base", thinking: "high" };
+
+/** A request whose own spending the ledger could fully observe, which is the rare case. */
+const MEASURED: RequestUsageExposure = { unaccountedSamples: 0, unmeasuredTokenSamples: 0 };
+
+const OBSERVED: ExecutionSpendAdmission = { status: "admitted", exposure: MEASURED };
 
 const LIMITS: ExecutionRoutingLimits = {
   capMicros: 2_000_000,
@@ -70,7 +77,7 @@ function routingRequest(overrides: Partial<ExecutionRoutingRequest> = {}): Execu
     pinned: PINNED,
     catalogue: snapshot([catalogueEntry(PINNED.model)], ["alpha"]),
     limits: LIMITS,
-    admission: "admitted",
+    admission: OBSERVED,
     now: "2030-01-01T00:00:01.000Z",
     ...overrides,
   };
@@ -115,28 +122,115 @@ test("a job launch records the pinned assignment with the identity and limits it
   expect(routing.evidence.enabledProviders).toEqual(["alpha"]);
 });
 
-test("a pending spending decision takes precedence over any economical move", () => {
-  const decision = resolveExecutionRouting(
-    routingRequest({
-      admission: "paused",
-      boundary: replacementBoundary(),
-      catalogue: snapshot(
-        [
-          catalogueEntry(PINNED.model, {
-            cost: { input: 4, output: 4 },
-            includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 2 },
-          }),
-          catalogueEntry("alpha/thrifty", {
-            cost: { input: 1, output: 1 },
-            includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
-          }),
-        ],
-        ["alpha"],
-      ),
-    }),
+/** The catalogue in which `alpha/thrifty` would otherwise be an automatic comparable reassignment. */
+function reassignableCatalogue(): ModelCatalogueSnapshot {
+  return snapshot(
+    [
+      catalogueEntry(PINNED.model, {
+        cost: { input: 4, output: 4 },
+        includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 2 },
+      }),
+      catalogueEntry("alpha/thrifty", {
+        cost: { input: 1, output: 1 },
+        includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
+      }),
+    ],
+    ["alpha"],
+  );
+}
+
+test("a pending spending decision takes precedence over an otherwise automatic reassignment", () => {
+  const automatic = resolveExecutionRouting(
+    routingRequest({ boundary: replacementBoundary(), catalogue: reassignableCatalogue() }),
+  );
+  expect(authorizedRouting(automatic).basis).toBe("comparable-reassignment");
+
+  for (const exposure of [
+    MEASURED,
+    { unaccountedSamples: 3, unmeasuredTokenSamples: 7 },
+  ] satisfies readonly RequestUsageExposure[]) {
+    const stopped = resolveExecutionRouting(
+      routingRequest({
+        admission: { status: "paused", exposure },
+        boundary: replacementBoundary(),
+        catalogue: reassignableCatalogue(),
+      }),
+    );
+    expect(pauseOf(stopped).reason).toBe("spending-decision-pending");
+  }
+});
+
+test("unmeasured request usage refuses the classification instead of reassigning", () => {
+  const pause = pauseOf(
+    resolveExecutionRouting(
+      routingRequest({
+        admission: {
+          status: "admitted",
+          exposure: { unaccountedSamples: 2, unmeasuredTokenSamples: 5 },
+        },
+        boundary: replacementBoundary(),
+        catalogue: reassignableCatalogue(),
+      }),
+    ),
   );
 
-  expect(pauseOf(decision).reason).toBe("spending-decision-pending");
+  expect(pause.reason).toBe("usage-evidence-unmeasured");
+  expect(pause.candidateSelector).toBe("alpha/thrifty");
+  expect(pause.unaccountedSamples).toBe(2);
+  expect(pause.unmeasuredTokenSamples).toBe(5);
+  const explanation = describeExecutionRoutingDecision(pause);
+  expect(explanation).toContain("unknown rather than small");
+  expect(explanation).not.toContain("free");
+});
+
+test("unmeasured tokens alone still refuse the classification", () => {
+  const pause = pauseOf(
+    resolveExecutionRouting(
+      routingRequest({
+        admission: {
+          status: "admitted",
+          exposure: { unaccountedSamples: 0, unmeasuredTokenSamples: 1 },
+        },
+        boundary: replacementBoundary(),
+        catalogue: reassignableCatalogue(),
+      }),
+    ),
+  );
+
+  expect(pause.reason).toBe("usage-evidence-unmeasured");
+});
+
+test("a task with no governing request has no ledger to prove a move against", () => {
+  const decision = resolveExecutionRouting(
+    routingRequest({
+      admission: { status: "no-governing-request" },
+      boundary: replacementBoundary(),
+      catalogue: reassignableCatalogue(),
+    }),
+  );
+  const pause = pauseOf(decision);
+
+  expect(pause.reason).toBe("usage-evidence-unmeasured");
+  expect(pause.usageSource).toBe("no-governing-request");
+  expect(pause.unaccountedSamples).toBeUndefined();
+  expect(describeExecutionRoutingDecision(pause)).toContain("no accounting ledger");
+});
+
+test("unmeasured usage leaves an unchanged pinned launch alone", () => {
+  const routing = authorizedRouting(
+    resolveExecutionRouting(
+      routingRequest({
+        admission: {
+          status: "admitted",
+          exposure: { unaccountedSamples: 4, unmeasuredTokenSamples: 9 },
+        },
+      }),
+    ),
+  );
+
+  expect(routing.basis).toBe("pinned-policy");
+  expect(routing.evidence.unaccountedSamples).toBe(4);
+  expect(routing.evidence.unmeasuredTokenSamples).toBe(9);
 });
 
 test("an uncertain prior outcome is never replaced automatically", () => {
@@ -327,7 +421,13 @@ test("an unread catalogue keeps the pinned model and claims no comparison", () =
   );
 
   expect(routing.basis).toBe("pinned-policy");
-  expect(routing.evidence).toEqual({ source: "catalogue-unavailable", enabledProviders: [] });
+  expect(routing.evidence).toEqual({
+    source: "catalogue-unavailable",
+    enabledProviders: [],
+    usageSource: "request-ledger",
+    unaccountedSamples: 0,
+    unmeasuredTokenSamples: 0,
+  });
 });
 
 test("the same question re-resolves to the same decision instead of asking twice", () => {

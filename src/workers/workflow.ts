@@ -152,6 +152,7 @@ import {
 import {
   describeExecutionRoutingDecision,
   type ExecutionRoutingBoundary,
+  type ExecutionSpendAdmission,
   executionRoutingPauseStands,
   type ModelCatalogueReader,
   type ModelCatalogueSnapshot,
@@ -246,7 +247,6 @@ type RoutingAttempt = Readonly<{
   readonly inputHead: string;
   readonly policyDigest: string;
   readonly cwd: string;
-  readonly admitted: "admitted" | "no-governing-request";
 }>;
 
 /** Every operation this task has recorded for one role, oldest first. */
@@ -3250,12 +3250,30 @@ export class WorkerWorkflow {
       pinned: task.policy.config.models[attempt.role],
       catalogue: await this.readCatalogue(attempt.cwd),
       limits: routingLimits(task),
-      admission: attempt.admitted,
+      admission: await this.admittedSpend(task),
       now: this.#deps.clock(),
     });
     if (decision.outcome === "authorized") return decision.routing;
     await this.stopTaskRouting(store, task, runtime, decision.pause);
     return undefined;
+  }
+
+  /**
+   * The spending checkpoint's own outcome for this task, with what it observed deciding it. Routing
+   * is only ever resolved after admission succeeded, so this reads the exposure that admission was
+   * taken against rather than deciding anything again.
+   */
+  private async admittedSpend(task: TaskRecord): Promise<ExecutionSpendAdmission> {
+    const requestId = task.requestId;
+    if (requestId === undefined) return { status: "no-governing-request" };
+    const readout = await this.#deps.requestSpend.readSpend(requestId);
+    return {
+      status: readout.pause === undefined ? "admitted" : "paused",
+      exposure: {
+        unaccountedSamples: readout.exposure.unaccountedSamples,
+        unmeasuredTokenSamples: readout.exposure.unmeasuredTokenSamples,
+      },
+    };
   }
 
   /** Reads catalogue evidence without letting a boundary failure decide anything by itself. */
@@ -3394,7 +3412,6 @@ export class WorkerWorkflow {
               inputHead,
               policyDigest,
               cwd: runtime.worktree?.path ?? taskSourcePath(targetTask, runtime),
-              admitted: spend === undefined ? "no-governing-request" : "admitted",
             });
       if (routing === undefined && role !== "validation") return undefined;
       const operation = {
