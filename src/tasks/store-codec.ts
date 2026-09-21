@@ -455,7 +455,7 @@ function parseResolvedPolicy(value: unknown, source: string): ResolvedPolicy {
   };
 }
 
-function parseWorktree(value: unknown, source: string): WorktreeLease {
+export function parseWorktree(value: unknown, source: string): WorktreeLease {
   if (!isRecord(value)) {
     failState(source, "worktree must be an object");
   }
@@ -512,7 +512,7 @@ function parseFinding(value: unknown, source: string): Finding {
   };
 }
 
-function parseReview(value: unknown, source: string): ReviewResult {
+export function parseReview(value: unknown, source: string): ReviewResult {
   if (!isRecord(value)) {
     failState(source, "review must be an object");
   }
@@ -547,7 +547,7 @@ function parseReview(value: unknown, source: string): ReviewResult {
  * candidate must run the complete final manifest again. A record carrying only some of the three
  * is a corrupt shape rather than a recoverable one, and fails closed.
  */
-function parseValidationEvidence(value: unknown, source: string): ValidationEvidence {
+export function parseValidationEvidence(value: unknown, source: string): ValidationEvidence {
   if (!isRecord(value)) {
     failState(source, "validation evidence must be an object");
   }
@@ -722,7 +722,7 @@ function parseReviewLevelRecord(value: unknown, source: string): ReviewLevelReco
   };
 }
 
-function parseNotification(value: unknown, source: string): Notification {
+export function parseNotification(value: unknown, source: string): Notification {
   if (!isRecord(value)) {
     failState(source, "notification must be an object");
   }
@@ -739,7 +739,7 @@ function parseNotification(value: unknown, source: string): Notification {
   };
 }
 
-function parsePullRequest(value: unknown, source: string): PullRequestMetadata {
+export function parsePullRequest(value: unknown, source: string): PullRequestMetadata {
   if (!isRecord(value)) {
     failState(source, "pull request metadata must be an object");
   }

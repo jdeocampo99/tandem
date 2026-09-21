@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-coding-agent";
 import { resolveTandemEnvironment } from "../../src/config/environment.ts";
-import type { ModelSpec, RepoPolicy, ResolvedPolicy, TaskRecord } from "../../src/contracts.ts";
+import type {
+  ModelSpec,
+  RepoPolicy,
+  RequestDeliveryRecord,
+  ResolvedPolicy,
+  TaskRecord,
+} from "../../src/contracts.ts";
 import { executeTandemAction, parseTandemCommand } from "../../src/extension/actions.ts";
 import { deliverPendingNotifications } from "../../src/extension/notifications.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/extension/summary.ts";
@@ -1105,7 +1111,10 @@ test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct
   const sent: string[] = [];
   const turns: unknown[] = [];
   const acknowledged: string[] = [];
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "acknowledgeRequest"> = {
+    acknowledgeRequest: async () => {
+      throw new Error("no request notification is expected in this scenario");
+    },
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1146,6 +1155,7 @@ test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct
     pi: sink,
     service: service,
     tasks: [readyTask, exhausted],
+    requests: [],
     delivered: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
@@ -1187,7 +1197,10 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
   const notices: string[] = [];
   const acknowledged: string[] = [];
   let modelTurns = 0;
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "acknowledgeRequest"> = {
+    acknowledgeRequest: async () => {
+      throw new Error("no request notification is expected in this scenario");
+    },
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1231,6 +1244,7 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
     pi: sink,
     service: service,
     tasks: [blocked],
+    requests: [],
     delivered: delivered,
     ctx: context,
     reportReadable: async () => true,
@@ -1239,6 +1253,7 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
     pi: sink,
     service: service,
     tasks: [blocked],
+    requests: [],
     delivered: delivered,
     ctx: context,
     reportReadable: async () => true,
@@ -1316,6 +1331,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         pi: sink,
         service: service,
         tasks: [completed],
+        requests: [],
         delivered: delivered,
         ctx: context,
         reportReadable: async () => true,
@@ -1324,6 +1340,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         pi: sink,
         service: service,
         tasks: [completed],
+        requests: [],
         delivered: delivered,
         ctx: context,
         reportReadable: async () => true,
@@ -1349,6 +1366,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         pi: sink,
         service: reopened,
         tasks: [persisted],
+        requests: [],
         delivered: new Set<string>(),
         ctx: context,
         reportReadable: async () => true,
@@ -1399,6 +1417,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
           pi: retrySink,
           service: reopened,
           tasks: [retryTask],
+          requests: [],
           delivered: retryDelivered,
           ctx: context,
           reportReadable: async () => true,
@@ -1411,6 +1430,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         pi: retrySink,
         service: reopened,
         tasks: [pendingRetry],
+        requests: [],
         delivered: retryDelivered,
         ctx: context,
         reportReadable: async () => true,
@@ -1431,7 +1451,10 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
   const entries: Array<{ readonly type: string; readonly data: unknown }> = [];
   const notices: string[] = [];
   const acknowledged: string[] = [];
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "acknowledgeRequest"> = {
+    acknowledgeRequest: async () => {
+      throw new Error("no request notification is expected in this scenario");
+    },
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1458,6 +1481,7 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
     pi: sink,
     service: service,
     tasks: [routine],
+    requests: [],
     delivered: delivered,
     ctx: context,
     reportReadable: async () => true,
@@ -1466,6 +1490,7 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
     pi: sink,
     service: service,
     tasks: [routine],
+    requests: [],
     delivered: delivered,
     ctx: context,
     reportReadable: async () => true,
@@ -1483,7 +1508,10 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
   const notices: string[] = [];
   const acknowledged: string[] = [];
   let modelTurns = 0;
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "acknowledgeRequest"> = {
+    acknowledgeRequest: async () => {
+      throw new Error("no request notification is expected in this scenario");
+    },
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1525,6 +1553,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     pi: sink,
     service: service,
     tasks: [scout, blocked],
+    requests: [],
     delivered: delivered,
     ctx: context,
     reportReadable: async () => true,
@@ -1533,6 +1562,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     pi: sink,
     service: service,
     tasks: [scout, blocked],
+    requests: [],
     delivered: delivered,
     ctx: context,
     reportReadable: async () => true,
@@ -1561,6 +1591,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     pi: sink,
     service: service,
     tasks: [recovered],
+    requests: [],
     delivered: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
@@ -1575,7 +1606,10 @@ test("notification kind controls whether presentation bookkeeping wakes the coor
   const sent: string[] = [];
   const notices: string[] = [];
   const acknowledged: string[] = [];
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "acknowledgeRequest"> = {
+    acknowledgeRequest: async () => {
+      throw new Error("no request notification is expected in this scenario");
+    },
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1613,6 +1647,7 @@ test("notification kind controls whether presentation bookkeeping wakes the coor
     pi: sink,
     service: service,
     tasks: [routine, coordinator],
+    requests: [],
     delivered: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
@@ -1629,7 +1664,10 @@ test("legacy scout recovery survives a later routine presentation notice", async
   const notices: string[] = [];
   const acknowledged: string[] = [];
   let modelTurns = 0;
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "acknowledgeRequest"> = {
+    acknowledgeRequest: async () => {
+      throw new Error("no request notification is expected in this scenario");
+    },
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1672,6 +1710,7 @@ test("legacy scout recovery survives a later routine presentation notice", async
     pi: sink,
     service: service,
     tasks: [recovered],
+    requests: [],
     delivered: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
@@ -1699,6 +1738,7 @@ test("legacy scout recovery survives a later routine presentation notice", async
     pi: sink,
     service: service,
     tasks: [routineOnly],
+    requests: [],
     delivered: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
@@ -1738,6 +1778,7 @@ test("session shutdown waits for an interval reconciliation already in flight", 
       return tickCount === 2 ? delayedTick : [];
     },
     list: async () => [],
+    listRequests: async () => [],
     shutdown: async () => {
       shutdownCalls += 1;
     },
@@ -1828,4 +1869,93 @@ test("extension cleanup skips confirmation for safe release and shows scope for 
   expect(prompts[0]).toContain("review-head");
   expect(prompts[0]).toContain("/tmp/treehouse/task-1");
   expect(refused.approved).toBe(false);
+});
+
+test("a request decision wakes the coordinator while routine request state stays quiet", async () => {
+  const sent: string[] = [];
+  const notified: string[] = [];
+  const acknowledged: string[] = [];
+  const quietRequest: RequestDeliveryRecord = {
+    schemaVersion: 1,
+    id: "req-quiet",
+    revision: 3,
+    repoPath: "/repo",
+    createdAt: "2030-01-01T00:00:00.000Z",
+    updatedAt: "2030-01-01T00:00:00.000Z",
+    members: [
+      {
+        taskId: "task-1",
+        briefRevision: 1,
+        agreementDigest: "agreement-1",
+        surfaces: ["api"],
+        admittedAt: "2030-01-01T00:00:00.000Z",
+        status: "active",
+      },
+    ],
+    dependencies: [],
+    conflicts: [],
+    notifications: [],
+  };
+  const decidingRequest: RequestDeliveryRecord = {
+    ...quietRequest,
+    id: "req-deciding",
+    notifications: [
+      {
+        id: "req-deciding:conflict:conflict-1",
+        message: "Request req-deciding needs a decision about task-1, task-2",
+        acknowledged: false,
+        kind: "coordinator",
+      },
+    ],
+  };
+  const service: Pick<TandemService, "acknowledge" | "acknowledgeRequest"> = {
+    acknowledge: async (taskId) => task({ id: taskId }),
+    acknowledgeRequest: async (requestId, notificationId) => {
+      acknowledged.push(`${requestId}:${notificationId}`);
+      return {
+        record: decidingRequest,
+        aggregate: {
+          requestId,
+          briefRevision: 1,
+          approvalState: "current",
+          activeTaskIds: [],
+          completedTaskIds: [],
+          waiting: [],
+          blockers: [],
+          decisions: [],
+          dispatchableTaskIds: [],
+          integrationOrder: [],
+          integrationStatus: "absent",
+          publicationStatus: "absent",
+          incompleteReasons: [],
+          readyToIntegrate: false,
+          delivered: false,
+        },
+      };
+    },
+  };
+  const sink = notificationSink(
+    (content) => {
+      sent.push(content);
+    },
+    () => undefined,
+  );
+  const context = notificationContext((content) => {
+    notified.push(content);
+  });
+
+  await deliverPendingNotifications({
+    pi: sink,
+    service,
+    tasks: [],
+    requests: [quietRequest, decidingRequest],
+    delivered: new Set<string>(),
+    ctx: context,
+    reportReadable: async () => true,
+  });
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toContain("[req-deciding] Request req-deciding needs a decision");
+  expect(notified).toEqual([]);
+  expect(acknowledged).toEqual(["req-deciding:req-deciding:conflict:conflict-1"]);
 });
