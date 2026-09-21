@@ -195,6 +195,7 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
       tasks: [record],
       requests: [],
       delivered: new Set<string>(),
+      unacknowledged: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
     });
@@ -209,6 +210,7 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
       tasks: [reloaded],
       requests: [],
       delivered: new Set<string>(),
+      unacknowledged: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
     });
@@ -238,6 +240,7 @@ test("an unreadable report downgrades the recorded interview to a disclosed bloc
       tasks: [record],
       requests: [],
       delivered: new Set<string>(),
+      unacknowledged: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
     });
@@ -265,6 +268,7 @@ test("an implementation-interview wake approves no scope and creates no implemen
       tasks: [record],
       requests: [],
       delivered: new Set<string>(),
+      unacknowledged: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
     });
@@ -306,6 +310,7 @@ test("routine scout bookkeeping stays out of the model wake and carries no follo
       tasks: [routineOnly],
       requests: [],
       delivered: new Set<string>(),
+      unacknowledged: new Set<string>(),
       ctx: { ui: { notify: (message) => notices.push(message) } },
       reportReadable: isResearchReportReadable,
     });
@@ -375,6 +380,7 @@ test("the delivered wake matches the pure decision for the same durable record",
       tasks: [record],
       requests: [],
       delivered: new Set<string>(),
+      unacknowledged: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
     });

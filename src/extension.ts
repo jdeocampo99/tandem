@@ -144,6 +144,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       }
     };
     const deliveredNotifications = new Set<string>();
+    const unacknowledgedNotifications = new Set<string>();
     const getService = (ctx: ExtensionContext): TandemService => {
       if (service === undefined) {
         service = serviceForContext(options, getEnvironment(ctx), classifyResearchContinuation);
@@ -191,6 +192,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             tasks,
             requests: await current.listRequests(),
             delivered: deliveredNotifications,
+            unacknowledged: unacknowledgedNotifications,
             ctx,
             reportReadable: isResearchReportReadable,
           });
