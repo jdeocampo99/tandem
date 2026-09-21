@@ -973,12 +973,18 @@ recorded once on the durable record and acknowledged through the request path.
 
 ### Standing request budgets and spending decisions
 
-A request spends under a standing cap. The cap is configured, never assumed: `policy.requestBudget`
-holds `capMicros` and `operationEstimateMicros`, both in integer USD micro-dollars, and both default
-to `"unset"`. `"unset"` is an amount nobody configured, which is unknown rather than unlimited and
-rather than zero, so a request governed by an unset amount stops for a decision instead of running.
-A repository tightens or raises the standing default by naming its own amounts; a pinned policy
-written before budgets existed loads as unset and stops the same way.
+A request spends under a standing cap when one is configured. The cap is configured, never assumed:
+`policy.requestBudget` holds `capMicros` and `operationEstimateMicros`, both in integer USD
+micro-dollars, and both default to `"unset"`. An unset `capMicros` leaves a request **not
+spend-governed**: it is admitted without a pause, a question, a reservation, or any budget state at
+all, exactly as it ran before budgets existed. Tandem cannot measure spending at the provider
+boundary, so a cap counts conservative estimates of operations rather than money, and refusing work
+nobody capped would cost every repository a setup step while protecting nothing. A repository turns
+the whole feature on by naming `capMicros`, and everything below applies from that point on.
+
+Removing a configured cap leaves the request ungoverned again. The cap in force is resolved before
+any recorded decision is read, so a decision raised under a cap the repository has since removed is
+released along with the rest of that request's budget rather than stranding its work.
 
 Precedence for the cap in force is the approved request override, then the pinned policy, which is
 already the repository override layered over the standing default. A lower repository amount
@@ -998,7 +1004,7 @@ one's reservation and is refused when the combined exposure cannot fit.
 {"request":{"action":"budget-approve","requestId":"req-...","decisionId":"spend-...","capMicros":25000000}}
 ```
 
-When the next step cannot fit, when no cap is configured, or when no conservative estimate is
+When the next step cannot fit under a configured cap, or when no conservative estimate is
 configured, the request enters a durable budget pause recorded in `requestBudgets` alongside the
 durable operation, reservation, and stop request. The pause is request-wide: progress on any other
 task under the same request is refused by the same check, so independent work cannot walk past it.
@@ -1008,7 +1014,6 @@ switches a model tier, drops a check, narrows review, or replans.
 
 | Pause reason | What it means |
 | --- | --- |
-| `no-configured-cap` | Nothing has authorized an amount for this request. |
 | `estimate-unavailable` | No conservative per-operation estimate is configured, so the next step's exposure is unknown. |
 | `exposure-unaccounted` | Work already done carries neither a published price nor a reserved estimate, so what the request has cost is unknown. |
 | `cap-would-be-exceeded` | Observed charges plus outstanding estimates plus the next step exceed the cap. |
