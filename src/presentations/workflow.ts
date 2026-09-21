@@ -16,6 +16,8 @@ import {
   presentationRuntime,
   unreleasedReservation,
 } from "../runtime/activity.ts";
+import { withRequestBudget } from "../runtime/budget.ts";
+import type { RequestSpendGate } from "../runtime/budget-gate.ts";
 import {
   readRuntimeState,
   updateRuntimeState,
@@ -66,6 +68,8 @@ export type PresentationRuntimeDependencies = Readonly<{
   readonly readTask: (taskId: string) => Promise<TaskRecord>;
   readonly taskInScope: (task: TaskRecord) => Promise<boolean>;
   readonly feedback: PresentationFeedbackWorkflow;
+  /** Decides whether this presentation may spend under its request's standing budget. */
+  readonly requestSpend: RequestSpendGate;
 }>;
 export type PresentationFailureBinding = Readonly<{
   readonly jobId: string;
@@ -815,6 +819,15 @@ export class PresentationRuntimeWorkflow {
       if (runtime.operation === undefined) {
         throw new Error(`presentation ${id} has no durable operation`);
       }
+      const spend = await this.#deps.requestSpend.decideAdmission({
+        task,
+        state,
+        operationId: runtime.operation.id,
+      });
+      if (spend?.outcome === "paused") {
+        await writeRuntimeState(this.#deps.runtimePath, withRequestBudget(state, spend.budget));
+        return false;
+      }
       const reservation = runtimeReservation(
         singleLine(this.#deps.idFactory(), "presentation reservation id"),
         runtime.taskId,
@@ -822,15 +835,16 @@ export class PresentationRuntimeWorkflow {
         this.#deps.clock(),
         runtime.operation.id,
       );
+      const admitted = replaceRuntimePresentation(state, id, (current) => ({
+        ...current,
+        ...(current.operation === undefined
+          ? {}
+          : { operation: { ...current.operation, phase: "admitted" as const } }),
+        reservation,
+      }));
       await writeRuntimeState(
         this.#deps.runtimePath,
-        replaceRuntimePresentation(state, id, (current) => ({
-          ...current,
-          ...(current.operation === undefined
-            ? {}
-            : { operation: { ...current.operation, phase: "admitted" as const } }),
-          reservation,
-        })),
+        spend === undefined ? admitted : withRequestBudget(admitted, spend.budget),
       );
       return true;
     });

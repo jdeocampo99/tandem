@@ -971,6 +971,163 @@ Routine request progress is passive: it is readable on demand and records no not
 decision the user must make and true request completion interrupt the main conversation, each one
 recorded once on the durable record and acknowledged through the request path.
 
+### Standing request budgets and spending decisions
+
+A request spends under a standing cap. The cap is configured, never assumed: `policy.requestBudget`
+holds `capMicros` and `operationEstimateMicros`, both in integer USD micro-dollars, and both default
+to `"unset"`. `"unset"` is an amount nobody configured, which is unknown rather than unlimited and
+rather than zero, so a request governed by an unset amount stops for a decision instead of running.
+A repository tightens or raises the standing default by naming its own amounts; a pinned policy
+written before budgets existed loads as unset and stops the same way.
+
+Precedence for the cap in force is the approved request override, then the pinned policy, which is
+already the repository override layered over the standing default. A lower repository amount
+tightens spending and stays visible in the budget readout.
+
+Every spend-bearing operation is admitted through one check, in the same atomic runtime write that
+records its durable operation and reservation: scout, implementation, fix, validation, review,
+verification, and presentation all go through it. The check adds observed charges from the
+accounting ledger to every outstanding estimated reservation and to the next step's conservative
+estimate, and compares that against the cap. A second concurrent admission therefore sees the first
+one's reservation and is refused when the combined exposure cannot fit.
+
+```sh
+# read the standing budget and any pending decision (passive; starts no work)
+{"request":{"action":"budget-show","requestId":"req-..."}}
+# answer one pending decision by raising the cap (human-confirmed)
+{"request":{"action":"budget-approve","requestId":"req-...","decisionId":"spend-...","capMicros":25000000}}
+```
+
+When the next step cannot fit, when no cap is configured, or when no conservative estimate is
+configured, the request enters a durable budget pause recorded in `requestBudgets` alongside the
+durable operation, reservation, and stop request. The pause is request-wide: progress on any other
+task under the same request is refused by the same check, so independent work cannot walk past it.
+Running work is never killed because a cap was reached; it finishes or unwinds through the existing
+pause and reconciliation paths, and its reservation is settled afterwards. Budget pressure never
+switches a model tier, drops a check, narrows review, or replans.
+
+| Pause reason | What it means |
+| --- | --- |
+| `no-configured-cap` | Nothing has authorized an amount for this request. |
+| `estimate-unavailable` | No conservative per-operation estimate is configured, so the next step's exposure is unknown. |
+| `exposure-unaccounted` | Work already done carries neither a published price nor a reserved estimate, so what the request has cost is unknown. |
+| `cap-would-be-exceeded` | Observed charges plus outstanding estimates plus the next step exceed the cap. |
+
+#### A zero charge total is not headroom
+
+Tandem's provider surface reports almost nothing. Child agents run interactive OMP, which publishes
+no tokens, price, or allowance, and coordinator-side prompt routing carries no request identity to
+bind a sample to. In practice `charges.amountMicros` is `0` for most requests while
+`charges.unavailableSamples` and `tokens.unavailableSamples` are not, so the charged total is a
+floor on what a request cost rather than a measurement of it, and admission never reads it as proof
+of remaining budget. Today's fully observed dimension is time: `timing.elapsedMs`, `activeMs`, and
+`waitingMs` are measured end to end.
+
+Admission therefore tracks what is unaccounted for, not just what is charged:
+
+- A settled operation the ledger priced leaves its reservation, because its actual charge is now in
+  the committed total.
+- A settled operation with no published price keeps its conservative estimate standing in for the
+  amount nobody published, so it keeps consuming the cap instead of reading as free.
+- An unpriced sample that no reservation stands for is **unaccounted**: an operation that never went
+  through admission, or a provider sample carrying no operation identity, such as review-level
+  assistance. Nothing in the budget represents its cost, so the request stops on an
+  `exposure-unaccounted` decision rather than spending further against a total it knows is wrong.
+
+Answering that decision accepts exactly the unmeasured work the approver was shown: the approval
+records `acknowledgedUnaccountedSamples`, and unmeasured work beyond that count is unknown again and
+asks again. Tandem never closes the gap by inventing a charge, by pricing an unpriced sample at
+zero, or by converting subscription quota into cash.
+
+The decision identity is derived from the request, pinned policy digest, agreement revision, cap,
+and reason rather than minted, so the question is recorded exactly once and every later refusal
+under it is silent. A restart re-derives the same pending decision; it cannot manufacture an
+authorization, and an unanswered question is still a pause.
+
+A cap increase is an explicit human-confirmed decision that must name the exact pending
+`decisionId`. It records the old and new cap, the pinned policy digest, and the agreement revision
+it was given under. It stops speaking when any of those moves: a changed pinned policy, a revised
+agreement, or a repository cap change makes the approval superseded, and the cap falls back to the
+pinned policy amount rather than to no cap at all. Authorizing an amount lower than the cap that
+stopped the request is refused rather than applied.
+
+Reservations are retained through uncertainty and released only on a positive outcome. Each
+reservation is keyed by the operation it backs, so re-admitting or replaying it counts once. After a
+restart, reconciliation settles them against the durable operations: an operation the ledger has
+priced leaves the record because its actual charge is now committed, an operation that ended without
+any provider-reported charge keeps its conservative estimate standing in for the amount nobody
+published, and an operation whose end is not proven keeps its reservation exactly as it was. The
+readout reports committed charges and reserved estimates separately, alongside the receipt's own
+unavailable-sample counts, the unaccounted count, and included-quota units, so an unmeasured amount
+is never shown as zero or as cash.
+
+### Economical routing and premium-tier approval
+
+Which exact model an attempt invokes is resolved at two boundaries and nowhere else: before a job is
+launched, and before a bounded replacement attempt after a known safe failure. There is no per-turn
+optimization loop, no mid-turn model switching, and no online learning from outcomes.
+
+The decision is recorded on the durable operation that admits the attempt, as an execution
+transition carrying the request, task, job, operation, generation, and attempt identity, the exact
+selector and thinking level, the tier evidence and where it came from, the enabled providers, and
+the cap, per-operation estimate, and worker limit it was taken under. Job construction and the
+execution gate both read the attempt's model through that one record, so an attempt whose model is
+not the pinned role assignment runs only when a transition authorizes exactly it. An audit note
+describing a model change is not a transition and admits nothing. A transition is fenced: it speaks
+only for the operation, job, generation, input HEAD, and pinned policy digest it names, and the gate
+refuses a stale one rather than reading through it. Routing never writes back to pinned policy; the
+pinned assignment and its history stay exactly as configured.
+
+Tier evidence comes from the OMP catalogue, read fresh at the boundary. `cost` is descriptive
+evidence about a model, never a guarantee about this account's pricing, and `includedAllowance`
+(`plan`, `unit`, `unitsPerRequest`) is quota consumption that carries no currency. A candidate is
+comparable only when the catalogue published both figures for both models, under the same plan and
+unit, and neither rises. A known rise on either axis is a premium move: a model that costs more is
+premium even when it is prepaid, bundled, or expected to bill nothing extra, and a model that draws
+more included allowance is premium even when the money is equal or unpublished. Two models nobody
+published an allowance for are not therefore equal; unpublished is unknown consumption, not none.
+
+A comparable reassignment happens automatically only after a known safe failure of the pinned model,
+and only among providers the pinned profile explicitly enabled in `models.json`. Catalogue discovery
+alone never authorizes a provider. Among eligible candidates a known included allowance is preferred
+first, then the lower published cost, then the selector, so the same catalogue always yields the
+same choice. A prior outcome that could not be proven stays quarantined with its capacity and
+resources: it is never retried or replaced.
+
+The request's own usage has to be observed as well. Catalogue figures say what a model is published
+to cost and draw; the accounting ledger says what this request has actually drawn, and a request
+carrying `unaccountedSamples` or `unmeasuredTokenSamples` has drawn an amount nobody reported. That
+is unknown consumption rather than small consumption, so no replacement can be proven to draw no
+more than the pinned model does, and the task stops on a `usage-evidence-unmeasured` decision naming
+the counts instead. A task with no governing request has no ledger at all and stops the same way. The
+charged total is never read as a measurement anywhere in the comparison: it is a floor on what the
+request cost. Because Tandem's provider surface reports so little, the honest consequence is that
+automatic reassignment is rare and the question is the normal outcome.
+
+Anything else is a question rather than a move. The task stops on a durable routing decision recorded
+in `routingPause`, the coordinator is notified exactly once, and nothing for that task starts until
+it is answered. The answer is pinning the model you want through the models configuration, which
+records a new immutable policy snapshot; the recorded question stops speaking once the pinned policy,
+the generation, or the input HEAD moves under it, and routing re-resolves against the new identity.
+
+| Routing pause reason | What it means |
+| --- | --- |
+| `spending-decision-pending` | The request is stopped on a spending decision, which takes precedence over any routing choice. |
+| `prior-outcome-uncertain` | The previous attempt's outcome could not be proven, so it stays quarantined rather than being replaced. |
+| `pinned-model-absent-from-catalogue` | The catalogue does not list the pinned model, so nothing confirms it can still run. |
+| `pinned-model-ambiguous-in-catalogue` | The pinned selector matches more than one entry, so which model would run is unknown. |
+| `pinned-model-thinking-level-unsupported` | The pinned model no longer supports the thinking level pinned for this role. |
+| `premium-tier-requires-approval` | The only available replacement costs more or draws more included allowance. |
+| `tier-evidence-indeterminate` | Tier evidence for the available replacements is missing or contradictory. |
+| `usage-evidence-unmeasured` | The request's own usage is not fully observed, so no replacement can be proven to draw no more. |
+
+The spending checkpoint runs first and wins: a request-wide budget pause, whatever its reason,
+a planned-step cap, or the worker concurrency limit refuses the reservation before routing is
+resolved at all, and no routing choice can widen any of them. An `exposure-unaccounted` pause is
+answered by accepting that unmeasured work through `budget-approve`, never by rerouting. A catalogue that cannot be read, or that published no models at all,
+supplies no evidence either way: the pinned model continues and the transition records that no
+comparison was made, rather than treating silence as a contradiction or as headroom.
+
 ### Post-research continuation disposition
 
 Every scout record carries a durable `researchContinuation` describing what its completed report

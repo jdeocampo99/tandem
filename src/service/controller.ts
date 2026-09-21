@@ -75,7 +75,7 @@ import {
   type ReviewExistingResult,
   type ValidationRetryResult,
 } from "../recovery/workflow.ts";
-import type { RequestApprovalIntent } from "../requests/brief.ts";
+import { type RequestApprovalIntent, requestApprovalState } from "../requests/brief.ts";
 import {
   type MergeRequestInput,
   type PublishRequestInput,
@@ -99,6 +99,13 @@ import {
   taskRuntime,
   unreleasedReservation,
 } from "../runtime/activity.ts";
+import {
+  type RequestOperationSettlement,
+  type RequestSpendAuthorization,
+  type RequestSpendReadout,
+  requestOperationSettlements,
+} from "../runtime/budget.ts";
+import { createRequestSpendGate, type RequestSpendGate } from "../runtime/budget-gate.ts";
 import { withStateLock } from "../runtime/database.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import {
@@ -145,6 +152,7 @@ import {
   type TaskStoreTransaction,
   transitionStoredTask,
 } from "../tasks/store.ts";
+import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
 import {
@@ -301,6 +309,10 @@ export type TandemService = Readonly<{
     requestId: string,
     notificationId: string,
   ) => Promise<RequestDeliveryView>;
+  readonly requestSpend: (requestId: string) => Promise<RequestSpendReadout>;
+  readonly authorizeRequestSpend: (
+    intent: RequestSpendAuthorization,
+  ) => Promise<RequestSpendReadout>;
   readonly tick: () => Promise<readonly TaskRecord[]>;
   readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly steer: (input: SteerTaskInput) => Promise<TaskCommunicationView>;
@@ -593,6 +605,7 @@ class TandemController {
   readonly #requests: RequestBriefWorkflow;
   readonly #requestDelivery: RequestDeliveryWorkflow;
   readonly #usage: RequestUsageLedger;
+  readonly #spend: RequestSpendGate;
   /** Durable-state digest of the draft body last published per task, to avoid redundant refreshes. */
   readonly #draftDigests = new Map<string, string>();
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
@@ -604,6 +617,13 @@ class TandemController {
   constructor(deps: ServiceDependencies) {
     this.#deps = deps;
     this.#usage = deps.usageLedger;
+    this.#spend = createRequestSpendGate({
+      runtimePath: deps.runtimePath,
+      store: deps.store,
+      clock: deps.clock,
+      readRequestUsage: (requestId) => this.#usage.read(requestId),
+      readAgreementRevision: (requestId) => this.agreementRevision(requestId),
+    });
     this.#sourceReady = deps.refreshSource === undefined;
     this.#source = new SourceInboxWorkflow({
       home: deps.home,
@@ -636,6 +656,7 @@ class TandemController {
       readTask: (taskId) => this.get(taskId),
       taskInScope: (task) => this.#source.taskInScope(task),
       feedback: this.#presentationFeedback,
+      requestSpend: this.#spend,
     });
     this.#worker = new WorkerWorkflow({
       home: deps.home,
@@ -665,6 +686,8 @@ class TandemController {
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
       reviewAssistance: deps.reviewAssistance,
       recordRequestUsage: (events) => this.recordAccounting(events),
+      requestSpend: this.#spend,
+      readModelCatalogue: (cwd) => this.readModelCatalogue(cwd),
     });
     this.#control = new TaskControlWorkflow({
       home: deps.home,
@@ -781,6 +804,8 @@ class TandemController {
       approveRequestSplit: (requestId) => this.#requestDelivery.approveSplit(requestId),
       acknowledgeRequest: (requestId, notificationId) =>
         this.#requestDelivery.acknowledge(requestId, notificationId),
+      requestSpend: (requestId) => this.#spend.readSpend(requestId),
+      authorizeRequestSpend: (intent) => this.#spend.authorizeSpend(intent),
       tick: () => this.tick(),
       acknowledge: (id, notificationId) => this.acknowledge(id, notificationId),
       steer: (input) => this.steer(input),
@@ -811,6 +836,25 @@ class TandemController {
       ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
     });
   }
+  /**
+   * Catalogue tier evidence for one checkout, read fresh at an execution boundary. A catalogue it
+   * cannot read is reported as unavailable rather than as an empty catalogue, because an empty one
+   * would read as "nothing is enabled and nothing is included".
+   */
+  private async readModelCatalogue(cwd: string): Promise<ModelCatalogueSnapshot> {
+    try {
+      const settings = await readModelSettings({ repoPath: cwd, home: this.#deps.home });
+      return {
+        status: "read",
+        models: await listOmpModels(this.#deps.run, { cwd }),
+        enabledProviders: settings.enabledProviders,
+        readAt: this.#deps.clock(),
+      };
+    } catch {
+      return { status: "unavailable", reason: "catalogue-unreadable" };
+    }
+  }
+
   async models(repoPath: string): Promise<ModelOptionsResult> {
     const source = await mapTaskSource(this.#deps.run, repoPath, this.#deps.sourceWorkspace);
     const modelSettings = await readModelSettings({
@@ -1655,13 +1699,50 @@ class TandemController {
   private async recordRequestAccounting(tasks: readonly TaskRecord[]): Promise<void> {
     const governed = tasks.filter((task) => task.requestId !== undefined);
     if (governed.length === 0) return;
+    const state = await this.readState();
     try {
-      await this.recordAccounting(
-        await this.requestAccountingEvents(governed, await this.readState()),
-      );
+      await this.recordAccounting(await this.requestAccountingEvents(governed, state));
     } catch (error) {
       await this.diagnoseAccountingFailure(error);
     }
+    await this.reconcileRequestSpending(governed, await this.readState());
+  }
+
+  /**
+   * Settles each request's outstanding estimates against the operations they back, which is how a
+   * restart gets back to a true exposure without double-counting an operation or dropping the one
+   * whose outcome nobody can prove yet.
+   */
+  private async reconcileRequestSpending(
+    tasks: readonly TaskRecord[],
+    state: RuntimeState,
+  ): Promise<void> {
+    const settlements = new Map<string, RequestOperationSettlement[]>();
+    for (const task of tasks) {
+      const requestId = task.requestId;
+      const runtime = state.tasks.find((entry) => entry.taskId === task.id);
+      if (requestId === undefined || runtime === undefined) continue;
+      const observed = settlements.get(requestId) ?? [];
+      observed.push(
+        ...requestOperationSettlements(runtime),
+        ...state.presentations
+          .filter((presentation) => presentation.taskId === task.id)
+          .flatMap(requestOperationSettlements),
+      );
+      settlements.set(requestId, observed);
+    }
+    for (const [requestId, observed] of settlements) {
+      await this.#spend.reconcileReservations({ requestId, settlements: observed });
+    }
+  }
+
+  /** The brief revision a spending decision is bound to: the approved one while it still stands. */
+  private async agreementRevision(requestId: string): Promise<number> {
+    const record = await this.#deps.requestStore.read(requestId);
+    if (record === undefined) return 0;
+    return requestApprovalState(record) === "current" && record.approval !== undefined
+      ? record.approval.briefRevision
+      : record.draft.revision;
   }
 
   private async requestAccountingEvents(

@@ -169,6 +169,7 @@ export async function runWorkerJob(
     command: job.role === "presentation" ? "presentation" : "worker",
     cwd: job.cwd,
     resultPath: job.resultPath,
+    resolvedModel: job.model,
     ...(job.review === undefined ? {} : { inputHead: job.review.head }),
   };
   let admission: ExecutionAdmission;

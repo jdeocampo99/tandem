@@ -6,6 +6,7 @@ import {
   MODEL_ROLE_ORDER,
   type TaskRecord,
 } from "../contracts.ts";
+import { describeSpendMicros, type RequestSpendReadout } from "../runtime/budget.ts";
 import { USD_MICROS_PER_DOLLAR } from "../runtime/usage.ts";
 import type {
   AdditionalCharges,
@@ -1028,6 +1029,48 @@ function summarizeRequestReceipt(value: unknown): string {
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
+/**
+ * The standing budget as one decision-ready block: the cap in force, what has been charged, what
+ * is still reserved as an estimate, and the pending question if the request is stopped on one.
+ */
+export function summarizeRequestSpend(readout: RequestSpendReadout): string {
+  const { cap, exposure, pause } = readout;
+  const lines = [
+    `${readout.requestId}: cap ${cap.source === "none" ? "none in force" : `${describeSpendMicros(cap.capMicros)} from ${cap.source}`}; approval ${readout.approvalState}`,
+    `Charged (observed): ${describeCharges(readout.charges)}`,
+    `Reserved (estimate): ${describeSpendMicros(exposure.reservedMicros)} across ${exposure.inFlightReservations} in-flight and ${exposure.settledEstimateReservations} settled-but-unpriced operation(s)`,
+    `Accounted exposure: ${describeSpendMicros(exposure.totalMicros)} (a floor on what this request cost, not a measurement)`,
+    `Unmeasured: ${exposure.unpricedSamples} sample(s) carry no published price and ${exposure.unmeasuredTokenSamples} reported no tokens; ${exposure.unaccountedSamples} of them have no reserved estimate standing for them`,
+    `Included quota: ${describeQuota(readout.quota)}`,
+  ];
+  if (readout.approval !== undefined) {
+    lines.push(
+      `Authorized ${describeSpendMicros(readout.approval.capMicros)} on decision ${readout.approval.decisionId} at ${readout.approval.approvedAt}, replacing ${describeSpendMicros(readout.approval.previousCapMicros)}, accepting ${readout.approval.acknowledgedUnaccountedSamples} unmeasured sample(s).`,
+    );
+  }
+  lines.push(
+    pause === undefined
+      ? "No spending decision is pending; admission is passive and nothing is being asked."
+      : `Pending decision ${pause.decisionId} (${pause.reason}) raised at ${pause.observedAt} by task ${pause.taskId}; next step estimated at ${describeSpendMicros(pause.nextStepMicros)}. Answer it with budget-approve; Tandem will not economize to fit.`,
+  );
+  if (readout.reconciledAt !== undefined) {
+    lines.push(
+      `Reservations last reconciled against durable operations at ${readout.reconciledAt}.`,
+    );
+  }
+  return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
+}
+
+function isRequestSpendReadout(value: unknown): value is RequestSpendReadout {
+  const record = summaryRecord(value);
+  return (
+    record !== undefined &&
+    typeof record.requestId === "string" &&
+    summaryRecord(record.cap) !== undefined &&
+    summaryRecord(record.exposure) !== undefined
+  );
+}
+
 function isNonEmptyEntry(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -1092,6 +1135,11 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     return summarizeRequestBrief(value);
   }
   if (action === "request-receipt") return summarizeRequestReceipt(value);
+  if (action === "budget-show" || action === "budget-approve") {
+    return isRequestSpendReadout(value)
+      ? summarizeRequestSpend(value)
+      : boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  }
   if (action === "presentations" || action === "present" || action === "feedback") {
     return summarizePresentations(action, value);
   }

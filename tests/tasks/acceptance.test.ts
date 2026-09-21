@@ -44,6 +44,7 @@ function policyWith(commands: readonly ValidationCommand[]): ResolvedPolicy {
         jevAssistance: "off",
         sourceTransmission: false,
       },
+      requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
     },
     guidance: { implementation: [], validation: [], review: [] },
   };

@@ -7,6 +7,7 @@ import type {
   TaskRecord,
 } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
+import { describeSpendMicros } from "../runtime/budget.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
 import { activeTaskMessages, MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import {
@@ -15,6 +16,7 @@ import {
   compactText,
   projectName,
   summarizeModelAssignments,
+  summarizeRequestSpend,
 } from "./summary.ts";
 
 const TANDEM_COMMAND_ARITY: Readonly<
@@ -61,6 +63,8 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "request-publish": { min: 6, max: 6 },
   "request-merge": { min: 3, max: 3 },
   "request-split": { min: 2, max: 2 },
+  "budget-show": { min: 2, max: 2 },
+  "budget-approve": { min: 4, max: 4 },
   "review-existing": { min: 3, max: 3 },
   "validation-retry": { min: 2, max: 2 },
   "evidence-repair": { min: 2, max: 2 },
@@ -136,6 +140,13 @@ export type TandemAction =
   | Readonly<{ readonly action: "brief-review"; readonly requestId: string }>
   | Readonly<{ readonly action: "brief-show"; readonly requestId: string }>
   | Readonly<{ readonly action: "request-receipt"; readonly requestId: string }>
+  | Readonly<{ readonly action: "budget-show"; readonly requestId: string }>
+  | Readonly<{
+      readonly action: "budget-approve";
+      readonly requestId: string;
+      readonly decisionId: string;
+      readonly capMicros: number;
+    }>
   | Readonly<{
       readonly action: "brief-approve";
       readonly requestId: string;
@@ -253,6 +264,7 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "request-publish" ||
     action.action === "request-merge" ||
     action.action === "request-split" ||
+    action.action === "budget-approve" ||
     action.action === "cancel" ||
     action.action === "publish" ||
     action.action === "draft" ||
@@ -370,6 +382,13 @@ async function approvalPrompt(
     return {
       title: "Approve this request brief?",
       message: `Approve request ${action.requestId} at brief revision ${action.briefRevision} (${view.approvalState}; durable draft is at revision ${view.record.draft.revision}). Approving the brief records the agreement only; it does not authorize provider activation, publication, merge, deployment, or destructive work.`,
+    };
+  }
+  if (action.action === "budget-approve") {
+    const readout = await service.requestSpend(action.requestId);
+    return {
+      title: "Authorize more spending on this request?",
+      message: `Raise the cap for request ${action.requestId} to ${describeSpendMicros(action.capMicros)}, answering decision ${action.decisionId}.\n\n${summarizeRequestSpend(readout)}\n\nAuthorizing spending resumes admission under the new cap only; it does not approve scope, publication, merge, deployment, or destructive work.`,
     };
   }
   if (!("taskId" in action))
@@ -633,6 +652,18 @@ export async function executeTandemAction(
       return textResult(await service.requestBrief(action.requestId), action.action);
     case "request-receipt":
       return textResult(await service.requestReceipt(action.requestId), action.action);
+    case "budget-show":
+      return textResult(await service.requestSpend(action.requestId), action.action);
+    case "budget-approve":
+      return textResult(
+        await service.authorizeRequestSpend({
+          requestId: action.requestId,
+          decisionId: action.decisionId,
+          capMicros: action.capMicros,
+        }),
+        action.action,
+        true,
+      );
     case "brief-approve":
       return textResult(
         await service.approveRequestBrief({
@@ -933,6 +964,22 @@ export function parseTandemCommand(input: string): TandemAction {
       return { action: "brief-show", requestId: value(1, "brief-show") };
     case "request-receipt":
       return { action: "request-receipt", requestId: value(1, "request-receipt") };
+    case "budget-show":
+      return { action: "budget-show", requestId: value(1, "budget-show") };
+    case "budget-approve": {
+      const capMicros = Number(value(3, "budget-approve cap in USD micro-dollars"));
+      if (!Number.isSafeInteger(capMicros) || capMicros < 0) {
+        throw new TypeError(
+          "budget-approve cap must be a non-negative integer number of USD micro-dollars",
+        );
+      }
+      return {
+        action: "budget-approve",
+        requestId: value(1, "budget-approve"),
+        decisionId: value(2, "budget-approve decision id"),
+        capMicros,
+      };
+    }
     case "brief-review":
       return { action: "brief-review", requestId: value(1, "brief-review") };
     case "brief-approve": {
