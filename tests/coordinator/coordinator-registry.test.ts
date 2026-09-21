@@ -900,6 +900,74 @@ test("allows reset when historical worker endpoints are no longer live", async (
   }
 });
 
+test("allows reset past a settled terminal stop intent but refuses a quarantined one", async () => {
+  for (const phase of ["cancelled", "quarantined"] as const) {
+    const values = await fixture();
+    try {
+      await saveCoordinatorRecord(values.home, values.recordA);
+      await seedTask(values.home, values.repoA, "implementation");
+      const store = createTaskStore({
+        directory: join(values.home, "tasks"),
+        clock: () => new Date().toISOString(),
+        idFactory: () => "reset-task",
+      });
+      const seeded = await store.read("reset-task");
+      await store.update(seeded.id, seeded.revision, (current) => ({
+        ...current,
+        stage: "cancelled",
+        revision: current.revision + 1,
+      }));
+      await writeRuntimeState(runtimeFile(values.home), {
+        schemaVersion: 1,
+        tasks: [
+          {
+            ...runtimeTask(values),
+            stopRequest: {
+              schemaVersion: 1,
+              action: "cancel",
+              generation: 0,
+              requestedAt: "2030-01-02T03:04:05.000Z",
+            },
+            operation: {
+              schemaVersion: 1,
+              id: "reset-operation",
+              taskId: "reset-task",
+              kind: "implementation",
+              role: "implementer",
+              generation: 0,
+              inputHead: "abc123",
+              policyDigest: "policy",
+              instructionRevision: 0,
+              jobId: "reset-job",
+              phase,
+              fencingRevision: 1,
+              claimOwner: "tandem",
+              createdAt: "2030-01-02T03:04:05.000Z",
+              effects: [],
+            },
+          },
+        ],
+        presentations: [],
+      });
+      const runner = nativeResetRunner([{ record: values.recordA, agentStatus: "idle" }]);
+      const reset = resetCoordinators(runner.run, {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA],
+      });
+
+      if (phase === "cancelled") {
+        expect((await reset).map((record) => record.repoPath)).toEqual([values.repoA]);
+      } else {
+        await expect(reset).rejects.toThrow("pending stop intent");
+        expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(true);
+      }
+    } finally {
+      await cleanup(values.root);
+    }
+  }
+});
+
 test("refuses a busy selected coordinator before closing any idle coordinator", async () => {
   const values = await fixture();
   try {
