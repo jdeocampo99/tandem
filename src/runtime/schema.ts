@@ -224,12 +224,18 @@ export type RequestSpendApproval = Readonly<{
   readonly policyCapMicros: number | "unset";
   readonly policyDigest: string;
   readonly briefRevision: number;
+  /**
+   * How much unmeasured work the approver was shown and accepted. Spending nobody can observe is
+   * accepted explicitly and only up to this count; work beyond it is unknown again and asks again.
+   */
+  readonly acknowledgedUnaccountedSamples: number;
   readonly approvedAt: IsoTimestamp;
 }>;
 
 export const REQUEST_BUDGET_PAUSE_REASONS = [
   "no-configured-cap",
   "estimate-unavailable",
+  "exposure-unaccounted",
   "cap-would-be-exceeded",
 ] as const;
 
@@ -251,6 +257,9 @@ export type RequestBudgetPause = Readonly<{
   readonly reservedMicros: number;
   readonly nextStepMicros: number | "unavailable";
   readonly unpricedSamples: number;
+  /** Unpriced work no reservation stands for, so nothing in the budget represents its cost. */
+  readonly unaccountedSamples: number;
+  readonly unmeasuredTokenSamples: number;
   readonly observedAt: IsoTimestamp;
 }>;
 
@@ -927,6 +936,10 @@ function parseSpendApproval(value: unknown, field: string): RequestSpendApproval
     policyCapMicros: optionalMicroDollars(value.policyCapMicros, `${field}.policyCapMicros`),
     policyDigest: singleLine(value.policyDigest, `${field}.policyDigest`),
     briefRevision: nonNegativeInteger(value.briefRevision, `${field}.briefRevision`),
+    acknowledgedUnaccountedSamples: nonNegativeInteger(
+      value.acknowledgedUnaccountedSamples,
+      `${field}.acknowledgedUnaccountedSamples`,
+    ),
     approvedAt: singleLine(value.approvedAt, `${field}.approvedAt`),
   };
 }
@@ -948,6 +961,11 @@ function parseBudgetPause(value: unknown, field: string): RequestBudgetPause {
         ? "unavailable"
         : microDollars(value.nextStepMicros, `${field}.nextStepMicros`),
     unpricedSamples: nonNegativeInteger(value.unpricedSamples, `${field}.unpricedSamples`),
+    unaccountedSamples: nonNegativeInteger(value.unaccountedSamples, `${field}.unaccountedSamples`),
+    unmeasuredTokenSamples: nonNegativeInteger(
+      value.unmeasuredTokenSamples,
+      `${field}.unmeasuredTokenSamples`,
+    ),
     observedAt: singleLine(value.observedAt, `${field}.observedAt`),
   };
 }

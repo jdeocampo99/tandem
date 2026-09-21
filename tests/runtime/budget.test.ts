@@ -41,7 +41,9 @@ type BudgetWorld = Readonly<{
 }>;
 
 type SampleInput = Readonly<{
-  readonly operationId: string;
+  /** Omitted for a sample no operation identity can be attributed to, such as review assistance. */
+  readonly operationId?: string;
+  readonly sampleIdentity: string;
   readonly inputTokens: number | "unavailable";
   readonly priced: boolean;
 }>;
@@ -181,7 +183,7 @@ async function withBudgetWorld(
       restart: newGate,
       admit,
       state: () => readRuntimeState(path),
-      recordSample: async ({ operationId, inputTokens, priced }) => {
+      recordSample: async ({ operationId, sampleIdentity, inputTokens, priced }) => {
         const event = providerSampleEvent({
           requestId: REQUEST_ID,
           workKind: "implementation",
@@ -198,12 +200,16 @@ async function withBudgetWorld(
           },
           startedAt: "2030-01-01T00:00:00.000Z",
           endedAt: "2030-01-01T00:01:00.000Z",
-          sampleIdentity: operationId,
+          sampleIdentity,
           taskId: "task-1",
           role: "implementer",
         });
         if (event === undefined) throw new Error("the sample produced no accounting event");
-        await ledger.record([{ ...event, identity: { ...event.identity, operationId } }]);
+        await ledger.record([
+          operationId === undefined
+            ? event
+            : { ...event, identity: { ...event.identity, operationId } },
+        ]);
       },
     },
     tasks,
@@ -338,9 +344,15 @@ test("a restart reconciles reservations without double counting or losing one", 
         ...state,
         tasks: [{ ...runtimeTask(task.id, [priced, unpriced]), operation: running }],
       });
-      await world.recordSample({ operationId: "op-priced", inputTokens: 2_000_000, priced: true });
+      await world.recordSample({
+        operationId: "op-priced",
+        sampleIdentity: "op-priced",
+        inputTokens: 2_000_000,
+        priced: true,
+      });
       await world.recordSample({
         operationId: "op-unpriced",
+        sampleIdentity: "op-unpriced",
         inputTokens: "unavailable",
         priced: false,
       });
@@ -383,7 +395,12 @@ test("an unreported charge is counted as unmeasured rather than as zero cash", a
       const task = tasks[0];
       if (task === undefined) throw new Error("the world seeded no task");
       expect((await world.admit(task, "op-a")).outcome).toBe("admitted");
-      await world.recordSample({ operationId: "op-a", inputTokens: "unavailable", priced: false });
+      await world.recordSample({
+        operationId: "op-a",
+        sampleIdentity: "op-a",
+        inputTokens: "unavailable",
+        priced: false,
+      });
 
       const readout = await world.gate.readSpend(REQUEST_ID);
       expect(readout.charges.amountMicros).toBe(0);
@@ -405,9 +422,15 @@ test("the observation names only the operations the ledger actually priced", asy
       const task = tasks[0];
       if (task === undefined) throw new Error("the world seeded no task");
       expect((await world.admit(task, "op-priced")).outcome).toBe("admitted");
-      await world.recordSample({ operationId: "op-priced", inputTokens: 1_000_000, priced: true });
+      await world.recordSample({
+        operationId: "op-priced",
+        sampleIdentity: "op-priced",
+        inputTokens: 1_000_000,
+        priced: true,
+      });
       await world.recordSample({
         operationId: "op-free",
+        sampleIdentity: "op-free",
         inputTokens: "unavailable",
         priced: false,
       });
@@ -422,5 +445,99 @@ test("the observation names only the operations the ledger actually priced", asy
       expect(readout.pricedOperationIds).toEqual(["op-priced"]);
     },
     { capMicros: 5_000_000, operationEstimateMicros: 400_000 },
+  );
+});
+
+test("zero observed charges beside unmeasured work is not treated as headroom", async () => {
+  await withBudgetWorld(
+    async (world, tasks) => {
+      const task = tasks[0];
+      if (task === undefined) throw new Error("the world seeded no task");
+      await world.recordSample({
+        sampleIdentity: "review-assistance-1",
+        inputTokens: "unavailable",
+        priced: false,
+      });
+
+      const stopped = await world.admit(task, "op-a");
+      expect(stopped.outcome).toBe("paused");
+      if (stopped.outcome !== "paused") return;
+      expect(stopped.pause.reason).toBe("exposure-unaccounted");
+      expect(stopped.pause.committedMicros).toBe(0);
+      expect(stopped.pause.unpricedSamples).toBe(1);
+      expect(stopped.pause.unaccountedSamples).toBe(1);
+      expect(stopped.pause.unmeasuredTokenSamples).toBe(1);
+
+      const readout = await world.gate.readSpend(REQUEST_ID);
+      expect(readout.exposure.committedMicros).toBe(0);
+      expect(readout.exposure.totalMicros).toBe(0);
+      expect(readout.exposure.unaccountedSamples).toBe(1);
+      expect(readout.reservations).toEqual([]);
+    },
+    { capMicros: 5_000_000, operationEstimateMicros: 400_000 },
+  );
+});
+
+test("accepting unmeasured work resumes admission and later unmeasured work asks again", async () => {
+  await withBudgetWorld(
+    async (world, tasks) => {
+      const task = tasks[0];
+      if (task === undefined) throw new Error("the world seeded no task");
+      await world.recordSample({
+        sampleIdentity: "review-assistance-1",
+        inputTokens: "unavailable",
+        priced: false,
+      });
+      const stopped = await world.admit(task, "op-a");
+      if (stopped.outcome !== "paused") throw new Error("unmeasured work should have stopped it");
+
+      const accepted = await world.gate.authorizeSpend({
+        requestId: REQUEST_ID,
+        decisionId: stopped.pause.decisionId,
+        capMicros: 5_000_000,
+      });
+      expect(accepted.approval?.acknowledgedUnaccountedSamples).toBe(1);
+      expect((await world.admit(task, "op-a")).outcome).toBe("admitted");
+
+      await world.recordSample({
+        sampleIdentity: "review-assistance-2",
+        inputTokens: "unavailable",
+        priced: false,
+      });
+      const reasked = await world.admit(task, "op-b");
+      expect(reasked.outcome).toBe("paused");
+      if (reasked.outcome !== "paused") return;
+      expect(reasked.pause.reason).toBe("exposure-unaccounted");
+      expect(reasked.pause.unaccountedSamples).toBe(2);
+      expect(reasked.pause.decisionId).not.toBe(stopped.pause.decisionId);
+    },
+    { capMicros: 200_000, operationEstimateMicros: 400_000 },
+  );
+});
+
+test("an unpriced operation a reservation stands for keeps consuming the cap and asks nothing", async () => {
+  await withBudgetWorld(
+    async (world, tasks) => {
+      const task = tasks[0];
+      if (task === undefined) throw new Error("the world seeded no task");
+      expect((await world.admit(task, "op-a")).outcome).toBe("admitted");
+      await world.recordSample({
+        operationId: "op-a",
+        sampleIdentity: "op-a",
+        inputTokens: "unavailable",
+        priced: false,
+      });
+
+      const readout = await world.gate.readSpend(REQUEST_ID);
+      expect(readout.exposure.unpricedSamples).toBe(1);
+      expect(readout.exposure.unaccountedSamples).toBe(0);
+      expect(readout.exposure.totalMicros).toBe(400_000);
+
+      const next = await world.admit(task, "op-b");
+      expect(next.outcome).toBe("paused");
+      if (next.outcome !== "paused") return;
+      expect(next.pause.reason).toBe("cap-would-be-exceeded");
+    },
+    { capMicros: 500_000, operationEstimateMicros: 400_000 },
   );
 });

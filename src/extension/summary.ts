@@ -928,12 +928,13 @@ export function summarizeRequestSpend(readout: RequestSpendReadout): string {
     `${readout.requestId}: cap ${cap.source === "none" ? "none in force" : `${describeSpendMicros(cap.capMicros)} from ${cap.source}`}; approval ${readout.approvalState}`,
     `Charged (observed): ${describeCharges(readout.charges)}`,
     `Reserved (estimate): ${describeSpendMicros(exposure.reservedMicros)} across ${exposure.inFlightReservations} in-flight and ${exposure.settledEstimateReservations} settled-but-unpriced operation(s)`,
-    `Accounted exposure: ${describeSpendMicros(exposure.totalMicros)}`,
+    `Accounted exposure: ${describeSpendMicros(exposure.totalMicros)} (a floor on what this request cost, not a measurement)`,
+    `Unmeasured: ${exposure.unpricedSamples} sample(s) carry no published price and ${exposure.unmeasuredTokenSamples} reported no tokens; ${exposure.unaccountedSamples} of them have no reserved estimate standing for them`,
     `Included quota: ${describeQuota(readout.quota)}`,
   ];
   if (readout.approval !== undefined) {
     lines.push(
-      `Authorized ${describeSpendMicros(readout.approval.capMicros)} on decision ${readout.approval.decisionId} at ${readout.approval.approvedAt}, replacing ${describeSpendMicros(readout.approval.previousCapMicros)}.`,
+      `Authorized ${describeSpendMicros(readout.approval.capMicros)} on decision ${readout.approval.decisionId} at ${readout.approval.approvedAt}, replacing ${describeSpendMicros(readout.approval.previousCapMicros)}, accepting ${readout.approval.acknowledgedUnaccountedSamples} unmeasured sample(s).`,
     );
   }
   lines.push(

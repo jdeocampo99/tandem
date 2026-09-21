@@ -951,7 +951,34 @@ switches a model tier, drops a check, narrows review, or replans.
 | --- | --- |
 | `no-configured-cap` | Nothing has authorized an amount for this request. |
 | `estimate-unavailable` | No conservative per-operation estimate is configured, so the next step's exposure is unknown. |
+| `exposure-unaccounted` | Work already done carries neither a published price nor a reserved estimate, so what the request has cost is unknown. |
 | `cap-would-be-exceeded` | Observed charges plus outstanding estimates plus the next step exceed the cap. |
+
+#### A zero charge total is not headroom
+
+Tandem's provider surface reports almost nothing. Child agents run interactive OMP, which publishes
+no tokens, price, or allowance, and coordinator-side prompt routing carries no request identity to
+bind a sample to. In practice `charges.amountMicros` is `0` for most requests while
+`charges.unavailableSamples` and `tokens.unavailableSamples` are not, so the charged total is a
+floor on what a request cost rather than a measurement of it, and admission never reads it as proof
+of remaining budget. Today's fully observed dimension is time: `timing.elapsedMs`, `activeMs`, and
+`waitingMs` are measured end to end.
+
+Admission therefore tracks what is unaccounted for, not just what is charged:
+
+- A settled operation the ledger priced leaves its reservation, because its actual charge is now in
+  the committed total.
+- A settled operation with no published price keeps its conservative estimate standing in for the
+  amount nobody published, so it keeps consuming the cap instead of reading as free.
+- An unpriced sample that no reservation stands for is **unaccounted**: an operation that never went
+  through admission, or a provider sample carrying no operation identity, such as review-level
+  assistance. Nothing in the budget represents its cost, so the request stops on an
+  `exposure-unaccounted` decision rather than spending further against a total it knows is wrong.
+
+Answering that decision accepts exactly the unmeasured work the approver was shown: the approval
+records `acknowledgedUnaccountedSamples`, and unmeasured work beyond that count is unknown again and
+asks again. Tandem never closes the gap by inventing a charge, by pricing an unpriced sample at
+zero, or by converting subscription quota into cash.
 
 The decision identity is derived from the request, pinned policy digest, agreement revision, cap,
 and reason rather than minted, so the question is recorded exactly once and every later refusal
@@ -972,8 +999,8 @@ priced leaves the record because its actual charge is now committed, an operatio
 any provider-reported charge keeps its conservative estimate standing in for the amount nobody
 published, and an operation whose end is not proven keeps its reservation exactly as it was. The
 readout reports committed charges and reserved estimates separately, alongside the receipt's own
-unavailable-sample counts and included-quota units, so an unmeasured amount is never shown as zero
-or as cash.
+unavailable-sample counts, the unaccounted count, and included-quota units, so an unmeasured amount
+is never shown as zero or as cash.
 
 ### Post-research continuation disposition
 

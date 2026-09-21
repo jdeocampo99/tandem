@@ -23,7 +23,7 @@ import type {
   RuntimeState,
   RuntimeTaskState,
 } from "./schema.ts";
-import { USD_MICROS_PER_DOLLAR } from "./usage.ts";
+import { type RequestUsageEvent, USD_MICROS_PER_DOLLAR } from "./usage.ts";
 import {
   type AdditionalCharges,
   buildRequestUsageReceipt,
@@ -71,16 +71,27 @@ export type RequestSpendCap =
 export type RequestSpendApprovalState = "absent" | "recorded" | "current" | "superseded";
 
 /**
- * What the ledger says one request has actually been charged, plus which operations it holds a
- * reported charge for. An operation missing from `pricedOperationIds` is unpriced, not free.
+ * What the ledger says one request has actually been charged, and how much of it nobody published
+ * a price for. An operation missing from `pricedOperationIds` is unpriced, not free, and a sample
+ * in `unattributedUnpricedSamples` carries no operation identity at all, so no reservation can
+ * ever stand for it. Tandem's own provider surface reports almost nothing, so a zero charge total
+ * beside a non-zero unpriced count is the normal case rather than an unusual one.
  */
 export type RequestChargeObservation = Readonly<{
   readonly charges: AdditionalCharges;
   readonly quota: IncludedQuota;
   readonly pricedOperationIds: readonly string[];
+  readonly unpricedOperationIds: readonly string[];
+  readonly unattributedUnpricedSamples: number;
+  readonly unmeasuredTokenSamples: number;
 }>;
 
-/** Observed charges and outstanding estimates, kept apart so neither is read as the other. */
+/**
+ * Observed charges and outstanding estimates, kept apart so neither is read as the other, beside
+ * the work no amount stands for at all. `totalMicros` is only the accounted part: it is a floor on
+ * what the request has cost, never a measurement of it, and `unaccountedSamples` is what makes the
+ * difference visible instead of letting it read as headroom.
+ */
 export type RequestSpendExposure = Readonly<{
   readonly committedMicros: number;
   readonly reservedMicros: number;
@@ -88,6 +99,8 @@ export type RequestSpendExposure = Readonly<{
   readonly inFlightReservations: number;
   readonly settledEstimateReservations: number;
   readonly unpricedSamples: number;
+  readonly unaccountedSamples: number;
+  readonly unmeasuredTokenSamples: number;
 }>;
 
 export type RequestSpendAdmissionInput = Readonly<{
@@ -195,19 +208,38 @@ export function withRequestBudget(state: RuntimeState, budget: RequestBudgetStat
 /**
  * Reduces the ledger's own events to what a budget needs. Totals come from the canonical receipt
  * rather than a second summation, so a budget can never disagree with the receipt it quotes.
+ *
+ * Only the samples the receipt itself accounts for are inspected: the intake and terminal markers
+ * carry no provider boundary by construction, and counting them as unpriced work would stop every
+ * request for a decision about two timestamps.
  */
 export function observeRequestCharges(
   requestId: string,
   readout: RequestUsageReadout,
 ): RequestChargeObservation {
   const receipt = buildRequestUsageReceipt(requestId, readout);
-  const pricedOperationIds: string[] = [];
-  for (const event of readout.events) {
+  const priced = new Set<string>();
+  const unpriced = new Set<string>();
+  let unattributedUnpricedSamples = 0;
+  let unmeasuredTokenSamples = 0;
+  for (const event of accountableSamples(readout.events)) {
+    if (event.tokens.provenance === "unavailable") unmeasuredTokenSamples += 1;
     const operationId = event.identity.operationId;
-    if (operationId === undefined || event.charge.provenance === "unavailable") continue;
-    if (!pricedOperationIds.includes(operationId)) pricedOperationIds.push(operationId);
+    if (event.charge.provenance !== "unavailable") {
+      if (operationId !== undefined) priced.add(operationId);
+      continue;
+    }
+    if (operationId === undefined) unattributedUnpricedSamples += 1;
+    else unpriced.add(operationId);
   }
-  return { charges: receipt.charges, quota: receipt.quota, pricedOperationIds };
+  return {
+    charges: receipt.charges,
+    quota: receipt.quota,
+    pricedOperationIds: [...priced],
+    unpricedOperationIds: [...unpriced],
+    unattributedUnpricedSamples,
+    unmeasuredTokenSamples,
+  };
 }
 
 /**
@@ -259,6 +291,7 @@ export function requestSpendExposure(
     0,
   );
   const committedMicros = observation.charges.amountMicros;
+  const reserved = new Set(reservations.map((entry) => entry.operationId));
   return {
     committedMicros,
     reservedMicros,
@@ -267,6 +300,10 @@ export function requestSpendExposure(
     settledEstimateReservations: reservations.filter((entry) => entry.basis === "settled-estimate")
       .length,
     unpricedSamples: observation.charges.unavailableSamples,
+    unaccountedSamples:
+      observation.unattributedUnpricedSamples +
+      observation.unpricedOperationIds.filter((operationId) => !reserved.has(operationId)).length,
+    unmeasuredTokenSamples: observation.unmeasuredTokenSamples,
   };
 }
 
@@ -282,10 +319,13 @@ export function decideRequestSpendAdmission(
   if (budget.pause !== undefined) {
     return { outcome: "paused", budget, pause: budget.pause, raised: false };
   }
+  const approvalState = requestSpendApprovalState(budget.approval, input.policy, input.identity);
   const cap = resolveRequestSpendCap(input.policy, budget.approval, input.identity);
   const exposure = requestSpendExposure(budget, input.observation);
   const estimate = input.policy.operationEstimateMicros;
-  const verdict = judgeRequestSpend(cap, estimate, exposure);
+  const acknowledged =
+    approvalState === "current" ? (budget.approval?.acknowledgedUnaccountedSamples ?? 0) : 0;
+  const verdict = judgeRequestSpend(cap, estimate, exposure, acknowledged);
   if (verdict.kind === "refused") {
     const pause = budgetPause(input, cap, estimate, exposure, verdict.reason);
     return { outcome: "paused", budget: { ...budget, pause }, pause, raised: true };
@@ -387,6 +427,7 @@ export function authorizeRequestSpend(
     policyCapMicros: pause.policyCapMicros,
     policyDigest: pause.policyDigest,
     briefRevision: pause.briefRevision,
+    acknowledgedUnaccountedSamples: pause.unaccountedSamples,
     approvedAt: now,
   };
   const { pause: _resolved, ...resumed } = budget;
@@ -441,11 +482,14 @@ export function describeSpendMicros(value: number | "unset" | "unavailable"): st
 export function describeRequestSpendDecision(pause: RequestBudgetPause): string {
   return [
     `Spending decision ${pause.decisionId} for this request: ${PAUSE_EXPLANATIONS[pause.reason]}.`,
-    `Cap in force ${describeSpendMicros(pause.capMicros)}; charged so far ${describeSpendMicros(pause.committedMicros)}; reserved for work already admitted ${describeSpendMicros(pause.reservedMicros)} (estimate); next step estimated at ${describeSpendMicros(pause.nextStepMicros)}.`,
+    `Cap in force ${describeSpendMicros(pause.capMicros)}; charged so far ${describeSpendMicros(pause.committedMicros)} (observed only); reserved for work already admitted ${describeSpendMicros(pause.reservedMicros)} (estimate); next step estimated at ${describeSpendMicros(pause.nextStepMicros)}.`,
     pause.unpricedSamples === 0
       ? undefined
-      : `${pause.unpricedSamples} recorded sample(s) carry no published price and are counted as unmeasured rather than as zero.`,
-    "Nothing under this request will start until the cap is raised through budget-approve naming this decision. Tandem will not switch models, skip checks, narrow review, or replan to fit.",
+      : `${pause.unpricedSamples} recorded sample(s) carry no published price and ${pause.unmeasuredTokenSamples} reported no tokens, so the charged figure is a floor on what this request cost, not a measurement of it.`,
+    pause.unaccountedSamples === 0
+      ? undefined
+      : `${pause.unaccountedSamples} of those have no reserved estimate standing for them either, so their cost stays unknown until you accept it; authorizing this decision accepts exactly that much unmeasured work, and later unmeasured work asks again.`,
+    "Nothing under this request will start until this decision is answered through budget-approve naming it. Tandem will not switch models, skip checks, narrow review, or replan to fit, and it will not invent a charge or turn subscription quota into cash to close the gap.",
   ]
     .filter((line): line is string => line !== undefined)
     .join(" ");
@@ -461,6 +505,8 @@ const PAUSE_EXPLANATIONS: Readonly<Record<RequestBudgetPause["reason"], string>>
   "no-configured-cap": "no standing cap is configured for it, so no amount has been authorized",
   "estimate-unavailable":
     "no conservative per-operation estimate is configured, so the next step's exposure is unknown",
+  "exposure-unaccounted":
+    "work it has already done carries no published price and no reserved estimate, so what it has cost is unknown rather than zero",
   "cap-would-be-exceeded": "the next step no longer fits under the cap",
 };
 
@@ -473,6 +519,17 @@ function recordedCap(budget: RequestBudgetState | undefined): RequestSpendCap {
   }
   const pin = budget?.cap;
   return pin === undefined ? { source: "none" } : { source: pin.source, capMicros: pin.capMicros };
+}
+
+/** The samples a receipt accounts for; the point markers carry no provider boundary by design. */
+function accountableSamples(events: readonly RequestUsageEvent[]): readonly RequestUsageEvent[] {
+  const seen = new Set<string>();
+  return events.filter((event) => {
+    if (event.kind !== "work" && event.kind !== "provider-sample") return false;
+    if (seen.has(event.eventKey)) return false;
+    seen.add(event.eventKey);
+    return true;
+  });
 }
 
 function withoutOperation(
@@ -492,13 +549,23 @@ type SpendVerdict =
       readonly estimateMicros: number;
     }>;
 
+/**
+ * The cap arithmetic is only meaningful over exposure that is actually accounted for, so unpriced
+ * work nothing stands for is checked before it. Tandem's own provider surface publishes no price
+ * for most work, which makes a zero charge total beside unpriced samples the ordinary case: it is
+ * a reason to stop and ask, never evidence of remaining budget.
+ */
 function judgeRequestSpend(
   cap: RequestSpendCap,
   estimate: number | "unset",
   exposure: RequestSpendExposure,
+  acknowledgedUnaccounted: number,
 ): SpendVerdict {
   if (cap.source === "none") return { kind: "refused", reason: "no-configured-cap" };
   if (estimate === "unset") return { kind: "refused", reason: "estimate-unavailable" };
+  if (exposure.unaccountedSamples > acknowledgedUnaccounted) {
+    return { kind: "refused", reason: "exposure-unaccounted" };
+  }
   if (exposure.totalMicros + estimate > cap.capMicros) {
     return { kind: "refused", reason: "cap-would-be-exceeded" };
   }
@@ -519,6 +586,7 @@ function spendDecisionId(
   identity: RequestSpendIdentity,
   cap: RequestSpendCap,
   reason: RequestBudgetPause["reason"],
+  unaccountedSamples: number,
 ): string {
   const canonical = JSON.stringify([
     requestId,
@@ -526,6 +594,7 @@ function spendDecisionId(
     identity.briefRevision,
     cap.source === "none" ? null : cap.capMicros,
     reason,
+    unaccountedSamples,
   ]);
   return `${DECISION_ID_PREFIX}${createHash("sha256").update(canonical).digest("hex").slice(0, 16)}`;
 }
@@ -538,7 +607,13 @@ function budgetPause(
   reason: RequestBudgetPause["reason"],
 ): RequestBudgetPause {
   return {
-    decisionId: spendDecisionId(input.requestId, input.identity, cap, reason),
+    decisionId: spendDecisionId(
+      input.requestId,
+      input.identity,
+      cap,
+      reason,
+      exposure.unaccountedSamples,
+    ),
     reason,
     taskId: input.taskId,
     capMicros: cap.source === "none" ? "unset" : cap.capMicros,
@@ -549,6 +624,8 @@ function budgetPause(
     reservedMicros: exposure.reservedMicros,
     nextStepMicros: estimate === "unset" ? "unavailable" : estimate,
     unpricedSamples: exposure.unpricedSamples,
+    unaccountedSamples: exposure.unaccountedSamples,
+    unmeasuredTokenSamples: exposure.unmeasuredTokenSamples,
     observedAt: input.now,
   };
 }
