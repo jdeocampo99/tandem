@@ -57,6 +57,7 @@ const policy: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
+    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: {
     implementation: [],
@@ -986,4 +987,110 @@ test("a task carries the request brief it was created under and refuses a task-s
       "2026-09-15T00:00:00.000Z",
     ),
   ).toThrow(/Unsafe request id/u);
+});
+
+function readyImplementation(): TaskRecord {
+  let ready = implementationToReviewing();
+  for (const lens of ALL_REVIEW_LENSES) {
+    ready = transitionTask(ready, { type: "record-review", review: review(lens) }, context());
+  }
+  return transitionTask(ready, { type: "finish-review", head: "head-1", generation: 0 }, context());
+}
+
+test("a request pull request merges a member only with proof that it carries its reviewed work", () => {
+  const ready = { ...readyImplementation(), requestId: "req-1" };
+  const pullRequest = {
+    repository: "org/repo",
+    number: 42,
+    state: "merged" as const,
+    head: "integrated-head-1",
+    base: "main",
+  };
+
+  const merged = transitionTask(
+    ready,
+    {
+      type: "merge",
+      approved: true,
+      verified: true,
+      pullRequest,
+      requestDelivery: {
+        requestId: "req-1",
+        integratedHead: "integrated-head-1",
+        memberHead: "head-1",
+      },
+    },
+    context(),
+  );
+
+  expect(merged.stage).toBe("merged");
+  expect(merged.notifications.at(-1)?.message).toContain("as part of request req-1");
+});
+
+test("a request delivery proof that names another member or request is refused", () => {
+  const ready = { ...readyImplementation(), requestId: "req-1" };
+  const pullRequest = {
+    repository: "org/repo",
+    number: 42,
+    state: "merged" as const,
+    head: "integrated-head-1",
+    base: "main",
+  };
+
+  expect(() =>
+    transitionTask(
+      ready,
+      {
+        type: "merge",
+        approved: true,
+        verified: true,
+        pullRequest,
+        requestDelivery: {
+          requestId: "req-1",
+          integratedHead: "integrated-head-1",
+          memberHead: "head-2",
+        },
+      },
+      context(),
+    ),
+  ).toThrow(/does not show that/u);
+
+  expect(() =>
+    transitionTask(
+      ready,
+      {
+        type: "merge",
+        approved: true,
+        verified: true,
+        pullRequest,
+        requestDelivery: {
+          requestId: "req-2",
+          integratedHead: "integrated-head-1",
+          memberHead: "head-1",
+        },
+      },
+      context(),
+    ),
+  ).toThrow(/does not show that/u);
+});
+
+test("without a request delivery proof a merge still has to be the reviewed head", () => {
+  expect(() =>
+    transitionTask(
+      readyImplementation(),
+      {
+        type: "merge",
+        approved: true,
+        verified: true,
+        pullRequest: {
+          repository: "org/repo",
+          number: 42,
+          state: "merged",
+          head: "integrated-head-1",
+          base: "main",
+        },
+      },
+      context(),
+    ),
+  ).toThrow(/must match the reviewed head/u);
 });

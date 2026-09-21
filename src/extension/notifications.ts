@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { TaskRecord } from "../contracts.ts";
+import type { RequestDeliveryRecord, TaskRecord } from "../contracts.ts";
 import type { TandemService } from "../service/controller.ts";
 import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
 import { buildResearchFollowUpContent } from "./research-follow-up.ts";
@@ -14,6 +14,8 @@ const TANDEM_NOTIFICATION_ENTRY = "tandem-notification";
 export type ResearchReportProbe = (reportPath: string) => Promise<boolean>;
 
 type NotificationRef = Readonly<{
+  /** Whether the coordinator acknowledges this through the task path or the request path. */
+  readonly scope: "task" | "request";
   readonly taskId: string;
   readonly notificationId: string;
   readonly message: string;
@@ -74,6 +76,7 @@ async function allPendingNotifications(
       const question = judgmentNeeded ? task.communication?.question : undefined;
       if (judgmentNeeded) followUp ??= await researchFollowUpContent(task, reportReadable);
       result.push({
+        scope: "task",
         taskId: task.id,
         notificationId: notification.id,
         message: notification.message,
@@ -94,6 +97,26 @@ async function allPendingNotifications(
   }
   return result;
 }
+/**
+ * Request notifications exist only for decisions and true completion, so every one of them needs
+ * the coordinator's judgment; routine whole-request progress records nothing to deliver.
+ */
+function requestNotifications(
+  requests: readonly RequestDeliveryRecord[],
+): readonly NotificationRef[] {
+  return requests.flatMap((request) =>
+    request.notifications
+      .filter((notification) => !notification.acknowledged)
+      .map((notification) => ({
+        scope: "request" as const,
+        taskId: request.id,
+        notificationId: notification.id,
+        message: notification.message,
+        judgmentNeeded: true,
+      })),
+  );
+}
+
 function notificationContent(notifications: readonly NotificationRef[]): string {
   return notifications
     .map((notification) => {
@@ -122,8 +145,10 @@ type NotificationUi = Readonly<{ readonly ui: Pick<ExtensionContext["ui"], "noti
 
 export type PendingNotificationDelivery = Readonly<{
   readonly pi: NotificationMessageSink;
-  readonly service: Pick<TandemService, "acknowledge">;
+  readonly service: Pick<TandemService, "acknowledge" | "acknowledgeRequest">;
   readonly tasks: readonly TaskRecord[];
+  /** Whole-request records whose decisions and completion may interrupt the conversation. */
+  readonly requests: readonly RequestDeliveryRecord[];
   /** Task/notification pairs already sent in this process, so one wake is not repeated. */
   readonly delivered: Set<string>;
   readonly ctx: NotificationUi;
@@ -135,7 +160,10 @@ export async function deliverPendingNotifications(
   delivery: PendingNotificationDelivery,
 ): Promise<void> {
   const { pi, service, tasks, delivered, ctx } = delivery;
-  const pending = (await allPendingNotifications(tasks, delivery.reportReadable)).filter(
+  const pending = [
+    ...(await allPendingNotifications(tasks, delivery.reportReadable)),
+    ...requestNotifications(delivery.requests),
+  ].filter(
     (notification) => !delivered.has(`${notification.taskId}:${notification.notificationId}`),
   );
   if (pending.length === 0) return;
@@ -164,6 +192,10 @@ export async function deliverPendingNotifications(
       );
     }
     for (const notification of batch) {
+      if (notification.scope === "request") {
+        await service.acknowledgeRequest(notification.taskId, notification.notificationId);
+        continue;
+      }
       await service.acknowledge(notification.taskId, notification.notificationId);
     }
   } catch (error) {

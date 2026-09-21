@@ -10,6 +10,8 @@ import type {
   TaskRecord,
   WorktreeLease,
 } from "../../src/contracts.ts";
+import { RecoveryConversationWorkflow } from "../../src/recovery/conversation.ts";
+import { AVAILABILITY_WAIT_CEILING_MS } from "../../src/recovery/wait.ts";
 import { RecoveryWorkflow } from "../../src/recovery/workflow.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { DurableJob, RuntimeState } from "../../src/runtime/schema.ts";
@@ -41,6 +43,7 @@ const policy: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
+    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -48,6 +51,10 @@ const policy: ResolvedPolicy = {
 type FixtureOptions = Readonly<{
   readonly taskKind?: TaskRecord["kind"];
   readonly stage?: TaskRecord["stage"];
+  readonly blockReason?: string;
+  readonly requestId?: string;
+  readonly requestHold?: string;
+  readonly outOfScope?: boolean;
   readonly currentHead?: string;
   readonly diff?: string;
   readonly dirty?: boolean;
@@ -90,7 +97,8 @@ async function fixture(options: FixtureOptions = {}) {
   await mkdir(commonPath, { recursive: true });
   let currentBranch: string | undefined = options.detached ? undefined : "task/task-1";
   let branchHead = options.currentHead ?? BASE;
-  const clock = (): string => NOW;
+  let now = NOW;
+  const clock = (): string => now;
   let id = 0;
   const idFactory = (): string => `id-${++id}`;
   const store = createTaskStore({ directory: join(home, "tasks"), clock, idFactory });
@@ -102,6 +110,7 @@ async function fixture(options: FixtureOptions = {}) {
     acceptanceCriteria: ["recovery is bounded"],
     surfaces: ["runtime"],
     policy,
+    ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
   };
   await store.create(taskInput);
   const worktree = lease(worktreePath);
@@ -118,6 +127,7 @@ async function fixture(options: FixtureOptions = {}) {
     revision: current.revision + 1,
     updatedAt: NOW,
     stage: options.stage ?? "blocked",
+    ...(options.blockReason === undefined ? {} : { blockReason: options.blockReason }),
     scopeApproved: true,
     worktree,
     ...(options.reportPath === undefined ? {} : { reportPath: options.reportPath }),
@@ -224,6 +234,11 @@ async function fixture(options: FixtureOptions = {}) {
     }
     return result();
   };
+  const getTask = async (taskId: string): Promise<TaskRecord> => {
+    const current = await store.read(taskId);
+    if (current === undefined) throw new Error(`task ${taskId} is missing`);
+    return current;
+  };
   const workflow = new RecoveryWorkflow({
     home,
     sessionId: "session-1",
@@ -232,13 +247,26 @@ async function fixture(options: FixtureOptions = {}) {
     idFactory,
     store,
     runtimePath: runtimeFile(home),
-    getTask: async (taskId) => {
-      const current = await store.read(taskId);
-      if (current === undefined) throw new Error(`task ${taskId} is missing`);
-      return current;
-    },
-    taskInScope: async () => true,
+    getTask,
+    taskInScope: async () => options.outOfScope !== true,
   });
+  const conversationFor = (sessionId: string): RecoveryConversationWorkflow =>
+    new RecoveryConversationWorkflow({
+      sessionId,
+      clock,
+      idFactory,
+      store,
+      runtimePath: runtimeFile(home),
+      recovery: {
+        inspect: (taskId) => workflow.inspect(taskId),
+        plan: (taskId) => workflow.plan(taskId),
+        reconcile: (taskId, approved) => workflow.reconcile(taskId, approved),
+        repairEvidence: (taskId, approved) => workflow.repairEvidence(taskId, approved),
+      },
+      getTask,
+      taskInScope: async () => options.outOfScope !== true,
+      requestDispatchHold: async () => options.requestHold,
+    });
   return {
     home,
     repo,
@@ -247,8 +275,17 @@ async function fixture(options: FixtureOptions = {}) {
     task,
     runtimePath: runtimeFile(home),
     workflow,
+    conversation: conversationFor("session-1"),
+    conversationFor,
+    setNow: (value: string) => {
+      now = value;
+    },
     cleanup: () => rm(home, { recursive: true, force: true }),
   };
+}
+
+function minutesAfter(timestamp: string, minutes: number): string {
+  return new Date(Date.parse(timestamp) + minutes * 60_000).toISOString();
 }
 
 function job(phase: DurableJob["phase"], kind: DurableJob["kind"] = "worker"): DurableJob {
@@ -603,6 +640,269 @@ test("delivery preflight rejects duplicate PR metadata", async () => {
     const value = await f.workflow.deliveryPreflight("task-1", "owner/repo", "main");
     expect(value.ready).toBe(false);
     expect(value.refusals.join("\n")).toContain("duplicate publication");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a preapproved action runs once scope, ownership, and the prior outcome are proven", async () => {
+  const f = await fixture({
+    endpoint: "missing",
+    job: job("consumed"),
+    blockReason: "the implementer pane disappeared while the durable result was already recorded",
+    requestId: "req-1",
+  });
+  try {
+    const outcome = await f.conversation.decide("task-1");
+
+    expect(outcome.status).toBe("applied");
+    expect(outcome.requestId).toBe("req-1");
+    expect(outcome.decision?.approval).toBe("preapproved");
+    expect(outcome.decision?.recommendedAction).toBe("reconcile");
+    expect(outcome.decision?.unmetProofs).toEqual([]);
+    const state = await readRuntimeState(f.runtimePath);
+    expect(state.tasks[0]?.endpoints).toEqual([]);
+    const after = await f.store.read("task-1");
+    expect(after?.communication?.question).toBeUndefined();
+    const inspection = await f.workflow.inspect("task-1");
+    expect(inspection.requestId).toBe("req-1");
+    expect(inspection.recoveryDecisions).toHaveLength(1);
+    expect(inspection.recoveryDecisions[0]?.disposition).toBe("applied");
+    expect(inspection.recoveryDecisions[0]?.generation).toBe(0);
+    expect(inspection.worktree.preserved).toBe(true);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("an action outside the preapproved set asks one bounded question and runs nothing", async () => {
+  const f = await fixture({
+    blockReason: "the reviewer never reported a result for the reviewed HEAD",
+    requestId: "req-1",
+  });
+  try {
+    const outcome = await f.conversation.decide("task-1");
+    const repeated = await f.conversation.decide("task-1");
+
+    expect(outcome.status).toBe("asked");
+    expect(outcome.decision?.recommendedAction).toBe("review-existing");
+    expect(outcome.decision?.approval).toBe("user-approval");
+    expect(outcome.changed).toBe(true);
+    expect(repeated.changed).toBe(false);
+    const after = await f.store.read("task-1");
+    const question = after?.communication?.question;
+    expect(question?.id).toBe(outcome.decision?.questionId);
+    expect(question?.text).toContain("review-existing");
+    expect(question?.text).toContain("Remaining budget");
+    expect(question?.recommendation).toContain("review-existing");
+    expect(after?.notifications.filter((entry) => !entry.acknowledged)).toHaveLength(1);
+    const state = await readRuntimeState(f.runtimePath);
+    expect(state.tasks[0]?.reviewMode).toBeUndefined();
+    expect(state.tasks[0]?.recovery?.recoveryAttempts ?? 0).toBe(0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("foreign ownership and an uncertain worker outcome ask instead of retrying", async () => {
+  const f = await fixture({
+    endpoint: "foreign",
+    job: job("running"),
+    blockReason: "the implementer pane answers for another session",
+  });
+  try {
+    const outcome = await f.conversation.decide("task-1");
+
+    expect(outcome.status).toBe("asked");
+    expect(outcome.decision?.ownership).toBe("foreign");
+    expect(outcome.decision?.priorOutcome).toBe("uncertain");
+    expect(outcome.decision?.unmetProofs).toContain("endpoint-ownership-proven");
+    expect(outcome.decision?.unmetProofs).toContain("prior-outcome-known");
+    const state = await readRuntimeState(f.runtimePath);
+    expect(state.tasks[0]?.jobs[0]?.phase).toBe("running");
+    expect(state.tasks[0]?.endpoints).toHaveLength(1);
+    expect(state.tasks[0]?.reservation?.phase).toBe("endpoint");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("an exhausted recovery budget asks and leaves every resource in place", async () => {
+  const f = await fixture({
+    endpoint: "missing",
+    job: job("consumed"),
+    blockReason: "the implementer pane disappeared after its durable result was recorded",
+  });
+  try {
+    const seeded = await readRuntimeState(f.runtimePath);
+    await writeRuntimeState(f.runtimePath, {
+      ...seeded,
+      tasks: seeded.tasks.map((entry) => ({
+        ...entry,
+        recovery: {
+          schemaVersion: 1 as const,
+          recoveryAttempts: 3,
+          validationRetries: 0,
+          evidenceRepairs: 0,
+        },
+      })),
+    });
+
+    const outcome = await f.conversation.decide("task-1");
+
+    expect(outcome.status).toBe("asked");
+    expect(outcome.decision?.unmetProofs).toContain("recovery-attempt-budget-remaining");
+    const state = await readRuntimeState(f.runtimePath);
+    expect(state.tasks[0]?.endpoints).toHaveLength(1);
+    expect(state.tasks[0]?.recovery?.recoveryAttempts).toBe(3);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a confirmed availability block waits at most five minutes without launching work", async () => {
+  const f = await fixture({
+    blockReason: "provider rate limit: the model endpoint is temporarily unavailable",
+    requestId: "req-1",
+  });
+  try {
+    const started = await f.conversation.decide("task-1");
+
+    expect(started.status).toBe("waiting");
+    expect(started.wait?.requestId).toBe("req-1");
+    expect(started.wait?.deadlineAt).toBe(
+      new Date(Date.parse(NOW) + AVAILABILITY_WAIT_CEILING_MS).toISOString(),
+    );
+    expect((await f.store.read("task-1"))?.communication?.question).toBeUndefined();
+
+    f.setNow(minutesAfter(NOW, 2));
+    const repeated = await f.conversation.decide("task-1");
+
+    expect(repeated.status).toBe("waiting");
+    expect(repeated.changed).toBe(false);
+    expect(repeated.wait?.deadlineAt).toBe(started.wait?.deadlineAt);
+    const inspection = await f.workflow.inspect("task-1");
+    expect(inspection.availabilityWaits).toHaveLength(1);
+    expect(inspection.availabilityWaits[0]?.disposition).toBe("waiting");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("durable evidence of a delay beyond five minutes asks immediately", async () => {
+  const f = await fixture({
+    blockReason: "provider quota exhausted; retry after 1800 seconds",
+  });
+  try {
+    const outcome = await f.conversation.decide("task-1");
+
+    expect(outcome.status).toBe("asked");
+    expect(outcome.wait?.disposition).toBe("asked");
+    expect(outcome.wait?.knownAvailableAt).toBe(minutesAfter(NOW, 30));
+    expect((await f.store.read("task-1"))?.communication?.question?.text).toContain(
+      "provider quota exhausted",
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a wait reconstructed after restart is overdue and asks rather than acting", async () => {
+  const f = await fixture({
+    blockReason: "provider rate limit: the model endpoint is temporarily unavailable",
+  });
+  try {
+    await f.conversation.decide("task-1");
+    f.setNow(minutesAfter(NOW, 9));
+
+    const restarted = f.conversationFor("session-2");
+    const outcome = await restarted.decide("task-1");
+
+    expect(outcome.status).toBe("asked");
+    expect(outcome.wait?.disposition).toBe("asked");
+    expect(outcome.wait?.dispositionReason).toContain("overdue");
+    const state = await readRuntimeState(f.runtimePath);
+    expect(state.tasks[0]?.recoveryWaits).toHaveLength(1);
+    expect(state.tasks[0]?.reviewMode).toBeUndefined();
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a due wait re-inspects once, continues the decision rules, and never duplicates work", async () => {
+  const f = await fixture({
+    blockReason: "provider rate limit: the model endpoint is temporarily unavailable",
+  });
+  try {
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    await f.conversation.decide("task-1");
+    const passive = JSON.stringify(await readRuntimeState(f.runtimePath));
+
+    f.setNow(minutesAfter(NOW, 3));
+    expect(await f.conversation.reconcileWaits([task])).toEqual([]);
+    expect(JSON.stringify(await readRuntimeState(f.runtimePath))).toBe(passive);
+
+    f.setNow(minutesAfter(NOW, 6));
+    const woken = await f.conversation.reconcileWaits([task]);
+    const again = await f.conversation.reconcileWaits([task]);
+
+    expect(woken).toHaveLength(1);
+    expect(woken[0]?.status).toBe("asked");
+    expect(woken[0]?.wait?.disposition).toBe("continued");
+    expect(again).toEqual([]);
+    const after = await f.store.read("task-1");
+    expect(after?.notifications.filter((entry) => !entry.acknowledged)).toHaveLength(1);
+    const state = await readRuntimeState(f.runtimePath);
+    expect(state.tasks[0]?.reviewMode).toBeUndefined();
+    expect(state.tasks[0]?.recoveryWaits).toHaveLength(1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a cancelled task cannot be resumed by its old wait timer", async () => {
+  const f = await fixture({
+    blockReason: "provider rate limit: the model endpoint is temporarily unavailable",
+  });
+  try {
+    await f.conversation.decide("task-1");
+    const current = await f.store.read("task-1");
+    if (current === undefined) throw new Error("fixture task missing");
+    const cancelled = await f.store.update("task-1", current.revision, (entry) => ({
+      ...entry,
+      revision: entry.revision + 1,
+      updatedAt: NOW,
+      stage: "cancelled" as const,
+    }));
+
+    f.setNow(minutesAfter(NOW, 6));
+    const woken = await f.conversation.reconcileWaits([cancelled]);
+
+    expect(woken[0]?.wait?.disposition).toBe("abandoned");
+    expect((await f.store.read("task-1"))?.communication?.question).toBeUndefined();
+    const state = await readRuntimeState(f.runtimePath);
+    expect(state.tasks[0]?.recoveryWaits?.[0]?.dispositionReason).toContain("cancelled");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a request whose brief approval is not current blocks preapproved recovery", async () => {
+  const f = await fixture({
+    endpoint: "missing",
+    job: job("consumed"),
+    blockReason: "the implementer pane disappeared after its durable result was recorded",
+    requestId: "req-1",
+    requestHold: "Request req-1 changed what was agreed after approval",
+  });
+  try {
+    const outcome = await f.conversation.decide("task-1");
+
+    expect(outcome.status).toBe("asked");
+    expect(outcome.decision?.unmetProofs).toContain("request-approval-current");
+    const state = await readRuntimeState(f.runtimePath);
+    expect(state.tasks[0]?.endpoints).toHaveLength(1);
   } finally {
     await f.cleanup();
   }

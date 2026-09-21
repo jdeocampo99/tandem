@@ -7,6 +7,7 @@ import type {
   TaskRecord,
 } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
+import { describeSpendMicros } from "../runtime/budget.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
 import { activeTaskMessages, MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import {
@@ -15,6 +16,7 @@ import {
   compactText,
   projectName,
   summarizeModelAssignments,
+  summarizeRequestSpend,
 } from "./summary.ts";
 
 const TANDEM_COMMAND_ARITY: Readonly<
@@ -47,11 +49,22 @@ const TANDEM_COMMAND_ARITY: Readonly<
   messages: { min: 2, max: 2 },
   inspect: { min: 2, max: 2 },
   "recovery-plan": { min: 2, max: 2 },
+  "recovery-decide": { min: 2, max: 2 },
   reconcile: { min: 2, max: 2 },
   "brief-show": { min: 2, max: 2 },
   "brief-review": { min: 2, max: 2 },
   "brief-approve": { min: 4, max: 4 },
   "request-receipt": { min: 2, max: 2 },
+  "request-show": { min: 2, max: 2 },
+  "request-relate": { min: 4, max: 4 },
+  "request-conflict": { min: 4, max: 4 },
+  "request-decide": { min: 4, max: 4 },
+  "request-integrate": { min: 2, max: 2 },
+  "request-publish": { min: 6, max: 6 },
+  "request-merge": { min: 3, max: 3 },
+  "request-split": { min: 2, max: 2 },
+  "budget-show": { min: 2, max: 2 },
+  "budget-approve": { min: 4, max: 4 },
   "review-existing": { min: 3, max: 3 },
   "validation-retry": { min: 2, max: 2 },
   "evidence-repair": { min: 2, max: 2 },
@@ -101,6 +114,7 @@ export type TandemAction =
   | Readonly<{ readonly action: "messages"; readonly taskId: string }>
   | Readonly<{ readonly action: "inspect"; readonly taskId: string }>
   | Readonly<{ readonly action: "recovery-plan"; readonly taskId: string }>
+  | Readonly<{ readonly action: "recovery-decide"; readonly taskId: string }>
   | Readonly<{ readonly action: "reconcile"; readonly taskId: string }>
   | Readonly<{
       readonly action: "review-existing";
@@ -126,12 +140,53 @@ export type TandemAction =
   | Readonly<{ readonly action: "brief-review"; readonly requestId: string }>
   | Readonly<{ readonly action: "brief-show"; readonly requestId: string }>
   | Readonly<{ readonly action: "request-receipt"; readonly requestId: string }>
+  | Readonly<{ readonly action: "budget-show"; readonly requestId: string }>
+  | Readonly<{
+      readonly action: "budget-approve";
+      readonly requestId: string;
+      readonly decisionId: string;
+      readonly capMicros: number;
+    }>
   | Readonly<{
       readonly action: "brief-approve";
       readonly requestId: string;
       readonly briefRevision: number;
       readonly contentDigest: string;
     }>
+  | Readonly<{ readonly action: "request-show"; readonly requestId: string }>
+  | Readonly<{
+      readonly action: "request-relate";
+      readonly requestId: string;
+      readonly taskId: string;
+      readonly dependsOn: string;
+    }>
+  | Readonly<{
+      readonly action: "request-conflict";
+      readonly requestId: string;
+      readonly taskIds: readonly string[];
+      readonly reason: string;
+    }>
+  | Readonly<{
+      readonly action: "request-decide";
+      readonly requestId: string;
+      readonly conflictId: string;
+      readonly instruction: string;
+    }>
+  | Readonly<{ readonly action: "request-integrate"; readonly requestId: string }>
+  | Readonly<{
+      readonly action: "request-publish";
+      readonly requestId: string;
+      readonly repository: string;
+      readonly title: string;
+      readonly base: string;
+      readonly summary: PrSummary;
+    }>
+  | Readonly<{
+      readonly action: "request-merge";
+      readonly requestId: string;
+      readonly method: "merge" | "squash" | "rebase";
+    }>
+  | Readonly<{ readonly action: "request-split"; readonly requestId: string }>
   | Readonly<{ readonly action: "tick" }>
   | Readonly<{
       readonly action: "pause";
@@ -206,11 +261,16 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "configure-models" ||
     action.action === "approve" ||
     action.action === "brief-approve" ||
+    action.action === "request-publish" ||
+    action.action === "request-merge" ||
+    action.action === "request-split" ||
+    action.action === "budget-approve" ||
     action.action === "cancel" ||
     action.action === "publish" ||
     action.action === "draft" ||
     action.action === "merge" ||
     action.action === "reconcile" ||
+    action.action === "recovery-decide" ||
     action.action === "review-existing" ||
     action.action === "validation-retry" ||
     action.action === "evidence-repair"
@@ -258,6 +318,28 @@ function taskApprovalDetails(task: TaskRecord, includeDirections = false): strin
     .join("; ");
 }
 
+/** The three whole-request actions that need a human decision, each one separately. */
+function requestApprovalPrompt(
+  action: Extract<TandemAction, { action: "request-publish" | "request-merge" | "request-split" }>,
+): Readonly<{ readonly title: string; readonly message: string }> {
+  if (action.action === "request-publish") {
+    return {
+      title: "Publish the request pull request?",
+      message: `Publish one verified pull request on ${action.repository} (${action.title}, base ${action.base}) for request ${action.requestId}. Publication is not merge approval and never merges or deploys.`,
+    };
+  }
+  if (action.action === "request-merge") {
+    return {
+      title: "Merge the request pull request?",
+      message: `Merge the single pull request for request ${action.requestId} using ${action.method}, after its required remote checks are observed as successful.`,
+    };
+  }
+  return {
+    title: "Split this request across several pull requests?",
+    message: `Allow request ${action.requestId} to deliver its members through separate pull requests instead of one. One verified pull request is the default outcome.`,
+  };
+}
+
 async function approvalPrompt(
   action: TandemAction,
   service: TandemService,
@@ -288,11 +370,25 @@ async function approvalPrompt(
         "Tandem will save these settings on this computer, outside the project. This does not change the app or start work.",
     };
   }
+  if (
+    action.action === "request-publish" ||
+    action.action === "request-merge" ||
+    action.action === "request-split"
+  ) {
+    return requestApprovalPrompt(action);
+  }
   if (action.action === "brief-approve") {
     const view = await service.requestBrief(action.requestId);
     return {
       title: "Approve this request brief?",
       message: `Approve request ${action.requestId} at brief revision ${action.briefRevision} (${view.approvalState}; durable draft is at revision ${view.record.draft.revision}). Approving the brief records the agreement only; it does not authorize provider activation, publication, merge, deployment, or destructive work.`,
+    };
+  }
+  if (action.action === "budget-approve") {
+    const readout = await service.requestSpend(action.requestId);
+    return {
+      title: "Authorize more spending on this request?",
+      message: `Raise the cap for request ${action.requestId} to ${describeSpendMicros(action.capMicros)}, answering decision ${action.decisionId}.\n\n${summarizeRequestSpend(readout)}\n\nAuthorizing spending resumes admission under the new cap only; it does not approve scope, publication, merge, deployment, or destructive work.`,
     };
   }
   if (!("taskId" in action))
@@ -324,6 +420,11 @@ async function approvalPrompt(
       return {
         title: "Merge reviewed pull request?",
         message: `Merge task ${action.taskId} using ${action.method}: ${details}?`,
+      };
+    case "recovery-decide":
+      return {
+        title: "Let Tandem settle this recovery decision?",
+        message: `Read durable state for task ${action.taskId} and either run a preapproved recovery action whose scope, ownership, and prior outcome are proven, wait at most five minutes for a confirmed availability block, or ask one question. It never retries uncertain work, publishes, merges, or deploys: ${details}?`,
       };
     case "reconcile":
       return {
@@ -436,6 +537,8 @@ export async function executeTandemAction(
       return textResult(await service.inspect(action.taskId), action.action);
     case "recovery-plan":
       return textResult(await service.recoveryPlan(action.taskId), action.action);
+    case "recovery-decide":
+      return textResult(await service.recoveryDecide(action.taskId), action.action, true);
     case "reconcile":
       return textResult(
         await service.reconcile(action.taskId, { approved: true }),
@@ -491,12 +594,76 @@ export async function executeTandemAction(
         }),
         action.action,
       );
+    case "request-show":
+      return textResult(await service.requestStatus(action.requestId), action.action);
+    case "request-relate":
+      return textResult(
+        await service.relateRequestTasks(action.requestId, {
+          taskId: action.taskId,
+          dependsOn: action.dependsOn,
+          reason: `${action.taskId} waits for ${action.dependsOn}`,
+        }),
+        action.action,
+      );
+    case "request-conflict":
+      return textResult(
+        await service.recordRequestConflict(action.requestId, {
+          taskIds: action.taskIds,
+          reason: action.reason,
+        }),
+        action.action,
+      );
+    case "request-decide":
+      return textResult(
+        await service.decideRequestConflict(action.requestId, {
+          conflictId: action.conflictId,
+          instruction: action.instruction,
+        }),
+        action.action,
+      );
+    case "request-integrate":
+      return textResult(await service.integrateRequest(action.requestId), action.action);
+    case "request-publish":
+      return textResult(
+        await service.publishRequest(action.requestId, {
+          repository: action.repository,
+          title: action.title,
+          base: action.base,
+          summary: action.summary,
+          approved: true,
+        }),
+        action.action,
+        true,
+      );
+    case "request-merge":
+      return textResult(
+        await service.mergeRequest(action.requestId, {
+          approved: true,
+          method: action.method,
+        }),
+        action.action,
+        true,
+      );
+    case "request-split":
+      return textResult(await service.approveRequestSplit(action.requestId), action.action, true);
     case "brief-review":
       return textResult(await service.reviewRequestBrief(action.requestId), action.action);
     case "brief-show":
       return textResult(await service.requestBrief(action.requestId), action.action);
     case "request-receipt":
       return textResult(await service.requestReceipt(action.requestId), action.action);
+    case "budget-show":
+      return textResult(await service.requestSpend(action.requestId), action.action);
+    case "budget-approve":
+      return textResult(
+        await service.authorizeRequestSpend({
+          requestId: action.requestId,
+          decisionId: action.decisionId,
+          capMicros: action.capMicros,
+        }),
+        action.action,
+        true,
+      );
     case "brief-approve":
       return textResult(
         await service.approveRequestBrief({
@@ -723,6 +890,8 @@ export function parseTandemCommand(input: string): TandemAction {
       return { action: "inspect", taskId: value(1, "inspect") };
     case "recovery-plan":
       return { action: "recovery-plan", taskId: value(1, "recovery-plan") };
+    case "recovery-decide":
+      return { action: "recovery-decide", taskId: value(1, "recovery-decide") };
     case "reconcile":
       return { action: "reconcile", taskId: value(1, "reconcile") };
     case "review-existing":
@@ -744,10 +913,73 @@ export function parseTandemCommand(input: string): TandemAction {
       };
     case "approve":
       return { action: "approve", taskId: value(1, "approve") };
+    case "request-show":
+      return { action: "request-show", requestId: value(1, "request-show") };
+    case "request-relate":
+      return {
+        action: "request-relate",
+        requestId: value(1, "request-relate"),
+        taskId: value(2, "request-relate task"),
+        dependsOn: value(3, "request-relate dependency"),
+      };
+    case "request-conflict":
+      return {
+        action: "request-conflict",
+        requestId: value(1, "request-conflict"),
+        taskIds: value(2, "request-conflict tasks").split(","),
+        reason: value(3, "request-conflict reason"),
+      };
+    case "request-decide":
+      return {
+        action: "request-decide",
+        requestId: value(1, "request-decide"),
+        conflictId: value(2, "request-decide conflict"),
+        instruction: value(3, "request-decide instruction"),
+      };
+    case "request-integrate":
+      return { action: "request-integrate", requestId: value(1, "request-integrate") };
+    case "request-publish":
+      return {
+        action: "request-publish",
+        requestId: value(1, "request-publish"),
+        repository: value(2, "request-publish repository"),
+        title: value(3, "request-publish title"),
+        base: value(4, "request-publish base"),
+        summary: parseSummaryJson(value(5, "request-publish summary")),
+      };
+    case "request-merge": {
+      const requestMethod = value(2, "request-merge method");
+      if (requestMethod !== "merge" && requestMethod !== "squash" && requestMethod !== "rebase") {
+        throw new TypeError(`unsupported merge method ${requestMethod}`);
+      }
+      return {
+        action: "request-merge",
+        requestId: value(1, "request-merge"),
+        method: requestMethod,
+      };
+    }
+    case "request-split":
+      return { action: "request-split", requestId: value(1, "request-split") };
     case "brief-show":
       return { action: "brief-show", requestId: value(1, "brief-show") };
     case "request-receipt":
       return { action: "request-receipt", requestId: value(1, "request-receipt") };
+    case "budget-show":
+      return { action: "budget-show", requestId: value(1, "budget-show") };
+    case "budget-approve": {
+      const capMicros = Number(value(3, "budget-approve cap in USD micro-dollars"));
+      if (!Number.isSafeInteger(capMicros) || capMicros < 0) {
+        throw new TypeError(
+          "budget-approve cap must be a non-negative integer number of USD micro-dollars",
+        );
+      }
+      return {
+        action: "budget-approve",
+        requestId: value(1, "budget-approve"),
+        decisionId: value(2, "budget-approve decision id"),
+        capMicros,
+      };
+    }
     case "brief-review":
       return { action: "brief-review", requestId: value(1, "brief-review") };
     case "brief-approve": {

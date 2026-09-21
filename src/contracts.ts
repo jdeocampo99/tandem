@@ -112,15 +112,18 @@ export type IsoTimestamp = string;
 
 export type InstructionChannel = "implementation" | "validation" | "review";
 
-export type ThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-  | "auto";
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "auto",
+] as const;
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 export type ModelSpec = {
   readonly model: string;
@@ -186,6 +189,17 @@ export type ReviewLevelPolicy = {
   readonly sourceTransmission: boolean;
 };
 
+/**
+ * The standing amounts a request may spend, in integer USD micro-dollars. A repository tightens or
+ * raises the standing default by naming its own amounts; an approved request override is recorded
+ * on the request rather than here. `"unset"` is an amount nobody configured, which is unknown: it
+ * is neither zero nor unlimited, and a request governed by one pauses instead of spending.
+ */
+export type RequestBudgetPolicy = {
+  readonly capMicros: number | "unset";
+  readonly operationEstimateMicros: number | "unset";
+};
+
 export type RepoPolicy = {
   readonly version: 1;
   readonly models: Readonly<Record<AgentRole, ModelSpec>>;
@@ -195,6 +209,7 @@ export type RepoPolicy = {
   readonly maxWorkers: number;
   readonly maxFixRounds: number;
   readonly reviewLevels: ReviewLevelPolicy;
+  readonly requestBudget: RequestBudgetPolicy;
 };
 
 export type GuidanceProvenance = {
@@ -514,6 +529,108 @@ export type RequestBriefRecord = {
   readonly history: readonly RequestBriefRevision[];
   readonly approval?: RequestBriefApproval;
   readonly reviewPane?: RequestReviewPane;
+};
+
+/** Whether a recorded relation is honored, or held aside because it no longer makes sense. */
+export type RequestRelationStatus = "active" | "quarantined";
+
+/**
+ * One approved task admitted to a request, pinned to the brief revision and agreement that admitted
+ * it. A member whose pinning no longer matches the approved brief is quarantined, never re-pinned.
+ */
+export type RequestMember = Readonly<{
+  readonly taskId: string;
+  readonly briefRevision: number;
+  readonly agreementDigest: string;
+  readonly surfaces: readonly string[];
+  readonly admittedAt: IsoTimestamp;
+  readonly status: RequestRelationStatus;
+  readonly quarantineReason?: string;
+}>;
+
+/** One member's durable wait on another member of the same request. */
+export type RequestDependency = Readonly<{
+  readonly taskId: string;
+  readonly dependsOn: string;
+  readonly reason: string;
+  readonly briefRevision: number;
+  readonly recordedAt: IsoTimestamp;
+  readonly status: RequestRelationStatus;
+  readonly quarantineReason?: string;
+}>;
+
+/** The user decision that settles one conflict; the coordinator never records this by itself. */
+export type RequestConflictDecision = Readonly<{
+  readonly instruction: string;
+  readonly decidedAt: IsoTimestamp;
+}>;
+
+/**
+ * Two or more members whose outputs contradict within the approved design. A conflict blocks the
+ * request until a decision settles it, and is never resolved by retrying the work that produced it.
+ */
+export type RequestConflict = Readonly<{
+  readonly id: string;
+  readonly taskIds: readonly string[];
+  readonly reason: string;
+  readonly briefRevision: number;
+  readonly recordedAt: IsoTimestamp;
+  readonly status: RequestRelationStatus;
+  readonly quarantineReason?: string;
+  readonly decision?: RequestConflictDecision;
+}>;
+
+/** One member output the integration commit contains, pinned to the head that was reviewed. */
+export type RequestIntegratedMember = Readonly<{
+  readonly taskId: string;
+  readonly branch: string;
+  readonly head: string;
+}>;
+
+/**
+ * The single delivery commit the approved member outputs were merged into, together with the
+ * evidence recorded against that commit. Every merge was clean, so the integrated commit contains
+ * no content beyond the member commits its members had reviewed.
+ */
+export type RequestIntegration = Readonly<{
+  readonly worktree: WorktreeLease;
+  readonly baseHead: string;
+  readonly head: string;
+  readonly members: readonly RequestIntegratedMember[];
+  readonly policyDigest: string;
+  readonly ownerSessionId: string;
+  readonly integratedAt: IsoTimestamp;
+  readonly evidence: readonly PinnedValidationEvidence[];
+  readonly reviews: readonly ReviewResult[];
+}>;
+
+/** The one pull request a request delivers through, bound to the integrated commit it publishes. */
+export type RequestPublication = Readonly<{
+  readonly pullRequest: PullRequestMetadata;
+  readonly integratedHead: string;
+  readonly draft: boolean;
+  readonly publishedAt: IsoTimestamp;
+}>;
+
+/**
+ * Whole-request coordination and delivery for one request identity. It shares the identity owned by
+ * the request brief rather than minting another, and SQLite holds it as the sole authority.
+ */
+export type RequestDeliveryRecord = {
+  readonly schemaVersion: 1;
+  readonly id: string;
+  readonly revision: number;
+  readonly repoPath: string;
+  readonly createdAt: IsoTimestamp;
+  readonly updatedAt: IsoTimestamp;
+  readonly members: readonly RequestMember[];
+  readonly dependencies: readonly RequestDependency[];
+  readonly conflicts: readonly RequestConflict[];
+  readonly integration?: RequestIntegration;
+  readonly publication?: RequestPublication;
+  /** Splitting delivery across several pull requests, recorded only from an explicit approval. */
+  readonly splitApproved?: boolean;
+  readonly notifications: readonly Notification[];
 };
 
 export type TaskRecord = {

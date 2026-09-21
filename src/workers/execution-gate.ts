@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import type { TaskRecord } from "../contracts.ts";
+import type { ModelSpec, TaskRecord } from "../contracts.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../runtime/persistence.ts";
 import type {
   DurableJob,
@@ -9,6 +9,7 @@ import type {
   RuntimeTaskState,
 } from "../runtime/schema.ts";
 import { createTaskStore, type TaskStore, type TaskStoreTransaction } from "../tasks/store.ts";
+import { authorizeExecutionModel, executionRoutingFence } from "./execution-routing.ts";
 
 export type ExecutionIdentity = Readonly<{
   readonly schemaVersion: 1;
@@ -27,6 +28,8 @@ export type ExecutionGateInput = Readonly<{
   readonly cwd: string;
   readonly resultPath: string;
   readonly inputHead?: string;
+  /** The exact model this execution will invoke; absent only for model-free validation runs. */
+  readonly resolvedModel?: ModelSpec;
 }>;
 
 export type ExecutionAdmission = Readonly<{
@@ -78,6 +81,30 @@ function operationEffectId(jobId: string): string {
 
 function executionIdentity(input: ExecutionGateInput): string {
   return `${input.execution.operationId}:${input.jobId}:${input.execution.fencingRevision}:${input.execution.claimOwner}`;
+}
+
+/**
+ * Why this execution may not invoke the model its job names, or nothing when it may. Model-free
+ * validation runs carry no model and are not routed; every other role is held to the transition
+ * recorded on its operation, falling back to the pinned role assignment when none changed it.
+ */
+function refusedExecutionModel(
+  task: TaskRecord,
+  job: DurableJob,
+  operation: DurableOperation,
+  claimed: ModelSpec | undefined,
+): string | undefined {
+  const role = job.role;
+  if (role === "validation") {
+    return claimed === undefined ? undefined : "validation execution carries no resolved model";
+  }
+  const authorization = authorizeExecutionModel({
+    claimed,
+    pinned: task.policy.config.models[role],
+    routing: operation.routing,
+    fence: executionRoutingFence(operation, job.id),
+  });
+  return authorization.authorized ? undefined : authorization.reason;
 }
 
 async function claimInTransaction(
@@ -171,6 +198,8 @@ async function claimInTransaction(
   if (input.inputHead !== undefined && operation.inputHead !== input.inputHead) {
     return refusal("execution input checkpoint is stale");
   }
+  const modelRefusal = refusedExecutionModel(task, job, operation, input.resolvedModel);
+  if (modelRefusal !== undefined) return refusal(modelRefusal);
   const claimId = operationEffectId(input.jobId);
   if (operation.effects.some((effect) => effect.id === claimId)) {
     return refusal("execution claim already exists");

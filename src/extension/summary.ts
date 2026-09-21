@@ -6,6 +6,7 @@ import {
   MODEL_ROLE_ORDER,
   type TaskRecord,
 } from "../contracts.ts";
+import { describeSpendMicros, type RequestSpendReadout } from "../runtime/budget.ts";
 import { USD_MICROS_PER_DOLLAR } from "../runtime/usage.ts";
 import type {
   AdditionalCharges,
@@ -902,6 +903,46 @@ function summarizeRequestBrief(value: unknown): string {
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
+/**
+ * Renders the whole-request view: what runs, what waits, what needs a decision, and every reason
+ * the request is not finished. It restates durable state and never claims delivery by itself.
+ */
+function summarizeRequestDelivery(value: unknown): string {
+  const view = summaryRecord(value);
+  const aggregate = view === undefined ? undefined : summaryRecord(view.aggregate);
+  const record = view === undefined ? undefined : summaryRecord(view.record);
+  if (view === undefined || aggregate === undefined || record === undefined) {
+    return boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  }
+  const reasons = Array.isArray(aggregate.incompleteReasons)
+    ? aggregate.incompleteReasons.filter(isNonEmptyEntry)
+    : [];
+  const lines = [
+    `${recordText(aggregate, "requestId") ?? "unknown request"}: approval ${recordText(aggregate, "approvalState") ?? "unknown"}; integration ${recordText(aggregate, "integrationStatus") ?? "unknown"}; publication ${recordText(aggregate, "publicationStatus") ?? "unknown"}`,
+    `Members: ${summaryList(record.members).length} admitted; running ${summaryList(aggregate.activeTaskIds).length}; finished ${summaryList(aggregate.completedTaskIds).length}`,
+    `Waiting: ${describeSummaryEntries(aggregate.waiting, "taskId", "reason")}`,
+    `Decisions needed: ${describeSummaryEntries(aggregate.decisions, "subject", "detail")}`,
+    reasons.length === 0
+      ? "Outstanding: none recorded."
+      : `Outstanding (${reasons.length}): ${compactList(reasons, ACTION_SUMMARY_MAX_ITEMS, 160)}`,
+    "Publication approval, merge approval, and deployment stay separate and explicit.",
+  ];
+  return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
+}
+
+function summaryList(value: unknown): readonly unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function describeSummaryEntries(value: unknown, subject: string, detail: string): string {
+  const entries = summaryList(value).flatMap((entry) => {
+    const record = summaryRecord(entry);
+    if (record === undefined) return [];
+    return [`${recordText(record, subject) ?? "unknown"}: ${recordText(record, detail) ?? ""}`];
+  });
+  return entries.length === 0 ? "none" : compactList(entries, ACTION_SUMMARY_MAX_ITEMS, 160);
+}
+
 function isRequestUsageReceipt(value: unknown): value is RequestUsageReceipt {
   const record = summaryRecord(value);
   return (
@@ -988,6 +1029,48 @@ function summarizeRequestReceipt(value: unknown): string {
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
+/**
+ * The standing budget as one decision-ready block: the cap in force, what has been charged, what
+ * is still reserved as an estimate, and the pending question if the request is stopped on one.
+ */
+export function summarizeRequestSpend(readout: RequestSpendReadout): string {
+  const { cap, exposure, pause } = readout;
+  const lines = [
+    `${readout.requestId}: cap ${cap.source === "none" ? "none in force" : `${describeSpendMicros(cap.capMicros)} from ${cap.source}`}; approval ${readout.approvalState}`,
+    `Charged (observed): ${describeCharges(readout.charges)}`,
+    `Reserved (estimate): ${describeSpendMicros(exposure.reservedMicros)} across ${exposure.inFlightReservations} in-flight and ${exposure.settledEstimateReservations} settled-but-unpriced operation(s)`,
+    `Accounted exposure: ${describeSpendMicros(exposure.totalMicros)} (a floor on what this request cost, not a measurement)`,
+    `Unmeasured: ${exposure.unpricedSamples} sample(s) carry no published price and ${exposure.unmeasuredTokenSamples} reported no tokens; ${exposure.unaccountedSamples} of them have no reserved estimate standing for them`,
+    `Included quota: ${describeQuota(readout.quota)}`,
+  ];
+  if (readout.approval !== undefined) {
+    lines.push(
+      `Authorized ${describeSpendMicros(readout.approval.capMicros)} on decision ${readout.approval.decisionId} at ${readout.approval.approvedAt}, replacing ${describeSpendMicros(readout.approval.previousCapMicros)}, accepting ${readout.approval.acknowledgedUnaccountedSamples} unmeasured sample(s).`,
+    );
+  }
+  lines.push(
+    pause === undefined
+      ? "No spending decision is pending; admission is passive and nothing is being asked."
+      : `Pending decision ${pause.decisionId} (${pause.reason}) raised at ${pause.observedAt} by task ${pause.taskId}; next step estimated at ${describeSpendMicros(pause.nextStepMicros)}. Answer it with budget-approve; Tandem will not economize to fit.`,
+  );
+  if (readout.reconciledAt !== undefined) {
+    lines.push(
+      `Reservations last reconciled against durable operations at ${readout.reconciledAt}.`,
+    );
+  }
+  return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
+}
+
+function isRequestSpendReadout(value: unknown): value is RequestSpendReadout {
+  const record = summaryRecord(value);
+  return (
+    record !== undefined &&
+    typeof record.requestId === "string" &&
+    summaryRecord(record.cap) !== undefined &&
+    summaryRecord(record.exposure) !== undefined
+  );
+}
+
 function isNonEmptyEntry(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -1008,6 +1091,7 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   if (
     action === "inspect" ||
     action === "recovery-plan" ||
+    action === "recovery-decide" ||
     action === "reconcile" ||
     action === "review-existing" ||
     action === "validation-retry" ||
@@ -1031,6 +1115,18 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     return isTaskRecord(value) ? summarizeTask(value) : boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
   if (
+    action === "request-show" ||
+    action === "request-relate" ||
+    action === "request-conflict" ||
+    action === "request-decide" ||
+    action === "request-integrate" ||
+    action === "request-publish" ||
+    action === "request-merge" ||
+    action === "request-split"
+  ) {
+    return summarizeRequestDelivery(value);
+  }
+  if (
     action === "brief-draft" ||
     action === "brief-review" ||
     action === "brief-show" ||
@@ -1039,6 +1135,11 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     return summarizeRequestBrief(value);
   }
   if (action === "request-receipt") return summarizeRequestReceipt(value);
+  if (action === "budget-show" || action === "budget-approve") {
+    return isRequestSpendReadout(value)
+      ? summarizeRequestSpend(value)
+      : boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  }
   if (action === "presentations" || action === "present" || action === "feedback") {
     return summarizePresentations(action, value);
   }

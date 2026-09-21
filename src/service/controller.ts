@@ -21,6 +21,7 @@ import {
   resolveBalancedProfile,
 } from "../config/operating-profile.ts";
 import { type OnboardRepoResult, onboardRepo, resolveRepoPolicy } from "../config/repositories.ts";
+import type { RequestDeliveryRecord, ReviewResult } from "../contracts.ts";
 import {
   type AnswerTaskInput,
   type Clock,
@@ -61,6 +62,10 @@ import { type PresentationRecord, readPresentationRecord } from "../presentation
 import { preparePresentation } from "../presentations/session.ts";
 import { PresentationRuntimeWorkflow } from "../presentations/workflow.ts";
 import {
+  type RecoveryConversationOutcome,
+  RecoveryConversationWorkflow,
+} from "../recovery/conversation.ts";
+import {
   type DeliveryPreflightResult,
   type EvidenceRepairResult,
   type ReconciliationResult,
@@ -70,7 +75,17 @@ import {
   type ReviewExistingResult,
   type ValidationRetryResult,
 } from "../recovery/workflow.ts";
-import type { RequestApprovalIntent } from "../requests/brief.ts";
+import { type RequestApprovalIntent, requestApprovalState } from "../requests/brief.ts";
+import {
+  type MergeRequestInput,
+  type PublishRequestInput,
+  type RequestDeliveryView,
+  RequestDeliveryWorkflow,
+} from "../requests/delivery.ts";
+import {
+  createRequestDeliveryStore,
+  type RequestDeliveryStore,
+} from "../requests/delivery-store.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../requests/store.ts";
 import {
   type DraftRequestBriefInput,
@@ -84,6 +99,13 @@ import {
   taskRuntime,
   unreleasedReservation,
 } from "../runtime/activity.ts";
+import {
+  type RequestOperationSettlement,
+  type RequestSpendAuthorization,
+  type RequestSpendReadout,
+  requestOperationSettlements,
+} from "../runtime/budget.ts";
+import { createRequestSpendGate, type RequestSpendGate } from "../runtime/budget-gate.ts";
 import { withStateLock } from "../runtime/database.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import {
@@ -130,6 +152,7 @@ import {
   type TaskStoreTransaction,
   transitionStoredTask,
 } from "../tasks/store.ts";
+import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
 import {
@@ -222,6 +245,8 @@ export type TandemService = Readonly<{
   readonly get: (id: string) => Promise<TaskRecord>;
   readonly inspect: (id: string) => Promise<RecoveryInspection>;
   readonly recoveryPlan: (id: string) => Promise<RecoveryPlan>;
+  /** Settles the current recovery decision for one task: apply, wait, or ask exactly once. */
+  readonly recoveryDecide: (id: string) => Promise<RecoveryConversationOutcome>;
   readonly reconcile: (
     id: string,
     input: { readonly approved: boolean },
@@ -248,6 +273,46 @@ export type TandemService = Readonly<{
   readonly approveRequestBrief: (intent: RequestApprovalIntent) => Promise<RequestBriefView>;
   readonly requestBrief: (requestId: string) => Promise<RequestBriefView>;
   readonly requestReceipt: (requestId: string) => Promise<RequestUsageReceipt>;
+  readonly listRequests: () => Promise<readonly RequestDeliveryRecord[]>;
+  readonly requestStatus: (requestId: string) => Promise<RequestDeliveryView>;
+  readonly relateRequestTasks: (
+    requestId: string,
+    input: {
+      readonly taskId: string;
+      readonly dependsOn: string;
+      readonly reason: string;
+    },
+  ) => Promise<RequestDeliveryView>;
+  readonly recordRequestConflict: (
+    requestId: string,
+    input: { readonly taskIds: readonly string[]; readonly reason: string },
+  ) => Promise<RequestDeliveryView>;
+  readonly decideRequestConflict: (
+    requestId: string,
+    input: { readonly conflictId: string; readonly instruction: string },
+  ) => Promise<RequestDeliveryView>;
+  readonly recordRequestReview: (
+    requestId: string,
+    review: ReviewResult,
+  ) => Promise<RequestDeliveryView>;
+  readonly integrateRequest: (requestId: string) => Promise<RequestDeliveryView>;
+  readonly publishRequest: (
+    requestId: string,
+    input: PublishRequestInput,
+  ) => Promise<RequestDeliveryView>;
+  readonly mergeRequest: (
+    requestId: string,
+    input: MergeRequestInput,
+  ) => Promise<RequestDeliveryView>;
+  readonly approveRequestSplit: (requestId: string) => Promise<RequestDeliveryView>;
+  readonly acknowledgeRequest: (
+    requestId: string,
+    notificationId: string,
+  ) => Promise<RequestDeliveryView>;
+  readonly requestSpend: (requestId: string) => Promise<RequestSpendReadout>;
+  readonly authorizeRequestSpend: (
+    intent: RequestSpendAuthorization,
+  ) => Promise<RequestSpendReadout>;
   readonly tick: () => Promise<readonly TaskRecord[]>;
   readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly steer: (input: SteerTaskInput) => Promise<TaskCommunicationView>;
@@ -313,6 +378,7 @@ type ServiceDependencies = Readonly<{
   classifyResearchContinuation: ResearchContinuationClassifier;
   store: TaskStore;
   requestStore: RequestBriefStore;
+  requestDeliveryStore: RequestDeliveryStore;
   usageLedger: RequestUsageLedger;
   runtimePath: string;
   workerPath: string;
@@ -535,8 +601,11 @@ class TandemController {
   readonly #worker: WorkerWorkflow;
   readonly #control: TaskControlWorkflow;
   readonly #recovery: RecoveryWorkflow;
+  readonly #recoveryConversation: RecoveryConversationWorkflow;
   readonly #requests: RequestBriefWorkflow;
+  readonly #requestDelivery: RequestDeliveryWorkflow;
   readonly #usage: RequestUsageLedger;
+  readonly #spend: RequestSpendGate;
   /** Durable-state digest of the draft body last published per task, to avoid redundant refreshes. */
   readonly #draftDigests = new Map<string, string>();
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
@@ -548,6 +617,13 @@ class TandemController {
   constructor(deps: ServiceDependencies) {
     this.#deps = deps;
     this.#usage = deps.usageLedger;
+    this.#spend = createRequestSpendGate({
+      runtimePath: deps.runtimePath,
+      store: deps.store,
+      clock: deps.clock,
+      readRequestUsage: (requestId) => this.#usage.read(requestId),
+      readAgreementRevision: (requestId) => this.agreementRevision(requestId),
+    });
     this.#sourceReady = deps.refreshSource === undefined;
     this.#source = new SourceInboxWorkflow({
       home: deps.home,
@@ -580,6 +656,7 @@ class TandemController {
       readTask: (taskId) => this.get(taskId),
       taskInScope: (task) => this.#source.taskInScope(task),
       feedback: this.#presentationFeedback,
+      requestSpend: this.#spend,
     });
     this.#worker = new WorkerWorkflow({
       home: deps.home,
@@ -609,6 +686,8 @@ class TandemController {
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
       reviewAssistance: deps.reviewAssistance,
       recordRequestUsage: (events) => this.recordAccounting(events),
+      requestSpend: this.#spend,
+      readModelCatalogue: (cwd) => this.readModelCatalogue(cwd),
     });
     this.#control = new TaskControlWorkflow({
       home: deps.home,
@@ -654,6 +733,36 @@ class TandemController {
         await this.pause(taskId, reason);
       },
     });
+    this.#requestDelivery = new RequestDeliveryWorkflow({
+      sessionId: deps.sessionId,
+      poolRoot: deps.poolRoot,
+      run: deps.run,
+      clock: deps.clock,
+      idFactory: deps.idFactory,
+      store: deps.requestDeliveryStore,
+      readBrief: (requestId) => this.#requests.requireRequest(requestId),
+      listTasks: () => this.list(),
+      transitionTask: (taskId, event) => this.transition(taskId, event),
+    });
+    this.#recoveryConversation = new RecoveryConversationWorkflow({
+      sessionId: deps.sessionId,
+      clock: deps.clock,
+      idFactory: deps.idFactory,
+      store: deps.store,
+      runtimePath: deps.runtimePath,
+      recovery: {
+        inspect: (taskId) => this.#recovery.inspect(taskId),
+        plan: (taskId) => this.#recovery.plan(taskId),
+        reconcile: (taskId, approved) => this.#recovery.reconcile(taskId, approved),
+        repairEvidence: (taskId, approved) => this.#recovery.repairEvidence(taskId, approved),
+      },
+      getTask: (taskId) => this.get(taskId),
+      taskInScope: (task) => this.#source.taskInScope(task),
+      requestDispatchHold: async (task) => {
+        const decision = await this.#requests.dispatchDecisionForTask(task);
+        return decision === undefined || decision.allowed ? undefined : decision.reason;
+      },
+    });
   }
 
   api(): TandemService {
@@ -661,6 +770,7 @@ class TandemController {
       onboard: (repoPath, write) => this.onboard(repoPath, write),
       inspect: (id) => this.#recovery.inspect(id),
       recoveryPlan: (id) => this.#recovery.plan(id),
+      recoveryDecide: (id) => this.#recoveryConversation.decide(id),
       reconcile: (id, input) => this.#recovery.reconcile(id, input.approved),
       reviewExisting: (id, input) => this.#recovery.reviewExisting(id, input.head, input.approved),
       validationRetry: (id, input) => this.#recovery.validationRetry(id, input.approved),
@@ -681,6 +791,21 @@ class TandemController {
       approveRequestBrief: (intent) => this.#requests.approve(intent),
       requestBrief: (requestId) => this.#requests.read(requestId),
       requestReceipt: (requestId) => this.#usage.receipt(requestId),
+      listRequests: () => this.#deps.requestDeliveryStore.list(),
+      requestStatus: (requestId) => this.#requestDelivery.status(requestId),
+      relateRequestTasks: (requestId, input) => this.#requestDelivery.relate(requestId, input),
+      recordRequestConflict: (requestId, input) => this.#requestDelivery.conflict(requestId, input),
+      decideRequestConflict: (requestId, input) => this.#requestDelivery.decide(requestId, input),
+      recordRequestReview: (requestId, review) =>
+        this.#requestDelivery.recordReview(requestId, review),
+      integrateRequest: (requestId) => this.#requestDelivery.integrate(requestId),
+      publishRequest: (requestId, input) => this.#requestDelivery.publish(requestId, input),
+      mergeRequest: (requestId, input) => this.#requestDelivery.merge(requestId, input),
+      approveRequestSplit: (requestId) => this.#requestDelivery.approveSplit(requestId),
+      acknowledgeRequest: (requestId, notificationId) =>
+        this.#requestDelivery.acknowledge(requestId, notificationId),
+      requestSpend: (requestId) => this.#spend.readSpend(requestId),
+      authorizeRequestSpend: (intent) => this.#spend.authorizeSpend(intent),
       tick: () => this.tick(),
       acknowledge: (id, notificationId) => this.acknowledge(id, notificationId),
       steer: (input) => this.steer(input),
@@ -711,6 +836,25 @@ class TandemController {
       ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
     });
   }
+  /**
+   * Catalogue tier evidence for one checkout, read fresh at an execution boundary. A catalogue it
+   * cannot read is reported as unavailable rather than as an empty catalogue, because an empty one
+   * would read as "nothing is enabled and nothing is included".
+   */
+  private async readModelCatalogue(cwd: string): Promise<ModelCatalogueSnapshot> {
+    try {
+      const settings = await readModelSettings({ repoPath: cwd, home: this.#deps.home });
+      return {
+        status: "read",
+        models: await listOmpModels(this.#deps.run, { cwd }),
+        enabledProviders: settings.enabledProviders,
+        readAt: this.#deps.clock(),
+      };
+    } catch {
+      return { status: "unavailable", reason: "catalogue-unreadable" };
+    }
+  }
+
   async models(repoPath: string): Promise<ModelOptionsResult> {
     const source = await mapTaskSource(this.#deps.run, repoPath, this.#deps.sourceWorkspace);
     const modelSettings = await readModelSettings({
@@ -858,6 +1002,7 @@ class TandemController {
         );
       }
       const created = await store.create({ ...taskInput, id });
+      await this.#requestDelivery.admit(created);
       const current = await readRuntimeState(this.#deps.runtimePath);
       const runtimeTask: RuntimeTaskState = {
         schemaVersion: 1,
@@ -1050,6 +1195,10 @@ class TandemController {
     },
   ): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("publish input must be an object");
+    await this.#requestDelivery.assertSeparateDeliveryApproved(
+      await this.get(id),
+      "publishing a reviewed pull request",
+    );
     if (input.approved) {
       const preflight = await this.#recovery.deliveryPreflight(id, input.repository, input.base);
       if (!preflight.ready) {
@@ -1120,6 +1269,7 @@ class TandemController {
   ): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("merge input must be an object");
     const task = await this.get(id);
+    await this.#requestDelivery.assertSeparateDeliveryApproved(task, "merging");
     const method = input.method ?? "merge";
     const metadata = await mergeReviewedTask({
       task,
@@ -1343,12 +1493,58 @@ class TandemController {
       }
     }
     const settled = await this.#source.scopedTasks();
+    await this.reconcileRecoveryWaits(settled);
     await this.recordRequestAccounting(settled);
+    await this.reconcileRequests(settled);
     let draftRecorded = false;
     for (const task of settled) {
       if (await this.refreshDraftPullRequest(task)) draftRecorded = true;
     }
     return draftRecorded ? this.#source.scopedTasks() : settled;
+  }
+
+  /**
+   * Wakes the bounded availability waits whose deadline has passed. A wake that cannot be settled
+   * leaves a bounded diagnostic rather than failing the pass, so one incident never stops the rest
+   * of the scheduler.
+   */
+  private async reconcileRecoveryWaits(tasks: readonly TaskRecord[]): Promise<void> {
+    try {
+      await this.#recoveryConversation.reconcileWaits(tasks);
+    } catch (error) {
+      await appendDiagnosticEvent(
+        this.#deps.home,
+        { event: "recovery-wait-reconcile-failed", details: { errorClass: errorClassName(error) } },
+        this.#deps.clock,
+      );
+    }
+  }
+
+  /**
+   * Brings every request that owns scoped members back in line with durable task state. A request
+   * that cannot be reconciled leaves a bounded diagnostic instead of failing the whole pass, so one
+   * request never stops independent work elsewhere.
+   */
+  private async reconcileRequests(tasks: readonly TaskRecord[]): Promise<void> {
+    const requestIds = new Set(
+      tasks.flatMap((task) =>
+        task.requestId === undefined || task.kind !== "implementation" ? [] : [task.requestId],
+      ),
+    );
+    for (const requestId of requestIds) {
+      try {
+        await this.#requestDelivery.reconcile(requestId);
+      } catch (error) {
+        await appendDiagnosticEvent(
+          this.#deps.home,
+          {
+            event: "request-reconcile-failed",
+            details: { requestId, errorClass: errorClassName(error) },
+          },
+          this.#deps.clock,
+        );
+      }
+    }
   }
 
   private async blockTaskIfReconcileClaim(
@@ -1503,13 +1699,50 @@ class TandemController {
   private async recordRequestAccounting(tasks: readonly TaskRecord[]): Promise<void> {
     const governed = tasks.filter((task) => task.requestId !== undefined);
     if (governed.length === 0) return;
+    const state = await this.readState();
     try {
-      await this.recordAccounting(
-        await this.requestAccountingEvents(governed, await this.readState()),
-      );
+      await this.recordAccounting(await this.requestAccountingEvents(governed, state));
     } catch (error) {
       await this.diagnoseAccountingFailure(error);
     }
+    await this.reconcileRequestSpending(governed, await this.readState());
+  }
+
+  /**
+   * Settles each request's outstanding estimates against the operations they back, which is how a
+   * restart gets back to a true exposure without double-counting an operation or dropping the one
+   * whose outcome nobody can prove yet.
+   */
+  private async reconcileRequestSpending(
+    tasks: readonly TaskRecord[],
+    state: RuntimeState,
+  ): Promise<void> {
+    const settlements = new Map<string, RequestOperationSettlement[]>();
+    for (const task of tasks) {
+      const requestId = task.requestId;
+      const runtime = state.tasks.find((entry) => entry.taskId === task.id);
+      if (requestId === undefined || runtime === undefined) continue;
+      const observed = settlements.get(requestId) ?? [];
+      observed.push(
+        ...requestOperationSettlements(runtime),
+        ...state.presentations
+          .filter((presentation) => presentation.taskId === task.id)
+          .flatMap(requestOperationSettlements),
+      );
+      settlements.set(requestId, observed);
+    }
+    for (const [requestId, observed] of settlements) {
+      await this.#spend.reconcileReservations({ requestId, settlements: observed });
+    }
+  }
+
+  /** The brief revision a spending decision is bound to: the approved one while it still stands. */
+  private async agreementRevision(requestId: string): Promise<number> {
+    const record = await this.#deps.requestStore.read(requestId);
+    if (record === undefined) return 0;
+    return requestApprovalState(record) === "current" && record.approval !== undefined
+      ? record.approval.briefRevision
+      : record.draft.revision;
   }
 
   private async requestAccountingEvents(
@@ -1725,9 +1958,12 @@ class TandemController {
       return;
     }
     switch (task.stage) {
-      case "queued":
+      case "queued": {
+        const hold = await this.#requestDelivery.dispatchHold(task);
+        if (hold !== undefined) return;
         await this.#worker.startQueuedTask(task);
         return;
+      }
       case "awaiting-fixes":
         await this.#worker.beginFixes(task);
         return;
@@ -2096,6 +2332,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     classifyResearchContinuation,
     store: createTaskStore({ directory: join(home, "tasks"), clock, idFactory }),
     requestStore: createRequestBriefStore({ home, clock, idFactory }),
+    requestDeliveryStore: createRequestDeliveryStore({ home, clock }),
     usageLedger: createRequestUsageLedger({ home, clock }),
     runtimePath: runtimeFile(home),
     workerPath: fileURLToPath(new URL("../worker.ts", import.meta.url)),

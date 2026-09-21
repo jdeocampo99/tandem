@@ -53,6 +53,7 @@ function policy(overrides: Partial<ReviewLevelPolicy> = {}): ResolvedPolicy {
       maxWorkers: 3,
       maxFixRounds: 3,
       reviewLevels: { ...DEFAULT_REVIEW_LEVEL_POLICY, ...overrides },
+      requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
     },
     guidance: { implementation: [], validation: [], review: [] },
   };
