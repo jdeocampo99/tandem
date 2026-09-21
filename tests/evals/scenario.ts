@@ -10,6 +10,7 @@ import type {
   Endpoint,
   IdFactory,
   IsoTimestamp,
+  RequestBudgetPolicy,
   ResolvedPolicy,
   TaskRecord,
   WorktreeLease,
@@ -31,6 +32,12 @@ export const SCENARIO_HEAD = "0123456789abcdef0123456789abcdef01234567";
 export const SCENARIO_NEXT_HEAD = "89abcdef0123456789abcdef0123456789abcdef";
 export const SCENARIO_SESSION = "scenario-session";
 export const SCENARIO_TASK_ID = "task-1";
+
+/** A cap wide enough that scenarios exercise admitted work rather than the budget pause. */
+export const SCENARIO_REQUEST_BUDGET: RequestBudgetPolicy = {
+  capMicros: 10_000_000,
+  operationEstimateMicros: 500_000,
+};
 
 export const SCENARIO_POLICY: ResolvedPolicy = {
   config: {
@@ -54,6 +61,7 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
+    requestBudget: SCENARIO_REQUEST_BUDGET,
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -747,6 +755,7 @@ async function classifyResources(
 export type SeedTaskInput = Readonly<{
   readonly kind: TaskRecord["kind"];
   readonly requestId?: string;
+  readonly policy?: ResolvedPolicy;
   readonly stage?: TaskRecord["stage"];
   readonly previousStage?: TaskRecord["stage"];
   readonly reviewHead?: string;
@@ -768,7 +777,7 @@ export async function seedScenarioTask(
     objective: "exercise one durable scenario path",
     acceptanceCriteria: ["the durable outcome is observable"],
     surfaces: ["scenario"],
-    policy: SCENARIO_POLICY,
+    policy: input.policy ?? SCENARIO_POLICY,
     ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
   });
   if (

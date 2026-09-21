@@ -35,6 +35,12 @@ import {
   taskRuntime,
   unreleasedReservation,
 } from "../runtime/activity.ts";
+import {
+  describeRequestSpendDecision,
+  type RequestSpendAdmission,
+  withRequestBudget,
+} from "../runtime/budget.ts";
+import type { RequestSpendGate } from "../runtime/budget-gate.ts";
 import { withStateLock } from "../runtime/database.ts";
 import {
   readRuntimeState,
@@ -132,7 +138,7 @@ import {
   reclassifyReviewLevel,
   requiredReviewLenses,
 } from "../tasks/review-levels.ts";
-import type { TaskStore } from "../tasks/store.ts";
+import type { TaskStore, TaskStoreTransaction } from "../tasks/store.ts";
 import {
   readValidationResult,
   type ValidationJob,
@@ -253,6 +259,8 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly reviewAssistance: ReviewAssistanceRuntime;
   /** Appends accounting facts. It records only; it never decides whether work may continue. */
   readonly recordRequestUsage: (events: readonly RequestUsageEvent[]) => Promise<void>;
+  /** Decides whether the next operation may spend under its request's standing budget. */
+  readonly requestSpend: RequestSpendGate;
 }>;
 export class WorkerWorkflow {
   readonly #deps: WorkerWorkflowDependencies;
@@ -3101,6 +3109,35 @@ export class WorkerWorkflow {
     }
   }
 
+  /**
+   * Stops the whole request on one durable decision. The pause is persisted before anything else
+   * under that request can be admitted, and the question is recorded only by the admission that
+   * raised it, so every later refusal is silent instead of another paid coordinator round.
+   */
+  private async stopRequestSpending(
+    store: TaskStoreTransaction,
+    task: TaskRecord,
+    state: RuntimeState,
+    spend: Extract<RequestSpendAdmission, { readonly outcome: "paused" }>,
+  ): Promise<void> {
+    await writeRuntimeState(this.#deps.runtimePath, withRequestBudget(state, spend.budget));
+    if (!spend.raised) return;
+    await store.update(task.id, task.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: this.#deps.clock(),
+      notifications: [
+        ...current.notifications,
+        {
+          id: singleLine(this.#deps.idFactory(), "budget decision notification id"),
+          message: describeRequestSpendDecision(spend.pause),
+          acknowledged: false,
+          kind: "coordinator" as const,
+        },
+      ],
+    }));
+  }
+
   async reserveTask(
     taskId: string,
     role: WorkerRole | "validation",
@@ -3133,6 +3170,12 @@ export class WorkerWorkflow {
       if (unreleasedReservation(runtime.reservation)) return undefined;
       if (runtime.jobs.some(activeRuntimeJob)) return undefined;
       if (activeReservations(state) >= task.policy.config.maxWorkers) return undefined;
+      const operationId = singleLine(this.#deps.idFactory(), "operation id");
+      const spend = await this.#deps.requestSpend.decideAdmission({ task, state, operationId });
+      if (spend?.outcome === "paused") {
+        await this.stopRequestSpending(store, task, state, spend);
+        return undefined;
+      }
       const inputHead = task.reviewHead ?? runtime.sourceCheckpoint.head;
       const iterationScope = isFix ? iterationScopeFor(task) : undefined;
       const targetTask = isFix
@@ -3160,7 +3203,6 @@ export class WorkerWorkflow {
             };
           })()
         : task;
-      const operationId = singleLine(this.#deps.idFactory(), "operation id");
       const jobId = singleLine(this.#deps.idFactory(), "operation job id");
       const kind: DurableOperationKind =
         role === "validation"
@@ -3231,9 +3273,10 @@ export class WorkerWorkflow {
           : {}),
       };
       if (isFix) await store.update(task.id, task.revision, () => targetTask);
+      const admitted = replaceRuntimeTask(state, taskId, () => nextRuntime);
       await writeRuntimeState(
         this.#deps.runtimePath,
-        replaceRuntimeTask(state, taskId, () => nextRuntime),
+        spend === undefined ? admitted : withRequestBudget(admitted, spend.budget),
       );
       return { task: targetTask, runtime: nextRuntime, reservation };
     });
