@@ -122,6 +122,7 @@ import {
   type TaskStoreTransaction,
   transitionStoredTask,
 } from "../tasks/store.ts";
+import { isLockContentionError } from "../tasks/store-errors.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
 import {
@@ -505,6 +506,18 @@ class TaskRevisionConflictError extends Error {
 function errorClassName(error: unknown): string {
   if (error instanceof Error) return error.name.slice(0, 64);
   return typeof error;
+}
+
+/**
+ * Runs a record-settling effect, leaving the record as it stands for the next tick when a peer
+ * controller holds the lock. Every other failure keeps its own path out of this call.
+ */
+async function retainOnLockContention(settle: () => Promise<void>): Promise<void> {
+  try {
+    await settle();
+  } catch (error) {
+    if (!isLockContentionError(error)) throw error;
+  }
 }
 
 function samePullRequest(left: PullRequestMetadata, right: PullRequestMetadata): boolean {
@@ -1299,11 +1312,14 @@ class TandemController {
       try {
         await this.reconcileTask(task);
       } catch (error) {
+        if (isLockContentionError(error)) continue;
         if (captureSucceeded) {
-          await this.blockTaskIfReconcileClaim(
-            task,
-            capturedRuntime,
-            `scheduler failure: ${describeError(error)}`,
+          await retainOnLockContention(() =>
+            this.blockTaskIfReconcileClaim(
+              task,
+              capturedRuntime,
+              `scheduler failure: ${describeError(error)}`,
+            ),
           );
         }
       }
@@ -1315,16 +1331,19 @@ class TandemController {
       try {
         await this.#presentationRuntime.reconcilePresentation(presentation);
       } catch (error) {
-        await this.#presentationRuntime.failPresentation(
-          presentation.id,
-          describeError(error),
-          {
-            jobId: presentation.job.id,
-            operationId: presentation.operation?.id,
-            fencingRevision: presentation.operation?.fencingRevision,
-            claimOwner: presentation.operation?.claimOwner,
-          },
-          true,
+        if (isLockContentionError(error)) continue;
+        await retainOnLockContention(() =>
+          this.#presentationRuntime.failPresentation(
+            presentation.id,
+            describeError(error),
+            {
+              jobId: presentation.job.id,
+              operationId: presentation.operation?.id,
+              fencingRevision: presentation.operation?.fencingRevision,
+              claimOwner: presentation.operation?.claimOwner,
+            },
+            true,
+          ),
         );
       }
     }

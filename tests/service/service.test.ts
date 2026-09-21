@@ -25,7 +25,15 @@ import {
   type WorkerReceipt,
   type WorktreeLease,
 } from "../../src/contracts.ts";
-import type { PresentationRecord } from "../../src/presentations/records.ts";
+import {
+  PRESENTATION_LOCK_POLL_MS,
+  PRESENTATION_LOCK_TIMEOUT_MS,
+  presentationFeedbackLockPath,
+} from "../../src/presentations/lock.ts";
+import {
+  type PresentationRecord,
+  readPresentationRecord,
+} from "../../src/presentations/records.ts";
 import { activeReservations, activeRuntimeJob } from "../../src/runtime/activity.ts";
 import { diagnosticsPath } from "../../src/runtime/diagnostics.ts";
 import {
@@ -65,9 +73,17 @@ import {
   requiredReviewLenses,
 } from "../../src/tasks/review-levels.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { acquireDarwinFileLock } from "../../src/tasks/store-lock.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
 import { WorkerWorkflow } from "../../src/workers/workflow.ts";
+
+/**
+ * Tests that deliberately contend the state lock need a budget above `withStateLock`'s own 5s
+ * acquisition ceiling. Bun's 5s default expires at the same moment the lock does, so the harness
+ * aborts the test before the contention it is asserting can resolve.
+ */
+const LOCK_CONTENTION_TIMEOUT_MS = 20_000;
 
 const TIMESTAMP = "2030-01-01T00:00:00.000Z";
 const SOURCE_CHECKPOINT = {
@@ -1715,47 +1731,121 @@ test("presentation answers reject cancelled owners but remain allowed for comple
   });
 });
 
-test("concurrent controllers consume one completed presentation only once", async () => {
-  await withFixture(
-    {
-      kind: "implementation",
-      runner: {
-        presentationOpenResponse: commandResult(
-          "session:\n  status: opened\n  session_ended: false\n",
-        ),
+test(
+  "concurrent controllers consume one completed presentation only once",
+  async () => {
+    await withFixture(
+      {
+        kind: "implementation",
+        runner: {
+          presentationOpenResponse: commandResult(
+            "session:\n  status: opened\n  session_ended: false\n",
+          ),
+        },
       },
-    },
-    async ({ home, run, runnerState, service }) => {
-      await seedRunningPresentation(home, "presentation-1");
-      const secondService = createTandemService({
-        home,
-        sessionId: "session-2",
-        poolRoot: join(home, "pool"),
-        run,
-        clock: () => TIMESTAMP,
-        idFactory: () => "second-service-id",
-      });
-      try {
-        await Promise.all([service.tick(), secondService.tick()]);
-        const openCalls = runnerState.calls.filter(
-          (request) => request.argv[0] === "lavish-axi" && request.argv[1] !== "poll",
+      async ({ home, run, runnerState, service }) => {
+        await seedRunningPresentation(home, "presentation-1");
+        const secondService = createTandemService({
+          home,
+          sessionId: "session-2",
+          poolRoot: join(home, "pool"),
+          run,
+          clock: () => TIMESTAMP,
+          idFactory: () => "second-service-id",
+        });
+        try {
+          await Promise.all([service.tick(), secondService.tick()]);
+          const openCalls = runnerState.calls.filter(
+            (request) => request.argv[0] === "lavish-axi" && request.argv[1] !== "poll",
+          );
+          expect(openCalls).toHaveLength(1);
+          const runtime = await readRuntime(home);
+          expect(runtime.presentations[0]?.job.phase).toBe("consumed");
+          expect(runtime.presentations[0]?.endpoint?.paneId).toBe("pane-1");
+          const record = JSON.parse(
+            await Bun.file(join(home, "presentation-1-record.json")).text(),
+          ) as {
+            readonly status: string;
+          };
+          expect(record.status).toBe("open");
+          runnerState.releasePresentation();
+        } finally {
+          await secondService.shutdown();
+        }
+      },
+    );
+  },
+  LOCK_CONTENTION_TIMEOUT_MS,
+);
+
+test(
+  "a contended presentation lock retains the presentation for a later tick",
+  async () => {
+    await withFixture(
+      {
+        kind: "implementation",
+        runner: {
+          presentationOpenResponse: commandResult(
+            "session:\n  status: opened\n  session_ended: false\n",
+          ),
+        },
+      },
+      async ({ home, service }) => {
+        const { recordPath } = await seedRunningPresentation(home, "presentation-1");
+        const release = await acquireDarwinFileLock(
+          presentationFeedbackLockPath(recordPath),
+          PRESENTATION_LOCK_TIMEOUT_MS,
+          PRESENTATION_LOCK_POLL_MS,
         );
-        expect(openCalls).toHaveLength(1);
-        const runtime = await readRuntime(home);
-        expect(runtime.presentations[0]?.job.phase).toBe("consumed");
-        expect(runtime.presentations[0]?.endpoint?.paneId).toBe("pane-1");
-        const record = JSON.parse(
-          await Bun.file(join(home, "presentation-1-record.json")).text(),
-        ) as {
-          readonly status: string;
-        };
-        expect(record.status).toBe("open");
-        runnerState.releasePresentation();
-      } finally {
-        await secondService.shutdown();
-      }
-    },
-  );
+        try {
+          await service.tick();
+        } finally {
+          await release();
+        }
+        const contended = await readRuntime(home);
+        expect(contended.presentations[0]?.job.phase).toBe("running");
+        expect(contended.presentations[0]?.operation?.phase).toBe("running");
+        expect(contended.presentations[0]?.lastError).toBeUndefined();
+        expect((await readPresentationRecord(recordPath)).status).toBe("running");
+
+        await service.tick();
+        const settled = await readRuntime(home);
+        expect(settled.presentations[0]?.job.phase).toBe("consumed");
+        expect((await readPresentationRecord(recordPath)).status).toBe("open");
+      },
+    );
+  },
+  LOCK_CONTENTION_TIMEOUT_MS,
+);
+
+test("a presentation reconcile failure that is not lock contention is still recorded", async () => {
+  await withFixture({ kind: "implementation" }, async ({ home, run }) => {
+    const { recordPath } = await seedRunningPresentation(home, "presentation-1");
+    const failingService = createTandemService({
+      home,
+      sessionId: "session-1",
+      poolRoot: join(home, "pool"),
+      run: async (request) => {
+        if (request.argv.includes("process-info")) {
+          throw new Error("herdr pane inspection failed");
+        }
+        return run(request);
+      },
+      clock: () => TIMESTAMP,
+      idFactory: () => "failing-service-id",
+    });
+    try {
+      await failingService.tick();
+      const runtime = await readRuntime(home);
+      expect(runtime.presentations[0]?.lastError).toContain("herdr pane inspection failed");
+      expect(runtime.presentations[0]?.operation?.phase).toBe("quarantined");
+      const record = await readPresentationRecord(recordPath);
+      expect(record.status).toBe("failed");
+      expect(record.error).toContain("herdr pane inspection failed");
+    } finally {
+      await failingService.shutdown();
+    }
+  });
 });
 
 test("quarantines a presentation notification after delivering pending feedback exactly once", async () => {
@@ -2148,115 +2238,123 @@ test("routes a pinned skill invocation to the implementer and scout worker conte
   );
 });
 
-test("two controllers serialize one worker dispatch and persist one active job", async () => {
-  await withFixture(
-    {
-      kind: "scout",
-      stage: "queued",
-      runner: { active: false },
-    },
-    async ({ home, lease, endpoint, run, service, runnerState }) => {
-      const seededStore = createTaskStore({
-        directory: join(home, "tasks"),
-        clock: () => TIMESTAMP,
-        idFactory: () => "unused",
-      });
-      const current = await seededStore.read("task-1");
-      if (current === undefined) throw new Error("fixture task missing");
-      await seededStore.update(current.id, current.revision, (task) => ({
-        ...task,
-        revision: task.revision + 1,
-        updatedAt: TIMESTAMP,
-        worktree: lease,
-      }));
-      await writeRuntimeState(runtimeFile(home), {
-        schemaVersion: 1,
-        tasks: [
-          {
-            schemaVersion: 1,
-            taskId: "task-1",
-            sourceCheckpoint: SOURCE_CHECKPOINT,
-            taskName: "tandem-task-1",
-            worktree: lease,
-            endpoints: [endpoint],
-            jobs: [],
-          },
-        ],
-        presentations: [],
-      });
-      const other = createTandemService({
-        home,
-        sessionId: "session-1",
-        poolRoot: lease.root,
-        run,
-        clock: () => TIMESTAMP,
-        idFactory: () => "other-job",
-      });
-      await Promise.all([service.tick(), other.tick()]);
-      const task = await service.get("task-1");
-      const runtime = await readRuntime(home);
-      expect({ stage: task.stage, blockReason: task.blockReason }).toEqual({
-        stage: "scouting",
-        blockReason: undefined,
-      });
-      expect(runnerState.launches).toBe(1);
-      expect(runtime.tasks[0]?.jobs).toHaveLength(1);
-      expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("running");
-      expect(activeRuntimeJob(runtime.tasks[0]?.jobs[0] as DurableJob)).toBe(true);
-    },
-  );
-});
+test(
+  "two controllers serialize one worker dispatch and persist one active job",
+  async () => {
+    await withFixture(
+      {
+        kind: "scout",
+        stage: "queued",
+        runner: { active: false },
+      },
+      async ({ home, lease, endpoint, run, service, runnerState }) => {
+        const seededStore = createTaskStore({
+          directory: join(home, "tasks"),
+          clock: () => TIMESTAMP,
+          idFactory: () => "unused",
+        });
+        const current = await seededStore.read("task-1");
+        if (current === undefined) throw new Error("fixture task missing");
+        await seededStore.update(current.id, current.revision, (task) => ({
+          ...task,
+          revision: task.revision + 1,
+          updatedAt: TIMESTAMP,
+          worktree: lease,
+        }));
+        await writeRuntimeState(runtimeFile(home), {
+          schemaVersion: 1,
+          tasks: [
+            {
+              schemaVersion: 1,
+              taskId: "task-1",
+              sourceCheckpoint: SOURCE_CHECKPOINT,
+              taskName: "tandem-task-1",
+              worktree: lease,
+              endpoints: [endpoint],
+              jobs: [],
+            },
+          ],
+          presentations: [],
+        });
+        const other = createTandemService({
+          home,
+          sessionId: "session-1",
+          poolRoot: lease.root,
+          run,
+          clock: () => TIMESTAMP,
+          idFactory: () => "other-job",
+        });
+        await Promise.all([service.tick(), other.tick()]);
+        const task = await service.get("task-1");
+        const runtime = await readRuntime(home);
+        expect({ stage: task.stage, blockReason: task.blockReason }).toEqual({
+          stage: "scouting",
+          blockReason: undefined,
+        });
+        expect(runnerState.launches).toBe(1);
+        expect(runtime.tasks[0]?.jobs).toHaveLength(1);
+        expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("running");
+        expect(activeRuntimeJob(runtime.tasks[0]?.jobs[0] as DurableJob)).toBe(true);
+      },
+    );
+  },
+  LOCK_CONTENTION_TIMEOUT_MS,
+);
 
-test("pause waits behind launch proof and prevents a second dispatch", async () => {
-  await withFixture(
-    {
-      kind: "scout",
-      stage: "queued",
-      runner: { active: false, holdProof: true },
-      runtimeEdits: {},
-    },
-    async ({ home, lease, endpoint, service, runnerState }) => {
-      const store = createTaskStore({
-        directory: join(home, "tasks"),
-        clock: () => TIMESTAMP,
-        idFactory: () => "unused",
-      });
-      const current = await store.read("task-1");
-      if (current === undefined) throw new Error("fixture task missing");
-      await store.update(current.id, current.revision, (task) => ({
-        ...task,
-        revision: task.revision + 1,
-        updatedAt: TIMESTAMP,
-        worktree: lease,
-      }));
-      await writeRuntimeState(runtimeFile(home), {
-        schemaVersion: 1,
-        tasks: [
-          {
-            schemaVersion: 1,
-            taskId: "task-1",
-            sourceCheckpoint: SOURCE_CHECKPOINT,
-            taskName: "tandem-task-1",
-            worktree: lease,
-            endpoints: [endpoint],
-            jobs: [],
-          },
-        ],
-        presentations: [],
-      });
-      const tick = service.tick();
-      await runnerState.proofStarted;
-      const pause = service.pause("task-1", "pause during startup");
-      runnerState.releaseProof();
-      await Promise.all([pause, tick]);
-      expect((await service.get("task-1")).stage).toBe("paused");
-      expect(runnerState.launches).toBe(1);
-      expect(runnerState.active).toBe(false);
-      const persisted = await readRuntime(home);
-      expect(persisted.tasks[0]?.stopRequest?.action).toBe("pause");
-    },
-  );
-});
+test(
+  "pause waits behind launch proof and prevents a second dispatch",
+  async () => {
+    await withFixture(
+      {
+        kind: "scout",
+        stage: "queued",
+        runner: { active: false, holdProof: true },
+        runtimeEdits: {},
+      },
+      async ({ home, lease, endpoint, service, runnerState }) => {
+        const store = createTaskStore({
+          directory: join(home, "tasks"),
+          clock: () => TIMESTAMP,
+          idFactory: () => "unused",
+        });
+        const current = await store.read("task-1");
+        if (current === undefined) throw new Error("fixture task missing");
+        await store.update(current.id, current.revision, (task) => ({
+          ...task,
+          revision: task.revision + 1,
+          updatedAt: TIMESTAMP,
+          worktree: lease,
+        }));
+        await writeRuntimeState(runtimeFile(home), {
+          schemaVersion: 1,
+          tasks: [
+            {
+              schemaVersion: 1,
+              taskId: "task-1",
+              sourceCheckpoint: SOURCE_CHECKPOINT,
+              taskName: "tandem-task-1",
+              worktree: lease,
+              endpoints: [endpoint],
+              jobs: [],
+            },
+          ],
+          presentations: [],
+        });
+        const tick = service.tick();
+        await runnerState.proofStarted;
+        const pause = service.pause("task-1", "pause during startup");
+        runnerState.releaseProof();
+        await Promise.all([pause, tick]);
+        expect((await service.get("task-1")).stage).toBe("paused");
+        expect(runnerState.launches).toBe(1);
+        expect(runnerState.active).toBe(false);
+        const persisted = await readRuntime(home);
+        expect(persisted.tasks[0]?.stopRequest?.action).toBe("pause");
+      },
+    );
+  },
+  LOCK_CONTENTION_TIMEOUT_MS,
+);
 test("pause treats a missing worker pane as already stopped", async () => {
   await withFixture(
     {
@@ -3541,31 +3639,35 @@ test("persists full feedback evidence across a later poll and restart", async ()
   );
 });
 
-test("separate controllers serialize native presentation consumption", async () => {
-  await withFixture({}, async ({ home, service, run, runnerState }) => {
-    await seedConsumedPresentation(home, "presentation-lock");
-    const other = createTandemService({
-      home,
-      sessionId: "session-2",
-      poolRoot: join(home, "pool"),
-      run,
-      clock: () => TIMESTAMP,
-      idFactory: () => "other-id",
+test(
+  "separate controllers serialize native presentation consumption",
+  async () => {
+    await withFixture({}, async ({ home, service, run, runnerState }) => {
+      await seedConsumedPresentation(home, "presentation-lock");
+      const other = createTandemService({
+        home,
+        sessionId: "session-2",
+        poolRoot: join(home, "pool"),
+        run,
+        clock: () => TIMESTAMP,
+        idFactory: () => "other-id",
+      });
+      try {
+        await Promise.all([service.tick(), other.tick()]);
+        await runnerState.presentationStarted;
+        await Promise.resolve();
+        const polls = runnerState.calls.filter(
+          (request) => request.argv[0] === "lavish-axi" && request.argv[1] === "poll",
+        );
+        expect(polls).toHaveLength(1);
+      } finally {
+        runnerState.releasePresentation();
+        await other.shutdown();
+      }
     });
-    try {
-      await Promise.all([service.tick(), other.tick()]);
-      await runnerState.presentationStarted;
-      await Promise.resolve();
-      const polls = runnerState.calls.filter(
-        (request) => request.argv[0] === "lavish-axi" && request.argv[1] === "poll",
-      );
-      expect(polls).toHaveLength(1);
-    } finally {
-      runnerState.releasePresentation();
-      await other.shutdown();
-    }
-  });
-});
+  },
+  LOCK_CONTENTION_TIMEOUT_MS,
+);
 
 test("shutdown stops owned presentation polling without starting a later poll", async () => {
   await withFixture({}, async ({ home, service, runnerState }) => {

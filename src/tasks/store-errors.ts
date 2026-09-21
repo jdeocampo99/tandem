@@ -107,6 +107,14 @@ export class StoreFilesystemError extends TaskStoreError {
   }
 }
 
+/**
+ * A lost race for a repository lock: the operation never ran, so the record it would have written
+ * is still owned by whichever holder won and stays available to a later attempt.
+ */
+export function isLockContentionError(error: unknown): boolean {
+  return errorCode(error) === "lock-timeout";
+}
+
 export function errorCode(error: unknown): string | undefined {
   if (error instanceof Error && "code" in error && typeof error.code === "string") {
     return error.code;

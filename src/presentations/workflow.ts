@@ -42,6 +42,7 @@ import {
 } from "../service/records.ts";
 import { recoverEndpointFromLaunch } from "../tasks/control.ts";
 import type { TaskStore } from "../tasks/store.ts";
+import { isLockContentionError } from "../tasks/store-errors.ts";
 import { parseWorkerJob, readWorkerResult, type WorkerResult } from "../workers/jobs.ts";
 import { liveWorkerTerminal } from "../workers/terminal.ts";
 import type { PresentationFeedbackWorkflow } from "./feedback.ts";
@@ -678,6 +679,7 @@ export class PresentationRuntimeWorkflow {
         };
       });
     } catch (error) {
+      if (isLockContentionError(error)) throw error;
       if (failureReason === undefined) {
         failureReason = `presentation reconciliation failed: ${describeError(error)}`;
       }
