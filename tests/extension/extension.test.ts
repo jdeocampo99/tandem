@@ -378,6 +378,43 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
     researchTaskIds: ["scout-a", "scout-b"],
   });
 });
+test("create forwards an explicit skill invocation to task creation untouched", async () => {
+  const createCalls: unknown[] = [];
+  const created = task({ skill: { name: "refactor-functions", context: "Refactor foo.ts" } });
+  const service = {
+    create: async (input: unknown) => {
+      createCalls.push(input);
+      return created;
+    },
+  } as unknown as TandemService;
+  const noUiContext = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
+
+  const result = await executeTandemAction(
+    {
+      action: "create",
+      repoPath: "/repo",
+      kind: "implementation",
+      objective: "ship feature",
+      acceptanceCriteria: ["behavior"],
+      surfaces: ["src"],
+      skill: { name: "refactor-functions", context: "Refactor foo.ts" },
+    },
+    service,
+    noUiContext,
+  );
+
+  expect(createCalls).toEqual([
+    {
+      repoPath: "/repo",
+      kind: "implementation",
+      objective: "ship feature",
+      acceptanceCriteria: ["behavior"],
+      surfaces: ["src"],
+      skill: { name: "refactor-functions", context: "Refactor foo.ts" },
+    },
+  ]);
+  expect(result.value).toBe(created);
+});
 test("recovery slash commands preserve exact-head and delivery arguments", () => {
   expect(parseTandemCommand("inspect task-1")).toEqual({
     action: "inspect",

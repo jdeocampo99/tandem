@@ -183,6 +183,7 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
       ...(input.researchContinuation === undefined
         ? {}
         : { researchContinuation: input.researchContinuation }),
+      ...(input.skill === undefined ? {} : { skill: input.skill }),
     };
     const task = createTask(taskInput, options.clock());
     writeTaskPayload(db, task.id, task.revision, task);

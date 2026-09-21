@@ -335,6 +335,40 @@ test("round-trips handoff snapshots and rejects oversized persisted excerpts", a
   });
 });
 
+const skill = {
+  name: "refactor-functions",
+  context: "Apply the five function-review principles.",
+} as const;
+
+test("round-trips a pinned skill invocation and refuses a malformed one at creation", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const without = await store.create({ ...input, id: "without-skill" });
+    const withSkill = await store.create({ ...input, id: "with-skill", skill });
+    expect(without.skill).toBeUndefined();
+    expect((await store.read(without.id))?.skill).toBeUndefined();
+    expect((await store.read(withSkill.id))?.skill).toEqual(skill);
+
+    const reloaded = makeStore(directory, "reloaded");
+    expect((await reloaded.read(withSkill.id))?.skill).toEqual(skill);
+
+    await expect(
+      store.create({ ...input, id: "invalid-skill", skill: { ...skill, name: "" } }),
+    ).rejects.toThrow(TypeError);
+  });
+});
+
+test("fails closed on a persisted skill record with an unexpected field", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "with-skill", skill });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.skill = { ...skill, scope: "everything" };
+    });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
 test("serializes CAS updates and rejects stale concurrent writers", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);

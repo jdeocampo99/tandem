@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { RepoPolicy, TaskKind, TaskRecord } from "../contracts.ts";
+import type { RepoPolicy, SkillInvocation, TaskKind, TaskRecord } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
 import { activeTaskMessages, MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
@@ -65,6 +65,8 @@ export type TandemAction =
       readonly acceptanceCriteria: readonly string[];
       readonly surfaces: readonly string[];
       readonly researchTaskIds?: readonly string[] | undefined;
+      /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
+      readonly skill?: SkillInvocation | undefined;
     }>
   | Readonly<{ readonly action: "list" }>
   | Readonly<{ readonly action: "presentations" }>
@@ -333,6 +335,7 @@ function serviceCreateInput(
     acceptanceCriteria: action.acceptanceCriteria,
     surfaces: action.surfaces,
     ...(action.researchTaskIds === undefined ? {} : { researchTaskIds: action.researchTaskIds }),
+    ...(action.skill === undefined ? {} : { skill: action.skill }),
   };
 }
 
