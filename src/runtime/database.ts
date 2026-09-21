@@ -113,13 +113,18 @@ function createSchema(db: StateDatabase): void {
 }
 
 /**
- * Request briefs arrived after the initialization marker was fixed at version 1, so the table is
+ * Request tables arrived after the initialization marker was fixed at version 1, so they are
  * created on every open instead of through the marker. A database written by an older build gains
- * the empty table and keeps every task and runtime row it already holds.
+ * the empty tables and keeps every task and runtime row it already holds.
  */
-function ensureRequestBriefTable(db: StateDatabase): void {
+function ensureRequestTables(db: StateDatabase): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS request_briefs (
+      id TEXT PRIMARY KEY NOT NULL,
+      revision INTEGER NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS request_deliveries (
       id TEXT PRIMARY KEY NOT NULL,
       revision INTEGER NOT NULL,
       payload TEXT NOT NULL
@@ -199,7 +204,7 @@ async function openDatabase(home: string, allowMigrationState = false): Promise<
     } else {
       assertSchema(db);
     }
-    ensureRequestBriefTable(db);
+    ensureRequestTables(db);
     await chmod(path, 0o600);
   } catch (error) {
     try {
@@ -553,6 +558,36 @@ export function writeRequestBriefPayload(
 ): void {
   db.query(
     "INSERT INTO request_briefs(id, revision, payload) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, payload = excluded.payload",
+  ).run(id, revision, JSON.stringify(payload));
+}
+
+export function readRequestDeliveryPayload(db: StateDatabase, id: string): unknown | undefined {
+  const row = db.query("SELECT payload FROM request_deliveries WHERE id = ?").get(id) as
+    | { payload?: unknown }
+    | null
+    | undefined;
+  if (row === null || row === undefined || typeof row.payload !== "string") return undefined;
+  return JSON.parse(row.payload) as unknown;
+}
+
+export function readAllRequestDeliveryPayloads(db: StateDatabase): readonly unknown[] {
+  const rows = db.query("SELECT payload FROM request_deliveries ORDER BY id").all() as readonly {
+    payload?: unknown;
+  }[];
+  return rows.map((row) => {
+    if (typeof row.payload !== "string") throw new Error("request delivery payload is not text");
+    return JSON.parse(row.payload) as unknown;
+  });
+}
+
+export function writeRequestDeliveryPayload(
+  db: StateDatabase,
+  id: string,
+  revision: number,
+  payload: unknown,
+): void {
+  db.query(
+    "INSERT INTO request_deliveries(id, revision, payload) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, payload = excluded.payload",
   ).run(id, revision, JSON.stringify(payload));
 }
 

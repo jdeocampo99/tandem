@@ -21,6 +21,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
 | Models, environment, policy | [config/](src/config/) |
 | Request briefs, approval revisions, review pane | [requests/](src/requests/): `brief.ts`, `store.ts`, `store-codec.ts`, `markdown.ts`, `review-pane.ts`, `workflow.ts` |
+| Whole-request membership, dependencies, integration, single-PR delivery | [requests/](src/requests/): `aggregate.ts`, `delivery.ts`, `delivery-store.ts`, `delivery-codec.ts`; [delivery/integration.ts](src/delivery/integration.ts) |
 | Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts` |
 | Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/workflow.ts](src/recovery/workflow.ts) |
 | Worker execution, results, control, validation | [workers/](src/workers/); entry points: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [validation-worker.ts](src/validation-worker.ts) |
@@ -87,6 +88,7 @@ Before changing behavior, read its contract:
 - Policy/instructions: [Repository onboarding and central policy](docs/agent-reference.md#repository-onboarding-and-central-policy).
 - Approvals/validation/review/child results: [Task lifecycle](docs/agent-reference.md#task-lifecycle).
 - Request briefs/approval revisions/review pane: [Request briefs and approval revisions](docs/agent-reference.md#request-briefs-and-approval-revisions).
+- Whole-request coordination/single-PR delivery: [Whole-request coordination and single-PR delivery](docs/agent-reference.md#whole-request-coordination-and-single-pr-delivery).
 - Messages/control: [Inspecting and controlling work](docs/agent-reference.md#inspecting-and-controlling-work).
 - Tools/notifications/compaction: [OMP extension](docs/agent-reference.md#omp-extension).
 - Capacity/disk admission: [Safe automatic maintenance](docs/agent-reference.md#safe-automatic-maintenance).
