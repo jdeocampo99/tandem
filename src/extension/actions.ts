@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { RepoPolicy, TaskKind, TaskRecord } from "../contracts.ts";
+import type { RepoPolicy, RequestBriefContent, TaskKind, TaskRecord } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
 import { activeTaskMessages, MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
@@ -42,6 +42,9 @@ const TANDEM_COMMAND_ARITY: Readonly<
   inspect: { min: 2, max: 2 },
   "recovery-plan": { min: 2, max: 2 },
   reconcile: { min: 2, max: 2 },
+  "brief-show": { min: 2, max: 2 },
+  "brief-review": { min: 2, max: 2 },
+  "brief-approve": { min: 4, max: 4 },
   "review-existing": { min: 3, max: 3 },
   "validation-retry": { min: 2, max: 2 },
   "evidence-repair": { min: 2, max: 2 },
@@ -103,6 +106,21 @@ export type TandemAction =
       readonly base: string;
     }>
   | Readonly<{ readonly action: "approve"; readonly taskId: string }>
+  | Readonly<{
+      readonly action: "brief-draft";
+      readonly repoPath: string;
+      readonly requestId?: string | undefined;
+      readonly content: RequestBriefContent;
+      readonly reviewPane: boolean;
+    }>
+  | Readonly<{ readonly action: "brief-review"; readonly requestId: string }>
+  | Readonly<{ readonly action: "brief-show"; readonly requestId: string }>
+  | Readonly<{
+      readonly action: "brief-approve";
+      readonly requestId: string;
+      readonly briefRevision: number;
+      readonly contentDigest: string;
+    }>
   | Readonly<{ readonly action: "tick" }>
   | Readonly<{
       readonly action: "pause";
@@ -176,6 +194,7 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "setup" ||
     action.action === "configure-models" ||
     action.action === "approve" ||
+    action.action === "brief-approve" ||
     action.action === "cancel" ||
     action.action === "publish" ||
     action.action === "draft" ||
@@ -250,6 +269,13 @@ async function approvalPrompt(
       title: `Save Tandem settings for ${project}?`,
       message:
         "Tandem will save these settings on this computer, outside the project. This does not change the app or start work.",
+    };
+  }
+  if (action.action === "brief-approve") {
+    const view = await service.requestBrief(action.requestId);
+    return {
+      title: "Approve this request brief?",
+      message: `Approve request ${action.requestId} at brief revision ${action.briefRevision} (${view.approvalState}; durable draft is at revision ${view.record.draft.revision}). Approving the brief records the agreement only; it does not authorize provider activation, publication, merge, deployment, or destructive work.`,
     };
   }
   if (!("taskId" in action))
@@ -431,6 +457,30 @@ export async function executeTandemAction(
       return textResult(await service.messages(action.taskId), action.action);
     case "approve":
       return textResult(await service.approve(action.taskId), action.action, true);
+    case "brief-draft":
+      return textResult(
+        await service.draftRequestBrief({
+          repoPath: action.repoPath,
+          content: action.content,
+          reviewPane: action.reviewPane,
+          ...(action.requestId === undefined ? {} : { requestId: action.requestId }),
+        }),
+        action.action,
+      );
+    case "brief-review":
+      return textResult(await service.reviewRequestBrief(action.requestId), action.action);
+    case "brief-show":
+      return textResult(await service.requestBrief(action.requestId), action.action);
+    case "brief-approve":
+      return textResult(
+        await service.approveRequestBrief({
+          requestId: action.requestId,
+          briefRevision: action.briefRevision,
+          contentDigest: action.contentDigest,
+        }),
+        action.action,
+        true,
+      );
     case "tick":
       return textResult(await service.tick(), action.action);
     case "pause":
@@ -668,6 +718,22 @@ export function parseTandemCommand(input: string): TandemAction {
       };
     case "approve":
       return { action: "approve", taskId: value(1, "approve") };
+    case "brief-show":
+      return { action: "brief-show", requestId: value(1, "brief-show") };
+    case "brief-review":
+      return { action: "brief-review", requestId: value(1, "brief-review") };
+    case "brief-approve": {
+      const briefRevision = Number(value(2, "brief-approve revision"));
+      if (!Number.isSafeInteger(briefRevision) || briefRevision < 1) {
+        throw new TypeError("brief-approve revision must be a positive integer");
+      }
+      return {
+        action: "brief-approve",
+        requestId: value(1, "brief-approve"),
+        briefRevision,
+        contentDigest: value(3, "brief-approve content digest"),
+      };
+    }
     case "tick":
       return { action: "tick" };
     case "pause":

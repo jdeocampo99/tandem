@@ -1,23 +1,24 @@
-import type {
-  Endpoint,
-  Finding,
-  FindingSeverity,
-  FindingVerdict,
-  IsoTimestamp,
-  IterationScope,
-  Notification,
-  PullRequestMetadata,
-  ResearchContinuation,
-  ResearchHandoff,
-  ResolvedGuidance,
-  ReviewLens,
-  ReviewResult,
-  TaskKind,
-  TaskRecord,
-  TaskStage,
-  ValidationContractName,
-  ValidationEvidence,
-  WorktreeLease,
+import {
+  type Endpoint,
+  type Finding,
+  type FindingSeverity,
+  type FindingVerdict,
+  type IsoTimestamp,
+  type IterationScope,
+  isSafeRequestId,
+  type Notification,
+  type PullRequestMetadata,
+  type ResearchContinuation,
+  type ResearchHandoff,
+  type ResolvedGuidance,
+  type ReviewLens,
+  type ReviewResult,
+  type TaskKind,
+  type TaskRecord,
+  type TaskStage,
+  type ValidationContractName,
+  type ValidationEvidence,
+  type WorktreeLease,
 } from "../contracts.ts";
 import {
   FINAL_REVIEW_LENSES,
@@ -37,6 +38,8 @@ export type TaskInput = Readonly<{
   readonly acceptanceCriteria: readonly string[];
   readonly surfaces: readonly string[];
   readonly policy: TaskRecord["policy"];
+  /** The approved request brief this task is created under, when one governs it. */
+  readonly requestId?: string;
   readonly researchHandoffs?: readonly ResearchHandoff[];
   /** Explicit post-research disposition; scouts fall back to the conservative default. */
   readonly researchContinuation?: ResearchContinuation;
@@ -269,6 +272,9 @@ function assertTaskInput(input: TaskInput): void {
   }
   assertTextList(input.acceptanceCriteria, "acceptanceCriteria");
   assertTextList(input.surfaces, "surfaces");
+  if (input.requestId !== undefined && !isSafeRequestId(input.requestId)) {
+    throw new TypeError(`Unsafe request id: ${String(input.requestId)}`);
+  }
   assertResearchContinuationInput(input);
   const maxFixRounds = input.policy?.config?.maxFixRounds;
   if (!isInteger(maxFixRounds) || maxFixRounds < 0) {
@@ -744,6 +750,7 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     id: input.id,
     revision: 0,
     repoPath: input.repoPath,
+    ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
     kind: input.kind,
     objective: input.objective,
     acceptanceCriteria: [...input.acceptanceCriteria],

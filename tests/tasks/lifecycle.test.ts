@@ -872,3 +872,19 @@ test("a fix scope bound to another head or generation is refused", () => {
     ),
   ).toThrow(TaskTransitionError);
 });
+
+test("a task carries the request brief it was created under and refuses a task-shaped one", () => {
+  const governed = createTask(
+    { ...implementationInput, requestId: "req-1" },
+    "2026-09-15T00:00:00.000Z",
+  );
+
+  expect(governed.requestId).toBe("req-1");
+  expect(createTask(implementationInput, "2026-09-15T00:00:00.000Z").requestId).toBeUndefined();
+  expect(() =>
+    createTask(
+      { ...implementationInput, requestId: "implementation-task" },
+      "2026-09-15T00:00:00.000Z",
+    ),
+  ).toThrow(/Unsafe request id/u);
+});

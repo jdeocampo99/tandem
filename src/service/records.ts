@@ -36,6 +36,8 @@ export type TaskCreationRequest = Readonly<{
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
   readonly surfaces: readonly string[];
+  /** The request brief this task is created under, when one governs it. */
+  readonly requestId?: string;
   readonly researchHandoffs?: TaskRecord["researchHandoffs"];
   readonly researchContinuation?: TaskRecord["researchContinuation"];
 }>;
@@ -514,6 +516,7 @@ export function taskInputFor(
     acceptanceCriteria: readTextList(request.acceptanceCriteria, "acceptanceCriteria"),
     surfaces: readTextList(request.surfaces, "surfaces"),
     policy,
+    ...(request.requestId === undefined ? {} : { requestId: request.requestId }),
     ...(request.researchHandoffs === undefined
       ? {}
       : { researchHandoffs: request.researchHandoffs }),

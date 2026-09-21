@@ -414,11 +414,103 @@ export type TaskCleanupState = {
   readonly observedAt: IsoTimestamp;
 };
 
+/** Marks a durable request identity so it can never be confused with a task identity. */
+export const REQUEST_ID_PREFIX = "req-";
+
+export function isSafeRequestId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.startsWith(REQUEST_ID_PREFIX) &&
+    value.length > REQUEST_ID_PREFIX.length &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)
+  );
+}
+
+export const MAX_REQUEST_BRIEF_ENTRIES = 24;
+export const MAX_REQUEST_BRIEF_BYTES = 32 * 1024;
+
+/**
+ * What one brief revision says. The first seven fields carry the agreement itself; `openQuestions`
+ * and `researchLinks` are annotations the coordinator keeps current without reopening approval.
+ */
+export type RequestBriefContent = Readonly<{
+  readonly goal: string;
+  readonly scope: readonly string[];
+  readonly constraints: readonly string[];
+  readonly nonGoals: readonly string[];
+  readonly acceptanceCriteria: readonly string[];
+  readonly recommendedApproach: string;
+  readonly keyDecisions: readonly string[];
+  readonly openQuestions: readonly string[];
+  readonly researchLinks: readonly string[];
+}>;
+
+/** Whether a revision changed what was agreed or only annotated it. */
+export type RequestBriefChangeKind = "agreement" | "annotation";
+
+/** One immutable draft revision, digested so later content can be detected as different. */
+export type RequestBriefRevision = Readonly<{
+  readonly revision: number;
+  readonly content: RequestBriefContent;
+  readonly contentDigest: string;
+  readonly agreementDigest: string;
+  readonly changeKind: RequestBriefChangeKind;
+  readonly recordedAt: IsoTimestamp;
+}>;
+
+/**
+ * An approval bound to one exact request and draft revision. `agreementDigest` is what makes the
+ * approval non-current when the agreement changes; `contentDigest` proves which bytes were shown.
+ */
+export type RequestBriefApproval = Readonly<{
+  readonly requestId: string;
+  readonly briefRevision: number;
+  readonly contentDigest: string;
+  readonly agreementDigest: string;
+  readonly approvedAt: IsoTimestamp;
+}>;
+
+/**
+ * Where the coordinator-owned temporary review pane stands. `retained` and `quarantined` mean
+ * Tandem deliberately left a pane alone: `retained` is a transient refusal such as a busy pane,
+ * `quarantined` is ownership Tandem could not prove and will not act on without a human.
+ */
+export type RequestReviewPaneStatus = "open" | "closed" | "retained" | "quarantined";
+
+/** The durable note describing the one pane this request owns. */
+export type RequestReviewPane = Readonly<{
+  readonly status: RequestReviewPaneStatus;
+  readonly endpoint: Endpoint;
+  readonly renderedRevision: number;
+  readonly renderedPath: string;
+  readonly observedAt: IsoTimestamp;
+  readonly reason?: string;
+}>;
+
+/**
+ * The durable request-level agreement: one stable identity, a monotonic draft revision, and the
+ * approval bound to it. SQLite holds this record; rendered Markdown is only a view of it.
+ */
+export type RequestBriefRecord = {
+  readonly schemaVersion: 1;
+  readonly id: string;
+  readonly revision: number;
+  readonly repoPath: string;
+  readonly createdAt: IsoTimestamp;
+  readonly updatedAt: IsoTimestamp;
+  readonly draft: RequestBriefRevision;
+  readonly history: readonly RequestBriefRevision[];
+  readonly approval?: RequestBriefApproval;
+  readonly reviewPane?: RequestReviewPane;
+};
+
 export type TaskRecord = {
   readonly schemaVersion: 1;
   readonly id: string;
   readonly revision: number;
   readonly repoPath: string;
+  /** The request brief this task was created under, when one governs it. */
+  readonly requestId?: string;
   readonly kind: TaskKind;
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];

@@ -95,6 +95,19 @@ export function registerTandemOmp(
     MODEL_ROLE_ORDER.map((role) => [role, modelSpecSchema] as const),
   ) as Record<AgentRole, typeof modelSpecSchema>;
   const modelAssignmentsSchema = z.object(modelAssignmentsShape).strict();
+  const briefContentSchema = z
+    .object({
+      goal: z.string(),
+      scope: z.array(z.string()),
+      constraints: z.array(z.string()),
+      nonGoals: z.array(z.string()),
+      acceptanceCriteria: z.array(z.string()),
+      recommendedApproach: z.string(),
+      keyDecisions: z.array(z.string()),
+      openQuestions: z.array(z.string()),
+      researchLinks: z.array(z.string()),
+    })
+    .strict();
   const actionSchema = z.union([
     z.object({ action: z.literal("restart"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("onboard"), repoPath: z.string() }).strict(),
@@ -161,6 +174,25 @@ export function registerTandemOmp(
       })
       .strict(),
     z.object({ action: z.literal("approve"), taskId: z.string() }).strict(),
+    z
+      .object({
+        action: z.literal("brief-draft"),
+        repoPath: z.string(),
+        requestId: z.string().optional(),
+        content: briefContentSchema,
+        reviewPane: z.boolean(),
+      })
+      .strict(),
+    z.object({ action: z.literal("brief-review"), requestId: z.string() }).strict(),
+    z.object({ action: z.literal("brief-show"), requestId: z.string() }).strict(),
+    z
+      .object({
+        action: z.literal("brief-approve"),
+        requestId: z.string(),
+        briefRevision: z.number().int().positive(),
+        contentDigest: z.string(),
+      })
+      .strict(),
     z.object({ action: z.literal("tick") }).strict(),
     z
       .object({ action: z.literal("pause"), taskId: z.string(), reason: z.string().optional() })
@@ -263,7 +295,7 @@ export function registerTandemOmp(
   });
   pi.registerCommand("tandem", {
     description:
-      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, steer, answer, tick, pause, resume, cancel, present, feedback, describe, draft, publish, merge, cleanup.",
+      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, brief-show, brief-review, brief-approve, steer, answer, tick, pause, resume, cancel, present, feedback, describe, draft, publish, merge, cleanup.",
     handler: async (args, ctx) => {
       try {
         const parsedAction = parseTandemCommand(args);

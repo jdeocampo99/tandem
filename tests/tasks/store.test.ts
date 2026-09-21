@@ -869,3 +869,16 @@ test("loads records written before cleanup notes existed and rejects malformed o
     await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
   });
 });
+
+test("the request brief a task was created under survives the authoritative round trip", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, requestId: "req-1" });
+
+    expect(created.requestId).toBe("req-1");
+    expect((await makeStore(directory).read(created.id))?.requestId).toBe("req-1");
+    await expect(store.create({ ...input, requestId: "task-1" })).rejects.toThrow(
+      /Unsafe request id/u,
+    );
+  });
+});

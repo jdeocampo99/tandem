@@ -195,6 +195,9 @@ function summarizeTask(task: TaskRecord): string {
     `Repository: ${compactText(task.repoPath, ACTION_SUMMARY_MAX_TEXT)}`,
     `Objective: ${compactText(task.objective, ACTION_SUMMARY_MAX_TEXT)}`,
     `Scope: ${task.scopeApproved ? "approved" : "awaiting approval"}; generation ${task.generation}; revision ${task.revision}`,
+    ...(task.requestId === undefined
+      ? []
+      : [`Request brief: ${compactText(task.requestId, ACTION_SUMMARY_MAX_TEXT)}`]),
     `Acceptance criteria (${task.acceptanceCriteria.length}): ${compactList(task.acceptanceCriteria)}`,
     `Surfaces (${task.surfaces.length}): ${compactList(task.surfaces)}`,
   ];
@@ -780,6 +783,49 @@ function isTaskArray(value: unknown): value is readonly TaskRecord[] {
 }
 
 /** Return bounded model-facing text while preserving the full structured value for UI/details. */
+/**
+ * Renders the durable request agreement without becoming a second authority: every line restates
+ * what SQLite holds, including the digest an approval must carry to be accepted.
+ */
+function summarizeRequestBrief(value: unknown): string {
+  const view = summaryRecord(value);
+  const record = view === undefined ? undefined : summaryRecord(view.record);
+  const draft = record === undefined ? undefined : summaryRecord(record.draft);
+  if (view === undefined || record === undefined || draft === undefined) {
+    return boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  }
+  const pane = summaryRecord(record.reviewPane);
+  const paused = Array.isArray(view.pausedTaskIds)
+    ? view.pausedTaskIds.filter(isNonEmptyEntry)
+    : [];
+  const lines = [
+    `${recordText(record, "id") ?? "unknown request"}: brief revision ${recordNumber(draft, "revision") ?? 0}; approval ${recordText(view, "approvalState") ?? "unknown"}`,
+    `Change kind: ${recordText(draft, "changeKind") ?? "unknown"}; content digest ${recordText(draft, "contentDigest") ?? "unknown"}`,
+    `Review pane: ${
+      pane === undefined
+        ? "none opened for this request"
+        : `${recordText(pane, "status") ?? "unknown"} at revision ${recordNumber(pane, "renderedRevision") ?? 0}${
+            recordText(pane, "reason") === undefined
+              ? ""
+              : `; ${compactText(recordText(pane, "reason") ?? "", ACTION_SUMMARY_MAX_TEXT)}`
+          }`
+    }`,
+  ];
+  if (paused.length > 0) {
+    lines.push(
+      `Paused pending reapproval (${paused.length}): ${compactList(paused, ACTION_SUMMARY_MAX_ITEMS, 100)}`,
+    );
+  }
+  lines.push(
+    "Approving a brief records the agreement only; it never authorizes publication, merge, deployment, or destructive work.",
+  );
+  return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
+}
+
+function isNonEmptyEntry(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 export function summarizeTandemActionValue(action: TandemAction["action"], value: unknown): string {
   if (action === "list" || action === "tick") {
     return isTaskArray(value)
@@ -817,6 +863,14 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     action === "merge"
   ) {
     return isTaskRecord(value) ? summarizeTask(value) : boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  }
+  if (
+    action === "brief-draft" ||
+    action === "brief-review" ||
+    action === "brief-show" ||
+    action === "brief-approve"
+  ) {
+    return summarizeRequestBrief(value);
   }
   if (action === "presentations" || action === "present" || action === "feedback") {
     return summarizePresentations(action, value);
