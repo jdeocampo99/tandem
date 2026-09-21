@@ -378,6 +378,43 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
     researchTaskIds: ["scout-a", "scout-b"],
   });
 });
+test("create forwards an explicit skill invocation to task creation untouched", async () => {
+  const createCalls: unknown[] = [];
+  const created = task({ skill: { name: "refactor-functions", context: "Refactor foo.ts" } });
+  const service = {
+    create: async (input: unknown) => {
+      createCalls.push(input);
+      return created;
+    },
+  } as unknown as TandemService;
+  const noUiContext = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
+
+  const result = await executeTandemAction(
+    {
+      action: "create",
+      repoPath: "/repo",
+      kind: "implementation",
+      objective: "ship feature",
+      acceptanceCriteria: ["behavior"],
+      surfaces: ["src"],
+      skill: { name: "refactor-functions", context: "Refactor foo.ts" },
+    },
+    service,
+    noUiContext,
+  );
+
+  expect(createCalls).toEqual([
+    {
+      repoPath: "/repo",
+      kind: "implementation",
+      objective: "ship feature",
+      acceptanceCriteria: ["behavior"],
+      surfaces: ["src"],
+      skill: { name: "refactor-functions", context: "Refactor foo.ts" },
+    },
+  ]);
+  expect(result.value).toBe(created);
+});
 test("recovery slash commands preserve exact-head and delivery arguments", () => {
   expect(parseTandemCommand("inspect task-1")).toEqual({
     action: "inspect",
@@ -685,6 +722,95 @@ test("model listing is read-only and model changes require approval", async () =
   expect(configured.approved).toBe(true);
   expect(configureCalls).toEqual([{ repoPath: "/repo", models }]);
   expect(configured.value).toBe(savedSettings);
+});
+test("configure-models forwards explicit provider enablement and recaps it in the approval prompt", async () => {
+  const configureCalls: unknown[] = [];
+  const prompts: string[] = [];
+  const service = {
+    configureModels: async (input: unknown) => {
+      configureCalls.push(input);
+      return {
+        configPath: "/tandem-home/models.json",
+        configured: true,
+        models,
+        enabledProviders: ["openai-codex"],
+      };
+    },
+  } as unknown as TandemService;
+  const uiContext = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      confirm: async (_title: string, message: string) => {
+        prompts.push(message);
+        return true;
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  const result = await executeTandemAction(
+    { action: "configure-models", repoPath: "/repo", models, enabledProviders: ["openai-codex"] },
+    service,
+    uiContext,
+  );
+
+  expect(result.approved).toBe(true);
+  expect(configureCalls).toEqual([
+    { repoPath: "/repo", models, enabledProviders: ["openai-codex"] },
+  ]);
+  expect(prompts[0]).toContain("Enabled providers");
+  expect(prompts[0]).toContain("openai-codex");
+});
+test("models summary surfaces discovered/enabled providers and a resolved Balanced proposal", () => {
+  const summary = summarizeTandemActionValue("models", {
+    modelSettings: {
+      configPath: "/tandem-home/models.json",
+      configured: false,
+      enabledProviders: ["openai-codex"],
+    },
+    availableModels: [],
+    discoveredProviders: ["openai-codex", "other-provider"],
+    balancedProfile: {
+      status: "resolved",
+      assignments: {},
+      roles: {
+        coordinator: {
+          role: "coordinator",
+          provider: "openai-codex",
+          model: { model: "openai-codex/gpt-6-astra", thinking: "high" },
+          evidence: { reasoning: true },
+          reason: "provider openai-codex is enabled",
+        },
+      },
+    },
+  });
+
+  expect(summary).toContain("Discovered providers");
+  expect(summary).toContain("other-provider");
+  expect(summary).toContain("Enabled providers");
+  expect(summary).toContain("openai-codex/gpt-6-astra");
+  expect(summary).toContain("Planning (coordinator)");
+});
+test("models summary discloses unresolved Balanced roles with actionable reasons", () => {
+  const summary = summarizeTandemActionValue("models", {
+    modelSettings: {
+      configPath: "/tandem-home/models.json",
+      configured: false,
+      enabledProviders: [],
+    },
+    availableModels: [],
+    discoveredProviders: [],
+    balancedProfile: {
+      status: "unresolved",
+      roles: {},
+      gaps: [{ role: "coordinator", reason: "no provider is explicitly enabled for spending yet" }],
+    },
+  });
+
+  expect(summary).toContain("unresolved");
+  expect(summary).toContain("no built-in pin, fuzzy alias, or silent fallback");
+  expect(summary).toContain("Planning (coordinator)");
+  expect(summary).toContain("no provider is explicitly enabled");
 });
 test("onboard summaries render complete saved and pending role selections", () => {
   const savedModels: RepoPolicy["models"] = {
