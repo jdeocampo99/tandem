@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
+import type { RequestBriefContent } from "../../src/contracts.ts";
 import type {
   CoordinatorLaunchDependencies,
   CoordinatorLaunchRequest,
@@ -8,7 +9,14 @@ import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { createTandemService } from "../../src/service/controller.ts";
-import { SCENARIO_POLICY, type ScenarioWorld, withScenario } from "./scenario.ts";
+import {
+  SCENARIO_POLICY,
+  type ScenarioWorld,
+  scenarioRuntimeTask,
+  seedScenarioRuntime,
+  seedScenarioTask,
+  withScenario,
+} from "./scenario.ts";
 
 const EXTENSION_PATH = fileURLToPath(new URL("../../src/extension.ts", import.meta.url));
 const CONFIG_PATH = fileURLToPath(new URL("../../src/worker-config.yml", import.meta.url));
@@ -225,6 +233,92 @@ test("an unavailable OMP catalogue refuses a model change and leaves policy unto
       world.trace().some((event) => event.boundary === "omp" && event.outcome === "refused"),
     ).toBe(true);
     expect((await world.snapshot()).tasks).toEqual([]);
+    await service.shutdown();
+  });
+});
+
+const BRIEF: RequestBriefContent = {
+  goal: "Keep one durable agreement for this request",
+  scope: ["src/requests"],
+  constraints: ["SQLite stays authoritative"],
+  nonGoals: ["no second ledger"],
+  acceptanceCriteria: ["dispatch is blocked while the brief is superseded"],
+  recommendedApproach: "One record with monotonic draft revisions",
+  keyDecisions: ["the pane is a projection the coordinator owns"],
+  openQuestions: [],
+  researchLinks: [],
+};
+
+test("a request brief gates dispatch, retires only its own pane, and pauses superseded work", async () => {
+  await withScenario({}, async (world) => {
+    const service = createTandemService({
+      home: world.home,
+      sessionId: world.sessionId,
+      poolRoot: world.poolRoot,
+      run: world.run,
+      clock: world.clock,
+      idFactory: world.idFactory,
+    });
+    const bystander = world.openPane({ paneId: "pane-bystander", cwd: world.repoPath });
+    const drafted = await service.draftRequestBrief({
+      repoPath: world.repoPath,
+      content: BRIEF,
+      reviewPane: true,
+    });
+    const requestId = drafted.record.id;
+    const reviewPaneId = drafted.record.reviewPane?.endpoint.paneId ?? "";
+    const task = await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "awaiting-approval",
+      requestId,
+    });
+    await seedScenarioRuntime(world, scenarioRuntimeTask());
+
+    expect(drafted.record.reviewPane?.status).toBe("open");
+    expect(drafted.approvalState).toBe("unapproved");
+    await expect(service.approve(task.id)).rejects.toThrow(/has no approved brief/u);
+
+    const approved = await service.approveRequestBrief({
+      requestId,
+      briefRevision: drafted.record.draft.revision,
+      contentDigest: drafted.record.draft.contentDigest,
+    });
+    expect(approved.approvalState).toBe("current");
+    expect(approved.record.reviewPane?.status).toBe("closed");
+    expect(world.paneIsPresent(reviewPaneId)).toBe(false);
+    expect(world.paneIsPresent(bystander.paneId)).toBe(true);
+
+    const dispatched = await service.approve(task.id);
+    expect(dispatched.stage).toBe("queued");
+    expect(dispatched.scopeApproved).toBe(true);
+
+    const annotated = await service.draftRequestBrief({
+      repoPath: world.repoPath,
+      requestId,
+      content: { ...BRIEF, openQuestions: ["does the pane need a keybinding?"] },
+      reviewPane: false,
+    });
+    expect(annotated.record.draft.revision).toBe(2);
+    expect(annotated.approvalState).toBe("current");
+    expect(annotated.pausedTaskIds).toEqual([]);
+
+    const rescoped = await service.draftRequestBrief({
+      repoPath: world.repoPath,
+      requestId,
+      content: { ...BRIEF, scope: ["src/requests", "src/coordinator"] },
+      reviewPane: true,
+    });
+    expect(rescoped.record.draft.revision).toBe(3);
+    expect(rescoped.approvalState).toBe("superseded");
+    expect(rescoped.pausedTaskIds).toEqual([task.id]);
+    expect((await service.get(task.id)).stage).toBe("paused");
+    expect(rescoped.record.reviewPane?.status).toBe("open");
+    expect(rescoped.record.reviewPane?.renderedRevision).toBe(3);
+    expect(rescoped.record.reviewPane?.endpoint.paneId).not.toBe(reviewPaneId);
+
+    const reread = await service.requestBrief(requestId);
+    expect(reread.record.approval?.briefRevision).toBe(1);
+    expect(reread.record.history.map((entry) => entry.revision)).toEqual([1, 2]);
     await service.shutdown();
   });
 });

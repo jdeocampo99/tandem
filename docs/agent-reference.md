@@ -809,6 +809,59 @@ spent and configured rounds, states that the task is not ready and not accepted,
 evidence-backed blockers that remain, and names the explicit decision available. Neither message
 claims delivery.
 
+### Request briefs and approval revisions
+
+A substantial request gets one durable request brief: a stable `req-`prefixed identity, a monotonic
+draft revision, and the approval bound to it. The record lives in the `request_briefs` table of the
+authoritative `<home>/state.sqlite` and is written under the same compare-and-swap discipline as a
+task record. A request id can never collide with a task id, so related tasks refer to one approved
+request through their own `requestId` field instead of becoming a second identity owner.
+
+A brief holds the goal, scope, constraints, non-goals, acceptance criteria, recommended approach,
+key decisions, unresolved questions, and research links. The first seven carry the agreement; the
+unresolved questions and research links are annotations. Every edit creates a new draft revision and
+pushes the previous one into the preserved history, so revisions only ever move forward.
+
+```sh
+# through the coordinator's tandem tool
+{"request":{"action":"brief-draft","repoPath":"/absolute/path","content":{...},"reviewPane":true}}
+{"request":{"action":"brief-approve","requestId":"req-...","briefRevision":3,"contentDigest":"..."}}
+```
+
+Approval is an explicit main-conversation decision, human-confirmed at runtime like every other
+approval-bearing action. It records the exact request id, draft revision, content digest, and
+agreement digest, and it is refused when any of the three names something other than the current
+draft. An approval taken for one revision therefore cannot approve a later revision or a different
+request.
+
+An agreement change makes the recorded approval non-current: dispatch under that request is refused,
+and the work already running under it is paused through the existing ownership-safe pause control
+until the brief is reapproved. Annotation-only edits still advance the draft revision but leave the
+approval current, so progress notes never force reapproval. An approved brief records an agreement
+and nothing more: task scope approval, publication, merge, deploy, and destructive actions each
+remain separate explicit approvals.
+
+With `reviewPane: true` the coordinator renders the current draft as read-only Markdown under
+`<home>/request-briefs/<requestId>.md` and shows it in one temporary Herdr pane it owns. The pane has
+no editing path; the user edits by replying in the main conversation. A tiny fix keeps the same
+approval contract with a compact in-chat brief and no pane at all.
+
+Every pane operation proves exact ownership first, through the same native session snapshot,
+endpoint identity, stopped-pane, and close-verification checks the coordinator's own pane uses. The
+durable record keeps the outcome:
+
+| Pane status | Meaning |
+| --- | --- |
+| `open` | The owned pane is showing the recorded draft revision. |
+| `closed` | Approval retired the owned pane, or it was already gone; the next projection reopens one. |
+| `retained` | A transient refusal such as a busy pane. Nothing was closed; retry later. |
+| `quarantined` | Ownership could not be proven, or a pane operation failed. Nothing is closed or renamed until a human resolves it. |
+
+A missing, moved, foreign, ambiguous, busy, or failed pane never closes an unrelated pane and never
+loses the brief: the durable record, its approved revision, its history, and every task referring to
+it stay readable from SQLite, and the rendered Markdown is rewritten regardless. A pane receipt on
+its own never changes a task stage or task scope approval.
+
 ### Post-research continuation disposition
 
 Every scout record carries a durable `researchContinuation` describing what its completed report

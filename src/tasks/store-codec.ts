@@ -10,6 +10,7 @@ import {
   type GuidanceProvenance,
   type InstructionChannel,
   type IterationScope,
+  isSafeRequestId,
   LEGACY_EVIDENCE_CONTRACT,
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
@@ -94,6 +95,7 @@ const TOP_LEVEL_KEYS = [
   "id",
   "revision",
   "repoPath",
+  "requestId",
   "kind",
   "objective",
   "acceptanceCriteria",
@@ -899,6 +901,10 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   if (!isSafeTaskId(id)) {
     failState(source, `unsafe task id ${id}`);
   }
+  const requestId = optionalText(value, "requestId", source);
+  if (requestId !== undefined && !isSafeRequestId(requestId)) {
+    failState(source, `unsafe request id ${requestId}`);
+  }
   const previousStage = optionalText(value, "previousStage", source);
   if (previousStage !== undefined && !isOneOf(previousStage, TASK_STAGES)) {
     failState(source, `unsupported previousStage ${previousStage}`);
@@ -950,6 +956,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     id,
     revision: requiredInteger(value, "revision", source),
     repoPath: requiredText(value, "repoPath", source),
+    ...(requestId === undefined ? {} : { requestId }),
     kind,
     objective: requiredText(value, "objective", source),
     acceptanceCriteria: requiredTextArray(value, "acceptanceCriteria", source),

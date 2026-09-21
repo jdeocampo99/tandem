@@ -219,6 +219,19 @@ function parseQuotedCommand(value: string): readonly string[] {
   return tokens;
 }
 
+/** Agent launchers keep the foreground; an ordinary command such as `cat` exits back to the shell. */
+const PERSISTENT_LAUNCHERS: Readonly<Record<string, true>> = {
+  bun: true,
+  node: true,
+  omp: true,
+  sh: true,
+};
+
+function isPersistentLaunch(argv: readonly string[]): boolean {
+  const launcher = (argv[0] ?? "").split("/").at(-1) ?? "";
+  return PERSISTENT_LAUNCHERS[launcher] === true;
+}
+
 async function bootstrapProcessArgv(command: string): Promise<readonly string[]> {
   const tokens = parseQuotedCommand(command);
   const scriptPath = tokens[1];
@@ -420,10 +433,13 @@ export async function createScenarioWorld(
       );
     }
     if (action === "run") {
-      nextPid += 1;
-      pane.processes = [
-        { pid: nextPid, name: "omp", argv: await bootstrapProcessArgv(argv.at(-1) ?? "") },
-      ];
+      const launched = await bootstrapProcessArgv(argv.at(-1) ?? "");
+      if (isPersistentLaunch(launched)) {
+        nextPid += 1;
+        pane.processes = [{ pid: nextPid, name: "omp", argv: launched }];
+      } else {
+        pane.processes = [{ pid: pane.shellPid, name: "sh", argv: ["sh"] }];
+      }
       return commandResult(JSON.stringify({ result: { type: "ok" } }));
     }
     if (action === "send-keys") {
@@ -730,6 +746,7 @@ async function classifyResources(
 
 export type SeedTaskInput = Readonly<{
   readonly kind: TaskRecord["kind"];
+  readonly requestId?: string;
   readonly stage?: TaskRecord["stage"];
   readonly previousStage?: TaskRecord["stage"];
   readonly reviewHead?: string;
@@ -752,6 +769,7 @@ export async function seedScenarioTask(
     acceptanceCriteria: ["the durable outcome is observable"],
     surfaces: ["scenario"],
     policy: SCENARIO_POLICY,
+    ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
   });
   if (
     task.stage === "awaiting-approval" &&

@@ -112,6 +112,21 @@ function createSchema(db: StateDatabase): void {
   ).run();
 }
 
+/**
+ * Request briefs arrived after the initialization marker was fixed at version 1, so the table is
+ * created on every open instead of through the marker. A database written by an older build gains
+ * the empty table and keeps every task and runtime row it already holds.
+ */
+function ensureRequestBriefTable(db: StateDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS request_briefs (
+      id TEXT PRIMARY KEY NOT NULL,
+      revision INTEGER NOT NULL,
+      payload TEXT NOT NULL
+    );
+  `);
+}
+
 function assertSchema(db: StateDatabase): void {
   const rows = db
     .query(
@@ -184,6 +199,7 @@ async function openDatabase(home: string, allowMigrationState = false): Promise<
     } else {
       assertSchema(db);
     }
+    ensureRequestBriefTable(db);
     await chmod(path, 0o600);
   } catch (error) {
     try {
@@ -508,6 +524,36 @@ export function writeTaskPayload(
 
 export function deleteTaskPayload(db: StateDatabase, id: string): void {
   db.query("DELETE FROM tasks WHERE id = ?").run(id);
+}
+
+export function readRequestBriefPayload(db: StateDatabase, id: string): unknown | undefined {
+  const row = db.query("SELECT payload FROM request_briefs WHERE id = ?").get(id) as
+    | { payload?: unknown }
+    | null
+    | undefined;
+  if (row === null || row === undefined || typeof row.payload !== "string") return undefined;
+  return JSON.parse(row.payload) as unknown;
+}
+
+export function readAllRequestBriefPayloads(db: StateDatabase): readonly unknown[] {
+  const rows = db.query("SELECT payload FROM request_briefs ORDER BY id").all() as readonly {
+    payload?: unknown;
+  }[];
+  return rows.map((row) => {
+    if (typeof row.payload !== "string") throw new Error("request brief payload is not text");
+    return JSON.parse(row.payload) as unknown;
+  });
+}
+
+export function writeRequestBriefPayload(
+  db: StateDatabase,
+  id: string,
+  revision: number,
+  payload: unknown,
+): void {
+  db.query(
+    "INSERT INTO request_briefs(id, revision, payload) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, payload = excluded.payload",
+  ).run(id, revision, JSON.stringify(payload));
 }
 
 export function readRuntimePayload(db: StateDatabase): unknown | undefined {

@@ -70,6 +70,13 @@ import {
   type ReviewExistingResult,
   type ValidationRetryResult,
 } from "../recovery/workflow.ts";
+import type { RequestApprovalIntent } from "../requests/brief.ts";
+import { createRequestBriefStore, type RequestBriefStore } from "../requests/store.ts";
+import {
+  type DraftRequestBriefInput,
+  type RequestBriefView,
+  RequestBriefWorkflow,
+} from "../requests/workflow.ts";
 import {
   activeReservations,
   activeRuntimeJob,
@@ -148,6 +155,8 @@ export type CreateTaskRequest = Readonly<{
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
   readonly surfaces: readonly string[];
+  /** The request brief this task is created under; dispatch stays blocked while it is superseded. */
+  readonly requestId?: string;
   readonly researchTaskIds?: readonly string[];
   /** Explicitly selected post-research disposition; scouts otherwise take the safe default. */
   readonly researchContinuation?: ResearchContinuation;
@@ -226,6 +235,10 @@ export type TandemService = Readonly<{
     input: { readonly repository: string; readonly base: string },
   ) => Promise<DeliveryPreflightResult>;
   readonly approve: (id: string) => Promise<TaskRecord>;
+  readonly draftRequestBrief: (input: DraftRequestBriefInput) => Promise<RequestBriefView>;
+  readonly reviewRequestBrief: (requestId: string) => Promise<RequestBriefView>;
+  readonly approveRequestBrief: (intent: RequestApprovalIntent) => Promise<RequestBriefView>;
+  readonly requestBrief: (requestId: string) => Promise<RequestBriefView>;
   readonly tick: () => Promise<readonly TaskRecord[]>;
   readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly steer: (input: SteerTaskInput) => Promise<TaskCommunicationView>;
@@ -290,6 +303,7 @@ type ServiceDependencies = Readonly<{
   idFactory: IdFactory;
   classifyResearchContinuation: ResearchContinuationClassifier;
   store: TaskStore;
+  requestStore: RequestBriefStore;
   runtimePath: string;
   workerPath: string;
   validationWorkerPath: string;
@@ -511,6 +525,7 @@ class TandemController {
   readonly #worker: WorkerWorkflow;
   readonly #control: TaskControlWorkflow;
   readonly #recovery: RecoveryWorkflow;
+  readonly #requests: RequestBriefWorkflow;
   /** Durable-state digest of the draft body last published per task, to avoid redundant refreshes. */
   readonly #draftDigests = new Map<string, string>();
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
@@ -614,6 +629,18 @@ class TandemController {
       taskInScope: (task) => this.#source.taskInScope(task),
       wake: (task) => this.reconcileTask(task),
     });
+    this.#requests = new RequestBriefWorkflow({
+      home: deps.home,
+      sessionId: deps.sessionId,
+      parentWorkspaceId: deps.parentWorkspaceId,
+      run: deps.run,
+      clock: deps.clock,
+      store: deps.requestStore,
+      listTasks: () => this.list(),
+      pauseTask: async (taskId, reason) => {
+        await this.pause(taskId, reason);
+      },
+    });
   }
 
   api(): TandemService {
@@ -636,6 +663,10 @@ class TandemController {
       list: () => this.list(),
       get: (id) => this.get(id),
       approve: (id) => this.approve(id),
+      draftRequestBrief: (input) => this.#requests.draft(input),
+      reviewRequestBrief: (requestId) => this.#requests.review(requestId),
+      approveRequestBrief: (intent) => this.#requests.approve(intent),
+      requestBrief: (requestId) => this.#requests.read(requestId),
       tick: () => this.tick(),
       acknowledge: (id, notificationId) => this.acknowledge(id, notificationId),
       steer: (input) => this.steer(input),
@@ -758,6 +789,7 @@ class TandemController {
   async create(input: CreateTaskRequest): Promise<TaskRecord> {
     await this.ensureSourceReady();
     if (!isRecord(input)) throw new TypeError("create input must be an object");
+    if (input.requestId !== undefined) await this.#requests.requireRequest(input.requestId);
     const classifiedContinuation = await this.continuationFor(input);
     return this.#deps.store.exclusive(async (store) => {
       const source = await mapTaskSource(
@@ -851,6 +883,10 @@ class TandemController {
 
   async approve(id: string): Promise<TaskRecord> {
     const task = await this.get(id);
+    const dispatch = await this.#requests.dispatchDecisionForTask(task);
+    if (dispatch !== undefined && !dispatch.allowed) {
+      throw new Error(`Task ${task.id} cannot be dispatched: ${dispatch.reason}`);
+    }
     if (task.kind === "implementation") {
       const runtime = await this.runtimeFor(task.id);
       if (runtime === undefined) throw new Error(`Task ${task.id} has no durable runtime metadata`);
@@ -1934,6 +1970,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     idFactory,
     classifyResearchContinuation,
     store: createTaskStore({ directory: join(home, "tasks"), clock, idFactory }),
+    requestStore: createRequestBriefStore({ home, clock, idFactory }),
     runtimePath: runtimeFile(home),
     workerPath: fileURLToPath(new URL("../worker.ts", import.meta.url)),
     validationWorkerPath: fileURLToPath(new URL("../validation-worker.ts", import.meta.url)),
