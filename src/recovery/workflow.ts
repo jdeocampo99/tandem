@@ -45,6 +45,8 @@ import { type TaskEvent, transitionTask } from "../tasks/lifecycle.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import type { ValidationJob, ValidationResult } from "../validation-worker.ts";
 import { runValidation } from "../workers/validation.ts";
+import type { RecoveryDecisionReceipt } from "./decision.ts";
+import type { RecoveryAvailabilityWait } from "./wait.ts";
 
 const MAX_RECOVERY_ATTEMPTS = 3;
 const MAX_VALIDATION_RETRIES = 3;
@@ -86,6 +88,8 @@ export type RecoveryJobState = Readonly<{
 }>;
 export type RecoveryInspection = Readonly<{
   readonly taskId: string;
+  /** The request this task belongs to, preserved through every recovery action and wait. */
+  readonly requestId?: string;
   readonly stage: TaskRecord["stage"];
   readonly generation: number;
   readonly reviewRound: number;
@@ -149,6 +153,10 @@ export type RecoveryInspection = Readonly<{
     readonly error?: string;
   }>[];
   readonly pullRequest?: TaskRecord["pullRequest"];
+  /** Durable receipts of conversational recovery decisions, oldest first. */
+  readonly recoveryDecisions: readonly RecoveryDecisionReceipt[];
+  /** Durable bounded availability waits, including the ones already settled. */
+  readonly availabilityWaits: readonly RecoveryAvailabilityWait[];
   readonly blocked: boolean;
   readonly safetyReasons: readonly string[];
   readonly recommendations: readonly string[];
@@ -740,6 +748,7 @@ export class RecoveryWorkflow {
     ]);
     return {
       taskId: task.id,
+      ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
       stage: task.stage,
       generation: task.generation,
       reviewRound: task.reviewRound,
@@ -785,6 +794,8 @@ export class RecoveryWorkflow {
       reservations,
       operations,
       ...(task.pullRequest === undefined ? {} : { pullRequest: task.pullRequest }),
+      recoveryDecisions: runtime?.recoveryDecisions ?? [],
+      availabilityWaits: runtime?.recoveryWaits ?? [],
       blocked,
       safetyReasons,
       recommendations: recoveryRecommendations(task, runtime, endpointEntries, jobs, current),

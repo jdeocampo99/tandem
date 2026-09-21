@@ -1766,6 +1766,42 @@ classifies infrastructure, validation-configuration, and task-code failures. `ev
 reconstructs only reports/provenance proven by durable task/generation/HEAD-matching records; stale
 reports are refused.
 
+### Conversational recovery and bounded availability waits
+
+The `recovery-decide` extension action settles one task's current recovery decision from durable
+state alone. It reads the task's recorded blockers, classifies endpoint ownership and the prior
+worker outcome, re-reads the dry-run plan, and then does exactly one of three things: run a
+preapproved action, hold a bounded wait, or ask one question. Every mutation still goes through
+`reconcile`, `review-existing`, `validation-retry`, or `evidence-repair`, so their locks, fencing,
+ownership checks, budgets, and quarantine behavior decide the result.
+
+The preapproval policy enumerates both the eligible actions and the proof each one needs; an action
+is never eligible because of its name. `reconcile` and `evidence-repair` are the only unattended
+actions, and each runs only with the task in scope, its scope approved, its request brief approval
+current, canonical repository identity proven, every endpoint proved owned, the prior outcome known,
+no active durable job, no pending stop request, and its own budget remaining; `evidence-repair` also
+requires the exact clean reviewed HEAD. Everything else, including `review-existing` and
+`validation-retry`, produces one bounded question carrying the recommendation, its expected effect,
+and the remaining budgets, and executes nothing until it is answered through the existing
+question-id-bound answer API. Foreign or unknown ownership, an uncertain worker outcome, a stale
+request agreement, or an exhausted budget leaves every resource intact and asks. Scope and
+acceptance changes, cap increases, higher-cost or higher-quota tiers, publication, merge, deploy,
+and destructive work keep their separate explicit approvals.
+
+A confirmed temporary quota or availability block persists a bounded wait tied to the original
+request and task. When durable evidence already names an availability time more than five minutes
+away, Tandem asks immediately instead of waiting. Otherwise the wait wakes at the earlier of the
+known availability time and a five-minute ceiling, re-inspects exactly once, and then continues
+through the same decision rules or asks. Waits live in the authoritative SQLite runtime state, are
+deduplicated by request/task and evidence identity, and are reconstructed after a restart; a
+repeated signal for the same unresolved incident never moves the original deadline, a wait that was
+already overdue when another session reconstructed it asks rather than acting, and a cancelled or
+superseded task is never resumed by an old timer. Routine wakes stay passive: a wake before the
+deadline reads durable state and stops, and only a decision or completion interrupts the main
+conversation. `tandem inspect TASK_ID --json` lists the resulting decision and wait receipts, each
+preserving its request identity, task generation, triggering evidence, ownership and outcome
+classification, recommended action, approval requirement, start and deadline, and disposition.
+
 ### Reconciling Tandem resources across sessions
 
 `tandem reconcile-resources [--home PATH] [--yes] [--discard] [--json]` is the front door's

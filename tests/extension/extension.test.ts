@@ -1833,3 +1833,72 @@ test("a request decision wakes the coordinator while routine request state stays
   expect(notified).toEqual([]);
   expect(acknowledged).toEqual(["req-deciding:req-deciding:conflict:conflict-1"]);
 });
+
+test("a recovery question wakes the coordinator once with its recommendation and consequences", async () => {
+  const sent: Array<{ readonly content: string; readonly options: unknown }> = [];
+  const notices: string[] = [];
+  const acknowledged: string[] = [];
+  const service: Pick<TandemService, "acknowledge" | "acknowledgeRequest"> = {
+    acknowledgeRequest: async () => {
+      throw new Error("no request notification is expected in this scenario");
+    },
+    acknowledge: async (taskId, notificationId) => {
+      acknowledged.push(`${taskId}:${notificationId}`);
+      return task({ id: taskId });
+    },
+  };
+  const sink = notificationSink(
+    (content, options) => sent.push({ content, options }),
+    () => undefined,
+  );
+  const context = notificationContext((message) => notices.push(message));
+  const question = {
+    id: "recovery-3f2a",
+    text: "Task task-1 in request req-1 is blocked: the reviewer never reported a result. Recommended action: review-existing. Remaining budget: 3 recovery attempt(s).",
+    recommendation:
+      "review-existing: runs validation and bounded reviews at the exact reviewed HEAD",
+  };
+  const asked = task({
+    id: "task-1",
+    stage: "blocked",
+    requestId: "req-1",
+    blockReason: question.text,
+    communication: { revision: 0, messages: [], question },
+    notifications: [
+      {
+        id: "recovery-notification",
+        message: question.text,
+        acknowledged: false,
+        kind: "coordinator",
+      },
+    ],
+  });
+  const delivered = new Set<string>();
+
+  await deliverPendingNotifications({
+    pi: sink,
+    service,
+    tasks: [asked],
+    requests: [],
+    delivered,
+    ctx: context,
+    reportReadable: async () => true,
+  });
+  await deliverPendingNotifications({
+    pi: sink,
+    service,
+    tasks: [asked],
+    requests: [],
+    delivered,
+    ctx: context,
+    reportReadable: async () => true,
+  });
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]?.content).toContain("Question recovery-3f2a:");
+  expect(sent[0]?.content).toContain("Recommended action: review-existing");
+  expect(sent[0]?.content).toContain("Recommendation: review-existing:");
+  expect(sent[0]?.options).toMatchObject({ triggerTurn: true });
+  expect(notices).toHaveLength(0);
+  expect(acknowledged).toEqual(["task-1:recovery-notification"]);
+});

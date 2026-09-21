@@ -882,6 +882,7 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   if (
     action === "inspect" ||
     action === "recovery-plan" ||
+    action === "recovery-decide" ||
     action === "reconcile" ||
     action === "review-existing" ||
     action === "validation-retry" ||
