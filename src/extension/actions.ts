@@ -51,6 +51,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "brief-show": { min: 2, max: 2 },
   "brief-review": { min: 2, max: 2 },
   "brief-approve": { min: 4, max: 4 },
+  "request-receipt": { min: 2, max: 2 },
   "request-show": { min: 2, max: 2 },
   "request-relate": { min: 4, max: 4 },
   "request-conflict": { min: 4, max: 4 },
@@ -132,6 +133,7 @@ export type TandemAction =
     }>
   | Readonly<{ readonly action: "brief-review"; readonly requestId: string }>
   | Readonly<{ readonly action: "brief-show"; readonly requestId: string }>
+  | Readonly<{ readonly action: "request-receipt"; readonly requestId: string }>
   | Readonly<{
       readonly action: "brief-approve";
       readonly requestId: string;
@@ -619,6 +621,8 @@ export async function executeTandemAction(
       return textResult(await service.reviewRequestBrief(action.requestId), action.action);
     case "brief-show":
       return textResult(await service.requestBrief(action.requestId), action.action);
+    case "request-receipt":
+      return textResult(await service.requestReceipt(action.requestId), action.action);
     case "brief-approve":
       return textResult(
         await service.approveRequestBrief({
@@ -915,6 +919,8 @@ export function parseTandemCommand(input: string): TandemAction {
       return { action: "request-split", requestId: value(1, "request-split") };
     case "brief-show":
       return { action: "brief-show", requestId: value(1, "brief-show") };
+    case "request-receipt":
+      return { action: "request-receipt", requestId: value(1, "request-receipt") };
     case "brief-review":
       return { action: "brief-review", requestId: value(1, "brief-review") };
     case "brief-approve": {

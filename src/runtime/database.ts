@@ -132,6 +132,24 @@ function ensureRequestTables(db: StateDatabase): void {
   `);
 }
 
+/**
+ * Request accounting arrived after the initialization marker was fixed at version 1, so its table
+ * is created on every open the way request briefs are. The event key is the primary key, which is
+ * what makes recording the same observed event twice a no-op instead of a double count.
+ */
+function ensureRequestUsageTable(db: StateDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS request_usage_events (
+      event_key TEXT PRIMARY KEY NOT NULL,
+      request_id TEXT NOT NULL,
+      recorded_at TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS request_usage_events_by_request
+      ON request_usage_events(request_id);
+  `);
+}
+
 function assertSchema(db: StateDatabase): void {
   const rows = db
     .query(
@@ -205,6 +223,7 @@ async function openDatabase(home: string, allowMigrationState = false): Promise<
       assertSchema(db);
     }
     ensureRequestTables(db);
+    ensureRequestUsageTable(db);
     await chmod(path, 0o600);
   } catch (error) {
     try {
@@ -589,6 +608,49 @@ export function writeRequestDeliveryPayload(
   db.query(
     "INSERT INTO request_deliveries(id, revision, payload) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, payload = excluded.payload",
   ).run(id, revision, JSON.stringify(payload));
+}
+
+/** Answers whether this event was new, so a caller can tell a fresh attempt from a replayed one. */
+export function insertRequestUsagePayload(
+  db: StateDatabase,
+  entry: Readonly<{
+    readonly eventKey: string;
+    readonly requestId: string;
+    readonly recordedAt: string;
+    readonly payload: unknown;
+  }>,
+): boolean {
+  const existing = db
+    .query("SELECT 1 AS present FROM request_usage_events WHERE event_key = ?")
+    .get(entry.eventKey) as { present?: unknown } | null | undefined;
+  if (existing !== null && existing !== undefined) return false;
+  db.query(
+    "INSERT INTO request_usage_events(event_key, request_id, recorded_at, payload) VALUES (?, ?, ?, ?)",
+  ).run(entry.eventKey, entry.requestId, entry.recordedAt, JSON.stringify(entry.payload));
+  return true;
+}
+
+/**
+ * Stored rows in a stable observation order, oldest recording first. A row whose text is not JSON
+ * is reported as null so the caller can count it rather than lose the rest of the request.
+ */
+export function readRequestUsagePayloads(
+  db: StateDatabase,
+  requestId: string,
+): readonly (unknown | null)[] {
+  const rows = db
+    .query(
+      "SELECT payload FROM request_usage_events WHERE request_id = ? ORDER BY recorded_at, event_key",
+    )
+    .all(requestId) as readonly { payload?: unknown }[];
+  return rows.map((row) => {
+    if (typeof row.payload !== "string") return null;
+    try {
+      return JSON.parse(row.payload) as unknown;
+    } catch {
+      return null;
+    }
+  });
 }
 
 export function readRuntimePayload(db: StateDatabase): unknown | undefined {

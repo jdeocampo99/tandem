@@ -114,6 +114,14 @@ import type {
   RuntimeState,
   RuntimeTaskState,
 } from "../runtime/schema.ts";
+import type { RequestUsageEvent } from "../runtime/usage.ts";
+import {
+  requestIntakeEvent,
+  requestTerminalEvent,
+  settledWorkEvents,
+} from "../runtime/usage-events.ts";
+import { createRequestUsageLedger, type RequestUsageLedger } from "../runtime/usage-ledger.ts";
+import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import { TaskControlWorkflow } from "../tasks/control.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
@@ -250,6 +258,7 @@ export type TandemService = Readonly<{
   readonly reviewRequestBrief: (requestId: string) => Promise<RequestBriefView>;
   readonly approveRequestBrief: (intent: RequestApprovalIntent) => Promise<RequestBriefView>;
   readonly requestBrief: (requestId: string) => Promise<RequestBriefView>;
+  readonly requestReceipt: (requestId: string) => Promise<RequestUsageReceipt>;
   readonly listRequests: () => Promise<readonly RequestDeliveryRecord[]>;
   readonly requestStatus: (requestId: string) => Promise<RequestDeliveryView>;
   readonly relateRequestTasks: (
@@ -352,6 +361,7 @@ type ServiceDependencies = Readonly<{
   store: TaskStore;
   requestStore: RequestBriefStore;
   requestDeliveryStore: RequestDeliveryStore;
+  usageLedger: RequestUsageLedger;
   runtimePath: string;
   workerPath: string;
   validationWorkerPath: string;
@@ -575,6 +585,7 @@ class TandemController {
   readonly #recovery: RecoveryWorkflow;
   readonly #requests: RequestBriefWorkflow;
   readonly #requestDelivery: RequestDeliveryWorkflow;
+  readonly #usage: RequestUsageLedger;
   /** Durable-state digest of the draft body last published per task, to avoid redundant refreshes. */
   readonly #draftDigests = new Map<string, string>();
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
@@ -585,6 +596,7 @@ class TandemController {
   #sourceReady = true;
   constructor(deps: ServiceDependencies) {
     this.#deps = deps;
+    this.#usage = deps.usageLedger;
     this.#sourceReady = deps.refreshSource === undefined;
     this.#source = new SourceInboxWorkflow({
       home: deps.home,
@@ -645,6 +657,7 @@ class TandemController {
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
       reviewAssistance: deps.reviewAssistance,
+      recordRequestUsage: (events) => this.recordAccounting(events),
     });
     this.#control = new TaskControlWorkflow({
       home: deps.home,
@@ -723,10 +736,11 @@ class TandemController {
       list: () => this.list(),
       get: (id) => this.get(id),
       approve: (id) => this.approve(id),
-      draftRequestBrief: (input) => this.#requests.draft(input),
+      draftRequestBrief: (input) => this.draftRequestBrief(input),
       reviewRequestBrief: (requestId) => this.#requests.review(requestId),
       approveRequestBrief: (intent) => this.#requests.approve(intent),
       requestBrief: (requestId) => this.#requests.read(requestId),
+      requestReceipt: (requestId) => this.#usage.receipt(requestId),
       listRequests: () => this.#deps.requestDeliveryStore.list(),
       requestStatus: (requestId) => this.#requestDelivery.status(requestId),
       relateRequestTasks: (requestId, input) => this.#requestDelivery.relate(requestId, input),
@@ -1408,6 +1422,7 @@ class TandemController {
       }
     }
     const settled = await this.#source.scopedTasks();
+    await this.recordRequestAccounting(settled);
     await this.reconcileRequests(settled);
     let draftRecorded = false;
     for (const task of settled) {
@@ -1574,6 +1589,97 @@ class TandemController {
         pullRequest: metadata,
       }));
     });
+  }
+
+  /**
+   * Opens the request and records its intake, so the receipt's wall clock starts at the moment
+   * the agreement became durable rather than at the first worker launch.
+   */
+  private async draftRequestBrief(input: DraftRequestBriefInput): Promise<RequestBriefView> {
+    const view = await this.#requests.draft(input);
+    await this.recordAccounting([requestIntakeEvent(view.record)]);
+    return view;
+  }
+
+  /**
+   * Brings the ledger level with durable state: the intake of every governing request, one span
+   * per settled operation, and the terminal fact of every delivered or cancelled task. Each event
+   * identity is derived from the records themselves, so repeating this pass after a restart, a
+   * reconciliation, or a compaction records nothing new.
+   */
+  private async recordRequestAccounting(tasks: readonly TaskRecord[]): Promise<void> {
+    const governed = tasks.filter((task) => task.requestId !== undefined);
+    if (governed.length === 0) return;
+    try {
+      await this.recordAccounting(
+        await this.requestAccountingEvents(governed, await this.readState()),
+      );
+    } catch (error) {
+      await this.diagnoseAccountingFailure(error);
+    }
+  }
+
+  private async requestAccountingEvents(
+    tasks: readonly TaskRecord[],
+    state: RuntimeState,
+  ): Promise<readonly RequestUsageEvent[]> {
+    const events: RequestUsageEvent[] = [];
+    const openedRequests = new Set<string>();
+    for (const task of tasks) {
+      const requestId = task.requestId;
+      if (requestId === undefined) continue;
+      if (!openedRequests.has(requestId)) {
+        openedRequests.add(requestId);
+        const brief = await this.#deps.requestStore.read(requestId);
+        if (brief !== undefined) events.push(requestIntakeEvent(brief));
+      }
+      const runtime = state.tasks.find((entry) => entry.taskId === task.id);
+      if (runtime !== undefined) {
+        events.push(
+          ...settledWorkEvents({
+            requestId,
+            runtime,
+            presentations: state.presentations.filter(
+              (presentation) => presentation.taskId === task.id,
+            ),
+          }),
+        );
+      }
+      const terminal = requestTerminalEvent(requestId, task);
+      if (terminal !== undefined) events.push(terminal);
+    }
+    return events;
+  }
+
+  /**
+   * Appends accounting facts. Accounting observes work; it never authorizes, pauses, retries, or
+   * blocks it, so a ledger failure is reported and the caller carries on unchanged.
+   */
+  private async recordAccounting(events: readonly RequestUsageEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    try {
+      await this.#usage.record(events);
+    } catch (error) {
+      await this.diagnoseAccountingFailure(error, events.length);
+    }
+  }
+
+  private async diagnoseAccountingFailure(error: unknown, events?: number): Promise<void> {
+    try {
+      await appendDiagnosticEvent(
+        this.#deps.home,
+        {
+          event: "request-accounting-failed",
+          details: {
+            errorClass: errorClassName(error),
+            ...(events === undefined ? {} : { events }),
+          },
+        },
+        this.#deps.clock,
+      );
+    } catch {
+      // Observability must not make request accounting fail either.
+    }
   }
 
   /**
@@ -1940,7 +2046,26 @@ class TandemController {
   private async transition(taskId: string, event: TaskEvent): Promise<TaskRecord> {
     const task = await this.get(taskId);
     const context = this.context();
-    return transitionStoredTask(this.#deps.store, taskId, task.revision, event, context);
+    const next = await transitionStoredTask(
+      this.#deps.store,
+      taskId,
+      task.revision,
+      event,
+      context,
+    );
+    await this.recordTerminalDelivery(next);
+    return next;
+  }
+
+  /**
+   * Pins the request's delivery, cancellation, or failure moment at the transition that caused it,
+   * so a later cleanup or reconciliation pass that touches the task cannot move the recorded time.
+   */
+  private async recordTerminalDelivery(task: TaskRecord): Promise<void> {
+    const requestId = task.requestId;
+    if (requestId === undefined) return;
+    const terminal = requestTerminalEvent(requestId, task);
+    if (terminal !== undefined) await this.recordAccounting([terminal]);
   }
 
   private context(): TaskTransitionContext {
@@ -2082,6 +2207,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     store: createTaskStore({ directory: join(home, "tasks"), clock, idFactory }),
     requestStore: createRequestBriefStore({ home, clock, idFactory }),
     requestDeliveryStore: createRequestDeliveryStore({ home, clock }),
+    usageLedger: createRequestUsageLedger({ home, clock }),
     runtimePath: runtimeFile(home),
     workerPath: fileURLToPath(new URL("../worker.ts", import.meta.url)),
     validationWorkerPath: fileURLToPath(new URL("../validation-worker.ts", import.meta.url)),
