@@ -1002,6 +1002,61 @@ readout reports committed charges and reserved estimates separately, alongside t
 unavailable-sample counts, the unaccounted count, and included-quota units, so an unmeasured amount
 is never shown as zero or as cash.
 
+### Economical routing and premium-tier approval
+
+Which exact model an attempt invokes is resolved at two boundaries and nowhere else: before a job is
+launched, and before a bounded replacement attempt after a known safe failure. There is no per-turn
+optimization loop, no mid-turn model switching, and no online learning from outcomes.
+
+The decision is recorded on the durable operation that admits the attempt, as an execution
+transition carrying the request, task, job, operation, generation, and attempt identity, the exact
+selector and thinking level, the tier evidence and where it came from, the enabled providers, and
+the cap, per-operation estimate, and worker limit it was taken under. Job construction and the
+execution gate both read the attempt's model through that one record, so an attempt whose model is
+not the pinned role assignment runs only when a transition authorizes exactly it. An audit note
+describing a model change is not a transition and admits nothing. A transition is fenced: it speaks
+only for the operation, job, generation, input HEAD, and pinned policy digest it names, and the gate
+refuses a stale one rather than reading through it. Routing never writes back to pinned policy; the
+pinned assignment and its history stay exactly as configured.
+
+Tier evidence comes from the OMP catalogue, read fresh at the boundary. `cost` is descriptive
+evidence about a model, never a guarantee about this account's pricing, and `includedAllowance`
+(`plan`, `unit`, `unitsPerRequest`) is quota consumption that carries no currency. A candidate is
+comparable only when the catalogue published both figures for both models, under the same plan and
+unit, and neither rises. A known rise on either axis is a premium move: a model that costs more is
+premium even when it is prepaid, bundled, or expected to bill nothing extra, and a model that draws
+more included allowance is premium even when the money is equal or unpublished. Two models nobody
+published an allowance for are not therefore equal; unpublished is unknown consumption, not none.
+
+A comparable reassignment happens automatically only after a known safe failure of the pinned model,
+and only among providers the pinned profile explicitly enabled in `models.json`. Catalogue discovery
+alone never authorizes a provider. Among eligible candidates a known included allowance is preferred
+first, then the lower published cost, then the selector, so the same catalogue always yields the
+same choice. A prior outcome that could not be proven stays quarantined with its capacity and
+resources: it is never retried or replaced.
+
+Anything else is a question rather than a move. The task stops on a durable routing decision recorded
+in `routingPause`, the coordinator is notified exactly once, and nothing for that task starts until
+it is answered. The answer is pinning the model you want through the models configuration, which
+records a new immutable policy snapshot; the recorded question stops speaking once the pinned policy,
+the generation, or the input HEAD moves under it, and routing re-resolves against the new identity.
+
+| Routing pause reason | What it means |
+| --- | --- |
+| `spending-decision-pending` | The request is stopped on a spending decision, which takes precedence over any routing choice. |
+| `prior-outcome-uncertain` | The previous attempt's outcome could not be proven, so it stays quarantined rather than being replaced. |
+| `pinned-model-absent-from-catalogue` | The catalogue does not list the pinned model, so nothing confirms it can still run. |
+| `pinned-model-ambiguous-in-catalogue` | The pinned selector matches more than one entry, so which model would run is unknown. |
+| `pinned-model-thinking-level-unsupported` | The pinned model no longer supports the thinking level pinned for this role. |
+| `premium-tier-requires-approval` | The only available replacement costs more or draws more included allowance. |
+| `tier-evidence-indeterminate` | Tier evidence for the available replacements is missing or contradictory. |
+
+The spending checkpoint runs first and wins: a request-wide budget pause, a planned-step cap, or the
+worker concurrency limit refuses the reservation before routing is resolved at all, and no routing
+choice can widen any of them. A catalogue that cannot be read, or that published no models at all,
+supplies no evidence either way: the pinned model continues and the transition records that no
+comparison was made, rather than treating silence as a contradiction or as headroom.
+
 ### Post-research continuation disposition
 
 Every scout record carries a durable `researchContinuation` describing what its completed report

@@ -1908,6 +1908,93 @@ test("approved task allocates a fresh endpoint and dispatches one worker", async
     expect(persisted.tasks[0]?.jobs[0]?.phase).toBe("running");
   });
 });
+async function approveWithWorktree(
+  home: string,
+  lease: WorktreeLease,
+  service: TandemService,
+): Promise<void> {
+  const store = createTaskStore({
+    directory: join(home, "tasks"),
+    clock: () => TIMESTAMP,
+    idFactory: () => "unused",
+  });
+  const current = await store.read("task-1");
+  if (current === undefined) throw new Error("fixture task missing");
+  await store.update(current.id, current.revision, (task) => ({
+    ...task,
+    revision: task.revision + 1,
+    updatedAt: TIMESTAMP,
+    worktree: lease,
+  }));
+  await writeRuntimeState(runtimeFile(home), {
+    schemaVersion: 1,
+    tasks: [
+      {
+        schemaVersion: 1,
+        taskId: "task-1",
+        sourceCheckpoint: SOURCE_CHECKPOINT,
+        taskName: "tandem-task-1",
+        worktree: lease,
+        endpoints: [],
+        jobs: [],
+      },
+    ],
+    presentations: [],
+  });
+  await service.approve("task-1");
+}
+
+test("a dispatched job carries the exact model its recorded execution transition names", async () => {
+  await withFixture(
+    { kind: "implementation", runner: { ompModels: OMP_MODELS } },
+    async ({ home, lease, service, runnerState }) => {
+      await approveWithWorktree(home, lease, service);
+      await service.tick();
+
+      expect(runnerState.launches).toBe(1);
+      const persisted = await readRuntime(home);
+      const routing = persisted.tasks[0]?.operation?.routing;
+      const jobPath = persisted.tasks[0]?.jobs[0]?.jobPath;
+      if (routing === undefined || jobPath === undefined) {
+        throw new Error("dispatched job or its execution transition is missing");
+      }
+      expect(routing.basis).toBe("pinned-policy");
+      expect(routing.selector).toBe("test/implementer");
+      expect(routing.evidence.source).toBe("catalogue-read");
+      expect(routing.limits.maxWorkers).toBe(4);
+      const spec = JSON.parse(await readFile(jobPath, "utf8")) as WorkerJob;
+      expect(spec.model).toEqual({ model: routing.selector, thinking: routing.thinking });
+    },
+  );
+});
+
+test("a catalogue that no longer lists the pinned model stops the task and asks exactly once", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      runner: { ompModels: OMP_MODELS.filter((entry) => entry.selector !== "test/implementer") },
+    },
+    async ({ home, lease, service, runnerState }) => {
+      await approveWithWorktree(home, lease, service);
+      await service.tick();
+      await service.tick();
+
+      expect(runnerState.launches).toBe(0);
+      const persisted = await readRuntime(home);
+      const pause = persisted.tasks[0]?.routingPause;
+      expect(pause?.reason).toBe("pinned-model-absent-from-catalogue");
+      expect(pause?.pinnedSelector).toBe("test/implementer");
+      const stopped = await service.get("task-1");
+      const questions = stopped.notifications.filter((notification) =>
+        notification.message.startsWith("Routing decision"),
+      );
+      expect(questions).toHaveLength(1);
+      expect(questions[0]?.kind).toBe("coordinator");
+      expect(stopped.policy.config.models.implementer).toEqual(policy.config.models.implementer);
+    },
+  );
+});
+
 test("implementer jobs receive bounded scout context and the full report artifact", async () => {
   await withFixture({ kind: "implementation" }, async ({ home, lease, service }) => {
     const reportPath = join(home, "jobs", "scout-1", "0", "job-1", "report.txt");

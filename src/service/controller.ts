@@ -136,6 +136,7 @@ import {
   type TaskStoreTransaction,
   transitionStoredTask,
 } from "../tasks/store.ts";
+import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
 import {
@@ -627,6 +628,7 @@ class TandemController {
       reviewAssistance: deps.reviewAssistance,
       recordRequestUsage: (events) => this.recordAccounting(events),
       requestSpend: this.#spend,
+      readModelCatalogue: (cwd) => this.readModelCatalogue(cwd),
     });
     this.#control = new TaskControlWorkflow({
       home: deps.home,
@@ -731,6 +733,25 @@ class TandemController {
       ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
     });
   }
+  /**
+   * Catalogue tier evidence for one checkout, read fresh at an execution boundary. A catalogue it
+   * cannot read is reported as unavailable rather than as an empty catalogue, because an empty one
+   * would read as "nothing is enabled and nothing is included".
+   */
+  private async readModelCatalogue(cwd: string): Promise<ModelCatalogueSnapshot> {
+    try {
+      const settings = await readModelSettings({ repoPath: cwd, home: this.#deps.home });
+      return {
+        status: "read",
+        models: await listOmpModels(this.#deps.run, { cwd }),
+        enabledProviders: settings.enabledProviders,
+        readAt: this.#deps.clock(),
+      };
+    } catch {
+      return { status: "unavailable", reason: "catalogue-unreadable" };
+    }
+  }
+
   async models(repoPath: string): Promise<ModelOptionsResult> {
     const source = await mapTaskSource(this.#deps.run, repoPath, this.#deps.sourceWorkspace);
     const modelSettings = await readModelSettings({

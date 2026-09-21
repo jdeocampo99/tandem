@@ -112,15 +112,18 @@ export type IsoTimestamp = string;
 
 export type InstructionChannel = "implementation" | "validation" | "review";
 
-export type ThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-  | "auto";
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "auto",
+] as const;
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 export type ModelSpec = {
   readonly model: string;
