@@ -2364,6 +2364,24 @@ test("pause treats a missing worker pane as already stopped", async () => {
   );
 });
 
+test("cancelled tasks clear settled stop intents after workers stop", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+    },
+    async ({ home, service }) => {
+      const cancelled = await service.cancel("task-1", "no longer needed");
+      expect(cancelled.stage).toBe("cancelled");
+      expect((await readRuntime(home)).tasks[0]?.stopRequest?.action).toBe("cancel");
+
+      await service.tick();
+
+      expect((await readRuntime(home)).tasks[0]?.stopRequest).toBeUndefined();
+    },
+  );
+});
+
 test("shutdown waits for an active scheduler tick to drain its launch proof", async () => {
   await withFixture(
     {

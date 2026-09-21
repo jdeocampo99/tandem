@@ -78,6 +78,16 @@ function runtimeTaskHasActiveState(runtime: RuntimeTaskState, sessionId: string)
     runtime.jobs.some((job) => job.endpoint?.sessionId === sessionId || activeRuntimeJob(job))
   );
 }
+function hasSettledTerminalStopIntent(task: TaskRecord, runtime: RuntimeTaskState): boolean {
+  return (
+    runtime.stopRequest !== undefined &&
+    (task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged") &&
+    runtime.endpoints.length === 0 &&
+    !runtime.jobs.some(activeRuntimeJob) &&
+    runtime.operation !== undefined &&
+    ["completed", "failed", "cancelled"].includes(runtime.operation.phase)
+  );
+}
 
 function runtimePresentationHasActiveState(
   runtime: RuntimePresentation,
@@ -100,7 +110,7 @@ function assertSafeTaskState(task: TaskRecord, runtime: RuntimeTaskState | undef
   if (runtime.endpointLaunch !== undefined) {
     throw new Error(`selected task ${JSON.stringify(task.id)} has a pending endpoint launch`);
   }
-  if (runtime.stopRequest !== undefined) {
+  if (runtime.stopRequest !== undefined && !hasSettledTerminalStopIntent(task, runtime)) {
     throw new Error(`selected task ${JSON.stringify(task.id)} has a pending stop intent`);
   }
   if (unreleasedReservation(runtime.reservation)) {

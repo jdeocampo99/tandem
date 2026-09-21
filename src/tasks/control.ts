@@ -863,6 +863,19 @@ export class TaskControlWorkflow {
       });
     });
   }
+  private async clearSettledStopRequest(taskId: string): Promise<void> {
+    await withStateLock(this.#deps.home, async () => {
+      await this.#deps.store.exclusive(async () => {
+        const state = await readRuntimeState(this.#deps.runtimePath);
+        const settled = replaceRuntimeTask(state, taskId, (current) => {
+          if (current.operation?.phase === "quarantined") return current;
+          const { stopRequest: _stopRequest, ...withoutStopRequest } = current;
+          return withoutStopRequest;
+        });
+        await writeRuntimeState(this.#deps.runtimePath, settled);
+      });
+    });
+  }
 
   async reconcileStopRequest(task: TaskRecord, runtime: RuntimeTaskState): Promise<void> {
     const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
@@ -904,13 +917,11 @@ export class TaskControlWorkflow {
       await this.#deps.reconcileJob(task, runtime, active);
       return;
     }
-    if (
-      task.stage === "paused" ||
-      task.stage === "blocked" ||
-      task.stage === "cancelled" ||
-      task.stage === "completed" ||
-      task.stage === "merged"
-    ) {
+    if (task.stage === "paused" || task.stage === "blocked") {
+      return;
+    }
+    if (task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged") {
+      await this.clearSettledStopRequest(task.id);
       return;
     }
     const event: TaskEvent =
