@@ -912,6 +912,7 @@ test("allows reset past a settled terminal stop intent but refuses a quarantined
         idFactory: () => "reset-task",
       });
       const seeded = await store.read("reset-task");
+      if (seeded === undefined) throw new Error("fixture task missing");
       await store.update(seeded.id, seeded.revision, (current) => ({
         ...current,
         stage: "cancelled",
