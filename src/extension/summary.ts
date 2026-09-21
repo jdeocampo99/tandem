@@ -5,6 +5,15 @@ import {
   MODEL_ROLE_ORDER,
   type TaskRecord,
 } from "../contracts.ts";
+import { USD_MICROS_PER_DOLLAR } from "../runtime/usage.ts";
+import type {
+  AdditionalCharges,
+  ElapsedMillis,
+  IncludedQuota,
+  RequestUsageReceipt,
+  TokenTotals,
+} from "../runtime/usage-receipt.ts";
+import { REQUEST_RECEIPT_SCHEMA_VERSION } from "../runtime/usage-receipt.ts";
 import { isPinnedEvidence } from "../tasks/acceptance.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import {
@@ -822,6 +831,92 @@ function summarizeRequestBrief(value: unknown): string {
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
+function isRequestUsageReceipt(value: unknown): value is RequestUsageReceipt {
+  const record = summaryRecord(value);
+  return (
+    record !== undefined &&
+    record.schemaVersion === REQUEST_RECEIPT_SCHEMA_VERSION &&
+    typeof record.requestId === "string"
+  );
+}
+
+function describeDuration(value: ElapsedMillis): string {
+  if (value === "unavailable") return "unavailable";
+  const totalSeconds = Math.round(value / 1_000);
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
+/** Never presents an unmeasured charge as zero, and never lets one read as a saving. */
+function describeCharges(charges: AdditionalCharges): string {
+  const amount = `${charges.currency} ${(charges.amountMicros / USD_MICROS_PER_DOLLAR).toFixed(6)}`;
+  const priced = charges.actualSamples + charges.estimatedSamples;
+  const counted =
+    priced === 0
+      ? `${amount} (no sample carried a price)`
+      : `${amount} from ${charges.actualSamples} actual and ${charges.estimatedSamples} estimated sample(s)`;
+  return charges.unavailableSamples === 0
+    ? counted
+    : `${counted}; ${charges.unavailableSamples} sample(s) unavailable and excluded rather than counted as zero`;
+}
+
+function describeTokens(tokens: TokenTotals): string {
+  const parts = [`${tokens.actualInputTokens} in / ${tokens.actualOutputTokens} out actual`];
+  if (tokens.estimatedInputTokens > 0 || tokens.estimatedOutputTokens > 0) {
+    parts.push(`${tokens.estimatedInputTokens} in / ${tokens.estimatedOutputTokens} out estimated`);
+  }
+  if (tokens.unavailableSamples > 0) {
+    parts.push(`${tokens.unavailableSamples} sample(s) unavailable`);
+  }
+  return parts.join("; ");
+}
+
+function describeQuota(quota: IncludedQuota): string {
+  const entries = quota.entries.map((entry) => `${entry.plan} ${entry.units} ${entry.unit}`);
+  const unavailable =
+    quota.unavailableSamples === 0
+      ? undefined
+      : `${quota.unavailableSamples} sample(s) unavailable`;
+  if (entries.length === 0) return unavailable ?? "none reported";
+  return unavailable === undefined
+    ? compactList(entries, ACTION_SUMMARY_MAX_ITEMS, 100)
+    : `${compactList(entries, ACTION_SUMMARY_MAX_ITEMS, 100)}; ${unavailable}`;
+}
+
+/**
+ * The compact receipt first, then the breakdown the caller can expand. Elapsed time comes only
+ * from the recorded intake and terminal facts, so concurrent workers are reported as overlap
+ * rather than added to the wall clock.
+ */
+function summarizeRequestReceipt(value: unknown): string {
+  if (!isRequestUsageReceipt(value)) return boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  const { timing, breakdown } = value;
+  const lines = [
+    `${value.requestId}: ${value.status}; elapsed ${describeDuration(timing.elapsedMs)} (intake ${timing.intakeAt} to terminal ${timing.terminalAt})`,
+    `Additional charges: ${describeCharges(value.charges)}`,
+    `Included quota: ${describeQuota(value.quota)}`,
+    `Tokens: ${describeTokens(value.tokens)}`,
+    `Active ${describeDuration(timing.activeMs)}; overlapping ${describeDuration(timing.overlappingMs)}; waiting or queued ${describeDuration(timing.waitingMs)}`,
+  ];
+  for (const total of breakdown.byWorkKind) {
+    lines.push(
+      `- ${total.workKind}: ${total.sampleCount} sample(s); active ${describeDuration(total.activeMs)}; ${total.retries} retry(ies); ${total.failures} failure(s); tokens ${describeTokens(total.tokens)}`,
+    );
+  }
+  for (const provider of breakdown.byProvider) {
+    lines.push(
+      `- ${provider.provider}/${provider.model}: ${provider.sampleCount} sample(s); ${provider.timedOutSamples} timed out; ${describeCharges(provider.charges)}`,
+    );
+  }
+  lines.push(
+    `Samples not listed: ${breakdown.omittedSamples}; duplicate receipts ignored: ${breakdown.duplicateSamples}; unreadable rows: ${breakdown.malformedSamples}`,
+  );
+  return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
+}
+
 function isNonEmptyEntry(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -872,6 +967,7 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   ) {
     return summarizeRequestBrief(value);
   }
+  if (action === "request-receipt") return summarizeRequestReceipt(value);
   if (action === "presentations" || action === "present" || action === "feedback") {
     return summarizePresentations(action, value);
   }

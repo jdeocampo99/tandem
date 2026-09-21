@@ -862,6 +862,56 @@ loses the brief: the durable record, its approved revision, its history, and eve
 it stay readable from SQLite, and the rendered Markdown is rewritten regardless. A pane receipt on
 its own never changes a task stage or task scope approval.
 
+### Request usage receipts and the accounting ledger
+
+Every durable request also has one accounting ledger: append-only facts in the
+`request_usage_events` table of the authoritative `<home>/state.sqlite`, joined to the request
+identity the brief owns. The ledger is the single owner of usage, cost, quota, and timing records
+for a request. It records facts and uncertainty only: nothing in it authorizes, pauses, retries, or
+blocks work, and a standing budget or in-flight admission control is a separate consumer that reads
+these records and enforces its own policy.
+
+```sh
+# through the coordinator's tandem tool
+{"request":{"action":"request-receipt","requestId":"req-..."}}
+```
+
+Four kinds of event are recorded, each keyed by a stable event identity derived from the durable
+records rather than from when it was observed. Replaying the same completion, worker, or provider
+receipt after a restart, a reconciliation, or a compaction reproduces the same key and is counted
+once; a distinct attempt carries a distinct operation or attempt identity and stays attributable.
+
+| Event | What it records |
+| --- | --- |
+| `intake` | The request's brief became durable. This is where the wall clock starts. |
+| `work` | One settled durable operation: its kind, role, task, job, operation, generation, and attempt. Work still in flight is not recorded, so it can never inflate a total. |
+| `provider-sample` | One provider call, with whatever that provider actually reported. |
+| `terminal` | The delivery, cancellation, or failure that settled the request, stamped at the transition that caused it. |
+
+Elapsed time is the wall time from intake to the terminal event, including research, interview,
+approval, queue, and recovery waits. It is never the sum of parallel worker durations: the receipt
+merges the accounted intervals into a union, reports the concurrency separately as overlapping time,
+and derives waiting time as elapsed minus active. Successful delivery ends at the verified-PR
+handoff, not at a later human merge, so a task reaching `merged` records no terminal event. A late
+cost receipt arriving after delivery updates the totals and is clamped out of the timing, so the
+recorded delivery time cannot move.
+
+Every token, charge, and quota figure carries its provenance. `actual` is what a provider reported,
+`estimated` names the method and source that produced it, and `unavailable` names one of a closed
+set of reasons. An unavailable figure is counted as an unavailable sample and excluded from the
+totals; it is never added as zero and never used to claim a saving. Tandem's child agents run
+interactive OMP, which reports no tokens, price, or allowance, so their work spans account for
+latency, identity, and outcome and say `no-provider-boundary` about the rest. Included subscription
+quota is recorded in the provider's own units and never converted into a dollar charge. Charges are
+held in integer USD micro-dollars so a receipt's totals do not drift when summed.
+
+Receipts are bounded and privacy-safe by construction: an event carries identities, enumerated
+statuses and reasons, timestamps, and counts. Labels are length-bounded and unknown fields are
+refused both when an event is written and when a stored row is read, so no raw prompt, provider
+payload, API key, repository content, or full action error can reach a receipt. A missing, stale, or
+malformed row is counted as an unreadable row and left visible on the receipt rather than dropped,
+and telemetry being unavailable never fails a receipt or a state transition.
+
 ### Post-research continuation disposition
 
 Every scout record carries a durable `researchContinuation` describing what its completed report
