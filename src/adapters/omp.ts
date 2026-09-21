@@ -26,6 +26,17 @@ function isThinkingLevel(value: string): value is ThinkingLevel {
   return THINKING_LEVELS[value] === true;
 }
 
+/**
+ * What one request on this model draws from a subscription's included allowance, in the
+ * provider's own units. It carries no currency: an included draw is quota consumption, and
+ * pricing it would invent a charge the provider never billed.
+ */
+export type OmpIncludedAllowance = Readonly<{
+  plan: string;
+  unit: string;
+  unitsPerRequest: number;
+}>;
+
 export type OmpModelRecord = Readonly<{
   selector: string;
   id: string;
@@ -34,10 +45,12 @@ export type OmpModelRecord = Readonly<{
   name?: string;
   reasoning?: boolean;
   contextWindow?: number;
+  /** Descriptive catalogue pricing; it is evidence about the model, not this account's rate. */
   cost?: Readonly<{
     input: number;
     output: number;
   }>;
+  includedAllowance?: OmpIncludedAllowance;
 }>;
 
 export type OmpModelListInput = Readonly<{
@@ -102,6 +115,34 @@ function optionalModelCost(
     );
   }
   return { input, output };
+}
+
+function optionalIncludedAllowance(
+  value: unknown,
+  field: string,
+  operation: string,
+  response: string,
+): OmpIncludedAllowance | undefined {
+  if (value === undefined || value === null) return undefined;
+  const allowance = requiredRecord(value, field, operation, response);
+  const unitsPerRequest = optionalNumber(
+    allowance.unitsPerRequest,
+    `${field}.unitsPerRequest`,
+    operation,
+    response,
+  );
+  if (unitsPerRequest === undefined) {
+    throw new AdapterProtocolError(
+      operation,
+      `${field} must report unitsPerRequest when present`,
+      response,
+    );
+  }
+  return {
+    plan: requiredString(allowance.plan, `${field}.plan`, operation, response),
+    unit: requiredString(allowance.unit, `${field}.unit`, operation, response),
+    unitsPerRequest,
+  };
 }
 
 function parseThinkingLevels(
@@ -173,6 +214,12 @@ function parseModelRecord(
     response,
   );
   const cost = optionalModelCost(record.cost, `models[${index}].cost`, operation, response);
+  const includedAllowance = optionalIncludedAllowance(
+    record.includedAllowance,
+    `models[${index}].includedAllowance`,
+    operation,
+    response,
+  );
   return {
     selector,
     id,
@@ -182,6 +229,7 @@ function parseModelRecord(
     ...(reasoning === undefined ? {} : { reasoning }),
     ...(contextWindow === undefined ? {} : { contextWindow }),
     ...(cost === undefined ? {} : { cost }),
+    ...(includedAllowance === undefined ? {} : { includedAllowance }),
   };
 }
 

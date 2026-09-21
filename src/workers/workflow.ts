@@ -19,11 +19,13 @@ import {
 import { EndpointOwnershipError, LeaseSafetyError } from "../adapters/primitives.ts";
 import { acquireWorktree } from "../adapters/treehouse.ts";
 import type {
+  AgentRole,
   Clock,
   CommandRunner,
   Endpoint,
   IdFactory,
   IsoTimestamp,
+  ModelSpec,
   ReviewLevelRecord,
   ReviewMode,
   TaskQuestion,
@@ -52,12 +54,15 @@ import {
 } from "../runtime/persistence.ts";
 import type {
   DurableEndpointLaunch,
+  DurableExecutionRouting,
+  DurableExecutionRoutingPause,
   DurableJob,
   DurableJobConsumption,
   DurableOperation,
   DurableOperationEffect,
   DurableOperationKind,
   DurableReservation,
+  ExecutionRoutingLimits,
   RuntimeState,
   RuntimeTaskState,
 } from "../runtime/schema.ts";
@@ -145,6 +150,17 @@ import {
   type ValidationResult,
 } from "../validation-worker.ts";
 import {
+  describeExecutionRoutingDecision,
+  type ExecutionRoutingBoundary,
+  type ExecutionSpendAdmission,
+  executionRoutingPauseStands,
+  type ModelCatalogueReader,
+  type ModelCatalogueSnapshot,
+  type PriorExecutionAttempt,
+  resolvedExecutionModel,
+  resolveExecutionRouting,
+} from "./execution-routing.ts";
+import {
   parseWorkerJob,
   readWorkerResult,
   type WorkerJob,
@@ -222,6 +238,62 @@ function claimOf(operation: DurableOperation | undefined): OperationClaim | unde
         claimOwner: operation.claimOwner,
       };
 }
+
+/** What one reservation needs routing resolved for, before its operation exists. */
+type RoutingAttempt = Readonly<{
+  readonly role: WorkerRole;
+  readonly operationId: string;
+  readonly jobId: string;
+  readonly inputHead: string;
+  readonly policyDigest: string;
+  readonly cwd: string;
+}>;
+
+/** Every operation this task has recorded for one role, oldest first. */
+function roleOperations(runtime: RuntimeTaskState, role: WorkerRole): readonly DurableOperation[] {
+  return [
+    ...(runtime.operationHistory ?? []),
+    ...(runtime.operation === undefined ? [] : [runtime.operation]),
+  ].filter((operation) => operation.role === role);
+}
+
+/** Which attempt this is for the role, counting every operation already recorded for it. */
+function attemptNumber(runtime: RuntimeTaskState, role: WorkerRole): number {
+  return roleOperations(runtime, role).length + 1;
+}
+
+/**
+ * How the last attempt for this role ended, as far as the durable record proves. A failed
+ * operation is a known safe failure: it settled and released what it held. A quarantined one is
+ * uncertain and stays that way. Anything else is not a replacement boundary at all.
+ */
+function priorExecutionAttempt(
+  runtime: RuntimeTaskState,
+  role: WorkerRole,
+  pinned: Readonly<Record<AgentRole, ModelSpec>>,
+): PriorExecutionAttempt | undefined {
+  const operations = roleOperations(runtime, role);
+  const last = operations[operations.length - 1];
+  if (last === undefined) return undefined;
+  if (last.phase !== "failed" && last.phase !== "quarantined") return undefined;
+  return {
+    operationId: last.id,
+    selector: last.routing?.selector ?? pinned[role].model,
+    outcome: last.phase === "failed" ? "known-safe-failure" : "uncertain",
+  };
+}
+
+function routingBoundary(prior: PriorExecutionAttempt | undefined): ExecutionRoutingBoundary {
+  return prior === undefined ? { kind: "job-launch" } : { kind: "replacement-attempt", prior };
+}
+
+function routingLimits(task: TaskRecord): ExecutionRoutingLimits {
+  return {
+    capMicros: task.policy.config.requestBudget.capMicros,
+    operationEstimateMicros: task.policy.config.requestBudget.operationEstimateMicros,
+    maxWorkers: task.policy.config.maxWorkers,
+  };
+}
 export type CurrentCheckout = Readonly<{
   readonly checkpoint: GitCheckpoint;
   readonly expectedHead: string;
@@ -261,6 +333,8 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly recordRequestUsage: (events: readonly RequestUsageEvent[]) => Promise<void>;
   /** Decides whether the next operation may spend under its request's standing budget. */
   readonly requestSpend: RequestSpendGate;
+  /** Reads catalogue tier evidence at an execution boundary; it never enables a provider. */
+  readonly readModelCatalogue: ModelCatalogueReader;
 }>;
 export class WorkerWorkflow {
   readonly #deps: WorkerWorkflowDependencies;
@@ -2626,7 +2700,10 @@ export class WorkerWorkflow {
         generation: task.generation,
         role,
         cwd: task.worktree.path,
-        model: task.policy.config.models[role],
+        model: resolvedExecutionModel(
+          reservedRuntime.operation?.routing,
+          task.policy.config.models[role],
+        ),
         prompt,
         resultPath: paths.resultPath,
         ...(reservedRuntime.operation === undefined
@@ -2783,7 +2860,7 @@ export class WorkerWorkflow {
       generation: task.generation,
       role,
       cwd: runtime.worktree?.path ?? taskSourcePath(task, runtime),
-      model: task.policy.config.models[role],
+      model: resolvedExecutionModel(runtime.operation?.routing, task.policy.config.models[role]),
       prompt,
       resultPath: paths.resultPath,
       ...(runtime.operation === undefined
@@ -3138,6 +3215,108 @@ export class WorkerWorkflow {
     }));
   }
 
+  /**
+   * Resolves which exact model this attempt may invoke, at the one boundary that decides it.
+   * Returns the transition to record on the admitting operation, or nothing when the task stops on
+   * a routing question, which it records once and never asks again while it still speaks.
+   */
+  private async resolveRouting(
+    store: TaskStoreTransaction,
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    attempt: RoutingAttempt,
+  ): Promise<DurableExecutionRouting | undefined> {
+    const identity = {
+      role: attempt.role,
+      generation: task.generation,
+      policyDigest: attempt.policyDigest,
+      inputHead: attempt.inputHead,
+    };
+    if (executionRoutingPauseStands(runtime.routingPause, identity)) return undefined;
+    const prior = priorExecutionAttempt(runtime, attempt.role, task.policy.config.models);
+    const decision = resolveExecutionRouting({
+      boundary: routingBoundary(prior),
+      identity: {
+        ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+        taskId: task.id,
+        jobId: attempt.jobId,
+        operationId: attempt.operationId,
+        role: attempt.role,
+        generation: task.generation,
+        attempt: attemptNumber(runtime, attempt.role),
+        policyDigest: attempt.policyDigest,
+        inputHead: attempt.inputHead,
+      },
+      pinned: task.policy.config.models[attempt.role],
+      catalogue: await this.readCatalogue(attempt.cwd),
+      limits: routingLimits(task),
+      admission: await this.admittedSpend(task),
+      now: this.#deps.clock(),
+    });
+    if (decision.outcome === "authorized") return decision.routing;
+    await this.stopTaskRouting(store, task, runtime, decision.pause);
+    return undefined;
+  }
+
+  /**
+   * The spending checkpoint's own outcome for this task, with what it observed deciding it. Routing
+   * is only ever resolved after admission succeeded, so this reads the exposure that admission was
+   * taken against rather than deciding anything again.
+   */
+  private async admittedSpend(task: TaskRecord): Promise<ExecutionSpendAdmission> {
+    const requestId = task.requestId;
+    if (requestId === undefined) return { status: "no-governing-request" };
+    const readout = await this.#deps.requestSpend.readSpend(requestId);
+    return {
+      status: readout.pause === undefined ? "admitted" : "paused",
+      exposure: {
+        unaccountedSamples: readout.exposure.unaccountedSamples,
+        unmeasuredTokenSamples: readout.exposure.unmeasuredTokenSamples,
+      },
+    };
+  }
+
+  /** Reads catalogue evidence without letting a boundary failure decide anything by itself. */
+  private async readCatalogue(cwd: string): Promise<ModelCatalogueSnapshot> {
+    try {
+      return await this.#deps.readModelCatalogue(cwd);
+    } catch {
+      return { status: "unavailable", reason: "catalogue-unreadable" };
+    }
+  }
+
+  /**
+   * Stops one task on a routing question, recording it before anything else for that task can be
+   * admitted and notifying the coordinator only for the admission that raised it.
+   */
+  private async stopTaskRouting(
+    store: TaskStoreTransaction,
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    pause: DurableExecutionRoutingPause,
+  ): Promise<void> {
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    await writeRuntimeState(
+      this.#deps.runtimePath,
+      replaceRuntimeTask(state, task.id, (current) => ({ ...current, routingPause: pause })),
+    );
+    if (runtime.routingPause?.decisionId === pause.decisionId) return;
+    await store.update(task.id, task.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: this.#deps.clock(),
+      notifications: [
+        ...current.notifications,
+        {
+          id: singleLine(this.#deps.idFactory(), "routing decision notification id"),
+          message: describeExecutionRoutingDecision(pause),
+          acknowledged: false,
+          kind: "coordinator" as const,
+        },
+      ],
+    }));
+  }
+
   async reserveTask(
     taskId: string,
     role: WorkerRole | "validation",
@@ -3222,6 +3401,19 @@ export class WorkerWorkflow {
             `fix-context-${targetTask.generation}.json`,
           )
         : undefined;
+      const policyDigest = policyIdentity(targetTask.policy);
+      const routing =
+        role === "validation"
+          ? undefined
+          : await this.resolveRouting(store, targetTask, runtime, {
+              role,
+              operationId,
+              jobId,
+              inputHead,
+              policyDigest,
+              cwd: runtime.worktree?.path ?? taskSourcePath(targetTask, runtime),
+            });
+      if (routing === undefined && role !== "validation") return undefined;
       const operation = {
         ...durableOperation(
           operationId,
@@ -3230,13 +3422,14 @@ export class WorkerWorkflow {
           role,
           targetTask.generation,
           inputHead,
-          policyIdentity(targetTask.policy),
+          policyDigest,
           targetTask.communication?.revision ?? 0,
           jobId,
           this.#claimOwner,
           this.#deps.clock(),
         ),
         phase: "admitted" as const,
+        ...(routing === undefined ? {} : { routing }),
         ...(isFix
           ? {
               fixContext: {
@@ -3255,8 +3448,9 @@ export class WorkerWorkflow {
         this.#deps.clock(),
         operation.id,
       );
+      const { routingPause: _answered, ...admittedRuntime } = runtime;
       const nextRuntime = {
-        ...runtime,
+        ...admittedRuntime,
         operation,
         ...(runtime.operation === undefined
           ? {}

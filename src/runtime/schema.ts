@@ -1,15 +1,23 @@
 import { isAbsolute, resolve } from "node:path";
 import type { GitCheckpoint } from "../adapters/git.ts";
+import {
+  MODEL_TIER_EVIDENCE_GAPS,
+  MODEL_TIER_PREMIUM_AXES,
+  type ModelTierAxisRelation,
+  type ModelTierEvidenceGap,
+  type ModelTierPremiumAxis,
+} from "../config/model-tier.ts";
 import type {
   Endpoint,
   Finding,
   IsoTimestamp,
   ReviewLens,
   ReviewMode,
+  ThinkingLevel,
   ValidationContractName,
   WorktreeLease,
 } from "../contracts.ts";
-import { MODEL_ROLE_ORDER } from "../contracts.ts";
+import { MODEL_ROLE_ORDER, THINKING_LEVELS } from "../contracts.ts";
 import type { EscalationReason } from "../tasks/acceptance.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 
@@ -47,6 +55,133 @@ export type DurableOperationEffect = Readonly<{
   readonly receipt?: string;
 }>;
 
+/**
+ * How an attempt's exact model came to be authorized. `pinned-policy` is the role assignment the
+ * repository pinned; `comparable-reassignment` is the one automatic move, taken only after a known
+ * safe failure and only on proven same-or-lower tier evidence. A premium move is never one of
+ * these: it is a question, not a basis.
+ */
+export const EXECUTION_ROUTING_BASES = ["pinned-policy", "comparable-reassignment"] as const;
+
+export type ExecutionRoutingBasis = (typeof EXECUTION_ROUTING_BASES)[number];
+
+/** Whether the tier evidence behind a routing choice was actually read at the boundary. */
+export const EXECUTION_ROUTING_EVIDENCE_SOURCES = [
+  "catalogue-read",
+  "catalogue-unavailable",
+] as const;
+
+export type ExecutionRoutingEvidenceSource = (typeof EXECUTION_ROUTING_EVIDENCE_SOURCES)[number];
+
+/** Where the usage evidence behind a routing choice came from, or that there was none to read. */
+export const EXECUTION_ROUTING_USAGE_SOURCES = ["request-ledger", "no-governing-request"] as const;
+
+export type ExecutionRoutingUsageSource = (typeof EXECUTION_ROUTING_USAGE_SOURCES)[number];
+
+/** The configured limits a routing choice was taken under, recorded as they stood. */
+export type ExecutionRoutingLimits = Readonly<{
+  readonly capMicros: number | "unset";
+  readonly operationEstimateMicros: number | "unset";
+  readonly maxWorkers: number;
+}>;
+
+/**
+ * What the boundary knew about the two models it placed against each other, and how much of the
+ * request's own spending nobody could observe. The sample counts are present exactly when a
+ * governing request's ledger was read; they are what makes unmeasured work visible in the record
+ * instead of leaving a charged total to be misread as a measurement.
+ */
+export type ExecutionRoutingEvidence = Readonly<{
+  readonly source: ExecutionRoutingEvidenceSource;
+  readonly catalogueReadAt?: IsoTimestamp;
+  /** Providers explicitly enabled for spending; catalogue discovery alone never adds one. */
+  readonly enabledProviders: readonly string[];
+  readonly costRelation?: ModelTierAxisRelation;
+  readonly quotaRelation?: ModelTierAxisRelation;
+  readonly includedAllowancePlan?: string;
+  readonly usageSource: ExecutionRoutingUsageSource;
+  readonly unaccountedSamples?: number;
+  readonly unmeasuredTokenSamples?: number;
+}>;
+
+/**
+ * The recorded execution transition that authorizes one attempt's exact model. Job construction
+ * writes it onto the operation that admitted the attempt and the execution gate reads it back; an
+ * audit effect describing a model change never stands in for it, and it speaks only for the
+ * operation, generation, HEAD, and pinned policy it names.
+ */
+export type DurableExecutionRouting = Readonly<{
+  readonly schemaVersion: 1;
+  readonly decisionId: string;
+  readonly basis: ExecutionRoutingBasis;
+  readonly requestId?: string;
+  readonly taskId: string;
+  readonly jobId: string;
+  readonly operationId: string;
+  readonly role: WorkerRole;
+  readonly generation: number;
+  readonly attempt: number;
+  readonly policyDigest: string;
+  readonly inputHead: string;
+  readonly provider: string;
+  readonly selector: string;
+  readonly thinking: ThinkingLevel;
+  /** The model this transition moves away from; present only on an actual model change. */
+  readonly replaces?: Readonly<{
+    readonly selector: string;
+    readonly thinking: ThinkingLevel;
+  }>;
+  readonly evidence: ExecutionRoutingEvidence;
+  readonly limits: ExecutionRoutingLimits;
+  readonly resolvedAt: IsoTimestamp;
+}>;
+
+export const EXECUTION_ROUTING_PAUSE_REASONS = [
+  "spending-decision-pending",
+  "prior-outcome-uncertain",
+  "pinned-model-absent-from-catalogue",
+  "pinned-model-ambiguous-in-catalogue",
+  "pinned-model-thinking-level-unsupported",
+  "premium-tier-requires-approval",
+  "tier-evidence-indeterminate",
+  "usage-evidence-unmeasured",
+] as const;
+
+export type ExecutionRoutingPauseReason = (typeof EXECUTION_ROUTING_PAUSE_REASONS)[number];
+
+/**
+ * The durable question one task's routing is stopped on. It is written once and read by every
+ * later reservation, so the same question costs nothing to repeat and is never asked twice. It
+ * stops speaking when the pinned policy, generation, or input HEAD moves under it.
+ */
+export type DurableExecutionRoutingPause = Readonly<{
+  readonly schemaVersion: 1;
+  readonly decisionId: string;
+  readonly reason: ExecutionRoutingPauseReason;
+  readonly taskId: string;
+  readonly jobId: string;
+  readonly operationId: string;
+  readonly role: WorkerRole;
+  readonly generation: number;
+  readonly attempt: number;
+  readonly policyDigest: string;
+  readonly inputHead: string;
+  readonly pinnedSelector: string;
+  readonly pinnedThinking: ThinkingLevel;
+  /** The candidate the question is about, when the boundary identified one. */
+  readonly candidateSelector?: string;
+  readonly candidateProvider?: string;
+  readonly premiumAxis?: ModelTierPremiumAxis;
+  readonly evidenceGaps: readonly ModelTierEvidenceGap[];
+  readonly enabledProviders: readonly string[];
+  readonly usageSource: ExecutionRoutingUsageSource;
+  /** Work under this request whose cost or tokens nobody reported; present with a read ledger. */
+  readonly unaccountedSamples?: number;
+  readonly unmeasuredTokenSamples?: number;
+  readonly limits: ExecutionRoutingLimits;
+  readonly observedAt: IsoTimestamp;
+}>;
+
 export type DurableOperation = Readonly<{
   readonly schemaVersion: 1;
   readonly id: string;
@@ -69,6 +204,8 @@ export type DurableOperation = Readonly<{
   readonly claimOwner: string;
   readonly createdAt: IsoTimestamp;
   readonly effects: readonly DurableOperationEffect[];
+  /** The execution transition authorizing this attempt's exact model; absent means the pinned one. */
+  readonly routing?: DurableExecutionRouting;
   readonly resultConsumedAt?: IsoTimestamp;
   readonly error?: string;
 }>;
@@ -167,6 +304,8 @@ export type RuntimeTaskState = Readonly<{
   readonly taskName: string;
   readonly operation?: DurableOperation;
   readonly operationHistory?: readonly DurableOperation[];
+  /** The routing question this task is stopped on, until its policy, generation, or HEAD moves. */
+  readonly routingPause?: DurableExecutionRoutingPause;
   readonly reservation?: DurableReservation;
   readonly endpointLaunch?: DurableEndpointLaunch;
   readonly stopRequest?: DurableStopRequest;
@@ -357,6 +496,172 @@ function enumValue<Value extends string>(
   }
   return value as Value;
 }
+const WORKER_ROLES = ["scout", "implementer", "reviewer", "verifier", "presentation"] as const;
+
+function parseRoutingLimits(value: unknown, field: string): ExecutionRoutingLimits {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  return {
+    capMicros: optionalMicroDollars(value.capMicros, `${field}.capMicros`),
+    operationEstimateMicros: optionalMicroDollars(
+      value.operationEstimateMicros,
+      `${field}.operationEstimateMicros`,
+    ),
+    maxWorkers: positiveInteger(value.maxWorkers, `${field}.maxWorkers`),
+  };
+}
+
+function parseProviderList(value: unknown, field: string): readonly string[] {
+  if (!Array.isArray(value)) throw new TypeError(`${field} must be an array`);
+  return value.map((entry, index) => singleLine(entry, `${field}[${index}]`));
+}
+
+function parseAxisRelation(value: unknown, field: string): ModelTierAxisRelation | undefined {
+  return value === undefined
+    ? undefined
+    : enumValue(value, ["lower", "equal", "higher"] as const, field);
+}
+
+/** The observed sample counts, present together exactly when a governing request's ledger was read. */
+function parseObservedSamples(
+  value: Record<string, unknown>,
+  field: string,
+): Readonly<{ unaccountedSamples?: number; unmeasuredTokenSamples?: number }> {
+  const source = enumValue(
+    value.usageSource,
+    EXECUTION_ROUTING_USAGE_SOURCES,
+    `${field}.usageSource`,
+  );
+  if (source === "no-governing-request") return {};
+  return {
+    unaccountedSamples: nonNegativeInteger(value.unaccountedSamples, `${field}.unaccountedSamples`),
+    unmeasuredTokenSamples: nonNegativeInteger(
+      value.unmeasuredTokenSamples,
+      `${field}.unmeasuredTokenSamples`,
+    ),
+  };
+}
+
+function parseRoutingEvidence(value: unknown, field: string): ExecutionRoutingEvidence {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  const catalogueReadAt =
+    value.catalogueReadAt === undefined
+      ? undefined
+      : singleLine(value.catalogueReadAt, `${field}.catalogueReadAt`);
+  const costRelation = parseAxisRelation(value.costRelation, `${field}.costRelation`);
+  const quotaRelation = parseAxisRelation(value.quotaRelation, `${field}.quotaRelation`);
+  const includedAllowancePlan =
+    value.includedAllowancePlan === undefined
+      ? undefined
+      : singleLine(value.includedAllowancePlan, `${field}.includedAllowancePlan`);
+  return {
+    source: enumValue(value.source, EXECUTION_ROUTING_EVIDENCE_SOURCES, `${field}.source`),
+    ...(catalogueReadAt === undefined ? {} : { catalogueReadAt }),
+    enabledProviders: parseProviderList(value.enabledProviders, `${field}.enabledProviders`),
+    ...(costRelation === undefined ? {} : { costRelation }),
+    ...(quotaRelation === undefined ? {} : { quotaRelation }),
+    ...(includedAllowancePlan === undefined ? {} : { includedAllowancePlan }),
+    usageSource: enumValue(
+      value.usageSource,
+      EXECUTION_ROUTING_USAGE_SOURCES,
+      `${field}.usageSource`,
+    ),
+    ...parseObservedSamples(value, field),
+  };
+}
+
+function parseExecutionRouting(value: unknown, field: string): DurableExecutionRouting {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  const requestId =
+    value.requestId === undefined ? undefined : singleLine(value.requestId, `${field}.requestId`);
+  const replaces =
+    value.replaces === undefined
+      ? undefined
+      : (() => {
+          if (!isRecord(value.replaces)) {
+            throw new TypeError(`${field}.replaces must be an object`);
+          }
+          return {
+            selector: singleLine(value.replaces.selector, `${field}.replaces.selector`),
+            thinking: enumValue(
+              value.replaces.thinking,
+              THINKING_LEVELS,
+              `${field}.replaces.thinking`,
+            ),
+          };
+        })();
+  return {
+    schemaVersion: 1,
+    decisionId: singleLine(value.decisionId, `${field}.decisionId`),
+    basis: enumValue(value.basis, EXECUTION_ROUTING_BASES, `${field}.basis`),
+    ...(requestId === undefined ? {} : { requestId }),
+    taskId: singleLine(value.taskId, `${field}.taskId`),
+    jobId: singleLine(value.jobId, `${field}.jobId`),
+    operationId: singleLine(value.operationId, `${field}.operationId`),
+    role: enumValue(value.role, WORKER_ROLES, `${field}.role`),
+    generation: nonNegativeInteger(value.generation, `${field}.generation`),
+    attempt: positiveInteger(value.attempt, `${field}.attempt`),
+    policyDigest: singleLine(value.policyDigest, `${field}.policyDigest`),
+    inputHead: singleLine(value.inputHead, `${field}.inputHead`),
+    provider: singleLine(value.provider, `${field}.provider`),
+    selector: singleLine(value.selector, `${field}.selector`),
+    thinking: enumValue(value.thinking, THINKING_LEVELS, `${field}.thinking`),
+    ...(replaces === undefined ? {} : { replaces }),
+    evidence: parseRoutingEvidence(value.evidence, `${field}.evidence`),
+    limits: parseRoutingLimits(value.limits, `${field}.limits`),
+    resolvedAt: singleLine(value.resolvedAt, `${field}.resolvedAt`),
+  };
+}
+
+function parseRoutingPause(value: unknown, field: string): DurableExecutionRoutingPause {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  if (!Array.isArray(value.evidenceGaps)) {
+    throw new TypeError(`${field}.evidenceGaps must be an array`);
+  }
+  const candidateSelector =
+    value.candidateSelector === undefined
+      ? undefined
+      : singleLine(value.candidateSelector, `${field}.candidateSelector`);
+  const candidateProvider =
+    value.candidateProvider === undefined
+      ? undefined
+      : singleLine(value.candidateProvider, `${field}.candidateProvider`);
+  const premiumAxis =
+    value.premiumAxis === undefined
+      ? undefined
+      : enumValue(value.premiumAxis, MODEL_TIER_PREMIUM_AXES, `${field}.premiumAxis`);
+  return {
+    schemaVersion: 1,
+    decisionId: singleLine(value.decisionId, `${field}.decisionId`),
+    reason: enumValue(value.reason, EXECUTION_ROUTING_PAUSE_REASONS, `${field}.reason`),
+    taskId: singleLine(value.taskId, `${field}.taskId`),
+    jobId: singleLine(value.jobId, `${field}.jobId`),
+    operationId: singleLine(value.operationId, `${field}.operationId`),
+    role: enumValue(value.role, WORKER_ROLES, `${field}.role`),
+    generation: nonNegativeInteger(value.generation, `${field}.generation`),
+    attempt: positiveInteger(value.attempt, `${field}.attempt`),
+    policyDigest: singleLine(value.policyDigest, `${field}.policyDigest`),
+    inputHead: singleLine(value.inputHead, `${field}.inputHead`),
+    pinnedSelector: singleLine(value.pinnedSelector, `${field}.pinnedSelector`),
+    pinnedThinking: enumValue(value.pinnedThinking, THINKING_LEVELS, `${field}.pinnedThinking`),
+    ...(candidateSelector === undefined ? {} : { candidateSelector }),
+    ...(candidateProvider === undefined ? {} : { candidateProvider }),
+    ...(premiumAxis === undefined ? {} : { premiumAxis }),
+    evidenceGaps: value.evidenceGaps.map(
+      (entry, index): ModelTierEvidenceGap =>
+        enumValue(entry, MODEL_TIER_EVIDENCE_GAPS, `${field}.evidenceGaps[${index}]`),
+    ),
+    enabledProviders: parseProviderList(value.enabledProviders, `${field}.enabledProviders`),
+    usageSource: enumValue(
+      value.usageSource,
+      EXECUTION_ROUTING_USAGE_SOURCES,
+      `${field}.usageSource`,
+    ),
+    ...parseObservedSamples(value, field),
+    limits: parseRoutingLimits(value.limits, `${field}.limits`),
+    observedAt: singleLine(value.observedAt, `${field}.observedAt`),
+  };
+}
+
 function parseOperationEffect(value: unknown, field: string): DurableOperationEffect {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   const identity =
@@ -385,6 +690,10 @@ function parseOperation(value: unknown, field: string): DurableOperation {
       ? undefined
       : singleLine(value.resultConsumedAt, `${field}.resultConsumedAt`);
   const error = value.error === undefined ? undefined : text(value.error, `${field}.error`);
+  const routing =
+    value.routing === undefined
+      ? undefined
+      : parseExecutionRouting(value.routing, `${field}.routing`);
   const fixContext =
     value.fixContext === undefined
       ? undefined
@@ -460,6 +769,7 @@ function parseOperation(value: unknown, field: string): DurableOperation {
     effects: value.effects.map((entry, index) =>
       parseOperationEffect(entry, `${field}.effects[${index}]`),
     ),
+    ...(routing === undefined ? {} : { routing }),
     ...(resultConsumedAt === undefined ? {} : { resultConsumedAt }),
     ...(error === undefined ? {} : { error }),
   };
@@ -706,6 +1016,10 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
         : value.operationHistory.map((entry, index) =>
             parseOperation(entry, `${field}.operationHistory[${index}]`),
           );
+  const routingPause =
+    value.routingPause === undefined
+      ? undefined
+      : parseRoutingPause(value.routingPause, `${field}.routingPause`);
   const reservation =
     value.reservation === undefined
       ? undefined
@@ -824,6 +1138,7 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
     taskName: singleLine(value.taskName, `${field}.taskName`),
     ...(operation === undefined ? {} : { operation }),
     ...(operationHistory === undefined ? {} : { operationHistory }),
+    ...(routingPause === undefined ? {} : { routingPause }),
     ...(reservation === undefined ? {} : { reservation }),
     ...(endpointLaunch === undefined ? {} : { endpointLaunch }),
     ...(stopRequest === undefined ? {} : { stopRequest }),

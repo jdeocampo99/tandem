@@ -2,8 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { InstructionChannels, ResolvedPolicy } from "../../src/contracts.ts";
+import type { InstructionChannels, ModelSpec, ResolvedPolicy } from "../../src/contracts.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
+import type { DurableExecutionRouting, DurableOperation } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { runWorkerJob } from "../../src/worker.ts";
 import { claimExecutionStart, type ExecutionGateInput } from "../../src/workers/execution-gate.ts";
@@ -116,9 +117,163 @@ async function fixture() {
     command: "worker",
     cwd: home,
     resultPath,
+    resolvedModel: policy.config.models.implementer,
   };
   return { home, input, store, task };
 }
+
+const REASSIGNED: ModelSpec = { model: "provider/comparable", thinking: "max" };
+
+function reassignmentRouting(
+  generation: number,
+  overrides: Partial<DurableExecutionRouting> = {},
+): DurableExecutionRouting {
+  return {
+    schemaVersion: 1,
+    decisionId: "routing-1",
+    basis: "comparable-reassignment",
+    taskId: "task-1",
+    jobId: "job-1",
+    operationId: "operation-1",
+    role: "implementer",
+    generation,
+    attempt: 2,
+    policyDigest: "policy",
+    inputHead: "head",
+    provider: "provider",
+    selector: REASSIGNED.model,
+    thinking: REASSIGNED.thinking,
+    replaces: { selector: "provider/implementer", thinking: "max" },
+    evidence: {
+      source: "catalogue-read",
+      catalogueReadAt: "2030-01-01T00:00:00.000Z",
+      enabledProviders: ["provider"],
+      costRelation: "equal",
+      quotaRelation: "lower",
+      usageSource: "request-ledger",
+      unaccountedSamples: 0,
+      unmeasuredTokenSamples: 0,
+    },
+    limits: { capMicros: "unset", operationEstimateMicros: "unset", maxWorkers: 2 },
+    resolvedAt: "2030-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+async function reviseOperation(
+  home: string,
+  revise: (operation: DurableOperation) => DurableOperation,
+): Promise<void> {
+  const state = await readRuntimeState(runtimeFile(home));
+  await writeRuntimeState(runtimeFile(home), {
+    ...state,
+    tasks: state.tasks.map((entry) =>
+      entry.operation === undefined ? entry : { ...entry, operation: revise(entry.operation) },
+    ),
+  });
+}
+
+test("an audit record of a model change never admits the changed model", async () => {
+  const { home, input } = await fixture();
+  try {
+    await reviseOperation(home, (operation) => ({
+      ...operation,
+      effects: [
+        {
+          id: "audit-1",
+          kind: "worker",
+          phase: "intent",
+          createdAt: "2030-01-01T00:00:00.000Z",
+          identity: `model change to ${REASSIGNED.model}`,
+        },
+      ],
+    }));
+
+    const outcome = await claimExecutionStart({ ...input, resolvedModel: REASSIGNED });
+
+    expect(outcome.admitted).toBe(false);
+    expect(outcome.reason).toContain("no execution transition authorizes it");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("a recorded execution transition admits exactly the model it names", async () => {
+  const { home, input } = await fixture();
+  try {
+    await reviseOperation(home, (operation) => ({
+      ...operation,
+      routing: reassignmentRouting(operation.generation),
+    }));
+
+    const pinned = await claimExecutionStart(input);
+    expect(pinned.admitted).toBe(false);
+    expect(pinned.reason).toContain("does not match the recorded execution transition");
+
+    const reassigned = await claimExecutionStart({ ...input, resolvedModel: REASSIGNED });
+    expect(reassigned.admitted).toBe(true);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("a transition established against another generation is stale", async () => {
+  const { home, input } = await fixture();
+  try {
+    await reviseOperation(home, (operation) => ({
+      ...operation,
+      routing: reassignmentRouting(operation.generation + 1),
+    }));
+
+    const outcome = await claimExecutionStart({ ...input, resolvedModel: REASSIGNED });
+
+    expect(outcome.admitted).toBe(false);
+    expect(outcome.reason).toContain("stale");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("a worker entrypoint runs the exact model its transition authorized", async () => {
+  const { home, input } = await fixture();
+  try {
+    await reviseOperation(home, (operation) => ({
+      ...operation,
+      routing: reassignmentRouting(operation.generation),
+    }));
+    const jobPath = join(home, "routed-job.json");
+    await writeFile(
+      jobPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "job-1",
+        taskId: "task-1",
+        generation: input.generation,
+        role: "implementer",
+        cwd: home,
+        model: REASSIGNED,
+        prompt: "run",
+        resultPath: input.resultPath,
+        execution: input.execution,
+      }),
+    );
+
+    const invocations: string[] = [];
+    await runWorkerJob(jobPath, {
+      run: async (request) => {
+        invocations.push(request.argv.join(" "));
+        return 0;
+      },
+    });
+
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]).toContain(
+      `--model ${REASSIGNED.model} --thinking ${REASSIGNED.thinking}`,
+    );
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
 
 test("concurrent worker entrypoints persist exactly one execution claim", async () => {
   const { home, input } = await fixture();
