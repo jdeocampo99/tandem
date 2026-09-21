@@ -7,9 +7,11 @@ import {
   type JevEvaluationOptions,
   type JevEvaluationResponse,
   type JevQuestions,
+  jevUsageRecord,
 } from "../adapters/typesafe.ts";
 import type { ReviewLevel, ReviewLevelPolicy, ReviewLevelRecord } from "../contracts.ts";
 import type { DiagnosticValue } from "../runtime/diagnostics.ts";
+import type { UsageRecord } from "../runtime/usage.ts";
 import type { AdvisoryReviewLead } from "./review-brief.ts";
 import type { ChangedFileObservation } from "./review-levels.ts";
 
@@ -93,6 +95,8 @@ export type ReviewAssistanceOutcome = Readonly<{
   readonly cached: boolean;
   readonly identity?: ReviewAssistanceIdentity;
   readonly resultIdentity?: string;
+  /** Bounded provider usage; present only when this call actually reached the provider. */
+  readonly usage?: UsageRecord;
 }>;
 
 export type JevEvaluator = (
@@ -106,11 +110,15 @@ export type ReviewAssistanceCache = Readonly<{
   readonly write: (identity: ReviewAssistanceIdentity, response: JevEvaluationResponse) => void;
 }>;
 
+/** A monotonic duration clock, injected so a recorded provider duration is never an ambient read. */
+export type ReviewAssistanceClock = () => number;
+
 export type ReviewAssistanceRuntime = Readonly<{
   readonly apiKey?: string;
   readonly timeoutMs: number;
   readonly evaluate: JevEvaluator;
   readonly cache: ReviewAssistanceCache;
+  readonly now: ReviewAssistanceClock;
   readonly recordDiagnostic: (
     event: string,
     details: Readonly<Record<string, DiagnosticValue>>,
@@ -369,6 +377,7 @@ export async function requestReviewAssistance(
     };
   }
 
+  const startedAt = runtime.now();
   let response: JevEvaluationResponse;
   try {
     response = await runtime.evaluate(input, {
@@ -376,6 +385,7 @@ export async function requestReviewAssistance(
       timeoutMs: runtime.timeoutMs,
     });
   } catch (error) {
+    const code = error instanceof JevEvaluationError ? error.code : "unavailable";
     const reason = error instanceof JevEvaluationError ? `jev-${error.code}` : "jev-error";
     await runtime.recordDiagnostic("review-level-assistance-failed", {
       reason,
@@ -392,9 +402,15 @@ export async function requestReviewAssistance(
       refusals: screened.refusals,
       cached: false,
       identity,
+      usage: jevUsageRecord({
+        outcome: { kind: "failed", code },
+        durationMs: elapsedMs(startedAt, runtime.now()),
+        reason,
+      }),
     };
   }
 
+  const durationMs = elapsedMs(startedAt, runtime.now());
   runtime.cache.write(identity, response);
   const interpreted = interpretReviewAssistance({ response, identity, source: request.source });
   await runtime.recordDiagnostic("review-level-assistance-answered", {
@@ -414,7 +430,16 @@ export async function requestReviewAssistance(
     cached: false,
     identity,
     resultIdentity: interpreted.resultIdentity,
+    usage: jevUsageRecord({
+      outcome: { kind: "answered", usage: response.usage },
+      durationMs,
+      reason: "review-level-assistance-answered",
+    }),
   };
+}
+
+function elapsedMs(startedAt: number, endedAt: number): number {
+  return Math.max(0, Math.round(endedAt - startedAt));
 }
 
 /** The default runtime: the one existing Jev transport, a fresh cache, and no diagnostics sink. */
@@ -424,6 +449,7 @@ export function reviewAssistanceRuntime(
     readonly timeoutMs: number;
     readonly evaluate?: JevEvaluator;
     readonly cache?: ReviewAssistanceCache;
+    readonly now?: ReviewAssistanceClock;
     readonly recordDiagnostic?: ReviewAssistanceRuntime["recordDiagnostic"];
   }>,
 ): ReviewAssistanceRuntime {
@@ -431,6 +457,7 @@ export function reviewAssistanceRuntime(
     timeoutMs: input.timeoutMs,
     evaluate: input.evaluate ?? evaluateJev,
     cache: input.cache ?? createReviewAssistanceCache(),
+    now: input.now ?? (() => performance.now()),
     recordDiagnostic: input.recordDiagnostic ?? (async () => undefined),
     ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),
   };

@@ -1,4 +1,9 @@
 import { TextDecoder } from "node:util";
+import {
+  JEV_PRICING_SNAPSHOT,
+  USAGE_RECORD_SCHEMA_VERSION,
+  type UsageRecord,
+} from "../runtime/usage.ts";
 
 const TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const JEV_MODEL = "jev-1.13.0" as const;
@@ -77,6 +82,47 @@ export class JevEvaluationError extends Error {
     this.name = "JevEvaluationError";
     this.code = code;
   }
+}
+
+/** How one Jev call ended, which is what decides whether its token counts exist at all. */
+export type JevAttemptOutcome =
+  | Readonly<{ readonly kind: "answered"; readonly usage: JevUsage }>
+  | Readonly<{ readonly kind: "failed"; readonly code: JevEvaluationError["code"] }>;
+
+/**
+ * The bounded usage record for one Jev call, so every caller of this boundary describes its
+ * provider usage the same way. A call that never answered reports unavailable token counts
+ * rather than zero, which would read as a call that used nothing.
+ */
+export function jevUsageRecord(
+  attempt: Readonly<{
+    readonly outcome: JevAttemptOutcome;
+    readonly durationMs: number;
+    readonly reason: string;
+  }>,
+): UsageRecord {
+  const shared = {
+    schemaVersion: USAGE_RECORD_SCHEMA_VERSION,
+    provider: JEV_PROVIDER,
+    model: JEV_MODEL,
+    durationMs: attempt.durationMs,
+    reason: attempt.reason,
+    pricing: JEV_PRICING_SNAPSHOT,
+  } as const;
+  if (attempt.outcome.kind === "answered") {
+    return {
+      ...shared,
+      inputTokens: attempt.outcome.usage.input_tokens,
+      outputTokens: attempt.outcome.usage.output_tokens,
+      timedOut: false,
+    };
+  }
+  return {
+    ...shared,
+    inputTokens: "unavailable",
+    outputTokens: "unavailable",
+    timedOut: attempt.outcome.code === "timeout",
+  };
 }
 
 function fail(code: JevEvaluationError["code"], message: string): never {
