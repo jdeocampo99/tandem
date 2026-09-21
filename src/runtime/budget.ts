@@ -3,12 +3,15 @@
  * reserved, and whether the next spend-bearing operation may start.
  *
  * Everything here is pure arithmetic over durable records and the accounting ledger's own totals.
- * It decides; it never locks, persists, launches, or notifies. The only two outcomes are running
- * the next operation exactly as planned or stopping the whole request for one explicit decision:
- * nothing here switches a model tier, drops a check, narrows review, or replans.
+ * It decides; it never locks, persists, launches, or notifies. Under a cap the only two outcomes
+ * are running the next operation exactly as planned or stopping the whole request for one explicit
+ * decision: nothing here switches a model tier, drops a check, narrows review, or replans. A
+ * request no cap governs is not decided here at all.
  *
  * Money is integer USD micro-dollars throughout. `"unset"` is an amount nobody configured and
- * `"unavailable"` is an amount nobody reported; neither is zero, and neither is unlimited.
+ * `"unavailable"` is an amount nobody reported; neither is zero, and neither is unlimited. An unset
+ * cap configures no governance rather than an unlimited one; an unset estimate under a configured
+ * cap is exposure nobody can bound, and stops the request.
  */
 
 import { createHash } from "node:crypto";
@@ -55,13 +58,14 @@ export type RequestSpendIdentity = Readonly<{
   readonly briefRevision: number;
 }>;
 
-/** The cap in force, or the explicit absence of one. Absence never means unlimited. */
-export type RequestSpendCap =
-  | Readonly<{
-      readonly source: RequestSpendCapPin["source"];
-      readonly capMicros: number;
-    }>
-  | Readonly<{ readonly source: "none" }>;
+/** A cap that actually governs spending, and where it was resolved from. */
+export type GoverningSpendCap = Readonly<{
+  readonly source: RequestSpendCapPin["source"];
+  readonly capMicros: number;
+}>;
+
+/** The cap in force, or the explicit absence of one. Absence leaves the request ungoverned. */
+export type RequestSpendCap = GoverningSpendCap | Readonly<{ readonly source: "none" }>;
 
 /**
  * Whether a recorded approval still speaks for the identity now asking to spend. `recorded` is an
@@ -193,6 +197,21 @@ export function requestBudgetFor(
   return state.requestBudgets?.find((entry) => entry.requestId === requestId);
 }
 
+/**
+ * Drops one request's budget, leaving every other request and every task untouched. A budget only
+ * binds under a cap, so when no cap governs the request its pin, estimates, and recorded decision
+ * stop binding with the cap that produced them rather than standing in durable state.
+ */
+export function withoutRequestBudget(
+  state: RuntimeState,
+  requestId: string | undefined,
+): RuntimeState {
+  const existing = state.requestBudgets;
+  if (requestId === undefined || existing === undefined) return state;
+  const remaining = existing.filter((entry) => entry.requestId !== requestId);
+  return remaining.length === existing.length ? state : { ...state, requestBudgets: remaining };
+}
+
 /** Replaces one request's budget, leaving every other request and every task untouched. */
 export function withRequestBudget(state: RuntimeState, budget: RequestBudgetState): RuntimeState {
   const existing = state.requestBudgets ?? [];
@@ -311,16 +330,26 @@ export function requestSpendExposure(
  * The one admission decision, taken against observed charges and every outstanding estimate at
  * once. The caller persists the returned budget in the same atomic write that records its
  * operation, which is what makes a second concurrent admission see this one's reservation.
+ *
+ * Returns `undefined` when no cap governs the request, which leaves it ungoverned rather than
+ * stopped. A cap here counts conservative estimates of operations; it measures nothing, because the
+ * provider boundary publishes no price, tokens, or quota for what Tandem runs. Refusing work nobody
+ * capped would therefore buy no protection against spending Tandem cannot see, and would cost every
+ * repository a mandatory configuration step. A configured cap governs exactly as before.
+ *
+ * The cap is resolved before the standing pause is read, so a cap the repository removes releases
+ * the decision it raised instead of leaving it to strand the request.
  */
 export function decideRequestSpendAdmission(
   input: RequestSpendAdmissionInput,
-): RequestSpendAdmission {
+): RequestSpendAdmission | undefined {
   const budget = input.budget ?? emptyRequestBudget(input.requestId);
+  const cap = resolveRequestSpendCap(input.policy, budget.approval, input.identity);
+  if (cap.source === "none") return undefined;
   if (budget.pause !== undefined) {
     return { outcome: "paused", budget, pause: budget.pause, raised: false };
   }
   const approvalState = requestSpendApprovalState(budget.approval, input.policy, input.identity);
-  const cap = resolveRequestSpendCap(input.policy, budget.approval, input.identity);
   const exposure = requestSpendExposure(budget, input.observation);
   const estimate = input.policy.operationEstimateMicros;
   const acknowledged =
@@ -412,7 +441,7 @@ export function authorizeRequestSpend(
       intent.requestId,
     );
   }
-  if (pause.capMicros !== "unset" && intent.capMicros < pause.capMicros) {
+  if (intent.capMicros < pause.capMicros) {
     throw new RequestBudgetError(
       "cap-not-raised",
       `Request ${intent.requestId} is stopped at ${describeSpendMicros(pause.capMicros)}; authorizing ${describeSpendMicros(intent.capMicros)} would lower it rather than resolve the decision`,
@@ -468,8 +497,7 @@ export function requestSpendReadout(
 }
 
 /** Prints an amount of money without ever letting an unknown amount read as zero dollars. */
-export function describeSpendMicros(value: number | "unset" | "unavailable"): string {
-  if (value === "unset") return "none configured";
+export function describeSpendMicros(value: number | "unavailable"): string {
   if (value === "unavailable") return "unavailable";
   return `USD ${(value / USD_MICROS_PER_DOLLAR).toFixed(6)}`;
 }
@@ -502,7 +530,6 @@ const SETTLED_OPERATION_PHASES: readonly DurableOperationPhase[] = [
 ];
 
 const PAUSE_EXPLANATIONS: Readonly<Record<RequestBudgetPause["reason"], string>> = {
-  "no-configured-cap": "no standing cap is configured for it, so no amount has been authorized",
   "estimate-unavailable":
     "no conservative per-operation estimate is configured, so the next step's exposure is unknown",
   "exposure-unaccounted":
@@ -556,12 +583,11 @@ type SpendVerdict =
  * a reason to stop and ask, never evidence of remaining budget.
  */
 function judgeRequestSpend(
-  cap: RequestSpendCap,
+  cap: GoverningSpendCap,
   estimate: number | "unset",
   exposure: RequestSpendExposure,
   acknowledgedUnaccounted: number,
 ): SpendVerdict {
-  if (cap.source === "none") return { kind: "refused", reason: "no-configured-cap" };
   if (estimate === "unset") return { kind: "refused", reason: "estimate-unavailable" };
   if (exposure.unaccountedSamples > acknowledgedUnaccounted) {
     return { kind: "refused", reason: "exposure-unaccounted" };
@@ -584,7 +610,7 @@ function judgeRequestSpend(
 function spendDecisionId(
   requestId: string,
   identity: RequestSpendIdentity,
-  cap: RequestSpendCap,
+  cap: GoverningSpendCap,
   reason: RequestBudgetPause["reason"],
   unaccountedSamples: number,
 ): string {
@@ -592,7 +618,7 @@ function spendDecisionId(
     requestId,
     identity.policyDigest,
     identity.briefRevision,
-    cap.source === "none" ? null : cap.capMicros,
+    cap.capMicros,
     reason,
     unaccountedSamples,
   ]);
@@ -601,7 +627,7 @@ function spendDecisionId(
 
 function budgetPause(
   input: RequestSpendAdmissionInput,
-  cap: RequestSpendCap,
+  cap: GoverningSpendCap,
   estimate: number | "unset",
   exposure: RequestSpendExposure,
   reason: RequestBudgetPause["reason"],
@@ -616,7 +642,7 @@ function budgetPause(
     ),
     reason,
     taskId: input.taskId,
-    capMicros: cap.source === "none" ? "unset" : cap.capMicros,
+    capMicros: cap.capMicros,
     policyCapMicros: input.policy.capMicros,
     policyDigest: input.identity.policyDigest,
     briefRevision: input.identity.briefRevision,

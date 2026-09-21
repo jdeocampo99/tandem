@@ -16,7 +16,7 @@ import {
   presentationRuntime,
   unreleasedReservation,
 } from "../runtime/activity.ts";
-import { withRequestBudget } from "../runtime/budget.ts";
+import { withoutRequestBudget, withRequestBudget } from "../runtime/budget.ts";
 import type { RequestSpendGate } from "../runtime/budget-gate.ts";
 import {
   readRuntimeState,
@@ -844,7 +844,9 @@ export class PresentationRuntimeWorkflow {
       }));
       await writeRuntimeState(
         this.#deps.runtimePath,
-        spend === undefined ? admitted : withRequestBudget(admitted, spend.budget),
+        spend === undefined
+          ? withoutRequestBudget(admitted, task.requestId)
+          : withRequestBudget(admitted, spend.budget),
       );
       return true;
     });

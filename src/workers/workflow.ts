@@ -40,6 +40,7 @@ import {
 import {
   describeRequestSpendDecision,
   type RequestSpendAdmission,
+  withoutRequestBudget,
   withRequestBudget,
 } from "../runtime/budget.ts";
 import type { RequestSpendGate } from "../runtime/budget-gate.ts";
@@ -3187,6 +3188,21 @@ export class WorkerWorkflow {
   }
 
   /**
+   * Drops a budget no cap governs any more, before routing or any later reader can honour what it
+   * records. A repository that removes its cap leaves the request ungoverned, so a decision raised
+   * under the cap it removed stops binding with that cap instead of stranding the request.
+   */
+  private async releaseRequestSpending(
+    task: TaskRecord,
+    state: RuntimeState,
+  ): Promise<RuntimeState> {
+    const released = withoutRequestBudget(state, task.requestId);
+    if (released === state) return state;
+    await writeRuntimeState(this.#deps.runtimePath, released);
+    return released;
+  }
+
+  /**
    * Stops the whole request on one durable decision. The pause is persisted before anything else
    * under that request can be admitted, and the question is recorded only by the admission that
    * raised it, so every later refusal is silent instead of another paid coordinator round.
@@ -3355,6 +3371,8 @@ export class WorkerWorkflow {
         await this.stopRequestSpending(store, task, state, spend);
         return undefined;
       }
+      const baseState =
+        spend === undefined ? await this.releaseRequestSpending(task, state) : state;
       const inputHead = task.reviewHead ?? runtime.sourceCheckpoint.head;
       const iterationScope = isFix ? iterationScopeFor(task) : undefined;
       const targetTask = isFix
@@ -3467,7 +3485,7 @@ export class WorkerWorkflow {
           : {}),
       };
       if (isFix) await store.update(task.id, task.revision, () => targetTask);
-      const admitted = replaceRuntimeTask(state, taskId, () => nextRuntime);
+      const admitted = replaceRuntimeTask(baseState, taskId, () => nextRuntime);
       await writeRuntimeState(
         this.#deps.runtimePath,
         spend === undefined ? admitted : withRequestBudget(admitted, spend.budget),
