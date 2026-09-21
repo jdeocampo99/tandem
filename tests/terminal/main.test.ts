@@ -32,12 +32,34 @@ function catalogue(): readonly OmpModelRecord[] {
   ];
 }
 
-function onboardingService(options: Readonly<{ existingConfig: boolean; configured: boolean }>): {
+/** A catalogue with explicit reasoning evidence, so Balanced can resolve every role from it. */
+function balancedCatalogue(): readonly OmpModelRecord[] {
+  return [
+    {
+      selector: "acme/balanced",
+      id: "balanced",
+      provider: "acme",
+      thinking: ["low", "medium", "high", "max"],
+      reasoning: true,
+    },
+  ];
+}
+
+function onboardingService(
+  options: Readonly<{
+    existingConfig: boolean;
+    configured: boolean;
+    catalogue?: readonly OmpModelRecord[];
+    enabledProviders?: readonly string[];
+  }>,
+): {
   readonly service: TandemService;
   readonly configureCalls: ModelSpec[][];
+  readonly providerCalls: (readonly string[] | undefined)[];
   readonly writeCalls: string[];
 } {
   const configureCalls: ModelSpec[][] = [];
+  const providerCalls: (readonly string[] | undefined)[] = [];
   const writeCalls: string[] = [];
   const models = options.configured
     ? {
@@ -49,6 +71,7 @@ function onboardingService(options: Readonly<{ existingConfig: boolean; configur
         presentation: { model: "test/model", thinking: "low" },
       }
     : undefined;
+  const enabledProviders = options.enabledProviders ?? [];
   const service = {
     onboard: async (repoPath: string, write = false) => {
       if (write) writeCalls.push(repoPath);
@@ -61,6 +84,7 @@ function onboardingService(options: Readonly<{ existingConfig: boolean; configur
         modelSettings: {
           configPath: "/private/tandem/models.json",
           configured: options.configured,
+          enabledProviders,
           ...(models === undefined ? {} : { models }),
         },
         policy: {} as never,
@@ -73,17 +97,27 @@ function onboardingService(options: Readonly<{ existingConfig: boolean; configur
       modelSettings: {
         configPath: "/private/tandem/models.json",
         configured: options.configured,
+        enabledProviders,
         ...(models === undefined ? {} : { models }),
       },
-      availableModels: catalogue(),
+      availableModels: options.catalogue ?? catalogue(),
     }),
-    configureModels: async (input: { readonly models: RepoPolicy["models"] }) => {
+    configureModels: async (input: {
+      readonly models: RepoPolicy["models"];
+      readonly enabledProviders?: readonly string[];
+    }) => {
       configureCalls.push(Object.values(input.models));
-      return { configPath: "/private/tandem/models.json", configured: true, models: input.models };
+      providerCalls.push(input.enabledProviders);
+      return {
+        configPath: "/private/tandem/models.json",
+        configured: true,
+        models: input.models,
+        enabledProviders: input.enabledProviders ?? enabledProviders,
+      };
     },
     shutdown: async () => undefined,
   } as unknown as TandemService;
-  return { service, configureCalls, writeCalls };
+  return { service, configureCalls, providerCalls, writeCalls };
 }
 
 function fakeApplication(invocations: CliInvocation[]): CliApplication {
@@ -170,7 +204,10 @@ test("declining the first-run role recap performs no model write and no launch",
   const home = join(repo, "..", "home");
   const fake = onboardingService({ existingConfig: true, configured: false });
   const invocations: CliInvocation[] = [];
-  const answers = roles.flatMap(() => ["test/model", "low"]);
+  // The single discovered "test" provider has no reasoning-capability evidence in this fixture's
+  // catalogue, so Balanced always stays unresolved here and onboarding falls through to the manual
+  // six-role loop regardless of the enable/skip answer.
+  const answers = ["enable", ...roles.flatMap(() => ["test/model", "low"])];
   answers.push("not now");
   const result = await runTerminal([repo, "--home", home], {
     cwd: repo,
@@ -195,7 +232,7 @@ test("unsupported thinking fails before any model write or coordinator launch", 
   const home = join(repo, "..", "home");
   const fake = onboardingService({ existingConfig: true, configured: false });
   const invocations: CliInvocation[] = [];
-  const answers = ["test/model", "max"];
+  const answers = ["enable", "test/model", "max"];
   const result = await runTerminal([repo, "--home", home], {
     cwd: repo,
     run: runCommand,
@@ -242,7 +279,7 @@ test("explicit role answers are sent to the service only after the complete reca
   const home = join(repo, "..", "home");
   const fake = onboardingService({ existingConfig: true, configured: false });
   const invocations: CliInvocation[] = [];
-  const answers = roles.flatMap(() => ["test/model", "high"]);
+  const answers = ["enable", ...roles.flatMap(() => ["test/model", "high"])];
   answers.push("save");
   const result = await runTerminal([repo, "--home", home, "--headless"], {
     cwd: repo,
@@ -263,6 +300,105 @@ test("explicit role answers are sent to the service only after the complete reca
     ),
   ).toBe(true);
   expect(invocations).toHaveLength(1);
+  await rm(join(repo, ".."), { recursive: true, force: true });
+});
+
+test("first-run onboarding accepts a resolved Balanced proposal without six separate role questions", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const home = join(repo, "..", "home");
+  const fake = onboardingService({
+    existingConfig: true,
+    configured: false,
+    catalogue: balancedCatalogue(),
+  });
+  const invocations: CliInvocation[] = [];
+  const answers = ["enable", "accept"];
+  const result = await runTerminal([repo, "--home", home, "--headless"], {
+    cwd: repo,
+    run: runCommand,
+    service: fake.service,
+    application: fakeApplication(invocations),
+    prompt: async () => answers.shift() ?? "not now",
+    isTTY: false,
+    stdout: () => undefined,
+    stderr: () => undefined,
+  });
+  expect(result.status).toBe("launched");
+  expect(fake.configureCalls).toEqual([
+    [
+      { model: "acme/balanced", thinking: "high" },
+      { model: "acme/balanced", thinking: "medium" },
+      { model: "acme/balanced", thinking: "max" },
+      { model: "acme/balanced", thinking: "max" },
+      { model: "acme/balanced", thinking: "high" },
+      { model: "acme/balanced", thinking: "low" },
+    ],
+  ]);
+  expect(fake.providerCalls).toEqual([["acme"]]);
+  expect(invocations).toHaveLength(1);
+  await rm(join(repo, ".."), { recursive: true, force: true });
+});
+
+test("first-run onboarding lets the user inspect and override a resolved Balanced proposal", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const home = join(repo, "..", "home");
+  const fake = onboardingService({
+    existingConfig: true,
+    configured: false,
+    catalogue: balancedCatalogue(),
+  });
+  const invocations: CliInvocation[] = [];
+  const answers = ["enable", "override", ...roles.flatMap(() => ["acme/balanced", "low"]), "save"];
+  const result = await runTerminal([repo, "--home", home, "--headless"], {
+    cwd: repo,
+    run: runCommand,
+    service: fake.service,
+    application: fakeApplication(invocations),
+    prompt: async () => answers.shift() ?? "not now",
+    isTTY: false,
+    stdout: () => undefined,
+    stderr: () => undefined,
+  });
+  expect(result.status).toBe("launched");
+  expect(fake.configureCalls).toHaveLength(1);
+  expect(
+    fake.configureCalls[0]?.every(
+      (model) => model.model === "acme/balanced" && model.thinking === "low",
+    ),
+  ).toBe(true);
+  expect(fake.providerCalls).toEqual([["acme"]]);
+  await rm(join(repo, ".."), { recursive: true, force: true });
+});
+
+test("first-run onboarding discloses the exact unresolved reason and falls back to manual roles", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const home = join(repo, "..", "home");
+  // The default fixture catalogue has no reasoning-capability evidence, so Balanced can never
+  // resolve any role from it regardless of provider enablement.
+  const fake = onboardingService({ existingConfig: true, configured: false });
+  const invocations: CliInvocation[] = [];
+  const answers = ["enable", ...roles.flatMap(() => ["test/model", "low"])];
+  answers.push("not now");
+  const output: string[] = [];
+  const result = await runTerminal([repo, "--home", home], {
+    cwd: repo,
+    run: runCommand,
+    service: fake.service,
+    application: fakeApplication(invocations),
+    prompt: async () => answers.shift() ?? "not now",
+    isTTY: true,
+    stdout: (text) => output.push(text),
+    stderr: (text) => output.push(text),
+  });
+  expect(result.status).toBe("cancelled");
+  expect(fake.configureCalls).toHaveLength(0);
+  const rendered = output.join("");
+  expect(rendered).toContain("Balanced could not resolve every role");
+  expect(rendered).toContain("no built-in pin, fuzzy alias, or silent fallback");
+  expect(rendered).toContain("no explicit reasoning-capability evidence");
   await rm(join(repo, ".."), { recursive: true, force: true });
 });
 
@@ -549,13 +685,41 @@ test("configure keeps one current-project anchor when several projects are saved
   await rm(join(first, ".."), { recursive: true, force: true });
 });
 
+test("returning onboarding shows the saved enabled providers and Keep all stays read-only", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const home = join(repo, "..", "home");
+  const fake = onboardingService({
+    existingConfig: true,
+    configured: true,
+    enabledProviders: ["acme", "globex"],
+  });
+  const invocations: CliInvocation[] = [];
+  const output: string[] = [];
+  const result = await runTerminal(["configure", "--home", home], {
+    cwd: repo,
+    run: runCommand,
+    service: fake.service,
+    application: fakeApplication(invocations),
+    prompt: async () => "keep all",
+    isTTY: true,
+    stdout: (text) => output.push(text),
+    stderr: (text) => output.push(text),
+  });
+  expect(result.status).toBe("configured");
+  expect(fake.configureCalls).toHaveLength(0);
+  const rendered = output.join("");
+  expect(rendered).toContain("Enabled providers (explicit spending permission): acme, globex");
+  await rm(join(repo, ".."), { recursive: true, force: true });
+});
+
 test("bare launch with an empty registry keeps current-Git onboarding", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const home = join(repo, "..", "home");
   const fake = onboardingService({ existingConfig: true, configured: false });
   const invocations: CliInvocation[] = [];
-  const answers = roles.flatMap(() => ["test/model", "low"]);
+  const answers = ["enable", ...roles.flatMap(() => ["test/model", "low"])];
   answers.push("save");
   const result = await runTerminal(["--home", home, "--headless"], {
     cwd: repo,
@@ -637,6 +801,7 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
   const fake = onboardingService({ existingConfig: false, configured: false });
   const invocations: CliInvocation[] = [];
   const promptMarkers = [
+    "Enable test for automatic Balanced selection?",
     "Planning model selector",
     "Planning thinking level",
     "Research model selector",
@@ -653,6 +818,9 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
     "Save project settings?",
   ] as const;
   const keySequences = [
+    // Accept the default "Skip": the fixture catalogue has no reasoning-capability evidence, so
+    // Balanced stays unresolved regardless and onboarding falls through to the manual role loop.
+    "\r",
     "\r",
     "l\r",
     "\r",
@@ -750,7 +918,7 @@ test("cancelling keyboard onboarding before the first selection does not configu
   let cancelled = false;
   const onOutput = (chunk: Buffer | string): void => {
     rendered += chunk.toString();
-    if (!cancelled && rendered.includes("Planning model selector")) {
+    if (!cancelled && rendered.includes("Enable test for automatic Balanced selection?")) {
       cancelled = true;
       queueMicrotask(() => {
         input.write("\u0003");

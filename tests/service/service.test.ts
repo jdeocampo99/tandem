@@ -18,6 +18,7 @@ import {
   type Endpoint,
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
+  MODEL_ROLE_ORDER,
   type ResolvedPolicy,
   type ReviewLens,
   type TaskRecord,
@@ -127,6 +128,26 @@ const OMP_MODELS = [
     thinking: ["low", "high", "max"],
   },
 ] as const;
+
+/** A catalogue with explicit capability evidence, usable by every Balanced role once its provider is enabled. */
+const BALANCED_OMP_MODELS = [
+  {
+    selector: "test/balanced",
+    id: "balanced",
+    provider: "test",
+    thinking: ["low", "medium", "high", "max"],
+    reasoning: true,
+    contextWindow: 100_000,
+  },
+] as const;
+const BALANCED_MODELS = {
+  coordinator: { model: "test/balanced", thinking: "high" },
+  scout: { model: "test/balanced", thinking: "medium" },
+  implementer: { model: "test/balanced", thinking: "max" },
+  reviewer: { model: "test/balanced", thinking: "max" },
+  verifier: { model: "test/balanced", thinking: "high" },
+  presentation: { model: "test/balanced", thinking: "low" },
+} as const;
 
 /** Opt-in GitHub remote for draft-PR paths; absent by default so other fixtures are unaffected. */
 type DraftRemoteOptions = Readonly<{
@@ -780,6 +801,79 @@ test("bound task creation normalizes clean input to the original identity and pe
     await rm(root, { recursive: true, force: true });
   }
 });
+test("records an explicit skill invocation on the durable task and it survives a restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-service-skill-"));
+  const home = join(root, "home");
+  const repoPath = join(root, "repo");
+  const common = join(root, "git-common");
+  await Promise.all([mkdir(repoPath, { recursive: true }), mkdir(common, { recursive: true })]);
+  const runner = fakeRunner({ commonDirectory: common });
+  const skill = {
+    name: "refactor-functions",
+    context: "Apply the five function-review principles.",
+  } as const;
+  let idSequence = 0;
+  const service = createTandemService({
+    home,
+    sessionId: "session-a",
+    poolRoot: join(root, "pool"),
+    run: runner.run,
+    clock: () => TIMESTAMP,
+    idFactory: () => {
+      idSequence += 1;
+      return `task-skill-${idSequence}`;
+    },
+  });
+  try {
+    const created = await service.create({
+      repoPath,
+      kind: "implementation",
+      objective: "Refactor the parser",
+      acceptanceCriteria: ["Keep behavior identical."],
+      surfaces: ["src"],
+      skill,
+    });
+    expect(created.skill).toEqual(skill);
+
+    const withoutSkill = await service.create({
+      repoPath,
+      kind: "implementation",
+      objective: "Adjust logging",
+      acceptanceCriteria: ["Keep behavior identical."],
+      surfaces: ["src"],
+    });
+    expect(withoutSkill.skill).toBeUndefined();
+
+    await expect(
+      service.create({
+        repoPath,
+        kind: "implementation",
+        objective: "Refactor the parser again",
+        acceptanceCriteria: ["Keep behavior identical."],
+        surfaces: ["src"],
+        skill: { ...skill, name: "" },
+      }),
+    ).rejects.toThrow(TypeError);
+
+    const reloaded = createTandemService({
+      home,
+      sessionId: "session-a",
+      poolRoot: join(root, "pool"),
+      run: runner.run,
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    try {
+      const persisted = await reloaded.get(created.id);
+      expect(persisted.skill).toEqual(skill);
+    } finally {
+      await reloaded.shutdown();
+    }
+  } finally {
+    await service.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("new scouts persist a classified continuation and an explicit disposition still wins", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-service-continuation-"));
   const home = join(root, "home");
@@ -1104,6 +1198,43 @@ test("approved model changes affect future tasks without mutating an existing po
       surfaces: ["service"],
     });
     expect(created.policy.config.models.coordinator).toEqual(updatedModels.coordinator);
+  });
+});
+
+test("models reports discovered providers and a Balanced proposal built only from enabled providers", async () => {
+  await withFixture({ runner: { ompModels: BALANCED_OMP_MODELS } }, async ({ task, service }) => {
+    const beforeEnable = await service.models(task.repoPath);
+    expect(beforeEnable.discoveredProviders).toEqual(["test"]);
+    expect(beforeEnable.balancedProfile.status).toBe("unresolved");
+
+    await service.configureModels({
+      repoPath: task.repoPath,
+      models: BALANCED_MODELS,
+      enabledProviders: ["test"],
+    });
+
+    const afterEnable = await service.models(task.repoPath);
+    expect(afterEnable.modelSettings.enabledProviders).toEqual(["test"]);
+    const proposal = afterEnable.balancedProfile;
+    expect(proposal.status).toBe("resolved");
+    if (proposal.status !== "resolved") throw new Error("expected resolved");
+    for (const role of MODEL_ROLE_ORDER) {
+      expect(proposal.assignments[role].model).toBe("test/balanced");
+    }
+  });
+});
+
+test("configureModels leaves enabled providers untouched when the call omits them", async () => {
+  await withFixture({ runner: { ompModels: BALANCED_OMP_MODELS } }, async ({ task, service }) => {
+    await service.configureModels({
+      repoPath: task.repoPath,
+      models: BALANCED_MODELS,
+      enabledProviders: ["test"],
+    });
+    await service.configureModels({ repoPath: task.repoPath, models: BALANCED_MODELS });
+
+    const options = await service.models(task.repoPath);
+    expect(options.modelSettings.enabledProviders).toEqual(["test"]);
   });
 });
 
@@ -1899,6 +2030,123 @@ test("implementer jobs receive bounded scout context and the full report artifac
     expect(spec.prompt).toContain(reportPath);
   });
 });
+test("routes a pinned skill invocation to the implementer and scout worker context but never to a review worker", async () => {
+  const skill = {
+    name: "refactor-functions",
+    context: "Apply the five function-review principles.",
+  } as const;
+
+  await withFixture({ kind: "implementation" }, async ({ home, lease, service }) => {
+    const store = createTaskStore({
+      directory: join(home, "tasks"),
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    const current = await store.read("task-1");
+    if (current === undefined) throw new Error("fixture implementation task missing");
+    await store.update(current.id, current.revision, (task) => ({
+      ...task,
+      revision: task.revision + 1,
+      updatedAt: TIMESTAMP,
+      worktree: lease,
+      skill,
+    }));
+    const runtime = await readRuntime(home);
+    await writeRuntimeState(runtimeFile(home), {
+      ...runtime,
+      tasks: runtime.tasks.map((entry) => ({
+        ...entry,
+        worktree: lease,
+        endpoints: [],
+        jobs: [],
+      })),
+    });
+
+    await service.approve("task-1");
+    await service.tick();
+
+    const launched = (await readRuntime(home)).tasks[0]?.jobs[0];
+    if (launched === undefined) throw new Error("implementer job was not persisted");
+    const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
+      readonly prompt: string;
+    };
+    expect(spec.prompt).toContain("## Skill");
+    expect(spec.prompt).toContain("Requested skill: refactor-functions");
+    expect(spec.prompt).toContain(skill.context);
+    expect(spec.prompt).toContain("never open a separate user conversation or channel");
+  });
+
+  await withFixture({ kind: "scout" }, async ({ home, lease, service }) => {
+    const store = createTaskStore({
+      directory: join(home, "tasks"),
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    const current = await store.read("task-1");
+    if (current === undefined) throw new Error("fixture scout task missing");
+    await store.update(current.id, current.revision, (task) => ({
+      ...task,
+      revision: task.revision + 1,
+      updatedAt: TIMESTAMP,
+      worktree: lease,
+      skill,
+    }));
+    const runtime = await readRuntime(home);
+    await writeRuntimeState(runtimeFile(home), {
+      ...runtime,
+      tasks: runtime.tasks.map((entry) => ({
+        ...entry,
+        worktree: lease,
+        endpoints: [],
+        jobs: [],
+      })),
+    });
+
+    await service.tick();
+
+    const launched = (await readRuntime(home)).tasks[0]?.jobs[0];
+    if (launched === undefined) throw new Error("scout job was not persisted");
+    const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
+      readonly prompt: string;
+    };
+    expect(spec.prompt).toContain("## Skill");
+    expect(spec.prompt).toContain("Requested skill: refactor-functions");
+  });
+
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "reviewing",
+      taskEdits: { reviewHead: "review-head" },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, service }) => {
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const current = await store.read("task-1");
+      if (current === undefined) throw new Error("fixture reviewing task missing");
+      await store.update(current.id, current.revision, (task) => ({
+        ...task,
+        revision: task.revision + 1,
+        updatedAt: TIMESTAMP,
+        skill,
+      }));
+      await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+
+      await service.tick();
+
+      const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
+      if (launched === undefined) throw new Error("review job was not persisted");
+      const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
+        readonly prompt: string;
+      };
+      expect(spec.prompt).not.toContain("## Skill");
+    },
+  );
+});
 
 test("two controllers serialize one worker dispatch and persist one active job", async () => {
   await withFixture(
@@ -2658,6 +2906,84 @@ test("needs-decision survives reload, rejects stale answers, and resumes only af
         expect(resumed.scopeApproved).toBe(true);
         expect(resumed.communication?.messages.at(-1)?.kind).toBe("answer");
         expect(resumed.communication?.messages.at(-1)?.replyTo).toBe(question.id);
+      } finally {
+        await reloaded.shutdown();
+      }
+    },
+  );
+});
+test("a skill-originated needs-decision question is surfaced by the coordinator's own communication protocol and the skill survives restart", async () => {
+  const skill = {
+    name: "refactor-functions",
+    context: "Apply the five function-review principles.",
+  } as const;
+
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      runner: { active: false },
+    },
+    async ({ home, lease, run, service }) => {
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const current = await store.read("task-1");
+      if (current === undefined) throw new Error("fixture implementation task missing");
+      await store.update(current.id, current.revision, (task) => ({
+        ...task,
+        revision: task.revision + 1,
+        updatedAt: TIMESTAMP,
+        skill,
+      }));
+
+      const endpoint = endpointFor("implementer");
+      const job = workerJob(home, endpoint, "implementer");
+      await writeJsonAtomically(job.resultPath, {
+        id: job.id,
+        taskId: job.taskId,
+        generation: job.generation,
+        role: job.role,
+        status: "needs-decision",
+        text: "Running the requested skill needs a decision.",
+        question: {
+          text: "Should the skill also touch the deprecated legacy module?",
+          recommendation: "Leave the deprecated module untouched.",
+        },
+        finishedAt: TIMESTAMP,
+      });
+      await seedTaskResources(home, lease, [endpoint], [job]);
+
+      await service.tick();
+
+      const reloaded = createTandemService({
+        home,
+        sessionId: "session-1",
+        poolRoot: lease.root,
+        run,
+        clock: () => TIMESTAMP,
+        idFactory: () => "reloaded-id",
+      });
+      try {
+        const persisted = await reloaded.get("task-1");
+        const question = persisted.communication?.question;
+        if (question === undefined) throw new Error("needs-decision question was not persisted");
+        expect(persisted.stage).toBe("blocked");
+        expect(question.text).toBe("Should the skill also touch the deprecated legacy module?");
+        expect(persisted.skill).toEqual(skill);
+
+        const answered = await reloaded.answer({
+          taskId: "task-1",
+          questionId: question.id,
+          text: "No, leave the deprecated module untouched.",
+        });
+        expect(answered.stage).toBe("implementing");
+
+        const resumed = await reloaded.get("task-1");
+        expect(resumed.stage).toBe("implementing");
+        expect(resumed.skill).toEqual(skill);
       } finally {
         await reloaded.shutdown();
       }
