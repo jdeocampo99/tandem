@@ -23,6 +23,7 @@ import type {
   CommandRunner,
   Endpoint,
   IdFactory,
+  IsoTimestamp,
   ReviewLevelRecord,
   ReviewMode,
   TaskQuestion,
@@ -54,6 +55,8 @@ import type {
   RuntimeState,
   RuntimeTaskState,
 } from "../runtime/schema.ts";
+import type { RequestUsageEvent } from "../runtime/usage.ts";
+import { providerSampleEvent } from "../runtime/usage-events.ts";
 import {
   appendTaskJob,
   buildPrompt,
@@ -106,7 +109,10 @@ import {
 } from "../tasks/communication-protocol.ts";
 import { describeFixRoundExhaustion } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
-import type { ReviewAssistanceRuntime } from "../tasks/review-assistance.ts";
+import type {
+  ReviewAssistanceOutcome,
+  ReviewAssistanceRuntime,
+} from "../tasks/review-assistance.ts";
 import { requestReviewAssistance } from "../tasks/review-assistance.ts";
 import {
   type AdvisoryReviewLead,
@@ -245,6 +251,8 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
   readonly maintainPoolForAllocation: (task: TaskRecord) => Promise<boolean>;
   readonly reviewAssistance: ReviewAssistanceRuntime;
+  /** Appends accounting facts. It records only; it never decides whether work may continue. */
+  readonly recordRequestUsage: (events: readonly RequestUsageEvent[]) => Promise<void>;
 }>;
 export class WorkerWorkflow {
   readonly #deps: WorkerWorkflowDependencies;
@@ -2240,6 +2248,7 @@ export class WorkerWorkflow {
       task.reviewLevel,
       classifyReviewLevel({ files, affectedCallers: facts.affectedCallers, impact }),
     );
+    const startedAt = this.#deps.clock();
     const assistance = await requestReviewAssistance(
       this.#deps.reviewAssistance,
       task.policy.config.reviewLevels,
@@ -2252,6 +2261,7 @@ export class WorkerWorkflow {
         source: `${facts.cumulative.range} diff ${facts.cumulative.fromRef}..${facts.cumulative.toRef}`,
       },
     );
+    await this.recordAssistanceSample(task, assistance, startedAt, this.#deps.clock());
     if (assistance.identity === undefined) return { record: deterministic, leads: [] };
     const assisted: ReviewLevelRecord = {
       ...deterministic,
@@ -2270,6 +2280,34 @@ export class WorkerWorkflow {
       },
       leads: assistance.leads,
     };
+  }
+
+  /**
+   * Accounts for the one provider call this review round may have made, under the request that
+   * governs the task. A disabled, refused, or exactly cached round reached no provider and so has
+   * nothing to account for; a repeated call under the same provider identity records once.
+   */
+  private async recordAssistanceSample(
+    task: TaskRecord,
+    assistance: ReviewAssistanceOutcome,
+    startedAt: IsoTimestamp,
+    endedAt: IsoTimestamp,
+  ): Promise<void> {
+    const requestId = task.requestId;
+    if (requestId === undefined || assistance.usage === undefined) return;
+    if (assistance.identity === undefined) return;
+    const event = providerSampleEvent({
+      requestId,
+      workKind: "review",
+      usage: assistance.usage,
+      startedAt,
+      endedAt,
+      sampleIdentity: assistance.identity.request,
+      taskId: task.id,
+      generation: task.generation,
+      role: "reviewer",
+    });
+    if (event !== undefined) await this.#deps.recordRequestUsage([event]);
   }
 
   /**

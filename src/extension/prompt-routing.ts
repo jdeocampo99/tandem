@@ -8,7 +8,7 @@ import type {
 import {
   evaluateJev,
   JEV_MODEL,
-  JEV_PROVIDER,
+  type JevAttemptOutcome,
   type JevChoiceAnswer,
   JevEvaluationError,
   type JevEvaluationInput,
@@ -16,13 +16,10 @@ import {
   type JevEvaluationResponse,
   type JevFetch,
   type JevQuestions,
+  jevUsageRecord,
 } from "../adapters/typesafe.ts";
 import { appendDiagnosticEvent, type DiagnosticValue } from "../runtime/diagnostics.ts";
-import {
-  JEV_PRICING_SNAPSHOT,
-  USAGE_RECORD_SCHEMA_VERSION,
-  type UsageRecord,
-} from "../runtime/usage.ts";
+import type { UsageRecord } from "../runtime/usage.ts";
 import type { TandemService } from "../service/controller.ts";
 import { executeTandemAction, type TandemAction } from "./actions.ts";
 import { ACTION_RESULT_MAX_CHARS, compactText, summarizeTandemActionValue } from "./summary.ts";
@@ -236,39 +233,6 @@ function knownComposition(choice: string): choice is RouteComposition {
   return choice === "single" || choice === "homogeneous-batch" || choice === "mixed";
 }
 
-type JevAttemptOutcome =
-  | Readonly<{ readonly kind: "success"; readonly response: JevEvaluationResponse }>
-  | Readonly<{ readonly kind: "failure"; readonly code: JevEvaluationError["code"] }>;
-
-function jevUsageRecord(
-  outcome: JevAttemptOutcome,
-  durationMs: number,
-  reason: string,
-): UsageRecord {
-  const shared = {
-    schemaVersion: USAGE_RECORD_SCHEMA_VERSION,
-    provider: JEV_PROVIDER,
-    model: JEV_MODEL,
-    durationMs,
-    reason,
-    pricing: JEV_PRICING_SNAPSHOT,
-  } as const;
-  if (outcome.kind === "success") {
-    return {
-      ...shared,
-      inputTokens: outcome.response.usage.input_tokens,
-      outputTokens: outcome.response.usage.output_tokens,
-      timedOut: false,
-    };
-  }
-  return {
-    ...shared,
-    inputTokens: "unavailable",
-    outputTokens: "unavailable",
-    timedOut: outcome.code === "timeout",
-  };
-}
-
 function evaluationResult(
   classifier: PromptRoutingEvaluation["classifier"],
   reason: string,
@@ -282,7 +246,7 @@ function evaluationResult(
     classifier,
     reason,
     durationMs,
-    ...(outcome === undefined ? {} : { usage: jevUsageRecord(outcome, durationMs, reason) }),
+    ...(outcome === undefined ? {} : { usage: jevUsageRecord({ outcome, durationMs, reason }) }),
     ...(decision === undefined ? {} : { decision }),
   };
 }
@@ -325,9 +289,9 @@ export async function classifyPrompt(
   } catch (error) {
     const code = error instanceof JevEvaluationError ? error.code : "unavailable";
     const reason = error instanceof JevEvaluationError ? `jev-${error.code}` : "jev-error";
-    return evaluationResult("jev", reason, startedAt, now, { kind: "failure", code });
+    return evaluationResult("jev", reason, startedAt, now, { kind: "failed", code });
   }
-  const outcome: JevAttemptOutcome = { kind: "success", response };
+  const outcome: JevAttemptOutcome = { kind: "answered", usage: response.usage };
 
   const answers = [
     choiceAnswer(response, "action"),
