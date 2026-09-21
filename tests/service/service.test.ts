@@ -18,6 +18,7 @@ import {
   type Endpoint,
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
+  MODEL_ROLE_ORDER,
   type ResolvedPolicy,
   type ReviewLens,
   type TaskRecord,
@@ -127,6 +128,26 @@ const OMP_MODELS = [
     thinking: ["low", "high", "max"],
   },
 ] as const;
+
+/** A catalogue with explicit capability evidence, usable by every Balanced role once its provider is enabled. */
+const BALANCED_OMP_MODELS = [
+  {
+    selector: "test/balanced",
+    id: "balanced",
+    provider: "test",
+    thinking: ["low", "medium", "high", "max"],
+    reasoning: true,
+    contextWindow: 100_000,
+  },
+] as const;
+const BALANCED_MODELS = {
+  coordinator: { model: "test/balanced", thinking: "high" },
+  scout: { model: "test/balanced", thinking: "medium" },
+  implementer: { model: "test/balanced", thinking: "max" },
+  reviewer: { model: "test/balanced", thinking: "max" },
+  verifier: { model: "test/balanced", thinking: "high" },
+  presentation: { model: "test/balanced", thinking: "low" },
+} as const;
 
 /** Opt-in GitHub remote for draft-PR paths; absent by default so other fixtures are unaffected. */
 type DraftRemoteOptions = Readonly<{
@@ -780,6 +801,79 @@ test("bound task creation normalizes clean input to the original identity and pe
     await rm(root, { recursive: true, force: true });
   }
 });
+test("records an explicit skill invocation on the durable task and it survives a restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-service-skill-"));
+  const home = join(root, "home");
+  const repoPath = join(root, "repo");
+  const common = join(root, "git-common");
+  await Promise.all([mkdir(repoPath, { recursive: true }), mkdir(common, { recursive: true })]);
+  const runner = fakeRunner({ commonDirectory: common });
+  const skill = {
+    name: "refactor-functions",
+    context: "Apply the five function-review principles.",
+  } as const;
+  let idSequence = 0;
+  const service = createTandemService({
+    home,
+    sessionId: "session-a",
+    poolRoot: join(root, "pool"),
+    run: runner.run,
+    clock: () => TIMESTAMP,
+    idFactory: () => {
+      idSequence += 1;
+      return `task-skill-${idSequence}`;
+    },
+  });
+  try {
+    const created = await service.create({
+      repoPath,
+      kind: "implementation",
+      objective: "Refactor the parser",
+      acceptanceCriteria: ["Keep behavior identical."],
+      surfaces: ["src"],
+      skill,
+    });
+    expect(created.skill).toEqual(skill);
+
+    const withoutSkill = await service.create({
+      repoPath,
+      kind: "implementation",
+      objective: "Adjust logging",
+      acceptanceCriteria: ["Keep behavior identical."],
+      surfaces: ["src"],
+    });
+    expect(withoutSkill.skill).toBeUndefined();
+
+    await expect(
+      service.create({
+        repoPath,
+        kind: "implementation",
+        objective: "Refactor the parser again",
+        acceptanceCriteria: ["Keep behavior identical."],
+        surfaces: ["src"],
+        skill: { ...skill, name: "" },
+      }),
+    ).rejects.toThrow(TypeError);
+
+    const reloaded = createTandemService({
+      home,
+      sessionId: "session-a",
+      poolRoot: join(root, "pool"),
+      run: runner.run,
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    try {
+      const persisted = await reloaded.get(created.id);
+      expect(persisted.skill).toEqual(skill);
+    } finally {
+      await reloaded.shutdown();
+    }
+  } finally {
+    await service.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("new scouts persist a classified continuation and an explicit disposition still wins", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-service-continuation-"));
   const home = join(root, "home");
@@ -1104,6 +1198,43 @@ test("approved model changes affect future tasks without mutating an existing po
       surfaces: ["service"],
     });
     expect(created.policy.config.models.coordinator).toEqual(updatedModels.coordinator);
+  });
+});
+
+test("models reports discovered providers and a Balanced proposal built only from enabled providers", async () => {
+  await withFixture({ runner: { ompModels: BALANCED_OMP_MODELS } }, async ({ task, service }) => {
+    const beforeEnable = await service.models(task.repoPath);
+    expect(beforeEnable.discoveredProviders).toEqual(["test"]);
+    expect(beforeEnable.balancedProfile.status).toBe("unresolved");
+
+    await service.configureModels({
+      repoPath: task.repoPath,
+      models: BALANCED_MODELS,
+      enabledProviders: ["test"],
+    });
+
+    const afterEnable = await service.models(task.repoPath);
+    expect(afterEnable.modelSettings.enabledProviders).toEqual(["test"]);
+    const proposal = afterEnable.balancedProfile;
+    expect(proposal.status).toBe("resolved");
+    if (proposal.status !== "resolved") throw new Error("expected resolved");
+    for (const role of MODEL_ROLE_ORDER) {
+      expect(proposal.assignments[role].model).toBe("test/balanced");
+    }
+  });
+});
+
+test("configureModels leaves enabled providers untouched when the call omits them", async () => {
+  await withFixture({ runner: { ompModels: BALANCED_OMP_MODELS } }, async ({ task, service }) => {
+    await service.configureModels({
+      repoPath: task.repoPath,
+      models: BALANCED_MODELS,
+      enabledProviders: ["test"],
+    });
+    await service.configureModels({ repoPath: task.repoPath, models: BALANCED_MODELS });
+
+    const options = await service.models(task.repoPath);
+    expect(options.modelSettings.enabledProviders).toEqual(["test"]);
   });
 });
 
@@ -1899,6 +2030,123 @@ test("implementer jobs receive bounded scout context and the full report artifac
     expect(spec.prompt).toContain(reportPath);
   });
 });
+test("routes a pinned skill invocation to the implementer and scout worker context but never to a review worker", async () => {
+  const skill = {
+    name: "refactor-functions",
+    context: "Apply the five function-review principles.",
+  } as const;
+
+  await withFixture({ kind: "implementation" }, async ({ home, lease, service }) => {
+    const store = createTaskStore({
+      directory: join(home, "tasks"),
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    const current = await store.read("task-1");
+    if (current === undefined) throw new Error("fixture implementation task missing");
+    await store.update(current.id, current.revision, (task) => ({
+      ...task,
+      revision: task.revision + 1,
+      updatedAt: TIMESTAMP,
+      worktree: lease,
+      skill,
+    }));
+    const runtime = await readRuntime(home);
+    await writeRuntimeState(runtimeFile(home), {
+      ...runtime,
+      tasks: runtime.tasks.map((entry) => ({
+        ...entry,
+        worktree: lease,
+        endpoints: [],
+        jobs: [],
+      })),
+    });
+
+    await service.approve("task-1");
+    await service.tick();
+
+    const launched = (await readRuntime(home)).tasks[0]?.jobs[0];
+    if (launched === undefined) throw new Error("implementer job was not persisted");
+    const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
+      readonly prompt: string;
+    };
+    expect(spec.prompt).toContain("## Skill");
+    expect(spec.prompt).toContain("Requested skill: refactor-functions");
+    expect(spec.prompt).toContain(skill.context);
+    expect(spec.prompt).toContain("never open a separate user conversation or channel");
+  });
+
+  await withFixture({ kind: "scout" }, async ({ home, lease, service }) => {
+    const store = createTaskStore({
+      directory: join(home, "tasks"),
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    const current = await store.read("task-1");
+    if (current === undefined) throw new Error("fixture scout task missing");
+    await store.update(current.id, current.revision, (task) => ({
+      ...task,
+      revision: task.revision + 1,
+      updatedAt: TIMESTAMP,
+      worktree: lease,
+      skill,
+    }));
+    const runtime = await readRuntime(home);
+    await writeRuntimeState(runtimeFile(home), {
+      ...runtime,
+      tasks: runtime.tasks.map((entry) => ({
+        ...entry,
+        worktree: lease,
+        endpoints: [],
+        jobs: [],
+      })),
+    });
+
+    await service.tick();
+
+    const launched = (await readRuntime(home)).tasks[0]?.jobs[0];
+    if (launched === undefined) throw new Error("scout job was not persisted");
+    const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
+      readonly prompt: string;
+    };
+    expect(spec.prompt).toContain("## Skill");
+    expect(spec.prompt).toContain("Requested skill: refactor-functions");
+  });
+
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "reviewing",
+      taskEdits: { reviewHead: "review-head" },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, service }) => {
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const current = await store.read("task-1");
+      if (current === undefined) throw new Error("fixture reviewing task missing");
+      await store.update(current.id, current.revision, (task) => ({
+        ...task,
+        revision: task.revision + 1,
+        updatedAt: TIMESTAMP,
+        skill,
+      }));
+      await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+
+      await service.tick();
+
+      const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
+      if (launched === undefined) throw new Error("review job was not persisted");
+      const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
+        readonly prompt: string;
+      };
+      expect(spec.prompt).not.toContain("## Skill");
+    },
+  );
+});
 
 test("two controllers serialize one worker dispatch and persist one active job", async () => {
   await withFixture(
@@ -2658,6 +2906,84 @@ test("needs-decision survives reload, rejects stale answers, and resumes only af
         expect(resumed.scopeApproved).toBe(true);
         expect(resumed.communication?.messages.at(-1)?.kind).toBe("answer");
         expect(resumed.communication?.messages.at(-1)?.replyTo).toBe(question.id);
+      } finally {
+        await reloaded.shutdown();
+      }
+    },
+  );
+});
+test("a skill-originated needs-decision question is surfaced by the coordinator's own communication protocol and the skill survives restart", async () => {
+  const skill = {
+    name: "refactor-functions",
+    context: "Apply the five function-review principles.",
+  } as const;
+
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      runner: { active: false },
+    },
+    async ({ home, lease, run, service }) => {
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const current = await store.read("task-1");
+      if (current === undefined) throw new Error("fixture implementation task missing");
+      await store.update(current.id, current.revision, (task) => ({
+        ...task,
+        revision: task.revision + 1,
+        updatedAt: TIMESTAMP,
+        skill,
+      }));
+
+      const endpoint = endpointFor("implementer");
+      const job = workerJob(home, endpoint, "implementer");
+      await writeJsonAtomically(job.resultPath, {
+        id: job.id,
+        taskId: job.taskId,
+        generation: job.generation,
+        role: job.role,
+        status: "needs-decision",
+        text: "Running the requested skill needs a decision.",
+        question: {
+          text: "Should the skill also touch the deprecated legacy module?",
+          recommendation: "Leave the deprecated module untouched.",
+        },
+        finishedAt: TIMESTAMP,
+      });
+      await seedTaskResources(home, lease, [endpoint], [job]);
+
+      await service.tick();
+
+      const reloaded = createTandemService({
+        home,
+        sessionId: "session-1",
+        poolRoot: lease.root,
+        run,
+        clock: () => TIMESTAMP,
+        idFactory: () => "reloaded-id",
+      });
+      try {
+        const persisted = await reloaded.get("task-1");
+        const question = persisted.communication?.question;
+        if (question === undefined) throw new Error("needs-decision question was not persisted");
+        expect(persisted.stage).toBe("blocked");
+        expect(question.text).toBe("Should the skill also touch the deprecated legacy module?");
+        expect(persisted.skill).toEqual(skill);
+
+        const answered = await reloaded.answer({
+          taskId: "task-1",
+          questionId: question.id,
+          text: "No, leave the deprecated module untouched.",
+        });
+        expect(answered.stage).toBe("implementing");
+
+        const resumed = await reloaded.get("task-1");
+        expect(resumed.stage).toBe("implementing");
+        expect(resumed.skill).toEqual(skill);
       } finally {
         await reloaded.shutdown();
       }
@@ -4486,4 +4812,291 @@ test("the scheduler refreshes an approved draft on durable change and records re
       expect(await draftRefreshFailures(home)).toHaveLength(1);
     },
   );
+});
+
+/** One approved implementation task seeded as a member of the whole-request fixture. */
+type RequestMemberSeed = Readonly<{
+  readonly objective: string;
+  readonly surfaces: readonly string[];
+  readonly paneId: string;
+}>;
+
+type RequestFixture = Readonly<{
+  readonly home: string;
+  readonly repoPath: string;
+  readonly requestId: string;
+  readonly memberIds: readonly string[];
+  readonly runnerState: FakeRunnerState;
+  readonly service: TandemService;
+  /** A second controller over the same durable home, as a restart would build. */
+  readonly restart: () => TandemService;
+}>;
+
+function memberLeaseFor(home: string, taskId: string): WorktreeLease {
+  return {
+    root: join(home, "pool"),
+    path: join(home, "pool", taskId),
+    name: `tandem-${taskId}`,
+    baseHead: "source-head",
+    branch: `tandem/${taskId}`,
+    leaseId: `lease-${taskId}`,
+    leaseHolder: `session-1:${taskId}`,
+    leasedAt: TIMESTAMP,
+  };
+}
+
+function memberEndpointFor(paneId: string): Endpoint {
+  return {
+    sessionId: "session-1",
+    workspaceId: "workspace-1",
+    tabId: "tab-1",
+    paneId,
+    role: "implementer",
+    generation: 0,
+  };
+}
+
+/** Gives one seeded member the durable worktree and endpoint a dispatch would otherwise acquire. */
+async function attachMemberResources(home: string, taskId: string, paneId: string): Promise<void> {
+  const state = await readRuntime(home);
+  await writeRuntimeState(runtimeFile(home), {
+    ...state,
+    tasks: state.tasks.map((entry) =>
+      entry.taskId === taskId
+        ? {
+            ...entry,
+            worktree: memberLeaseFor(home, taskId),
+            endpoints: [memberEndpointFor(paneId)],
+          }
+        : entry,
+    ),
+  });
+}
+
+async function runtimeMember(home: string, taskId: string): Promise<RuntimeTaskState> {
+  const state = await readRuntime(home);
+  const entry = state.tasks.find((candidate) => candidate.taskId === taskId);
+  if (entry === undefined) throw new Error(`runtime entry for ${taskId} is missing`);
+  return entry;
+}
+
+/**
+ * Seeds one approved request brief and its approved implementation members through the service
+ * itself, so membership is recorded by the controller rather than written into durable state.
+ */
+async function requestFixture(
+  members: readonly RequestMemberSeed[],
+): Promise<RequestFixture & { readonly close: () => Promise<void> }> {
+  const home = await mkdtemp(join(tmpdir(), "tandem-service-request-"));
+  const repoPath = join(home, "repo");
+  await mkdir(repoPath, { recursive: true });
+  const runner = fakeRunner();
+  let sequence = 0;
+  const idFactory = (): string => {
+    sequence += 1;
+    return `request-id-${sequence}`;
+  };
+  const serviceOptions = {
+    home,
+    sessionId: "session-1",
+    poolRoot: join(home, "pool"),
+    run: runner.run,
+    clock: () => TIMESTAMP,
+    idFactory,
+  };
+  const service = createTandemService(serviceOptions);
+  const drafted = await service.draftRequestBrief({
+    repoPath,
+    reviewPane: false,
+    content: {
+      goal: "Deliver two approved tasks as one request",
+      scope: ["src/service"],
+      constraints: ["one verified pull request by default"],
+      nonGoals: ["no automatic merge"],
+      acceptanceCriteria: ["Both members are delivered together."],
+      recommendedApproach: "Coordinate the members around one request identity",
+      keyDecisions: ["dependencies order the members"],
+      openQuestions: [],
+      researchLinks: [],
+    },
+  });
+  await service.approveRequestBrief({
+    requestId: drafted.record.id,
+    briefRevision: drafted.record.draft.revision,
+    contentDigest: drafted.record.draft.contentDigest,
+  });
+  const memberIds: string[] = [];
+  for (const member of members) {
+    const created = await service.create({
+      repoPath,
+      kind: "implementation",
+      objective: member.objective,
+      acceptanceCriteria: ["the member is reviewed"],
+      surfaces: member.surfaces,
+      requestId: drafted.record.id,
+    });
+    await service.approve(created.id);
+    await attachMemberResources(home, created.id, member.paneId);
+    memberIds.push(created.id);
+  }
+  return {
+    home,
+    repoPath,
+    requestId: drafted.record.id,
+    memberIds,
+    runnerState: runner.state,
+    service,
+    restart: () => createTandemService(serviceOptions),
+    close: async () => {
+      await service.shutdown();
+      await rm(home, { recursive: true, force: true });
+    },
+  };
+}
+
+async function withRequestFixture(
+  members: readonly RequestMemberSeed[],
+  action: (fixture: RequestFixture) => Promise<void>,
+): Promise<void> {
+  const created = await requestFixture(members);
+  try {
+    await action(created);
+  } finally {
+    created.runnerState.releasePresentation();
+    await created.close();
+  }
+}
+
+const REQUEST_MEMBERS: readonly RequestMemberSeed[] = [
+  { objective: "add the endpoint", surfaces: ["api"], paneId: "pane-1" },
+  { objective: "add the screen", surfaces: ["ui"], paneId: "pane-2" },
+];
+
+test("scheduling dispatches an independent request member and holds the one that depends on it", async () => {
+  await withRequestFixture(REQUEST_MEMBERS, async (fixture) => {
+    const [first, second] = fixture.memberIds;
+    if (first === undefined || second === undefined) throw new Error("members were not seeded");
+    await fixture.service.relateRequestTasks(fixture.requestId, {
+      taskId: second,
+      dependsOn: first,
+      reason: "the screen needs the endpoint",
+    });
+
+    await fixture.service.tick();
+
+    expect((await runtimeMember(fixture.home, first)).reservation).toBeDefined();
+    expect((await runtimeMember(fixture.home, second)).reservation).toBeUndefined();
+    expect((await runtimeMember(fixture.home, second)).jobs).toHaveLength(0);
+    expect((await fixture.service.get(second)).stage).toBe("queued");
+
+    const status = await fixture.service.requestStatus(fixture.requestId);
+    expect(status.aggregate.waiting).toEqual([
+      { taskId: second, waitingFor: [first], reason: `waiting for ${first} to finish` },
+    ]);
+  });
+});
+
+test("without a recorded dependency both request members are dispatched", async () => {
+  await withRequestFixture(REQUEST_MEMBERS, async (fixture) => {
+    const [first, second] = fixture.memberIds;
+    if (first === undefined || second === undefined) throw new Error("members were not seeded");
+
+    await fixture.service.tick();
+
+    expect((await runtimeMember(fixture.home, first)).reservation).toBeDefined();
+    expect((await runtimeMember(fixture.home, second)).reservation).toBeDefined();
+  });
+}, 20_000);
+
+test("a ready subset of request members never reports the request as delivered", async () => {
+  await withRequestFixture(REQUEST_MEMBERS, async (fixture) => {
+    const [first, second] = fixture.memberIds;
+    if (first === undefined || second === undefined) throw new Error("members were not seeded");
+    const store = createTaskStore({
+      directory: join(fixture.home, "tasks"),
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    const finished = await store.read(first);
+    if (finished === undefined) throw new Error("member task is missing");
+    await store.update(finished.id, finished.revision, (task) => ({
+      ...task,
+      revision: task.revision + 1,
+      updatedAt: TIMESTAMP,
+      stage: "ready",
+      reviewHead: "member-head-1",
+    }));
+
+    const status = await fixture.service.requestStatus(fixture.requestId);
+
+    expect(status.aggregate.completedTaskIds).toEqual([first]);
+    expect(status.aggregate.delivered).toBe(false);
+    expect(status.aggregate.readyToIntegrate).toBe(false);
+    expect(status.aggregate.incompleteReasons.join("; ")).toContain(second);
+    await expect(fixture.service.integrateRequest(fixture.requestId)).rejects.toThrow(
+      /cannot be integrated/u,
+    );
+  });
+});
+
+test("a restarted controller restores request relations without duplicating membership or jobs", async () => {
+  await withRequestFixture(REQUEST_MEMBERS, async (fixture) => {
+    const [first, second] = fixture.memberIds;
+    if (first === undefined || second === undefined) throw new Error("members were not seeded");
+    await fixture.service.relateRequestTasks(fixture.requestId, {
+      taskId: second,
+      dependsOn: first,
+      reason: "the screen needs the endpoint",
+    });
+    await fixture.service.tick();
+    const jobsBefore = (await runtimeMember(fixture.home, first)).jobs.length;
+
+    const restarted = fixture.restart();
+    try {
+      await restarted.tick();
+      const status = await restarted.requestStatus(fixture.requestId);
+
+      expect(status.record.members.map((member) => member.taskId)).toEqual([first, second]);
+      expect(status.record.dependencies).toHaveLength(1);
+      expect(status.record.dependencies[0]).toMatchObject({
+        taskId: second,
+        dependsOn: first,
+        status: "active",
+      });
+      expect(status.record.integration).toBeUndefined();
+      expect((await runtimeMember(fixture.home, first)).jobs).toHaveLength(jobsBefore);
+      expect((await runtimeMember(fixture.home, second)).reservation).toBeUndefined();
+      expect(status.aggregate.waiting.map((wait) => wait.taskId)).toEqual([second]);
+    } finally {
+      await restarted.shutdown();
+    }
+  });
+});
+
+test("a member of a request cannot be published on its own without approval to split delivery", async () => {
+  await withRequestFixture(REQUEST_MEMBERS, async (fixture) => {
+    const [first] = fixture.memberIds;
+    if (first === undefined) throw new Error("members were not seeded");
+
+    await expect(
+      fixture.service.publish(first, {
+        repository: "acme/repo",
+        title: "Deliver one member",
+        base: "main",
+        summary: { tldr: ["t"], what: ["w"], why: ["y"] },
+        approved: true,
+      }),
+    ).rejects.toThrow(/needs explicit approval to split delivery/u);
+
+    await fixture.service.approveRequestSplit(fixture.requestId);
+    await expect(
+      fixture.service.publish(first, {
+        repository: "acme/repo",
+        title: "Deliver one member",
+        base: "main",
+        summary: { tldr: ["t"], what: ["w"], why: ["y"] },
+        approved: true,
+      }),
+    ).rejects.toThrow(/delivery preflight refused publication/u);
+  });
 });

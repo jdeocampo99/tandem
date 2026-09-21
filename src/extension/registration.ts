@@ -118,6 +118,7 @@ export function registerTandemOmp(
         action: z.literal("configure-models"),
         repoPath: z.string(),
         models: modelAssignmentsSchema,
+        enabledProviders: z.array(z.string()).optional(),
       })
       .strict(),
     z
@@ -129,6 +130,7 @@ export function registerTandemOmp(
         acceptanceCriteria: z.array(z.string()),
         surfaces: z.array(z.string()),
         researchTaskIds: z.array(z.string()).optional(),
+        skill: z.object({ name: z.string(), context: z.string() }).strict().optional(),
       })
       .strict(),
     z.object({ action: z.literal("list") }).strict(),

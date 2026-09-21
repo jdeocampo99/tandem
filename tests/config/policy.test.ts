@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { writeModelSettings } from "../../src/config/models.ts";
 import { defaultPolicy, parsePolicy } from "../../src/config/policy.ts";
 import { onboardRepo, resolveRepoPolicy } from "../../src/config/repositories.ts";
 
@@ -387,4 +388,22 @@ test("review-level settings reject unknown keys, wrong types, and unsupported mo
   expect(() => parsePolicy({ reviewLevels: { reducedRouting: "yes" } })).toThrow(TypeError);
   expect(() => parsePolicy({ reviewLevels: { jevAssistance: "active" } })).toThrow(TypeError);
   expect(() => parsePolicy({ reviewLevels: [] })).toThrow(TypeError);
+});
+
+test("saved provider enablement is exposed through onboarding but never becomes part of the resolved policy", async () => {
+  await withFixture("provider-enablement-repo", async ({ repo, home }) => {
+    await writeModelSettings({
+      repoPath: repo,
+      home,
+      models: defaultPolicy().models,
+      enabledProviders: ["openai-codex"],
+    });
+
+    const onboarded = await onboardRepo({ repoPath: repo, home });
+    expect(onboarded.modelSettings.enabledProviders).toEqual(["openai-codex"]);
+
+    const resolved = await resolveRepoPolicy({ repoPath: repo, home });
+    expect(resolved.config).not.toHaveProperty("enabledProviders");
+    expect(resolved.config.models).toEqual(defaultPolicy().models);
+  });
 });
