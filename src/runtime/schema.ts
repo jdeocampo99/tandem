@@ -371,7 +371,7 @@ export type RequestSpendApproval = Readonly<{
   readonly requestId: string;
   readonly decisionId: string;
   readonly capMicros: number;
-  readonly previousCapMicros: number | "unset";
+  readonly previousCapMicros: number;
   readonly policyCapMicros: number | "unset";
   readonly policyDigest: string;
   readonly briefRevision: number;
@@ -384,7 +384,6 @@ export type RequestSpendApproval = Readonly<{
 }>;
 
 export const REQUEST_BUDGET_PAUSE_REASONS = [
-  "no-configured-cap",
   "estimate-unavailable",
   "exposure-unaccounted",
   "cap-would-be-exceeded",
@@ -400,7 +399,8 @@ export type RequestBudgetPause = Readonly<{
   readonly decisionId: string;
   readonly reason: RequestBudgetPauseReason;
   readonly taskId: string;
-  readonly capMicros: number | "unset";
+  /** The cap that stopped the request. A pause is only ever raised under a governing cap. */
+  readonly capMicros: number;
   readonly policyCapMicros: number | "unset";
   readonly policyDigest: string;
   readonly briefRevision: number;
@@ -1386,7 +1386,7 @@ function parseSpendApproval(value: unknown, field: string): RequestSpendApproval
     requestId: singleLine(value.requestId, `${field}.requestId`),
     decisionId: singleLine(value.decisionId, `${field}.decisionId`),
     capMicros: microDollars(value.capMicros, `${field}.capMicros`),
-    previousCapMicros: optionalMicroDollars(value.previousCapMicros, `${field}.previousCapMicros`),
+    previousCapMicros: microDollars(value.previousCapMicros, `${field}.previousCapMicros`),
     policyCapMicros: optionalMicroDollars(value.policyCapMicros, `${field}.policyCapMicros`),
     policyDigest: singleLine(value.policyDigest, `${field}.policyDigest`),
     briefRevision: nonNegativeInteger(value.briefRevision, `${field}.briefRevision`),
@@ -1404,7 +1404,7 @@ function parseBudgetPause(value: unknown, field: string): RequestBudgetPause {
     decisionId: singleLine(value.decisionId, `${field}.decisionId`),
     reason: enumValue(value.reason, REQUEST_BUDGET_PAUSE_REASONS, `${field}.reason`),
     taskId: singleLine(value.taskId, `${field}.taskId`),
-    capMicros: optionalMicroDollars(value.capMicros, `${field}.capMicros`),
+    capMicros: microDollars(value.capMicros, `${field}.capMicros`),
     policyCapMicros: optionalMicroDollars(value.policyCapMicros, `${field}.policyCapMicros`),
     policyDigest: singleLine(value.policyDigest, `${field}.policyDigest`),
     briefRevision: nonNegativeInteger(value.briefRevision, `${field}.briefRevision`),

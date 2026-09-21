@@ -13,6 +13,7 @@ import {
   type RequestSpendAdmission,
   requestBudgetFor,
   requestOperationSettlements,
+  withoutRequestBudget,
   withRequestBudget,
 } from "../../src/runtime/budget.ts";
 import { createRequestSpendGate, type RequestSpendGate } from "../../src/runtime/budget-gate.ts";
@@ -36,6 +37,12 @@ type BudgetWorld = Readonly<{
   readonly gate: RequestSpendGate;
   readonly recordSample: (input: SampleInput) => Promise<void>;
   readonly restart: () => RequestSpendGate;
+  /** Runs one admission exactly as the runtime does, persisting whatever it decides. */
+  readonly decide: (
+    task: TaskRecord,
+    operationId: string,
+  ) => Promise<RequestSpendAdmission | undefined>;
+  /** The same admission, asserting that a cap governed it. */
   readonly admit: (task: TaskRecord, operationId: string) => Promise<RequestSpendAdmission>;
   readonly state: () => Promise<RuntimeState>;
 }>;
@@ -167,20 +174,33 @@ async function withBudgetWorld(
     tasks: taskIds.map((taskId) => runtimeTask(taskId, [])),
     presentations: [],
   });
-  const admit = async (task: TaskRecord, operationId: string): Promise<RequestSpendAdmission> =>
+  const decide = async (
+    task: TaskRecord,
+    operationId: string,
+  ): Promise<RequestSpendAdmission | undefined> =>
     store.exclusive(async () => {
       const state = await readRuntimeState(path);
       const admission = await gate.decideAdmission({ task, state, operationId });
-      if (admission === undefined) throw new Error("an ungoverned task reached the budget gate");
-      await writeRuntimeState(path, withRequestBudget(state, admission.budget));
+      await writeRuntimeState(
+        path,
+        admission === undefined
+          ? withoutRequestBudget(state, task.requestId)
+          : withRequestBudget(state, admission.budget),
+      );
       return admission;
     });
+  const admit = async (task: TaskRecord, operationId: string): Promise<RequestSpendAdmission> => {
+    const admission = await decide(task, operationId);
+    if (admission === undefined) throw new Error("no cap governed this admission");
+    return admission;
+  };
   await run(
     {
       home,
       store,
       gate,
       restart: newGate,
+      decide,
       admit,
       state: () => readRuntimeState(path),
       recordSample: async ({ operationId, sampleIdentity, inputTokens, priced }) => {
@@ -261,22 +281,91 @@ test("an independent task under the same request cannot walk past the budget pau
   );
 });
 
-test("a request with no configured cap pauses instead of running unlimited", async () => {
+test("a request with no configured cap is not spend-governed at all", async () => {
   await withBudgetWorld(
     async (world, tasks) => {
       const task = tasks[0];
       if (task === undefined) throw new Error("the world seeded no task");
-      const admission = await world.admit(task, "op-a");
-      expect(admission.outcome).toBe("paused");
-      if (admission.outcome !== "paused") return;
-      expect(admission.pause.reason).toBe("no-configured-cap");
-      expect(admission.pause.capMicros).toBe("unset");
+      expect(await world.decide(task, "op-a")).toBeUndefined();
 
       const readout = await world.gate.readSpend(REQUEST_ID);
       expect(readout.cap.source).toBe("none");
+      expect(readout.pause).toBeUndefined();
+      expect(readout.reservations).toEqual([]);
       expect(readout.exposure.reservedMicros).toBe(0);
+      expect(requestBudgetFor(await world.state(), REQUEST_ID)).toBeUndefined();
     },
     { capMicros: "unset", operationEstimateMicros: "unset" },
+  );
+});
+
+test("an ungoverned request accumulates no budget state across repeated admissions", async () => {
+  await withBudgetWorld(
+    async (world, tasks) => {
+      const task = tasks[0];
+      if (task === undefined) throw new Error("the world seeded no task");
+      for (const operationId of ["op-a", "op-b", "op-c"]) {
+        expect(await world.decide(task, operationId)).toBeUndefined();
+      }
+      await world.recordSample({
+        sampleIdentity: "review-assistance-1",
+        inputTokens: "unavailable",
+        priced: false,
+      });
+      expect(await world.decide(task, "op-d")).toBeUndefined();
+
+      expect((await world.state()).requestBudgets ?? []).toEqual([]);
+      const readout = await world.gate.readSpend(REQUEST_ID);
+      expect(readout.reservations).toEqual([]);
+      expect(readout.exposure.totalMicros).toBe(0);
+      expect(readout.pause).toBeUndefined();
+    },
+    { capMicros: "unset", operationEstimateMicros: 400_000 },
+  );
+});
+
+test("a configured cap still stops the request when the next step does not fit", async () => {
+  await withBudgetWorld(
+    async (world, tasks) => {
+      const task = tasks[0];
+      if (task === undefined) throw new Error("the world seeded no task");
+      expect((await world.admit(task, "op-a")).outcome).toBe("admitted");
+
+      const stopped = await world.admit(task, "op-b");
+      expect(stopped.outcome).toBe("paused");
+      if (stopped.outcome !== "paused") return;
+      expect(stopped.raised).toBe(true);
+      expect(stopped.pause.reason).toBe("cap-would-be-exceeded");
+      expect(stopped.pause.capMicros).toBe(500_000);
+      expect(stopped.pause.nextStepMicros).toBe(400_000);
+
+      const readout = await world.gate.readSpend(REQUEST_ID);
+      expect(readout.pause?.decisionId).toBe(stopped.pause.decisionId);
+      expect(readout.reservations.map((entry) => entry.operationId)).toEqual(["op-a"]);
+    },
+    { capMicros: 500_000, operationEstimateMicros: 400_000 },
+  );
+});
+
+test("removing the cap releases a standing decision instead of stranding the request", async () => {
+  await withBudgetWorld(
+    async (world, tasks) => {
+      const task = tasks[0];
+      if (task === undefined) throw new Error("the world seeded no task");
+      expect((await world.admit(task, "op-a")).outcome).toBe("admitted");
+      expect((await world.admit(task, "op-b")).outcome).toBe("paused");
+
+      const ungoverned = await world.store.update(task.id, task.revision, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        policy: resolvedPolicy({ capMicros: "unset", operationEstimateMicros: 400_000 }),
+      }));
+      expect(await world.decide(ungoverned, "op-c")).toBeUndefined();
+
+      expect(requestBudgetFor(await world.state(), REQUEST_ID)).toBeUndefined();
+      expect((await world.gate.readSpend(REQUEST_ID)).pause).toBeUndefined();
+    },
+    { capMicros: 500_000, operationEstimateMicros: 400_000 },
   );
 });
 

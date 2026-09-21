@@ -58,8 +58,9 @@ const REQUEST_BUDGET_KEYS: Readonly<Record<string, true>> = {
 };
 
 /**
- * No standing amount is assumed for anyone. Until a repository configures both, a request pauses
- * for an explicit spending decision rather than running against a cap Tandem invented for it.
+ * No standing amount is assumed for anyone. Until a repository configures a cap, its requests are
+ * not spend-governed and run as they did before budgets existed, rather than pausing against a cap
+ * Tandem invented for them. Configuring `capMicros` turns the whole feature on for that repository.
  */
 export const DEFAULT_REQUEST_BUDGET: RequestBudgetPolicy = {
   capMicros: "unset",

@@ -98,7 +98,7 @@ test("a request whose next step cannot fit stops before launch and asks exactly 
   });
 });
 
-test("a request with no standing cap pauses rather than running unlimited", async () => {
+test("a request with no standing cap runs ungoverned and asks nothing", async () => {
   await withScenario({}, async (world) => {
     const service = createTandemService({
       home: world.home,
@@ -119,7 +119,7 @@ test("a request with no standing cap pauses rather than running unlimited", asyn
       briefRevision: drafted.record.draft.revision,
       contentDigest: drafted.record.draft.contentDigest,
     });
-    await seedScenarioTask(world, {
+    const task = await seedScenarioTask(world, {
       kind: "implementation",
       stage: "queued",
       requestId,
@@ -131,8 +131,15 @@ test("a request with no standing cap pauses rather than running unlimited", asyn
 
     const spend = await service.requestSpend(requestId);
     expect(spend.cap.source).toBe("none");
-    expect(spend.pause?.reason).toBe("no-configured-cap");
+    expect(spend.pause).toBeUndefined();
+    expect(spend.reservations).toEqual([]);
     expect(spend.exposure.totalMicros).toBe(0);
+
+    const runtimeState = await readRuntimeState(runtimeFile(world.home));
+    expect(runtimeState.requestBudgets ?? []).toEqual([]);
+    expect(runtimeState.tasks[0]?.operation).toBeDefined();
+    const admitted = await service.get(task.id);
+    expect(budgetDecisionNotices(admitted.notifications.map((entry) => entry.message))).toEqual([]);
     await service.shutdown();
   });
 });

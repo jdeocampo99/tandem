@@ -44,9 +44,9 @@ export type RequestSpendReconciliation = Readonly<{
 
 export type RequestSpendGate = Readonly<{
   /**
-   * Decides whether one operation may start, or returns `undefined` when no request governs the
-   * task. The caller persists `admission.budget` with its own runtime write; nothing is reserved
-   * until it does.
+   * Decides whether one operation may start, or returns `undefined` when the operation is not
+   * spend-governed: no request governs the task, or no cap governs that request. The caller
+   * persists `admission.budget` with its own runtime write; nothing is reserved until it does.
    */
   readonly decideAdmission: (
     request: RequestSpendAdmissionRequest,
