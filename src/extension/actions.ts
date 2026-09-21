@@ -1,5 +1,11 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { RepoPolicy, RequestBriefContent, TaskKind, TaskRecord } from "../contracts.ts";
+import type {
+  RepoPolicy,
+  RequestBriefContent,
+  SkillInvocation,
+  TaskKind,
+  TaskRecord,
+} from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import { describeSpendMicros } from "../runtime/budget.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
@@ -64,6 +70,7 @@ export type TandemAction =
       readonly action: "configure-models";
       readonly repoPath: string;
       readonly models: RepoPolicy["models"];
+      readonly enabledProviders?: readonly string[] | undefined;
     }>
   | Readonly<{
       readonly action: "create";
@@ -73,6 +80,8 @@ export type TandemAction =
       readonly acceptanceCriteria: readonly string[];
       readonly surfaces: readonly string[];
       readonly researchTaskIds?: readonly string[] | undefined;
+      /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
+      readonly skill?: SkillInvocation | undefined;
     }>
   | Readonly<{ readonly action: "list" }>
   | Readonly<{ readonly action: "presentations" }>
@@ -271,9 +280,15 @@ async function approvalPrompt(
       choices.length === 0
         ? "No model choices were provided."
         : choices.map((entry) => `- ${entry}`).join("\n");
+    const providerDetails =
+      action.enabledProviders === undefined
+        ? ""
+        : `\n\nEnabled providers (explicit spending permission, replaces any saved set): ${
+            action.enabledProviders.length === 0 ? "none" : action.enabledProviders.join(", ")
+          }.`;
     return {
       title: "Save Tandem model choices?",
-      message: `Proposed choices by job:\n${choiceDetails}\n\nThese choices will be saved on this computer and reused across projects for future work. They replace any saved choices. Saving them does not change the project or start work.`,
+      message: `Proposed choices by job:\n${choiceDetails}${providerDetails}\n\nThese choices will be saved on this computer and reused across projects for future work. They replace any saved choices. Saving them does not change the project or start work.`,
     };
   }
   if (action.action === "setup") {
@@ -380,6 +395,7 @@ function serviceCreateInput(
     acceptanceCriteria: action.acceptanceCriteria,
     surfaces: action.surfaces,
     ...(action.researchTaskIds === undefined ? {} : { researchTaskIds: action.researchTaskIds }),
+    ...(action.skill === undefined ? {} : { skill: action.skill }),
   };
 }
 
@@ -408,7 +424,13 @@ export async function executeTandemAction(
       return textResult(await service.models(action.repoPath), action.action);
     case "configure-models":
       return textResult(
-        await service.configureModels({ repoPath: action.repoPath, models: action.models }),
+        await service.configureModels({
+          repoPath: action.repoPath,
+          models: action.models,
+          ...(action.enabledProviders === undefined
+            ? {}
+            : { enabledProviders: action.enabledProviders }),
+        }),
         action.action,
         true,
       );

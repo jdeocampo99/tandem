@@ -15,11 +15,13 @@ import {
 import {
   AGENT_ROLE_KEYS,
   assertKnownKeys,
+  deduplicateStrings,
   hasKey,
   isRecord,
   MODEL_KEYS,
   parseJson,
   readModelSelector,
+  readNonEmptyString,
   readThinkingLevel,
 } from "./values.ts";
 
@@ -28,12 +30,15 @@ const MODEL_SETTINGS_SCHEMA_VERSION = 1;
 const MODEL_SETTINGS_ENVELOPE_KEYS: Readonly<Record<string, true>> = {
   schemaVersion: true,
   models: true,
+  enabledProviders: true,
 };
 
 export type ModelSettings = Readonly<{
   configPath: string;
   configured: boolean;
   models?: RepoPolicy["models"];
+  /** Providers explicitly approved for spending; catalogue discovery alone never adds one here. */
+  enabledProviders: readonly string[];
 }>;
 type ModelSettingsPaths = Readonly<{
   home: string;
@@ -86,7 +91,22 @@ function modelSettingsPaths(root: string, home: ResolvedHome): ModelSettingsPath
   }
   return { home: home.canonical, config, requestedConfig };
 }
-function parseStoredModelSettings(text: string, source: string): RepoPolicy["models"] {
+/** Reads the explicit spending-permission provider set; absent means none, never "all discovered". */
+function readEnabledProviders(value: unknown, field: string): readonly string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${field} must be an array of provider ids`);
+  }
+  const providers = value.map((entry, index) => readNonEmptyString(entry, `${field}[${index}]`));
+  return [...deduplicateStrings(providers)].sort();
+}
+
+type StoredModelSettings = Readonly<{
+  models: RepoPolicy["models"];
+  enabledProviders: readonly string[];
+}>;
+
+function parseStoredModelSettings(text: string, source: string): StoredModelSettings {
   const envelope = parseJson(text, source);
   if (!isRecord(envelope)) {
     throw new TypeError(`${source} must be an object`);
@@ -98,7 +118,10 @@ function parseStoredModelSettings(text: string, source: string): RepoPolicy["mod
   if (envelope.schemaVersion !== MODEL_SETTINGS_SCHEMA_VERSION) {
     throw new TypeError(`${source}.schemaVersion must be ${MODEL_SETTINGS_SCHEMA_VERSION}`);
   }
-  return parseModelAssignments(envelope.models);
+  return {
+    models: parseModelAssignments(envelope.models),
+    enabledProviders: readEnabledProviders(envelope.enabledProviders, `${source}.enabledProviders`),
+  };
 }
 
 /** Reads model settings after repository and Tandem-home paths have been canonicalized. */
@@ -119,12 +142,14 @@ export async function readModelSettingsAt(
     }
   }
   if (text === undefined) {
-    return { configPath: paths.config, configured: false };
+    return { configPath: paths.config, configured: false, enabledProviders: [] };
   }
+  const stored = parseStoredModelSettings(text, paths.config);
   return {
     configPath: paths.config,
     configured: true,
-    models: parseStoredModelSettings(text, paths.config),
+    models: stored.models,
+    enabledProviders: stored.enabledProviders,
   };
 }
 
@@ -145,6 +170,8 @@ export async function writeModelSettings(
     repoPath: string;
     home: string;
     models: RepoPolicy["models"];
+    /** Omit to preserve the previously saved provider enablement; never defaults to "all discovered". */
+    enabledProviders?: readonly string[] | undefined;
   }>,
 ): Promise<ModelSettings> {
   const root = await repositoryRoot(options.repoPath);
@@ -152,7 +179,13 @@ export async function writeModelSettings(
   const paths = modelSettingsPaths(root, home);
   const models = parseModelAssignments(options.models);
   const existing = await inspectPolicyPath(paths);
-  if (existing.exists) await readModelSettingsAt(root, home, undefined);
+  const priorSettings = existing.exists
+    ? await readModelSettingsAt(root, home, undefined)
+    : undefined;
+  const enabledProviders =
+    options.enabledProviders === undefined
+      ? (priorSettings?.enabledProviders ?? [])
+      : readEnabledProviders(options.enabledProviders, "enabledProviders");
 
   await ensurePrivateDirectoryTree(paths.home, "Tandem home");
   const beforeWrite = await inspectPolicyPath(paths);
@@ -160,6 +193,7 @@ export async function writeModelSettings(
   await writeJsonAtomically(paths.config, {
     schemaVersion: MODEL_SETTINGS_SCHEMA_VERSION,
     models,
+    enabledProviders,
   });
   const afterWrite = await inspectPolicyPath(paths);
   if (!afterWrite.exists) throw new Error(`model settings write did not create ${paths.config}`);

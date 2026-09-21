@@ -1,4 +1,4 @@
-import { type AgentRole, isAgentRole } from "./contracts.ts";
+import { type AgentRole, isAgentRole, type SkillInvocation } from "./contracts.ts";
 
 export type AgentBriefReview = Readonly<{
   readonly head: string;
@@ -15,6 +15,8 @@ export type AgentBriefInput = Readonly<{
   readonly reportPath: string;
   readonly review?: AgentBriefReview;
   readonly artifacts?: readonly string[];
+  /** An explicit, user-invoked skill pinned to this worker; opaque to Tandem beyond its identity. */
+  readonly skill?: SkillInvocation;
 }>;
 
 export type ReviewLensId = "behavior" | "design" | "coverage" | "verification";
@@ -73,6 +75,8 @@ selected active tasks.
 
 If delegation is blocked, never silently take over research. Ask for and receive explicit user authorization before researching directly.
 
+When the user explicitly invokes a named skill, record it verbatim on the create action's skill field (name plus the bounded invocation context) rather than describing it in the objective; this needs no fuzzy intent classification. The skill is delivered only to the one worker that performs the task and never invents its domain semantics; it does not by itself approve implementation, publishing, merging, deployment, or a destructive action.
+
 When the user gives a clear direction within an already approved scope, forward it with the steer action without asking for redundant generic approval. Keep messages as concise deltas, batch independent pending directions in order, and use supersedes to replace obsolete directions explicitly; a materially wider scope still needs the normal approval workflow. Steer returns a queued receipt; let the child apply it at the next safe boundary. Query messages only when the user asks or before a dependent decision, never in a repeated model-driven polling loop.
 
 When a worker reports a needs-decision question, keep the main conversation as the single user inbox. First inspect the durable current question (including its question id, recommendation, report path, task scope, approval state, and relevant repository evidence). Resolve it yourself only when the answer is already established by explicit prior user direction, the approved scope, or unambiguous in-scope repository facts and the action is non-destructive; send that concise rationale through the existing exact-id answer API. For a presentation question, preserve its presentation/task identity and exact question id; the controller routes the same answer request to the presentation runtime. Escalate genuine product choices, ambiguous evidence, scope changes, credentials, approval-bearing actions, and destructive, publishing, merging, or deploying decisions to the user without inferring consent. Preserve presentation identity and never claim artifact success before its worker completes. Mechanical/UI receipts, heartbeats, and passive progress do not require a model turn. Never claim implementation completion from enqueue or context receipt; PR-ready coordinator notifications remain actionable.
@@ -94,6 +98,7 @@ export const COORDINATOR_TOOL_GUIDANCE = [
   "Use the tandem tool for durable state and actions; call it with {request: {action: ...}} and do not claim a task transition from prose.",
   "Tool text is a bounded action summary; full structured state remains in tool details and durable reports. Use show and report paths when deeper evidence is needed.",
   "Research/scout work is automatic after task creation; implementation still needs explicit scope approval.",
+  "For an explicit skill invocation, pass create's skill field with the exact name and bounded context; do not classify or infer it. It reaches only the intended worker and never authorizes implementation, publishing, merging, deployment, or a destructive action by itself.",
   "Within already approved scope, forward a clear user direction with steer without adding a redundant generic approval step; do not use it to widen scope or change pinned policy.",
   "Keep steering messages as concise deltas, batch independent pending directions in order, and explicitly supersede obsolete directions. Query messages only when the user asks or before a dependent decision, not in a repeated model-driven polling loop.",
   "Steer returns a queued receipt; let the child apply it at the next native safe boundary. Mechanical/UI receipt, heartbeat, and progress updates do not wake a model and do not require follow-up turns.",
@@ -106,8 +111,8 @@ export const COORDINATOR_TOOL_GUIDANCE = [
   "Routine scheduler notifications, receipts, progress, and heartbeats are shown in the UI/durable log without a model turn; actionable blockers, judgment-needed reports, and PR-ready delivery notices may wake the coordinator.",
   "An undefined worker timeout has no default total-runtime kill; explicit positive limits, validation timeouts, and cancellation remain in force.",
   "Approval-bearing actions are human-confirmed at runtime and fail closed without interactive UI; safe cleanup does not require approval, while discard does.",
-  "On first onboarding, inspect modelSettings.configured. If no choices are saved, call models once and present six separate role choices in order: Planning (coordinator), Research (scout), Coding (implementer), Review (reviewer), Final checks (verifier), and Presentations (presentation). For each role, show the suggested exact catalogue selector, supported thinking level, and short reason; require an explicit accept, adjust, or decline answer for every role. Never infer or group roles, and never treat built-in suggestions as approved. Before configure-models, recap all six exact model+thinking selections and ask for explicit human approval; configure-models is the only model write and setup is separately approved. If the user chooses Not now, pause without configure-models, project setup, or launch; do not fall through to built-in defaults.",
-  "On repeat onboarding, show every saved role's exact catalogue selector and thinking level, then offer Keep all, Change roles, or Not now. Keep all is read-only reuse and may continue separately approved project setup without forcing re-selection; Change roles asks explicitly for every role, including keep-current answers for untouched roles, preserves them, and recaps all six before configure-models approval. Not now pauses onboarding without changing saved choices. Never silently reuse choices or start a model questionnaire from setup's post-save result.",
+  "On first onboarding, inspect modelSettings.configured. If no choices are saved, call models once to fetch the OMP catalogue and show provider state in two distinct dimensions: providers the catalogue discovered and providers the user has explicitly enabled for spending. Discovery or a present credential never authorizes spending; only enabled providers are eligible Balanced candidates. Propose the resolved Balanced profile by default with a compact one-line-per-role summary (Planning/coordinator, Research/scout, Coding/implementer, Review/reviewer, Final checks/verifier, Presentations/presentation); exact selectors, thinking levels, capability evidence, and reasons are available on expansion rather than mandatory reading. The user may accept the proposal as-is, inspect and override any individual role, change provider enablement, or choose Not now. If Balanced cannot resolve every role (missing catalogue data, unsupported thinking/capability, invalid selectors, unavailable authentication, or absent spending permission), disclose exactly which roles are unresolved and why; never substitute a built-in pin, fuzzy alias, or silent fallback, and collect the remaining roles explicitly instead. Before configure-models, recap the complete six-role configuration exactly as it will be saved and ask for explicit human approval; configure-models is the only model write and setup is separately approved. If the user chooses Not now, pause without configure-models, project setup, or launch.",
+  "On repeat onboarding, show a compact summary of the saved profile with every role's exact catalogue selector and thinking level, then offer Keep all, Change roles, or Not now. Keep all is read-only reuse and may continue separately approved project setup without forcing re-selection. Change roles asks explicitly for every role, including keep-current answers for untouched roles, preserves those assignments, and recaps only the concise change plus the complete proposed configuration before configure-models approval; never silently rebalance or rewrite unrelated existing role assignments. Not now pauses onboarding without changing saved choices. Never silently reuse choices or start a model questionnaire from setup's post-save result.",
 ].join("\n");
 
 /** The five applicable principles, named so a review brief can list them as blocking requirements. */
@@ -272,6 +277,16 @@ function readReviewContext(review: AgentBriefReview): AgentBriefReview {
     : { head, generation: review.generation, pass, findings };
 }
 
+function readSkill(skill: SkillInvocation): SkillInvocation {
+  if (skill === null || typeof skill !== "object" || Array.isArray(skill)) {
+    throw new TypeError("skill must be an object");
+  }
+  return {
+    name: readSingleLineText(skill.name, "skill.name"),
+    context: readNonEmptyText(skill.context, "skill.context"),
+  };
+}
+
 function formatBullets(entries: readonly string[]): string[] {
   const lines: string[] = [];
   for (const entry of entries) {
@@ -342,6 +357,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
   const review = input.review === undefined ? undefined : readReviewContext(input.review);
   const artifacts =
     input.artifacts === undefined ? undefined : readPromptList(input.artifacts, "artifacts");
+  const skill = input.skill === undefined ? undefined : readSkill(input.skill);
 
   const reportInstructions =
     input.role === "presentation"
@@ -365,6 +381,20 @@ export function buildAgentBrief(input: AgentBriefInput): string {
     "## Instructions",
     ...formatBullets(instructions),
     "",
+    ...(skill === undefined
+      ? []
+      : [
+          "## Skill",
+          `Requested skill: ${skill.name}`,
+          ...formatBullets([
+            "This is an opaque, explicitly user-invoked capability; do not load, infer, or run any other skill.",
+            "Tandem does not interpret this skill's domain semantics; follow the context below as the skill's own instructions within the objective and acceptance criteria above.",
+            "If running this skill needs a user decision, return Outcome: needs-decision through the existing report protocol; never open a separate user conversation or channel.",
+          ]),
+          "",
+          skill.context,
+          "",
+        ]),
     "## Report",
     ...formatBullets(reportInstructions),
     ...formatBullets(COMMON_AGENT_INSTRUCTIONS),
