@@ -40,6 +40,7 @@ export type TaskCreationRequest = Readonly<{
   readonly requestId?: string;
   readonly researchHandoffs?: TaskRecord["researchHandoffs"];
   readonly researchContinuation?: TaskRecord["researchContinuation"];
+  readonly skill?: TaskRecord["skill"];
 }>;
 
 export function isTerminalTask(task: TaskRecord): boolean {
@@ -307,6 +308,11 @@ export function reviewFindings(task: TaskRecord): readonly Finding[] {
   return findings;
 }
 
+/** The worker role that actually performs the task's work, as opposed to review or verification. */
+function isSkillEligibleRole(role: WorkerRole): boolean {
+  return role === "implementer" || role === "scout";
+}
+
 export function buildPrompt(
   task: TaskRecord,
   role: WorkerRole,
@@ -316,6 +322,7 @@ export function buildPrompt(
   extraInstructions: readonly string[] = [],
 ): string {
   const guidance = task.policy.guidance[roleChannel(role)].map((entry) => entry.text);
+  const skill = isSkillEligibleRole(role) ? task.skill : undefined;
   return buildAgentBrief({
     role,
     objective: task.objective,
@@ -324,6 +331,7 @@ export function buildPrompt(
     reportPath,
     ...(review === undefined ? {} : { review }),
     ...(artifacts.length === 0 ? {} : { artifacts }),
+    ...(skill === undefined ? {} : { skill }),
   });
 }
 
@@ -523,5 +531,6 @@ export function taskInputFor(
     ...(request.researchContinuation === undefined
       ? {}
       : { researchContinuation: request.researchContinuation }),
+    ...(request.skill === undefined ? {} : { skill: request.skill }),
   };
 }

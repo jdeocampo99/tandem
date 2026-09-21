@@ -35,6 +35,7 @@ import {
   type ReviewResult,
   SAFETY_FLOOR_ORDER,
   type SafetyFloor,
+  type SkillInvocation,
   type TaskCleanupState,
   type TaskCleanupStatus,
   type TaskKind,
@@ -51,6 +52,7 @@ import { FINDING_STATUSES } from "./findings.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { DEFAULT_REVIEW_LEVEL_POLICY } from "./review-levels.ts";
+import { checkSkillInvocation } from "./skill-invocation.ts";
 import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
 
 const TASK_STAGES: readonly TaskStage[] = [
@@ -117,6 +119,7 @@ const TOP_LEVEL_KEYS = [
   "findingLedger",
   "researchHandoffs",
   "researchContinuation",
+  "skill",
   "reportPath",
   "blockReason",
   "notifications",
@@ -842,6 +845,12 @@ function parseResearchHandoff(value: unknown, source: string): ResearchHandoff {
   };
 }
 
+function parseSkillInvocation(value: unknown, source: string): SkillInvocation {
+  const check = checkSkillInvocation(value);
+  if (!check.valid) failState(source, check.defect);
+  return check.invocation;
+}
+
 /**
  * Scout records carry a durable post-research disposition. Records written before the field
  * existed load with the conservative default; anything else present is rejected rather than
@@ -969,6 +978,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   const cleanupValue = Object.hasOwn(value, "cleanup")
     ? requiredValue(value, "cleanup", source)
     : undefined;
+  const skillValue = Object.hasOwn(value, "skill")
+    ? requiredValue(value, "skill", source)
+    : undefined;
   const kind = requiredEnum(value, "kind", TASK_KINDS, source);
   const researchContinuation = parseResearchContinuation(value, kind, source);
   const taskBase = {
@@ -1010,6 +1022,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
           ),
         }),
     ...(researchContinuation === undefined ? {} : { researchContinuation }),
+    ...(skillValue === undefined
+      ? {}
+      : { skill: parseSkillInvocation(skillValue, `${source}.skill`) }),
   };
   return {
     ...taskBase,

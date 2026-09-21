@@ -265,6 +265,105 @@ test("pins a complete resolved policy snapshot when creating a task", () => {
   expect(task.policy.guidance.validation[0]?.text).toBe("validation guidance");
 });
 
+test("pins an explicit skill invocation and rejects a malformed one", () => {
+  const withoutSkill = createTask(implementationInput, "2026-09-15T00:00:00.000Z");
+  expect(withoutSkill.skill).toBeUndefined();
+
+  const withSkill = createTask(
+    {
+      ...implementationInput,
+      id: "skill-task",
+      skill: { name: "refactor-functions", context: "Apply the five function-review principles." },
+    },
+    "2026-09-15T00:00:00.000Z",
+  );
+  expect(withSkill.skill).toEqual({
+    name: "refactor-functions",
+    context: "Apply the five function-review principles.",
+  });
+
+  const invalidSkill = {
+    ...implementationInput,
+    skill: { name: "", context: "Apply the five function-review principles." },
+  } as unknown as TaskInput;
+  expect(() => createTask(invalidSkill, "2026-09-15T00:00:00.000Z")).toThrow(TypeError);
+
+  const unexpectedField = {
+    ...implementationInput,
+    skill: { name: "refactor-functions", context: "context", scope: "everything" },
+  } as unknown as TaskInput;
+  expect(() => createTask(unexpectedField, "2026-09-15T00:00:00.000Z")).toThrow(TypeError);
+});
+
+test("a pinned skill invocation survives approval, a fix round, and evidence invalidation", () => {
+  const skill = {
+    name: "refactor-functions",
+    context: "Apply the five function-review principles.",
+  };
+  const created = createTask(
+    { ...implementationInput, id: "skill-lifecycle", skill },
+    "2026-09-15T00:00:00.000Z",
+  );
+  const approved = transitionTask(created, { type: "approve" }, context());
+  const started = transitionTask(
+    approved,
+    { type: "start", worktree, endpoints: [endpoint(approved.generation)] },
+    context(),
+  );
+  expect(started.skill).toEqual(skill);
+
+  const afterImplementation = transitionTask(
+    started,
+    { type: "implementation-complete", head: "head-1", generation: started.generation },
+    context(),
+  );
+  const awaitingFixes = transitionTask(
+    afterImplementation,
+    {
+      type: "validation-failed",
+      head: "head-1",
+      generation: started.generation,
+      contract: "final",
+      policyDigest,
+      evidence: [evidence("head-1", "final", 1)],
+    },
+    context(),
+  );
+  expect(awaitingFixes.skill).toEqual(skill);
+
+  const fixing = transitionTask(
+    awaitingFixes,
+    { type: "begin-fixes", head: "head-1", generation: started.generation },
+    context(),
+  );
+  expect(fixing.skill).toEqual(skill);
+  expect(fixing.generation).toBe(started.generation + 1);
+
+  const afterSecondImplementation = transitionTask(
+    fixing,
+    { type: "implementation-complete", head: "head-2", generation: fixing.generation },
+    context(),
+  );
+  const reviewing = transitionTask(
+    afterSecondImplementation,
+    {
+      type: "validation-succeeded",
+      head: "head-2",
+      generation: fixing.generation,
+      contract: "iteration",
+      policyDigest,
+      evidence: [evidence("head-2", "iteration")],
+    },
+    context(),
+  );
+  const invalidated = transitionTask(
+    reviewing,
+    { type: "invalidate-evidence", head: "head-2", generation: fixing.generation },
+    context(),
+  );
+  expect(invalidated.skill).toEqual(skill);
+});
+
 test("keeps implementation behind explicit approval and binds starts to a worktree generation", () => {
   const initial = createTask(implementationInput, "2026-09-15T00:00:00.000Z");
   expect(initial.stage).toBe("awaiting-approval");
