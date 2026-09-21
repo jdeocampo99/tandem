@@ -18,6 +18,7 @@ import { createTandemExtension, reviewStatus } from "../../src/extension.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";
 
 const models: Readonly<
   Record<
@@ -1158,6 +1159,7 @@ test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct
     tasks: [readyTask, exhausted],
     requests: [],
     delivered: new Set<string>(),
+    unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1191,6 +1193,68 @@ test("a draft pull request is summarized as unfinished visibility, never as acce
   expect(summary).toContain(
     "Draft visibility only: the draft is unfinished and is not evidence of readiness",
   );
+});
+
+test("a failed acknowledgement retries on the next tick without waking the coordinator again", async () => {
+  const sent: Array<{ readonly content: string; readonly options: unknown }> = [];
+  const acknowledged: string[] = [];
+  let acknowledgementsFail = true;
+  const service: Pick<TandemService, "acknowledge" | "acknowledgeRequest"> = {
+    acknowledgeRequest: async () => {
+      throw new Error("no request notification is expected in this scenario");
+    },
+    acknowledge: async (taskId, notificationId) => {
+      if (acknowledgementsFail) {
+        throw new StoreLockTimeoutError("/tmp/tandem/home", 5_000);
+      }
+      acknowledged.push(`${taskId}:${notificationId}`);
+      return task({ id: taskId });
+    },
+  };
+  const sink = notificationSink(
+    (content, options) => sent.push({ content, options }),
+    () => undefined,
+  );
+  const context = notificationContext(() => undefined);
+  const blocked = transitionTask(
+    task({ stage: "implementing" }),
+    { type: "block", reason: "worktree allocation failed before worker launch" },
+    { now: "2030-01-02T03:04:06.000Z", notificationId: "blocked-notification" },
+  );
+  const delivered = new Set<string>();
+  const unacknowledgedKeys = new Set<string>();
+  const deliver = async (): Promise<void> =>
+    deliverPendingNotifications({
+      pi: sink,
+      service,
+      tasks: [blocked],
+      requests: [],
+      delivered,
+      unacknowledged: unacknowledgedKeys,
+      ctx: context,
+      reportReadable: async () => true,
+    });
+
+  // The wake reaches the coordinator, then the acknowledgement loses the state-lock race.
+  await deliver();
+  expect(sent).toHaveLength(1);
+  expect(acknowledged).toHaveLength(0);
+  expect(unacknowledgedKeys.has("task-1:blocked-notification")).toBe(true);
+
+  // Later ticks over the same still-unacknowledged record must not send the wake a second time.
+  await deliver();
+  await deliver();
+  expect(sent).toHaveLength(1);
+
+  // Once the lock is free the acknowledgement lands, exactly once, with no further wake.
+  acknowledgementsFail = false;
+  await deliver();
+  expect(sent).toHaveLength(1);
+  expect(acknowledged).toEqual(["task-1:blocked-notification"]);
+  expect(unacknowledgedKeys.size).toBe(0);
+
+  await deliver();
+  expect(acknowledged).toEqual(["task-1:blocked-notification"]);
 });
 
 test("fresh block transitions wake the coordinator once through the bridge", async () => {
@@ -1240,6 +1304,7 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
     { now: "2030-01-02T03:04:06.000Z", notificationId: "blocked-notification" },
   );
   const delivered = new Set<string>();
+  const unacknowledgedKeys = new Set<string>();
 
   await deliverPendingNotifications({
     pi: sink,
@@ -1247,6 +1312,7 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
     tasks: [blocked],
     requests: [],
     delivered: delivered,
+    unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1256,6 +1322,7 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
     tasks: [blocked],
     requests: [],
     delivered: delivered,
+    unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1321,6 +1388,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
     );
     const context = notificationContext((message) => notices.push(message));
     const delivered = new Set<string>();
+    const unacknowledgedKeys = new Set<string>();
     const service = createTandemService({
       home,
       sessionId: "extension-scout-session",
@@ -1334,6 +1402,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         tasks: [completed],
         requests: [],
         delivered: delivered,
+        unacknowledged: unacknowledgedKeys,
         ctx: context,
         reportReadable: async () => true,
       });
@@ -1343,6 +1412,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         tasks: [completed],
         requests: [],
         delivered: delivered,
+        unacknowledged: unacknowledgedKeys,
         ctx: context,
         reportReadable: async () => true,
       });
@@ -1369,6 +1439,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         tasks: [persisted],
         requests: [],
         delivered: new Set<string>(),
+        unacknowledged: new Set<string>(),
         ctx: context,
         reportReadable: async () => true,
       });
@@ -1413,6 +1484,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         () => undefined,
       );
       const retryDelivered = new Set<string>();
+      const retryUnacknowledged = new Set<string>();
       await expect(
         deliverPendingNotifications({
           pi: retrySink,
@@ -1420,6 +1492,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
           tasks: [retryTask],
           requests: [],
           delivered: retryDelivered,
+          unacknowledged: retryUnacknowledged,
           ctx: context,
           reportReadable: async () => true,
         }),
@@ -1433,6 +1506,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         tasks: [pendingRetry],
         requests: [],
         delivered: retryDelivered,
+        unacknowledged: retryUnacknowledged,
         ctx: context,
         reportReadable: async () => true,
       });
@@ -1477,6 +1551,7 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
     ],
   });
   const delivered = new Set<string>();
+  const unacknowledgedKeys = new Set<string>();
 
   await deliverPendingNotifications({
     pi: sink,
@@ -1484,6 +1559,7 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
     tasks: [routine],
     requests: [],
     delivered: delivered,
+    unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1493,6 +1569,7 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
     tasks: [routine],
     requests: [],
     delivered: delivered,
+    unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1549,6 +1626,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     ],
   });
   const delivered = new Set<string>();
+  const unacknowledgedKeys = new Set<string>();
 
   await deliverPendingNotifications({
     pi: sink,
@@ -1556,6 +1634,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     tasks: [scout, blocked],
     requests: [],
     delivered: delivered,
+    unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1565,6 +1644,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     tasks: [scout, blocked],
     requests: [],
     delivered: delivered,
+    unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1594,6 +1674,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     tasks: [recovered],
     requests: [],
     delivered: new Set<string>(),
+    unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1650,6 +1731,7 @@ test("notification kind controls whether presentation bookkeeping wakes the coor
     tasks: [routine, coordinator],
     requests: [],
     delivered: new Set<string>(),
+    unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1713,6 +1795,7 @@ test("legacy scout recovery survives a later routine presentation notice", async
     tasks: [recovered],
     requests: [],
     delivered: new Set<string>(),
+    unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1741,6 +1824,7 @@ test("legacy scout recovery survives a later routine presentation notice", async
     tasks: [routineOnly],
     requests: [],
     delivered: new Set<string>(),
+    unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
   });
@@ -1951,6 +2035,7 @@ test("a request decision wakes the coordinator while routine request state stays
     tasks: [],
     requests: [quietRequest, decidingRequest],
     delivered: new Set<string>(),
+    unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
   });
@@ -2001,6 +2086,7 @@ test("a recovery question wakes the coordinator once with its recommendation and
     ],
   });
   const delivered = new Set<string>();
+  const unacknowledgedKeys = new Set<string>();
 
   await deliverPendingNotifications({
     pi: sink,
@@ -2008,6 +2094,7 @@ test("a recovery question wakes the coordinator once with its recommendation and
     tasks: [asked],
     requests: [],
     delivered,
+    unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
   });
@@ -2017,6 +2104,7 @@ test("a recovery question wakes the coordinator once with its recommendation and
     tasks: [asked],
     requests: [],
     delivered,
+    unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
   });

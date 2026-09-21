@@ -117,6 +117,11 @@ function requestNotifications(
   );
 }
 
+/** Identifies one notification across ticks, so a delivered wake is never repeated. */
+function deliveryKey(notification: NotificationRef): string {
+  return `${notification.taskId}:${notification.notificationId}`;
+}
+
 function notificationContent(notifications: readonly NotificationRef[]): string {
   return notifications
     .map((notification) => {
@@ -151,6 +156,11 @@ export type PendingNotificationDelivery = Readonly<{
   readonly requests: readonly RequestDeliveryRecord[];
   /** Task/notification pairs already sent in this process, so one wake is not repeated. */
   readonly delivered: Set<string>;
+  /**
+   * Sent pairs whose acknowledgement has not been recorded yet. A lost state-lock race leaves the
+   * pair here for a later tick instead of re-sending a wake the coordinator has already read.
+   */
+  readonly unacknowledged: Set<string>;
   readonly ctx: NotificationUi;
   readonly reportReadable: ResearchReportProbe;
 }>;
@@ -159,19 +169,21 @@ export type PendingNotificationDelivery = Readonly<{
 export async function deliverPendingNotifications(
   delivery: PendingNotificationDelivery,
 ): Promise<void> {
-  const { pi, service, tasks, delivered, ctx } = delivery;
+  const { pi, tasks, delivered, unacknowledged, ctx } = delivery;
   const pending = [
     ...(await allPendingNotifications(tasks, delivery.reportReadable)),
     ...requestNotifications(delivery.requests),
-  ].filter(
-    (notification) => !delivered.has(`${notification.taskId}:${notification.notificationId}`),
-  );
+  ];
   if (pending.length === 0) return;
-  const batch = pending.slice(0, MAX_NOTIFICATION_BATCH);
+  const batch = pending
+    .filter((notification) => !delivered.has(deliveryKey(notification)))
+    .slice(0, MAX_NOTIFICATION_BATCH);
   const actionable = batch.filter((notification) => notification.judgmentNeeded);
   const routine = batch.filter((notification) => !notification.judgmentNeeded);
-  for (const notification of batch)
-    delivered.add(`${notification.taskId}:${notification.notificationId}`);
+  for (const notification of batch) {
+    delivered.add(deliveryKey(notification));
+    unacknowledged.add(deliveryKey(notification));
+  }
   try {
     if (routine.length > 0) {
       const content = notificationContent(routine);
@@ -191,16 +203,42 @@ export async function deliverPendingNotifications(
         { deliverAs: "followUp", triggerTurn: true },
       );
     }
+  } catch (error) {
     for (const notification of batch) {
+      delivered.delete(deliveryKey(notification));
+      unacknowledged.delete(deliveryKey(notification));
+    }
+    throw error;
+  }
+  await acknowledgeDelivered(delivery, pending);
+}
+
+/**
+ * Records the acknowledgement of every notification already shown in this process, including ones
+ * whose acknowledgement lost a state-lock race on an earlier tick. The message has already reached
+ * the coordinator, so a failure here waits for the next tick rather than waking it a second time
+ * for something it has read.
+ */
+async function acknowledgeDelivered(
+  delivery: PendingNotificationDelivery,
+  pending: readonly NotificationRef[],
+): Promise<void> {
+  const { service, unacknowledged } = delivery;
+  for (const notification of pending) {
+    const key = deliveryKey(notification);
+    if (!unacknowledged.has(key)) continue;
+    try {
       if (notification.scope === "request") {
         await service.acknowledgeRequest(notification.taskId, notification.notificationId);
-        continue;
+      } else {
+        await service.acknowledge(notification.taskId, notification.notificationId);
       }
-      await service.acknowledge(notification.taskId, notification.notificationId);
+      unacknowledged.delete(key);
+    } catch {
+      // ponytail: one contended state lock fails the rest of the pass too, so stop here and retry
+      // on the next tick. Acknowledge each notification independently if a non-contention failure
+      // ever needs to be isolated from its neighbours.
+      return;
     }
-  } catch (error) {
-    for (const notification of batch)
-      delivered.delete(`${notification.taskId}:${notification.notificationId}`);
-    throw error;
   }
 }
