@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import {
+  type AgentRole,
   LEGACY_EVIDENCE_CONTRACT,
   MODEL_ROLE_LABELS,
   MODEL_ROLE_ORDER,
@@ -349,7 +350,7 @@ function summarizeOnboard(value: unknown, action: "onboard" | "setup"): string {
       lines.push("Pending role choices (all six roles are unselected until explicit answers):");
       lines.push(...summarizeModelAssignments(undefined, true).map((entry) => `- ${entry}`));
       lines.push(
-        "Fetch the available OMP models catalogue, then choose or adjust every role explicitly, or choose Not now to pause without configure-models, project setup, or launch.",
+        "Call models to fetch the OMP catalogue and the proposed Balanced profile, then accept it, inspect and override any role or provider enablement, or choose Not now to pause without configure-models, project setup, or launch.",
       );
     }
   } else if (modelSettings?.configured === true) {
@@ -456,6 +457,69 @@ function summarizeModelCatalogueEntry(value: unknown): string {
   }`;
 }
 
+function summarizeProviderState(record: Record<string, unknown>): readonly string[] {
+  const discovered = record.discoveredProviders;
+  const settings = summaryRecord(record.modelSettings);
+  const enabled = settings?.enabledProviders;
+  const lines: string[] = [];
+  if (Array.isArray(discovered)) {
+    lines.push(
+      `Discovered providers (catalogue only; discovery never authorizes spending): ${
+        discovered.length === 0 ? "none" : discovered.join(", ")
+      }`,
+    );
+  }
+  if (Array.isArray(enabled)) {
+    lines.push(
+      `Enabled providers (explicit spending permission): ${enabled.length === 0 ? "none" : enabled.join(", ")}`,
+    );
+  }
+  return lines;
+}
+
+function summarizeBalancedProposal(value: unknown): readonly string[] {
+  const record = summaryRecord(value);
+  const status = record === undefined ? undefined : recordText(record, "status");
+  if (record === undefined || status === undefined) return [];
+  if (status === "resolved") {
+    const roles = summaryRecord(record.roles);
+    const lines = [
+      "Balanced proposal (resolved from enabled providers; expand for evidence and reasons):",
+    ];
+    for (const role of MODEL_ROLE_ORDER) {
+      const entry = summaryRecord(roles?.[role]);
+      const model = entry === undefined ? undefined : summaryRecord(entry.model);
+      const selector = model === undefined ? undefined : recordText(model, "model");
+      const thinking = model === undefined ? undefined : recordText(model, "thinking");
+      lines.push(
+        `- ${MODEL_ROLE_LABELS[role]} (${role}): ${selector ?? "selector unavailable"}${
+          thinking === undefined ? "" : ` (thinking ${thinking})`
+        }`,
+      );
+    }
+    lines.push(
+      "Accept as-is, inspect exact selectors/evidence/reasons on expansion, or override any role before configure-models.",
+    );
+    return lines;
+  }
+  const gaps = Array.isArray(record.gaps) ? record.gaps : [];
+  const reasons = gaps
+    .map((gap) => summaryRecord(gap))
+    .filter((gap): gap is Record<string, unknown> => gap !== undefined)
+    .map((gap) => {
+      const role = recordText(gap, "role");
+      const reason = recordText(gap, "reason");
+      if (role === undefined || reason === undefined) return undefined;
+      const label = MODEL_ROLE_LABELS[role as AgentRole] as string | undefined;
+      return `${label ?? role} (${role}): ${compactText(reason, 160)}`;
+    })
+    .filter((entry): entry is string => entry !== undefined);
+  return [
+    "Balanced proposal is unresolved; no built-in pin, fuzzy alias, or silent fallback is used:",
+    ...reasons.map((entry) => `- ${entry}`),
+  ];
+}
+
 function summarizeModels(value: unknown): string {
   const record = summaryRecord(value);
   if (record === undefined) return boundedJson(value, ACTION_RESULT_MAX_CHARS);
@@ -469,13 +533,20 @@ function summarizeModels(value: unknown): string {
       lines.push("Current choices:");
       lines.push(...current.map((entry) => `- ${entry}`));
     }
+    lines.push(...summarizeProviderState(record));
   } else if (settings?.configured === false) {
     lines.push("No saved model choices yet.");
-    lines.push(
-      "Choose an exact catalogue selector and a supported thinking level explicitly for each role; no role is pre-approved:",
-    );
-    for (const role of MODEL_ROLE_ORDER)
-      lines.push(`- ${MODEL_ROLE_LABELS[role]} (${role}): choose a model and thinking level`);
+    lines.push(...summarizeProviderState(record));
+    const balancedLines = summarizeBalancedProposal(record.balancedProfile);
+    if (balancedLines.length > 0) {
+      lines.push(...balancedLines);
+    } else {
+      lines.push(
+        "Choose an exact catalogue selector and a supported thinking level explicitly for each role; no role is pre-approved:",
+      );
+      for (const role of MODEL_ROLE_ORDER)
+        lines.push(`- ${MODEL_ROLE_LABELS[role]} (${role}): choose a model and thinking level`);
+    }
   } else {
     lines.push("Current model choices are unavailable.");
   }

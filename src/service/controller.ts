@@ -15,6 +15,11 @@ import {
   readModelSettings,
   writeModelSettings,
 } from "../config/models.ts";
+import {
+  type BalancedProfileProposal,
+  discoveredProviders,
+  resolveBalancedProfile,
+} from "../config/operating-profile.ts";
 import { type OnboardRepoResult, onboardRepo, resolveRepoPolicy } from "../config/repositories.ts";
 import {
   type AnswerTaskInput,
@@ -152,6 +157,10 @@ export type CreateTaskRequest = Readonly<{
 export type ModelOptionsResult = Readonly<{
   readonly modelSettings: ModelSettings;
   readonly availableModels: readonly OmpModelRecord[];
+  /** Providers the OMP catalogue discovered; discovery alone never authorizes spending. */
+  readonly discoveredProviders: readonly string[];
+  /** The Balanced profile resolved from `modelSettings.enabledProviders` against this catalogue. */
+  readonly balancedProfile: BalancedProfileProposal;
 }>;
 export type SourceRefreshResult = Readonly<{
   readonly head: string;
@@ -183,7 +192,12 @@ export type TandemService = Readonly<{
   readonly onboard: (repoPath: string, write?: boolean) => Promise<OnboardRepoResult>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
   readonly configureModels: (
-    input: Readonly<{ readonly repoPath: string; readonly models: RepoPolicy["models"] }>,
+    input: Readonly<{
+      readonly repoPath: string;
+      readonly models: RepoPolicy["models"];
+      /** Omit to preserve the previously saved provider enablement. */
+      readonly enabledProviders?: readonly string[] | undefined;
+    }>,
   ) => Promise<ModelSettings>;
   readonly create: (input: CreateTaskRequest) => Promise<TaskRecord>;
   readonly refreshSource?: () => Promise<SourceRefreshResult | undefined>;
@@ -659,7 +673,15 @@ class TandemController {
       home: this.#deps.home,
     });
     const availableModels = await listOmpModels(this.#deps.run, { cwd: source.checkoutPath });
-    return { modelSettings, availableModels };
+    return {
+      modelSettings,
+      availableModels,
+      discoveredProviders: discoveredProviders(availableModels),
+      balancedProfile: resolveBalancedProfile({
+        catalogue: availableModels,
+        enabledProviders: new Set(modelSettings.enabledProviders),
+      }),
+    };
   }
 
   async refreshSource(): Promise<SourceRefreshResult | undefined> {
@@ -705,6 +727,7 @@ class TandemController {
     input: Readonly<{
       readonly repoPath: string;
       readonly models: RepoPolicy["models"];
+      readonly enabledProviders?: readonly string[] | undefined;
     }>,
   ): Promise<ModelSettings> {
     if (!isRecord(input)) throw new TypeError("configureModels input must be an object");
@@ -717,6 +740,7 @@ class TandemController {
       repoPath: source.repoPath,
       home: this.#deps.home,
       models,
+      ...(input.enabledProviders === undefined ? {} : { enabledProviders: input.enabledProviders }),
     });
   }
   /** Classified outside the store lock so a bounded classifier call never delays other work. */

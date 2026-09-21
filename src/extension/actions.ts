@@ -56,6 +56,7 @@ export type TandemAction =
       readonly action: "configure-models";
       readonly repoPath: string;
       readonly models: RepoPolicy["models"];
+      readonly enabledProviders?: readonly string[] | undefined;
     }>
   | Readonly<{
       readonly action: "create";
@@ -240,9 +241,15 @@ async function approvalPrompt(
       choices.length === 0
         ? "No model choices were provided."
         : choices.map((entry) => `- ${entry}`).join("\n");
+    const providerDetails =
+      action.enabledProviders === undefined
+        ? ""
+        : `\n\nEnabled providers (explicit spending permission, replaces any saved set): ${
+            action.enabledProviders.length === 0 ? "none" : action.enabledProviders.join(", ")
+          }.`;
     return {
       title: "Save Tandem model choices?",
-      message: `Proposed choices by job:\n${choiceDetails}\n\nThese choices will be saved on this computer and reused across projects for future work. They replace any saved choices. Saving them does not change the project or start work.`,
+      message: `Proposed choices by job:\n${choiceDetails}${providerDetails}\n\nThese choices will be saved on this computer and reused across projects for future work. They replace any saved choices. Saving them does not change the project or start work.`,
     };
   }
   if (action.action === "setup") {
@@ -364,7 +371,13 @@ export async function executeTandemAction(
       return textResult(await service.models(action.repoPath), action.action);
     case "configure-models":
       return textResult(
-        await service.configureModels({ repoPath: action.repoPath, models: action.models }),
+        await service.configureModels({
+          repoPath: action.repoPath,
+          models: action.models,
+          ...(action.enabledProviders === undefined
+            ? {}
+            : { enabledProviders: action.enabledProviders }),
+        }),
         action.action,
         true,
       );
