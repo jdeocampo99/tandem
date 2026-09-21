@@ -97,6 +97,7 @@ Before changing behavior, read its contract:
 - PRs/artifacts: [Pull-request delivery](docs/agent-reference.md#pull-request-delivery), [Presentations and Lavish](docs/agent-reference.md#presentations-and-lavish).
 - Persistence/restart/locking: [Recovery and durable state](docs/agent-reference.md#recovery-durable-state-and-compaction), [Local limits](docs/agent-reference.md#local-limits-and-source-of-truth).
 - Recovery/rescue workflow: [First-class bounded recovery actions](docs/agent-reference.md#first-class-bounded-recovery-actions).
+- Recovery decisions/availability waits: [Conversational recovery and bounded availability waits](docs/agent-reference.md#conversational-recovery-and-bounded-availability-waits).
 - Stale records/panes/leases: [Reconciling Tandem resources across sessions](docs/agent-reference.md#reconciling-tandem-resources-across-sessions).
 
 Keep this file a routing map and cross-cutting rules. Update links when code moves; put detailed

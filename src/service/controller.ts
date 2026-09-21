@@ -62,6 +62,10 @@ import { type PresentationRecord, readPresentationRecord } from "../presentation
 import { preparePresentation } from "../presentations/session.ts";
 import { PresentationRuntimeWorkflow } from "../presentations/workflow.ts";
 import {
+  type RecoveryConversationOutcome,
+  RecoveryConversationWorkflow,
+} from "../recovery/conversation.ts";
+import {
   type DeliveryPreflightResult,
   type EvidenceRepairResult,
   type ReconciliationResult,
@@ -233,6 +237,8 @@ export type TandemService = Readonly<{
   readonly get: (id: string) => Promise<TaskRecord>;
   readonly inspect: (id: string) => Promise<RecoveryInspection>;
   readonly recoveryPlan: (id: string) => Promise<RecoveryPlan>;
+  /** Settles the current recovery decision for one task: apply, wait, or ask exactly once. */
+  readonly recoveryDecide: (id: string) => Promise<RecoveryConversationOutcome>;
   readonly reconcile: (
     id: string,
     input: { readonly approved: boolean },
@@ -583,6 +589,7 @@ class TandemController {
   readonly #worker: WorkerWorkflow;
   readonly #control: TaskControlWorkflow;
   readonly #recovery: RecoveryWorkflow;
+  readonly #recoveryConversation: RecoveryConversationWorkflow;
   readonly #requests: RequestBriefWorkflow;
   readonly #requestDelivery: RequestDeliveryWorkflow;
   readonly #usage: RequestUsageLedger;
@@ -714,6 +721,25 @@ class TandemController {
       listTasks: () => this.list(),
       transitionTask: (taskId, event) => this.transition(taskId, event),
     });
+    this.#recoveryConversation = new RecoveryConversationWorkflow({
+      sessionId: deps.sessionId,
+      clock: deps.clock,
+      idFactory: deps.idFactory,
+      store: deps.store,
+      runtimePath: deps.runtimePath,
+      recovery: {
+        inspect: (taskId) => this.#recovery.inspect(taskId),
+        plan: (taskId) => this.#recovery.plan(taskId),
+        reconcile: (taskId, approved) => this.#recovery.reconcile(taskId, approved),
+        repairEvidence: (taskId, approved) => this.#recovery.repairEvidence(taskId, approved),
+      },
+      getTask: (taskId) => this.get(taskId),
+      taskInScope: (task) => this.#source.taskInScope(task),
+      requestDispatchHold: async (task) => {
+        const decision = await this.#requests.dispatchDecisionForTask(task);
+        return decision === undefined || decision.allowed ? undefined : decision.reason;
+      },
+    });
   }
 
   api(): TandemService {
@@ -721,6 +747,7 @@ class TandemController {
       onboard: (repoPath, write) => this.onboard(repoPath, write),
       inspect: (id) => this.#recovery.inspect(id),
       recoveryPlan: (id) => this.#recovery.plan(id),
+      recoveryDecide: (id) => this.#recoveryConversation.decide(id),
       reconcile: (id, input) => this.#recovery.reconcile(id, input.approved),
       reviewExisting: (id, input) => this.#recovery.reviewExisting(id, input.head, input.approved),
       validationRetry: (id, input) => this.#recovery.validationRetry(id, input.approved),
@@ -1422,6 +1449,7 @@ class TandemController {
       }
     }
     const settled = await this.#source.scopedTasks();
+    await this.reconcileRecoveryWaits(settled);
     await this.recordRequestAccounting(settled);
     await this.reconcileRequests(settled);
     let draftRecorded = false;
@@ -1429,6 +1457,23 @@ class TandemController {
       if (await this.refreshDraftPullRequest(task)) draftRecorded = true;
     }
     return draftRecorded ? this.#source.scopedTasks() : settled;
+  }
+
+  /**
+   * Wakes the bounded availability waits whose deadline has passed. A wake that cannot be settled
+   * leaves a bounded diagnostic rather than failing the pass, so one incident never stops the rest
+   * of the scheduler.
+   */
+  private async reconcileRecoveryWaits(tasks: readonly TaskRecord[]): Promise<void> {
+    try {
+      await this.#recoveryConversation.reconcileWaits(tasks);
+    } catch (error) {
+      await appendDiagnosticEvent(
+        this.#deps.home,
+        { event: "recovery-wait-reconcile-failed", details: { errorClass: errorClassName(error) } },
+        this.#deps.clock,
+      );
+    }
   }
 
   /**

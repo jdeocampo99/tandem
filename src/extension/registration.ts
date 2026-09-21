@@ -161,6 +161,7 @@ export function registerTandemOmp(
     z.object({ action: z.literal("messages"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("inspect"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("recovery-plan"), taskId: z.string() }).strict(),
+    z.object({ action: z.literal("recovery-decide"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("reconcile"), taskId: z.string() }).strict(),
     z
       .object({ action: z.literal("review-existing"), taskId: z.string(), head: z.string() })

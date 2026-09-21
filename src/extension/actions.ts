@@ -47,6 +47,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   messages: { min: 2, max: 2 },
   inspect: { min: 2, max: 2 },
   "recovery-plan": { min: 2, max: 2 },
+  "recovery-decide": { min: 2, max: 2 },
   reconcile: { min: 2, max: 2 },
   "brief-show": { min: 2, max: 2 },
   "brief-review": { min: 2, max: 2 },
@@ -109,6 +110,7 @@ export type TandemAction =
   | Readonly<{ readonly action: "messages"; readonly taskId: string }>
   | Readonly<{ readonly action: "inspect"; readonly taskId: string }>
   | Readonly<{ readonly action: "recovery-plan"; readonly taskId: string }>
+  | Readonly<{ readonly action: "recovery-decide"; readonly taskId: string }>
   | Readonly<{ readonly action: "reconcile"; readonly taskId: string }>
   | Readonly<{
       readonly action: "review-existing";
@@ -256,6 +258,7 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "draft" ||
     action.action === "merge" ||
     action.action === "reconcile" ||
+    action.action === "recovery-decide" ||
     action.action === "review-existing" ||
     action.action === "validation-retry" ||
     action.action === "evidence-repair"
@@ -399,6 +402,11 @@ async function approvalPrompt(
         title: "Merge reviewed pull request?",
         message: `Merge task ${action.taskId} using ${action.method}: ${details}?`,
       };
+    case "recovery-decide":
+      return {
+        title: "Let Tandem settle this recovery decision?",
+        message: `Read durable state for task ${action.taskId} and either run a preapproved recovery action whose scope, ownership, and prior outcome are proven, wait at most five minutes for a confirmed availability block, or ask one question. It never retries uncertain work, publishes, merges, or deploys: ${details}?`,
+      };
     case "reconcile":
       return {
         title: "Reconcile Tandem recovery state?",
@@ -510,6 +518,8 @@ export async function executeTandemAction(
       return textResult(await service.inspect(action.taskId), action.action);
     case "recovery-plan":
       return textResult(await service.recoveryPlan(action.taskId), action.action);
+    case "recovery-decide":
+      return textResult(await service.recoveryDecide(action.taskId), action.action, true);
     case "reconcile":
       return textResult(
         await service.reconcile(action.taskId, { approved: true }),
@@ -849,6 +859,8 @@ export function parseTandemCommand(input: string): TandemAction {
       return { action: "inspect", taskId: value(1, "inspect") };
     case "recovery-plan":
       return { action: "recovery-plan", taskId: value(1, "recovery-plan") };
+    case "recovery-decide":
+      return { action: "recovery-decide", taskId: value(1, "recovery-decide") };
     case "reconcile":
       return { action: "reconcile", taskId: value(1, "reconcile") };
     case "review-existing":

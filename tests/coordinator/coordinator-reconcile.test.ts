@@ -24,7 +24,9 @@ import {
 import { digest, recordPath, registrySessionDirectory } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { listCoordinatorQuarantineRecords } from "../../src/coordinator/resources.ts";
-import { runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
+import type { RecoveryDecisionReceipt } from "../../src/recovery/decision.ts";
+import type { RecoveryAvailabilityWait } from "../../src/recovery/wait.ts";
+import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { FIRST_HEAD, fakePool, type Pool, TASK_LEASE_ID } from "./fake-pool.ts";
@@ -766,5 +768,66 @@ test("the scan reads every session under the home, not just one", async () => {
       SECOND_SESSION,
     ]);
     expect(observation.coordinators[0]?.liveness.status).toBe("live");
+  });
+});
+
+test("recovery and wait receipts survive repeated resource reconciliation", async () => {
+  await withFixture(async (test) => {
+    const lease = await seedPendingImplementation(test, "blocked");
+    const seeded = await readRuntimeState(runtimeFile(test.home));
+    const wait: RecoveryAvailabilityWait = {
+      schemaVersion: 1,
+      taskId: "implementation-1",
+      generation: 0,
+      requestId: "req-1",
+      evidenceIdentity: "evidence-1",
+      evidenceSummary: "provider rate limit: the model endpoint is temporarily unavailable",
+      ownerSessionId: FIRST_SESSION,
+      startedAt: TIMESTAMP,
+      deadlineAt: "2030-01-02T03:09:05.000Z",
+      disposition: "waiting",
+    };
+    const decision: RecoveryDecisionReceipt = {
+      schemaVersion: 1,
+      id: "recovery-evidence-1-waiting",
+      taskId: "implementation-1",
+      generation: 0,
+      requestId: "req-1",
+      evidence: {
+        kind: "temporary-availability",
+        identity: "evidence-1",
+        summary: "provider rate limit: the model endpoint is temporarily unavailable",
+        observedAt: TIMESTAMP,
+      },
+      ownership: "proven-owned",
+      priorOutcome: "known",
+      approval: "preapproved",
+      unmetProofs: [],
+      consequences: "No work is launched while the wait holds.",
+      disposition: "waiting",
+      dispositionReason: "waiting until 2030-01-02T03:09:05.000Z",
+      decidedAt: TIMESTAMP,
+    };
+    await writeRuntimeState(runtimeFile(test.home), {
+      ...seeded,
+      tasks: seeded.tasks.map((entry) =>
+        entry.taskId === "implementation-1"
+          ? { ...entry, recoveryWaits: [wait], recoveryDecisions: [decision] }
+          : entry,
+      ),
+    });
+
+    const dry = await test.reconcile(false);
+    const applied = await test.reconcile(true);
+
+    expect(entries(dry.cleaned, "implementation-task")).toHaveLength(0);
+    expect(entries(applied.cleaned, "implementation-task")).toHaveLength(0);
+    expect(test.pool.leases.has(lease.leaseId)).toBe(true);
+    expect(test.pool.returnedPaths).toHaveLength(0);
+    const after = await readRuntimeState(runtimeFile(test.home));
+    const runtime = after.tasks.find((entry) => entry.taskId === "implementation-1");
+    expect(runtime?.recoveryWaits).toEqual([wait]);
+    expect(runtime?.recoveryDecisions).toEqual([decision]);
+    expect(runtime?.worktree?.path).toBe(lease.path);
   });
 });
