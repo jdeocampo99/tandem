@@ -13,6 +13,7 @@ import {
   type TandemBoundaryEnvironment,
   type TandemEnvironmentSource,
 } from "./config/environment.ts";
+import type { TaskRecord } from "./contracts.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import {
   deliverPendingNotifications,
@@ -28,6 +29,7 @@ import {
   type TandemServiceOptions,
 } from "./service/controller.ts";
 import { isMissing, isTerminalTask } from "./service/records.ts";
+import { ledgerBlockers } from "./tasks/findings.ts";
 import {
   type ResearchContinuationClassifier,
   researchContinuationClassifier,
@@ -89,6 +91,24 @@ function logExtensionError(pi: ExtensionAPI, error: unknown): void {
   });
 }
 
+/** Status-line summary of an in-progress review cycle, or `undefined` outside one. */
+export function reviewStatus(task: TaskRecord): string | undefined {
+  if (task.stage !== "reviewing" && task.stage !== "awaiting-fixes") return undefined;
+  const current = task.reviews.filter(
+    (review) => review.head === task.reviewHead && review.generation === task.generation,
+  );
+  const failed = current.filter((review) => !review.pass).map((review) => review.lens);
+  const blockers = ledgerBlockers(task.findingLedger ?? []).length;
+  const parts = [
+    task.reviewRound === 0
+      ? task.stage
+      : `${task.stage} fix ${task.reviewRound}/${task.policy.config.maxFixRounds}`,
+  ];
+  if (failed.length > 0) parts.push(`${failed.join(",")} fail`);
+  if (blockers > 0) parts.push(`${blockers} blocker${blockers === 1 ? "" : "s"}`);
+  return parts.join(" · ");
+}
+
 /** Create the OMP extension factory; all mutable runtime state is per loaded extension instance. */
 export function createTandemExtension(options: TandemExtensionOptions = {}): ExtensionFactory {
   return (pi: ExtensionAPI): void => {
@@ -118,7 +138,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       if (waitingInputs.size > 0) {
         void statusReporter?.report("blocked", "Waiting for your answer");
       } else if (agentActive) {
-        void statusReporter?.report("working");
+        void statusReporter?.report("working", taskMessage);
       } else {
         void statusReporter?.report(taskState, taskMessage);
       }
@@ -161,6 +181,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
                 break;
               }
               taskState = "working";
+              taskMessage = reviewStatus(task) ?? `${task.stage}: ${task.objective}`;
             }
             reportStatus();
           }

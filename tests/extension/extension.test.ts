@@ -8,7 +8,7 @@ import type { ModelSpec, RepoPolicy, ResolvedPolicy, TaskRecord } from "../../sr
 import { executeTandemAction, parseTandemCommand } from "../../src/extension/actions.ts";
 import { deliverPendingNotifications } from "../../src/extension/notifications.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/extension/summary.ts";
-import { createTandemExtension } from "../../src/extension.ts";
+import { createTandemExtension, reviewStatus } from "../../src/extension.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
@@ -94,6 +94,69 @@ function notificationSink(
     appendEntry,
   };
 }
+
+test("review status renders round, failed lenses, and blocker count for the status line", () => {
+  const reviewing = task({
+    stage: "reviewing",
+    reviewRound: 2,
+    reviewHead: "head-1",
+    reviews: [
+      {
+        lens: "behavior",
+        head: "head-1",
+        generation: 0,
+        pass: false,
+        findings: [],
+        summary: "Needs another look.",
+      },
+      {
+        lens: "design",
+        head: "head-1",
+        generation: 0,
+        pass: true,
+        findings: [],
+        summary: "Looks good.",
+      },
+    ],
+    findingLedger: [
+      {
+        id: "finding-1",
+        lens: "behavior",
+        severity: "P1",
+        verdict: "confirmed",
+        description: "Missing error handling.",
+        status: "unresolved",
+        raisedAt: { head: "head-1", generation: 0, reviewRound: 2 },
+        statusAt: { head: "head-1", generation: 0, reviewRound: 2 },
+      },
+    ],
+  });
+  expect(reviewStatus(reviewing)).toBe("reviewing fix 2/3 · behavior fail · 1 blocker");
+
+  expect(reviewStatus(task({ ...reviewing, reviewRound: 0 }))).toBe(
+    "reviewing · behavior fail · 1 blocker",
+  );
+
+  const twoBlockers = task({
+    ...reviewing,
+    findingLedger: [
+      ...(reviewing.findingLedger ?? []),
+      {
+        id: "finding-2",
+        lens: "behavior",
+        severity: "P0",
+        verdict: "confirmed",
+        description: "Crashes on empty input.",
+        status: "unresolved",
+        raisedAt: { head: "head-1", generation: 0, reviewRound: 2 },
+        statusAt: { head: "head-1", generation: 0, reviewRound: 2 },
+      },
+    ],
+  });
+  expect(reviewStatus(twoBlockers)).toBe("reviewing fix 2/3 · behavior fail · 2 blockers");
+
+  expect(reviewStatus(task({ stage: "implementing" }))).toBeUndefined();
+});
 
 test("environment resolution applies explicit boundary values and ignores unrelated variables", () => {
   const environment = resolveTandemEnvironment(
