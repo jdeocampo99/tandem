@@ -42,7 +42,7 @@ type Fixture = Readonly<{
   readonly poolRoot: string;
   readonly pool: Pool;
   readonly launch: (sessionId: string) => Promise<void>;
-  readonly reconcile: (apply: boolean) => Promise<ReconcileReport>;
+  readonly reconcile: (apply: boolean, discard?: boolean) => Promise<ReconcileReport>;
 }>;
 
 async function fixture(): Promise<Fixture> {
@@ -94,13 +94,14 @@ async function fixture(): Promise<Fixture> {
     launch: async (sessionId) => {
       await launchCoordinator(request(sessionId), dependencies);
     },
-    reconcile: async (apply) =>
+    reconcile: async (apply, discard = false) =>
       reconcileTandemResources({
         run: pool.run,
         home,
         poolRoot,
         repoPaths: [repo],
         apply,
+        discard,
         clock: () => TIMESTAMP,
         newId: () => {
           quarantineIds += 1;
@@ -297,6 +298,116 @@ async function seedPendingScout(
     presentations: [],
   });
   return { lease, endpoint };
+}
+
+/** Seeds a dirty implementation whose explicit discard requires task approval. */
+async function seedPendingImplementation(
+  test: Fixture,
+  stage: "cancelled" | "blocked" = "cancelled",
+): Promise<WorktreeLease> {
+  const worktreePath = join(test.poolRoot, "implementation-worktree");
+  await mkdir(worktreePath, { recursive: true });
+  const lease: WorktreeLease = {
+    root: test.poolRoot,
+    path: worktreePath,
+    name: "tandem-implementation-1",
+    baseHead: FIRST_HEAD,
+    branch: "tandem/implementation-1",
+    leaseId: "lease-implementation",
+    leaseHolder: "task:implementation-1",
+    leasedAt: TIMESTAMP,
+  };
+  test.pool.leases.set(lease.leaseId, {
+    leaseId: lease.leaseId,
+    leaseHolder: lease.leaseHolder,
+    path: lease.path,
+  });
+  const endpoint: Endpoint = {
+    sessionId: FIRST_SESSION,
+    workspaceId: "workspace-implementation",
+    tabId: "tab-implementation",
+    paneId: "pane-implementation",
+    role: "implementer",
+    generation: 0,
+  };
+  test.pool.panes.set(endpoint.paneId, {
+    paneId: endpoint.paneId,
+    tabId: endpoint.tabId,
+    workspaceId: endpoint.workspaceId,
+    cwd: lease.path,
+    omp: undefined,
+  });
+  test.pool.worktrees.set(lease.path, {
+    head: FIRST_HEAD,
+    branch: lease.branch,
+    dirty: true,
+    unmerged: false,
+  });
+
+  const store = createTaskStore({
+    directory: join(test.home, "tasks"),
+    clock: () => TIMESTAMP,
+    idFactory: () => "implementation-1",
+  });
+  const created = await store.create({
+    id: "implementation-1",
+    repoPath: test.repo,
+    kind: "implementation",
+    objective: "implement the approved change",
+    acceptanceCriteria: ["the change is complete"],
+    surfaces: ["service"],
+    policy: scoutPolicy,
+  });
+  const queued = await store.update(created.id, created.revision, (task) =>
+    transitionTask(
+      task,
+      { type: "approve" },
+      { now: TIMESTAMP, notificationId: "implementation-approve-1" },
+    ),
+  );
+  const started = await store.update(queued.id, queued.revision, (task) =>
+    transitionTask(
+      task,
+      { type: "start", worktree: lease, endpoints: [endpoint] },
+      { now: TIMESTAMP, notificationId: "implementation-start-1" },
+    ),
+  );
+  const settled = await store.update(started.id, started.revision, (task) =>
+    transitionTask(
+      task,
+      stage === "cancelled"
+        ? { type: "cancel", reason: "superseded" }
+        : { type: "block", reason: "awaiting coordinator decision" },
+      {
+        now: TIMESTAMP,
+        notificationId:
+          stage === "cancelled" ? "implementation-cancel-1" : "implementation-block-1",
+      },
+    ),
+  );
+
+  await writeRuntimeState(runtimeFile(test.home), {
+    schemaVersion: 1,
+    tasks: [
+      {
+        schemaVersion: 1,
+        taskId: settled.id,
+        sourceCheckpoint: {
+          head: FIRST_HEAD,
+          base: FIRST_HEAD,
+          diff: "",
+          dirty: false,
+          unmerged: false,
+        },
+        taskName: lease.name,
+        worktree: lease,
+        endpoints: [endpoint],
+        jobs: [],
+      },
+    ],
+    presentations: [],
+  });
+  return lease;
 }
 
 test("the plan classifies each observed resource without touching any of them", () => {
@@ -531,6 +642,43 @@ test("pending scout cleanup is finished through the durable task cleanup owner",
 
     const again = await test.reconcile(true);
     expect(entries(again.cleaned, "scout-task")).toHaveLength(0);
+  });
+});
+
+test("cancelled implementation cleanup requires explicit discard approval", async () => {
+  await withFixture(async (test) => {
+    const lease = await seedPendingImplementation(test);
+
+    const dry = await test.reconcile(false);
+    expect(entries(dry.cleaned, "implementation-task")[0]?.id).toBe("implementation-1");
+    expect(test.pool.leases.has(lease.leaseId)).toBe(true);
+
+    const applied = await test.reconcile(true, true);
+    expect(entries(applied.cleaned, "implementation-task")[0]?.id).toBe("implementation-1");
+    expect(test.pool.leases.has(lease.leaseId)).toBe(false);
+    expect(test.pool.returnedPaths).toContain(lease.path);
+    const returned = test.pool.calls.find(
+      (call) =>
+        call.argv[0] === "treehouse" &&
+        call.argv.includes("return") &&
+        call.argv.includes(lease.leaseId),
+    );
+    expect(returned?.argv).toContain("--force");
+  });
+});
+
+test("blocked implementation cleanup is included only in explicit discard reconciliation", async () => {
+  await withFixture(async (test) => {
+    const lease = await seedPendingImplementation(test, "blocked");
+
+    const safe = await test.reconcile(false);
+    expect(entries(safe.cleaned, "implementation-task")).toHaveLength(0);
+    expect(test.pool.leases.has(lease.leaseId)).toBe(true);
+
+    const applied = await test.reconcile(true, true);
+    expect(entries(applied.cleaned, "implementation-task")[0]?.id).toBe("implementation-1");
+    expect(test.pool.leases.has(lease.leaseId)).toBe(false);
+    expect(test.pool.returnedPaths).toContain(lease.path);
   });
 });
 

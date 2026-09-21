@@ -6,11 +6,14 @@ import type { Clock, CommandRunner, WorktreeLease } from "../contracts.ts";
 import { taskRuntime } from "../runtime/activity.ts";
 import { databasePath } from "../runtime/database.ts";
 import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
+import { isTerminalTask } from "../service/records.ts";
 import {
   decideScoutCleanupEligibility,
+  finishPendingImplementationCleanup,
   finishPendingScoutCleanup,
   type TaskCleanupOutcome,
 } from "../service/scout-cleanup.ts";
+
 import { createTaskStore } from "../tasks/store.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
@@ -47,6 +50,7 @@ export type ReconcileResourceKind =
   | "coordinator"
   | "worktree-lease"
   | "scout-task"
+  | "implementation-task"
   | "unreadable-record"
   | "quarantine-note";
 
@@ -86,6 +90,13 @@ export type ObservedPoolLease = Readonly<{
   readonly checkout: CoordinatorCheckoutObservation | undefined;
 }>;
 
+/** One terminal implementation task whose earlier cleanup did not finish releasing its resources. */
+export type ObservedPendingImplementation = Readonly<{
+  readonly taskId: string;
+  readonly repoPath: string;
+  readonly reason: string;
+}>;
+
 /** One terminal scout whose child resources an earlier coordinator did not finish releasing. */
 export type ObservedPendingScout = Readonly<{
   readonly taskId: string;
@@ -105,6 +116,7 @@ export type ReconcileObservation = Readonly<{
   readonly coordinators: readonly ObservedCoordinator[];
   readonly leases: readonly ObservedPoolLease[];
   readonly scouts: readonly ObservedPendingScout[];
+  readonly implementationTasks?: readonly ObservedPendingImplementation[];
   readonly unreadable: readonly UnreadableCoordinatorRecord[];
   readonly quarantines: readonly CoordinatorQuarantineRecord[];
   readonly failures: readonly ReconcileScanFailure[];
@@ -128,6 +140,13 @@ export type ReconcilePlanItem =
       readonly observed: ObservedPoolLease;
       /** The exact identity a release must name, present only when the lease may be released. */
       readonly lease: WorktreeLease | undefined;
+    }>
+  | Readonly<{
+      readonly kind: "implementation-task";
+      readonly action: "clean";
+      readonly reason: string;
+      readonly taskId: string;
+      readonly repoPath: string;
     }>
   | Readonly<{
       readonly kind: "scout-task";
@@ -185,6 +204,8 @@ export type ReconcileScanInput = Readonly<{
   /** Repositories saved under the Tandem home, so empty pools are still inspected. */
   readonly repoPaths: readonly string[];
   readonly clock: Clock;
+  /** Include blocked implementation tasks only for an explicit discard plan. */
+  readonly discard?: boolean;
 }>;
 
 export type ReconcileApplyInput = Readonly<{
@@ -193,6 +214,8 @@ export type ReconcileApplyInput = Readonly<{
   readonly plan: ReconcilePlan;
   readonly clock: Clock;
   readonly newId: () => string;
+  /** Explicitly force-return cancelled implementation worktrees after identity checks. */
+  readonly discard: boolean;
 }>;
 
 export type ReconcileInput = Readonly<{
@@ -202,6 +225,8 @@ export type ReconcileInput = Readonly<{
   readonly repoPaths: readonly string[];
   /** Dry run unless the caller explicitly asked to apply the plan. */
   readonly apply: boolean;
+  /** With apply, force-return only cancelled implementation task worktrees. */
+  readonly discard?: boolean;
   readonly clock?: Clock;
   readonly newId?: () => string;
 }>;
@@ -398,6 +423,41 @@ async function observePendingScouts(
   return pending;
 }
 
+/**
+ * Lists terminal implementation tasks whose earlier cleanup did not settle. The task cleanup owner
+ * rechecks the task and runtime under the state lock before touching any pane or lease.
+ */
+async function observePendingImplementations(
+  home: string,
+  clock: Clock,
+  discard: boolean,
+): Promise<readonly ObservedPendingImplementation[]> {
+  if (!(await fileExists(databasePath(home)))) return [];
+  const store = createTaskStore({
+    directory: join(home, "tasks"),
+    clock,
+    idFactory: defaultIdFactory(),
+  });
+  const tasks = await store.list();
+  const state = await readRuntimeState(runtimeFile(home));
+  const pending: ObservedPendingImplementation[] = [];
+  for (const task of tasks) {
+    const explicitlyDiscardedBlocked =
+      discard && task.kind === "implementation" && task.stage === "blocked";
+    if (task.kind !== "implementation" || (!isTerminalTask(task) && !explicitlyDiscardedBlocked))
+      continue;
+    if (task.cleanup?.status === "quarantined") continue;
+    const runtime = taskRuntime(state, task.id);
+    if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) continue;
+    pending.push({
+      taskId: task.id,
+      repoPath: task.repoPath,
+      reason: `the ${task.stage} implementation task still holds child resources its coordinator did not release`,
+    });
+  }
+  return pending;
+}
+
 /** Gathers every Tandem resource under one home without running a single mutating command. */
 export async function scanTandemResources(
   input: ReconcileScanInput,
@@ -410,6 +470,11 @@ export async function scanTandemResources(
     coordinators,
     leases,
     scouts: await observePendingScouts(home, input.clock),
+    implementationTasks: await observePendingImplementations(
+      home,
+      input.clock,
+      input.discard === true,
+    ),
     unreadable,
     quarantines: await listCoordinatorQuarantineRecords(home),
     failures,
@@ -551,6 +616,16 @@ export function planTandemReconciliation(observation: ReconcileObservation): Rec
       repoPath: scout.repoPath,
     });
   }
+  for (const task of observation.implementationTasks ?? []) {
+    items.push({
+      kind: "implementation-task",
+      action: "clean",
+      reason: task.reason,
+      taskId: task.taskId,
+      repoPath: task.repoPath,
+    });
+  }
+
   for (const entry of observation.unreadable) {
     items.push({
       kind: "unreadable-record",
@@ -574,6 +649,10 @@ export function planTandemReconciliation(observation: ReconcileObservation): Rec
 
 type CoordinatorItem = Extract<ReconcilePlanItem, Readonly<{ readonly kind: "coordinator" }>>;
 type LeaseItem = Extract<ReconcilePlanItem, Readonly<{ readonly kind: "worktree-lease" }>>;
+type ImplementationTaskItem = Extract<
+  ReconcilePlanItem,
+  Readonly<{ readonly kind: "implementation-task" }>
+>;
 type ScoutItem = Extract<ReconcilePlanItem, Readonly<{ readonly kind: "scout-task" }>>;
 type RepositoryItem = CoordinatorItem | LeaseItem;
 
@@ -651,9 +730,13 @@ async function applyLeaseItem(
   };
 }
 
-function scoutResult(item: ScoutItem, outcome: TaskCleanupOutcome | undefined): ReconcileResult {
+function taskCleanupResult(
+  item: ScoutItem | ImplementationTaskItem,
+  outcome: TaskCleanupOutcome | undefined,
+): ReconcileResult {
+  const label = item.kind === "scout-task" ? "scout" : "implementation task";
   if (outcome === undefined) {
-    return { item, outcome: "retained", reason: "the scout settled before cleanup reached it" };
+    return { item, outcome: "retained", reason: `the ${label} settled before cleanup reached it` };
   }
   if (outcome.status === "released") return { item, outcome: "cleaned", reason: outcome.reason };
   if (outcome.status === "quarantined") {
@@ -681,12 +764,36 @@ async function applyScoutItems(
     return;
   }
   const outcomes = new Map(settled.map((outcome) => [outcome.taskId, outcome]));
-  for (const item of items) results.set(item, scoutResult(item, outcomes.get(item.taskId)));
+  for (const item of items) results.set(item, taskCleanupResult(item, outcomes.get(item.taskId)));
+}
+
+/** Finishes every unsettled implementation task through the durable task cleanup owner. */
+async function applyImplementationItems(
+  input: ReconcileApplyInput,
+  items: readonly ImplementationTaskItem[],
+  results: Map<ReconcilePlanItem, ReconcileResult>,
+): Promise<void> {
+  let settled: readonly TaskCleanupOutcome[];
+  try {
+    settled = await finishPendingImplementationCleanup({
+      home: input.home,
+      run: input.run,
+      clock: input.clock,
+      discard: input.discard,
+    });
+  } catch (error) {
+    const reason = describeFailure(error);
+    for (const item of items) results.set(item, { item, outcome: "failed", reason });
+    return;
+  }
+  const outcomes = new Map(settled.map((outcome) => [outcome.taskId, outcome]));
+  for (const item of items) results.set(item, taskCleanupResult(item, outcomes.get(item.taskId)));
 }
 
 type ReconcileWork = Readonly<{
   readonly repositories: ReadonlyMap<string, readonly RepositoryItem[]>;
   readonly scouts: readonly ScoutItem[];
+  readonly implementationTasks: readonly ImplementationTaskItem[];
   readonly reported: readonly ReconcilePlanItem[];
 }>;
 
@@ -694,10 +801,15 @@ type ReconcileWork = Readonly<{
 function reconcileWork(plan: ReconcilePlan): ReconcileWork {
   const repositories = new Map<string, RepositoryItem[]>();
   const scouts: ScoutItem[] = [];
+  const implementationTasks: ImplementationTaskItem[] = [];
   const reported: ReconcilePlanItem[] = [];
   for (const item of plan.items) {
     if (item.kind === "scout-task") {
       scouts.push(item);
+      continue;
+    }
+    if (item.kind === "implementation-task") {
+      implementationTasks.push(item);
       continue;
     }
     if (item.kind !== "coordinator" && item.kind !== "worktree-lease") {
@@ -709,17 +821,16 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
     if (group === undefined) repositories.set(repoPath, [item]);
     else group.push(item);
   }
-  return { repositories, scouts, reported };
+  return { repositories, scouts, implementationTasks, reported };
 }
 
 /**
  * Carries out one plan.
  *
  * Coordinator and lease work is grouped per repository and held under that repository's shared
- * lock, so a launch in another session cannot allocate underneath the reconcile. Scout cleanup is
- * home-wide and runs through its own durable owner outside those locks, which keeps the lock
- * order documented in `withCoordinatorRepositoryLock` intact. Unreadable records and existing
- * quarantine notes are only ever reported; nothing deletes them.
+ * lock, so a launch in another session cannot allocate underneath the reconcile. Task cleanup runs
+ * through its durable owner, which revalidates state and lease identity before every release.
+ * Unreadable records and existing quarantine notes are only ever reported; nothing deletes them.
  */
 export async function applyTandemReconciliation(
   input: ReconcileApplyInput,
@@ -744,6 +855,9 @@ export async function applyTandemReconciliation(
         }
       }
     });
+  }
+  if (work.implementationTasks.length > 0) {
+    await applyImplementationItems(input, work.implementationTasks, results);
   }
   if (work.scouts.length > 0) await applyScoutItems(input, work.scouts, results);
   return input.plan.items.map(
@@ -772,7 +886,7 @@ function entryFor(item: ReconcilePlanItem, reason: string): ReconcileReportEntry
       path: item.observed.path,
     };
   }
-  if (item.kind === "scout-task") {
+  if (item.kind === "implementation-task" || item.kind === "scout-task") {
     return { kind: item.kind, id: item.taskId, reason, repoPath: item.repoPath };
   }
   if (item.kind === "unreadable-record") {
@@ -844,6 +958,7 @@ export async function reconcileTandemResources(input: ReconcileInput): Promise<R
     home: input.home,
     poolRoot: input.poolRoot,
     repoPaths: input.repoPaths,
+    ...(input.discard === undefined ? {} : { discard: input.discard }),
     clock,
   });
   const plan = planTandemReconciliation(observation);
@@ -869,6 +984,7 @@ export async function reconcileTandemResources(input: ReconcileInput): Promise<R
       plan,
       clock,
       newId,
+      discard: input.discard === true,
     }),
   });
 }

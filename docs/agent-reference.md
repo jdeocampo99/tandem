@@ -1656,15 +1656,15 @@ reports are refused.
 
 ### Reconciling Tandem resources across sessions
 
-`tandem reconcile-resources [--home PATH] [--yes] [--json]` is the front door's home-wide cleanup
-surface, and the supported alternative to deleting coordinator records, panes, or lock files by
-hand. It is distinct from the advanced CLI's per-task `tandem reconcile TASK_ID`, which repairs one
-task's durable runtime.
+`tandem reconcile-resources [--home PATH] [--yes] [--discard] [--json]` is the front door's
+home-wide cleanup surface, and the supported alternative to deleting coordinator records, panes,
+or lock files by hand. It is distinct from the advanced CLI's per-task `tandem reconcile TASK_ID`,
+which repairs one task's durable runtime.
 
 It runs in two stages. The scan reads every coordinator record across every session directory under
 the home, asks Herdr whether each recorded coordinator still answers, reads the checkout behind a
-record no live coordinator answers for, lists each Treehouse pool's leases, lists the terminal
-scouts whose cleanup never settled, and lists the durable quarantine notes and unreadable record
+record no live coordinator answers for, lists each Treehouse pool's leases, lists terminal task
+resources whose cleanup never settled, and lists the durable quarantine notes and unreadable record
 files already present. The scan issues read-only commands only. The plan is then a pure function of
 those observations, so nothing is classified from a resource Tandem changed on the way.
 
@@ -1676,24 +1676,30 @@ Classification:
 - an orphaned coordinator lease, held under the coordinator lease-holder identity with no record
   naming it, is released by exact lease id, holder, and path when its checkout is clean;
 - a dirty, unmerged, unlanded, foreign, or ownership-uncertain worktree is retained and reported
-  with the reason; leases held by anything other than a coordinator are never released here, so
-  implementation task worktrees with unlanded commits are untouched;
-- completed and safely cancelled scout resources are finished through the durable task cleanup
-  owner, which keeps the report, provenance, and task history;
+  with the reason; non-coordinator leases are released only through their durable task cleanup
+  owner, never by pool path;
+- terminal implementation tasks and completed or safely cancelled scout resources are finished
+  through the durable task cleanup owner, which keeps the report, provenance, and task history;
+- `--yes --discard` is the explicit destructive path for cancelled or blocked implementation
+  tasks. It stops and closes their owned endpoints, revalidates exact Treehouse lease identity,
+  and force-returns only those task leases; it does not discard scouts, live tasks, or changed
+  ownership;
 - a record Tandem cannot place or prove, such as one stored under a session directory it does not
   name, is quarantined with a durable note and nothing is closed or released;
 - existing quarantine notes and unreadable record files are listed with their path and reason, and
   are never deleted.
 
-Without `--yes` the command changes nothing and reports what it would clean. Applying takes the
-shared repository lock for each repository first, then that session's launch lock, so a concurrent
-launch cannot allocate underneath it; a dry run takes no lock and never disturbs a live coordinator.
-A `clean` plan item is a prediction: applying re-reads the resource and hands it back to its owner,
-which may still retain or quarantine it. Applying twice plans nothing to clean the second time, and
-a quarantine note is written once per lease rather than on every run. `--json` prints a versioned
-report (`schemaVersion`, `mode`, `home`, `cleaned`, `retained`, `quarantined`, `failed`) whose
-entries carry the resource kind, id, repository, session, path, and reason. The exit code is
-non-zero only when the scan or an apply failed, never because a resource was deliberately retained.
+Without `--yes` the command changes nothing and reports what it would clean. `--discard` is valid
+only with `--yes`. Applying coordinator and pool-lease items takes the shared repository lock for
+each repository first, then that session's launch lock, so a concurrent launch cannot allocate
+underneath them; task cleanup runs through its durable state-and-lease owner. A dry run takes no
+lock and never disturbs a live coordinator. A `clean` plan item is a prediction: applying re-reads
+the resource and hands it back to its owner, which may still retain or quarantine it. Applying
+twice plans nothing to clean the second time, and a quarantine note is written once per lease rather
+than on every run. `--json` prints a versioned report (`schemaVersion`, `mode`, `home`, `cleaned`,
+`retained`, `quarantined`, `failed`) whose entries carry the resource kind, id, repository, session,
+path, and reason. The exit code is non-zero only when the scan or an apply failed, never because a
+resource was deliberately retained.
 
 `delivery-preflight` must pass before approved publication. It checks the exact reviewed HEAD,
 clean/unmerged state, generated database types, formatting, lint/pre-push checks, diff whitespace,

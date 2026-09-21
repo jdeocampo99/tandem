@@ -81,20 +81,26 @@ records, Herdr panes, and Treehouse leases Tandem left behind instead of deletin
 ```sh
 tandem reconcile-resources
 tandem reconcile-resources --yes
+tandem reconcile-resources --yes --discard
 ```
 
 The command scans every Tandem session under the home and classifies each resource before it
 changes anything. Without `--yes` it is a dry run that issues only read-only commands and reports
 what it would clean. Live coordinators are retained; a stopped owned coordinator has its pane
 closed, its exact lease released, and its record removed; an orphaned clean coordinator lease is
-returned by its exact lease identity; completed scout resources are finished through the normal
-task cleanup rules; and anything dirty, unmerged, unlanded, foreign, or ownership-uncertain is kept
-and reported with its reason. Quarantine notes and unreadable record files are listed with their
-path and never deleted. Reports, task history, provenance, and unmerged branches survive every
-path, applying is idempotent, and `--json` prints a versioned report for automation. The exit code
-is non-zero only when the scan or an apply actually failed, not because something was retained.
-This home-wide command is separate from the advanced CLI's per-task `tandem reconcile TASK_ID`
-recovery action.
+returned by its exact lease identity; and terminal task resources are finished through the durable
+task cleanup owner. Anything dirty, unmerged, unlanded, foreign, or ownership-uncertain is kept
+and reported with its reason.
+
+`--yes --discard` is the explicit destructive path for cancelled or blocked implementation tasks.
+It stops and closes their owned endpoints, revalidates the exact Treehouse lease identity, then
+uses Treehouse's force-return operation. It never deletes a path by name and never discards scouts,
+live tasks, or tasks whose lease ownership changed. Quarantine notes and unreadable record files are
+listed with their path and never deleted. Reports, task history, provenance, and unmerged branches
+survive every safe path, applying is idempotent, and `--json` prints a versioned report for
+automation. The exit code is non-zero only when the scan or an apply actually failed, not because
+something was retained. This home-wide command is separate from the advanced CLI's per-task
+`tandem reconcile TASK_ID` recovery action.
 
 The frontdoor verifies exact Tandem ownership, revalidates the pane cwd/process immediately before
 close, confirms close acknowledgement and pane absence, then launches a replacement with the same

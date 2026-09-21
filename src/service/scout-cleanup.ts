@@ -53,6 +53,10 @@ export type TaskCleanupDependencies = Readonly<{
   readonly run: CommandRunner;
   readonly clock: Clock;
 }>;
+export type TerminalTaskCleanupOptions = Readonly<{
+  /** Discard is reserved for explicitly approved cancelled or blocked implementation tasks. */
+  readonly discard?: boolean;
+}>;
 
 /** The scout checkout as it was observed, without interpreting it. */
 export type ScoutCheckoutObservation =
@@ -415,10 +419,17 @@ function hasBusyPresentation(state: RuntimeState, taskId: string): boolean {
 export async function releaseTerminalTaskResources(
   deps: TaskCleanupDependencies,
   captured: TaskRecord,
+  options: TerminalTaskCleanupOptions = {},
 ): Promise<TaskCleanupOutcome> {
   return withStateLock(deps.home, async () => {
     const task = await deps.store.read(captured.id);
-    if (task === undefined || task.revision !== captured.revision || !isTerminalTask(task)) {
+    const discardableBlocked =
+      options.discard === true && task?.kind === "implementation" && task.stage === "blocked";
+    if (
+      task === undefined ||
+      task.revision !== captured.revision ||
+      (!isTerminalTask(task) && !discardableBlocked)
+    ) {
       return deferred(captured.id, "the task changed before cleanup started");
     }
     const state = await readRuntimeState(deps.runtimePath);
@@ -498,6 +509,11 @@ export async function releaseTerminalTaskResources(
         repo: task.repoPath,
         lease,
         childWorkerStopped: true,
+        ...(options.discard === true &&
+        task.kind === "implementation" &&
+        (task.stage === "cancelled" || task.stage === "blocked")
+          ? { discard: true, destructiveApproval: true }
+          : {}),
       });
     } catch (error) {
       return recordCleanupAttempt(deps, task, {
@@ -560,6 +576,59 @@ export async function finishPendingScoutCleanup(
       const runtime = taskRuntime(state, task.id);
       if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) continue;
       outcomes.push(await releaseTerminalTaskResources(deps, task));
+    }
+    return outcomes;
+  });
+}
+
+/**
+ * Finishes unsettled implementation tasks across a Tandem home. Normal cleanup still proves a
+ * landed worktree; an explicit discard pass may force-return only cancelled or blocked tasks.
+ */
+
+export type PendingImplementationCleanupInput = PendingScoutCleanupInput &
+  Readonly<{ readonly discard?: boolean }>;
+
+export async function finishPendingImplementationCleanup(
+  input: PendingImplementationCleanupInput,
+): Promise<readonly TaskCleanupOutcome[]> {
+  const home = absoluteDirectory(input.home, "home");
+  const run = input.run ?? runCommand;
+  const clock = input.clock ?? ((): string => new Date().toISOString());
+  if (typeof run !== "function" || typeof clock !== "function") {
+    throw new TypeError("run and clock must be functions");
+  }
+  const deps: TaskCleanupDependencies = {
+    home,
+    store: createTaskStore({
+      directory: join(home, "tasks"),
+      clock,
+      idFactory: defaultIdFactory(),
+    }),
+    runtimePath: runtimeFile(home),
+    run,
+    clock,
+  };
+  return withStateLock(home, async () => {
+    const tasks = await deps.store.list();
+    const state = await readRuntimeState(deps.runtimePath);
+    const outcomes: TaskCleanupOutcome[] = [];
+    for (const task of tasks) {
+      const explicitlyDiscardedBlocked =
+        input.discard === true && task.kind === "implementation" && task.stage === "blocked";
+      if (task.kind !== "implementation" || (!isTerminalTask(task) && !explicitlyDiscardedBlocked))
+        continue;
+      if (task.cleanup?.status === "quarantined") continue;
+      const runtime = taskRuntime(state, task.id);
+      if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) continue;
+      outcomes.push(
+        await releaseTerminalTaskResources(deps, task, {
+          discard:
+            input.discard === true &&
+            task.kind === "implementation" &&
+            (task.stage === "cancelled" || task.stage === "blocked"),
+        }),
+      );
     }
     return outcomes;
   });
