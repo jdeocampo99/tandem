@@ -912,6 +912,69 @@ payload, API key, repository content, or full action error can reach a receipt. 
 malformed row is counted as an unreadable row and left visible on the receipt rather than dropped,
 and telemetry being unavailable never fails a receipt or a state transition.
 
+### Standing request budgets and spending decisions
+
+A request spends under a standing cap. The cap is configured, never assumed: `policy.requestBudget`
+holds `capMicros` and `operationEstimateMicros`, both in integer USD micro-dollars, and both default
+to `"unset"`. `"unset"` is an amount nobody configured, which is unknown rather than unlimited and
+rather than zero, so a request governed by an unset amount stops for a decision instead of running.
+A repository tightens or raises the standing default by naming its own amounts; a pinned policy
+written before budgets existed loads as unset and stops the same way.
+
+Precedence for the cap in force is the approved request override, then the pinned policy, which is
+already the repository override layered over the standing default. A lower repository amount
+tightens spending and stays visible in the budget readout.
+
+Every spend-bearing operation is admitted through one check, in the same atomic runtime write that
+records its durable operation and reservation: scout, implementation, fix, validation, review,
+verification, and presentation all go through it. The check adds observed charges from the
+accounting ledger to every outstanding estimated reservation and to the next step's conservative
+estimate, and compares that against the cap. A second concurrent admission therefore sees the first
+one's reservation and is refused when the combined exposure cannot fit.
+
+```sh
+# read the standing budget and any pending decision (passive; starts no work)
+{"request":{"action":"budget-show","requestId":"req-..."}}
+# answer one pending decision by raising the cap (human-confirmed)
+{"request":{"action":"budget-approve","requestId":"req-...","decisionId":"spend-...","capMicros":25000000}}
+```
+
+When the next step cannot fit, when no cap is configured, or when no conservative estimate is
+configured, the request enters a durable budget pause recorded in `requestBudgets` alongside the
+durable operation, reservation, and stop request. The pause is request-wide: progress on any other
+task under the same request is refused by the same check, so independent work cannot walk past it.
+Running work is never killed because a cap was reached; it finishes or unwinds through the existing
+pause and reconciliation paths, and its reservation is settled afterwards. Budget pressure never
+switches a model tier, drops a check, narrows review, or replans.
+
+| Pause reason | What it means |
+| --- | --- |
+| `no-configured-cap` | Nothing has authorized an amount for this request. |
+| `estimate-unavailable` | No conservative per-operation estimate is configured, so the next step's exposure is unknown. |
+| `cap-would-be-exceeded` | Observed charges plus outstanding estimates plus the next step exceed the cap. |
+
+The decision identity is derived from the request, pinned policy digest, agreement revision, cap,
+and reason rather than minted, so the question is recorded exactly once and every later refusal
+under it is silent. A restart re-derives the same pending decision; it cannot manufacture an
+authorization, and an unanswered question is still a pause.
+
+A cap increase is an explicit human-confirmed decision that must name the exact pending
+`decisionId`. It records the old and new cap, the pinned policy digest, and the agreement revision
+it was given under. It stops speaking when any of those moves: a changed pinned policy, a revised
+agreement, or a repository cap change makes the approval superseded, and the cap falls back to the
+pinned policy amount rather than to no cap at all. Authorizing an amount lower than the cap that
+stopped the request is refused rather than applied.
+
+Reservations are retained through uncertainty and released only on a positive outcome. Each
+reservation is keyed by the operation it backs, so re-admitting or replaying it counts once. After a
+restart, reconciliation settles them against the durable operations: an operation the ledger has
+priced leaves the record because its actual charge is now committed, an operation that ended without
+any provider-reported charge keeps its conservative estimate standing in for the amount nobody
+published, and an operation whose end is not proven keeps its reservation exactly as it was. The
+readout reports committed charges and reserved estimates separately, alongside the receipt's own
+unavailable-sample counts and included-quota units, so an unmeasured amount is never shown as zero
+or as cash.
+
 ### Post-research continuation disposition
 
 Every scout record carries a durable `researchContinuation` describing what its completed report

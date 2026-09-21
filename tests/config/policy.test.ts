@@ -13,7 +13,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { defaultPolicy, parsePolicy } from "../../src/config/policy.ts";
+import { defaultPolicy, parsePolicy, parsePolicyOverride } from "../../src/config/policy.ts";
 import { onboardRepo, resolveRepoPolicy } from "../../src/config/repositories.ts";
 
 type PolicyFixture = Readonly<{
@@ -184,6 +184,32 @@ test("parsePolicy rejects unknown keys, invalid pins, invalid limits, and unsafe
       validationCommands: [{ name: "empty", argv: [], surfaces: [], timeoutMs: 1000 }],
     }),
   ).toThrow(TypeError);
+});
+
+test("standing spending amounts default to unset and layer without adopting a default", () => {
+  expect(parsePolicy({}).requestBudget).toEqual({
+    capMicros: "unset",
+    operationEstimateMicros: "unset",
+  });
+
+  const standing = parsePolicy({
+    requestBudget: { capMicros: 10_000_000, operationEstimateMicros: 500_000 },
+  });
+  expect(standing.requestBudget).toEqual({
+    capMicros: 10_000_000,
+    operationEstimateMicros: 500_000,
+  });
+
+  const tightened = parsePolicyOverride({ requestBudget: { capMicros: 2_000_000 } }, standing);
+  expect(tightened.requestBudget).toEqual({
+    capMicros: 2_000_000,
+    operationEstimateMicros: 500_000,
+  });
+
+  expect(() => parsePolicy({ requestBudget: { capMicros: -1 } })).toThrow(TypeError);
+  expect(() => parsePolicy({ requestBudget: { capMicros: 1.5 } })).toThrow(TypeError);
+  expect(() => parsePolicy({ requestBudget: { capMicros: "unlimited" } })).toThrow(TypeError);
+  expect(() => parsePolicy({ requestBudget: { unexpected: 1 } })).toThrow(TypeError);
 });
 
 test("resolveRepoPolicy refuses missing configured guidance files", async () => {

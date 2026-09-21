@@ -58,6 +58,7 @@ const policy: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
+    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -742,6 +743,40 @@ test("a record written before review levels existed loads at the conservative de
   });
 });
 
+test("a record written before budgets existed loads with no cap rather than an inherited one", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-request-budget" });
+    rewritePayload(directory, created.id, (payload) => {
+      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
+      delete policyValue.config?.requestBudget;
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("the upgraded record did not reload");
+    expect(reloaded.policy.config.requestBudget).toEqual({
+      capMicros: "unset",
+      operationEstimateMicros: "unset",
+    });
+  });
+});
+
+test("refuses a pinned budget amount that is neither unset nor whole micro-dollars", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "invalid-request-budget" });
+    rewritePayload(directory, created.id, (payload) => {
+      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
+      policyValue.config = {
+        ...policyValue.config,
+        requestBudget: { capMicros: "unlimited", operationEstimateMicros: 1 },
+      };
+    });
+
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
 test("a recorded review level round-trips with its reason, floors, and shadow assistance", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
@@ -816,6 +851,7 @@ test("refuses a pinned review-level policy with an unsupported assistance mode",
           jevAssistance: "active",
           sourceTransmission: false,
         },
+        requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
       };
     });
 
