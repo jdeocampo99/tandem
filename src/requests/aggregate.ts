@@ -772,7 +772,9 @@ function incompleteRequestReasons(
     reasons.push(`the request brief approval is ${input.approvalState}`);
   }
   if (input.members.length === 0) reasons.push("no approved implementation task is a member yet");
-  if (input.active.length > 0) reasons.push(`${input.active.length} member(s) are still running`);
+  if (input.active.length > 0) {
+    reasons.push(`${input.active.join(", ")} has not finished running yet`);
+  }
   if (input.pending.length > 0) {
     reasons.push(`${input.pending.join(", ")} has not started producing a reviewed result yet`);
   }

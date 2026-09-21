@@ -160,7 +160,7 @@ test("a ready subset never completes the request while another member is unfinis
   expect(aggregate.completedTaskIds).toEqual(["task-1"]);
   expect(aggregate.readyToIntegrate).toBe(false);
   expect(aggregate.delivered).toBe(false);
-  expect(aggregate.incompleteReasons).toContain("1 member(s) are still running");
+  expect(aggregate.incompleteReasons).toContain("task-2 has not finished running yet");
 });
 
 test("an ordinary blocker on one member leaves independent members dispatchable", () => {
