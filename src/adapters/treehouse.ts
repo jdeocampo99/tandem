@@ -680,7 +680,12 @@ export async function releaseWorktree(
     await runChecked(run, returnRequest, "treehouse lease return");
   } catch (error) {
     if (error instanceof LeaseSafetyError) throw error;
-    throw new LeaseSafetyError("treehouse lease release could not be proven safe", lease, error);
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new LeaseSafetyError(
+      `treehouse lease release could not be proven safe: ${detail}`,
+      lease,
+      error,
+    );
   }
   return { released: true, lease };
 }

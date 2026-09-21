@@ -1,5 +1,5 @@
 import { access, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, inspectEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
@@ -195,6 +195,7 @@ export type RecoveryPlan = Readonly<{
 export type ReconciliationResult = Readonly<{
   readonly taskId: string;
   readonly changed: boolean;
+  readonly repairedBranch?: string;
   readonly clearedEndpoints: readonly string[];
   readonly settledJobs: readonly string[];
   readonly releasedReservations: readonly string[];
@@ -319,20 +320,122 @@ async function canonical(path: string): Promise<string | undefined> {
     throw error;
   }
 }
+async function gitCommonDirectory(
+  deps: RecoveryWorkflowDependencies,
+  path: string,
+): Promise<string | undefined> {
+  const root = await gitText(deps.run, path, ["rev-parse", "--show-toplevel"]);
+  const common = await gitText(deps.run, path, ["rev-parse", "--git-common-dir"]);
+  if (root === undefined || common === undefined) return undefined;
+  return canonical(resolve(root, common));
+}
 
-async function gitText(
-  run: CommandRunner,
+async function sharesGitRepository(
+  deps: RecoveryWorkflowDependencies,
+  first: string,
+  second: string,
+): Promise<boolean> {
+  const [firstCommon, secondCommon] = await Promise.all([
+    gitCommonDirectory(deps, first),
+    gitCommonDirectory(deps, second),
+  ]);
+  return firstCommon !== undefined && firstCommon === secondCommon;
+}
+
+async function repositoryIdentityProven(
+  deps: RecoveryWorkflowDependencies,
+  recordedPath: string,
+  sourcePath: string | undefined,
+): Promise<boolean> {
+  const recordedCanonical = await canonical(recordedPath);
+  if (recordedCanonical === undefined || sourcePath === undefined) {
+    return recordedCanonical !== undefined;
+  }
+  const sourceCanonical = await canonical(sourcePath);
+  return (
+    sourceCanonical !== undefined &&
+    (sourceCanonical === recordedCanonical ||
+      (await sharesGitRepository(deps, recordedCanonical, sourceCanonical)))
+  );
+}
+
+async function runGitChecked(
+  deps: RecoveryWorkflowDependencies,
   cwd: string,
   args: readonly string[],
+  operation: string,
+): Promise<void> {
+  const result = await deps.run({ argv: ["git", "-C", cwd, ...args], cwd });
+  if (result.code === 0) return;
+  const detail = result.stderr.trim() || result.stdout.trim();
+  throw new Error(
+    `${operation} failed with exit code ${result.code}${detail.length === 0 ? "" : `: ${detail}`}`,
+  );
+}
+
+async function repairDetachedTaskBranch(
+  deps: RecoveryWorkflowDependencies,
+  task: TaskRecord,
+  inspection: RecoveryInspection,
 ): Promise<string | undefined> {
-  try {
-    const result = await run({ argv: ["git", "-C", cwd, ...args], cwd });
-    if (result.code !== 0) return undefined;
-    const value = result.stdout.trim();
-    return value.length === 0 ? undefined : value;
-  } catch {
+  if (
+    task.stage !== "blocked" ||
+    task.reviewHead === undefined ||
+    task.worktree === undefined ||
+    inspection.branch !== undefined ||
+    !inspection.review.exactHead ||
+    !inspection.review.clean ||
+    inspection.review.unmerged
+  )
     return undefined;
+  const path = inspection.worktree.path;
+  if (path === undefined) return undefined;
+  const branch = task.worktree.branch;
+  const branchHead = await gitText(deps.run, path, [
+    "rev-parse",
+    "--verify",
+    `refs/heads/${branch}`,
+  ]);
+  if (branchHead !== undefined && branchHead !== task.reviewHead) {
+    const ancestor = await deps.run({
+      argv: ["git", "-C", path, "merge-base", "--is-ancestor", branchHead, task.reviewHead],
+      cwd: path,
+    });
+    if (ancestor.code !== 0) {
+      throw new Error(
+        `task branch ${JSON.stringify(branch)} is not an ancestor of reviewed HEAD ${task.reviewHead}`,
+      );
+    }
+    await runGitChecked(
+      deps,
+      path,
+      ["branch", "--force", branch, task.reviewHead],
+      "task branch repair",
+    );
+    await runGitChecked(deps, path, ["switch", "--no-guess", branch], "task branch checkout");
+  } else if (branchHead === undefined) {
+    await runGitChecked(
+      deps,
+      path,
+      ["switch", "--no-guess", "--create", branch, task.reviewHead],
+      "task branch creation",
+    );
+  } else {
+    await runGitChecked(deps, path, ["switch", "--no-guess", branch], "task branch checkout");
   }
+  const repairedBranch = await gitText(deps.run, path, [
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    "HEAD",
+  ]);
+  const repairedHead = await gitText(deps.run, path, ["rev-parse", "HEAD"]);
+  if (repairedBranch !== branch || repairedHead !== task.reviewHead) {
+    throw new Error(
+      `task branch repair ended at ${JSON.stringify(repairedBranch)} and ${String(repairedHead)}`,
+    );
+  }
+  return branch;
 }
 
 async function checkpoint(
@@ -352,6 +455,21 @@ async function checkpoint(
   }
 }
 
+async function gitText(
+  run: CommandRunner,
+  cwd: string,
+  args: readonly string[],
+): Promise<string | undefined> {
+  try {
+    const result = await run({ argv: ["git", "-C", cwd, ...args], cwd });
+    if (result.code !== 0) return undefined;
+    const value = result.stdout.trim();
+    return value.length === 0 ? undefined : value;
+  } catch {
+    return undefined;
+  }
+}
+
 function repositoryFromRemote(remote: string): string | undefined {
   const value = remote.trim().replace(/\.git$/u, "");
   if (value.startsWith("git@github.com:")) return value.slice("git@github.com:".length);
@@ -363,6 +481,7 @@ function repositoryFromRemote(remote: string): string | undefined {
     return /^[^\s/]+\/[^\s/]+$/u.test(value) ? value : undefined;
   }
 }
+
 function defaultRecovery(
   runtime: RuntimeTaskState | undefined,
 ): NonNullable<RuntimeTaskState["recovery"]> {
@@ -377,9 +496,8 @@ function defaultRecovery(
 }
 
 function jobForEndpoint(runtime: RuntimeTaskState, endpoint: Endpoint): DurableJob | undefined {
-  return runtime.jobs.find(
-    (job) => job.endpoint?.paneId === endpoint.paneId || job.endpoint?.tabId === endpoint.tabId,
-  );
+  const byPane = runtime.jobs.find((job) => job.endpoint?.paneId === endpoint.paneId);
+  return byPane ?? runtime.jobs.find((job) => job.endpoint?.tabId === endpoint.tabId);
 }
 
 function jobState(job: DurableJob, resultExists: boolean): RecoveryJobState {
@@ -525,14 +643,24 @@ export class RecoveryWorkflow {
       runtime?.worktree?.baseHead ?? task.worktree?.baseHead,
     );
     const canonicalPath = await canonical(task.repoPath);
+    const configuredSourcePath = runtime?.sourceRepoPath;
     const sourcePath =
-      runtime?.sourceRepoPath === undefined ? undefined : await canonical(runtime.sourceRepoPath);
-    const identity =
-      canonicalPath === undefined
-        ? "missing"
-        : sourcePath !== undefined && sourcePath !== canonicalPath
-          ? "ambiguous"
-          : "proven";
+      configuredSourcePath === undefined ? undefined : await canonical(configuredSourcePath);
+    let identity: RecoveryInspection["repository"]["identity"];
+    if (canonicalPath === undefined) {
+      identity = "missing";
+    } else if (configuredSourcePath === undefined) {
+      identity = "proven";
+    } else if (sourcePath === undefined) {
+      identity = "ambiguous";
+    } else if (
+      sourcePath === canonicalPath ||
+      (await sharesGitRepository(this.#deps, canonicalPath, sourcePath))
+    ) {
+      identity = "proven";
+    } else {
+      identity = "ambiguous";
+    }
     const endpointEntries = await Promise.all(
       (runtime?.endpoints ?? task.endpoints ?? []).map((endpoint) =>
         endpointObservation(
@@ -681,7 +809,8 @@ export class RecoveryWorkflow {
       inspection.endpoints.some((entry) => entry.state === "missing" || entry.state === "stopped")
     ) {
       name = "reconcile";
-      effect = "clear only proven stale endpoint records and terminal effects; preserve worktree";
+      effect =
+        "clear only proven stale endpoint records, repair a detached exact reviewed branch, and preserve worktree";
     } else if (
       inspection.stage === "blocked" &&
       inspection.review.exactHead &&
@@ -804,10 +933,29 @@ export class RecoveryWorkflow {
         recoveryAttempts: recovery.recoveryAttempts,
       };
     }
+    let repairedBranch: string | undefined;
+    try {
+      repairedBranch = await repairDetachedTaskBranch(this.#deps, task, inspection);
+    } catch (error) {
+      return {
+        taskId,
+        changed: false,
+        clearedEndpoints: [],
+        settledJobs: [],
+        releasedReservations: [],
+        blocked: true,
+        reasons: [`task branch repair refused: ${describeError(error)}`],
+        worktreePreserved: true,
+        recoveryAttempts: recovery.recoveryAttempts,
+      };
+    }
     const clearedEndpoints: string[] = [];
     const settledJobs: string[] = [];
     const releasedReservations: string[] = [];
-    const reasons: string[] = [];
+    const reasons: string[] =
+      repairedBranch === undefined
+        ? []
+        : [`repaired task branch ${repairedBranch} at reviewed HEAD ${task.reviewHead}`];
     for (const endpointEntry of inspection.endpoints) {
       if (endpointEntry.state !== "missing" && endpointEntry.state !== "stopped") continue;
       const endpoint = endpointEntry.endpoint;
@@ -828,6 +976,20 @@ export class RecoveryWorkflow {
         reasons.push(`job ${job.id} was quarantined after endpoint ${endpoint.paneId} disappeared`);
       }
     }
+    const clearedEndpointPanes = new Set(clearedEndpoints);
+    const recordedEndpointPanes = new Set(runtime.endpoints.map((entry) => entry.paneId));
+    for (const job of runtime.jobs) {
+      if (!activeRuntimeJob(job) || settledJobs.includes(job.id)) continue;
+      const paneId = job.endpoint?.paneId;
+      if (
+        paneId === undefined ||
+        (!clearedEndpointPanes.has(paneId) &&
+          (runtime.operation?.phase !== "quarantined" || recordedEndpointPanes.has(paneId)))
+      )
+        continue;
+      settledJobs.push(job.id);
+      reasons.push(`job ${job.id} was quarantined after endpoint ${paneId} disappeared`);
+    }
     const canReleaseReservation =
       runtime.reservation !== undefined &&
       runtime.reservation.phase !== "released" &&
@@ -837,7 +999,10 @@ export class RecoveryWorkflow {
     if (canReleaseReservation && runtime.reservation !== undefined)
       releasedReservations.push(runtime.reservation.id);
     const changed =
-      clearedEndpoints.length > 0 || settledJobs.length > 0 || releasedReservations.length > 0;
+      repairedBranch !== undefined ||
+      clearedEndpoints.length > 0 ||
+      settledJobs.length > 0 ||
+      releasedReservations.length > 0;
     if (!changed) {
       return {
         taskId,
@@ -921,6 +1086,7 @@ export class RecoveryWorkflow {
     return {
       taskId,
       changed: true,
+      ...(repairedBranch === undefined ? {} : { repairedBranch }),
       clearedEndpoints,
       settledJobs,
       releasedReservations,
@@ -1008,16 +1174,7 @@ export class RecoveryWorkflow {
         reason: "durable runtime task is missing",
       };
     }
-    const repoCanonical = await canonical(task.repoPath);
-    const sourceCanonical =
-      runtime.sourceRepoPath === undefined
-        ? repoCanonical
-        : await canonical(runtime.sourceRepoPath);
-    if (
-      repoCanonical === undefined ||
-      sourceCanonical === undefined ||
-      repoCanonical !== sourceCanonical
-    ) {
+    if (!(await repositoryIdentityProven(this.#deps, task.repoPath, runtime.sourceRepoPath))) {
       return {
         taskId,
         changed: false,
@@ -1395,7 +1552,7 @@ export class RecoveryWorkflow {
       detail: remote === undefined ? "origin unavailable" : remote,
     });
     const qualityChecks = [
-      { name: "generated-database-types", argv: ["bun", "run", "check"] as const },
+      { name: "generated-database-types", argv: ["bun", "run", "db:types:check"] as const },
       { name: "format", argv: ["bunx", "biome", "format", "--check", "."] as const },
       { name: "pre-push", argv: ["bun", "run", "lint"] as const },
       { name: "git-diff-check", argv: ["git", "-C", cwd, "diff", "--check"] as const },

@@ -19,8 +19,10 @@ export type TerminalInvocation = Readonly<{
   readonly restart: boolean;
   readonly force: boolean;
   readonly yes: boolean;
+  readonly discard: boolean;
   readonly json: boolean;
 }>;
+
 export type TerminalRunResult = Readonly<{
   readonly exitCode: number;
   readonly status:
@@ -73,8 +75,10 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   let headless = false;
   let noAttach = false;
   let yes = false;
+  let discard = false;
   let json = false;
   const paths: string[] = [];
+
   let parseOptions = true;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -92,6 +96,11 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       yes = true;
       continue;
     }
+    if (parseOptions && token === "--discard") {
+      discard = true;
+      continue;
+    }
+
     if (parseOptions && token === "--json") {
       json = true;
       continue;
@@ -172,6 +181,12 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   if (resolvedCommand === "reconcile-resources" && paths.length > 0) {
     throw new Error("tandem reconcile-resources does not accept project paths");
   }
+  if (discard && resolvedCommand !== "reconcile-resources") {
+    throw new Error("tandem --discard is only valid with reconcile-resources");
+  }
+  if (discard && !yes) {
+    throw new Error("tandem reconcile-resources --discard requires --yes");
+  }
   if (resolvedCommand === "configure" && paths.length > 1) {
     throw new Error("tandem configure accepts at most one project path");
   }
@@ -197,6 +212,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     restart,
     force,
     yes,
+    discard,
     json,
     ...(home === undefined ? {} : { home }),
     ...(sessionId === undefined ? {} : { sessionId }),

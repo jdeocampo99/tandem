@@ -594,6 +594,35 @@ test("requires explicit approval before a destructive release or pull request me
   expect(mergeRunner.calls).toHaveLength(0);
 });
 
+test("preserves Treehouse return diagnostics in a failed destructive release", async () => {
+  const status = JSON.stringify([
+    {
+      name: lease.name,
+      path: lease.path,
+      status: "leased",
+      flavor: "git",
+      lease_id: lease.leaseId,
+      lease_holder: lease.leaseHolder,
+      leased_at: lease.leasedAt,
+      processes: [],
+    },
+  ]);
+  const runner = scriptedRunner([
+    result(status),
+    result("", 1, "Treehouse refused to return the checkout"),
+  ]);
+
+  await expect(
+    releaseWorktree(runner.run, {
+      repo: "/tmp/repo",
+      lease,
+      childWorkerStopped: true,
+      discard: true,
+      destructiveApproval: true,
+    }),
+  ).rejects.toThrow(/Treehouse refused to return the checkout/u);
+});
+
 test("refuses a pull request merge when the reviewed head is stale", async () => {
   const runner = scriptedRunner([
     result(

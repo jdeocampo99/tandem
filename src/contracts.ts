@@ -371,6 +371,18 @@ export type ResearchHandoff = {
   readonly excerpt: string;
 };
 
+export const MAX_SKILL_NAME_CHARS = 100;
+export const MAX_SKILL_CONTEXT_BYTES = 4 * 1024;
+
+/**
+ * An explicit, user-invoked skill pinned to a task. Tandem records its identity and carries its
+ * bounded context to the intended child worker without interpreting the skill's domain semantics.
+ */
+export type SkillInvocation = {
+  readonly name: string;
+  readonly context: string;
+};
+
 export const RESEARCH_CONTINUATION_DISPOSITIONS = [
   "report-only",
   "ask-intent",
@@ -442,6 +454,7 @@ export type TaskRecord = {
   readonly findingLedger?: readonly FindingLedgerEntry[];
   readonly researchHandoffs?: readonly ResearchHandoff[];
   readonly researchContinuation?: ResearchContinuation;
+  readonly skill?: SkillInvocation;
   readonly blockReason?: string;
   readonly notifications: readonly Notification[];
   readonly communication?: TaskCommunication;

@@ -28,6 +28,7 @@ import {
   type RepoPolicy,
   type ResearchContinuation,
   type ResearchHandoff,
+  type SkillInvocation,
   type SteerTaskInput,
   type TaskCommunicationView,
   type TaskRecord,
@@ -145,6 +146,8 @@ export type CreateTaskRequest = Readonly<{
   readonly researchTaskIds?: readonly string[];
   /** Explicitly selected post-research disposition; scouts otherwise take the safe default. */
   readonly researchContinuation?: ResearchContinuation;
+  /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
+  readonly skill?: SkillInvocation;
 }>;
 export type ModelOptionsResult = Readonly<{
   readonly modelSettings: ModelSettings;

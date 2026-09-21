@@ -1016,6 +1016,15 @@ test("reconcile-resources inspects Tandem resources and applies nothing without 
       yes: false,
     });
     expect(parseTerminalArgs(["reconcile-resources", "--home", home, "--yes"]).yes).toBe(true);
+    expect(
+      parseTerminalArgs(["reconcile-resources", "--home", home, "--yes", "--discard"]),
+    ).toMatchObject({
+      discard: true,
+      yes: true,
+    });
+    expect(() => parseTerminalArgs(["reconcile-resources", "--discard"])).toThrow(
+      "tandem reconcile-resources --discard requires --yes",
+    );
     expect(() => parseTerminalArgs(["reconcile-resources", "/repo"])).toThrow(
       "tandem reconcile-resources does not accept project paths",
     );
