@@ -161,6 +161,7 @@ export function registerTandemOmp(
     z.object({ action: z.literal("messages"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("inspect"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("recovery-plan"), taskId: z.string() }).strict(),
+    z.object({ action: z.literal("recovery-decide"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("reconcile"), taskId: z.string() }).strict(),
     z
       .object({ action: z.literal("review-existing"), taskId: z.string(), head: z.string() })
@@ -196,6 +197,56 @@ export function registerTandemOmp(
         contentDigest: z.string(),
       })
       .strict(),
+    z.object({ action: z.literal("request-show"), requestId: z.string() }).strict(),
+    z
+      .object({
+        action: z.literal("request-relate"),
+        requestId: z.string(),
+        taskId: z.string(),
+        dependsOn: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("request-conflict"),
+        requestId: z.string(),
+        taskIds: z.array(z.string()),
+        reason: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("request-decide"),
+        requestId: z.string(),
+        conflictId: z.string(),
+        instruction: z.string(),
+      })
+      .strict(),
+    z.object({ action: z.literal("request-integrate"), requestId: z.string() }).strict(),
+    z
+      .object({
+        action: z.literal("request-publish"),
+        requestId: z.string(),
+        repository: z.string(),
+        title: z.string(),
+        base: z.string(),
+        summary: z
+          .object({
+            tldr: z.array(z.string()),
+            what: z.array(z.string()),
+            why: z.array(z.string()),
+          })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("request-merge"),
+        requestId: z.string(),
+        method: z.enum(["merge", "squash", "rebase"]),
+      })
+      .strict(),
+    z.object({ action: z.literal("request-split"), requestId: z.string() }).strict(),
     z.object({ action: z.literal("tick") }).strict(),
     z
       .object({ action: z.literal("pause"), taskId: z.string(), reason: z.string().optional() })

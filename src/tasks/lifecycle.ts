@@ -150,11 +150,23 @@ type BlockEvent = Readonly<{
   readonly reason: string;
 }>;
 
+/**
+ * Proof that one request's single pull request contains this task's reviewed commit. Without it a
+ * merge must name the task's own reviewed HEAD, so a task can never be marked merged by a pull
+ * request that does not demonstrably carry its work.
+ */
+export type RequestDeliveryProof = Readonly<{
+  readonly requestId: string;
+  readonly integratedHead: string;
+  readonly memberHead: string;
+}>;
+
 type MergeEvent = Readonly<{
   readonly type: "merge";
   readonly pullRequest: PullRequestMetadata;
   readonly approved: boolean;
   readonly verified: boolean;
+  readonly requestDelivery?: RequestDeliveryProof;
 }>;
 
 type AcknowledgeNotificationEvent = Readonly<{
@@ -641,6 +653,33 @@ function assertReview(review: ReviewResult, task: TaskRecord): void {
         `Review lens ${review.lens} cannot pass with a ${finding.verdict} ${finding.severity} finding`,
       );
     }
+  }
+}
+
+/**
+ * A task merged on its own must be the pull request's head; a task merged inside a request must be
+ * the member commit the request proved its integrated head contains.
+ */
+function assertMergedHead(task: TaskRecord, event: MergeEvent): void {
+  const proof = event.requestDelivery;
+  if (proof === undefined) {
+    if (task.reviewHead === event.pullRequest.head) return;
+    throw new TaskTransitionError(
+      "merge-not-verified",
+      task,
+      "Merged pull request must match the reviewed head",
+    );
+  }
+  if (
+    task.requestId !== proof.requestId ||
+    proof.memberHead !== task.reviewHead ||
+    proof.integratedHead !== event.pullRequest.head
+  ) {
+    throw new TaskTransitionError(
+      "merge-not-verified",
+      task,
+      `Request delivery proof does not show that ${event.pullRequest.head} contains task ${task.id} at ${String(task.reviewHead)}`,
+    );
   }
 }
 
@@ -1205,22 +1244,21 @@ export function transitionTask(
           "Merge requires explicit approval and verified merge evidence",
         );
       }
-      if (
-        event.pullRequest?.state !== "merged" ||
-        !isNonEmptyText(event.pullRequest.head) ||
-        task.reviewHead !== event.pullRequest.head
-      ) {
+      if (event.pullRequest?.state !== "merged" || !isNonEmptyText(event.pullRequest.head)) {
         throw new TaskTransitionError(
           "merge-not-verified",
           task,
           "Merged pull request must match the reviewed head",
         );
       }
+      assertMergedHead(task, event);
       return commitWithNotification(
         task,
         context,
         { stage: "merged", pullRequest: event.pullRequest },
-        `Task ${task.id} merged after approved and verified merge`,
+        event.requestDelivery === undefined
+          ? `Task ${task.id} merged after approved and verified merge`
+          : `Task ${task.id} merged as part of request ${event.requestDelivery.requestId} at integrated HEAD ${event.requestDelivery.integratedHead}`,
       );
     }
     case "acknowledge-notification": {

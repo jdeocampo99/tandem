@@ -912,6 +912,65 @@ payload, API key, repository content, or full action error can reach a receipt. 
 malformed row is counted as an unreadable row and left visible on the receipt rather than dropped,
 and telemetry being unavailable never fails a receipt or a state transition.
 
+### Whole-request coordination and single-PR delivery
+
+Around the request identity #48 owns, one `request_deliveries` row in `<home>/state.sqlite` records
+which approved implementation tasks belong to the request, how they relate, the one commit their
+outputs were integrated into, and the one pull request that delivers them. It shares the request's
+identity rather than minting a second one, and is written under the same compare-and-swap discipline
+as a task record.
+
+Membership is pinned to the brief revision and agreement digest that admitted it. Admission is
+refused while the approval is not current, and refused rather than re-pinned when it names a
+different agreement. Reconciliation quarantines membership and relations that durable task state has
+outgrown - a cancelled member, a member that stopped naming the request, a member admitted under a
+superseded agreement, a relation whose endpoint is no longer active - and a quarantined record stays
+visible for a decision instead of being cleared or retried.
+
+| Request state | What it means |
+| --- | --- |
+| active | The member is running on its own and needs nothing from the request. |
+| completed component | The member reached `ready`, `completed`, or `merged`. |
+| waiting | A recorded dependency is unfinished, or known overlapping work is serialized ahead of it. |
+| blocker | An ordinary task blocker. Independent members keep running beside it. |
+| decision | A conflict, a quarantined relation, or a superseded brief. Only the user settles these. |
+
+Dependencies are explicit and ordered; an edge that would make the order contradictory is stored
+quarantined rather than silently reordering approved work. Members that share a surface are
+serialized automatically behind the one admitted first, which is ordinary coordination and asks the
+user for nothing. A subset of ready members never completes the request: unresolved members,
+unsatisfied dependencies, conflicts, a stale integration, or a missing pull request each keep it
+incomplete.
+
+Integration merges the reviewed member commits, dependencies first, onto one delivery branch in a
+worktree the request leases. Every merge must apply cleanly: a merge that would need resolution is
+aborted and recorded as a conflict needing a decision, so the integrated commit never contains
+content no review covered. An integration that already covers exactly the current member commits is
+reused, so a restart never integrates or verifies the same work twice.
+
+Final acceptance is bound to the integrated commit: the pinned validation commands run there, the
+four review lenses must pass there, the approved brief's acceptance criteria travel with it, and
+every member must still sit at the commit that was integrated under the same pinned policy. Evidence
+recorded only at a member commit is stale for the integrated commit and is refused.
+
+```sh
+{"request":{"action":"request-show","requestId":"req-..."}}
+{"request":{"action":"request-relate","requestId":"req-...","taskId":"...","dependsOn":"..."}}
+{"request":{"action":"request-integrate","requestId":"req-..."}}
+{"request":{"action":"request-publish","requestId":"req-...","repository":"owner/repo","title":"...","base":"main","summary":{...}}}
+{"request":{"action":"request-merge","requestId":"req-...","method":"squash"}}
+```
+
+With explicit publication approval the request creates or updates one verified pull request for the
+integrated commit, reusing the existing single-PR safeguards. A component task cannot publish or
+merge on its own unless splitting delivery was explicitly approved. Merge is a separate explicit
+approval with verified remote state; nothing merges or deploys automatically, and each member is
+marked merged only with the proof that the merged commit carries its reviewed work.
+
+Routine request progress is passive: it is readable on demand and records no notification. Only a
+decision the user must make and true request completion interrupt the main conversation, each one
+recorded once on the durable record and acknowledged through the request path.
+
 ### Post-research continuation disposition
 
 Every scout record carries a durable `researchContinuation` describing what its completed report
@@ -1756,6 +1815,42 @@ explicitly a full-implementation review subject, not proof that no implementatio
 classifies infrastructure, validation-configuration, and task-code failures. `evidence-repair`
 reconstructs only reports/provenance proven by durable task/generation/HEAD-matching records; stale
 reports are refused.
+
+### Conversational recovery and bounded availability waits
+
+The `recovery-decide` extension action settles one task's current recovery decision from durable
+state alone. It reads the task's recorded blockers, classifies endpoint ownership and the prior
+worker outcome, re-reads the dry-run plan, and then does exactly one of three things: run a
+preapproved action, hold a bounded wait, or ask one question. Every mutation still goes through
+`reconcile`, `review-existing`, `validation-retry`, or `evidence-repair`, so their locks, fencing,
+ownership checks, budgets, and quarantine behavior decide the result.
+
+The preapproval policy enumerates both the eligible actions and the proof each one needs; an action
+is never eligible because of its name. `reconcile` and `evidence-repair` are the only unattended
+actions, and each runs only with the task in scope, its scope approved, its request brief approval
+current, canonical repository identity proven, every endpoint proved owned, the prior outcome known,
+no active durable job, no pending stop request, and its own budget remaining; `evidence-repair` also
+requires the exact clean reviewed HEAD. Everything else, including `review-existing` and
+`validation-retry`, produces one bounded question carrying the recommendation, its expected effect,
+and the remaining budgets, and executes nothing until it is answered through the existing
+question-id-bound answer API. Foreign or unknown ownership, an uncertain worker outcome, a stale
+request agreement, or an exhausted budget leaves every resource intact and asks. Scope and
+acceptance changes, cap increases, higher-cost or higher-quota tiers, publication, merge, deploy,
+and destructive work keep their separate explicit approvals.
+
+A confirmed temporary quota or availability block persists a bounded wait tied to the original
+request and task. When durable evidence already names an availability time more than five minutes
+away, Tandem asks immediately instead of waiting. Otherwise the wait wakes at the earlier of the
+known availability time and a five-minute ceiling, re-inspects exactly once, and then continues
+through the same decision rules or asks. Waits live in the authoritative SQLite runtime state, are
+deduplicated by request/task and evidence identity, and are reconstructed after a restart; a
+repeated signal for the same unresolved incident never moves the original deadline, a wait that was
+already overdue when another session reconstructed it asks rather than acting, and a cancelled or
+superseded task is never resumed by an old timer. Routine wakes stay passive: a wake before the
+deadline reads durable state and stops, and only a decision or completion interrupts the main
+conversation. `tandem inspect TASK_ID --json` lists the resulting decision and wait receipts, each
+preserving its request identity, task generation, triggering evidence, ownership and outcome
+classification, recommended action, approval requirement, start and deadline, and disposition.
 
 ### Reconciling Tandem resources across sessions
 

@@ -66,8 +66,15 @@ function silentUi(): { readonly ui: Pick<ExtensionContext["ui"], "notify"> } {
   return { ui: { notify: () => undefined } };
 }
 
-function noopAcknowledge(record: TaskRecord): Pick<TandemService, "acknowledge"> {
-  return { acknowledge: async () => record };
+function noopAcknowledge(
+  record: TaskRecord,
+): Pick<TandemService, "acknowledge" | "acknowledgeRequest"> {
+  return {
+    acknowledge: async () => record,
+    acknowledgeRequest: async () => {
+      throw new Error("no request notification is expected in this scenario");
+    },
+  };
 }
 
 async function completedScout(
@@ -185,6 +192,7 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
       pi: recordingSink(first),
       service: noopAcknowledge(record),
       tasks: [record],
+      requests: [],
       delivered: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
@@ -198,6 +206,7 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
       pi: recordingSink(second),
       service: noopAcknowledge(reloaded),
       tasks: [reloaded],
+      requests: [],
       delivered: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
@@ -226,6 +235,7 @@ test("an unreadable report downgrades the recorded interview to a disclosed bloc
       pi: recordingSink(sent),
       service: noopAcknowledge(record),
       tasks: [record],
+      requests: [],
       delivered: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
@@ -252,6 +262,7 @@ test("an implementation-interview wake approves no scope and creates no implemen
       pi: recordingSink(sent),
       service: noopAcknowledge(record),
       tasks: [record],
+      requests: [],
       delivered: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
@@ -292,6 +303,7 @@ test("routine scout bookkeeping stays out of the model wake and carries no follo
       pi: recordingSink(sent),
       service: noopAcknowledge(routineOnly),
       tasks: [routineOnly],
+      requests: [],
       delivered: new Set<string>(),
       ctx: { ui: { notify: (message) => notices.push(message) } },
       reportReadable: isResearchReportReadable,
@@ -360,6 +372,7 @@ test("the delivered wake matches the pure decision for the same durable record",
       pi: recordingSink(sent),
       service: noopAcknowledge(record),
       tasks: [record],
+      requests: [],
       delivered: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,

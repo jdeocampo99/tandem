@@ -10,6 +10,14 @@ import type {
   WorktreeLease,
 } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
+import {
+  RECOVERY_ACTION_NAMES,
+  RECOVERY_DISPOSITIONS,
+  RECOVERY_PROOFS,
+  type RecoveryDecisionReceipt,
+  type RecoveryEvidence,
+} from "../recovery/decision.ts";
+import type { RecoveryAvailabilityWait } from "../recovery/wait.ts";
 import type { EscalationReason } from "../tasks/acceptance.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 
@@ -176,6 +184,10 @@ export type RuntimeTaskState = Readonly<{
   readonly reviewMode?: ReviewMode;
   readonly reviewProvenancePath?: string;
   readonly recovery?: RuntimeRecoveryState;
+  /** Receipts of conversational recovery decisions, newest last and bounded in length. */
+  readonly recoveryDecisions?: readonly RecoveryDecisionReceipt[];
+  /** Bounded availability waits, reconstructed from here after a restart. */
+  readonly recoveryWaits?: readonly RecoveryAvailabilityWait[];
   readonly sessionDirectory?: string;
   readonly fixContextPath?: string;
   readonly lastError?: string;
@@ -406,6 +418,111 @@ function parseStopRequest(value: unknown, field: string): DurableStopRequest {
     action: enumValue(value.action, ["pause", "cancel"] as const, `${field}.action`),
     generation: nonNegativeInteger(value.generation, `${field}.generation`),
     requestedAt: singleLine(value.requestedAt, `${field}.requestedAt`),
+  };
+}
+
+function parseRecoveryEvidence(value: unknown, field: string): RecoveryEvidence {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  const knownAvailableAt =
+    value.knownAvailableAt === undefined
+      ? undefined
+      : singleLine(value.knownAvailableAt, `${field}.knownAvailableAt`);
+  return {
+    kind: enumValue(
+      value.kind,
+      ["temporary-availability", "durable-blocker"] as const,
+      `${field}.kind`,
+    ),
+    identity: singleLine(value.identity, `${field}.identity`),
+    summary: singleLine(value.summary, `${field}.summary`),
+    observedAt: singleLine(value.observedAt, `${field}.observedAt`),
+    ...(knownAvailableAt === undefined ? {} : { knownAvailableAt }),
+  };
+}
+
+function parseRecoveryDecision(value: unknown, field: string): RecoveryDecisionReceipt {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  if (!Array.isArray(value.unmetProofs)) {
+    throw new TypeError(`${field}.unmetProofs must be an array`);
+  }
+  const requestId =
+    value.requestId === undefined ? undefined : singleLine(value.requestId, `${field}.requestId`);
+  const recommendedAction =
+    value.recommendedAction === undefined
+      ? undefined
+      : enumValue(value.recommendedAction, RECOVERY_ACTION_NAMES, `${field}.recommendedAction`);
+  const questionId =
+    value.questionId === undefined
+      ? undefined
+      : singleLine(value.questionId, `${field}.questionId`);
+  return {
+    schemaVersion: 1,
+    id: singleLine(value.id, `${field}.id`),
+    taskId: singleLine(value.taskId, `${field}.taskId`),
+    generation: nonNegativeInteger(value.generation, `${field}.generation`),
+    ...(requestId === undefined ? {} : { requestId }),
+    evidence: parseRecoveryEvidence(value.evidence, `${field}.evidence`),
+    ownership: enumValue(
+      value.ownership,
+      ["proven-owned", "foreign", "unknown"] as const,
+      `${field}.ownership`,
+    ),
+    priorOutcome: enumValue(
+      value.priorOutcome,
+      ["known", "uncertain"] as const,
+      `${field}.priorOutcome`,
+    ),
+    ...(recommendedAction === undefined ? {} : { recommendedAction }),
+    approval: enumValue(
+      value.approval,
+      ["preapproved", "user-approval"] as const,
+      `${field}.approval`,
+    ),
+    unmetProofs: value.unmetProofs.map((entry, index) =>
+      enumValue(entry, RECOVERY_PROOFS, `${field}.unmetProofs[${index}]`),
+    ),
+    consequences: text(value.consequences, `${field}.consequences`),
+    disposition: enumValue(value.disposition, RECOVERY_DISPOSITIONS, `${field}.disposition`),
+    dispositionReason: text(value.dispositionReason, `${field}.dispositionReason`),
+    ...(questionId === undefined ? {} : { questionId }),
+    decidedAt: singleLine(value.decidedAt, `${field}.decidedAt`),
+  };
+}
+
+function parseRecoveryWait(value: unknown, field: string): RecoveryAvailabilityWait {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  const requestId =
+    value.requestId === undefined ? undefined : singleLine(value.requestId, `${field}.requestId`);
+  const knownAvailableAt =
+    value.knownAvailableAt === undefined
+      ? undefined
+      : singleLine(value.knownAvailableAt, `${field}.knownAvailableAt`);
+  const reinspectedAt =
+    value.reinspectedAt === undefined
+      ? undefined
+      : singleLine(value.reinspectedAt, `${field}.reinspectedAt`);
+  const dispositionReason =
+    value.dispositionReason === undefined
+      ? undefined
+      : text(value.dispositionReason, `${field}.dispositionReason`);
+  return {
+    schemaVersion: 1,
+    taskId: singleLine(value.taskId, `${field}.taskId`),
+    generation: nonNegativeInteger(value.generation, `${field}.generation`),
+    ...(requestId === undefined ? {} : { requestId }),
+    evidenceIdentity: singleLine(value.evidenceIdentity, `${field}.evidenceIdentity`),
+    evidenceSummary: singleLine(value.evidenceSummary, `${field}.evidenceSummary`),
+    ownerSessionId: singleLine(value.ownerSessionId, `${field}.ownerSessionId`),
+    startedAt: singleLine(value.startedAt, `${field}.startedAt`),
+    deadlineAt: singleLine(value.deadlineAt, `${field}.deadlineAt`),
+    ...(knownAvailableAt === undefined ? {} : { knownAvailableAt }),
+    ...(reinspectedAt === undefined ? {} : { reinspectedAt }),
+    disposition: enumValue(
+      value.disposition,
+      ["waiting", "continued", "asked", "abandoned"] as const,
+      `${field}.disposition`,
+    ),
+    ...(dispositionReason === undefined ? {} : { dispositionReason }),
   };
 }
 
@@ -706,6 +823,26 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
             ...(lastAt === undefined ? {} : { lastAt }),
           };
         })();
+  const recoveryDecisions =
+    value.recoveryDecisions === undefined
+      ? undefined
+      : !Array.isArray(value.recoveryDecisions)
+        ? (() => {
+            throw new TypeError(`${field}.recoveryDecisions must be an array`);
+          })()
+        : value.recoveryDecisions.map((entry, index) =>
+            parseRecoveryDecision(entry, `${field}.recoveryDecisions[${index}]`),
+          );
+  const recoveryWaits =
+    value.recoveryWaits === undefined
+      ? undefined
+      : !Array.isArray(value.recoveryWaits)
+        ? (() => {
+            throw new TypeError(`${field}.recoveryWaits must be an array`);
+          })()
+        : value.recoveryWaits.map((entry, index) =>
+            parseRecoveryWait(entry, `${field}.recoveryWaits[${index}]`),
+          );
   const legacyQuarantine =
     value.legacyQuarantine === undefined
       ? undefined
@@ -744,6 +881,8 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
     ...(reviewMode === undefined ? {} : { reviewMode }),
     ...(reviewProvenancePath === undefined ? {} : { reviewProvenancePath }),
     ...(recovery === undefined ? {} : { recovery }),
+    ...(recoveryDecisions === undefined ? {} : { recoveryDecisions }),
+    ...(recoveryWaits === undefined ? {} : { recoveryWaits }),
     ...(lastError === undefined ? {} : { lastError }),
     ...(poolAdmissionKey === undefined ? {} : { poolAdmissionKey }),
     ...(legacyQuarantine === undefined ? {} : { legacyQuarantine }),

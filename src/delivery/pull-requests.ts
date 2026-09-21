@@ -23,6 +23,7 @@ import {
   describeTaskDraftPr,
   describeTaskPr,
   readSingleLine,
+  readText,
 } from "./evidence.ts";
 
 type RemoteCheck = Readonly<{
@@ -39,7 +40,8 @@ type RemotePullRequest = PullRequestMetadata &
     readonly checks: readonly RemoteCheck[];
   }>;
 
-type ReadyTask = Readonly<{
+/** A clean checkout proven to sit on one branch at one commit, with its origin identity read. */
+export type DeliveryCheckout = Readonly<{
   readonly cwd: string;
   readonly branch: string;
   readonly head: string;
@@ -108,14 +110,22 @@ async function runChecked(
   return result as CommandResult;
 }
 
-async function readGitText(
+export async function runGit(
+  run: CommandRunner,
+  cwd: string,
+  args: readonly string[],
+  operation: string,
+): Promise<CommandResult> {
+  return runChecked(run, { argv: ["git", "-C", cwd, ...args], cwd }, operation);
+}
+
+export async function readGitText(
   run: CommandRunner,
   cwd: string,
   args: readonly string[],
   operation: string,
 ): Promise<string> {
-  const request: CommandRequest = { argv: ["git", "-C", cwd, ...args], cwd };
-  const result = await runChecked(run, request, operation);
+  const result = await runGit(run, cwd, args, operation);
   const text = result.stdout.trim();
   if (text.length === 0)
     throw new AdapterProtocolError(operation, "git returned empty stdout", result.stdout);
@@ -176,35 +186,48 @@ function assertRepositoryIdentity(remote: string, expected: string): void {
   }
 }
 
-async function assertReadyCheckout(run: CommandRunner, task: TaskRecord): Promise<ReadyTask> {
-  const shape = assertTaskShape(task);
-  const actualHead = await readCleanCheckpoint(run, shape.cwd);
-  if (actualHead !== shape.head) {
-    throw new Error(
-      `task worktree HEAD ${JSON.stringify(actualHead)} does not match reviewed HEAD ${JSON.stringify(shape.head)}`,
-    );
-  }
+/** Observes one checkout and proves it is clean, on the expected branch, and has a GitHub origin. */
+export async function deliveryCheckout(
+  run: CommandRunner,
+  cwd: string,
+  branch: string,
+): Promise<DeliveryCheckout> {
+  const head = await readCleanCheckpoint(run, cwd);
   const actualBranch = await readGitText(
     run,
-    shape.cwd,
+    cwd,
     ["symbolic-ref", "--quiet", "--short", "HEAD"],
     "delivery worktree branch",
   );
-  if (actualBranch !== shape.branch) {
+  if (actualBranch !== branch) {
     throw new Error(
-      `task worktree branch ${JSON.stringify(actualBranch)} does not match task branch ${JSON.stringify(shape.branch)}`,
+      `task worktree branch ${JSON.stringify(actualBranch)} does not match task branch ${JSON.stringify(branch)}`,
     );
   }
   const remote = await readGitText(
     run,
-    shape.cwd,
+    cwd,
     ["remote", "get-url", "origin"],
     "delivery remote identity",
   );
-  return { cwd: shape.cwd, branch: shape.branch, head: shape.head, remote };
+  return { cwd, branch, head, remote };
 }
 
-async function assertUnchangedCheckout(run: CommandRunner, ready: ReadyTask): Promise<void> {
+async function assertReadyCheckout(
+  run: CommandRunner,
+  task: TaskRecord,
+): Promise<DeliveryCheckout> {
+  const shape = assertTaskShape(task);
+  const observed = await deliveryCheckout(run, shape.cwd, shape.branch);
+  if (observed.head !== shape.head) {
+    throw new Error(
+      `task worktree HEAD ${JSON.stringify(observed.head)} does not match reviewed HEAD ${JSON.stringify(shape.head)}`,
+    );
+  }
+  return observed;
+}
+
+async function assertUnchangedCheckout(run: CommandRunner, ready: DeliveryCheckout): Promise<void> {
   const actualHead = await readCleanCheckpoint(run, ready.cwd);
   if (actualHead !== ready.head) {
     throw new Error(`reviewed HEAD changed before delivery: ${JSON.stringify(actualHead)}`);
@@ -426,27 +449,40 @@ async function pushExactBranch(
   await runChecked(run, request, "delivery branch push");
 }
 
-export async function publishReviewedTask(input: {
-  readonly task: TaskRecord;
-  readonly summary: PrSummary;
-  readonly repository: string;
-  readonly title: string;
-  readonly base: string;
-  readonly approved: boolean;
-  readonly run: CommandRunner;
-}): Promise<PullRequestMetadata> {
-  if (!input.approved) throw new ApprovalRequiredError("pull request publish");
-  const run = readRunner(input.run);
+function checkedPublicationTarget(
+  input: Readonly<{
+    readonly repository: string;
+    readonly title: string;
+    readonly base: string;
+  }>,
+): Readonly<{ readonly repository: string; readonly title: string; readonly base: string }> {
   const repository = readSingleLine(input.repository, "repository");
-  const title = readSingleLine(input.title, "title");
-  const base = readSingleLine(input.base, "base");
   if (!/^[^\s/]+\/[^\s/]+$/u.test(repository)) {
     throw new TypeError("repository must be an owner/repository name");
   }
+  return {
+    repository,
+    title: readSingleLine(input.title, "title"),
+    base: readSingleLine(input.base, "base"),
+  };
+}
 
-  const ready = await assertReadyCheckout(run, input.task);
-  assertRepositoryIdentity(ready.remote, repository);
-  const body = describeTaskPr(input.task, input.summary);
+/**
+ * Creates or advances the one pull request for a reviewed branch. An existing pull request on that
+ * branch is reused, and an uncertain create is reconciled by re-observing rather than retried, so a
+ * repeated call can never open a second pull request for the same work.
+ */
+async function publishCheckout(
+  run: CommandRunner,
+  input: Readonly<{
+    readonly ready: DeliveryCheckout;
+    readonly repository: string;
+    readonly title: string;
+    readonly base: string;
+    readonly body: string;
+  }>,
+): Promise<PullRequestMetadata> {
+  const { ready, repository, title, base, body } = input;
   const existing = await observeExistingPullRequest(run, ready.cwd, repository, ready.branch, base);
   if (existing !== undefined && existing.head === ready.head) return existing;
 
@@ -483,6 +519,52 @@ export async function publishReviewedTask(input: {
     head: ready.branch,
   });
   return assertPublishedMetadata(created, repository, base, ready.head);
+}
+
+export async function publishReviewedTask(input: {
+  readonly task: TaskRecord;
+  readonly summary: PrSummary;
+  readonly repository: string;
+  readonly title: string;
+  readonly base: string;
+  readonly approved: boolean;
+  readonly run: CommandRunner;
+}): Promise<PullRequestMetadata> {
+  if (!input.approved) throw new ApprovalRequiredError("pull request publish");
+  const run = readRunner(input.run);
+  const target = checkedPublicationTarget(input);
+  const ready = await assertReadyCheckout(run, input.task);
+  assertRepositoryIdentity(ready.remote, target.repository);
+  return publishCheckout(run, {
+    ready,
+    ...target,
+    body: describeTaskPr(input.task, input.summary),
+  });
+}
+
+/**
+ * Publishes the one pull request a whole request delivers through, from the checkout holding its
+ * integrated commit. The caller proves acceptance before calling; this step only performs the
+ * approved publication and never merges or deploys.
+ */
+export async function publishIntegratedRequest(input: {
+  readonly checkout: DeliveryCheckout;
+  readonly repository: string;
+  readonly title: string;
+  readonly base: string;
+  readonly body: string;
+  readonly approved: boolean;
+  readonly run: CommandRunner;
+}): Promise<PullRequestMetadata> {
+  if (!input.approved) throw new ApprovalRequiredError("request pull request publish");
+  const run = readRunner(input.run);
+  const target = checkedPublicationTarget(input);
+  assertRepositoryIdentity(input.checkout.remote, target.repository);
+  return publishCheckout(run, {
+    ready: input.checkout,
+    ...target,
+    body: readText(input.body, "body"),
+  });
 }
 
 type DraftCheckout = Readonly<{
@@ -874,25 +956,22 @@ function assertRequiredChecks(checks: readonly RemoteCheck[]): void {
   }
 }
 
-export async function mergeReviewedTask(input: {
-  readonly task: TaskRecord;
-  readonly approved: boolean;
-  readonly method: "merge" | "squash" | "rebase";
-  readonly run: CommandRunner;
-}): Promise<PullRequestMetadata> {
-  if (!input.approved) throw new ApprovalRequiredError("pull request merge");
-  const run = readRunner(input.run);
-  if (input.method !== "merge" && input.method !== "squash" && input.method !== "rebase") {
-    throw new TypeError("pull request merge method is unsupported");
-  }
-  const pullRequest = input.task.pullRequest;
-  if (pullRequest === undefined) throw new Error("merge requires an observed pull request");
-
-  const ready = await assertReadyCheckout(run, input.task);
+/**
+ * Merges one observed pull request after proving the delivered commit, the required remote checks,
+ * and the checkout all still agree. Nothing here decides that a merge was approved.
+ */
+async function mergeObservedPullRequest(
+  run: CommandRunner,
+  input: Readonly<{
+    readonly ready: DeliveryCheckout;
+    readonly pullRequest: PullRequestMetadata;
+    readonly method: "merge" | "squash" | "rebase";
+    readonly headMismatch: string;
+  }>,
+): Promise<PullRequestMetadata> {
+  const { ready, pullRequest } = input;
   assertRepositoryIdentity(ready.remote, pullRequest.repository);
-  if (pullRequest.head !== ready.head) {
-    throw new Error("pull request head does not match the reviewed task HEAD");
-  }
+  if (pullRequest.head !== ready.head) throw new Error(input.headMismatch);
   if (pullRequest.base.length === 0) throw new Error("pull request base must be non-empty");
 
   const observed = await observePullRequestForMerge(run, ready.cwd, pullRequest, ready.branch);
@@ -915,4 +994,48 @@ export async function mergeReviewedTask(input: {
     throw new Error("merged pull request metadata does not match the reviewed task identity");
   }
   return merged;
+}
+
+function checkedMergeMethod(method: unknown): "merge" | "squash" | "rebase" {
+  if (method !== "merge" && method !== "squash" && method !== "rebase") {
+    throw new TypeError("pull request merge method is unsupported");
+  }
+  return method;
+}
+
+export async function mergeReviewedTask(input: {
+  readonly task: TaskRecord;
+  readonly approved: boolean;
+  readonly method: "merge" | "squash" | "rebase";
+  readonly run: CommandRunner;
+}): Promise<PullRequestMetadata> {
+  if (!input.approved) throw new ApprovalRequiredError("pull request merge");
+  const run = readRunner(input.run);
+  const method = checkedMergeMethod(input.method);
+  const pullRequest = input.task.pullRequest;
+  if (pullRequest === undefined) throw new Error("merge requires an observed pull request");
+  return mergeObservedPullRequest(run, {
+    ready: await assertReadyCheckout(run, input.task),
+    pullRequest,
+    method,
+    headMismatch: "pull request head does not match the reviewed task HEAD",
+  });
+}
+
+/** Merges the one request pull request after its own explicit approval, never as a publish effect. */
+export async function mergeIntegratedRequest(input: {
+  readonly checkout: DeliveryCheckout;
+  readonly pullRequest: PullRequestMetadata;
+  readonly approved: boolean;
+  readonly method: "merge" | "squash" | "rebase";
+  readonly run: CommandRunner;
+}): Promise<PullRequestMetadata> {
+  if (!input.approved) throw new ApprovalRequiredError("request pull request merge");
+  const run = readRunner(input.run);
+  return mergeObservedPullRequest(run, {
+    ready: input.checkout,
+    pullRequest: input.pullRequest,
+    method: checkedMergeMethod(input.method),
+    headMismatch: "pull request head does not match the integrated request HEAD",
+  });
 }
