@@ -95,6 +95,67 @@ test("rejects a malformed skill input", () => {
   ).toThrow(TypeError);
 });
 
+test("leaves the acceptance-criteria header unchanged when there are no you-check criteria", () => {
+  const brief = buildAgentBrief({
+    role: "implementer",
+    objective: "Add a streak bar",
+    acceptanceCriteria: ["Streak logic has unit tests"],
+    instructions: ["Follow the guidance channel."],
+    reportPath: "/tmp/report.txt",
+  });
+
+  expect(brief).toContain("## Acceptance criteria\n");
+  expect(brief).not.toContain("Tandem checks");
+  expect(brief).not.toContain("You check");
+});
+
+test("an implementer brief with you-check criteria splits the sections and names the evidence rule", () => {
+  const brief = buildAgentBrief({
+    role: "implementer",
+    objective: "Add a streak bar",
+    acceptanceCriteria: ["Streak logic has unit tests"],
+    userCheckCriteria: ["Streak bar glows at 5 in a row"],
+    instructions: ["Follow the guidance channel."],
+    reportPath: "/tmp/report.txt",
+  });
+
+  expect(brief).toContain("## Acceptance criteria (Tandem checks)");
+  expect(brief).toContain("- Streak logic has unit tests");
+  expect(brief).toContain("## You check (the user judges these from screenshots)");
+  expect(brief).toContain("- Streak bar glows at 5 in a row");
+  expect(brief).toContain("userCheckEvidence");
+  expect(brief).not.toContain("shown by the builder, not proof");
+});
+
+test("a reviewer brief with you-check criteria tells the lens they are not acceptance criteria", () => {
+  const brief = buildAgentBrief({
+    role: "reviewer",
+    objective: "Review the streak bar change",
+    acceptanceCriteria: ["Streak logic has unit tests"],
+    userCheckCriteria: ["Streak bar glows at 5 in a row"],
+    instructions: ["Stay read-only."],
+    reportPath: "/tmp/report.txt",
+  });
+
+  expect(brief).toContain("## You check (the user judges these from screenshots)");
+  expect(brief).toContain("shown by the builder, not proof");
+  expect(brief).toContain("Do not fail a lens, raise a finding, or ask a needs-decision question");
+});
+
+test("a reviewer's ReviewResult schema and role instructions cover handToUser", () => {
+  const brief = buildAgentBrief({
+    role: "reviewer",
+    objective: "Review the streak bar change",
+    acceptanceCriteria: ["Streak logic has unit tests"],
+    instructions: ["Stay read-only."],
+    reportPath: "/tmp/report.txt",
+    review: { head: "abc123", generation: 0, pass: "behavior" },
+  });
+
+  expect(brief).toContain('"handToUser"');
+  expect(brief).toContain("Tandem hands it to the user");
+});
+
 test("rejects missing, empty, or overlong TLDR and section input", () => {
   const invalidInputs: readonly PrDescriptionInput[] = [
     { ...validDescription, tldr: [] },
