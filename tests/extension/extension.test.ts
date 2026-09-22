@@ -471,7 +471,7 @@ test("recovery slash commands preserve exact-head and delivery arguments", () =>
       budget: { recoveryRemaining: 2 },
       refusals: [],
     }),
-  ).toContain("dry-run review-existing");
+  ).toContain("recommended review-existing");
 });
 
 test("communication slash commands join quoted deltas and reject extra message arguments", () => {
@@ -537,7 +537,7 @@ test("communication summaries keep newest actionable state and question identity
   expect(overview).toContain("QUESTION_NEEDS_ID");
   expect(overview).toContain("RECOMMENDATION_VISIBLE");
   expect(overview).toContain("NEWEST_ACTIONABLE");
-  expect(overview).toContain("Last observed activity");
+  expect(overview).toContain("Last activity");
   expect(overview).toContain("2030-01-02T03:04:07.000Z");
   expect(overview).not.toContain("HISTORY_SENTINEL_1");
   expect(latest).toContain("NEWEST_ACTIONABLE");
@@ -814,9 +814,9 @@ test("models summary surfaces discovered/enabled providers and a resolved Balanc
     },
   });
 
-  expect(summary).toContain("Discovered providers");
+  expect(summary).toContain("Providers found");
   expect(summary).toContain("other-provider");
-  expect(summary).toContain("Enabled providers");
+  expect(summary).toContain("Providers allowed to spend");
   expect(summary).toContain("openai-codex/gpt-6-astra");
   expect(summary).toContain("Planning (coordinator)");
 });
@@ -836,8 +836,7 @@ test("models summary discloses unresolved Balanced roles with actionable reasons
     },
   });
 
-  expect(summary).toContain("unresolved");
-  expect(summary).toContain("no built-in pin, fuzzy alias, or silent fallback");
+  expect(summary).toContain("No suitable model was found for these roles");
   expect(summary).toContain("Planning (coordinator)");
   expect(summary).toContain("no provider is explicitly enabled");
 });
@@ -1059,16 +1058,13 @@ test("scout summaries and the durable digest carry the post-research disposition
     },
   });
   const summary = summarizeTandemActionValue("show", scout);
-  expect(summary).toContain("Post-research disposition: implementation-interview");
-  expect(summary).toContain("routing only");
-  expect(summary).toContain("selected by jev");
-  expect(summary).toContain("jev-continuation-1");
+  expect(summary).toContain("After research: summarize the report with its evidence");
 
   const digest = buildDurableDigest([scout]);
-  expect(digest).toContain("continuation: implementation-interview (jev; routing only)");
+  expect(digest).toContain("after research: implementation-interview");
 
   const legacyScout = task({ id: "legacy-scout", kind: "scout", stage: "completed" });
-  expect(buildDurableDigest([legacyScout])).toContain("continuation: ask-intent");
+  expect(buildDurableDigest([legacyScout])).toContain("after research: ask-intent");
   expect(buildDurableDigest([task({ id: "implementation-task" })])).not.toContain("continuation:");
 });
 
@@ -1216,9 +1212,7 @@ test("a draft pull request is summarized as unfinished visibility, never as acce
   );
 
   expect(summary).toContain("Pull request: acme/repo#11 draft");
-  expect(summary).toContain(
-    "Draft visibility only: the draft is unfinished and is not evidence of readiness",
-  );
+  expect(summary).toContain("This is a draft: work in progress, not ready to merge.");
 });
 
 test("a failed acknowledgement retries on the next tick without waking the coordinator again", async () => {

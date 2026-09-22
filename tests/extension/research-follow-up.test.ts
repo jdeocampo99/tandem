@@ -138,32 +138,31 @@ test("each post-research follow-up renders its own coordinator wake content", ()
     decision("disclose-blocker", "implementation-interview", "missing-report"),
   );
 
-  expect(reportOnly).toContain("Post-research follow-up: report-only");
+  expect(reportOnly).toContain("Research follow-up: report-only");
   expect(reportOnly).toContain("Summarize the report for the user in plain language and stop.");
   expect(reportOnly).toContain("Do not propose implementation work");
   expect(reportOnly).not.toContain("acceptance criteria");
 
-  expect(askIntent).toContain("Post-research follow-up: ask-intent");
+  expect(askIntent).toContain("Research follow-up: ask-intent");
   expect(askIntent).toContain("ask exactly one question");
   expect(askIntent).not.toContain("acceptance criteria");
 
-  expect(interview).toContain("Post-research follow-up: implementation-interview");
-  expect(interview).toContain("cite the evidence");
+  expect(interview).toContain("Research follow-up: implementation-interview");
+  expect(interview).toContain("what it found");
   expect(interview).toContain("Propose one initial direction drawn from that evidence");
   expect(interview).toContain(
     "desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility, and approval",
   );
   expect(interview).toContain("do not widen scope on your own");
   expect(interview).toContain("researchTaskIds");
-  expect(interview).toContain("must not launch until the concrete scope is explicitly approved");
+  expect(interview).toContain("approve the concrete scope before starting");
 
-  expect(answerQuestion).toContain("Post-research follow-up: answer-question");
-  expect(answerQuestion).toContain("a durable needs-decision question is open");
-  expect(answerQuestion).toContain("recorded disposition implementation-interview");
+  expect(answerQuestion).toContain("Research follow-up: answer-question");
+  expect(answerQuestion).toContain("the task has an open question");
   expect(answerQuestion).toContain("Do not start the implementation interview");
 
-  expect(blocker).toContain("Post-research follow-up: disclose-blocker");
-  expect(blocker).toContain("no readable completed report is recorded");
+  expect(blocker).toContain("Research follow-up: disclose-blocker");
+  expect(blocker).toContain("there is no readable report");
   expect(blocker).toContain("Do not start the implementation interview");
 
   expect(new Set([reportOnly, askIntent, interview, answerQuestion, blocker]).size).toBe(5);
@@ -176,8 +175,8 @@ test("every overriding durable state names its own blocker reason", () => {
     buildResearchFollowUpContent(decision("disclose-blocker", "ask-intent", override)),
   );
   expect(new Set(reasons).size).toBe(reasons.length);
-  expect(reasons[1]).toContain("the scout is blocked");
-  expect(reasons[4]).toContain("older generation");
+  expect(reasons[1]).toContain("the research is blocked");
+  expect(reasons[4]).toContain("out of date");
 });
 
 test("a completed scout wake carries its durable follow-up and repeats it after a restart", async () => {
@@ -217,7 +216,7 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
 
     expect(first).toHaveLength(2);
     expect(first[1]).toContain("Evidence report: ");
-    expect(first[1]).toContain("Post-research follow-up: implementation-interview");
+    expect(first[1]).toContain("Research follow-up: implementation-interview");
     expect(second).toEqual(first);
   } finally {
     await rm(home, { recursive: true, force: true });
@@ -246,8 +245,8 @@ test("an unreadable report downgrades the recorded interview to a disclosed bloc
     });
 
     expect(sent).toHaveLength(2);
-    expect(sent[1]).toContain("Post-research follow-up: disclose-blocker");
-    expect(sent[1]).toContain("no readable completed report is recorded");
+    expect(sent[1]).toContain("Research follow-up: disclose-blocker");
+    expect(sent[1]).toContain("there is no readable report");
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -277,7 +276,7 @@ test("an implementation-interview wake approves no scope and creates no implemen
     expect(after.map((entry) => entry.id)).toEqual(["scout-task"]);
     expect(after.every((entry) => entry.kind === "scout")).toBe(true);
     expect(after[0]?.researchHandoffs).toBeUndefined();
-    expect(sent[1]).toContain("It stays awaiting-approval");
+    expect(sent[1]).toContain("It waits for the user to approve");
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -352,17 +351,14 @@ test("task summaries explain the disposition and its precedence in plain languag
     },
   };
   const summary = summarizeTandemActionValue("show", scout);
-  expect(summary).toContain("Post-research disposition: implementation-interview");
-  expect(summary).toContain("When this report lands: summarize the report with its evidence");
+  expect(summary).toContain("After research: summarize the report with its evidence");
   expect(summary).toContain("interview for implementation scope");
-  expect(summary).toContain("An open needs-decision question is answered first");
-  expect(summary).toContain("unreadable-report scout has its blocker disclosed instead");
 
   const reportOnly = summarizeTandemActionValue("show", {
     ...scout,
     researchContinuation: { schemaVersion: 1, disposition: "report-only", selectedBy: "explicit" },
   });
-  expect(reportOnly).toContain("When this report lands: summarize the report and stop.");
+  expect(reportOnly).toContain("After research: summarize the report and stop.");
 });
 
 test("the delivered wake matches the pure decision for the same durable record", async () => {

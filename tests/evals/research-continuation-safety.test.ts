@@ -124,7 +124,7 @@ test("an adversarial classifier result cannot approve scope, create, or start an
     });
     const content = buildResearchFollowUpContent(decision);
     expect(decision.followUp).toBe("implementation-interview");
-    expect(content).toContain("must not launch until the concrete scope is explicitly approved");
+    expect(content).toContain("approve the concrete scope before starting");
     expect(content).not.toContain("scope is approved");
     expect(content).not.toContain("has been approved");
 

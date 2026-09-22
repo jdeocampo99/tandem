@@ -72,9 +72,9 @@ function summarizeRecoveryAction(action: TandemAction["action"], value: unknown)
     const endpoints = Array.isArray(record.endpoints) ? record.endpoints.length : 0;
     const jobs = Array.isArray(record.jobs) ? record.jobs.length : 0;
     const stage = recordText(record, "stage") ?? "unknown stage";
-    const blocked = record.blocked === true ? "blocked" : "safe to inspect";
+    const blocked = record.blocked === true ? "blocked" : "not blocked";
     return boundedOutput(
-      `${taskId}: ${blocked}; stage ${stage}; ${endpoints} endpoint(s); ${jobs} durable job(s); ${recordText(record, "branch") ?? "branch unknown"}`,
+      `${taskId}: ${blocked}; stage ${stage}; ${endpoints} endpoint(s); ${jobs} job(s); ${recordText(record, "branch") ?? "branch unknown"}`,
       ACTION_RESULT_MAX_CHARS,
     );
   }
@@ -88,7 +88,7 @@ function summarizeRecoveryAction(action: TandemAction["action"], value: unknown)
     const recoveryRemaining =
       typeof budget?.recoveryRemaining === "number" ? budget.recoveryRemaining : undefined;
     return boundedOutput(
-      `${taskId}: dry-run ${name}; recovery remaining ${String(recoveryRemaining ?? "unknown")}${refusals.length === 0 ? "" : `; refusals: ${compactList(refusals)}`}`,
+      `${taskId}: recommended ${name}; ${String(recoveryRemaining ?? "unknown")} recovery attempt(s) left${refusals.length === 0 ? "" : `; refused: ${compactList(refusals)}`}`,
       ACTION_RESULT_MAX_CHARS,
     );
   }
@@ -102,7 +102,7 @@ function summarizeRecoveryAction(action: TandemAction["action"], value: unknown)
       .filter((entry) => entry.passed !== true)
       .map((entry) => (typeof entry.name === "string" ? entry.name : "unnamed check"));
     return boundedOutput(
-      `${taskId}: delivery ${record.ready === true ? "ready" : "refused"}${failed.length === 0 ? "" : `; failed: ${failed.join(", ")}`}`,
+      `${taskId}: ${record.ready === true ? "ready to deliver" : "not ready to deliver"}${failed.length === 0 ? "" : `; failed: ${failed.join(", ")}`}`,
       ACTION_RESULT_MAX_CHARS,
     );
   }
@@ -204,14 +204,14 @@ function summarizeTask(task: TaskRecord): string {
     `${task.id}: ${task.stage}`,
     `Repository: ${compactText(task.repoPath, ACTION_SUMMARY_MAX_TEXT)}`,
     `Objective: ${compactText(task.objective, ACTION_SUMMARY_MAX_TEXT)}`,
-    `Scope: ${task.scopeApproved ? "approved" : "awaiting approval"}; generation ${task.generation}; revision ${task.revision}`,
+    `Scope: ${task.scopeApproved ? "approved" : "awaiting approval"}; attempt ${task.generation}`,
     ...(task.requestId === undefined
       ? []
-      : [`Request brief: ${compactText(task.requestId, ACTION_SUMMARY_MAX_TEXT)}`]),
+      : [`Request: ${compactText(task.requestId, ACTION_SUMMARY_MAX_TEXT)}`]),
     `Acceptance criteria (${task.acceptanceCriteria.length}): ${compactList(task.acceptanceCriteria)}`,
     `Surfaces (${task.surfaces.length}): ${compactList(task.surfaces)}`,
   ];
-  if (heads.length > 0) lines.push(`Immutable heads: ${heads.join(", ")}`);
+  if (heads.length > 0) lines.push(`Commits: ${heads.join(", ")}`);
   if (task.worktree !== undefined) {
     lines.push(
       `Worktree: ${compactText(task.worktree.path, ACTION_SUMMARY_MAX_TEXT)}; branch ${compactText(task.worktree.branch, ACTION_SUMMARY_MAX_TEXT)}`,
@@ -224,7 +224,7 @@ function summarizeTask(task: TaskRecord): string {
     const remote = pinned.filter((entry) => entry.origin === "github").length;
     const legacy = task.validationEvidence.length - pinned.length;
     lines.push(
-      `Validation evidence: ${successful}/${task.validationEvidence.length} passing; ${iteration} iteration, ${pinned.length - iteration} final, ${legacy} legacy; ${pinned.length - remote} local, ${remote} remote; commands ${compactList(
+      `Checks: ${successful}/${task.validationEvidence.length} passing; ${pinned.length - iteration} final, ${iteration} during fixes${legacy === 0 ? "" : `, ${legacy} old-format`}; ${remote} from GitHub; ${compactList(
         task.validationEvidence.map((entry) => entry.name),
         4,
         100,
@@ -236,9 +236,9 @@ function summarizeTask(task: TaskRecord): string {
     const assistance =
       level.assistance === undefined
         ? ""
-        : `; shadow helper recommended ${level.assistance.recommendation} (recorded only, not applied)`;
+        : `; suggested ${level.assistance.recommendation} (not applied)`;
     lines.push(
-      `Review level: ${level.level}; floors ${level.floors.length === 0 ? "none" : level.floors.join(", ")}; reason ${compactText(level.reason, ACTION_SUMMARY_MAX_TEXT)}${assistance}`,
+      `Review level: ${level.level}; minimum ${level.floors.length === 0 ? "none" : level.floors.join(", ")}; because ${compactText(level.reason, ACTION_SUMMARY_MAX_TEXT)}${assistance}`,
     );
   }
   if (currentReviews.length > 0) {
@@ -265,7 +265,7 @@ function summarizeTask(task: TaskRecord): string {
   if (pending > 0) {
     const notifications = task.notifications.filter((notification) => !notification.acknowledged);
     lines.push(
-      `Pending notifications (${pending}): ${compactList(
+      `Unread updates (${pending}): ${compactList(
         notifications.map((notification) => notification.message),
         3,
         150,
@@ -273,26 +273,17 @@ function summarizeTask(task: TaskRecord): string {
     );
   }
   if (task.reportPath !== undefined)
-    lines.push(`Report evidence: ${compactText(task.reportPath, ACTION_SUMMARY_MAX_TEXT)}`);
+    lines.push(`Report: ${compactText(task.reportPath, ACTION_SUMMARY_MAX_TEXT)}`);
   const continuation = researchContinuationFor(task);
   if (continuation !== undefined) {
-    lines.push(
-      `Post-research disposition: ${continuation.disposition} (routing only; selected by ${continuation.selectedBy}${
-        continuation.classifierVersion === undefined
-          ? ""
-          : `; classifier ${compactText(continuation.classifierVersion, 100)}`
-      })`,
-      `When this report lands: ${describeResearchDisposition(continuation.disposition)}. An open needs-decision question is answered first, and a blocked, cancelled, incomplete, stale, or unreadable-report scout has its blocker disclosed instead.`,
-    );
+    lines.push(`After research: ${describeResearchDisposition(continuation.disposition)}.`);
   }
   if (task.pullRequest !== undefined) {
     lines.push(
       `Pull request: ${task.pullRequest.repository}#${task.pullRequest.number} ${task.pullRequest.state}; head ${task.pullRequest.head}; base ${task.pullRequest.base}`,
     );
     if (task.pullRequest.state === "draft") {
-      lines.push(
-        "Draft visibility only: the draft is unfinished and is not evidence of readiness, mergeability, deployment, or acceptance.",
-      );
+      lines.push("This is a draft: work in progress, not ready to merge.");
     }
   }
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
@@ -311,12 +302,12 @@ function summarizeTaskList(action: TandemAction["action"], tasks: readonly TaskR
     lines.push(
       `- ${task.id}: ${task.stage}; ${compactText(task.objective, ACTION_SUMMARY_MAX_TEXT)}; ${
         task.scopeApproved ? "scope approved" : "scope pending"
-      }${pending > 0 ? `; ${pending} pending notification(s)` : ""}${blocker}${head}${report}`,
+      }${pending > 0 ? `; ${pending} unread update(s)` : ""}${blocker}${head}${report}`,
     );
   }
   if (tasks.length > ACTION_SUMMARY_MAX_ITEMS) {
     lines.push(
-      `- ${tasks.length - ACTION_SUMMARY_MAX_ITEMS} additional task(s) remain in the authoritative store; use show for a task.`,
+      `- ${tasks.length - ACTION_SUMMARY_MAX_ITEMS} more task(s) not shown; use show for one.`,
     );
   }
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
@@ -409,20 +400,14 @@ export function summarizeModelAssignments(
   const record = summaryRecord(value);
   if (record === undefined) {
     return includeMissing
-      ? MODEL_ROLE_ORDER.map(
-          (role) =>
-            `${MODEL_ROLE_LABELS[role]} (${role}): no exact catalogue selector or thinking level selected`,
-        )
+      ? MODEL_ROLE_ORDER.map((role) => `${MODEL_ROLE_LABELS[role]} (${role}): not chosen yet`)
       : [];
   }
   const lines: string[] = [];
   for (const role of MODEL_ROLE_ORDER) {
     const spec = summaryRecord(record[role]);
     if (spec === undefined) {
-      if (includeMissing)
-        lines.push(
-          `${MODEL_ROLE_LABELS[role]} (${role}): no exact catalogue selector or thinking level selected`,
-        );
+      if (includeMissing) lines.push(`${MODEL_ROLE_LABELS[role]} (${role}): not chosen yet`);
       continue;
     }
     const model = recordText(spec, "model") ?? "model unavailable";
@@ -475,16 +460,10 @@ function summarizeProviderState(record: Record<string, unknown>): readonly strin
   const enabled = settings?.enabledProviders;
   const lines: string[] = [];
   if (Array.isArray(discovered)) {
-    lines.push(
-      `Discovered providers (catalogue only; discovery never authorizes spending): ${
-        discovered.length === 0 ? "none" : discovered.join(", ")
-      }`,
-    );
+    lines.push(`Providers found: ${discovered.length === 0 ? "none" : discovered.join(", ")}`);
   }
   if (Array.isArray(enabled)) {
-    lines.push(
-      `Enabled providers (explicit spending permission): ${enabled.length === 0 ? "none" : enabled.join(", ")}`,
-    );
+    lines.push(`Providers allowed to spend: ${enabled.length === 0 ? "none" : enabled.join(", ")}`);
   }
   return lines;
 }
@@ -495,9 +474,7 @@ function summarizeBalancedProposal(value: unknown): readonly string[] {
   if (record === undefined || status === undefined) return [];
   if (status === "resolved") {
     const roles = summaryRecord(record.roles);
-    const lines = [
-      "Balanced proposal (resolved from enabled providers; expand for evidence and reasons):",
-    ];
+    const lines = ["Suggested Balanced setup:"];
     for (const role of MODEL_ROLE_ORDER) {
       const entry = summaryRecord(roles?.[role]);
       const model = entry === undefined ? undefined : summaryRecord(entry.model);
@@ -509,9 +486,7 @@ function summarizeBalancedProposal(value: unknown): readonly string[] {
         }`,
       );
     }
-    lines.push(
-      "Accept as-is, inspect exact selectors/evidence/reasons on expansion, or override any role before configure-models.",
-    );
+    lines.push("Accept it, change any role, or choose Not now.");
     return lines;
   }
   const gaps = Array.isArray(record.gaps) ? record.gaps : [];
@@ -526,10 +501,7 @@ function summarizeBalancedProposal(value: unknown): readonly string[] {
       return `${label ?? role} (${role}): ${compactText(reason, 160)}`;
     })
     .filter((entry): entry is string => entry !== undefined);
-  return [
-    "Balanced proposal is unresolved; no built-in pin, fuzzy alias, or silent fallback is used:",
-    ...reasons.map((entry) => `- ${entry}`),
-  ];
+  return ["No suitable model was found for these roles:", ...reasons.map((entry) => `- ${entry}`)];
 }
 
 function summarizeModels(value: unknown): string {
@@ -553,9 +525,7 @@ function summarizeModels(value: unknown): string {
     if (balancedLines.length > 0) {
       lines.push(...balancedLines);
     } else {
-      lines.push(
-        "Choose an exact catalogue selector and a supported thinking level explicitly for each role; no role is pre-approved:",
-      );
+      lines.push("Choose a model and thinking level for each role:");
       for (const role of MODEL_ROLE_ORDER)
         lines.push(`- ${MODEL_ROLE_LABELS[role]} (${role}): choose a model and thinking level`);
     }
@@ -563,18 +533,16 @@ function summarizeModels(value: unknown): string {
     lines.push("Current model choices are unavailable.");
   }
   if (!Array.isArray(available)) {
-    lines.push("The available model list is unavailable; no recommendation can be made.");
+    lines.push("The model list could not be loaded, so there is nothing to suggest.");
   } else if (available.length === 0) {
-    lines.push("No OMP models are available; no recommendation can be made.");
+    lines.push("No models are available, so there is nothing to suggest.");
   } else {
-    lines.push("Available OMP models (reported costs are informational, not billing guarantees):");
+    lines.push("Available models (costs are estimates):");
     for (const entry of available.slice(0, ACTION_SUMMARY_MAX_ITEMS)) {
       lines.push(summarizeModelCatalogueEntry(entry));
     }
     if (available.length > ACTION_SUMMARY_MAX_ITEMS) {
-      lines.push(
-        `- ${available.length - ACTION_SUMMARY_MAX_ITEMS} additional model(s) omitted; use the full result for details.`,
-      );
+      lines.push(`- ${available.length - ACTION_SUMMARY_MAX_ITEMS} more model(s) not shown.`);
     }
   }
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
@@ -613,13 +581,13 @@ function summarizePresentations(action: TandemAction["action"], value: unknown):
 function communicationStatusLabel(status: unknown): string {
   switch (status) {
     case "pending":
-      return "queued for the child";
+      return "passed along, not yet delivered";
     case "received":
-      return "received by the bridge (queued for the child)";
+      return "passed along, not yet delivered";
     case "applied":
-      return "delivered to the child (context receipt; not completion)";
+      return "delivered (the task has it; not done yet)";
     case "superseded":
-      return "superseded";
+      return "replaced by a newer message";
     default:
       return typeof status === "string" && status.length > 0 ? status : "status unknown";
   }
@@ -667,14 +635,12 @@ function summarizeCommunicationActivity(activity: Record<string, unknown>): stri
   const heartbeatAt = recordText(activity, "heartbeatAt");
   const progressAt = recordText(activity, "progressAt");
   const timestamps = [
-    heartbeatAt === undefined ? undefined : `heartbeat ${compactText(heartbeatAt, 128)}`,
-    progressAt === undefined ? undefined : `progress ${compactText(progressAt, 128)}`,
+    heartbeatAt === undefined ? undefined : `last seen ${compactText(heartbeatAt, 128)}`,
+    progressAt === undefined ? undefined : `last progress ${compactText(progressAt, 128)}`,
   ].filter((entry): entry is string => entry !== undefined);
-  return `Last observed activity: ${compactText(phase, 60)}${
+  return `Last activity: ${compactText(phase, 60)}${
     tool === undefined ? "" : ` (${compactText(tool, 100)})`
-  }${
-    timestamps.length === 0 ? "; timestamps unavailable" : `; ${timestamps.join(", ")}`
-  }; liveness metadata only.`;
+  }${timestamps.length === 0 ? "" : `; ${timestamps.join(", ")}`}`;
 }
 
 function summarizeCommunication(value: unknown, mode: CommunicationSummaryMode): string {
@@ -692,7 +658,7 @@ function summarizeCommunication(value: unknown, mode: CommunicationSummaryMode):
     const latest = latestCommunicationMessage(messages);
     lines.push(
       latest === undefined
-        ? "No direction was recorded."
+        ? "No message was recorded."
         : `Latest entry: ${summarizeCommunicationMessage(latest, MAX_TASK_MESSAGE_CHARS)}`,
     );
     return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
@@ -725,14 +691,12 @@ function summarizeCommunication(value: unknown, mode: CommunicationSummaryMode):
       (left, right) => communicationMessageRevision(right) - communicationMessageRevision(left),
     );
   if (prioritized.length === 0) {
-    lines.push("No current or pending directions are recorded.");
+    lines.push("No messages yet.");
   } else {
     for (const entry of prioritized.slice(0, ACTION_SUMMARY_MAX_ITEMS))
       lines.push(`- ${summarizeCommunicationMessage(entry)}`);
     if (prioritized.length > ACTION_SUMMARY_MAX_ITEMS) {
-      lines.push(
-        `- ${prioritized.length - ACTION_SUMMARY_MAX_ITEMS} older current/pending entry(s) omitted; use JSON/details for the full record.`,
-      );
+      lines.push(`- ${prioritized.length - ACTION_SUMMARY_MAX_ITEMS} older message(s) not shown.`);
     }
   }
   const activity = summaryRecord(record.activity);
@@ -880,7 +844,7 @@ function summarizeRequestBrief(value: unknown): string {
     : [];
   const lines = [
     `${recordText(record, "id") ?? "unknown request"}: brief revision ${recordNumber(draft, "revision") ?? 0}; approval ${recordText(view, "approvalState") ?? "unknown"}`,
-    `Change kind: ${recordText(draft, "changeKind") ?? "unknown"}; content digest ${recordText(draft, "contentDigest") ?? "unknown"}`,
+    `Change: ${recordText(draft, "changeKind") ?? "unknown"}; content digest ${recordText(draft, "contentDigest") ?? "unknown"}`,
     `Review pane: ${
       pane === undefined
         ? "none opened for this request"
@@ -893,12 +857,9 @@ function summarizeRequestBrief(value: unknown): string {
   ];
   if (paused.length > 0) {
     lines.push(
-      `Paused pending reapproval (${paused.length}): ${compactList(paused, ACTION_SUMMARY_MAX_ITEMS, 100)}`,
+      `Paused until reapproved (${paused.length}): ${compactList(paused, ACTION_SUMMARY_MAX_ITEMS, 100)}`,
     );
   }
-  lines.push(
-    "Approving a brief records the agreement only; it never authorizes publication, merge, deployment, or destructive work.",
-  );
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
@@ -918,13 +879,12 @@ function summarizeRequestDelivery(value: unknown): string {
     : [];
   const lines = [
     `${recordText(aggregate, "requestId") ?? "unknown request"}: approval ${recordText(aggregate, "approvalState") ?? "unknown"}; integration ${recordText(aggregate, "integrationStatus") ?? "unknown"}; publication ${recordText(aggregate, "publicationStatus") ?? "unknown"}`,
-    `Members: ${summaryList(record.members).length} admitted; running ${summaryList(aggregate.activeTaskIds).length}; finished ${summaryList(aggregate.completedTaskIds).length}`,
+    `Tasks: ${summaryList(record.members).length} in this request; running ${summaryList(aggregate.activeTaskIds).length}; finished ${summaryList(aggregate.completedTaskIds).length}`,
     `Waiting: ${describeSummaryEntries(aggregate.waiting, "taskId", "reason")}`,
     `Decisions needed: ${describeSummaryEntries(aggregate.decisions, "subject", "detail")}`,
     reasons.length === 0
-      ? "Outstanding: none recorded."
-      : `Outstanding (${reasons.length}): ${compactList(reasons, ACTION_SUMMARY_MAX_ITEMS, 160)}`,
-    "Publication approval, merge approval, and deployment stay separate and explicit.",
+      ? "Left to do: nothing."
+      : `Left to do (${reasons.length}): ${compactList(reasons, ACTION_SUMMARY_MAX_ITEMS, 160)}`,
   ];
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
@@ -967,11 +927,11 @@ function describeCharges(charges: AdditionalCharges): string {
   const priced = charges.actualSamples + charges.estimatedSamples;
   const counted =
     priced === 0
-      ? `${amount} (no sample carried a price)`
-      : `${amount} from ${charges.actualSamples} actual and ${charges.estimatedSamples} estimated sample(s)`;
+      ? `${amount} (no prices available)`
+      : `${amount} (${charges.actualSamples} measured, ${charges.estimatedSamples} estimated)`;
   return charges.unavailableSamples === 0
     ? counted
-    : `${counted}; ${charges.unavailableSamples} sample(s) unavailable and excluded rather than counted as zero`;
+    : `${counted}; ${charges.unavailableSamples} unmeasured and not counted`;
 }
 
 function describeTokens(tokens: TokenTotals): string {
@@ -1006,11 +966,11 @@ function summarizeRequestReceipt(value: unknown): string {
   if (!isRequestUsageReceipt(value)) return boundedJson(value, ACTION_RESULT_MAX_CHARS);
   const { timing, breakdown } = value;
   const lines = [
-    `${value.requestId}: ${value.status}; elapsed ${describeDuration(timing.elapsedMs)} (intake ${timing.intakeAt} to terminal ${timing.terminalAt})`,
+    `${value.requestId}: ${value.status}; elapsed ${describeDuration(timing.elapsedMs)} (${timing.intakeAt} to ${timing.terminalAt})`,
     `Additional charges: ${describeCharges(value.charges)}`,
     `Included quota: ${describeQuota(value.quota)}`,
     `Tokens: ${describeTokens(value.tokens)}`,
-    `Active ${describeDuration(timing.activeMs)}; overlapping ${describeDuration(timing.overlappingMs)}; waiting or queued ${describeDuration(timing.waitingMs)}`,
+    `Active ${describeDuration(timing.activeMs)}; overlapping ${describeDuration(timing.overlappingMs)}; waiting ${describeDuration(timing.waitingMs)}`,
   ];
   for (const total of breakdown.byWorkKind) {
     lines.push(
@@ -1036,10 +996,10 @@ export function summarizeRequestSpend(readout: RequestSpendReadout): string {
   const { cap, exposure, pause } = readout;
   const lines = [
     `${readout.requestId}: cap ${cap.source === "none" ? "none in force" : `${formatDollars(cap.capMicros)} from ${cap.source}`}; approval ${readout.approvalState}`,
-    `Charged (observed): ${describeCharges(readout.charges)}`,
-    `Reserved (estimate): ${formatDollars(exposure.reservedMicros)} across ${exposure.inFlightReservations} in-flight and ${exposure.settledEstimateReservations} settled-but-unpriced operation(s)`,
-    `Accounted exposure: ${formatDollars(exposure.totalMicros)} (a floor on what this request cost, not a measurement)`,
-    `Unmeasured: ${exposure.unpricedSamples} sample(s) carry no published price and ${exposure.unmeasuredTokenSamples} reported no tokens; ${exposure.unaccountedSamples} of them have no reserved estimate standing for them`,
+    `Charged so far: ${describeCharges(readout.charges)}`,
+    `Set aside (estimate): ${formatDollars(exposure.reservedMicros)} for ${exposure.inFlightReservations} running and ${exposure.settledEstimateReservations} finished-but-unpriced step(s)`,
+    `Known cost: at least ${formatDollars(exposure.totalMicros)}`,
+    `Unmeasured: ${exposure.unpricedSamples} step(s) have no price and ${exposure.unmeasuredTokenSamples} reported no tokens; ${exposure.unaccountedSamples} have no estimate set aside`,
     `Included quota: ${describeQuota(readout.quota)}`,
   ];
   if (readout.approval !== undefined) {
@@ -1049,14 +1009,9 @@ export function summarizeRequestSpend(readout: RequestSpendReadout): string {
   }
   lines.push(
     pause === undefined
-      ? "No spending decision is pending; admission is passive and nothing is being asked."
-      : `A spending decision is pending. ${describePauseReason(pause.reason)} Raised at ${pause.observedAt}; the next step is estimated at ${formatDollars(pause.nextStepMicros)}. Answer it with budget-approve; Tandem will not economize to fit.`,
+      ? "No spending question is waiting."
+      : `Spending question waiting. ${describePauseReason(pause.reason)} The next step is estimated at ${formatDollars(pause.nextStepMicros)}. Answer it with budget-approve.`,
   );
-  if (readout.reconciledAt !== undefined) {
-    lines.push(
-      `Reservations last reconciled against durable operations at ${readout.reconciledAt}.`,
-    );
-  }
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
@@ -1149,27 +1104,25 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
 
 /** Build the small durable state block that survives OMP context compaction. */
 export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
-  const lines = ["Tandem durable state (authoritative store; do not infer from chat):"];
+  const lines = ["Tandem work right now:"];
   if (tasks.length === 0) {
-    lines.push("- No tasks are currently recorded.");
+    lines.push("- No tasks.");
     return boundedOutput(lines.join("\n"), DIGEST_MAX_CHARS);
   }
-  lines.push(`- ${tasks.length} task(s) recorded.`);
+  lines.push(`- ${tasks.length} task(s).`);
   const ordered = prioritizeTasks(tasks);
   for (const task of ordered.slice(0, DIGEST_MAX_TASKS)) {
     const pending = pendingCount(task);
-    const notificationSuffix = pending > 0 ? `; ${pending} pending notification(s)` : "";
+    const notificationSuffix = pending > 0 ? `; ${pending} unread update(s)` : "";
     const heads = taskHeads(task);
-    const headSuffix = heads.length === 0 ? "" : `; heads: ${compactList(heads, 4, 100)}`;
+    const headSuffix = heads.length === 0 ? "" : `; commits: ${compactList(heads, 4, 100)}`;
     const blockerSuffix =
       task.blockReason === undefined ? "" : `; blocker: ${compactText(task.blockReason)}`;
     const reportSuffix =
       task.reportPath === undefined ? "" : `; report: ${compactText(task.reportPath, 140)}`;
     const continuation = researchContinuationFor(task);
     const continuationSuffix =
-      continuation === undefined
-        ? ""
-        : `; continuation: ${continuation.disposition} (${continuation.selectedBy}; routing only)`;
+      continuation === undefined ? "" : `; after research: ${continuation.disposition}`;
     lines.push(
       `- ${task.id}: ${task.stage}; ${compactText(task.objective)}${notificationSuffix}${blockerSuffix}${headSuffix}${reportSuffix}${continuationSuffix}`,
     );
@@ -1202,6 +1155,6 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
     }
   }
   if (tasks.length > DIGEST_MAX_TASKS)
-    lines.push(`- ${tasks.length - DIGEST_MAX_TASKS} additional task(s) omitted from this digest.`);
+    lines.push(`- ${tasks.length - DIGEST_MAX_TASKS} more task(s) not shown.`);
   return boundedOutput(lines.join("\n"), DIGEST_MAX_CHARS);
 }
