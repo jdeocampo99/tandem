@@ -14,6 +14,7 @@ import { transitionTask } from "../tasks/lifecycle.ts";
 import { formatDecisionQuestion } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import {
+  type CentralRecoveryOutcome,
   chooseRecoveryAction,
   classifyRecoveryEvidence,
   preapprovedRecoveryAction,
@@ -61,6 +62,11 @@ export type RecoveryConversationDependencies = Readonly<{
   readonly requestDispatchHold: (
     task: Pick<TaskRecord, "requestId">,
   ) => Promise<string | undefined>;
+  /** Central recovery's own blocked-task entry point (`CentralRecoveryWorkflow.recoverBlockedTask`
+   *  in `./central.ts`, injected rather than imported directly to avoid a cycle: `central.ts`
+   *  already depends on this module for `taskAsking`). Reports `skipped` for a task the old
+   *  decision rules below should still handle themselves. */
+  readonly recoverBlockedTask: (task: TaskRecord) => Promise<CentralRecoveryOutcome>;
 }>;
 
 /** What one conversational recovery pass settled, and whether it changed any durable state. */
@@ -132,6 +138,23 @@ function waitIsDue(wait: RecoveryAvailabilityWait, now: IsoTimestamp): boolean {
   return deadlineMs === undefined || nowMs === undefined || nowMs >= deadlineMs;
 }
 
+/** Maps what central recovery actually did to the disposition shape conversational recovery reports
+ *  through; never called for `"skipped"`, which the caller handles by falling back to the old rules. */
+function centralRecoveryDisposition(action: CentralRecoveryOutcome["action"]): RecoveryDisposition {
+  switch (action) {
+    case "relaunched":
+    case "adopted":
+    case "resumed":
+      return "applied";
+    case "asked":
+      return "asked";
+    case "blocked":
+      return "refused";
+    case "skipped":
+      return "none";
+  }
+}
+
 function questionText(
   evidence: RecoveryEvidence,
   recommendedAction: RecoveryActionName | undefined,
@@ -200,11 +223,23 @@ export class RecoveryConversationWorkflow {
     this.#deps = deps;
   }
 
-  /** Reads durable state for one task and settles its current recovery decision. */
+  /** Reads durable state for one task and settles its current recovery decision. Delegates first to
+   *  central recovery: when the block is one it can re-enter automatically, its outcome is what
+   *  happened, reported through the same shape the old decision rules below would have produced, and
+   *  nothing here recommends an action central recovery has already carried out or asked about. */
   public async decide(taskId: string): Promise<RecoveryConversationOutcome> {
     const task = await this.#deps.getTask(taskId);
     if (isTerminalTask(task)) {
       return { taskId, status: "none", changed: false };
+    }
+    const centralOutcome = await this.#deps.recoverBlockedTask(task);
+    if (centralOutcome.action !== "skipped") {
+      return {
+        taskId,
+        ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+        status: centralRecoveryDisposition(centralOutcome.action),
+        changed: true,
+      };
     }
     const runtime = taskRuntime(await readRuntimeState(this.#deps.runtimePath), taskId);
     const evidence = classifyRecoveryEvidence({

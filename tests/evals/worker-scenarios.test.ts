@@ -119,7 +119,10 @@ test("a timed-out worker result blocks the task and preserves its unlanded workt
       finishedAt: SCENARIO_NOW,
     });
 
-    await service.tick();
+    // One tick fully consumes the written result and blocks the task; a second tick is no longer a
+    // no-op once blocked (central recovery's own blocked-task re-entry would pick a `worker-failed`
+    // cause like this one back up automatically, exactly as tests/evals/central-recovery-scenarios.
+    // test.ts covers), so this asserts the block itself right where it lands.
     await service.tick();
 
     const snapshot = await world.snapshot();

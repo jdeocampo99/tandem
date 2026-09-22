@@ -4,6 +4,25 @@ import type { BlockCause, BlockCauseKind, IsoTimestamp } from "../contracts.ts";
 /** Version of the durable recovery decision and bounded-wait contract. */
 export const RECOVERY_CONTRACT_SCHEMA_VERSION = 1;
 
+/**
+ * What one central recovery pass (`CentralRecoveryWorkflow`, in `./central.ts`) did for a task.
+ * Defined here rather than in `central.ts` so `./conversation.ts` can depend on it too without a
+ * cycle: `central.ts` already imports `taskAsking` from `./conversation.ts`.
+ */
+export type CentralRecoveryAction =
+  | "relaunched"
+  | "adopted"
+  | "resumed"
+  | "asked"
+  | "blocked"
+  | "skipped";
+
+export type CentralRecoveryOutcome = Readonly<{
+  readonly taskId: string;
+  readonly action: CentralRecoveryAction;
+  readonly reason: string;
+}>;
+
 /** Prefix shared by every durable recovery question id, so an answer path can recognize one. */
 export const RECOVERY_QUESTION_ID_PREFIX = "recovery-";
 
@@ -459,6 +478,43 @@ function failingProofs(facts: RecoveryProvenFacts): readonly RecoveryProof[] {
 
 function describeRemainingBudget(budget: RecoveryBudgetRemaining): string {
   return `Remaining budget: ${budget.recoveryAttempts} recovery attempt(s), ${budget.validationRetries} validation retry/retries, ${budget.evidenceRepairs} evidence repair(s).`;
+}
+
+/** Block-cause kinds within `unusable-result` central recovery may still retry automatically for a
+ *  blocked task: each still reflects an infrastructure-shaped failure (a worker or review pane
+ *  vanishing, or a result invalidated by a stale instruction revision), never a lens that ran to
+ *  completion and reported its own failure (`review-lens-failed` is deliberately excluded). */
+const RECOVERABLE_UNUSABLE_RESULT_KINDS: ReadonlySet<BlockCauseKind> = new Set([
+  "worker-failed",
+  "stale-review-state",
+  "no-clean-checkpoint",
+]);
+
+/**
+ * Whether a blocked task's typed cause is one central recovery may re-enter automatically: any
+ * `lost-resource` cause (nothing about the task's own work is in question), or an `unusable-result`
+ * cause whose kind is still infrastructure-shaped. A `user-decision` or `safety-stop` cause is never
+ * recoverable automatically; only a person resolves those.
+ */
+export function isRecoverableBlockCause(cause: BlockCause): boolean {
+  if (cause.group === "lost-resource") return true;
+  return cause.group === "unusable-result" && RECOVERABLE_UNUSABLE_RESULT_KINDS.has(cause.kind);
+}
+
+/** Legacy free-text worker-death shapes recorded before every block site carried a typed
+ *  `BlockCause`. Central recovery's blocked-task re-entry recognizes only these shapes for a task
+ *  whose block predates the typed-cause migration; anything else with no typed cause is left alone. */
+const LEGACY_WORKER_DEATH_TEXT_PATTERNS: readonly RegExp[] = [
+  /\bstale worker instruction\b/iu,
+  /\bworker stopped without a durable result\b/iu,
+  /\bworker launch (?:could not be proven|was not proven|not proven)\b/iu,
+  /\bendpoint (?:is )?missing\b/iu,
+];
+
+/** Whether legacy free-text (no typed `BlockCause`) reads as a worker-death shape central recovery
+ *  may still re-enter automatically. */
+export function isLegacyWorkerDeathBlockText(value: string): boolean {
+  return LEGACY_WORKER_DEATH_TEXT_PATTERNS.some((pattern) => pattern.test(value));
 }
 
 /** The two failure classes the central recovery module distinguishes for the same-class guard. */

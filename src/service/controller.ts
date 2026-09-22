@@ -778,6 +778,9 @@ class TandemController {
         const decision = await this.#requests.dispatchDecisionForTask(task);
         return decision === undefined || decision.allowed ? undefined : decision.reason;
       },
+      // Closes over `this`, not `#recoveryCentral` directly: `#recoveryCentral` is assigned right
+      // below, after this object is constructed, but before either workflow's methods can ever run.
+      recoverBlockedTask: (task) => this.#recoveryCentral.recoverBlockedTask(task),
     });
     this.#recoveryCentral = new CentralRecoveryWorkflow({
       home: deps.home,
@@ -2025,7 +2028,14 @@ class TandemController {
       await this.cleanupTerminalTask(task);
       return;
     }
-    if (task.stage === "paused" || task.stage === "blocked") return;
+    if (task.stage === "paused") return;
+    if (task.stage === "blocked") {
+      // A blocked task whose cause is recoverable (a worker/pane vanishing, not a person's decision)
+      // reaches central recovery here without anyone asking; anything not eligible is left exactly
+      // as blocked as it already was.
+      await this.#recoveryCentral.recoverBlockedTask(task);
+      return;
+    }
     if (
       runtime.operation !== undefined &&
       runtime.operation.claimOwner !== this.#worker.claimOwner
