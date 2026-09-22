@@ -369,6 +369,49 @@ test("assertTaskShape and describeTaskPr allow delivery once the hands-on check 
   expect(rendered).toContain('1 "you check" criteria confirmed by the user');
 });
 
+test("describeTaskPr never claims builder screenshots for criteria review handed to the user", () => {
+  const handedOff: TaskRecord = {
+    ...task(),
+    userCheckCriteria: ["The layout matches the design exactly"],
+    handedOffCriteria: ["The layout matches the design exactly"],
+    userCheck: {
+      head: "head-1",
+      generation: 0,
+      evidence: [],
+      answer: { outcome: "confirmed", answeredAt: "2030-01-02T03:04:05.000Z" },
+    },
+  };
+  const rendered = describeTaskPr(handedOff, summary);
+  expect(rendered).not.toContain(
+    '"you check" criteria confirmed by the user from builder screenshots',
+  );
+  expect(rendered).toContain(
+    '1 "you check" criteria review handed to the user with no screenshots',
+  );
+  expect(rendered).toContain("The layout matches the design exactly");
+});
+
+test("describeTaskPr reports screenshot-confirmed and handed-off you-check criteria separately", () => {
+  const mixed: TaskRecord = {
+    ...task(),
+    userCheckCriteria: ["Streak bar glows at 5 in a row", "The layout matches the design exactly"],
+    handedOffCriteria: ["The layout matches the design exactly"],
+    userCheck: {
+      head: "head-1",
+      generation: 0,
+      evidence: [{ criterion: "Streak bar glows at 5 in a row", paths: ["/home/jobs/a.png"] }],
+      answer: { outcome: "confirmed", answeredAt: "2030-01-02T03:04:05.000Z" },
+    },
+  };
+  const rendered = describeTaskPr(mixed, summary);
+  expect(rendered).toContain(
+    '1 "you check" criteria confirmed by the user from builder screenshots',
+  );
+  expect(rendered).toContain(
+    '1 "you check" criteria review handed to the user with no screenshots',
+  );
+});
+
 test("assertTaskShape still refuses a stale userCheck bound to a superseded HEAD or generation", () => {
   const stale: TaskRecord = {
     ...task(),

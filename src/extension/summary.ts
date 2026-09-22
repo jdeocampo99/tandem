@@ -216,6 +216,11 @@ function summarizeTask(task: TaskRecord): string {
           `You check (${task.userCheckCriteria.length}): ${compactList(task.userCheckCriteria)}`,
           `Your check: ${userCheckStatus(task)}`,
         ]),
+    ...(task.handedOffCriteria === undefined || task.handedOffCriteria.length === 0
+      ? []
+      : [
+          `Review handed to you, no screenshots (${task.handedOffCriteria.length}): ${compactList(task.handedOffCriteria)}`,
+        ]),
     `Surfaces (${task.surfaces.length}): ${compactList(task.surfaces)}`,
   ];
   if (heads.length > 0) lines.push(`Commits: ${heads.join(", ")}`);

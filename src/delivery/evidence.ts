@@ -214,16 +214,23 @@ export function describeTaskPr(task: TaskRecord, summary: PrSummary): string {
   const manifest = finalAcceptanceContract(task, shape.head);
   const validatedSummary = validateSummary(summary);
   const userCheckCount = userCheckCriteriaOf(task).length;
+  const handedOffCount = task.handedOffCriteria?.length ?? 0;
+  const screenshotCount = userCheckCount - handedOffCount;
   return renderPrDescription({
     tldr: validatedSummary.tldr,
     what: validatedSummary.what,
     why: validatedSummary.why,
     validation: [
       `final acceptance manifest at HEAD ${shape.head}: ${manifest.requirements.length} required checks, ${manifest.lenses.length} review lenses, ${manifest.criteria.length} acceptance criteria`,
-      ...(userCheckCount === 0
+      ...(screenshotCount === 0
         ? []
         : [
-            `${userCheckCount} "you check" criteria confirmed by the user from builder screenshots at HEAD ${shape.head}`,
+            `${screenshotCount} "you check" criteria confirmed by the user from builder screenshots at HEAD ${shape.head}`,
+          ]),
+      ...(handedOffCount === 0
+        ? []
+        : [
+            `${handedOffCount} "you check" criteria review handed to the user with no screenshots, confirmed by the user at HEAD ${shape.head}: ${task.handedOffCriteria?.join("; ")}`,
           ]),
       ...evidence.map(evidenceBullet),
     ],

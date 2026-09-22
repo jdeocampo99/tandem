@@ -72,17 +72,23 @@ function countEvidence(evidence: readonly UserCheckEvidence[]): {
   return { images, clips, withoutEvidence };
 }
 
-function evidenceNote(evidence: readonly UserCheckEvidence[]): string {
+function evidenceNote(evidence: readonly UserCheckEvidence[], handedOffCount: number): string {
   const { images, clips, withoutEvidence } = countEvidence(evidence);
   const parts: string[] = [];
   if (images > 0) parts.push(`${images} screenshot${images === 1 ? "" : "s"}`);
   if (clips > 0) parts.push(`${clips} clip${clips === 1 ? "" : "s"}`);
   const base =
     parts.length === 0 ? "No screenshots were saved." : `${parts.join(" and ")} attached.`;
-  const withNote =
-    withoutEvidence > 0
-      ? `${base} ${withoutEvidence} item${withoutEvidence === 1 ? "" : "s"} have none.`
-      : base;
+  const notes: string[] = [];
+  if (withoutEvidence > 0) {
+    notes.push(`${withoutEvidence} item${withoutEvidence === 1 ? " has" : "s have"} none.`);
+  }
+  if (handedOffCount > 0) {
+    notes.push(
+      `Review handed you ${handedOffCount} item${handedOffCount === 1 ? "" : "s"} with no screenshots.`,
+    );
+  }
+  const withNote = notes.length === 0 ? base : `${base} ${notes.join(" ")}`;
   return withNote.length <= 100 ? withNote : base;
 }
 
@@ -90,9 +96,10 @@ function evidenceNote(evidence: readonly UserCheckEvidence[]): string {
  *  message in a confirmation dialog) rather than joined into one line. */
 export function userCheckDecisionQuestion(task: TaskRecord): DecisionQuestion {
   const evidence = task.userCheck?.evidence ?? [];
+  const handedOffCount = task.handedOffCriteria?.length ?? 0;
   return {
     ask: `Does ${taskName(task.objective)} look right?`,
-    note: evidenceNote(evidence),
+    note: evidenceNote(evidence, handedOffCount),
   };
 }
 

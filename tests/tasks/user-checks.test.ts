@@ -124,6 +124,32 @@ test("the note counts images and clips and reports when nothing was saved", () =
   expect(imagesAndClips.note).toBe("2 screenshots and 1 clip attached.");
 });
 
+test("the note counts criteria review handed off with no screenshots, distinct from missing builder evidence", () => {
+  const handedOffOnly = userCheckDecisionQuestion(
+    taskWith({ handedOffCriteria: ["The layout matches the design exactly"] }),
+  );
+  expect(handedOffOnly.note).toBe(
+    "No screenshots were saved. Review handed you 1 item with no screenshots.",
+  );
+
+  const mixed = userCheckDecisionQuestion(
+    taskWith({
+      userCheck: {
+        head: "h",
+        generation: 0,
+        evidence: [
+          { criterion: "a", paths: ["/x.png"] },
+          { criterion: "b", paths: [] },
+        ],
+      },
+      handedOffCriteria: ["The layout matches the design exactly", "Another handed-off item"],
+    }),
+  );
+  expect(mixed.note).toBe(
+    "1 screenshot attached. 1 item has none. Review handed you 2 items with no screenshots.",
+  );
+});
+
 test("isUserCheckYes accepts only yes/y, ignoring case and trailing punctuation", () => {
   expect(isUserCheckYes("yes")).toBe(true);
   expect(isUserCheckYes("Yes.")).toBe(true);

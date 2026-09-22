@@ -1445,6 +1445,7 @@ test("record-review's handToUser moves a Tandem check into you-check, and reject
   );
   expect(task.acceptanceCriteria).toEqual([]);
   expect(task.userCheckCriteria).toEqual(["The behavior is durable"]);
+  expect(task.handedOffCriteria).toEqual(["The behavior is durable"]);
 });
 
 test("invalidate-evidence and begin-existing-review drop a stale user-check question", () => {

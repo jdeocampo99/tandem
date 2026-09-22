@@ -780,6 +780,10 @@ export type TaskRecord = {
   /** The "you check" list: hands-on/visual criteria the user judges from builder screenshots. Review
    *  lenses never block or ask on these. */
   readonly userCheckCriteria?: readonly string[];
+  /** The subset of `userCheckCriteria` that arrived via a review lens's `handToUser` rather than being
+   *  tagged at approval time; these never have builder screenshots, so summaries/PR bodies must not
+   *  claim they do. */
+  readonly handedOffCriteria?: readonly string[];
   /** Builder evidence for `userCheckCriteria`, bound to one generation and HEAD, and the user's answer. */
   readonly userCheck?: UserCheckRecord;
   readonly surfaces: readonly string[];

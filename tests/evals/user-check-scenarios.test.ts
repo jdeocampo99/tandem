@@ -543,6 +543,7 @@ test("a verifier that asks needs-decision twice without handToUser still ends in
       );
       expect(verificationReview?.pass).toBe(true);
       expect(verificationReview?.handToUser).toEqual([UNTESTABLE_CRITERION]);
+      expect(handedOff.handedOffCriteria).toEqual([UNTESTABLE_CRITERION]);
 
       // Reconciling once more reaches `ready` and asks the one user-check question the criterion was
       // handed off for — never a second needs-decision from the same lens.
@@ -556,6 +557,8 @@ test("a verifier that asks needs-decision twice without handToUser still ends in
       const question = ready.communication?.question;
       expect(question?.id.startsWith("user-check-")).toBe(true);
       expect(question?.id).toBe(userCheckQuestionId(ready.generation, ready.reviewHead ?? ""));
+      // The question names how many items review handed over with no screenshots.
+      expect(question?.text).toContain("Review handed you 1 item with no screenshots.");
       expect(
         ready.notifications.filter((entry) => entry.message.includes("needs a decision")),
       ).toHaveLength(1);

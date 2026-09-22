@@ -109,6 +109,7 @@ const TOP_LEVEL_KEYS = [
   "objective",
   "acceptanceCriteria",
   "userCheckCriteria",
+  "handedOffCriteria",
   "userCheck",
   "surfaces",
   "stage",
@@ -1118,6 +1119,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   const userCheckCriteriaValue = Object.hasOwn(value, "userCheckCriteria")
     ? requiredTextArray(value, "userCheckCriteria", source)
     : undefined;
+  const handedOffCriteriaValue = Object.hasOwn(value, "handedOffCriteria")
+    ? requiredTextArray(value, "handedOffCriteria", source)
+    : undefined;
   const userCheckValue = Object.hasOwn(value, "userCheck")
     ? requiredValue(value, "userCheck", source)
     : undefined;
@@ -1133,6 +1137,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     objective: requiredText(value, "objective", source),
     acceptanceCriteria: requiredTextArray(value, "acceptanceCriteria", source),
     ...(userCheckCriteriaValue === undefined ? {} : { userCheckCriteria: userCheckCriteriaValue }),
+    ...(handedOffCriteriaValue === undefined ? {} : { handedOffCriteria: handedOffCriteriaValue }),
     surfaces: requiredTextArray(value, "surfaces", source),
     stage: requiredEnum(value, "stage", TASK_STAGES, source),
     scopeApproved: requiredBoolean(value, "scopeApproved", source),

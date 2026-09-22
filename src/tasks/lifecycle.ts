@@ -1117,6 +1117,12 @@ export function transitionTask(
                 (text) => !handToUser.includes(text),
               ),
               userCheckCriteria: [...userCheckCriteriaOf(task), ...handToUser],
+              // Tracked separately from userCheckCriteria: these never have builder screenshots, so
+              // the ready question's evidence note and the PR body must count and list them apart
+              // from criteria the user actually tagged as "you check" up front.
+              handedOffCriteria: Array.from(
+                new Set([...(task.handedOffCriteria ?? []), ...handToUser]),
+              ),
             }),
       });
     }
