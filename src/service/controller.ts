@@ -1557,8 +1557,7 @@ class TandemController {
             cause: {
               group: "lost-resource",
               kind: "transition-failed",
-              summary:
-                "An internal scheduling step failed, so this task could not advance this turn.",
+              summary: "Something went wrong inside Tandem, so this task couldn't move forward.",
               detail: reason,
             },
           });
@@ -2011,8 +2010,7 @@ class TandemController {
       await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
         group: "safety-stop",
         kind: "runtime-metadata-missing",
-        summary:
-          "Tandem lost this task's durable runtime record, so no worker could be launched for it.",
+        summary: "Tandem lost its saved record for this task, so it couldn't start a worker.",
         detail: "durable runtime metadata is missing; no worker was launched",
       });
       return;
@@ -2056,7 +2054,7 @@ class TandemController {
           group: "safety-stop",
           kind: "quarantined-unknown-outcome",
           summary:
-            "This task's reservation has no matching operation record, so it was quarantined without touching its worktree or checkpoint.",
+            "Tandem's records for this task are incomplete, so it paused the task without touching your work.",
           detail: reason,
         });
         return;
@@ -2071,7 +2069,7 @@ class TandemController {
             group: "safety-stop",
             kind: "identity-mismatch",
             summary:
-              "The recorded reservation and operation no longer identify the same piece of work, so nothing was launched.",
+              "Tandem's records for this task don't match each other, so it didn't start anything.",
             detail: reason,
           },
         });
@@ -2125,7 +2123,7 @@ class TandemController {
           await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
             group: "lost-resource",
             kind: "resource-lost",
-            summary: "The task's worktree is missing, so no further work can run against it.",
+            summary: "The task's working copy is missing.",
             detail: `task is ${task.stage} but its durable worktree is missing`,
           });
           return;
@@ -2147,8 +2145,7 @@ class TandemController {
           await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
             group: "lost-resource",
             kind: "resource-lost",
-            summary:
-              "The task's worker resources are missing, so no further work can run against it.",
+            summary: "The worker's terminal and files are gone.",
             detail: `task is ${task.stage} but its worker resources are missing`,
           });
           return;

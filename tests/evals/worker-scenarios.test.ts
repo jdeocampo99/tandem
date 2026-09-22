@@ -125,7 +125,7 @@ test("a timed-out worker result blocks the task and preserves its unlanded workt
     const snapshot = await world.snapshot();
     const task = await service.get(SCENARIO_TASK_ID);
     expect(task.stage).toBe("blocked");
-    expect(task.blockReason).toContain("timed out");
+    expect(task.blockCause?.detail).toContain("timed out");
     expect(task.blockCause).toMatchObject({
       group: "unusable-result",
       kind: "worker-failed",
@@ -187,7 +187,7 @@ test("a stale worker result is rejected without advancing the task or releasing 
     const task = await service.get(SCENARIO_TASK_ID);
     expect(task.stage).toBe("blocked");
     expect(task.generation).toBe(0);
-    expect(snapshot.runtime.tasks[0]?.lastError ?? task.blockReason).toContain(
+    expect(snapshot.runtime.tasks[0]?.lastError ?? task.blockCause?.detail).toContain(
       "worker result rejected",
     );
     expect(snapshot.resources.failed).toContain("job:job-1");
@@ -228,8 +228,8 @@ test("an implementer result that cannot be applied to a diverged task blocks wit
       kind: "persistence-failed",
       jobId: "job-1",
     });
-    expect(task.blockReason).toContain("durable result could not be applied");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toContain("durable result could not be applied");
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });
@@ -279,8 +279,8 @@ test("a scout whose checkout cannot be verified blocks with a lost-resource caus
       kind: "checkout-unverifiable",
       jobId: "job-1",
     });
-    expect(task.blockReason).toContain("scout checkout could not be verified");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toContain("scout checkout could not be verified");
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });
@@ -343,8 +343,10 @@ test("a reviewer result launched against a stale instruction blocks with an unus
       kind: "stale-review-state",
       jobId: "job-1",
     });
-    expect(task.blockReason).toBe("review result was launched for an older instruction revision");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toBe(
+      "review result was launched for an older instruction revision",
+    );
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });
@@ -369,8 +371,8 @@ test("validation with no configured commands refuses with a user-decision cause"
       group: "user-decision",
       kind: "validation-config-refused",
     });
-    expect(task.blockReason).toContain("validation refused");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toContain("validation refused");
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });
@@ -394,8 +396,8 @@ test("validation without a reviewed HEAD refuses with a user-decision cause", as
       group: "user-decision",
       kind: "prerequisite-not-met",
     });
-    expect(task.blockReason).toBe("validation requires a task worktree and reviewed HEAD");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toBe("validation requires a task worktree and reviewed HEAD");
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });
@@ -421,8 +423,8 @@ test("validation whose runtime lost its worktree blocks with a lost-resource cau
       group: "lost-resource",
       kind: "resource-lost",
     });
-    expect(task.blockReason).toBe("validation runtime lost its worktree");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toBe("validation runtime lost its worktree");
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });
@@ -457,8 +459,8 @@ test("a reviewing task whose pane ownership cannot be proven blocks with a safet
       kind: "ownership-unprovable",
       paneId: "pane-1",
     });
-    expect(task.blockReason).toContain("ownership could not be proven");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toContain("ownership could not be proven");
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });
@@ -498,8 +500,8 @@ test("a reviewing task with an unresolved failed lens blocks with an unusable-re
       group: "unusable-result",
       kind: "review-lens-failed",
     });
-    expect(task.blockReason).toBe("the review worker reported a genuine content failure");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toBe("the review worker reported a genuine content failure");
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });
@@ -519,8 +521,8 @@ test("a queued task whose worktree allocation fails blocks with a lost-resource 
       group: "lost-resource",
       kind: "allocation-failed",
     });
-    expect(task.blockReason).toContain("worktree allocation failed");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toContain("worktree allocation failed");
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });
@@ -545,8 +547,8 @@ test("a queued task whose scope approval is missing at launch blocks with a lost
       group: "lost-resource",
       kind: "transition-failed",
     });
-    expect(task.blockReason).toContain("task start transition failed");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toContain("task start transition failed");
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });
@@ -590,8 +592,8 @@ test("a worker job with no durable endpoint identity is quarantined with a safet
       kind: "quarantined-unknown-outcome",
       jobId: "job-1",
     });
-    expect(task.blockReason).toBe("worker job has no durable endpoint identity");
-    expect(task.blockCause?.detail).toBe(task.blockReason);
+    expect(task.blockCause?.detail).toBe("worker job has no durable endpoint identity");
+    expect(task.blockCause?.summary).toBe(task.blockReason);
     await service.shutdown();
   });
 });

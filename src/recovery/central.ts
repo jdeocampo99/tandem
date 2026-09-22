@@ -281,7 +281,7 @@ export class CentralRecoveryWorkflow {
         group: "safety-stop",
         kind: "runtime-metadata-missing",
         summary:
-          "Tandem's durable record of this task's runtime is missing, so it cannot be resumed automatically.",
+          "Tandem lost its saved record for this task, so it can't restart it automatically.",
         detail: "durable runtime metadata is missing; no re-entry is possible",
       };
       await reportBlock(this.#deps.blockTask, task.id, cause);
@@ -346,7 +346,7 @@ export class CentralRecoveryWorkflow {
       await reportBlock(this.#deps.blockTask, task.id, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: `Tandem's automatic restart could not launch a new worker: ${reason}.`,
+        summary: `Tandem tried to restart the worker automatically, but it couldn't start.`,
         detail: `automatic restart could not launch a new worker: ${reason}`,
         ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
       });
@@ -421,7 +421,7 @@ export class CentralRecoveryWorkflow {
         group: "safety-stop",
         kind: "runtime-metadata-missing",
         summary:
-          "Tandem's durable record of this task's runtime is missing, so it cannot be resumed automatically.",
+          "Tandem lost its saved record for this task, so it can't restart it automatically.",
         detail: "durable runtime metadata is missing; no re-entry is possible",
       };
       await reportBlock(this.#deps.blockTask, task.id, cause);
@@ -477,7 +477,7 @@ export class CentralRecoveryWorkflow {
       await reportBlock(this.#deps.blockTask, task.id, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: `Tandem's automatic validation retry could not restart validation: ${reason}.`,
+        summary: `Tandem tried to rerun the checks automatically, but they couldn't start.`,
         detail: `automatic validation retry could not restart validation: ${reason}`,
         ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
       });
@@ -942,7 +942,7 @@ export class CentralRecoveryWorkflow {
       await reportBlock(this.#deps.blockTask, task.id, {
         group: "safety-stop",
         kind: "ownership-unprovable",
-        summary: `The approved validation retry could not proceed: ${proof.reasonSummary}.`,
+        summary: `You approved rerunning the checks, but Tandem couldn't confirm the old run stopped.`,
         detail: `the approved validation retry could not proceed: ${proof.reasonSummary}`,
         ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
       });
@@ -957,7 +957,7 @@ export class CentralRecoveryWorkflow {
       await reportBlock(this.#deps.blockTask, task.id, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: `The approved validation retry could not restart validation: ${reason}.`,
+        summary: `You approved rerunning the checks, but they couldn't start.`,
         detail: `the approved validation retry could not restart validation: ${reason}`,
         ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
       });
@@ -1051,7 +1051,7 @@ export class CentralRecoveryWorkflow {
       await reportBlock(this.#deps.blockTask, task.id, {
         group: "safety-stop",
         kind: "ownership-unprovable",
-        summary: `The approved restart could not proceed: ${proof.reasonSummary}.`,
+        summary: `You approved a restart, but Tandem couldn't confirm the old worker stopped.`,
         detail: `the approved restart could not proceed: ${proof.reasonSummary}`,
         ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
       });
@@ -1071,7 +1071,7 @@ export class CentralRecoveryWorkflow {
       await reportBlock(this.#deps.blockTask, task.id, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: `The approved restart could not launch a new worker: ${reason}.`,
+        summary: `You approved a restart, but the new worker couldn't start.`,
         detail: `the approved restart could not launch a new worker: ${reason}`,
         ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
       });

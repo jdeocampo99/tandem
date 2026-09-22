@@ -966,7 +966,7 @@ export class RecoveryWorkflow {
         group: "safety-stop",
         kind: "ownership-unprovable",
         summary:
-          "Tandem could not prove this task's repository checkout is the one it started from, so reconciliation refused to proceed.",
+          "Tandem couldn't confirm this is the same repository the task started in, so it didn't touch anything.",
         detail: reason,
       });
       return {
@@ -989,8 +989,7 @@ export class RecoveryWorkflow {
       await this.block(task, reason, {
         group: "safety-stop",
         kind: "ownership-unprovable",
-        summary:
-          "Tandem could not prove it owns the pane(s) behind this task, so reconciliation refused to proceed.",
+        summary: "Tandem couldn't confirm a terminal belongs to this task, so it didn't touch it.",
         detail: reason,
         ...(singleForeignPaneId === undefined ? {} : { paneId: singleForeignPaneId }),
       });

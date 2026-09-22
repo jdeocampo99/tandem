@@ -378,7 +378,7 @@ export class WorkerWorkflow {
           group: "safety-stop",
           kind: "quarantined-unknown-outcome",
           summary:
-            "The worker's pane identity was never recorded, so the outcome of this run cannot be trusted.",
+            "Tandem lost track of which terminal the worker ran in, so it can't tell what it finished.",
           detail: reason,
           jobId: job.id,
         });
@@ -428,7 +428,7 @@ export class WorkerWorkflow {
             group: "safety-stop",
             kind: "quarantined-unknown-outcome",
             summary:
-              "The worker stopped without leaving a durable result, so the outcome of this run cannot be trusted.",
+              "The worker stopped without reporting back, so Tandem can't tell what it finished.",
             detail: reason,
             jobId: job.id,
           });
@@ -438,7 +438,7 @@ export class WorkerWorkflow {
         await this.failJob(task, job, rejectedReason, claim, true, false, {
           group: "unusable-result",
           kind: "worker-failed",
-          summary: "The worker's result could not be read or did not match what was expected.",
+          summary: "The worker's report couldn't be read.",
           detail: rejectedReason,
           jobId: job.id,
         });
@@ -482,7 +482,7 @@ export class WorkerWorkflow {
       await this.failJob(task, job, rejectedReason, claim, true, false, {
         group: "unusable-result",
         kind: "worker-failed",
-        summary: "The validation result could not be read or did not match what was expected.",
+        summary: "The check results couldn't be read.",
         detail: rejectedReason,
         jobId: job.id,
       });
@@ -513,7 +513,7 @@ export class WorkerWorkflow {
       group: "safety-stop",
       kind: "quarantined-unknown-outcome",
       summary:
-        "The worker's pane disappeared before its outcome could be proven, so the task was quarantined for a person to inspect.",
+        "The worker's terminal disappeared before it finished, so Tandem paused the task for you to look at.",
       detail: reason,
       jobId: job.id,
     });
@@ -629,8 +629,7 @@ export class WorkerWorkflow {
         await this.failJob(task, job, reason, claim, blockReviewFailure, false, {
           group: "unusable-result",
           kind: "stale-review-state",
-          summary:
-            "The review result was produced against an instruction that is no longer current.",
+          summary: "The review was based on older instructions, so it no longer counts.",
           detail: reason,
           jobId: job.id,
         });
@@ -643,8 +642,7 @@ export class WorkerWorkflow {
         await this.failJob(task, job, reason, claim, blockReviewFailure, false, {
           group: "unusable-result",
           kind: "stale-review-state",
-          summary:
-            "The worker's result was produced against an instruction that is no longer current.",
+          summary: "The worker was following older instructions, so its result no longer counts.",
           detail: reason,
           jobId: job.id,
         });
@@ -684,7 +682,7 @@ export class WorkerWorkflow {
         summary:
           result.status === "needs-decision"
             ? `Worker ${job.role} stopped and needs a decision before it can continue.`
-            : `Worker ${job.role} failed and left nothing further to build on.`,
+            : `The ${job.role} failed.`,
         detail: reason,
         jobId: job.id,
       };
@@ -719,7 +717,7 @@ export class WorkerWorkflow {
               group: "lost-resource",
               kind: "checkout-unverifiable",
               summary:
-                "The scout's checkout could not be verified, so its result could not be trusted.",
+                "Tandem couldn't check the research worker's files, so it didn't trust the result.",
               detail: reason,
               jobId: job.id,
             },
@@ -745,7 +743,7 @@ export class WorkerWorkflow {
             cause: {
               group: "unusable-result",
               kind: "no-clean-checkpoint",
-              summary: "The scout stopped without leaving a clean, unchanged checkout to build on.",
+              summary: "The research worker changed files it wasn't supposed to.",
               detail: reason,
               jobId: job.id,
             },
@@ -779,8 +777,7 @@ export class WorkerWorkflow {
         const cause: BlockCause = {
           group: "unusable-result",
           kind: "no-clean-checkpoint",
-          summary:
-            "The implementer stopped without leaving a new, clean, committed checkpoint to build on.",
+          summary: "The worker stopped without committing its work.",
           detail:
             "implementer stopped without a new clean committed checkpoint; worktree is preserved",
           jobId: job.id,
@@ -816,7 +813,7 @@ export class WorkerWorkflow {
       await this.failJob(task, job, reason, claim, true, false, {
         group: "unusable-result",
         kind: "worker-failed",
-        summary: "The review worker finished without the identity its review needs to be accepted.",
+        summary: "The review finished, but Tandem couldn't match it to this task.",
         detail: reason,
         jobId: job.id,
       });
@@ -842,7 +839,7 @@ export class WorkerWorkflow {
           cause: {
             group: "unusable-result",
             kind: "stale-review-state",
-            summary: "The review evidence no longer matches the checkout it was supposed to cover.",
+            summary: "The code changed after it was reviewed, so the review no longer counts.",
             detail: reason,
             jobId: job.id,
           },
@@ -857,7 +854,7 @@ export class WorkerWorkflow {
       await this.failJob(task, job, reason, claim, true, false, {
         group: "unusable-result",
         kind: "worker-failed",
-        summary: "The review ran in a different mode than the task expected.",
+        summary: "The review ran in the wrong mode.",
         detail: reason,
         jobId: job.id,
       });
@@ -897,7 +894,7 @@ export class WorkerWorkflow {
       await this.failJob(task, job, reason, claim, true, false, {
         group: "unusable-result",
         kind: "worker-failed",
-        summary: "The validation job is missing the HEAD it was supposed to check.",
+        summary: "The check run didn't record which commit it checked.",
         detail: reason,
         jobId: job.id,
       });
@@ -910,7 +907,7 @@ export class WorkerWorkflow {
       await this.failJob(task, job, reason, claim, true, false, {
         group: "unusable-result",
         kind: "worker-failed",
-        summary: "The validation job is missing the contract identity it was supposed to check.",
+        summary: "The check run didn't record which settings it used.",
         detail: reason,
         jobId: job.id,
       });
@@ -921,8 +918,7 @@ export class WorkerWorkflow {
       await this.failJob(task, job, reason, claim, true, false, {
         group: "unusable-result",
         kind: "worker-failed",
-        summary:
-          "The validation evidence was produced under a policy that no longer matches this task.",
+        summary: "The checks ran under old settings, so they no longer count.",
         detail: reason,
         jobId: job.id,
       });
@@ -1219,8 +1215,7 @@ export class WorkerWorkflow {
           await this.#deps.blockTask(taskId, staleReason, {
             group: "unusable-result",
             kind: "stale-review-state",
-            summary:
-              "The review's result was produced against an instruction that is no longer current.",
+            summary: "The review was based on older instructions, so it no longer counts.",
             detail: staleReason,
             jobId: job.id,
           });
@@ -1276,7 +1271,7 @@ export class WorkerWorkflow {
               cause: {
                 group: "lost-resource",
                 kind: "persistence-failed",
-                summary: "This step's result could not be applied to the task's durable record.",
+                summary: "Tandem couldn't save this step's result.",
                 detail: reason,
                 jobId: job.id,
               },
@@ -1348,7 +1343,7 @@ export class WorkerWorkflow {
               cause: {
                 group: "lost-resource",
                 kind: "persistence-failed",
-                summary: "This step's result could not be applied to the task's durable record.",
+                summary: "Tandem couldn't save this step's result.",
                 detail: reason,
                 jobId: job.id,
               },
@@ -1693,14 +1688,14 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, allocationFailedReason, claim, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: "The task's worktree could not be allocated.",
+        summary: "Tandem couldn't set up a working copy for this task.",
         detail: allocationFailedReason,
       });
       const noLeaseReason = "worktree allocation returned no lease";
       await this.blockIfOperationClaim(task.id, noLeaseReason, claim, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: "The task's worktree could not be allocated.",
+        summary: "Tandem couldn't set up a working copy for this task.",
         detail: noLeaseReason,
       });
       return;
@@ -1711,7 +1706,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, noLeaseReason, claim, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: "The task's worktree could not be allocated.",
+        summary: "Tandem couldn't set up a working copy for this task.",
         detail: noLeaseReason,
       });
       return;
@@ -1743,7 +1738,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "transition-failed",
-        summary: "The task could not be moved into its start stage.",
+        summary: "Tandem couldn't start this task.",
         detail: reason,
       });
       return;
@@ -1763,7 +1758,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "resource-lost",
-        summary: "The task's worktree is missing, so no further work can run against it.",
+        summary: "The task's working copy is missing.",
         detail: reason,
       });
       return;
@@ -1775,7 +1770,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "resource-lost",
-        summary: "The task's worker pane is missing, so no further work can run against it.",
+        summary: "The worker's terminal is gone.",
         detail: reason,
       });
       return;
@@ -1868,7 +1863,7 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, reason, {
         group: "user-decision",
         kind: "prerequisite-not-met",
-        summary: "The fix stage has no reviewed HEAD to build a fix on top of.",
+        summary: "There's no reviewed work to fix yet.",
         detail: reason,
       });
       return;
@@ -1878,7 +1873,7 @@ export class WorkerWorkflow {
       await reportBlock(this.#deps.blockTask, task.id, {
         group: "user-decision",
         kind: "fix-rounds-exhausted",
-        summary: `The fix-round budget for this review cycle (${String(task.policy.config.maxFixRounds)}) is spent.`,
+        summary: `The worker has used all ${String(task.policy.config.maxFixRounds)} tries at fixing review findings.`,
         detail,
       });
       return;
@@ -1900,7 +1895,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "persistence-failed",
-        summary: "The findings this fix round is supposed to address were not durably recorded.",
+        summary: "The review findings weren't saved, so the fix couldn't start.",
         detail: reason,
       });
       return;
@@ -1929,8 +1924,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "persistence-failed",
-        summary:
-          "The findings this fix round is supposed to address could not be durably recorded.",
+        summary: "Tandem couldn't save the review findings, so the fix couldn't start.",
         detail: reason,
       });
       return;
@@ -1943,7 +1937,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "safety-stop",
         kind: "runtime-metadata-missing",
-        summary: "The task's durable runtime metadata is missing, so this fix round cannot launch.",
+        summary: "Tandem lost its saved record for this task, so the fix can't start.",
         detail: reason,
       });
       return;
@@ -2009,7 +2003,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "resource-lost",
-        summary: "The task's worktree is missing, so relaunch has nothing to relaunch into.",
+        summary: "The task's working copy is missing, so it can't be restarted.",
         detail: reason,
       });
       return { relaunched: false, reason };
@@ -2045,7 +2039,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "transition-failed",
-        summary: "The task could not be moved back into its relaunched stage.",
+        summary: "Tandem couldn't restart this task.",
         detail: reason,
       });
       return { relaunched: false, reason };
@@ -2210,7 +2204,7 @@ export class WorkerWorkflow {
             group: "safety-stop",
             kind: "quarantined-unknown-outcome",
             summary:
-              "A durable record this step needed to retry safely could not be trusted, so the task was quarantined for a person to inspect.",
+              "Tandem couldn't trust its own saved record of this step, so it paused the task for you to look at.",
             detail: reason,
           };
           await this.#deps.blockTask(taskId, reason, cause);
@@ -2326,8 +2320,7 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, reason, {
         group: "user-decision",
         kind: "prerequisite-not-met",
-        summary:
-          "Validation needs a task worktree and a reviewed HEAD, and this task has neither yet.",
+        summary: "There's no finished work to check yet.",
         detail: reason,
       });
       return;
@@ -2343,7 +2336,7 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, reason, {
         group: "user-decision",
         kind: "validation-config-refused",
-        summary: "Validation's configuration was refused, so it could not be planned.",
+        summary: "The project's check commands aren't set up correctly.",
         detail: reason,
       });
       return;
@@ -2363,7 +2356,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "resource-lost",
-        summary: "The task's worktree is missing, so validation cannot run against it.",
+        summary: "The task's working copy is missing, so the checks can't run.",
         detail: reason,
       });
       return;
@@ -2380,7 +2373,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "checkout-unverifiable",
-        summary: "The task's checkout could not be verified, so validation could not start.",
+        summary: "Tandem couldn't read the task's files, so the checks didn't run.",
         detail: reason,
       });
       return;
@@ -2395,7 +2388,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "user-decision",
         kind: "prerequisite-not-met",
-        summary: "Validation refused to run because the task worktree is stale or dirty.",
+        summary: "The code changed after it was submitted, so the checks didn't run.",
         detail: reason,
       });
       return;
@@ -2407,7 +2400,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "resource-lost",
-        summary: "The task's worktree is missing, so validation cannot run against it.",
+        summary: "The task's working copy is missing, so the checks can't run.",
         detail: reason,
       });
       return;
@@ -2419,7 +2412,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "resource-lost",
-        summary: "Validation has no owned implementer pane to check against.",
+        summary: "The worker's terminal is gone, so the checks can't run.",
         detail: reason,
       });
       return;
@@ -2520,7 +2513,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: "The pane validation needs could not be allocated.",
+        summary: "Tandem couldn't open a terminal to run the checks.",
         detail: reason,
       });
       return;
@@ -2605,7 +2598,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "persistence-failed",
-        summary: "The validation job could not be durably recorded.",
+        summary: "Tandem couldn't save the check run.",
         detail: reason,
       });
       return;
@@ -2803,7 +2796,7 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, reason, {
         group: "user-decision",
         kind: "prerequisite-not-met",
-        summary: "Review needs a task worktree and a reviewed HEAD, and this task has neither yet.",
+        summary: "There's no finished work to review yet.",
         detail: reason,
       });
       return;
@@ -2814,7 +2807,7 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, reason, {
         group: "safety-stop",
         kind: "runtime-metadata-missing",
-        summary: "The task's durable runtime metadata is missing, so review cannot proceed.",
+        summary: "Tandem lost its saved record for this task, so the review can't run.",
         detail: reason,
       });
       return;
@@ -2831,7 +2824,7 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, reason, {
         group: "unusable-result",
         kind: "review-lens-failed",
-        summary: "A review lens failed and left nothing further to build on.",
+        summary: "One of the reviews failed.",
         detail: reason,
       });
       return;
@@ -2859,7 +2852,7 @@ export class WorkerWorkflow {
           group: "safety-stop",
           kind: "ownership-unprovable",
           summary:
-            "The review pane's ownership could not be proven, so it is never touched without proof.",
+            "Tandem couldn't confirm the reviewer's terminal belongs to this task, so it didn't touch it.",
           detail: reason,
           paneId: reviewer.paneId,
         });
@@ -2879,7 +2872,7 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, reason, {
         group: "user-decision",
         kind: "prerequisite-not-met",
-        summary: "Review refused to run because the task worktree is stale or dirty.",
+        summary: "The code changed after it was submitted, so the review didn't run.",
         detail: reason,
       });
       return;
@@ -2926,7 +2919,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "resource-lost",
-        summary: "Review has no writer pane to review against.",
+        summary: "The worker's terminal is gone, so the review can't run.",
         detail: reason,
       });
       return;
@@ -3018,7 +3011,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: "The pane review needs could not be allocated.",
+        summary: "Tandem couldn't open a terminal for the review.",
         detail: reason,
       });
       return;
@@ -3200,7 +3193,7 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "persistence-failed",
-        summary: "The review job could not be durably prepared.",
+        summary: "Tandem couldn't set up the review.",
         detail: reason,
         paneId: reviewEndpoint.paneId,
       });
@@ -3554,8 +3547,7 @@ export class WorkerWorkflow {
           await this.#deps.blockTask(taskId, reason, {
             group: "lost-resource",
             kind: "resource-lost",
-            summary:
-              "The worker's launch could not be proven to have started, so its pane is not trusted.",
+            summary: "Tandem couldn't confirm the worker started.",
             detail: reason,
             jobId,
           });

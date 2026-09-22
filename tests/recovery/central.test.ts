@@ -671,7 +671,7 @@ test("a relaunch refusal blocks the task with the refusal reason", async () => {
     if (task === undefined) throw new Error("fixture task missing");
     const outcome = await f.workflow.recoverStuckWorker(task);
     expect(outcome.action).toBe("blocked");
-    expect(f.blockedReasons.join("\n")).toContain("worktree lease could not be reconfirmed");
+    expect(f.blockedCauses.at(-1)?.detail).toContain("worktree lease could not be reconfirmed");
     expect(f.blockedCauses.at(-1)?.kind).toBe("allocation-failed");
     expect(f.blockedCauses.at(-1)?.group).toBe("lost-resource");
   } finally {

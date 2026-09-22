@@ -437,8 +437,7 @@ export class TaskControlWorkflow {
           {
             group: "lost-resource",
             kind: "resource-lost",
-            summary:
-              "The worker's pane could not be relocated after a restart, so it could not resume.",
+            summary: "Tandem couldn't find the worker's terminal after a restart.",
             detail: reason,
           },
         );
@@ -569,7 +568,7 @@ export class TaskControlWorkflow {
           const cause: BlockCause = {
             group: "lost-resource",
             kind: "resource-lost",
-            summary: `Tandem could not confirm the worker actually stopped, so ${action} could not complete safely.`,
+            summary: `Tandem couldn't confirm the worker stopped, so it couldn't ${action} the task.`,
             detail: blockedReason,
           };
           const failedState = replaceRuntimeTask(state, taskId, (entry) => ({
@@ -1008,8 +1007,7 @@ export class TaskControlWorkflow {
         const cause: BlockCause = {
           group: "user-decision",
           kind: "prerequisite-not-met",
-          summary:
-            "This task has no reviewed commit yet, so it cannot be redirected with a new instruction.",
+          summary: "There's no reviewed work yet, so a new instruction can't be applied.",
           detail: reason,
         };
         const blocked = withInstruction(
@@ -1066,7 +1064,7 @@ export class TaskControlWorkflow {
           group: "lost-resource",
           kind: "resource-lost",
           summary:
-            "Tandem could not confirm the worker actually stopped, so the task could not be redirected.",
+            "Tandem couldn't confirm the worker stopped, so your new instruction wasn't applied.",
           detail: reason,
         };
         await writeRuntimeState(
@@ -1102,7 +1100,8 @@ export class TaskControlWorkflow {
             const cause: BlockCause = {
               group: "lost-resource",
               kind: "resource-lost",
-              summary: "A reviewer pane could not be closed, so the task could not be redirected.",
+              summary:
+                "A reviewer's terminal wouldn't close, so your new instruction couldn't be applied.",
               detail: reason,
               paneId: endpoint.paneId,
             };

@@ -2602,7 +2602,9 @@ test("blocks a saved lease whose checkout moved before the first worker in both 
         const persisted = await readRuntime(home);
         const runtime = persisted.tasks[0];
         expect(task.stage).toBe("blocked");
-        expect(task.blockReason).toContain("saved worktree is not the captured source commit A");
+        expect(task.blockCause?.detail).toContain(
+          "saved worktree is not the captured source commit A",
+        );
         expect(runtime?.jobs).toHaveLength(0);
         expect(runtime?.worktree?.path).toBe(savedLease.path);
         expect(runtime?.worktree?.leaseId).toBe(savedLease.leaseId);
@@ -3257,9 +3259,9 @@ test("failed review results block the task instead of advancing into a review lo
         // A failed result never carries that proof by design (the worker extension omits it), so it
         // surfaces the worker's own reported reason instead of a manufactured staleness error.
         if (status === "completed") {
-          expect(blocked.blockReason).toContain("stale worker instruction");
+          expect(blocked.blockCause?.detail).toContain("stale worker instruction");
         } else {
-          expect(blocked.blockReason).toContain("review output identity mismatch");
+          expect(blocked.blockCause?.detail).toContain("review output identity mismatch");
         }
 
         await service.tick();
