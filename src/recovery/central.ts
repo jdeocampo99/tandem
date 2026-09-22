@@ -19,6 +19,7 @@ import { readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, inspectEndpoint, interruptEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
+  BlockCause,
   Clock,
   CommandRunner,
   Endpoint,
@@ -102,7 +103,7 @@ export type CentralRecoveryDependencies = Readonly<{
   readonly relaunchWorker: RelaunchWorker;
   /** Central recovery's only mutation for the validating re-entry. */
   readonly revalidate: RevalidateWorker;
-  readonly blockTask: (taskId: string, reason: string) => Promise<void>;
+  readonly blockTask: (taskId: string, reason: string, cause?: BlockCause) => Promise<void>;
   /** Clears a proven-stopped owned pane from durable state; reused by the `reviewing` re-entry to
    *  drop a dead reviewer/verifier endpoint before relaunch creates its replacement. */
   readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
@@ -119,6 +120,31 @@ export type CentralRecoveryOutcome = Readonly<{
   readonly action: CentralRecoveryAction;
   readonly reason: string;
 }>;
+
+/** The shared shape every `blockTask` dependency across the codebase already has, widened only to
+ *  accept the optional typed cause `reportBlock` forwards through it. */
+export type BlockTaskEffect = (
+  taskId: string,
+  reason: string,
+  cause?: BlockCause,
+) => Promise<unknown>;
+
+/**
+ * Recovery's single entry point for reporting why a task is blocked. A call site that already holds
+ * a `blockTask`-shaped effect (however it reaches storage) routes its typed cause through here instead
+ * of composing the reason text and cause by hand at the call site. For this PR it behaves exactly
+ * like today's block: the cause is recorded on the task record and the task is blocked, same as
+ * always; nothing here triggers automatic recovery yet. A future PR can change only this function's
+ * body to start routing `lost-resource`/`unusable-result` causes into automatic re-entry without
+ * touching any of its callers.
+ */
+export async function reportBlock(
+  blockTask: BlockTaskEffect,
+  taskId: string,
+  cause: BlockCause,
+): Promise<void> {
+  await blockTask(taskId, cause.summary, cause);
+}
 
 function defaultRecovery(runtime: RuntimeTaskState | undefined): RuntimeRecoveryState {
   return (

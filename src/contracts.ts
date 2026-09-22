@@ -633,6 +633,113 @@ export type RequestDeliveryRecord = {
   readonly notifications: readonly Notification[];
 };
 
+/**
+ * The four top-level groups every block cause falls under, in order of how automatically Tandem may
+ * ever act on them. `lost-resource` and `unusable-result` are the shapes central recovery can one day
+ * resolve on its own; `user-decision` always needs a human choice; `safety-stop` is never automatic.
+ */
+export const BLOCK_CAUSE_GROUPS = [
+  "lost-resource",
+  "unusable-result",
+  "user-decision",
+  "safety-stop",
+] as const;
+
+export type BlockCauseGroup = (typeof BLOCK_CAUSE_GROUPS)[number];
+
+/**
+ * The closed set of specific block causes. Deliberately small and shared across call sites — a new
+ * wording at an existing site should reuse an existing kind rather than mint another; add a kind only
+ * for a genuinely new shape of blocker. `BLOCK_CAUSE_GROUP_BY_KIND` is the single place that ties a
+ * kind back to its group, so the two can never drift apart.
+ */
+export const BLOCK_CAUSE_KINDS = [
+  // lost-resource: auto-recoverable later, nothing about the task's own work is in question.
+  "allocation-failed",
+  "resource-lost",
+  "persistence-failed",
+  "transition-failed",
+  "checkout-unverifiable",
+  // unusable-result: the work that ran left nothing Tandem can build on or trust.
+  "no-clean-checkpoint",
+  "stale-review-state",
+  "review-lens-failed",
+  "worker-failed",
+  // user-decision: durable state is fine, but only a person can choose how to proceed.
+  "fix-rounds-exhausted",
+  "validation-config-refused",
+  "prerequisite-not-met",
+  "explicit-block",
+  // safety-stop: never resolved automatically, whatever the evidence later shows.
+  "ownership-unprovable",
+  "runtime-metadata-missing",
+  "identity-mismatch",
+  "quarantined-unknown-outcome",
+] as const;
+
+export type BlockCauseKind = (typeof BLOCK_CAUSE_KINDS)[number];
+
+/** The one authority for which group a kind belongs to; nothing else re-derives this mapping. */
+export const BLOCK_CAUSE_GROUP_BY_KIND: Readonly<Record<BlockCauseKind, BlockCauseGroup>> = {
+  "allocation-failed": "lost-resource",
+  "resource-lost": "lost-resource",
+  "persistence-failed": "lost-resource",
+  "transition-failed": "lost-resource",
+  "checkout-unverifiable": "lost-resource",
+  "no-clean-checkpoint": "unusable-result",
+  "stale-review-state": "unusable-result",
+  "review-lens-failed": "unusable-result",
+  "worker-failed": "unusable-result",
+  "fix-rounds-exhausted": "user-decision",
+  "validation-config-refused": "user-decision",
+  "prerequisite-not-met": "user-decision",
+  "explicit-block": "user-decision",
+  "ownership-unprovable": "safety-stop",
+  "runtime-metadata-missing": "safety-stop",
+  "identity-mismatch": "safety-stop",
+  "quarantined-unknown-outcome": "safety-stop",
+};
+
+export function isBlockCauseKind(value: unknown): value is BlockCauseKind {
+  return typeof value === "string" && (BLOCK_CAUSE_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * Why a task is blocked, typed rather than free text. `summary` is the plain-English one-liner a
+ * person reads: what happened, no task/job/pane ids in it. `detail` is internal free text — the raw
+ * error, the exact site's wording — kept for diagnosis but never shown as the summary. `jobId`/
+ * `paneId` identify the specific resource behind the block when the site has one, so recovery can key
+ * a question or decision off the exact incident instead of hashing wording that might later change.
+ */
+export type BlockCause = Readonly<{
+  readonly group: BlockCauseGroup;
+  readonly kind: BlockCauseKind;
+  readonly detail: string;
+  readonly summary: string;
+  readonly jobId?: string;
+  readonly paneId?: string;
+}>;
+
+/** Builds a `BlockCause`, filling `group` from `kind` so the two can never disagree. */
+export function blockCause(
+  kind: BlockCauseKind,
+  fields: Readonly<{
+    readonly summary: string;
+    readonly detail: string;
+    readonly jobId?: string;
+    readonly paneId?: string;
+  }>,
+): BlockCause {
+  return {
+    group: BLOCK_CAUSE_GROUP_BY_KIND[kind],
+    kind,
+    summary: fields.summary,
+    detail: fields.detail,
+    ...(fields.jobId === undefined ? {} : { jobId: fields.jobId }),
+    ...(fields.paneId === undefined ? {} : { paneId: fields.paneId }),
+  };
+}
+
 export type TaskRecord = {
   readonly schemaVersion: 1;
   readonly id: string;
@@ -665,6 +772,9 @@ export type TaskRecord = {
   readonly researchContinuation?: ResearchContinuation;
   readonly skill?: SkillInvocation;
   readonly blockReason?: string;
+  /** Typed cause behind `blockReason`, when the site that blocked the task recorded one. Old records
+   *  and sites not yet migrated to a typed cause carry `blockReason` alone. */
+  readonly blockCause?: BlockCause;
   readonly notifications: readonly Notification[];
   readonly communication?: TaskCommunication;
   readonly pullRequest?: PullRequestMetadata;

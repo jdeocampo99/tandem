@@ -2018,6 +2018,32 @@ unprovable pane asks a "retry"/"stop" question through the same plain-English sh
 under its own `VALIDATION_RETRY_QUESTION_ID_PREFIX` so it never misroutes into the implementing/
 scouting restart handler.
 
+### Typed block causes
+
+A blocking site may record a `BlockCause` (`src/contracts.ts`) alongside the task's free-text
+`blockReason`: a closed `kind`, its `group`, an internal `detail` (raw error/site text, for
+diagnosis), and a plain-English `summary` (what happened, no ids) that becomes the block's
+user-facing reason. `reportBlock` (`src/recovery/central.ts`) is the one entry point for reporting a
+cause — it records the cause and blocks exactly like today's free-text block; it does not yet trigger
+automatic recovery. `blockCause` is optional and additive on `TaskRecord`; records written before it
+existed load with no cause. Recovery question/decision identity for a caused block is keyed off
+`(taskId, generation, cause.kind, cause.jobId?)` (`blockCauseEvidenceIdentity` in
+`src/recovery/decision.ts`) instead of hashing the summary text, so rewording a summary can never
+orphan an outstanding approval. `tandem inspect TASK_ID --json` includes `blockCause` when one was
+recorded. Only a few representative sites are migrated so far; most blocking call sites still pass
+free text only, and are migrated incrementally.
+
+The kinds are grouped by how automatically Tandem may ever act on them:
+
+- **lost-resource** (auto-recoverable later): `allocation-failed`, `resource-lost`,
+  `persistence-failed`, `transition-failed`, `checkout-unverifiable`.
+- **unusable-result** (the work left nothing to build on): `no-clean-checkpoint`,
+  `stale-review-state`, `review-lens-failed`, `worker-failed`.
+- **user-decision** (only a person can choose how to proceed): `fix-rounds-exhausted`,
+  `validation-config-refused`, `prerequisite-not-met`, `explicit-block`.
+- **safety-stop** (never automatic): `ownership-unprovable`, `runtime-metadata-missing`,
+  `identity-mismatch`, `quarantined-unknown-outcome`.
+
 ### First-class bounded recovery actions
 
 The advanced CLI exposes the durable recovery workflow without editing SQLite or inspecting

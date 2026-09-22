@@ -213,6 +213,7 @@ export class RecoveryConversationWorkflow {
       ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
       blockers: durableBlockers(task, runtime),
       observedAt: this.#deps.clock(),
+      ...(task.blockCause === undefined ? {} : { cause: task.blockCause }),
     });
     if (evidence === undefined) return { taskId, status: "none", changed: false };
     if (evidence.kind !== "temporary-availability") {

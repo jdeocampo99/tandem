@@ -4,6 +4,7 @@ import { readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, inspectEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
+  BlockCause,
   Clock,
   CommandRunner,
   Endpoint,
@@ -164,6 +165,8 @@ export type RecoveryInspection = Readonly<{
     readonly error?: string;
   }>[];
   readonly pullRequest?: TaskRecord["pullRequest"];
+  /** The typed cause behind the task's current block, when the blocking site recorded one. */
+  readonly blockCause?: BlockCause;
   /** Durable receipts of conversational recovery decisions, oldest first. */
   readonly recoveryDecisions: readonly RecoveryDecisionReceipt[];
   /** Durable bounded availability waits, including the ones already settled. */
@@ -812,6 +815,7 @@ export class RecoveryWorkflow {
       reservations,
       operations,
       ...(task.pullRequest === undefined ? {} : { pullRequest: task.pullRequest }),
+      ...(task.blockCause === undefined ? {} : { blockCause: task.blockCause }),
       recoveryDecisions: runtime?.recoveryDecisions ?? [],
       availabilityWaits: runtime?.recoveryWaits ?? [],
       blocked,

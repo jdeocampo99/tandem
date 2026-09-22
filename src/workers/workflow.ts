@@ -20,6 +20,7 @@ import { EndpointOwnershipError, LeaseSafetyError } from "../adapters/primitives
 import { acquireWorktree } from "../adapters/treehouse.ts";
 import type {
   AgentRole,
+  BlockCause,
   Clock,
   CommandRunner,
   Endpoint,
@@ -31,6 +32,7 @@ import type {
   TaskQuestion,
   TaskRecord,
 } from "../contracts.ts";
+import { reportBlock } from "../recovery/central.ts";
 import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "../recovery/central-review.ts";
 import {
   activeReservations,
@@ -325,7 +327,7 @@ export type WorkerWorkflowDependencies = Readonly<{
   ) => Promise<TaskRecord>;
   readonly transition: (taskId: string, event: TaskEvent) => Promise<TaskRecord>;
   readonly context: () => TaskTransitionContext;
-  readonly blockTask: (taskId: string, reason: string) => Promise<TaskRecord>;
+  readonly blockTask: (taskId: string, reason: string, cause?: BlockCause) => Promise<TaskRecord>;
   readonly publishTaskInbox: (task: TaskRecord) => Promise<void>;
   readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
@@ -720,15 +722,20 @@ export class WorkerWorkflow {
         checkout.checkpoint.unmerged ||
         checkout.checkpoint.head === runtime.worktree?.baseHead
       ) {
+        const cause: BlockCause = {
+          group: "unusable-result",
+          kind: "no-clean-checkpoint",
+          summary:
+            "The implementer stopped without leaving a new, clean, committed checkpoint to build on.",
+          detail:
+            "implementer stopped without a new clean committed checkpoint; worktree is preserved",
+          jobId: job.id,
+        };
         await this.consumeJob(
           task.id,
           job.id,
           claim,
-          {
-            type: "block",
-            reason:
-              "implementer stopped without a new clean committed checkpoint; worktree is preserved",
-          },
+          { type: "block", reason: cause.summary, cause },
           instructionOptions(result.instructionRevision),
         );
         return;
@@ -1734,7 +1741,13 @@ export class WorkerWorkflow {
       return;
     }
     if (!recoveryFix && task.reviewRound >= task.policy.config.maxFixRounds) {
-      await this.#deps.blockTask(task.id, describeFixRoundExhaustion(task));
+      const detail = describeFixRoundExhaustion(task);
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "user-decision",
+        kind: "fix-rounds-exhausted",
+        summary: `The fix-round budget for this review cycle (${String(task.policy.config.maxFixRounds)}) is spent.`,
+        detail,
+      });
       return;
     }
     const reservation = reserved ?? (await this.reserveTask(task.id, "implementer"));

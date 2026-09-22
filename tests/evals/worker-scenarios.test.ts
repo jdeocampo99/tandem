@@ -111,6 +111,35 @@ test("a timed-out worker result blocks the task and preserves its unlanded workt
   });
 });
 
+test("an implementer that reports done without a new clean checkpoint blocks with a typed unusable-result cause", async () => {
+  await withScenario({}, async (world) => {
+    const { service, resultPath } = await seedRunningImplementation(world);
+    // The checkout is left exactly where seedRunningImplementation put it (unchanged head, clean),
+    // so it still matches the worktree's own base head: nothing was committed.
+    await persistWorkerResult(resultPath, {
+      id: "job-1",
+      taskId: SCENARIO_TASK_ID,
+      generation: 0,
+      role: "implementer",
+      status: "completed",
+      text: "Done.",
+      finishedAt: SCENARIO_NOW,
+    });
+
+    await service.tick();
+
+    const task = await service.get(SCENARIO_TASK_ID);
+    expect(task.stage).toBe("blocked");
+    expect(task.blockCause).toMatchObject({
+      group: "unusable-result",
+      kind: "no-clean-checkpoint",
+      jobId: "job-1",
+    });
+    expect(task.blockReason).toBe(task.blockCause?.summary);
+    await service.shutdown();
+  });
+});
+
 test("a stale worker result is rejected without advancing the task or releasing its worktree", async () => {
   await withScenario({}, async (world) => {
     const { service, resultPath } = await seedRunningImplementation(world);
