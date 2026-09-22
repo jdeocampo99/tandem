@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { runCommand } from "../../src/adapters/commands.ts";
 import type { OmpModelRecord } from "../../src/adapters/omp.ts";
+import { onboardRepo } from "../../src/config/repositories.ts";
 import type { CommandRequest, CommandResult, ModelSpec, RepoPolicy } from "../../src/contracts.ts";
 import { runTerminal } from "../../src/main.ts";
 import type { TandemService } from "../../src/service/controller.ts";
@@ -1337,5 +1338,39 @@ test("configure --reset and reset inside Herdr reject before any mutation", asyn
   expect(restartResult.status).toBe("error");
   expect(restartResult.error?.message).toContain("tandem --restart cannot run from inside Herdr");
   expect(invocations).toHaveLength(0);
+  await rm(join(repo, ".."), { recursive: true, force: true });
+});
+
+test("config opens the project's settings in $EDITOR and re-checks them after", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const home = join(repo, "..", "home");
+  const editorCalls: (readonly string[])[] = [];
+  const options = {
+    cwd: repo,
+    run: runCommand,
+    processEnvironment: { EDITOR: "vi" },
+    runInteractive: async (request: { readonly argv: readonly string[] }) => {
+      editorCalls.push(request.argv);
+      return 0;
+    },
+    stdout: () => undefined,
+    stderr: () => undefined,
+  };
+
+  const missing = await runTerminal(["config", "--home", home], options);
+  expect(missing.exitCode).toBe(1);
+  expect(missing.error?.message).toContain("no Tandem settings yet");
+  expect(editorCalls).toHaveLength(0);
+
+  const { configPath } = await onboardRepo({ repoPath: repo, home, write: true });
+  const result = await runTerminal(["config", "--home", home], options);
+  expect(result.status).toBe("configured");
+  expect(editorCalls).toEqual([["/bin/sh", "-c", 'vi "$1"', "sh", configPath]]);
+
+  await writeFile(configPath, "{ not json", "utf8");
+  const broken = await runTerminal(["config", "--home", home], options);
+  expect(broken.exitCode).toBe(1);
+  expect(broken.error?.message).toContain("the settings file has a problem");
   await rm(join(repo, ".."), { recursive: true, force: true });
 });

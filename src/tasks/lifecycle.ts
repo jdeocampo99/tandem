@@ -873,6 +873,11 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
         surfaces: [...command.surfaces],
         timeoutMs: command.timeoutMs,
       })),
+      setupCommands: policy.config.setupCommands.map((command) => ({
+        name: command.name,
+        argv: [...command.argv],
+        timeoutMs: command.timeoutMs,
+      })),
       maxWorkers: policy.config.maxWorkers,
       maxFixRounds: policy.config.maxFixRounds,
       reviewLevels: { ...policy.config.reviewLevels },

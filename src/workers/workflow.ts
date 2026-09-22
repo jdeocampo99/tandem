@@ -3395,6 +3395,9 @@ export class WorkerWorkflow {
       ...(userCheckDirectory === undefined
         ? {}
         : { userChecks: { directory: userCheckDirectory, criteria: userCheckCriteria } }),
+      ...(role === "implementer" && task.policy.config.setupCommands.length > 0
+        ? { setup: task.policy.config.setupCommands }
+        : {}),
     };
     const specWritten = await this.withOperationEffect(
       task.id,

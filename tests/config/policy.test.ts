@@ -433,3 +433,51 @@ test("saved provider enablement is exposed through onboarding but never becomes 
     expect(resolved.config.models).toEqual(defaultPolicy().models);
   });
 });
+
+test("setupCommands parse like validation commands but take no surfaces", () => {
+  const policy = parsePolicy({
+    setupCommands: [{ name: "install", argv: ["bun", "install"], timeoutMs: 1000 }],
+  });
+  expect(policy.setupCommands).toEqual([
+    { name: "install", argv: ["bun", "install"], timeoutMs: 1000 },
+  ]);
+  expect(defaultPolicy().setupCommands).toEqual([]);
+  expect(() =>
+    parsePolicy({
+      setupCommands: [{ name: "install", argv: ["bun"], surfaces: ["*"], timeoutMs: 1 }],
+    }),
+  ).toThrow(TypeError);
+  expect(() =>
+    parsePolicy({
+      setupCommands: [
+        { name: "a", argv: ["x"], timeoutMs: 1 },
+        { name: "a", argv: ["y"], timeoutMs: 1 },
+      ],
+    }),
+  ).toThrow("duplicate command name");
+});
+
+test("onboardRepo proposes a frozen install from the lockfile and saves it", async () => {
+  await withFixture("lockfile-repo", async ({ repo, home }) => {
+    await writeFile(join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+
+    const proposal = await onboardRepo({ repoPath: repo, home });
+    expect(proposal.approvalRequired).toBe(true);
+    expect(proposal.setupCommands.map((entry) => entry.argv)).toEqual([
+      ["pnpm", "install", "--frozen-lockfile"],
+    ]);
+
+    await onboardRepo({ repoPath: repo, home, write: true });
+    const resolved = await resolveRepoPolicy({ repoPath: repo, home });
+    expect(resolved.config.setupCommands.map((entry) => entry.argv)).toEqual([
+      ["pnpm", "install", "--frozen-lockfile"],
+    ]);
+  });
+});
+
+test("onboardRepo proposes no setup without a lockfile", async () => {
+  await withFixture("no-lockfile-repo", async ({ repo, home }) => {
+    const proposal = await onboardRepo({ repoPath: repo, home });
+    expect(proposal.setupCommands).toEqual([]);
+  });
+});

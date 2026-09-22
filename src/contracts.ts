@@ -139,6 +139,13 @@ export type ValidationCommand = {
   readonly timeoutMs: number;
 };
 
+/** A command that prepares a fresh worktree (e.g. installs dependencies) before anything runs in it. */
+export type SetupCommand = {
+  readonly name: string;
+  readonly argv: readonly string[];
+  readonly timeoutMs: number;
+};
+
 /** How much review scrutiny a change is classified for, ordered from least to most. */
 export const REVIEW_LEVEL_ORDER = ["light", "standard", "deep"] as const;
 
@@ -206,6 +213,7 @@ export type RepoPolicy = {
   readonly instructions: InstructionChannels;
   readonly instructionFiles: InstructionChannels;
   readonly validationCommands: readonly ValidationCommand[];
+  readonly setupCommands: readonly SetupCommand[];
   readonly maxWorkers: number;
   readonly maxFixRounds: number;
   readonly reviewLevels: ReviewLevelPolicy;

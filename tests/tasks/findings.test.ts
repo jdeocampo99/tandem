@@ -32,6 +32,7 @@ const policy: ResolvedPolicy = {
     validationCommands: [
       { name: "check", argv: ["bun", "run", "check"], surfaces: ["service"], timeoutMs: 1_000 },
     ],
+    setupCommands: [],
     maxWorkers: 3,
     maxFixRounds: 2,
     reviewLevels: {

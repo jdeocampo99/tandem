@@ -51,6 +51,7 @@ const policy: ResolvedPolicy = {
     validationCommands: [
       { name: "check", argv: ["bun", "run", "check"], surfaces: ["store"], timeoutMs: 10_000 },
     ],
+    setupCommands: [],
     maxWorkers: 3,
     maxFixRounds: 1,
     reviewLevels: {
@@ -977,6 +978,21 @@ test("a record written before budgets existed loads with no cap rather than an i
       capMicros: "unset",
       operationEstimateMicros: "unset",
     });
+  });
+});
+
+test("a record written before setup commands existed loads with none", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-setup-commands" });
+    rewritePayload(directory, created.id, (payload) => {
+      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
+      delete policyValue.config?.setupCommands;
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("the upgraded record did not reload");
+    expect(reloaded.policy.config.setupCommands).toEqual([]);
   });
 });
 

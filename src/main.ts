@@ -17,7 +17,7 @@ import {
   type TerminalRunResult,
 } from "./terminal/arguments.ts";
 import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
-import type { RunInteractive } from "./terminal/cli-process.ts";
+import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
 import {
   hasActiveHerdrContext,
@@ -34,6 +34,7 @@ import {
   prepareProjects,
   readProjectStates,
   runConfigure,
+  runOpenConfig,
 } from "./terminal/preparation.ts";
 import { createReadlineResources, type ReadlineResources, writeText } from "./terminal/process.ts";
 import {
@@ -43,7 +44,7 @@ import {
   selectProjects,
 } from "./terminal/projects.ts";
 
-const HELP_TEXT = `Tandem\n\nUsage:\n  tandem [PATH ...]              Open or reconnect project coordinators\n  tandem logs [--home PATH] [--json]\n                                 Show recent prompt-routing events\n  tandem migrate-state [--home PATH] [--yes] [--json]\n                                 Inspect legacy JSON or apply offline SQLite migration\n  tandem reconcile-resources [--home PATH] [--yes] [--discard] [--json]\n                                 Inspect stale resources; apply with --yes; discard cancelled implementation worktrees with --discard\n  tandem restart [PATH ...]      Replace owned coordinators without cancelling work\n  tandem --restart [PATH ...]    Compatibility spelling for restart\n  tandem --reset [PATH ...]      Stop idle Tandem coordinators, then reopen them\n  tandem --reset --force [PATH ...]\n                                 Explicitly discard selected idle coordinator resources\n  tandem configure [PATH]        Inspect or save repository settings\n  tandem --help                  Show this help\n`;
+const HELP_TEXT = `Tandem\n\nUsage:\n  tandem [PATH ...]              Open or reconnect project coordinators\n  tandem logs [--home PATH] [--json]\n                                 Show recent prompt-routing events\n  tandem migrate-state [--home PATH] [--yes] [--json]\n                                 Inspect legacy JSON or apply offline SQLite migration\n  tandem reconcile-resources [--home PATH] [--yes] [--discard] [--json]\n                                 Inspect stale resources; apply with --yes; discard cancelled implementation worktrees with --discard\n  tandem restart [PATH ...]      Replace owned coordinators without cancelling work\n  tandem --restart [PATH ...]    Compatibility spelling for restart\n  tandem --reset [PATH ...]      Stop idle Tandem coordinators, then reopen them\n  tandem --reset --force [PATH ...]\n                                 Explicitly discard selected idle coordinator resources\n  tandem configure [PATH]        Inspect or save repository settings\n  tandem config [PATH]           Open the project's settings file in $VISUAL/$EDITOR\n  tandem --help                  Show this help\n`;
 
 export type TerminalMainDependencies = Readonly<{
   readonly cwd?: string;
@@ -254,6 +255,19 @@ async function runProjectFlow({
     return { exitCode: 0, status: "cancelled" };
   }
   if (roots.length === 0) throw new Error("no projects were selected");
+  if (invocation.command === "config") {
+    const [root] = roots;
+    if (root === undefined || roots.length !== 1) {
+      throw new Error("tandem config needs exactly one project");
+    }
+    closeInteraction();
+    return await runOpenConfig(
+      root,
+      environment,
+      dependencies.runInteractive ?? defaultRunInteractive,
+      stdout,
+    );
+  }
   if (invocation.command === "configure" && roots.length !== 1) {
     throw new Error("tandem configure needs exactly one project to validate the OMP catalogue");
   }

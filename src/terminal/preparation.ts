@@ -1,3 +1,5 @@
+import { access } from "node:fs/promises";
+import { centralConfigPath, resolveRepoPolicy } from "../config/repositories.ts";
 import type { CommandRunner, RepoPolicy } from "../contracts.ts";
 import {
   createTandemService,
@@ -5,6 +7,7 @@ import {
   type TandemServiceOptions,
 } from "../service/controller.ts";
 import type { TerminalRunResult } from "./arguments.ts";
+import type { RunInteractive } from "./cli-process.ts";
 import type { TerminalEnvironment } from "./environment.ts";
 import {
   askProjectSettingsApproval,
@@ -113,6 +116,49 @@ export async function runConfigure(
     projects: roots,
     sessionId: environment.sessionId,
   };
+}
+
+/**
+ * Opens a project's central settings file in $VISUAL/$EDITOR, then re-reads it so a typo is
+ * reported now rather than at the next launch. Without an editor it falls back to macOS `open -t`,
+ * which returns before the file is saved, so there is nothing to re-read.
+ */
+export async function runOpenConfig(
+  root: string,
+  environment: TerminalEnvironment,
+  runInteractive: RunInteractive,
+  output: (text: string) => void,
+): Promise<TerminalRunResult> {
+  const configPath = await centralConfigPath(root, environment.home);
+  try {
+    await access(configPath);
+  } catch {
+    throw new Error(
+      `${root} has no Tandem settings yet; run \`tandem ${root}\` to set it up first`,
+    );
+  }
+  output(`Tandem settings for ${root}: ${configPath}\n`);
+  const editor = (environment.source.VISUAL ?? environment.source.EDITOR ?? "").trim();
+  if (editor.length === 0) {
+    await runInteractive({ argv: ["open", "-t", configPath], cwd: root });
+    return { exitCode: 0, status: "configured", projects: [root] };
+  }
+  // The editor value may carry its own arguments (e.g. "code --wait"), so the shell splits it.
+  const exit = await runInteractive({
+    argv: ["/bin/sh", "-c", `${editor} "$1"`, "sh", configPath],
+    cwd: root,
+  });
+  if (exit !== 0) throw new Error(`editor exited with code ${exit}`);
+  try {
+    await resolveRepoPolicy({ repoPath: root, home: environment.home });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`the settings file has a problem: ${message}. Run \`tandem config\` to fix it`);
+  }
+  output(
+    "Settings are valid. New tasks use them; running tasks keep the settings they started with.\n",
+  );
+  return { exitCode: 0, status: "configured", projects: [root] };
 }
 
 export async function prepareProjects(

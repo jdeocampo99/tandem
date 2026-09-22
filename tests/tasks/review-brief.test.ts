@@ -37,6 +37,7 @@ const policy: ResolvedPolicy = {
       { name: "check", argv: ["bun", "run", "check"], surfaces: ["service"], timeoutMs: 1_000 },
       { name: "test", argv: ["bun", "test"], surfaces: ["service"], timeoutMs: 1_000 },
     ],
+    setupCommands: [],
     maxWorkers: 3,
     maxFixRounds: 3,
     reviewLevels: {

@@ -468,6 +468,41 @@ test("runner records setup and nonzero OMP failures without a console transport"
   }
 });
 
+test("implementer setup runs in the worktree before OMP and a failure stops the launch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-worker-setup-"));
+  try {
+    const setup = [{ name: "install", argv: ["bun", "install"], timeoutMs: 5_000 }];
+    const job = {
+      ...makeJob(root),
+      setup,
+      execution: {
+        schemaVersion: 1 as const,
+        home: root,
+        operationId: "operation-1",
+        fencingRevision: 1,
+        claimOwner: "test-owner",
+      },
+    };
+    const jobPath = join(root, "job.json");
+    await writeFile(jobPath, `${JSON.stringify(job)}\n`, { mode: 0o600 });
+    const calls: { argv: readonly string[]; cwd: string; timeoutMs?: number }[] = [];
+    const result = await runWorkerJob(jobPath, {
+      run: async (request) => {
+        calls.push(request);
+        return 1;
+      },
+      now: () => "2030-01-02T03:04:05.000Z",
+      executionGate: async () => ({ admitted: true }),
+    });
+    expect(calls).toEqual([{ argv: ["bun", "install"], cwd: root, timeoutMs: 5_000 }]);
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain('worktree setup command "install"');
+    expect(() => parseWorkerJob({ ...makeJob(root, "scout"), setup })).toThrow(TypeError);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("requires absolute paths and strict result fields at the wire boundary", () => {
   expect(() =>
     parseWorkerJob({
