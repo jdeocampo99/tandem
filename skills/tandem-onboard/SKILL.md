@@ -162,7 +162,7 @@ launch, not as a hot swap of an already-running OMP conversation.
 
 For explicit paths, expand `~`, resolve relative paths against the current workspace, and obtain
 the canonical Git top-level root. For a bare launch, use only valid canonical `repoPath` values from
-saved central registrations under `<home>/repositories/*/config.json`; these are saved projects, not
+saved central registrations under `<home>/repositories/*/settings.toml` (or legacy `config.json`); these are saved projects, not
 arbitrary disk repositories. For names, consider supplied paths, workspace roots and additional
 directories, workspace configuration, known project indexes, and known central registrations.
 Do not crawl the home directory, clone, auto-register, or use Tandem's installation as a project

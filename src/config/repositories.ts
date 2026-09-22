@@ -10,12 +10,7 @@ import type {
   ValidationCommand,
 } from "../contracts.ts";
 import { type ModelSettings, readModelSettingsAt } from "./models.ts";
-import {
-  copyPolicy,
-  DEFAULT_COMMAND_TIMEOUT_MS,
-  parsePolicy,
-  parsePolicyOverride,
-} from "./policy.ts";
+import { copyPolicy, defaultPolicy, parsePolicy, parsePolicyOverride } from "./policy.ts";
 import {
   assertContainedReference,
   assertPhysicalRepositoryReference,
@@ -40,7 +35,9 @@ import {
 
 const ROOT_GUIDANCE_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
 const CENTRAL_REPOSITORY_DIRECTORY = "repositories";
-const CENTRAL_CONFIG_FILE = "config.json";
+const CENTRAL_CONFIG_FILE = "settings.toml";
+/** The JSON envelope projects were saved in before settings.toml; still read, never written. */
+const LEGACY_CONFIG_FILE = "config.json";
 const CENTRAL_SCHEMA_VERSION = 1;
 
 /** Reads an absolute Tandem or target-repository file; return undefined only when the optional file is absent. */
@@ -88,6 +85,7 @@ export type OnboardRepoResult = Readonly<{
 type CentralPaths = Readonly<{
   home: string;
   config: string;
+  legacy: string;
 }>;
 
 function applySavedModelSettings(base: RepoPolicy, settings: ModelSettings): RepoPolicy {
@@ -114,7 +112,24 @@ function centralPaths(root: string, home: ResolvedHome): CentralPaths {
   if (isContainedPath(root, central) || isContainedPath(root, configuredCentral)) {
     throw new Error("Tandem home would place central policy inside the target repository");
   }
-  return { home: home.canonical, config: central };
+  return {
+    home: home.canonical,
+    config: central,
+    legacy: path.join(path.dirname(central), LEGACY_CONFIG_FILE),
+  };
+}
+
+/** The settings file this repository actually has, if any; both formats at once is refused. */
+async function existingCentralFile(paths: CentralPaths): Promise<string | undefined> {
+  const toml = await inspectPolicyPath(paths);
+  const legacy = await inspectPolicyPath({ home: paths.home, config: paths.legacy });
+  if (toml.exists && legacy.exists) {
+    throw new Error(
+      `${path.dirname(paths.config)} has both ${CENTRAL_CONFIG_FILE} and ${LEGACY_CONFIG_FILE}; keep one`,
+    );
+  }
+  if (toml.exists) return paths.config;
+  return legacy.exists ? paths.legacy : undefined;
 }
 
 async function readDefaultRepositoryFile(
@@ -158,7 +173,26 @@ const CENTRAL_ENVELOPE_KEYS: Readonly<Record<string, true>> = {
   policy: true,
 };
 
+/** settings.toml is the policy itself plus the `repoPath` it belongs to. */
+function parseSettingsToml(text: string, source: string, root: string): unknown {
+  let parsed: unknown;
+  try {
+    parsed = Bun.TOML.parse(text);
+  } catch (error) {
+    throw new TypeError(
+      `${source} is not valid TOML: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!isRecord(parsed)) throw new TypeError(`${source} must be a TOML table`);
+  const { repoPath, ...policy } = parsed;
+  if (repoPath !== root) {
+    throw new TypeError(`${source} repoPath must be ${JSON.stringify(root)}`);
+  }
+  return policy;
+}
+
 function parseCentralPolicy(text: string, source: string, root: string): unknown {
+  if (source.endsWith(".toml")) return parseSettingsToml(text, source, root);
   const envelope = parseJson(text, source);
   if (!isRecord(envelope)) {
     throw new TypeError(`${source} must be an object`);
@@ -185,17 +219,10 @@ async function readCentralPolicy(
   root: string,
   readText: PolicyTextReader | undefined,
 ): Promise<unknown | undefined> {
-  const inspection = await inspectPolicyPath(paths);
-  let text: string | undefined;
-  if (readText === undefined) {
-    text = inspection.exists ? await readFile(paths.config, "utf8") : undefined;
-  } else {
-    text = await readText(paths.config);
-    if (text === undefined && inspection.exists) {
-      text = await readFile(paths.config, "utf8");
-    }
-  }
-  return text === undefined ? undefined : parseCentralPolicy(text, paths.config, root);
+  const file = await existingCentralFile(paths);
+  if (file === undefined) return undefined;
+  const text = (await readText?.(file)) ?? (await readFile(file, "utf8"));
+  return parseCentralPolicy(text, file, root);
 }
 
 async function writeCentralConfig(
@@ -203,8 +230,8 @@ async function writeCentralConfig(
   text: string,
   writeText: PolicyTextWriter | undefined,
 ): Promise<void> {
-  const before = await inspectPolicyPath(paths);
-  if (before.exists) throw centralOverwriteError(paths.config);
+  const before = await existingCentralFile(paths);
+  if (before !== undefined) throw centralOverwriteError(before);
   if (writeText !== undefined) {
     await writeText(paths.config, text);
     return;
@@ -217,8 +244,8 @@ async function writeCentralConfig(
   );
   const keyDirectory = path.dirname(paths.config);
   await ensureCentralDirectory(keyDirectory, "central policy repository");
-  const after = await inspectPolicyPath(paths);
-  if (after.exists) throw centralOverwriteError(paths.config);
+  const after = await existingCentralFile(paths);
+  if (after !== undefined) throw centralOverwriteError(after);
   try {
     await writeFile(paths.config, text, { encoding: "utf8", flag: "wx", mode: 0o600 });
   } catch (error) {
@@ -321,27 +348,16 @@ export async function resolveRepoPolicy(options: PolicyResolutionOptions): Promi
   return { config: copyPolicy(config), guidance };
 }
 
-function commandSurfaceForScript(scriptName: string): readonly string[] {
-  switch (scriptName) {
-    case "check":
-    case "typecheck":
-      return ["typecheck"];
-    case "lint":
-      return ["lint"];
-    case "test":
-      return ["test"];
-    default:
-      return [];
-  }
-}
-
 type ValidationProposal = Readonly<{
-  commands: readonly ValidationCommand[];
+  commands: readonly string[];
   unresolved: readonly string[];
   approvalRequired: boolean;
 }>;
 
-function proposeValidationCommands(packageText: string | undefined): ValidationProposal {
+function proposeValidationCommands(
+  packageText: string | undefined,
+  runner: string,
+): ValidationProposal {
   if (packageText === undefined) {
     return {
       commands: [],
@@ -388,15 +404,10 @@ function proposeValidationCommands(packageText: string | undefined): ValidationP
   const scriptNames = hasCiLocal
     ? (["ci:local"] as const)
     : (["check", "typecheck", "lint", "test"] as const);
-  const commands: ValidationCommand[] = [];
+  const commands: string[] = [];
   for (const scriptName of scriptNames) {
     if (typeof scripts[scriptName] === "string" && scripts[scriptName].trim().length > 0) {
-      commands.push({
-        name: `package:${scriptName}`,
-        argv: ["bun", "run", scriptName],
-        surfaces: commandSurfaceForScript(scriptName),
-        timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
-      });
+      commands.push(`${runner} run ${scriptName}`);
     }
   }
 
@@ -413,44 +424,27 @@ function proposeValidationCommands(packageText: string | undefined): ValidationP
   };
 }
 
-/** Lockfile → the install that reproduces it exactly; the first lockfile found wins. */
-const LOCKFILE_INSTALLS: readonly (readonly [string, string])[] = [
-  ["bun.lock", "bun install --frozen-lockfile"],
-  ["bun.lockb", "bun install --frozen-lockfile"],
-  ["pnpm-lock.yaml", "pnpm install --frozen-lockfile"],
-  ["yarn.lock", "yarn install --immutable"],
-  ["package-lock.json", "npm ci"],
-  ["uv.lock", "uv sync --frozen"],
+type PackageManager = Readonly<{ install: string; runner: string }>;
+
+/** Lockfile → the install that reproduces it exactly and the tool that runs package scripts. */
+const LOCKFILE_PACKAGE_MANAGERS: readonly (readonly [string, PackageManager])[] = [
+  ["bun.lock", { install: "bun install --frozen-lockfile", runner: "bun" }],
+  ["bun.lockb", { install: "bun install --frozen-lockfile", runner: "bun" }],
+  ["pnpm-lock.yaml", { install: "pnpm install --frozen-lockfile", runner: "pnpm" }],
+  ["yarn.lock", { install: "yarn install --immutable", runner: "yarn" }],
+  ["package-lock.json", { install: "npm ci", runner: "npm" }],
+  ["uv.lock", { install: "uv sync --frozen", runner: "bun" }],
 ];
 
-/**
- * Proposes one dependency install for fresh worktrees from the checkout's lockfile, if any, as the
- * plain-string form so the saved settings file stays easy to read and edit.
- */
-async function proposeSetupCommands(
+/** The first lockfile found decides the package manager; none means no install and bun scripts. */
+async function detectPackageManager(
   root: string,
   readText: PolicyTextReader | undefined,
-): Promise<readonly string[]> {
-  for (const [lockfile, command] of LOCKFILE_INSTALLS) {
-    if ((await readRepositoryFile(root, lockfile, readText, false)) !== undefined) return [command];
+): Promise<PackageManager | undefined> {
+  for (const [lockfile, manager] of LOCKFILE_PACKAGE_MANAGERS) {
+    if ((await readRepositoryFile(root, lockfile, readText, false)) !== undefined) return manager;
   }
-  return [];
-}
-
-function appendValidationCommands(
-  base: RepoPolicy,
-  commands: readonly ValidationCommand[],
-): RepoPolicy {
-  if (commands.length === 0) {
-    return copyPolicy(base);
-  }
-  const commandInput = commands.map((command) => ({
-    name: command.name,
-    argv: [...command.argv],
-    surfaces: [...command.surfaces],
-    timeoutMs: command.timeoutMs,
-  }));
-  return parsePolicyOverride({ validationCommands: commandInput }, base);
+  return undefined;
 }
 
 function onboardingUnresolved(
@@ -464,26 +458,70 @@ function onboardingUnresolved(
   return deduplicateStrings(unresolved);
 }
 
+function tomlList(values: readonly string[]): string {
+  return `[${values.map((value) => JSON.stringify(value)).join(", ")}]`;
+}
+
+/**
+ * Writes settings.toml with the proposed commands filled in and every other setting present but
+ * commented out, each with what it does and an example, so the file documents itself.
+ */
 function serializeCentralConfig(
   root: string,
-  commands: readonly ValidationCommand[],
+  validationCommands: readonly string[],
   setupCommands: readonly string[],
 ): string {
-  return `${JSON.stringify(
-    {
-      schemaVersion: CENTRAL_SCHEMA_VERSION,
-      repoPath: root,
-      policy: { version: 1, validationCommands: commands, setupCommands },
-    },
-    null,
-    2,
-  )}
+  const defaults = defaultPolicy();
+  const setting = (values: readonly string[], key: string, example: string): string =>
+    values.length > 0 ? `${key} = ${tomlList(values)}` : `# ${key} = ${example}`;
+  return `# Tandem settings for this project. Edit with \`tandem config\`.
+# Uncomment a line (remove the leading "#") to turn a setting on.
+# Changes apply to tasks started afterwards; running tasks keep the settings they began with.
+
+# The repository these settings belong to. Don't change this.
+repoPath = ${JSON.stringify(root)}
+
+# Commands that prepare a fresh working copy before a coding agent starts, like installing
+# dependencies. They run every time an agent starts, so they should be safe to repeat.
+${setting(setupCommands, "setupCommands", '["npm ci", "npx prisma generate"]')}
+
+# Checks every change must pass before Tandem accepts it. Each one runs in the project folder.
+${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"]')}
+
+# How many tasks may run at the same time.
+# maxWorkers = ${defaults.maxWorkers}
+
+# How many times reviewers may send a change back for fixes before Tandem asks you.
+# maxFixRounds = ${defaults.maxFixRounds}
+
+# Extra instructions for agents at each stage. Keep this section below the settings above.
+# [instructions]
+# implementation = ["Keep changes small and match the surrounding code."]
+# validation = []
+# review = ["Flag any change to the public API."]
+
+# Files in this repository whose contents are given to agents as instructions, by stage.
+# [instructionFiles]
+# implementation = ["docs/CONTRIBUTING.md"]
+# validation = []
+# review = []
+
+# A spending cap per request, in millionths of a US dollar (5000000 = $5.00).
+# [requestBudget]
+# capMicros = 5000000
+
+# Use a different model for one role in this project only. Roles: coordinator, scout,
+# implementer, reviewer, verifier, presentation. Other roles keep your saved choices.
+# [models.implementer]
+# model = "provider/model"
+# thinking = "high"
 `;
 }
 
 /** The absolute path of a repository's central settings file, whether or not it exists yet. */
 export async function centralConfigPath(repoPath: string, home: string): Promise<string> {
-  return centralPaths(await repositoryRoot(repoPath), await configuredHome(home)).config;
+  const paths = centralPaths(await repositoryRoot(repoPath), await configuredHome(home));
+  return (await existingCentralFile(paths)) ?? paths.config;
 }
 
 /** Discovers package scripts from the requested checkout without executing them; write=true creates only a missing central policy. */
@@ -502,8 +540,9 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
   const global = parsePolicyOverride(globalInput, savedBase);
   const currentPolicy =
     policyText === undefined ? copyPolicy(global) : parsePolicyOverride(policyText, global);
+  const configPath = (await existingCentralFile(paths)) ?? paths.config;
   if (existingConfig && options.write === true) {
-    throw centralOverwriteError(paths.config);
+    throw centralOverwriteError(configPath);
   }
 
   const packageText = await readRepositoryFile(
@@ -512,11 +551,12 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     options.readText,
     false,
   );
-  const proposal = proposeValidationCommands(packageText);
-  const setupCommands = await proposeSetupCommands(checkoutRoot, options.readText);
+  const manager = await detectPackageManager(checkoutRoot, options.readText);
+  const proposal = proposeValidationCommands(packageText, manager?.runner ?? "bun");
+  const setupCommands = manager === undefined ? [] : [manager.install];
   const proposedPolicy = existingConfig
     ? copyPolicy(currentPolicy)
-    : parsePolicyOverride({ setupCommands }, appendValidationCommands(global, proposal.commands));
+    : parsePolicyOverride({ setupCommands, validationCommands: proposal.commands }, global);
   const unresolved = onboardingUnresolved(proposal, proposedPolicy);
 
   let written = false;
@@ -531,7 +571,7 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
 
   return {
     repoPath: root,
-    configPath: paths.config,
+    configPath,
     existingConfig,
     written,
     approvalRequired: !written && (proposal.approvalRequired || setupCommands.length > 0),

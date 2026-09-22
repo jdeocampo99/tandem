@@ -12,6 +12,7 @@ import type { TandemService } from "../../src/service/controller.ts";
 import { parseTerminalArgs } from "../../src/terminal/arguments.ts";
 import type { CliApplication } from "../../src/terminal/cli-application.ts";
 import type { CliInvocation } from "../../src/terminal/cli-arguments.ts";
+import { readRegisteredProjects } from "../../src/terminal/projects.ts";
 
 const roles = [
   "coordinator",
@@ -1373,4 +1374,17 @@ test("config opens the project's settings in $EDITOR and re-checks them after", 
   expect(broken.exitCode).toBe(1);
   expect(broken.error?.message).toContain("the settings file has a problem");
   await rm(join(repo, ".."), { recursive: true, force: true });
+});
+
+test("saved projects are found from settings.toml as well as legacy config.json", async () => {
+  const projects = await gitProjects(2);
+  const [tomlProject, legacyProject] = projects;
+  if (tomlProject === undefined || legacyProject === undefined) {
+    throw new Error("test projects were not created");
+  }
+  const home = join(tomlProject, "..", "home");
+  await registerProjects(home, [legacyProject]);
+  await onboardRepo({ repoPath: tomlProject, home, write: true });
+  expect(await readRegisteredProjects(home)).toEqual([...projects].sort());
+  await rm(join(tomlProject, ".."), { recursive: true, force: true });
 });
