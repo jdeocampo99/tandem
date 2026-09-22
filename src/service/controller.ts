@@ -782,6 +782,8 @@ class TandemController {
       relaunchWorker: (task, extraInstructions) =>
         this.#worker.relaunchWorker(task, extraInstructions),
       blockTask: (taskId, reason) => this.blockTask(taskId, reason).then(() => undefined),
+      removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
+      relaunchReviewer: (task) => this.#worker.advanceReview(task),
     });
   }
 
@@ -2022,9 +2024,16 @@ class TandemController {
       case "validating":
         await this.#worker.startValidation(task);
         return;
-      case "reviewing":
+      case "reviewing": {
+        // A resumed reviewing task can carry a quarantined (proven-unowned) reviewer/verifier job
+        // left over from before it was blocked. Central recovery owns the stop/save/re-entry
+        // decision for that case, exactly as it does for implementing/scouting; "skipped" means
+        // nothing needs recovery, so review advances normally.
+        const recovered = await this.#recoveryCentral.recoverStuckWorker(task);
+        if (recovered.action !== "skipped") return;
         await this.#worker.advanceReview(task);
         return;
+      }
       case "scouting":
       case "implementing": {
         if (runtime.endpointLaunch !== undefined) return;

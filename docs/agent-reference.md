@@ -1968,7 +1968,7 @@ from its current stage. It is always the same three moves:
    | `implementing` | Relaunch: new durable operation, a fresh pane only if one is not already owned, a new worker started through the normal launch path | Yes |
    | `scouting` | The identical relaunch path as `implementing` | Yes |
    | `validating` | — | Not yet |
-   | `reviewing` | — | Not yet |
+   | `reviewing` | Relaunch only the one reviewer/verifier lens a quarantined (proven-unowned) job left unresolved, at the exact reviewed HEAD, through `WorkerWorkflow.advanceReview`'s own next-lens launch path | Yes |
    | `awaiting-fixes` | — | Not yet |
 
    Relaunch (`WorkerWorkflow.relaunchWorker`) never mutates the dead job or its result; it admits a
@@ -1976,6 +1976,22 @@ from its current stage. It is always the same three moves:
    receipt, instruction revision, and prompt are built exactly as for any other launch. The worker is
    told a prior attempt may have left partial edits and to inspect `git status`/`git diff` before
    continuing.
+
+   `reviewing` re-entry (`CentralRecoveryWorkflow.recoverStuckReviewer`, called from the controller
+   before `advanceReview`) is scoped to exactly the durable-quarantine shape: a reviewer/verifier job
+   whose most recent attempt for its lens failed with the pane or its result proven to have
+   disappeared (`failJob(..., quarantine: true)` in `workflow.ts`), and whose lens is not already
+   recorded in `task.reviews` for the exact reviewed HEAD. A completed lens, a lens whose worker ran to
+   completion and reported its own failure, a stale canonical instruction, or a malformed result is
+   never touched by central recovery; `advanceReview` keeps blocking those exactly as before. Once the
+   stop ladder proves any owned pane gone, the stale quarantined operation is settled to `"failed"` so
+   the replacement attempt's own routing decision reads a known-safe prior outcome rather than
+   re-pausing on the same uncertain one; `advanceReview`'s own next-lens computation then launches
+   exactly the missing lens as a new fenced operation, leaving every already-recorded lens untouched.
+   If the worktree no longer matches the exact reviewed HEAD (or is dirty or unmerged), re-entry never
+   relaunches against it; it asks instead, since review evidence is pinned to that HEAD. Reviewing
+   re-entry shares the same per-generation restart budget, restart question, and answer API as
+   implementing/scouting.
 
 Automatic re-entry is bounded to two restarts per task generation; a new generation resets the
 counter. A dead job that failed again inside its own startup grace window, in the same failure class

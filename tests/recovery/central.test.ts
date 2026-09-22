@@ -248,6 +248,16 @@ async function fixture(options: FixtureOptions = {}) {
     blockedReasons.push(reason);
   };
 
+  const removedEndpoints: string[] = [];
+  const removeEndpoint = async (_taskId: string, paneId: string): Promise<void> => {
+    removedEndpoints.push(paneId);
+  };
+
+  const relaunchReviewerCalls: TaskRecord[] = [];
+  const relaunchReviewer = async (task: TaskRecord): Promise<void> => {
+    relaunchReviewerCalls.push(task);
+  };
+
   const workflow = new CentralRecoveryWorkflow({
     home,
     sessionId: "session-1",
@@ -259,6 +269,8 @@ async function fixture(options: FixtureOptions = {}) {
     getTask,
     relaunchWorker,
     blockTask,
+    removeEndpoint,
+    relaunchReviewer,
   });
 
   return {
@@ -268,6 +280,8 @@ async function fixture(options: FixtureOptions = {}) {
     runtimePath: runtimeFile(home),
     relaunchCalls,
     blockedReasons,
+    removedEndpoints,
+    relaunchReviewerCalls,
     setRelaunchOutcome: (
       outcome: Readonly<{ readonly relaunched: boolean; readonly reason?: string }>,
     ) => {

@@ -6,13 +6,17 @@
  *   2. Save  - preserve the worktree and snapshot any uncommitted diff as durable evidence.
  *   3. Re-enter - hand the task back to its stage's single re-entry action.
  *
- * This slice wires only the `implementing` (and, since it shares the exact same path, `scouting`)
- * stage's re-entry: a dead worker with no owned pane recorded gets a fresh worker launched through
- * `WorkerWorkflow.relaunchWorker`, bounded by a per-generation restart budget. `validating`,
- * `reviewing`, and `awaiting-fixes` are not wired yet; each can be added later as its own stage
- * branch in `recoverStuckWorker()` below without touching the stop/save/proof machinery.
+ * `implementing` (and, since it shares the exact same path, `scouting`) re-entry: a dead worker with
+ * no owned pane recorded gets a fresh worker launched through `WorkerWorkflow.relaunchWorker`,
+ * bounded by a per-generation restart budget. `reviewing` re-entry (`recoverStuckReviewer`) relaunches
+ * only the one reviewer/verifier lens a quarantined (proven-unowned) job left unresolved, at the
+ * exact reviewed HEAD, reusing the same stop ladder and restart budget; completed lenses are left
+ * untouched, and a genuine content failure (not quarantined) is left for `advanceReview` to keep
+ * blocking. `validating` and `awaiting-fixes` are not wired yet; each can be added later as its own
+ * stage branch in `recoverStuckWorker()` below without touching the stop/save/proof machinery.
  */
 import { join } from "node:path";
+import { readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, inspectEndpoint, interruptEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
@@ -38,6 +42,7 @@ import { transitionTask } from "../tasks/lifecycle.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import { readWorkerTerminal, type WorkerTerminalJob } from "../workers/terminal.ts";
 import { pauseWorkerTerminal } from "../workers/terminal-control.ts";
+import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "./central-review.ts";
 import { taskAsking } from "./conversation.ts";
 import {
   classifyRestartFailure,
@@ -89,6 +94,13 @@ export type CentralRecoveryDependencies = Readonly<{
    *  new pane when one is not already owned, and a normal `launchAgent` launch. */
   readonly relaunchWorker: RelaunchWorker;
   readonly blockTask: (taskId: string, reason: string) => Promise<void>;
+  /** Clears a proven-stopped owned pane from durable state; reused by the `reviewing` re-entry to
+   *  drop a dead reviewer/verifier endpoint before relaunch creates its replacement. */
+  readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
+  /** The reviewing stage's single re-entry action: `WorkerWorkflow.advanceReview`. Central recovery
+   *  never launches a review worker itself; once it has stopped, saved, and cleared the dead lens,
+   *  this is what actually relaunches it, exactly as it would for any other next-lens advancement. */
+  readonly relaunchReviewer: (task: TaskRecord) => Promise<void>;
 }>;
 
 export type CentralRecoveryAction = "relaunched" | "asked" | "blocked" | "skipped";
@@ -179,6 +191,7 @@ export class CentralRecoveryWorkflow {
    * there is no active durable job and no unreleased reservation; this defends the same invariant.
    */
   public async recoverStuckWorker(task: TaskRecord): Promise<CentralRecoveryOutcome> {
+    if (task.stage === "reviewing") return this.recoverStuckReviewer(task);
     if (task.stage !== "implementing" && task.stage !== "scouting") {
       return {
         taskId: task.id,
@@ -303,6 +316,173 @@ export class CentralRecoveryWorkflow {
   }
 
   /**
+   * Gets a `reviewing` task back into its core loop when its current reviewer/verifier lens was
+   * quarantined: a durable job proven dead only by its pane or result disappearing, never a lens that
+   * ran to completion and reported its own failure. The caller (the coordinator's reconcile loop) is
+   * expected to call this before `WorkerWorkflow.advanceReview`; a "skipped" outcome means nothing is
+   * wrong and the caller should proceed to `advanceReview` as normal, and a "relaunched" outcome means
+   * this already stopped and saved the dead lens and the caller's very next `advanceReview` call will
+   * relaunch it (its own instruction-revision and quarantine checks let it proceed once this has
+   * cleared the stale endpoint). Only the dead lens is ever touched: completed lenses already recorded
+   * in `task.reviews` are left exactly as they are, and a moved or dirty worktree is never relaunched
+   * against — it is asked about instead, since review evidence is pinned to the exact reviewed HEAD.
+   */
+  private async recoverStuckReviewer(task: TaskRecord): Promise<CentralRecoveryOutcome> {
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    const runtime = taskRuntime(state, task.id);
+    if (runtime === undefined) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "durable runtime metadata is missing",
+      };
+    }
+    if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "an active job or an unreleased reservation already owns this task",
+      };
+    }
+    const deadReview = unresolvedReviewFailure(task, runtime);
+    if (deadReview === undefined || !isQuarantinedReviewFailure(deadReview)) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "no unresolved reviewer/verifier failure eligible for automatic recovery",
+      };
+    }
+    if (task.worktree === undefined || task.reviewHead === undefined) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "review requires a task worktree and reviewed HEAD",
+      };
+    }
+
+    const now = this.#deps.clock();
+    const lensLabel = deadReview.reviewLens ?? "review";
+    const incidentIdentity = restartIncidentIdentity({
+      taskId: task.id,
+      generation: task.generation,
+      deadJobId: deadReview.id,
+    });
+
+    // --- Move 1: stop. Prove any pane the dead lens owned is actually gone before touching it. ---
+    const endpoint =
+      deadReview.endpoint ??
+      runtime.endpoints.find(
+        (candidate) =>
+          candidate.role === deadReview.role && candidate.generation === task.generation,
+      );
+    if (endpoint !== undefined) {
+      const stopped = await this.stopLadder(
+        endpoint,
+        task.worktree.path,
+        terminalJobFor(deadReview),
+      );
+      if (!stopped) {
+        return this.askRestart(task, incidentIdentity, deadReview.id, now, {
+          what: `The ${lensLabel} reviewer stopped, but I could not prove it is actually gone.`,
+          risk: "If you choose restart, Tandem checks again first and will not run two reviewers on the same worktree at once. Nothing has changed yet either way; your worktree and history are preserved.",
+        });
+      }
+      await this.#deps.removeEndpoint(task.id, endpoint.paneId);
+    }
+
+    // Review evidence is pinned to the exact reviewed HEAD; never relaunch across drift or a dirty
+    // worktree, since that would review the wrong changes.
+    const checkout = await readCheckpoint(this.#deps.run, {
+      repo: task.worktree.path,
+      baseRef: task.worktree.baseHead,
+    });
+    if (checkout.head !== task.reviewHead || checkout.dirty || checkout.unmerged) {
+      return this.askRestart(task, incidentIdentity, deadReview.id, now, {
+        what: `The ${lensLabel} reviewer stopped, and the worktree no longer matches the exact commit this review was checking.`,
+        risk: "Relaunching now would review the wrong changes. Nothing has changed yet either way; your worktree and history are preserved.",
+      });
+    }
+
+    const recovery = defaultRecovery(runtime);
+    const restartsUsed =
+      recovery.restartGeneration === task.generation ? (recovery.restarts ?? 0) : 0;
+    if (restartsUsed >= MAX_AUTOMATIC_RESTARTS_PER_GENERATION) {
+      return this.askRestart(task, incidentIdentity, deadReview.id, now, {
+        what: `The ${lensLabel} reviewer stopped again; I already restarted review work automatically ${restartsUsed} time(s) this generation.`,
+        risk: "Restarting again may just repeat the same failure if it is not a one-off. Nothing is discarded either way; your worktree, reports, and history are preserved.",
+      });
+    }
+
+    // --- Move 2: save. Snapshot uncommitted work before the next reviewer can touch it. ---
+    await this.snapshotWorktree(task, runtime, restartsUsed + 1);
+
+    // --- Move 3: re-enter. Nothing here launches a worker directly: clearing the dead endpoint,
+    // spending one restart, and settling the stale quarantined operation (this stop ladder's own
+    // proof is what turns its previously-uncertain outcome into a known-safe one) is enough for the
+    // caller's very next `advanceReview` call to relaunch exactly this lens through its own normal
+    // launch path, as a new fenced operation. Without settling the operation, the replacement
+    // attempt's own routing would re-read the same quarantined phase and pause again for approval,
+    // undoing the proof this stop ladder just established. ---
+    const failureClass = classifyRestartFailure(
+      deadReview.error ?? "reviewer stopped without a durable result",
+    );
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
+      replaceRuntimeTask(current, task.id, (entry) => ({
+        ...entry,
+        ...(entry.operation?.phase === "quarantined"
+          ? { operation: { ...entry.operation, phase: "failed" as const } }
+          : {}),
+        recovery: {
+          ...defaultRecovery(entry),
+          restarts: restartsUsed + 1,
+          restartGeneration: task.generation,
+          lastRestartFailureClass: failureClass,
+          lastRestartAt: now,
+          lastOperation: "relaunch",
+          lastAt: now,
+        },
+      })),
+    );
+    const notice = `The ${lensLabel} reviewer stopped (${deadReview.error ?? "no durable result arrived"}). I am restarting just that review pass; completed reviews are kept. (Restart ${restartsUsed + 1} of ${MAX_AUTOMATIC_RESTARTS_PER_GENERATION}.)`;
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) return;
+      const notification: Notification = {
+        id: this.#deps.idFactory(),
+        message: notice,
+        acknowledged: false,
+        kind: "coordinator",
+      };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: now,
+        notifications: [...entry.notifications, notification],
+      }));
+    });
+    await this.saveDecision(task.id, {
+      taskId: task.id,
+      generation: task.generation,
+      ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+      evidence: this.evidenceFor(
+        incidentIdentity,
+        deadReview.error ?? "reviewer stopped without a durable result",
+        now,
+      ),
+      ownership: "proven-owned",
+      priorOutcome: "known",
+      approval: "preapproved",
+      unmetProofs: [],
+      consequences: notice,
+      disposition: "applied",
+      dispositionReason: notice,
+    });
+    const refreshed = await this.#deps.getTask(task.id);
+    await this.#deps.relaunchReviewer(refreshed);
+    return { taskId: task.id, action: "relaunched", reason: notice };
+  }
+
+  /**
    * Answers the one question central recovery ever asks (the 3rd-restart, unproven-death, or
    * same-failure-class question). Only an exact "restart" or "stop" is accepted; anything else is
    * refused with a plain-English error and the question stays open untouched. The reply is stored as
@@ -361,7 +541,8 @@ export class CentralRecoveryWorkflow {
       return { handled: true };
     }
     // choice === "restart": reuse the same three-move path, treating this approval as spending one
-    // more restart, but never as proof by itself — forceOneMoreRestart re-proves death first.
+    // more restart, but never as proof by itself — forceOneMoreRestart/forceOneMoreReviewRestart
+    // re-prove death first.
     const resumed = cleared === undefined ? undefined : await this.resumeFromAsk(cleared);
     const outcome: ForcedRestartOutcome =
       resumed === undefined
@@ -370,7 +551,9 @@ export class CentralRecoveryWorkflow {
             proven: false,
             reasonSummary: "the task could not be resumed from blocked",
           }
-        : await this.forceOneMoreRestart(resumed);
+        : resumed.stage === "reviewing"
+          ? await this.forceOneMoreReviewRestart(resumed)
+          : await this.forceOneMoreRestart(resumed);
     await this.saveDecision(taskId, {
       taskId,
       generation: task.generation,
@@ -394,9 +577,18 @@ export class CentralRecoveryWorkflow {
 
   /** Undoes the block that asking the restart question applied, so relaunch can proceed. */
   private async resumeFromAsk(task: TaskRecord): Promise<TaskRecord | undefined> {
-    if (task.stage !== "blocked")
-      return task.stage === "implementing" || task.stage === "scouting" ? task : undefined;
-    if (task.previousStage !== "implementing" && task.previousStage !== "scouting") {
+    if (task.stage !== "blocked") {
+      return task.stage === "implementing" ||
+        task.stage === "scouting" ||
+        task.stage === "reviewing"
+        ? task
+        : undefined;
+    }
+    if (
+      task.previousStage !== "implementing" &&
+      task.previousStage !== "scouting" &&
+      task.previousStage !== "reviewing"
+    ) {
       return undefined;
     }
     return this.#deps.store.exclusive(async (store) => {
@@ -490,6 +682,121 @@ export class CentralRecoveryWorkflow {
       }));
     });
     return { relaunched: true, proven: true, reasonSummary: proof.reasonSummary };
+  }
+
+  /**
+   * The `reviewing` stage's equivalent of `forceOneMoreRestart`: after an explicit user approval,
+   * re-proves the dead lens's death and relaunches once more without re-asking. A proof failure (an
+   * unproven pane, or a worktree that has since moved off the reviewed HEAD) is refused outright, not
+   * re-asked; the caller records that refusal as the decision.
+   */
+  private async forceOneMoreReviewRestart(task: TaskRecord): Promise<ForcedRestartOutcome> {
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    const runtime = taskRuntime(state, task.id);
+    if (runtime === undefined || task.stage !== "reviewing") {
+      return { relaunched: false, proven: false, reasonSummary: "the task is no longer reviewing" };
+    }
+    if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) {
+      return {
+        relaunched: false,
+        proven: false,
+        reasonSummary: "an active job or reservation already owns this task",
+      };
+    }
+    const deadReview = unresolvedReviewFailure(task, runtime);
+    if (deadReview === undefined || !isQuarantinedReviewFailure(deadReview)) {
+      return {
+        relaunched: false,
+        proven: false,
+        reasonSummary: "no unresolved reviewer/verifier failure remains",
+      };
+    }
+    if (task.worktree === undefined || task.reviewHead === undefined) {
+      return {
+        relaunched: false,
+        proven: false,
+        reasonSummary: "review has no worktree or reviewed HEAD",
+      };
+    }
+    const lensLabel = deadReview.reviewLens ?? "review";
+    const endpoint =
+      deadReview.endpoint ??
+      runtime.endpoints.find(
+        (candidate) =>
+          candidate.role === deadReview.role && candidate.generation === task.generation,
+      );
+    if (endpoint !== undefined) {
+      const stopped = await this.stopLadder(
+        endpoint,
+        task.worktree.path,
+        terminalJobFor(deadReview),
+      );
+      if (!stopped) {
+        return {
+          relaunched: false,
+          proven: false,
+          reasonSummary: `the ${lensLabel} reviewer's pane could not be proven stopped`,
+        };
+      }
+      await this.#deps.removeEndpoint(task.id, endpoint.paneId);
+    }
+    const checkout = await readCheckpoint(this.#deps.run, {
+      repo: task.worktree.path,
+      baseRef: task.worktree.baseHead,
+    });
+    if (checkout.head !== task.reviewHead || checkout.dirty || checkout.unmerged) {
+      return {
+        relaunched: false,
+        proven: true,
+        reasonSummary: "the worktree no longer matches the exact reviewed commit",
+      };
+    }
+    const recovery = defaultRecovery(runtime);
+    const restartsUsed =
+      recovery.restartGeneration === task.generation ? (recovery.restarts ?? 0) : 0;
+    await this.snapshotWorktree(task, runtime, restartsUsed + 1);
+    const reasonSummary = deadReview.error ?? "reviewer stopped without a durable result";
+    const now = this.#deps.clock();
+    // Settle the stale quarantined operation the same way the automatic path does: this approval's
+    // own re-proof is what turns its previously-uncertain outcome into a known-safe one, so the
+    // replacement attempt's routing decision must not re-read the same quarantined phase and pause.
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
+      replaceRuntimeTask(current, task.id, (entry) => ({
+        ...entry,
+        ...(entry.operation?.phase === "quarantined"
+          ? { operation: { ...entry.operation, phase: "failed" as const } }
+          : {}),
+        recovery: {
+          ...defaultRecovery(entry),
+          restarts: restartsUsed + 1,
+          restartGeneration: task.generation,
+          lastRestartFailureClass: classifyRestartFailure(reasonSummary),
+          lastRestartAt: now,
+          lastOperation: "relaunch",
+          lastAt: now,
+        },
+      })),
+    );
+    const notice = `The ${lensLabel} reviewer stopped (${reasonSummary}). You approved another restart; I restarted just that review pass and completed reviews are kept.`;
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) return;
+      const notification: Notification = {
+        id: this.#deps.idFactory(),
+        message: notice,
+        acknowledged: false,
+        kind: "coordinator",
+      };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: now,
+        notifications: [...entry.notifications, notification],
+      }));
+    });
+    const refreshed = await this.#deps.getTask(task.id);
+    await this.#deps.relaunchReviewer(refreshed);
+    return { relaunched: true, proven: true, reasonSummary };
   }
 
   private evidenceFor(
