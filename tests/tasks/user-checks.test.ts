@@ -161,6 +161,19 @@ test("isUserCheckYes accepts only yes/y, ignoring case and trailing punctuation"
   expect(isUserCheckYes("no")).toBe(false);
 });
 
+test("isUserCheckYes also accepts a clear leading yes/yep/yeah before punctuation, never a bare prefix", () => {
+  expect(isUserCheckYes("yes, looks good")).toBe(true);
+  expect(isUserCheckYes("yes. Ship it.")).toBe(true);
+  expect(isUserCheckYes("yep")).toBe(true);
+  expect(isUserCheckYes("Yep!")).toBe(true);
+  expect(isUserCheckYes("yeah")).toBe(true);
+  expect(isUserCheckYes("Yeah, that's right.")).toBe(true);
+  // Not a bare prefix match inside a longer word or an unpunctuated qualifier.
+  expect(isUserCheckYes("yesterday it was different")).toBe(false);
+  expect(isUserCheckYes("yep but check the color")).toBe(false);
+  expect(isUserCheckYes("looks good")).toBe(false);
+});
+
 test("userCheckStatus is none without criteria, and binds to the current HEAD and generation", () => {
   expect(userCheckStatus(taskWith({}))).toBe("none");
 

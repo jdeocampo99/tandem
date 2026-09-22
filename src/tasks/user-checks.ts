@@ -114,12 +114,13 @@ export function userCheckQuestion(task: TaskRecord, head: string): TaskQuestion 
   };
 }
 
+/** Conservative: only a clear leading yes counts, immediately followed by punctuation or the end
+ *  of the reply — never a bare prefix inside a longer word ("yesterday") or a qualified reply
+ *  ("yes but the color is off"), and never an implied yes with no "yes" at all ("looks good"). */
+const USER_CHECK_YES = /^(?:yes|yep|yeah|y)(?:[.,!?;:]|$)/u;
+
 export function isUserCheckYes(text: string): boolean {
-  const normalized = text
-    .trim()
-    .toLowerCase()
-    .replace(/[.!]+$/u, "");
-  return normalized === "yes" || normalized === "y";
+  return USER_CHECK_YES.test(text.trim().toLowerCase());
 }
 
 export function userCheckFinding(task: TaskRecord): Finding | undefined {
