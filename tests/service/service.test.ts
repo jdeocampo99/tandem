@@ -982,6 +982,45 @@ test("new scouts persist a classified continuation and an explicit disposition s
     await rm(root, { recursive: true, force: true });
   }
 });
+test("a scout under a request takes its post-research disposition from the brief, not its read-only guardrail", async () => {
+  const fixture = await requestFixture([]);
+  try {
+    const drafted = await fixture.service.draftRequestBrief({
+      repoPath: fixture.repoPath,
+      reviewPane: false,
+      content: {
+        goal: "Make study reviews more rewarding with a streak effect on the progress bar",
+        scope: [
+          "Research the review progress bar and answer lifecycle.",
+          "After explicit approval, implement the agreed behavior across review surfaces.",
+        ],
+        constraints: ["No database changes."],
+        nonGoals: ["Do not change SRS scheduling."],
+        acceptanceCriteria: ["Streaks escalate and reset correctly."],
+        recommendedApproach: "Own the streak in the card session and render it in the bar",
+        keyDecisions: [],
+        openQuestions: [],
+        researchLinks: [],
+      },
+    });
+    const scout = await fixture.service.create({
+      repoPath: fixture.repoPath,
+      kind: "scout",
+      objective:
+        "Research the best design for streak feedback on the review progress bar. Do not implement or edit product source.",
+      acceptanceCriteria: ["Recommend one effect"],
+      surfaces: ["src"],
+      requestId: drafted.record.id,
+    });
+    expect(scout.researchContinuation).toEqual({
+      schemaVersion: 1,
+      disposition: "implementation-interview",
+      selectedBy: "deterministic",
+    });
+  } finally {
+    await fixture.close();
+  }
+});
 test("creates a bounded immutable scout handoff for a same-source implementation", async () => {
   await withFixture({ kind: "scout" }, async (fixtureValue) => {
     const report = `Outcome: completed\n${"界".repeat(3_000)}`;
