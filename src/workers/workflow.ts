@@ -124,6 +124,7 @@ import {
 } from "../tasks/communication-protocol.ts";
 import { describeFixRoundExhaustion } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
+import { userCheckCriteriaOf, userCheckFinding } from "../tasks/user-checks.ts";
 import type {
   ReviewAssistanceOutcome,
   ReviewAssistanceRuntime,
@@ -165,6 +166,7 @@ import {
   resolveExecutionRouting,
 } from "./execution-routing.ts";
 import {
+  checkUserCheckFiles,
   parseWorkerJob,
   readWorkerResult,
   type WorkerJob,
@@ -791,6 +793,38 @@ export class WorkerWorkflow {
         );
         return;
       }
+      if (userCheckCriteriaOf(task).length > 0) {
+        const userCheckDirectory = join(
+          jobDirectoryFor(this.#deps.home, task.id, job.generation, job.id),
+          "user-checks",
+        );
+        const evidence = result.userCheckEvidence ?? [];
+        const missing = userCheckCriteriaOf(task).find(
+          (criterion) =>
+            !evidence.some((entry) => entry.criterion === criterion && entry.paths.length > 0),
+        );
+        const rejection =
+          missing !== undefined
+            ? `no screenshot or clip was submitted for "${missing}"`
+            : await checkUserCheckFiles(userCheckDirectory, evidence);
+        if (rejection !== undefined) {
+          const cause: BlockCause = {
+            group: "unusable-result",
+            kind: "worker-failed",
+            summary: "The builder didn't save screenshots for everything you'll check.",
+            detail: rejection,
+            jobId: job.id,
+          };
+          await this.consumeJob(
+            task.id,
+            job.id,
+            claim,
+            { type: "block", reason: cause.summary, cause },
+            instructionOptions(result.instructionRevision),
+          );
+          return;
+        }
+      }
       const reportPath = reportPathFor(job.jobPath);
       await writeTextAtomically(reportPath, result.text);
       await this.consumeJob(
@@ -802,6 +836,9 @@ export class WorkerWorkflow {
           head: checkout.checkpoint.head,
           generation: job.generation,
           reportPath,
+          ...(result.userCheckEvidence === undefined
+            ? {}
+            : { userCheckEvidence: result.userCheckEvidence }),
         },
         instructionOptions(result.instructionRevision),
       );
@@ -3136,7 +3173,7 @@ export class WorkerWorkflow {
               },
             }),
         communication,
-        review: { head: task.reviewHead, lens: nextLens },
+        review: { head: task.reviewHead, lens: nextLens, criteria: task.acceptanceCriteria },
         ...(this.#deps.workerTimeoutMs === undefined
           ? {}
           : { timeoutMs: this.#deps.workerTimeoutMs }),
@@ -3221,6 +3258,10 @@ export class WorkerWorkflow {
       ...(priorReportPath === undefined ? [] : [priorReportPath]),
       ...researchHandoffs.map((handoff) => handoff.reportPath),
     ];
+    const sessionDirectory =
+      role === "implementer" || role === "scout" ? runtime.sessionDirectory : undefined;
+    const userCheckCriteria = role === "implementer" ? userCheckCriteriaOf(task) : [];
+    const userCheckDirectory = userCheckCriteria.length === 0 ? undefined : join(directory, "user-checks");
     const extra = [
       ...(options.extraInstructions ?? []),
       ...(priorReportPath === undefined
@@ -3238,19 +3279,27 @@ export class WorkerWorkflow {
             "Preserve the original task scope and repair only evidence-backed findings.",
           ]
         : []),
+      ...(userCheckDirectory === undefined
+        ? []
+        : [
+            `Save the screenshots or clips for the "You check" criteria under ${userCheckDirectory}. It is outside the repository, so nothing there is committed.`,
+          ]),
     ];
-    const sessionDirectory =
-      role === "implementer" || role === "scout" ? runtime.sessionDirectory : undefined;
     const claim = claimOf(runtime.operation);
     if (claim === undefined) return;
-    if (sessionDirectory !== undefined) {
+    if (sessionDirectory !== undefined || userCheckDirectory !== undefined) {
       const prepared = await this.withOperationEffect(
         task.id,
         claim,
         task.generation,
         ["scouting", "implementing"],
         async () => {
-          await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
+          if (sessionDirectory !== undefined) {
+            await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
+          }
+          if (userCheckDirectory !== undefined) {
+            await mkdir(userCheckDirectory, { recursive: true, mode: 0o700 });
+          }
           return true;
         },
       );
@@ -3304,6 +3353,9 @@ export class WorkerWorkflow {
       ...(this.#deps.workerTimeoutMs === undefined
         ? {}
         : { timeoutMs: this.#deps.workerTimeoutMs }),
+      ...(userCheckDirectory === undefined
+        ? {}
+        : { userChecks: { directory: userCheckDirectory, criteria: userCheckCriteria } }),
     };
     const specWritten = await this.withOperationEffect(
       task.id,
@@ -3863,6 +3915,7 @@ export class WorkerWorkflow {
               cwd: runtime.worktree?.path ?? taskSourcePath(targetTask, runtime),
             });
       if (routing === undefined && role !== "validation") return undefined;
+      const userFinding = isFix ? userCheckFinding(task) : undefined;
       const operation = {
         ...durableOperation(
           operationId,
@@ -3885,7 +3938,10 @@ export class WorkerWorkflow {
                 head: inputHead,
                 generation: task.generation,
                 validationEvidence: task.validationEvidence,
-                findings: reviewFindings(task),
+                findings:
+                  userFinding === undefined
+                    ? reviewFindings(task)
+                    : [...reviewFindings(task), userFinding],
               },
             }
           : {}),
