@@ -185,6 +185,7 @@ export type CliOptions = Readonly<{
   readonly method?: MergeMethod;
   readonly input?: string;
   readonly acceptanceCriteria: readonly string[];
+  readonly userCheckCriteria: readonly string[];
   readonly surfaces: readonly string[];
   readonly artifacts: readonly string[];
 }>;
@@ -332,6 +333,7 @@ type MutableCliOptions = {
   method?: MergeMethod;
   input?: string;
   acceptanceCriteria: string[];
+  userCheckCriteria: string[];
   surfaces: string[];
   artifacts: string[];
 };
@@ -349,6 +351,7 @@ function initialOptions(): MutableCliOptions {
     noAttach: false,
     supersedes: [],
     acceptanceCriteria: [],
+    userCheckCriteria: [],
     surfaces: [],
     artifacts: [],
   };
@@ -530,6 +533,11 @@ function parseOption(options: MutableCliOptions, argv: readonly string[], index:
     case "--acceptance": {
       const parsed = optionValue(argv, index, name);
       options.acceptanceCriteria.push(parsed.value);
+      return parsed.nextIndex;
+    }
+    case "--user-check": {
+      const parsed = optionValue(argv, index, name);
+      options.userCheckCriteria.push(parsed.value);
       return parsed.nextIndex;
     }
     case "--surface": {

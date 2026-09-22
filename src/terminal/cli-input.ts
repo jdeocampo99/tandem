@@ -85,6 +85,7 @@ export function createInputFromInvocation(
       invocation.options.objective !== undefined ||
       invocation.options.kind !== undefined ||
       invocation.options.acceptanceCriteria.length > 0 ||
+      invocation.options.userCheckCriteria.length > 0 ||
       invocation.options.surfaces.length > 0
     ) {
       throw new CliUsageError(
@@ -92,7 +93,14 @@ export function createInputFromInvocation(
       );
     }
     const object = parseJsonObject(invocation.options.input, "input");
-    const allowed = ["repoPath", "kind", "objective", "acceptanceCriteria", "surfaces"] as const;
+    const allowed = [
+      "repoPath",
+      "kind",
+      "objective",
+      "acceptanceCriteria",
+      "userCheckCriteria",
+      "surfaces",
+    ] as const;
     for (const key of Object.keys(object)) {
       if (!allowed.includes(key as (typeof allowed)[number]))
         throw new CliUsageError(`input contains unknown key ${JSON.stringify(key)}`);
@@ -102,6 +110,9 @@ export function createInputFromInvocation(
       kind: parseTaskKind(text(object.kind, "input.kind")),
       objective: text(object.objective, "input.objective"),
       acceptanceCriteria: stringArray(object.acceptanceCriteria, "input.acceptanceCriteria"),
+      ...(object.userCheckCriteria === undefined
+        ? {}
+        : { userCheckCriteria: stringArray(object.userCheckCriteria, "input.userCheckCriteria") }),
       surfaces: stringArray(object.surfaces, "input.surfaces"),
     };
   }
@@ -117,6 +128,9 @@ export function createInputFromInvocation(
     kind: invocation.options.kind ?? "implementation",
     objective,
     acceptanceCriteria: invocation.options.acceptanceCriteria,
+    ...(invocation.options.userCheckCriteria.length === 0
+      ? {}
+      : { userCheckCriteria: invocation.options.userCheckCriteria }),
     surfaces: invocation.options.surfaces,
   };
 }
