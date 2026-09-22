@@ -94,6 +94,24 @@ test("classifyRecoveryEvidence keys a typed cause's identity off the cause, not 
   );
 });
 
+test("classifyRecoveryEvidence prefers the typed cause's plain-English summary over raw blocker text", () => {
+  const cause = blockCause("resource-lost", {
+    summary: "The task's worktree is missing, so no further work can run against it.",
+    detail: "task is implementing but its durable worktree is missing",
+    jobId: "job-1",
+  });
+  // The raw blocker text (what durable state actually recorded as the block reason) differs from
+  // the cause's plain-English summary; the question a person reads must use the latter.
+  const evidence = classifyRecoveryEvidence({
+    taskId: "task-1",
+    generation: 0,
+    blockers: ["task is implementing but its durable worktree is missing"],
+    observedAt: NOW,
+    cause,
+  });
+  expect(evidence?.summary).toBe(cause.summary);
+});
+
 test("classifyRecoveryEvidence still hashes free text when no cause is recorded", () => {
   const evidence = classifyRecoveryEvidence({
     taskId: "task-1",

@@ -962,7 +962,13 @@ export class RecoveryWorkflow {
       const reason = "reconciliation refused: canonical repository identity is not proven";
       const blockedChanged =
         !isTerminalTask(task) && task.stage !== "paused" && task.stage !== "blocked";
-      await this.block(task, reason);
+      await this.block(task, reason, {
+        group: "safety-stop",
+        kind: "ownership-unprovable",
+        summary:
+          "Tandem could not prove this task's repository checkout is the one it started from, so reconciliation refused to proceed.",
+        detail: reason,
+      });
       return {
         taskId,
         changed: blockedChanged,
@@ -979,7 +985,15 @@ export class RecoveryWorkflow {
       const reason = `reconciliation refused: endpoint ownership is not proven for ${foreign.map((entry) => entry.endpoint.paneId).join(", ")}`;
       const blockedChanged =
         !isTerminalTask(task) && task.stage !== "paused" && task.stage !== "blocked";
-      await this.block(task, reason);
+      const singleForeignPaneId = foreign.length === 1 ? foreign[0]?.endpoint.paneId : undefined;
+      await this.block(task, reason, {
+        group: "safety-stop",
+        kind: "ownership-unprovable",
+        summary:
+          "Tandem could not prove it owns the pane(s) behind this task, so reconciliation refused to proceed.",
+        detail: reason,
+        ...(singleForeignPaneId === undefined ? {} : { paneId: singleForeignPaneId }),
+      });
       return {
         taskId,
         changed: blockedChanged,
@@ -1731,7 +1745,7 @@ export class RecoveryWorkflow {
     return taskRuntime(await readRuntimeState(this.#deps.runtimePath), taskId);
   }
 
-  private async block(task: TaskRecord, reason: string): Promise<void> {
+  private async block(task: TaskRecord, reason: string, cause?: BlockCause): Promise<void> {
     if (isTerminalTask(task) || task.stage === "paused" || task.stage === "blocked") return;
     await withBoundedLock(this.#deps, async () =>
       this.#deps.store.exclusive(async (store) => {
@@ -1746,7 +1760,7 @@ export class RecoveryWorkflow {
         await store.update(current.id, current.revision, (entry) =>
           transitionTask(
             entry,
-            { type: "block", reason },
+            { type: "block", reason, ...(cause === undefined ? {} : { cause }) },
             { now: timestamp(this.#deps), notificationId: this.#deps.idFactory() },
           ),
         );
