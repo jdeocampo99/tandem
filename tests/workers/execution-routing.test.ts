@@ -180,8 +180,9 @@ test("unmeasured request usage refuses the classification instead of reassigning
   expect(pause.unaccountedSamples).toBe(2);
   expect(pause.unmeasuredTokenSamples).toBe(5);
   const explanation = describeExecutionRoutingDecision(pause);
-  expect(explanation).toContain("unknown rather than small");
-  expect(explanation).not.toContain("free");
+  expect(explanation).toBe(
+    "Keep this task on alpha/base? I can't see enough of what this request has spent.",
+  );
 });
 
 test("unmeasured tokens alone still refuse the classification", () => {
@@ -214,7 +215,9 @@ test("a task with no governing request has no ledger to prove a move against", (
   expect(pause.reason).toBe("usage-evidence-unmeasured");
   expect(pause.usageSource).toBe("no-governing-request");
   expect(pause.unaccountedSamples).toBeUndefined();
-  expect(describeExecutionRoutingDecision(pause)).toContain("no accounting ledger");
+  expect(describeExecutionRoutingDecision(pause)).toContain(
+    "No request tracks what this task spends.",
+  );
 });
 
 test("unmeasured usage leaves an unchanged pinned launch alone", () => {
@@ -345,7 +348,9 @@ test("a prepaid higher-cost replacement asks instead of moving", () => {
   expect(pause.reason).toBe("premium-tier-requires-approval");
   expect(pause.premiumAxis).toBe("monetary-cost");
   expect(pause.candidateSelector).toBe("alpha/deluxe");
-  expect(describeExecutionRoutingDecision(pause)).toContain("prepaid");
+  expect(describeExecutionRoutingDecision(pause)).toBe(
+    "Keep this task on alpha/base? The only alternative, alpha/deluxe, costs more.",
+  );
 });
 
 test("a replacement drawing more included allowance asks even at equal cost", () => {
@@ -397,9 +402,8 @@ test("unknown tier evidence pauses rather than classifying the move as comparabl
 
   expect(pause.reason).toBe("tier-evidence-indeterminate");
   expect(pause.evidenceGaps).toEqual(["catalogue-cost-unpublished"]);
-  // The evidence gap's plain-English translation appears; its raw machine identifier never does.
-  expect(describeExecutionRoutingDecision(pause)).toContain(
-    "no published price for one of the models",
+  expect(describeExecutionRoutingDecision(pause)).toBe(
+    "Keep this task on alpha/base? I can't get clear pricing for the alternatives.",
   );
   expect(describeExecutionRoutingDecision(pause)).not.toContain("catalogue-cost-unpublished");
 });

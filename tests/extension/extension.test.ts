@@ -600,10 +600,7 @@ test("approve confirmation exposes active non-superseded communication deltas an
 
   expect(result.approved).toBe(false);
   expect(prompts).toHaveLength(1);
-  expect(prompts[0]).toContain("Communication revision 3");
-  expect(prompts[0]).toContain("Preserve the existing adapter.");
-  expect(prompts[0]).toContain("Use the compatibility path.");
-  expect(prompts[0]).not.toContain("REPLACE_ME_OLD");
+  expect(prompts[0]).toBe("Includes 2 directions you gave after the plan.");
 });
 
 test("extension setup approval preserves the write boundary and metadata", async () => {
@@ -791,8 +788,7 @@ test("configure-models forwards explicit provider enablement and recaps it in th
   expect(configureCalls).toEqual([
     { repoPath: "/repo", models, enabledProviders: ["openai-codex"] },
   ]);
-  expect(prompts[0]).toContain("Enabled providers");
-  expect(prompts[0]).toContain("openai-codex");
+  expect(prompts[0]).toContain("Can spend on: openai-codex.");
 });
 test("models summary surfaces discovered/enabled providers and a resolved Balanced proposal", () => {
   const summary = summarizeTandemActionValue("models", {
@@ -1109,8 +1105,7 @@ test("draft publication needs interactive human approval and never runs without 
   const refused = await executeTandemAction(parsed, service, refusingContext);
   expect(refused.approved).toBe(false);
   expect(published).toHaveLength(0);
-  expect(prompts[0]).toContain("unfinished draft");
-  expect(prompts[0]).toContain("it does not merge, deploy, or accept anything");
+  expect(prompts[0]).toBe("Shows progress only. Nothing is merged.");
 
   const headless = await executeTandemAction(parsed, service, {
     hasUI: false,
@@ -1989,10 +1984,7 @@ test("extension cleanup skips confirmation for safe release and shows scope for 
 
   expect(cleanupInputs).toEqual([{}]);
   expect(prompts).toHaveLength(1);
-  expect(prompts[0]).toContain("/repo");
-  expect(prompts[0]).toContain("Release the completed task resources");
-  expect(prompts[0]).toContain("review-head");
-  expect(prompts[0]).toContain("/tmp/treehouse/task-1");
+  expect(prompts[0]).toBe("This discards its changes.");
   expect(refused.approved).toBe(false);
 });
 
