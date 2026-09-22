@@ -780,6 +780,20 @@ bun src/cli.ts create \
 ```sh
 bun src/cli.ts create --input '{"repoPath":"/absolute/path/to/repository","kind":"scout","objective":"Map the authentication boundary","acceptanceCriteria":["Report entry points"],"surfaces":["backend"]}'
 ```
+
+An implementation task may also repeat `--user-check` for hands-on or visual acceptance criteria the
+user judges from builder screenshots instead of a validation command:
+
+```sh
+bun src/cli.ts create \
+  --repo /absolute/path/to/repository \
+  --objective "Add a streak bar to the habit screen" \
+  --acceptance "Streak logic has unit tests" \
+  --user-check "Streak bar glows at 5 in a row" \
+  --surface "app"
+```
+
+See [Tandem checks and you check](#tandem-checks-and-you-check).
 For a clean-bound coordinator, task creation accepts either the original repository path or its
 configured clean source checkout and normalizes the record to the original canonical identity.
 The two checkouts must be distinct worktrees of the same Git common directory; unrelated paths are
@@ -808,7 +822,7 @@ The durable stages are:
 | `validating` | The runner is executing one named validation contract at that exact HEAD: targeted iteration checks between fix rounds, or the complete final acceptance manifest once the candidate is otherwise ready. |
 | `reviewing` | The contract's checks passed; fresh reviewers are recording the required lenses. |
 | `awaiting-fixes` | Validation or review found a failure; a bounded fix round may be started. |
-| `ready` | The complete final acceptance manifest and all required review lenses pass for the delivered code and policy at the current HEAD. |
+| `ready` | The complete final acceptance manifest and all required review lenses pass for the delivered code and policy at the current HEAD. With "you check" criteria, `ready` also asks one short question with the builder's screenshots, and delivery waits for a "yes" before it counts as satisfied. |
 | `paused` | Work is stopped with a resumable previous stage. |
 | `blocked` | Work cannot safely proceed; a reason is durable, requires coordinator judgment, and is surfaced as an actionable blocker. |
 | `cancelled` / `completed` / `merged` | Terminal states. A scout is research-complete only in durable `completed` state with its report; implementation reaches `merged` only after verified delivery. |
@@ -824,6 +838,39 @@ spent and configured rounds, states that the task is not ready and not accepted,
 evidence-backed blockers that remain, and names the explicit decision available. Neither message
 claims delivery.
 
+### Tandem checks and you check
+
+Every acceptance criterion is tagged into one of two lists:
+
+- **Tandem checks** (`acceptanceCriteria`): proven by a configured validation command and judged by
+  the review lenses, as before.
+- **You check** (`userCheckCriteria`): hands-on or visual behavior — the kind of thing a maintained
+  e2e suite would prove, but this repository has none — that the user judges from the builder's own
+  screenshots or clips. Review lenses never block or ask on these, and the verifier never invents
+  runner evidence for one.
+
+Tagging happens at approval, both in a request's brief (see below) and on a standalone `create`. A
+verifier or reviewer that cannot prove a Tandem-check criterion from runner evidence or the source at
+the reviewed HEAD does not fail the lens or ask a `needs-decision` question about it; it returns the
+criterion's exact text in the completed `ReviewResult.handToUser` list instead. `record-review` moves
+that text out of `acceptanceCriteria` and into `userCheckCriteria` on the task, so an unprovable
+criterion always ends with the human "yes", never a repeated verifier question.
+
+For an implementer job whose task has "you check" criteria, the controller creates a private
+`user-checks/` directory inside the job's own directory under `<home>` (never inside the repository,
+so nothing there is committed) and names it in the worker's brief. `submit_report` takes an
+`userCheckEvidence: [{criterion, paths[]}]` array; it is rejected until every "you check" criterion
+has at least one image or clip file inside that directory, and the controller independently re-checks
+every path (a real, non-empty, non-symlink file, staying inside the directory, with a supported
+extension) rather than trusting the worker's claim. On `implementation-complete` the controller
+records `task.userCheck = {head, generation, evidence}`, bound to the committed checkpoint HEAD.
+
+When `finish-review` reaches `ready` on a task with "you check" criteria, it sets one short durable
+question — `Does "<task>" look right? N screenshots attached.` — instead of the plain ready
+notification, with the id prefix `user-check-`. See
+[Two-way task communication](#two-way-task-communication) for how it is answered, and
+[Final delivery](#final-delivery) for why delivery waits on it.
+
 ### Request briefs and approval revisions
 
 A substantial request gets one durable request brief: a stable `req-`prefixed identity, a monotonic
@@ -836,6 +883,14 @@ A brief holds the goal, scope, constraints, non-goals, acceptance criteria, reco
 key decisions, unresolved questions, and research links. The first seven carry the agreement; the
 unresolved questions and research links are annotations. Every edit creates a new draft revision and
 pushes the previous one into the preserved history, so revisions only ever move forward.
+
+An optional `userCheckCriteria` field holds the "you check" split of the acceptance criteria (see
+[Tandem checks and you check](#tandem-checks-and-you-check)); the pane and the compact in-chat brief
+both show it as its own group. Moving a criterion between the two groups is an ordinary content edit
+and follows the same agreement/annotation rule as any other field: since `userCheckCriteria` is not
+one of the seven agreement fields directly, its own change to the digest is computed separately and
+only contributes when the list is non-empty, so a brief stored before this field existed, or one that
+never uses it, digests exactly as it always did.
 
 ```sh
 # through the coordinator's tandem tool
@@ -1230,10 +1285,19 @@ Review is independent and sequential. Tandem stops or pauses the implementer, op
 
 - `behavior` — observable semantics, ordering, mutation timing, errors, and boundaries;
 - `design` — function-review principles, honest dependencies, empathic signatures, abstraction levels, comments, and declaration order;
-- `coverage` — changed behavior, affected callers, relevant tests/reports, and acceptance criteria;
+- `coverage` — changed behavior, affected callers, relevant tests/reports, and Tandem-check acceptance criteria;
 - `verification` — fresh inspection of the exact HEAD and generation using runner evidence.
 
 All four lenses are required. A failed lens sends the task to `awaiting-fixes`; passing all four sends it to `ready`. Reviewers remain read-only and do not invent command output.
+
+`acceptanceCriteria` here means the Tandem-check list only (see
+[Tandem checks and you check](#tandem-checks-and-you-check)). A "you check" criterion is never
+acceptance criteria for any lens: reviewers and verifiers never block a lens, raise a finding, or ask
+a `needs-decision` question about one, and any builder screenshots referenced in the brief are shown
+as "shown by the builder, not proof", not runner evidence. When a Tandem-check criterion cannot be
+proven from runner evidence or the source at the reviewed HEAD, a lens does not fail or ask about it
+either; it names the criterion's exact text in `ReviewResult.handToUser`, and `record-review` moves it
+into the task's "you check" list instead.
 
 Validation commands are argv-only and execute in declaration order. A command belongs to the manifest when its `surfaces` is empty, contains `*`, or intersects the task surfaces; a task surface of `*` matches every command. The runner stops after the first non-zero, timeout, or cancellation result. Every evidence record includes the command name, argv, exit code, captured stdout/stderr, exact HEAD, the contract it ran under, the check origin, and the policy digest it was pinned to. No configured command or no matching command is a validation configuration failure, not a pass.
 
@@ -1274,6 +1338,12 @@ prior finding status with the change that supports it. Reviewers keep full sourc
 independent context. The brief says so explicitly: an implementer assertion, summary, report, or
 claimed fix is never proof, and every claim is confirmed against the source, the diff, or
 runner-produced evidence.
+
+When the task has "you check" criteria, the brief adds two more lines: "you check (judged by the
+user, not by this review; never block or ask on these)" listing that list, and "shown by the builder
+(not proof)" listing `criterion: path, path…` for the builder's saved evidence, only when it is bound
+to the reviewed HEAD and generation. Both are informational; a lens never treats either as acceptance
+criteria.
 
 Findings keep a stable identity across rounds on the durable `findingLedger`, which `record-review`
 is the only writer of. An identity is `lens:id`, and the reviewer is instructed to reuse the exact id
@@ -1554,6 +1624,15 @@ bun src/cli.ts answer --task TASK_ID --question QUESTION_ID \
   --text "The approved scope already requires preserving the existing API; proceed with that option."
 ```
 
+A question whose id starts with `user-check-` is different in kind: it is the end-of-task "you
+check" question (see [Tandem checks and you check](#tandem-checks-and-you-check)), shown to the user
+verbatim with the builder's screenshots, never answered on the user's behalf. `answer` routes this
+prefix before the recovery prefixes. A reply of exactly `yes` (or `y`, case- and
+punctuation-insensitive) needs human confirmation in the extension and, once given, clears the
+question without bumping `communication.revision` — it is a human judgment, not a worker instruction.
+Any other reply becomes the answer message, moves the task to `awaiting-fixes`, and starts a normal
+bounded fix round that counts against `maxFixRounds`.
+
 `messages` returns structured communication metadata and per-message status. In compact output,
 **queued** means persisted for the child, **received** means the bridge observed it, and
 **delivered** means the message entered provider-bound context. Steer and answer return a queued
@@ -1634,11 +1713,11 @@ Supported actions are:
 | `configure-models` | `repoPath`, `models` (complete six-role map) | Save approved global role choices for future work; requires confirmation and does not mutate existing task snapshots. |
 | `onboard` | `repoPath` | Read policy and propose validation; never writes. |
 | `setup` | `repoPath` | Write a missing policy after TUI confirmation. |
-| `create` | `repoPath`, `kind`, `objective`, `acceptanceCriteria`, `surfaces` | Create a scout or implementation task. |
+| `create` | `repoPath`, `kind`, `objective`, `acceptanceCriteria`, `surfaces`, optional `userCheckCriteria` | Create a scout or implementation task; `userCheckCriteria` names the "you check" split (see [Tandem checks and you check](#tandem-checks-and-you-check)). |
 | `list` | none | List durable tasks. |
 | `show` | `taskId`, optional `detail: "summary" \| "full"` | Inspect one task. |
 | `steer` | `taskId`, `text`, optional `supersedes` list | Queue an in-scope direction, preserve approval, and invalidate outdated review evidence when needed. |
-| `answer` | `taskId`, `questionId`, `text` | Answer the current needs-decision question; stale question IDs are rejected. |
+| `answer` | `taskId`, `questionId`, `text` | Answer the current needs-decision question; stale question IDs are rejected. A `user-check-` question additionally requires human confirmation for a "yes" reply. |
 | `messages` | `taskId` | Inspect communication revision, message receipts, current question, and worker activity. |
 | `approve` | `taskId` | Approve an implementation scope after confirmation. |
 | `tick` | none | Run one scheduler pass. |
@@ -1681,6 +1760,12 @@ The extension also registers `/tandem`. Arguments use shell-style quoting for pa
 The extension scheduler starts at session start with a 2,000 ms default interval and reconciles once immediately. It refreshes the durable digest before an agent turn, during OMP-native compaction, and after compaction. Routine notices, receipts, heartbeats, and passive progress are shown with `ctx.ui.notify` and appended to the durable UI log without a model turn. The newest actionable notices in one delivery batch are coalesced into at most one follow-up/model wake; routine backlog is excluded from that wake. Current blocked tasks, completed scout reports, and PR-ready coordinator notices are the judgment-needed cases. A judgment-needed notice on a scout also carries that scout's [post-research follow-up](#following-up-after-a-scout-reports), rebuilt from the durable record on every delivery. Progress is not death: after roughly five minutes without meaningful activity, or about 60 seconds without a startup heartbeat, Tandem emits one actionable inspection warning per inactivity episode and resets the episode when progress resumes; it does not kill a worker merely because time elapsed. Actual process exit or error still follows the existing failed/blocked path.
 
 A scout is completed research only when durable state records its `completed` stage and report; queued or blocked scout work is not completion.
+
+The judgment-needed delivery for a `user-check-` question attaches the builder's saved screenshots
+inline as image content on the message the user reads (bounded in count and per-file size); a clip
+or an oversized/unreadable file falls back to a `Clip: <path>` text line, since OMP cannot inline
+video. Task, notification, and question identifiers stay in the hidden companion message only, never
+in what the user sees.
 
 Treehouse worktrees are acquired under the configured pool root and tied to the source/base HEAD, lease holder, lease ID, task branch, and task generation. A launched coordinator first owns a distinct clean source worktree pinned to the original committed HEAD; that source lease is separate from each task worktree. Branches use the `tandem/<safe-task-name>` form. Runtime passes every owned task worktree as protected to pool maintenance.
 
@@ -1806,7 +1891,7 @@ bun src/cli.ts pr publish TASK_ID OWNER/REPO "Title" main \
   --yes
 ```
 
-The publish path verifies the task is ready, the worktree is clean, the branch and repository identity match the task, validation evidence is non-empty and successful, all four current review lenses exist, and the current worktree HEAD is exactly the reviewed HEAD. It pushes that exact reviewed SHA to the task branch. Existing pull requests are re-observed and must match the same repository, base, branch, and SHA; closed or merged duplicates are refused.
+The publish path verifies the task is ready, the worktree is clean, the branch and repository identity match the task, validation evidence is non-empty and successful, all four current review lenses exist, and the current worktree HEAD is exactly the reviewed HEAD. When the task has "you check" criteria (see [Tandem checks and you check](#tandem-checks-and-you-check)), it also requires a confirmed check bound to that exact HEAD and generation; a pending or stale one refuses publication with the number of hands-on criteria still waiting, and the rendered description reports the confirmed count as validation evidence once it passes. `delivery-preflight` and a whole-request member's own delivery gate carry the same `user-check` refusal. It pushes that exact reviewed SHA to the task branch. Existing pull requests are re-observed and must match the same repository, base, branch, and SHA; closed or merged duplicates are refused.
 
 Merge is a separate explicit action:
 
@@ -1831,6 +1916,8 @@ bun src/cli.ts feedback PRESENTATION_ID
 The controller creates a fresh private artifact directory outside the source repository, reads installed `lavish-axi --help`, selects matching playbooks, and requests fallback design guidance when the subject project has no detected design direction and the objective has no explicit one. The presentation worker receives a bounded brief and writes complete HTML only to the supplied artifact path. It must return exactly one `Artifact: <absolute path>` line and cannot open or poll Lavish.
 
 The controller verifies the artifact before opening it with Lavish. Each open presentation gets one supervised continuous native feedback listener with no client timeout; the listener is tracked, serialized with completion and notification persistence, and aborted and awaited during shutdown. The public `feedback` action remains a bounded, cancellable check and can explicitly check a browser-disconnected presentation. Automatic listening resumes after that check returns an open, non-disconnected observation. Ready/opened and ordinary ended observations are persisted as routine UI bookkeeping; each feedback event is stored as full private evidence under the presentation directory and delivered through the owning task's bounded notification path, while poll failures and `browser_disconnected` decisions are also persisted and delivered there. A `browser_disconnected` observation leaves an otherwise-open presentation recoverable without automatic reopen, while `user-ended` is never reopened and its final feedback is drained once. Presentation feedback is an observation, never an approval for implementation or delivery.
+
+A builder's "you check" screenshots (see [Tandem checks and you check](#tandem-checks-and-you-check)) are task evidence bound to a commit, not a presentation; they never open Lavish and are never routed through `present`.
 
 ## Recovery, durable state, and compaction
 
