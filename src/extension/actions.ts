@@ -5,6 +5,11 @@ import { formatDollars } from "../runtime/budget.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
+import {
+  isUserCheckYes,
+  USER_CHECK_QUESTION_ID_PREFIX,
+  userCheckDecisionQuestion,
+} from "../tasks/user-checks.ts";
 import { projectName, summarizeModelAssignments } from "./summary.ts";
 
 const TANDEM_COMMAND_ARITY: Readonly<
@@ -75,6 +80,7 @@ export type TandemAction =
       readonly kind: TaskKind;
       readonly objective: string;
       readonly acceptanceCriteria: readonly string[];
+      readonly userCheckCriteria?: readonly string[] | undefined;
       readonly surfaces: readonly string[];
       readonly researchTaskIds?: readonly string[] | undefined;
       /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
@@ -246,6 +252,11 @@ function textResult(
 
 function requiresHumanApproval(action: TandemAction): boolean {
   if (action.action === "cleanup") return action.discard === true;
+  if (action.action === "answer") {
+    return (
+      action.questionId.startsWith(USER_CHECK_QUESTION_ID_PREFIX) && isUserCheckYes(action.text)
+    );
+  }
   return (
     action.action === "setup" ||
     action.action === "configure-models" ||
@@ -324,9 +335,17 @@ async function approvalPrompt(
   if (action.action === "brief-approve") {
     const requestId = action.requestId ?? (await service.pendingBriefApprovalId());
     const view = await service.requestBrief(requestId);
+    const userChecks = view.record.draft.content.userCheckCriteria?.length ?? 0;
     return {
       title: "Approve this brief?",
-      message: taskName(view.record.draft.content.goal),
+      message: [
+        taskName(view.record.draft.content.goal),
+        userChecks === 0
+          ? ""
+          : `You'll check ${userChecks} thing${userChecks === 1 ? "" : "s"} at the end.`,
+      ]
+        .filter((part) => part.length > 0)
+        .join(" "),
     };
   }
   if (action.action === "budget-approve") {
@@ -340,16 +359,28 @@ async function approvalPrompt(
   const task = await service.get(action.taskId);
   const name = taskName(task.objective);
   switch (action.action) {
+    case "answer": {
+      // Only a user-check "yes" reaches this dialog; requiresHumanApproval gates every other reply.
+      const decision = userCheckDecisionQuestion(task);
+      return { title: decision.ask, message: decision.note ?? "" };
+    }
     case "approve": {
       // Directions given after the plan go to the worker too, so the approval names them.
       const directions =
         task.communication === undefined ? 0 : activeTaskMessages(task.communication).length;
+      const userChecks = task.userCheckCriteria?.length ?? 0;
       return {
         title: `Start building ${name}?`,
-        message:
+        message: [
           directions === 0
             ? ""
             : `Includes ${directions} direction${directions === 1 ? "" : "s"} you gave after the plan.`,
+          userChecks === 0
+            ? ""
+            : `You'll check ${userChecks} thing${userChecks === 1 ? "" : "s"} at the end.`,
+        ]
+          .filter((part) => part.length > 0)
+          .join(" "),
       };
     }
     case "cancel":
@@ -411,6 +442,9 @@ function serviceCreateInput(
     kind: action.kind,
     objective: action.objective,
     acceptanceCriteria: action.acceptanceCriteria,
+    ...(action.userCheckCriteria === undefined
+      ? {}
+      : { userCheckCriteria: action.userCheckCriteria }),
     surfaces: action.surfaces,
     ...(action.researchTaskIds === undefined ? {} : { researchTaskIds: action.researchTaskIds }),
     ...(action.skill === undefined ? {} : { skill: action.skill }),

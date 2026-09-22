@@ -1,17 +1,60 @@
 import { constants } from "node:fs";
-import { access } from "node:fs/promises";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { access, readFile } from "node:fs/promises";
+import { extname } from "node:path";
+import type {
+  CustomMessageContent,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@oh-my-pi/pi-coding-agent";
 import type { RequestDeliveryRecord, TaskRecord } from "../contracts.ts";
 import type { TandemService } from "../service/controller.ts";
 import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
+import { isClipPath, USER_CHECK_QUESTION_ID_PREFIX } from "../tasks/user-checks.ts";
 import { buildResearchFollowUpContent } from "./research-follow-up.ts";
 import { ACTION_SUMMARY_MAX_TEXT, compactText, prioritizeTasks } from "./summary.ts";
 
 const MAX_NOTIFICATION_BATCH = 8;
 const TANDEM_NOTIFICATION_ENTRY = "tandem-notification";
+const MAX_ATTACHMENT_IMAGES = 8;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 /** Proof that a recorded report is still readable, so the follow-up decision may trust it. */
 export type ResearchReportProbe = (reportPath: string) => Promise<boolean>;
+
+/** Inline image content, structurally compatible with OMP's `ImageContent` without depending on
+ *  the transitive `@oh-my-pi/pi-ai` package directly. */
+export type ReadableAttachment = Readonly<{
+  readonly type: "image";
+  readonly data: string;
+  readonly mimeType: string;
+}>;
+
+/** Reads one "you check" evidence file for inline attachment; `undefined` on any read failure or
+ *  unsupported extension. */
+export type ReadUserCheckAttachment = (path: string) => Promise<ReadableAttachment | undefined>;
+
+const IMAGE_MIME_TYPES: Readonly<Record<string, string>> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+/** Default {@link ReadUserCheckAttachment}: reads the file and base64-encodes it, inferring the
+ *  MIME type from its extension. */
+export async function readUserCheckAttachment(
+  path: string,
+): Promise<ReadableAttachment | undefined> {
+  const mimeType = IMAGE_MIME_TYPES[extname(path).toLowerCase()];
+  if (mimeType === undefined) return undefined;
+  try {
+    const bytes = await readFile(path);
+    return { type: "image", data: bytes.toString("base64"), mimeType };
+  } catch {
+    return undefined;
+  }
+}
 
 type NotificationRef = Readonly<{
   /** Whether the coordinator acknowledges this through the task path or the request path. */
@@ -25,6 +68,8 @@ type NotificationRef = Readonly<{
   readonly recommendation?: string;
   readonly reportPath?: string;
   readonly followUp?: string;
+  /** Builder-saved "you check" evidence paths, only for the current user-check question. */
+  readonly attachments?: readonly string[];
 }>;
 
 export async function isResearchReportReadable(reportPath: string): Promise<boolean> {
@@ -75,6 +120,13 @@ async function allPendingNotifications(
           notification.id === latestLegacyId);
       const question = judgmentNeeded ? task.communication?.question : undefined;
       if (judgmentNeeded) followUp ??= await researchFollowUpContent(task, reportReadable);
+      const attachments =
+        question?.id.startsWith(USER_CHECK_QUESTION_ID_PREFIX) === true &&
+        task.userCheck !== undefined &&
+        task.userCheck.head === task.reviewHead &&
+        task.userCheck.generation === task.generation
+          ? task.userCheck.evidence.flatMap((entry) => entry.paths)
+          : undefined;
       result.push({
         scope: "task",
         taskId: task.id,
@@ -92,6 +144,7 @@ async function allPendingNotifications(
             }),
         ...(judgmentNeeded && task.reportPath !== undefined ? { reportPath: task.reportPath } : {}),
         ...(judgmentNeeded && followUp !== undefined ? { followUp } : {}),
+        ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
       });
     }
   }
@@ -189,6 +242,46 @@ function judgmentIdentifiers(notifications: readonly NotificationRef[]): string 
   ].join("\n");
 }
 
+/**
+ * The displayed judgment content, with builder screenshots attached inline when the batch includes
+ * a user-check question. Bounded to {@link MAX_ATTACHMENT_IMAGES} images of at most
+ * {@link MAX_ATTACHMENT_BYTES} each; clips and oversized or unreadable files fall back to a `Clip:`
+ * text line instead, since OMP cannot inline video.
+ */
+async function judgmentMessageContent(
+  notifications: readonly NotificationRef[],
+  readAttachment: ReadUserCheckAttachment,
+): Promise<CustomMessageContent> {
+  const text = judgmentDisplayContent(notifications);
+  const paths = notifications.flatMap((notification) => notification.attachments ?? []);
+  if (paths.length === 0) return text;
+  const images: ReadableAttachment[] = [];
+  const fallbackLines: string[] = [];
+  for (const path of paths) {
+    if (isClipPath(path)) {
+      fallbackLines.push(`Clip: ${path}`);
+      continue;
+    }
+    if (images.length >= MAX_ATTACHMENT_IMAGES) {
+      fallbackLines.push(`Clip: ${path}`);
+      continue;
+    }
+    const image = await readAttachment(path);
+    if (image === undefined || Buffer.byteLength(image.data, "base64") > MAX_ATTACHMENT_BYTES) {
+      fallbackLines.push(`Clip: ${path}`);
+      continue;
+    }
+    images.push(image);
+  }
+  return [
+    {
+      type: "text",
+      text: fallbackLines.length === 0 ? text : `${text}\n${fallbackLines.join("\n")}`,
+    },
+    ...images,
+  ];
+}
+
 type NotificationMessageSink = Pick<ExtensionAPI, "sendMessage" | "appendEntry">;
 type NotificationUi = Readonly<{ readonly ui: Pick<ExtensionContext["ui"], "notify"> }>;
 
@@ -207,6 +300,8 @@ export type PendingNotificationDelivery = Readonly<{
   readonly unacknowledged: Set<string>;
   readonly ctx: NotificationUi;
   readonly reportReadable: ResearchReportProbe;
+  /** Reads one "you check" evidence file for inline attachment. */
+  readonly readAttachment: ReadUserCheckAttachment;
 }>;
 
 /** Deliver pending notifications without turning routine scheduler work into model input. */
@@ -250,7 +345,7 @@ export async function deliverPendingNotifications(
       pi.sendMessage(
         {
           customType: TANDEM_NOTIFICATION_ENTRY,
-          content: judgmentDisplayContent(actionable),
+          content: await judgmentMessageContent(actionable, delivery.readAttachment),
           display: true,
           attribution: "agent",
         },

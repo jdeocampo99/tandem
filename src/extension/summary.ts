@@ -21,6 +21,7 @@ import {
   checkResearchContinuation,
   researchContinuationFor,
 } from "../tasks/research-continuation.ts";
+import { userCheckStatus } from "../tasks/user-checks.ts";
 import type { TandemAction } from "./actions.ts";
 import { describeResearchDisposition } from "./research-follow-up.ts";
 
@@ -209,6 +210,12 @@ function summarizeTask(task: TaskRecord): string {
       ? []
       : [`Request: ${compactText(task.requestId, ACTION_SUMMARY_MAX_TEXT)}`]),
     `Acceptance criteria (${task.acceptanceCriteria.length}): ${compactList(task.acceptanceCriteria)}`,
+    ...(task.userCheckCriteria === undefined || task.userCheckCriteria.length === 0
+      ? []
+      : [
+          `You check (${task.userCheckCriteria.length}): ${compactList(task.userCheckCriteria)}`,
+          `Your check: ${userCheckStatus(task)}`,
+        ]),
     `Surfaces (${task.surfaces.length}): ${compactList(task.surfaces)}`,
   ];
   if (heads.length > 0) lines.push(`Commits: ${heads.join(", ")}`);
@@ -1140,6 +1147,12 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
       lines.push(
         `  acceptance (${task.acceptanceCriteria.length}): ${compactList(task.acceptanceCriteria, 3, 110)}`,
       );
+      if (task.userCheckCriteria !== undefined && task.userCheckCriteria.length > 0) {
+        lines.push(
+          `  you check (${task.userCheckCriteria.length}): ${compactList(task.userCheckCriteria, 3, 110)}`,
+          `  your check: ${userCheckStatus(task)}`,
+        );
+      }
       const findings = currentReviewFindings(task);
       if (findings.length > 0) {
         lines.push(

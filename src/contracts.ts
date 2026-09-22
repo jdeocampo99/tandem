@@ -495,7 +495,7 @@ export type RequestBriefContent = Readonly<{
   readonly researchLinks: readonly string[];
   /** "You check" criteria: hands-on/visual items the user judges from builder screenshots, not a
    *  validation command. Part of the agreement; omitted when empty. */
-  readonly userCheckCriteria?: readonly string[];
+  readonly userCheckCriteria?: readonly string[] | undefined;
 }>;
 
 /** Whether a revision changed what was agreed or only annotated it. */

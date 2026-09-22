@@ -18,6 +18,7 @@ import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import {
   deliverPendingNotifications,
   isResearchReportReadable,
+  readUserCheckAttachment,
 } from "./extension/notifications.ts";
 import { promptRoutingConfig } from "./extension/prompt-routing.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
@@ -198,6 +199,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             unacknowledged: unacknowledgedNotifications,
             ctx,
             reportReadable: isResearchReportReadable,
+            readAttachment: readUserCheckAttachment,
           });
         } catch (error) {
           taskState = "blocked";

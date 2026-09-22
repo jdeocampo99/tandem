@@ -5,7 +5,7 @@
  */
 
 import type { Finding, TaskQuestion, TaskRecord, UserCheckEvidence } from "../contracts.js";
-import { formatDecisionQuestion, taskName } from "./question.js";
+import { type DecisionQuestion, formatDecisionQuestion, taskName } from "./question.js";
 
 export const USER_CHECK_QUESTION_ID_PREFIX = "user-check-";
 
@@ -86,13 +86,21 @@ function evidenceNote(evidence: readonly UserCheckEvidence[]): string {
   return withNote.length <= 100 ? withNote : base;
 }
 
-export function userCheckQuestion(task: TaskRecord, head: string): TaskQuestion {
+/** The unformatted ask/note pair, for a caller that needs them shown separately (e.g. a title and
+ *  message in a confirmation dialog) rather than joined into one line. */
+export function userCheckDecisionQuestion(task: TaskRecord): DecisionQuestion {
   const evidence = task.userCheck?.evidence ?? [];
-  const text = formatDecisionQuestion({
+  return {
     ask: `Does ${taskName(task.objective)} look right?`,
     note: evidenceNote(evidence),
-  });
-  return { id: userCheckQuestionId(task.generation, head), text };
+  };
+}
+
+export function userCheckQuestion(task: TaskRecord, head: string): TaskQuestion {
+  return {
+    id: userCheckQuestionId(task.generation, head),
+    text: formatDecisionQuestion(userCheckDecisionQuestion(task)),
+  };
 }
 
 export function isUserCheckYes(text: string): boolean {

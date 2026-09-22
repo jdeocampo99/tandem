@@ -1178,6 +1178,7 @@ test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct
     unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
 
   expect(sent).toHaveLength(2);
@@ -1253,6 +1254,7 @@ test("a failed acknowledgement retries on the next tick without waking the coord
       unacknowledged: unacknowledgedKeys,
       ctx: context,
       reportReadable: async () => true,
+      readAttachment: async () => undefined,
     });
 
   // The wake reaches the coordinator (a hidden identifiers message, then the displayed prompt),
@@ -1336,6 +1338,7 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
     unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
   await deliverPendingNotifications({
     pi: sink,
@@ -1346,6 +1349,7 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
     unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
 
   expect(blocked.stage).toBe("blocked");
@@ -1428,6 +1432,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         unacknowledged: unacknowledgedKeys,
         ctx: context,
         reportReadable: async () => true,
+        readAttachment: async () => undefined,
       });
       await deliverPendingNotifications({
         pi: sink,
@@ -1438,6 +1443,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         unacknowledged: unacknowledgedKeys,
         ctx: context,
         reportReadable: async () => true,
+        readAttachment: async () => undefined,
       });
       expect(sent).toHaveLength(2);
       expect(sent[0]?.content).toContain("task scout-task");
@@ -1467,6 +1473,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         unacknowledged: new Set<string>(),
         ctx: context,
         reportReadable: async () => true,
+        readAttachment: async () => undefined,
       });
       expect(sent).toHaveLength(2);
 
@@ -1520,6 +1527,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
           unacknowledged: retryUnacknowledged,
           ctx: context,
           reportReadable: async () => true,
+          readAttachment: async () => undefined,
         }),
       ).rejects.toThrow("coordinator bridge unavailable");
       const pendingRetry = await reopened.get("scout-retry");
@@ -1534,6 +1542,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         unacknowledged: retryUnacknowledged,
         ctx: context,
         reportReadable: async () => true,
+        readAttachment: async () => undefined,
       });
       expect(retrySent).toHaveLength(2);
       expect(retrySent[1]).toContain("/tmp/tandem/scout-retry-report.txt");
@@ -1587,6 +1596,7 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
     unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
   await deliverPendingNotifications({
     pi: sink,
@@ -1597,6 +1607,7 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
     unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
 
   expect(sent).toHaveLength(0);
@@ -1662,6 +1673,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
   await deliverPendingNotifications({
     pi: sink,
@@ -1672,6 +1684,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
 
   expect(sent).toHaveLength(2);
@@ -1704,6 +1717,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
   expect(sent).toHaveLength(2);
   expect(modelTurns).toBe(1);
@@ -1761,6 +1775,7 @@ test("notification kind controls whether presentation bookkeeping wakes the coor
     unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
   expect(sent).toHaveLength(2);
   expect(sent[0]).toContain("task task-coordinator");
@@ -1827,6 +1842,7 @@ test("legacy scout recovery survives a later routine presentation notice", async
     unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
 
   expect(sent).toHaveLength(2);
@@ -1856,6 +1872,7 @@ test("legacy scout recovery survives a later routine presentation notice", async
     unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
 
   expect(sent).toHaveLength(2);
@@ -2064,6 +2081,7 @@ test("a request decision wakes the coordinator while routine request state stays
     unacknowledged: new Set<string>(),
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
 
   expect(sent).toHaveLength(2);
@@ -2125,6 +2143,7 @@ test("a recovery question wakes the coordinator once with its recommendation and
     unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
   await deliverPendingNotifications({
     pi: sink,
@@ -2135,6 +2154,7 @@ test("a recovery question wakes the coordinator once with its recommendation and
     unacknowledged: unacknowledgedKeys,
     ctx: context,
     reportReadable: async () => true,
+    readAttachment: async () => undefined,
   });
 
   expect(sent).toHaveLength(2);

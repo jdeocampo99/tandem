@@ -197,6 +197,7 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
       unacknowledged: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
+      readAttachment: async () => undefined,
     });
 
     const restarted = createTaskStore({ directory, clock: () => NOW, idFactory: () => "unused" });
@@ -212,6 +213,7 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
       unacknowledged: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
+      readAttachment: async () => undefined,
     });
 
     expect(first).toHaveLength(2);
@@ -242,6 +244,7 @@ test("an unreadable report downgrades the recorded interview to a disclosed bloc
       unacknowledged: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
+      readAttachment: async () => undefined,
     });
 
     expect(sent).toHaveLength(2);
@@ -270,6 +273,7 @@ test("an implementation-interview wake approves no scope and creates no implemen
       unacknowledged: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
+      readAttachment: async () => undefined,
     });
 
     const after = await store.list();
@@ -312,6 +316,7 @@ test("routine scout bookkeeping stays out of the model wake and carries no follo
       unacknowledged: new Set<string>(),
       ctx: { ui: { notify: (message) => notices.push(message) } },
       reportReadable: isResearchReportReadable,
+      readAttachment: async () => undefined,
     });
 
     expect(sent).toHaveLength(0);
@@ -379,6 +384,7 @@ test("the delivered wake matches the pure decision for the same durable record",
       unacknowledged: new Set<string>(),
       ctx: silentUi(),
       reportReadable: isResearchReportReadable,
+      readAttachment: async () => undefined,
     });
 
     const expected = buildResearchFollowUpContent(
