@@ -440,6 +440,21 @@ falls back to stale source. The original checkout may be dirty and remains untou
 task records, and delivery retain the original identity as `TANDEM_REPO`; the owned source checkout
 is `TANDEM_SOURCE_REPO`, which users normally do not set themselves.
 
+The coordinator's pane runs a Tandem launch script under `<home>/coordinator-scripts/`. When the
+coordinator exits there (Ctrl-C, crash), the script stays and says so in plain English: Enter
+starts it again in the same pane with `--continue`, keeping the same record, lease, and pane;
+Ctrl-C leaves the user at the pane's own shell. `--continue` is not part of coordinator identity,
+and that script waiting at its offer counts as a stopped coordinator shell, so restart and reset
+may close the pane.
+
+A coordinator that exited (Ctrl-C, crash, or closed pane) counts as stopped. When its recorded pane
+now runs something else, such as a shell or an `omp` started by hand, Tandem checks every process on
+the machine for the coordinator's own `--session-dir`. If none is running, launch and restart open a
+fresh pane with `--continue` and leave the old pane and whatever runs in it untouched; its lease is
+kept under a quarantine note. If the coordinator is still running elsewhere, or the record predates
+`--session-dir`, Tandem refuses and names the one step to take. Reset still refuses to close such a
+pane, because it is no longer Tandem's.
+
 An explicit `tandem PATH` opens or reconnects only that project after ownership checks. `--continue`
 resumes a stopped coordinator's saved conversation; `--restart` reloads the extension, prefetches
 fresh source before closing the old coordinator, and preserves child work and conversation history.
@@ -2193,8 +2208,10 @@ Classification:
   ownership;
 - a record Tandem cannot place or prove, such as one stored under a session directory it does not
   name, is quarantined with a durable note and nothing is closed or released;
-- existing quarantine notes and unreadable record files are listed with their path and reason, and
-  are never deleted.
+- unreadable record files are listed with their path and reason, and are never deleted;
+- an existing quarantine note is listed with its reason, and is removed only when no stored
+  coordinator record names its lease and Treehouse, re-read under the repository lock, no longer
+  holds that lease. A note whose lease cannot be read is kept.
 
 Without `--yes` the command changes nothing and reports what it would clean. `--discard` is valid
 only with `--yes`. Applying coordinator and pool-lease items takes the shared repository lock for
@@ -2203,7 +2220,7 @@ underneath them; task cleanup runs through its durable state-and-lease owner. A 
 lock and never disturbs a live coordinator. A `clean` plan item is a prediction: applying re-reads
 the resource and hands it back to its owner, which may still retain or quarantine it. Applying
 twice plans nothing to clean the second time, and a quarantine note is written once per lease rather
-than on every run. `--json` prints a versioned report (`schemaVersion`, `mode`, `home`, `cleaned`,
+than on every run or launch. `--json` prints a versioned report (`schemaVersion`, `mode`, `home`, `cleaned`,
 `retained`, `quarantined`, `failed`) whose entries carry the resource kind, id, repository, session,
 path, and reason. The exit code is non-zero only when the scan or an apply failed, never because a
 resource was deliberately retained.

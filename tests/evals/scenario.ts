@@ -67,7 +67,7 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
 };
 
 /** Every external boundary a scenario is allowed to touch. */
-export type ScenarioBoundary = "herdr" | "treehouse" | "git" | "omp" | "typesafe";
+export type ScenarioBoundary = "herdr" | "treehouse" | "git" | "omp" | "ps" | "typesafe";
 
 /** Scripted TypeSafe provider behavior; no scenario ever reaches the real endpoint. */
 export type ScenarioProviderBehavior =
@@ -152,6 +152,8 @@ export type ScenarioWorld = Readonly<{
     input: Readonly<{ readonly paneId: string; readonly cwd: string }>,
   ) => Endpoint;
   readonly paneIsPresent: (paneId: string) => boolean;
+  /** Replaces a pane's foreground, as when its agent exits and someone starts another by hand. */
+  readonly replaceForeground: (paneId: string, argv: readonly string[]) => void;
   readonly grantLease: (
     input: Readonly<{ readonly name: string; readonly holder: string }>,
   ) => Promise<WorktreeLease>;
@@ -194,6 +196,7 @@ function describeCommand(argv: readonly string[]): Readonly<{
     return { boundary: "git", action: `git ${verb}${qualifier}` };
   }
   if (program === "omp") return { boundary: "omp", action: `omp ${argv[1] ?? ""}`.trim() };
+  if (program === "ps") return { boundary: "ps", action: "ps" };
   throw new Error(`unexpected scenario command ${JSON.stringify(argv)}`);
 }
 
@@ -245,9 +248,11 @@ async function bootstrapProcessArgv(command: string): Promise<readonly string[]>
   const scriptPath = tokens[1];
   if (tokens[0] !== "/bin/sh" || scriptPath === undefined) return tokens;
   const script = await readFile(scriptPath, "utf8");
-  const executed = script.split("\n").find((line) => line.startsWith("exec "));
+  // The first command after the INT trap is the coordinator launch itself.
+  const lines = script.split("\n");
+  const executed = lines[lines.indexOf("trap : INT") + 1];
   if (executed === undefined) return tokens;
-  const argv = parseQuotedCommand(executed.slice("exec ".length));
+  const argv = parseQuotedCommand(executed);
   const start = argv.findIndex((entry, position) => position > 0 && !entry.includes("="));
   return start === -1 ? argv : argv.slice(start);
 }
@@ -572,6 +577,14 @@ export async function createScenarioWorld(
     if (program === "omp") {
       return commandResult(JSON.stringify({ models: options.ompModels ?? [] }));
     }
+    if (program === "ps") {
+      const lines = [...panes.values()]
+        .filter((pane) => pane.present)
+        .flatMap((pane) =>
+          pane.processes.map((process) => `${process.pid} ${process.argv.join(" ")}`),
+        );
+      return commandResult(lines.join("\n"));
+    }
     throw new Error(`unexpected scenario command ${JSON.stringify(request.argv)}`);
   };
 
@@ -631,6 +644,12 @@ export async function createScenarioWorld(
     },
     openPane,
     paneIsPresent: (paneId) => panes.get(paneId)?.present === true,
+    replaceForeground: (paneId, argv) => {
+      const pane = panes.get(paneId);
+      if (pane === undefined) throw new Error(`unknown scenario pane ${paneId}`);
+      nextPid += 1;
+      pane.processes = [{ pid: nextPid, name: argv[0] ?? "", argv }];
+    },
     grantLease,
     patchCheckout: (path, patch) => {
       Object.assign(checkoutFor(path), patch);

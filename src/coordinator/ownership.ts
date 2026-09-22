@@ -20,6 +20,7 @@ import {
 import { readCoordinatorRecord } from "./registry.ts";
 
 const LEGACY_COORDINATOR_SESSION_DIRECTORY = "coordinator-sessions";
+export const COORDINATOR_SCRIPT_DIRECTORY = "coordinator-scripts";
 const LEGACY_COORDINATOR_REPOSITORY_KEY_LENGTH = 24;
 const COORDINATOR_EXTENSION_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -47,10 +48,6 @@ export function sameCommand(left: readonly string[], right: readonly string[]): 
     normalizedLeft.length === normalizedRight.length &&
     normalizedLeft.every((value, index) => value === normalizedRight[index])
   );
-}
-
-function describeFailure(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function nativeErrorCode(value: string): string | undefined {
@@ -158,9 +155,23 @@ function ompLauncherIndex(argv: readonly string[]): number | undefined {
   return undefined;
 }
 
+/** `--continue` only resumes the saved conversation, so it never distinguishes one coordinator. */
 function normalizeOmpCommand(argv: readonly string[]): readonly string[] | undefined {
   const launcherIndex = ompLauncherIndex(argv);
-  return launcherIndex === undefined ? undefined : ["omp", ...argv.slice(launcherIndex + 1)];
+  return launcherIndex === undefined
+    ? undefined
+    : ["omp", ...argv.slice(launcherIndex + 1).filter((value) => value !== "--continue")];
+}
+
+/** The launch script Tandem writes, which waits in the pane after its coordinator exits. */
+function isCoordinatorBootstrap(argv: readonly string[]): boolean {
+  const script = argv[1] ?? "";
+  return (
+    argv.length === 2 &&
+    basename(argv[0] ?? "") === "sh" &&
+    basename(dirname(script)) === COORDINATOR_SCRIPT_DIRECTORY &&
+    /^coordinator-[0-9a-f]{16}-[0-9a-f]{16}-[0-9a-f]{16}\.sh$/u.test(basename(script))
+  );
 }
 
 function processLooksLikeOmp(process: {
@@ -311,20 +322,55 @@ export async function findRunningCoordinator(
   run: CommandRunner,
   input: FindRunningCoordinatorInput,
 ): Promise<CoordinatorRecord | undefined> {
-  return findOwnedCoordinator(run, input, false);
+  return findOwnedCoordinator(run, input, false, true);
 }
 
+/** Finds a running or cleanly stopped coordinator whose pane reset may close. */
 export async function findResetCoordinator(
   run: CommandRunner,
   input: FindRunningCoordinatorInput,
 ): Promise<CoordinatorRecord | undefined> {
-  return findOwnedCoordinator(run, input, true);
+  return findOwnedCoordinator(run, input, true, false);
+}
+
+/**
+ * Like reset, but a coordinator that exited and left its pane to another process is simply
+ * stopped: restart relaunches beside that pane instead of refusing.
+ */
+export async function findRestartCoordinator(
+  run: CommandRunner,
+  input: FindRunningCoordinatorInput,
+): Promise<CoordinatorRecord | undefined> {
+  return findOwnedCoordinator(run, input, true, true);
+}
+
+/**
+ * Returns the pid of any process on this machine still running the recorded coordinator's
+ * session directory, "unknown" when the record predates that flag, or undefined when none runs.
+ */
+async function liveCoordinatorProcess(
+  run: CommandRunner,
+  record: CoordinatorRecord,
+): Promise<string | undefined> {
+  const sessionDirectory = commandOption(record.command, "--session-dir").value;
+  if (sessionDirectory === undefined) return "unknown";
+  const request: CommandRequest = {
+    argv: ["ps", "-axww", "-o", "pid=,command="],
+    cwd: record.worktree.path,
+  };
+  const result = await run(request);
+  if (result.code !== 0) throw new AdapterCommandError("ps", request, result);
+  // ponytail: substring match on the joined command line; over-matching only fails closed.
+  const needle = `--session-dir ${sessionDirectory}`;
+  const line = result.stdout.split("\n").find((entry) => entry.includes(needle));
+  return line?.trim().split(/\s+/u)[0];
 }
 
 async function findOwnedCoordinator(
   run: CommandRunner,
   input: FindRunningCoordinatorInput,
   includeStopped: boolean,
+  includeAbandoned: boolean,
 ): Promise<CoordinatorRecord | undefined> {
   if (typeof run !== "function") throw new TypeError("run must be an argv command runner");
   const home = await canonicalHome(input.home);
@@ -382,9 +428,22 @@ async function findOwnedCoordinator(
   }
   if (matchingProcesses.length === 0) {
     if (inspection.activeWorker) {
-      throw ownershipFailure(
-        `foreground process in pane ${record.endpoint.paneId} does not match recorded OMP command (${describeFailure(record.command)})`,
-      );
+      const livePid = await liveCoordinatorProcess(run, record);
+      if (livePid !== undefined) {
+        throw ownershipFailure(
+          livePid === "unknown"
+            ? `pane ${record.endpoint.paneId} runs something other than the coordinator, and this record is too old to tell whether the coordinator is still running elsewhere. Close whatever runs in that pane, then run \`tandem restart\`.`
+            : `pane ${record.endpoint.paneId} runs something other than the coordinator, but the coordinator is still running elsewhere (process ${livePid}). Stop that process, then run \`tandem restart\`.`,
+        );
+      }
+      // The coordinator exited and the pane now runs something else. That pane is no longer
+      // ours to close, so it counts as stopped and a relaunch opens a fresh pane beside it.
+      if (!includeAbandoned) {
+        throw ownershipFailure(
+          `the coordinator isn't running in pane ${record.endpoint.paneId} any more, and something else is running there now. Run \`tandem restart\` to start it again in a new window.`,
+        );
+      }
+      return undefined;
     }
     await findUnrecordedCoordinator(run, home, sessionId, repoPath);
     if (!includeStopped) return undefined;
@@ -404,13 +463,18 @@ async function findOwnedCoordinator(
   return record;
 }
 
+/**
+ * Proves the pane holds only its own terminal shell, or Tandem's launch script waiting to
+ * start the coordinator again after it exited.
+ */
 export function assertStoppedCoordinatorShell(inspection: HerdrPaneInspection): void {
   const { shellPid, foregroundProcesses } = inspection.processInfo;
+  const only = foregroundProcesses.length === 1 ? foregroundProcesses[0] : undefined;
   if (
     inspection.activeWorker ||
     shellPid === undefined ||
-    foregroundProcesses.length !== 1 ||
-    foregroundProcesses[0]?.pid !== shellPid
+    only === undefined ||
+    (only.pid !== shellPid && !isCoordinatorBootstrap(only.argv))
   ) {
     throw ownershipFailure("stopped coordinator pane does not prove its original terminal shell");
   }

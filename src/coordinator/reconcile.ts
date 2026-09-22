@@ -38,7 +38,9 @@ import {
   listCoordinatorQuarantineRecords,
   observeCoordinatorCheckout,
   quarantineCoordinatorLease,
+  readCoordinatorLeasePresence,
   releaseCoordinatorLease,
+  retireCoordinatorQuarantineNote,
 } from "./resources.ts";
 import { retireCoordinatorWorkspace } from "./workspace.ts";
 
@@ -119,6 +121,8 @@ export type ReconcileObservation = Readonly<{
   readonly implementationTasks?: readonly ObservedPendingImplementation[];
   readonly unreadable: readonly UnreadableCoordinatorRecord[];
   readonly quarantines: readonly CoordinatorQuarantineRecord[];
+  /** Notes whose lease Treehouse no longer holds, so nothing is left for them to protect. */
+  readonly settledQuarantineIds: readonly string[];
   readonly failures: readonly ReconcileScanFailure[];
 }>;
 
@@ -163,11 +167,12 @@ export type ReconcilePlanItem =
     }>
   | Readonly<{
       readonly kind: "quarantine-note";
-      readonly action: "quarantine";
+      readonly action: "quarantine" | "clean";
       readonly reason: string;
       readonly path: string;
       readonly repoPath: string;
       readonly sessionId: string;
+      readonly record: CoordinatorQuarantineRecord;
     }>;
 
 export type ReconcilePlan = Readonly<{
@@ -465,6 +470,7 @@ export async function scanTandemResources(
   const home = await canonicalHome(input.home);
   const { coordinators, unreadable } = await observeCoordinators(input, home);
   const { leases, failures } = await observePoolLeases(input, coordinators);
+  const quarantines = await listCoordinatorQuarantineRecords(home);
   return {
     home,
     coordinators,
@@ -476,9 +482,35 @@ export async function scanTandemResources(
       input.discard === true,
     ),
     unreadable,
-    quarantines: await listCoordinatorQuarantineRecords(home),
+    quarantines,
+    settledQuarantineIds: await observeSettledQuarantines(input.run, quarantines, coordinators),
     failures,
   };
+}
+
+/**
+ * Lists notes whose lease is provably gone and that no stored coordinator record still names.
+ * A note whose lease cannot be read is kept.
+ */
+async function observeSettledQuarantines(
+  run: CommandRunner,
+  quarantines: readonly CoordinatorQuarantineRecord[],
+  coordinators: readonly ObservedCoordinator[],
+): Promise<readonly string[]> {
+  const recorded = new Set(coordinators.map((observed) => observed.found.record.worktree.leaseId));
+  const settled: string[] = [];
+  // ponytail: one Treehouse status read per note; group by pool if notes number in the hundreds.
+  for (const record of quarantines) {
+    if (recorded.has(record.lease.leaseId)) continue;
+    try {
+      if ((await readCoordinatorLeasePresence(run, record.repoPath, record.lease)) === "absent") {
+        settled.push(record.quarantineId);
+      }
+    } catch {
+      // Unreadable or reassigned: keep the note so the lease stays accounted for.
+    }
+  }
+  return settled;
 }
 
 function alreadyNoted(
@@ -635,16 +667,30 @@ export function planTandemReconciliation(observation: ReconcileObservation): Rec
     });
   }
   for (const record of observation.quarantines) {
+    const settled = observation.settledQuarantineIds.includes(record.quarantineId);
     items.push({
       kind: "quarantine-note",
-      action: "quarantine",
-      reason: `${record.stage} quarantine from ${record.quarantinedAt}: ${record.reason}`,
+      action: settled ? "clean" : "quarantine",
+      reason: settled
+        ? `the lease this note kept track of has since been returned, so the note can be removed`
+        : `${record.stage} quarantine from ${record.quarantinedAt}: ${record.reason}`,
+      record,
       path: join(coordinatorQuarantineDirectory(observation.home), `${record.quarantineId}.json`),
       repoPath: record.repoPath,
       sessionId: record.sessionId,
     });
   }
   return { schemaVersion: RECONCILE_REPORT_SCHEMA_VERSION, items };
+}
+
+async function applyQuarantineNoteItem(
+  input: ReconcileApplyInput,
+  item: QuarantineNoteItem,
+): Promise<ReconcileResult> {
+  const outcome = await retireCoordinatorQuarantineNote(input.run, input.home, item.record);
+  return outcome === "retired"
+    ? { item, outcome: "cleaned", reason: item.reason }
+    : { item, outcome: "quarantined", reason: "the lease this note tracks is held again" };
 }
 
 type CoordinatorItem = Extract<ReconcilePlanItem, Readonly<{ readonly kind: "coordinator" }>>;
@@ -654,7 +700,11 @@ type ImplementationTaskItem = Extract<
   Readonly<{ readonly kind: "implementation-task" }>
 >;
 type ScoutItem = Extract<ReconcilePlanItem, Readonly<{ readonly kind: "scout-task" }>>;
-type RepositoryItem = CoordinatorItem | LeaseItem;
+type QuarantineNoteItem = Extract<
+  ReconcilePlanItem,
+  Readonly<{ readonly kind: "quarantine-note" }>
+>;
+type RepositoryItem = CoordinatorItem | LeaseItem | QuarantineNoteItem;
 
 /**
  * Settles one stopped coordinator through the owners a replacement launch uses: the workspace
@@ -812,7 +862,11 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
       implementationTasks.push(item);
       continue;
     }
-    if (item.kind !== "coordinator" && item.kind !== "worktree-lease") {
+    if (
+      item.kind !== "coordinator" &&
+      item.kind !== "worktree-lease" &&
+      !(item.kind === "quarantine-note" && item.action === "clean")
+    ) {
       reported.push(item);
       continue;
     }
@@ -830,7 +884,8 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
  * Coordinator and lease work is grouped per repository and held under that repository's shared
  * lock, so a launch in another session cannot allocate underneath the reconcile. Task cleanup runs
  * through its durable owner, which revalidates state and lease identity before every release.
- * Unreadable records and existing quarantine notes are only ever reported; nothing deletes them.
+ * Unreadable records are only ever reported. A quarantine note is deleted only after its lease is
+ * re-read under the repository lock and found returned.
  */
 export async function applyTandemReconciliation(
   input: ReconcileApplyInput,
@@ -848,7 +903,9 @@ export async function applyTandemReconciliation(
             item,
             item.kind === "coordinator"
               ? await applyCoordinatorItem(input, item)
-              : await applyLeaseItem(input, item),
+              : item.kind === "quarantine-note"
+                ? await applyQuarantineNoteItem(input, item)
+                : await applyLeaseItem(input, item),
           );
         } catch (error) {
           results.set(item, { item, outcome: "failed", reason: describeFailure(error) });

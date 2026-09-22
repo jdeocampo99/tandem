@@ -110,6 +110,8 @@ function coordinatorRunner(input: CoordinatorRunnerInput): Readonly<{
   const run: CommandRunner = async (request) => {
     calls.push(request);
     const [program] = request.argv;
+    // No coordinator runs outside its pane in these scenarios.
+    if (program === "ps") return { code: 0, stdout: "", stderr: "" };
     if (program === "omp" && request.argv[1] === "models") {
       return {
         code: 0,

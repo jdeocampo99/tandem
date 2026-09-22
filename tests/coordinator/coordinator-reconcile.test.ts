@@ -23,7 +23,10 @@ import {
 } from "../../src/coordinator/reconcile.ts";
 import { digest, recordPath, registrySessionDirectory } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord } from "../../src/coordinator/registry.ts";
-import { listCoordinatorQuarantineRecords } from "../../src/coordinator/resources.ts";
+import {
+  listCoordinatorQuarantineRecords,
+  quarantineCoordinatorLease,
+} from "../../src/coordinator/resources.ts";
 import type { RecoveryDecisionReceipt } from "../../src/recovery/decision.ts";
 import type { RecoveryAvailabilityWait } from "../../src/recovery/wait.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
@@ -463,6 +466,7 @@ test("the plan classifies each observed resource without touching any of them", 
     scouts: [{ taskId: "scout-1", repoPath: "/repo", reason: "still holds child resources" }],
     unreadable: [{ path: "/home/coordinator-registry/a/b.json", reason: "not valid JSON" }],
     quarantines: [],
+    settledQuarantineIds: [],
     failures: [],
   });
   expect(plan.items.map((item) => item.action)).toEqual([
@@ -590,6 +594,39 @@ test("a record Tandem cannot place is quarantined once, closing and releasing no
     await test.reconcile(true);
     expect(await listCoordinatorQuarantineRecords(test.home)).toHaveLength(1);
     expect(await readCoordinatorRecord(path)).toBeDefined();
+  });
+});
+
+test("a note whose lease was since returned is retired once, and repeated notes do not pile up", async () => {
+  await withFixture(async (test) => {
+    const ghost = ghostRecord(test.repo, test.poolRoot);
+    let id = 0;
+    const note = () =>
+      quarantineCoordinatorLease({
+        home: test.home,
+        sessionId: "tandem",
+        repoPath: test.repo,
+        stage: "replacement",
+        reason: "previous coordinator checkout could not be read",
+        lease: ghost.worktree as WorktreeLease,
+        clock: () => TIMESTAMP,
+        newId: () => `note-${++id}`,
+      });
+    await note();
+    await note();
+    expect(await listCoordinatorQuarantineRecords(test.home)).toHaveLength(1);
+
+    const dry = await test.reconcile(false);
+    expect(entries(dry.cleaned, "quarantine-note")).toHaveLength(1);
+    expect(await listCoordinatorQuarantineRecords(test.home)).toHaveLength(1);
+
+    const applied = await test.reconcile(true);
+    expect(entries(applied.cleaned, "quarantine-note")).toHaveLength(1);
+    expect(await listCoordinatorQuarantineRecords(test.home)).toHaveLength(0);
+
+    const again = await test.reconcile(true);
+    expect(entries(again.cleaned, "quarantine-note")).toHaveLength(0);
+    expect(entries(again.quarantined, "quarantine-note")).toHaveLength(0);
   });
 });
 
