@@ -652,6 +652,44 @@ export class WorkerWorkflow {
       }
     }
     if (result.status === "failed" || result.status === "needs-decision") {
+      const reviewLens =
+        job.role === "reviewer" || job.role === "verifier" ? job.reviewLens : undefined;
+      if (
+        reviewLens !== undefined &&
+        job.head !== undefined &&
+        task.reviewHead === job.head &&
+        task.generation === job.generation &&
+        (task.stuckReviewLenses ?? []).includes(reviewLens)
+      ) {
+        // This lens already blocked once with a needs-decision/failed result for this exact
+        // reviewed HEAD and generation and was answered/resumed in an earlier round (the only way
+        // this code can run a second time for the same lens); asking again is the verifier loop
+        // issue #84 reported. Instead of blocking again, hand its still-unproven Tandem checks to
+        // the user exactly like a completed review's own handToUser, and let the task continue.
+        const reportPath = reportPathFor(job.jobPath);
+        await writeTextAtomically(reportPath, result.text);
+        await this.consumeJob(
+          task.id,
+          job.id,
+          claim,
+          {
+            type: "record-review",
+            review: {
+              lens: reviewLens,
+              head: job.head,
+              generation: job.generation,
+              pass: true,
+              findings: [],
+              summary: `${reviewLens} review repeated its earlier block, so its unresolved criteria were handed to the user.`,
+              ...(task.acceptanceCriteria.length === 0
+                ? {}
+                : { handToUser: task.acceptanceCriteria }),
+            },
+          },
+          { ...instructionOptions(result.instructionRevision), reportPath },
+        );
+        return;
+      }
       const question =
         result.status === "needs-decision"
           ? {
@@ -692,7 +730,7 @@ export class WorkerWorkflow {
         task.id,
         job.id,
         claim,
-        { type: "block", reason, cause },
+        { type: "block", reason, cause, ...(reviewLens === undefined ? {} : { reviewLens }) },
         {
           ...(question === undefined ? {} : { question }),
           ...instructionOptions(result.instructionRevision),

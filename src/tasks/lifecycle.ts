@@ -177,6 +177,9 @@ type BlockEvent = Readonly<{
   /** Typed cause behind `reason`, when the caller has one. Optional so every existing free-text
    *  block keeps working unchanged; a caller that has a cause should always supply it. */
   readonly cause?: BlockCause;
+  /** A review lens whose needs-decision/failed result caused this block; recorded on the task so a
+   *  repeat from the same lens is recognized as a loop instead of blocking again. */
+  readonly reviewLens?: ReviewLens;
 }>;
 
 /**
@@ -1378,6 +1381,10 @@ export function transitionTask(
       }
       // A typed cause always shows its plain-English summary; the technical text stays in its detail.
       const shown = event.cause?.summary ?? event.reason;
+      const stuckReviewLenses =
+        event.reviewLens === undefined || (task.stuckReviewLenses ?? []).includes(event.reviewLens)
+          ? task.stuckReviewLenses
+          : [...(task.stuckReviewLenses ?? []), event.reviewLens];
       return commitWithNotification(
         task,
         context,
@@ -1386,6 +1393,7 @@ export function transitionTask(
           previousStage: task.stage,
           blockReason: shown,
           ...(event.cause === undefined ? {} : { blockCause: event.cause }),
+          ...(stuckReviewLenses === undefined ? {} : { stuckReviewLenses }),
         },
         `Task ${task.id} blocked: ${shown}`,
         "coordinator",

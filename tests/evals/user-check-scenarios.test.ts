@@ -1,23 +1,33 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { interruptEndpoint } from "../../src/adapters/herdr.ts";
 import type {
+  Endpoint,
   PinnedValidationEvidence,
   ResolvedPolicy,
   ReviewResult,
   TaskRecord,
 } from "../../src/contracts.ts";
 import { assertTaskShape } from "../../src/delivery/evidence.ts";
-import { taskJobsDirectory } from "../../src/runtime/persistence.ts";
+import { readRuntimeState, runtimeFile, taskJobsDirectory } from "../../src/runtime/persistence.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { policyIdentity } from "../../src/tasks/acceptance.ts";
+import {
+  workerReceiptPath,
+  writeWorkerReceipt,
+} from "../../src/tasks/communication-persistence.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { userCheckQuestionId } from "../../src/tasks/user-checks.ts";
+import { persistWorkerResult } from "../../src/workers/jobs.ts";
 import {
   SCENARIO_HEAD,
   SCENARIO_POLICY,
   SCENARIO_TASK_ID,
   type ScenarioWorld,
+  scenarioJob,
+  scenarioOperation,
+  scenarioReservation,
   scenarioRuntimeTask,
   seedScenarioRuntime,
   withScenario,
@@ -324,5 +334,233 @@ test("answering the user-check question after the task has left ready throws", a
       "no longer waiting on you",
     );
     await service.shutdown();
+  });
+});
+
+/**
+ * The anti-loop enforcement this file's earlier tests assume: a scripted verification lens that
+ * asks needs-decision twice in a row, with no `handToUser`, for the same reviewed HEAD and
+ * generation. The first ask blocks normally (the coordinator answers it); the second, from the
+ * exact same lens, is recognized as the loop issue #84 reported and is handed to the user instead
+ * of blocking again — entirely through `WorkerWorkflow.consumeWorkerResult`'s real code path, driven
+ * by `service.tick()`, not a shortcut.
+ */
+test("a verifier that asks needs-decision twice without handToUser still ends in exactly one user-check question", async () => {
+  await withScenario({}, async (world) => {
+    let notificationSequence = 0;
+    const context = (): { now: string; notificationId: string } => {
+      notificationSequence += 1;
+      return { now: world.clock(), notificationId: `anti-loop-${notificationSequence}` };
+    };
+
+    const created = await world.store.create({
+      id: SCENARIO_TASK_ID,
+      repoPath: world.repoPath,
+      kind: "implementation",
+      objective: "Add a streak bar to the habit screen",
+      acceptanceCriteria: [UNTESTABLE_CRITERION],
+      surfaces: ["app"],
+      policy: VALIDATING_POLICY,
+    });
+    let task = await world.store.update(created.id, created.revision, (current) =>
+      transitionTask(current, { type: "approve" }, context()),
+    );
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const implementerEndpoint = {
+      ...world.openPane({ paneId: "pane-implementer", cwd: lease.path }),
+      role: "implementer" as const,
+    };
+    task = await world.store.update(task.id, task.revision, (current) =>
+      transitionTask(
+        current,
+        { type: "start", worktree: lease, endpoints: [implementerEndpoint] },
+        context(),
+      ),
+    );
+    task = await world.store.update(task.id, task.revision, (current) =>
+      transitionTask(
+        current,
+        { type: "implementation-complete", head: SCENARIO_HEAD, generation: current.generation },
+        context(),
+      ),
+    );
+    task = await world.store.update(task.id, task.revision, (current) =>
+      transitionTask(
+        current,
+        {
+          type: "validation-succeeded",
+          head: SCENARIO_HEAD,
+          generation: current.generation,
+          contract: "final",
+          policyDigest,
+          evidence: [evidence(SCENARIO_HEAD)],
+        },
+        context(),
+      ),
+    );
+    for (const lens of ["behavior", "design", "coverage"] as const) {
+      task = await world.store.update(task.id, task.revision, (current) =>
+        transitionTask(
+          current,
+          { type: "record-review", review: passingReview(lens, SCENARIO_HEAD) },
+          context(),
+        ),
+      );
+    }
+
+    // The last required lens (verification) is an active, running job about to ask needs-decision
+    // for the first time.
+    const verifierEndpoint = {
+      ...world.openPane({ paneId: "pane-verifier", cwd: lease.path }),
+      role: "verifier" as const,
+    };
+    const firstJob = {
+      ...scenarioJob({
+        home: world.home,
+        role: "verifier",
+        cwd: lease.path,
+        endpoint: verifierEndpoint,
+      }),
+      head: SCENARIO_HEAD,
+      reviewLens: "verification" as const,
+    };
+    await seedScenarioRuntime(
+      world,
+      scenarioRuntimeTask({
+        worktree: lease,
+        // The implementer endpoint is the runtime's writer; it stays present through review rounds
+        // in production, and advanceReview's relaunch path (currentWriter) requires one to proceed.
+        endpoints: [implementerEndpoint, verifierEndpoint],
+        jobs: [firstJob],
+        operation: scenarioOperation(firstJob),
+        reservation: scenarioReservation(),
+      }),
+    );
+    const service = createTandemService({
+      home: world.home,
+      sessionId: world.sessionId,
+      poolRoot: world.poolRoot,
+      run: world.run,
+      clock: world.clock,
+      idFactory: world.idFactory,
+    });
+    try {
+      await persistWorkerResult(firstJob.resultPath, {
+        id: firstJob.id,
+        taskId: task.id,
+        generation: firstJob.generation,
+        role: "verifier",
+        status: "needs-decision",
+        text: "Cannot confirm the exact layout matches the design from the diff alone.",
+        question: { text: "Does the final layout match the approved design exactly?" },
+        finishedAt: world.clock(),
+      });
+
+      await service.tick();
+      const blocked = await service.get(task.id);
+      expect(blocked.stage).toBe("blocked");
+      expect(blocked.stuckReviewLenses).toEqual(["verification"]);
+      const firstQuestionId = blocked.communication?.question?.id;
+      if (firstQuestionId === undefined) throw new Error("first needs-decision question missing");
+
+      await service.answer({
+        taskId: task.id,
+        questionId: firstQuestionId,
+        text: "Close enough to the mock; proceed.",
+      });
+
+      // Answering resumed the task, and reconciling relaunches the still-missing verification lens
+      // as a fresh job; find it to drive the second, looping ask.
+      let secondJobId: string | undefined;
+      let secondResultPath: string | undefined;
+      let secondJobPath: string | undefined;
+      let secondInstructionRevision: number | undefined;
+      let secondEndpoint: Endpoint | undefined;
+      for (let attempt = 0; attempt < 5 && secondJobId === undefined; attempt += 1) {
+        await service.tick();
+        const runtime = await readRuntimeState(runtimeFile(world.home));
+        const runtimeTask = runtime.tasks.find((entry) => entry.taskId === task.id);
+        const activeJob = runtimeTask?.jobs.find(
+          (entry) => entry.reviewLens === "verification" && entry.id !== firstJob.id,
+        );
+        if (activeJob !== undefined) {
+          secondJobId = activeJob.id;
+          secondResultPath = activeJob.resultPath;
+          secondJobPath = activeJob.jobPath;
+          secondInstructionRevision = activeJob.instructionRevision;
+          secondEndpoint = activeJob.endpoint;
+        }
+      }
+      if (
+        secondJobId === undefined ||
+        secondResultPath === undefined ||
+        secondJobPath === undefined
+      ) {
+        throw new Error("verification was never relaunched after the first answer");
+      }
+
+      // The relaunched lens now "finishes": its pane goes quiet, and it proves it applied the
+      // current canonical instruction, before its durable result lands — the same way central
+      // recovery's own relaunch test simulates completion.
+      if (secondEndpoint !== undefined) {
+        await interruptEndpoint(world.run, { endpoint: secondEndpoint, cwd: lease.path });
+      }
+      await writeWorkerReceipt(workerReceiptPath(secondJobPath), {
+        schemaVersion: 1,
+        jobId: secondJobId,
+        taskId: task.id,
+        generation: 0,
+        receivedRevision: secondInstructionRevision ?? 0,
+        appliedRevision: secondInstructionRevision ?? 0,
+        heartbeatAt: world.clock(),
+        progressAt: world.clock(),
+        phase: "finished",
+      });
+
+      const beforeSecondAsk = await service.get(task.id);
+      await persistWorkerResult(secondResultPath, {
+        id: secondJobId,
+        taskId: task.id,
+        generation: beforeSecondAsk.generation,
+        role: "verifier",
+        status: "needs-decision",
+        instructionRevision: secondInstructionRevision ?? 0,
+        text: "Still cannot confirm the exact layout from the diff alone.",
+        question: { text: "Does the final layout match the approved design exactly?" },
+        finishedAt: world.clock(),
+      });
+
+      await service.tick();
+      const handedOff = await service.get(task.id);
+      expect(handedOff.stage).not.toBe("blocked");
+      expect(handedOff.acceptanceCriteria).not.toContain(UNTESTABLE_CRITERION);
+      expect(handedOff.userCheckCriteria).toEqual([UNTESTABLE_CRITERION]);
+      const verificationReview = handedOff.reviews.find(
+        (review) =>
+          review.lens === "verification" &&
+          review.head === SCENARIO_HEAD &&
+          review.generation === handedOff.generation,
+      );
+      expect(verificationReview?.pass).toBe(true);
+      expect(verificationReview?.handToUser).toEqual([UNTESTABLE_CRITERION]);
+
+      // Reconciling once more reaches `ready` and asks the one user-check question the criterion was
+      // handed off for — never a second needs-decision from the same lens.
+      let ready: TaskRecord | undefined;
+      for (let attempt = 0; attempt < 5 && ready === undefined; attempt += 1) {
+        await service.tick();
+        const current = await service.get(task.id);
+        if (current.stage === "ready") ready = current;
+      }
+      if (ready === undefined) throw new Error("task never reached ready after the hand-off");
+      const question = ready.communication?.question;
+      expect(question?.id.startsWith("user-check-")).toBe(true);
+      expect(question?.id).toBe(userCheckQuestionId(ready.generation, ready.reviewHead ?? ""));
+      expect(
+        ready.notifications.filter((entry) => entry.message.includes("needs a decision")),
+      ).toHaveLength(1);
+    } finally {
+      await service.shutdown();
+    }
   });
 });

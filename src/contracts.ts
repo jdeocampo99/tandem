@@ -800,6 +800,13 @@ export type TaskRecord = {
   readonly validationEvidence: readonly ValidationEvidence[];
   readonly reviews: readonly ReviewResult[];
   readonly findingLedger?: readonly FindingLedgerEntry[];
+  /**
+   * Review lenses that have already blocked once with a needs-decision or failed worker result and
+   * were answered/resumed in an earlier round. A repeat from the same lens is the exact verifier
+   * loop issue #84 reported: instead of blocking again, that lens hands its still-unproven Tandem
+   * checks to the user (`ReviewResult.handToUser`) and the task continues.
+   */
+  readonly stuckReviewLenses?: readonly ReviewLens[];
   readonly researchHandoffs?: readonly ResearchHandoff[];
   readonly researchContinuation?: ResearchContinuation;
   readonly skill?: SkillInvocation;

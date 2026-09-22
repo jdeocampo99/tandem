@@ -127,6 +127,7 @@ const TOP_LEVEL_KEYS = [
   "validationEvidence",
   "reviews",
   "findingLedger",
+  "stuckReviewLenses",
   "researchHandoffs",
   "researchContinuation",
   "skill",
@@ -1077,6 +1078,24 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   }
   const findingLedgerEntries: readonly unknown[] =
     findingLedgerValue === undefined ? [] : findingLedgerValue;
+  const stuckReviewLensesValue = Object.hasOwn(value, "stuckReviewLenses")
+    ? requiredValue(value, "stuckReviewLenses", source)
+    : undefined;
+  if (stuckReviewLensesValue !== undefined && !Array.isArray(stuckReviewLensesValue)) {
+    failState(`${source}.stuckReviewLenses`, "stuckReviewLenses must be an array when present");
+  }
+  const stuckReviewLenses: readonly ReviewLens[] | undefined =
+    stuckReviewLensesValue === undefined
+      ? undefined
+      : (stuckReviewLensesValue as readonly unknown[]).map((entry, index) => {
+          if (!isOneOf(entry, REVIEW_LENSES)) {
+            failState(
+              `${source}.stuckReviewLenses[${index}]`,
+              `unsupported review lens ${String(entry)}`,
+            );
+          }
+          return entry;
+        });
   const reviewHead = optionalText(value, "reviewHead", source);
   const iterationScopeValue = Object.hasOwn(value, "iterationScope")
     ? requiredValue(value, "iterationScope", source)
@@ -1133,6 +1152,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
             parseFindingLedgerEntry(entry, `${source}.findingLedger[${index}]`),
           ),
         }),
+    ...(stuckReviewLenses === undefined ? {} : { stuckReviewLenses }),
     notifications: notificationEntries.map((entry, index) =>
       parseNotification(entry, `${source}.notifications[${index}]`),
     ),
