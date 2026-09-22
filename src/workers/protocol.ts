@@ -11,10 +11,6 @@ import {
 
 type JsonObject = Readonly<Record<string, unknown>>;
 
-export type ParsedOmpOutput = Readonly<{
-  readonly text: string;
-}>;
-
 export type ExpectedModel = Readonly<{
   readonly selector: string;
   readonly provider: string;
@@ -166,41 +162,6 @@ function stopReasonFrom(event: JsonObject): string | undefined {
   return undefined;
 }
 
-function assistantMessageText(message: unknown): string | undefined {
-  if (!isJsonObject(message) || message.role !== "assistant") {
-    return undefined;
-  }
-  const content = message.content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-
-  const textBlocks: string[] = [];
-  for (const block of content) {
-    if (!isJsonObject(block)) {
-      continue;
-    }
-    if (block.type === "text" || block.type === "output_text") {
-      if (typeof block.text !== "string") {
-        throw new WorkerOutputError("OMP assistant text block is malformed");
-      }
-      textBlocks.push(block.text);
-    }
-  }
-  return textBlocks.length === 0 ? undefined : textBlocks.join("");
-}
-
-function finalAssistantText(messages: unknown): string | undefined {
-  if (!Array.isArray(messages)) {
-    return undefined;
-  }
-  const finalMessage = messages[messages.length - 1];
-  return assistantMessageText(finalMessage);
-}
-
 export type NativeAgentEnd = Readonly<{
   readonly type: "agent_end";
   readonly messages: readonly unknown[];
@@ -218,34 +179,24 @@ function nativeAgentEnd(value: unknown): NativeAgentEnd {
   };
 }
 
-/**
- * Parse the native extension event rather than the OMP process's terminal output.
- *
- * The interactive process owns stdout/stderr, so treating either stream as a
- * transport would corrupt the user's TUI and impose an arbitrary capture cap.
- */
-export function parseNativeAgentEnd(
+/** Why a settled agent_end must fail the job before any report arrives, if it must. */
+export function nativeAgentEndFailure(
   value: unknown,
   expectedModel: ExpectedModel,
-  selectedModel: unknown,
-): ParsedOmpOutput {
-  const event = nativeAgentEnd(value);
-  const eventMismatch = modelMismatchReason(event, expectedModel);
-  if (eventMismatch !== undefined) throw new WorkerOutputError(eventMismatch);
+): string | undefined {
+  const failure = readNativeEventFailure(value);
+  if (failure !== undefined) return failure;
+  return modelMismatchReason(nativeAgentEnd(value), expectedModel);
+}
+
+/** Reject a report submitted while OMP runs any model other than the job's pinned one. */
+export function assertSelectedModel(expectedModel: ExpectedModel, selectedModel: unknown): void {
   const mismatch = modelMismatchReason({ model: selectedModel }, expectedModel);
   if (mismatch !== undefined) throw new WorkerOutputError(mismatch);
-  if (!isJsonObject(selectedModel)) {
-    throw new WorkerOutputError("OMP did not expose the selected model");
-  }
   const selected = modelObservation({ model: selectedModel });
   if (selected === undefined || selected.provider === undefined || selected.model === undefined) {
     throw new WorkerOutputError("OMP did not expose complete selected model metadata");
   }
-  const terminalCandidate = finalAssistantText(event.messages);
-  if (terminalCandidate === undefined || terminalCandidate.trim().length === 0) {
-    throw new WorkerOutputError("OMP terminal agent_end has no final assistant text");
-  }
-  return { text: terminalCandidate };
 }
 
 export function nativeAgentEndWillContinue(value: unknown): boolean {
@@ -256,152 +207,162 @@ export function readNativeEventFailure(value: unknown): string | undefined {
   return isJsonObject(value) ? readEventFailure(value) : "OMP emitted a malformed lifecycle event";
 }
 
-export function parseReviewWorkerText(job: WorkerJob, text: string): ReviewResult {
+/** A malformed submit_report call the worker must correct and resubmit; it never settles the job. */
+export class ReportRejection extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReportRejection";
+  }
+}
+
+export const IMPLEMENTER_OUTCOMES = ["implemented", "needs-decision", "failed"] as const;
+export const WORKER_OUTCOMES = ["completed", "needs-decision", "failed"] as const;
+
+export function outcomesFor(role: WorkerRole): readonly [string, ...string[]] {
+  return role === "implementer" ? IMPLEMENTER_OUTCOMES : WORKER_OUTCOMES;
+}
+
+/** The submit_report tool arguments, before role rules are applied. */
+export type SubmittedReport = Readonly<{
+  readonly outcome: string;
+  readonly report?: string | undefined;
+  readonly question?: string | undefined;
+  readonly recommendation?: string | undefined;
+  readonly artifactPath?: string | undefined;
+  readonly review?: unknown;
+}>;
+
+export type ResolvedReport = Readonly<{
+  readonly status: WorkerStatus;
+  readonly text: string;
+  readonly error?: string;
+  readonly question?: WorkerQuestion;
+  readonly artifactPath?: string;
+  readonly review?: ReviewResult;
+}>;
+
+/**
+ * Apply the role's report contract to a submission. Throws ReportRejection for anything the
+ * worker can fix, so a formatting slip is corrected in the conversation instead of failing the task.
+ */
+export function resolveSubmittedReport(
+  job: WorkerJob,
+  submission: SubmittedReport,
+): ResolvedReport {
+  const { role } = job;
+  const reviews = role === "reviewer" || role === "verifier";
+  if (!outcomesFor(role).includes(submission.outcome)) {
+    throw new ReportRejection(`outcome must be one of ${outcomesFor(role).join(", ")}`);
+  }
+  const status: WorkerStatus =
+    submission.outcome === "needs-decision" || submission.outcome === "failed"
+      ? submission.outcome
+      : "completed";
+  const report = submission.report?.trim() ?? "";
+  if (!reviews && report.length === 0) throw new ReportRejection("report must not be empty");
+
+  const question =
+    status === "needs-decision" ? decisionQuestion(submission) : noQuestion(submission);
+  if (submission.artifactPath !== undefined && role !== "presentation") {
+    throw new ReportRejection(`${role} reports do not take an artifactPath`);
+  }
+  if (submission.review !== undefined && !reviews) {
+    throw new ReportRejection(`${role} reports do not take a review`);
+  }
+
+  if (status !== "completed") {
+    if (submission.artifactPath !== undefined) {
+      throw new ReportRejection("artifactPath is only for a completed presentation");
+    }
+    if (submission.review !== undefined) {
+      throw new ReportRejection("review is only for a completed review");
+    }
+    return {
+      status,
+      text: renderReport(submission.outcome, question, undefined, report),
+      ...(status === "failed" ? { error: `${role} reported a failed outcome` } : {}),
+      ...(question === undefined ? {} : { question }),
+    };
+  }
+  if (reviews) {
+    const review = submittedReview(job, submission.review);
+    return { status, text: JSON.stringify(review), review };
+  }
+  if (role === "presentation") {
+    const artifactPath = submission.artifactPath?.trim();
+    if (artifactPath === undefined || !isAbsolute(artifactPath)) {
+      throw new ReportRejection("a completed presentation must include an absolute artifactPath");
+    }
+    return {
+      status,
+      text: renderReport(submission.outcome, undefined, artifactPath, report),
+      artifactPath,
+    };
+  }
+  return { status, text: renderReport(submission.outcome, undefined, undefined, report) };
+}
+
+function decisionQuestion(submission: SubmittedReport): WorkerQuestion {
+  const text = boundedLine(submission.question, "question");
+  if (text === undefined) throw new ReportRejection("needs-decision requires a question");
+  const recommendation = boundedLine(submission.recommendation, "recommendation");
+  return recommendation === undefined ? { text } : { text, recommendation };
+}
+
+function noQuestion(submission: SubmittedReport): undefined {
+  if (submission.question !== undefined || submission.recommendation !== undefined) {
+    throw new ReportRejection("question and recommendation are only for needs-decision");
+  }
+  return undefined;
+}
+
+function boundedLine(value: string | undefined, field: string): string | undefined {
+  const text = value?.trim();
+  if (text === undefined || text.length === 0) return undefined;
+  if (/[\r\n]/u.test(text)) throw new ReportRejection(`${field} must be a single line`);
+  if (text.length > MAX_TASK_MESSAGE_CHARS) {
+    throw new ReportRejection(`${field} exceeds the ${MAX_TASK_MESSAGE_CHARS}-character limit`);
+  }
+  return text;
+}
+
+function submittedReview(job: WorkerJob, value: unknown): ReviewResult {
   if (job.review === undefined) {
-    throw new WorkerOutputError("review worker job is missing review identity", text);
+    throw new WorkerOutputError("review worker job is missing review identity");
   }
-  let value: unknown;
-  try {
-    value = JSON.parse(text) as unknown;
-  } catch (error) {
-    throw new WorkerOutputError(
-      `review worker output is not strict JSON: ${error instanceof Error ? error.message : "parse failure"}`,
-      text,
-    );
-  }
+  if (value === undefined) throw new ReportRejection("a completed review must include review");
   let review: ReviewResult;
   try {
     review = parseReviewResult(value);
   } catch (error) {
-    throw new WorkerOutputError(
-      `review worker output does not match ReviewResult: ${error instanceof Error ? error.message : "invalid review"}`,
-      text,
-    );
+    throw new ReportRejection(error instanceof Error ? error.message : "review is invalid");
   }
   if (
     review.head !== job.review.head ||
     review.lens !== job.review.lens ||
     review.generation !== job.generation
   ) {
-    throw new WorkerOutputError(
-      "review worker output identity does not match the worker job",
-      text,
+    throw new ReportRejection(
+      `review must be bound to lens ${job.review.lens}, head ${job.review.head}, generation ${job.generation}`,
     );
   }
   return review;
 }
 
-export type ReportedOutcome = Readonly<{
-  readonly status: WorkerStatus;
-  readonly error?: string;
-}>;
-
-export function reportedOutcome(role: WorkerRole, text: string): ReportedOutcome {
-  const matches = [...text.matchAll(/^\s*Outcome\s*:\s*([^\r\n]+?)\s*$/gim)];
-  if (matches.length === 0) {
-    if (role === "implementer") {
-      return {
-        status: "failed",
-        error:
-          "implementer output must include exactly one Outcome: implemented|needs-decision|failed line",
-      };
+/** Human-readable report file text; structured fields stay authoritative on the result. */
+function renderReport(
+  outcome: string,
+  question: WorkerQuestion | undefined,
+  artifactPath: string | undefined,
+  report: string,
+): string {
+  const lines = [`Outcome: ${outcome}`];
+  if (question !== undefined) {
+    lines.push(`Question: ${question.text}`);
+    if (question.recommendation !== undefined) {
+      lines.push(`Recommendation: ${question.recommendation}`);
     }
-    return { status: "completed" };
   }
-  if (matches.length !== 1) {
-    return {
-      status: "failed",
-      error: `${role} output must include exactly one Outcome line`,
-    };
-  }
-  const outcome = matches[0]?.[1]?.toLowerCase();
-  if (outcome === "needs-decision") {
-    return { status: "needs-decision" };
-  }
-  if (outcome === "failed") {
-    return { status: "failed", error: `${role} reported a failed outcome` };
-  }
-  if (role === "implementer" && outcome === "implemented") {
-    return { status: "completed" };
-  }
-  if (role !== "implementer" && outcome === "completed") {
-    return { status: "completed" };
-  }
-  return {
-    status: "failed",
-    error:
-      role === "implementer"
-        ? "implementer Outcome must be implemented, needs-decision, or failed"
-        : `${role} Outcome must be completed, needs-decision, or failed`,
-  };
-}
-
-export type ReportedQuestion = Readonly<{
-  readonly question?: WorkerQuestion;
-  readonly error?: string;
-}>;
-
-export function reportedQuestion(
-  role: WorkerRole,
-  status: WorkerStatus,
-  text: string,
-): ReportedQuestion {
-  if (status !== "needs-decision") return {};
-  const questionMatches = [...text.matchAll(/^\s*Question\s*:\s*([^\r\n]+?)\s*$/gim)];
-  if (questionMatches.length !== 1) {
-    return {
-      error: `needs-decision ${role} output must include exactly one Question: <text> line`,
-    };
-  }
-  const questionText = questionMatches[0]?.[1]?.trim();
-  if (questionText === undefined || questionText.length === 0) {
-    return { error: "needs-decision Question: line must contain text" };
-  }
-  if (questionText.length > MAX_TASK_MESSAGE_CHARS) {
-    return {
-      error: `needs-decision question exceeds the ${MAX_TASK_MESSAGE_CHARS}-character limit`,
-    };
-  }
-
-  const recommendationMatches = [...text.matchAll(/^\s*Recommendation\s*:\s*([^\r\n]+?)\s*$/gim)];
-  if (recommendationMatches.length > 1) {
-    return {
-      error: `needs-decision ${role} output may include at most one Recommendation: line`,
-    };
-  }
-  const recommendation = recommendationMatches[0]?.[1]?.trim();
-  if (recommendation !== undefined && recommendation.length > MAX_TASK_MESSAGE_CHARS) {
-    return {
-      error: `needs-decision recommendation exceeds the ${MAX_TASK_MESSAGE_CHARS}-character limit`,
-    };
-  }
-  return {
-    question: {
-      text: questionText,
-      ...(recommendation === undefined || recommendation.length === 0 ? {} : { recommendation }),
-    },
-  };
-}
-
-export type ReportedArtifact = Readonly<{
-  readonly artifactPath?: string;
-  readonly error?: string;
-}>;
-
-export function artifactPathFromText(role: WorkerRole, text: string): ReportedArtifact {
-  if (role !== "presentation") {
-    return {};
-  }
-  const matches = [...text.matchAll(/^\s*Artifact\s*:\s*(\/[^\r\n]+?)\s*$/gim)];
-  const capturedPath = matches[0]?.[1];
-  if (matches.length !== 1 || capturedPath === undefined) {
-    return {
-      error: "presentation output must include exactly one Artifact: <absolute path> line",
-    };
-  }
-  const candidate = capturedPath.replace(/[.,;:)\]}]+$/u, "");
-  if (!isAbsolute(candidate)) {
-    return { error: "presentation Artifact path must be absolute" };
-  }
-  return { artifactPath: candidate };
+  if (artifactPath !== undefined) lines.push(`Artifact: ${artifactPath}`);
+  return report.length === 0 ? lines.join("\n") : `${lines.join("\n")}\n\n${report}`;
 }
