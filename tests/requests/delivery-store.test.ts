@@ -19,7 +19,14 @@ const NOW = "2030-01-01T00:00:00.000Z";
 const REQUEST_ID = "req-1";
 
 function memberTask(id: string): RequestMemberTask {
-  return { id, kind: "implementation", stage: "queued", surfaces: ["api"], requestId: REQUEST_ID };
+  return {
+    id,
+    kind: "implementation",
+    stage: "queued",
+    surfaces: ["api"],
+    requestId: REQUEST_ID,
+    objective: `Task ${id}`,
+  };
 }
 
 async function withHome(

@@ -11,6 +11,7 @@ import {
   requestDispatchHold,
   summarizeRequestProgress,
 } from "../../src/requests/aggregate.ts";
+import { expectNoIdentifiers } from "../tasks/question.test.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
 const REQUEST_ID = "req-1";
@@ -23,6 +24,7 @@ function memberTask(overrides: Partial<RequestMemberTask> = {}): RequestMemberTa
     stage: "queued",
     surfaces: ["api"],
     requestId: REQUEST_ID,
+    objective: "Add login page",
     ...overrides,
   };
 }
@@ -190,7 +192,7 @@ test("a dependency edge that contradicts the recorded order is quarantined for a
   const quarantined = cyclic.dependencies.filter((entry) => entry.status === "quarantined");
   expect(quarantined).toHaveLength(1);
   expect(quarantined[0]?.quarantineReason).toContain("contradictory");
-  expect(summarize(cyclic, [first, second]).decisions[0]?.detail).toContain("quarantined");
+  expect(summarize(cyclic, [first, second]).decisions[0]?.detail).toContain("is on hold because");
 });
 
 test("membership outgrown by durable task state is quarantined and stays visible", () => {
@@ -257,4 +259,81 @@ test("a superseded brief holds every member and asks for reapproval", () => {
 
   expect(aggregate.decisions[0]?.detail).toContain("needs reapproval");
   expect(requestDispatchHold(aggregate, "task-1")).toContain("superseded");
+});
+
+test("decisions for conflicts, quarantined members, and quarantined dependencies name tasks by title, never by id", () => {
+  const taskA = memberTask({ id: "task-a", objective: "Add login page" });
+  const taskB = memberTask({ id: "task-b", surfaces: ["ui"], objective: "Add signup page" });
+  const taskC = memberTask({ id: "task-c", surfaces: ["worker"], objective: "Sync inventory" });
+  const taskD = memberTask({ id: "task-d", surfaces: ["report"], objective: "Export report" });
+  const taskE = memberTask({
+    id: "task-e",
+    surfaces: ["auth"],
+    stage: "cancelled",
+    objective: "Refactor auth",
+  });
+
+  let record = requestWith([taskA, taskB, taskC, taskD, taskE]);
+  record = recordRequestConflict(
+    record,
+    {
+      id: "conflict-1",
+      taskIds: ["task-a", "task-b"],
+      reason: "both rewrite the same handler",
+      briefRevision: 1,
+    },
+    NOW,
+  );
+  record = recordRequestDependency(
+    record,
+    { taskId: "task-d", dependsOn: "task-c", reason: "needs the sync job", briefRevision: 1 },
+    NOW,
+  );
+  record = recordRequestDependency(
+    record,
+    { taskId: "task-c", dependsOn: "task-d", reason: "needs the report", briefRevision: 1 },
+    NOW,
+  );
+  record = quarantineOutdatedRelations(
+    record,
+    {
+      tasks: [taskA, taskB, taskC, taskD, taskE],
+      approvedBriefRevision: 1,
+      approvedAgreementDigest: AGREEMENT,
+    },
+    NOW,
+  );
+
+  const aggregate = summarize(record, [taskA, taskB, taskC, taskD, taskE]);
+  expect(aggregate.decisions).toHaveLength(3);
+
+  const ids = ["task-a", "task-b", "task-c", "task-d", "task-e", "conflict-1"];
+  for (const decision of aggregate.decisions) {
+    expectNoIdentifiers(decision.subject, ids);
+    expectNoIdentifiers(decision.detail, ids);
+    expect(decision.detail).not.toContain("->");
+    expect(decision.detail.toLowerCase()).not.toContain("quarantined");
+  }
+
+  const conflictDecision = aggregate.decisions.find((decision) =>
+    decision.detail.includes("both rewrite the same handler"),
+  );
+  expect(conflictDecision?.subject).toBe('"Add login page", "Add signup page"');
+  expect(conflictDecision?.detail).toBe(
+    '"Add login page" and "Add signup page" conflict: both rewrite the same handler',
+  );
+
+  const memberDecision = aggregate.decisions.find((decision) =>
+    decision.detail.includes("Refactor auth"),
+  );
+  expect(memberDecision?.detail).toBe(
+    '"Refactor auth" is on hold because the member task is cancelled',
+  );
+
+  const dependencyDecision = aggregate.decisions.find(
+    (decision) => decision !== conflictDecision && decision !== memberDecision,
+  );
+  expect(dependencyDecision?.detail).toContain("is on hold because");
+  expect(dependencyDecision?.detail).toContain("contradictory");
+  expect(dependencyDecision?.detail).toMatch(/"Sync inventory"|"Export report"/u);
 });
