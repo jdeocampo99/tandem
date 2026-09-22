@@ -373,14 +373,15 @@ export class WorkerWorkflow {
     }
     if (endpoint === undefined) {
       if (isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) {
-        await this.failJob(
-          task,
-          job,
-          "worker job has no durable endpoint identity",
-          claim,
-          true,
-          true,
-        );
+        const reason = "worker job has no durable endpoint identity";
+        await this.failJob(task, job, reason, claim, true, true, {
+          group: "safety-stop",
+          kind: "quarantined-unknown-outcome",
+          summary:
+            "The worker's pane identity was never recorded, so the outcome of this run cannot be trusted.",
+          detail: reason,
+          jobId: job.id,
+        });
       }
       return;
     }
@@ -422,17 +423,25 @@ export class WorkerWorkflow {
       } catch (error) {
         if (isMissing(error)) {
           if (!isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) return;
-          await this.failJob(
-            task,
-            job,
-            `worker stopped without a durable result: ${describeError(error)}`,
-            claim,
-            true,
-            true,
-          );
+          const reason = `worker stopped without a durable result: ${describeError(error)}`;
+          await this.failJob(task, job, reason, claim, true, true, {
+            group: "safety-stop",
+            kind: "quarantined-unknown-outcome",
+            summary:
+              "The worker stopped without leaving a durable result, so the outcome of this run cannot be trusted.",
+            detail: reason,
+            jobId: job.id,
+          });
           return;
         }
-        await this.failJob(task, job, `worker result rejected: ${describeError(error)}`, claim);
+        const rejectedReason = `worker result rejected: ${describeError(error)}`;
+        await this.failJob(task, job, rejectedReason, claim, true, false, {
+          group: "unusable-result",
+          kind: "worker-failed",
+          summary: "The worker's result could not be read or did not match what was expected.",
+          detail: rejectedReason,
+          jobId: job.id,
+        });
         return;
       }
       await this.consumeWorkerResult(task, runtime, job, result);
@@ -469,7 +478,14 @@ export class WorkerWorkflow {
         );
         return;
       }
-      await this.failJob(task, job, `validation result rejected: ${describeError(error)}`, claim);
+      const rejectedReason = `validation result rejected: ${describeError(error)}`;
+      await this.failJob(task, job, rejectedReason, claim, true, false, {
+        group: "unusable-result",
+        kind: "worker-failed",
+        summary: "The validation result could not be read or did not match what was expected.",
+        detail: rejectedReason,
+        jobId: job.id,
+      });
       return;
     }
     await this.consumeValidationResult(task, runtime, job, result);
@@ -493,7 +509,14 @@ export class WorkerWorkflow {
       await this.failJob(task, job, reason, claim, false, false);
       return;
     }
-    await this.failJob(task, job, reason, claim, true, true);
+    await this.failJob(task, job, reason, claim, true, true, {
+      group: "safety-stop",
+      kind: "quarantined-unknown-outcome",
+      summary:
+        "The worker's pane disappeared before its outcome could be proven, so the task was quarantined for a person to inspect.",
+      detail: reason,
+      jobId: job.id,
+    });
   }
 
   private async observeWorkerProgress(
@@ -602,25 +625,29 @@ export class WorkerWorkflow {
         (job.role === "reviewer" || job.role === "verifier") &&
         (job.instructionRevision ?? 0) !== (task.communication?.revision ?? 0)
       ) {
-        await this.failJob(
-          task,
-          job,
-          "review result was launched for an older instruction revision",
-          claim,
-          blockReviewFailure,
-        );
+        const reason = "review result was launched for an older instruction revision";
+        await this.failJob(task, job, reason, claim, blockReviewFailure, false, {
+          group: "unusable-result",
+          kind: "stale-review-state",
+          summary:
+            "The review result was produced against an instruction that is no longer current.",
+          detail: reason,
+          jobId: job.id,
+        });
         return;
       }
       try {
         await this.assertInstructionCurrent(task, job, result.instructionRevision);
       } catch (error) {
-        await this.failJob(
-          task,
-          job,
-          `stale worker instruction: ${describeError(error)}`,
-          claim,
-          blockReviewFailure,
-        );
+        const reason = `stale worker instruction: ${describeError(error)}`;
+        await this.failJob(task, job, reason, claim, blockReviewFailure, false, {
+          group: "unusable-result",
+          kind: "stale-review-state",
+          summary:
+            "The worker's result was produced against an instruction that is no longer current.",
+          detail: reason,
+          jobId: job.id,
+        });
         return;
       }
     }
@@ -651,11 +678,21 @@ export class WorkerWorkflow {
             ].join(" ");
       const reportPath = reportPathFor(job.jobPath);
       await writeTextAtomically(reportPath, result.text);
+      const cause: BlockCause = {
+        group: "unusable-result",
+        kind: "worker-failed",
+        summary:
+          result.status === "needs-decision"
+            ? `Worker ${job.role} stopped and needs a decision before it can continue.`
+            : `Worker ${job.role} failed and left nothing further to build on.`,
+        detail: reason,
+        jobId: job.id,
+      };
       await this.consumeJob(
         task.id,
         job.id,
         claim,
-        { type: "block", reason },
+        { type: "block", reason, cause },
         {
           ...(question === undefined ? {} : { question }),
           ...instructionOptions(result.instructionRevision),
@@ -670,13 +707,22 @@ export class WorkerWorkflow {
       try {
         checkout = await this.readWorkerCheckout(runtime, job);
       } catch (error) {
+        const reason = `scout checkout could not be verified: ${describeError(error)}; worktree is preserved`;
         await this.consumeJob(
           task.id,
           job.id,
           claim,
           {
             type: "block",
-            reason: `scout checkout could not be verified: ${describeError(error)}; worktree is preserved`,
+            reason,
+            cause: {
+              group: "lost-resource",
+              kind: "checkout-unverifiable",
+              summary:
+                "The scout's checkout could not be verified, so its result could not be trusted.",
+              detail: reason,
+              jobId: job.id,
+            },
           },
           instructionOptions(result.instructionRevision),
         );
@@ -687,14 +733,22 @@ export class WorkerWorkflow {
         checkout.checkpoint.unmerged ||
         checkout.checkpoint.head !== runtime.worktree?.baseHead
       ) {
+        const reason =
+          "scout stopped with a changed, dirty, or unmerged checkout; worktree is preserved";
         await this.consumeJob(
           task.id,
           job.id,
           claim,
           {
             type: "block",
-            reason:
-              "scout stopped with a changed, dirty, or unmerged checkout; worktree is preserved",
+            reason,
+            cause: {
+              group: "unusable-result",
+              kind: "no-clean-checkpoint",
+              summary: "The scout stopped without leaving a clean, unchanged checkout to build on.",
+              detail: reason,
+              jobId: job.id,
+            },
           },
           instructionOptions(result.instructionRevision),
         );
@@ -758,12 +812,14 @@ export class WorkerWorkflow {
     }
     const review = result.review;
     if (review === undefined || job.head === undefined || job.reviewLens === undefined) {
-      await this.failJob(
-        task,
-        job,
-        "review worker completed without complete review identity",
-        claim,
-      );
+      const reason = "review worker completed without complete review identity";
+      await this.failJob(task, job, reason, claim, true, false, {
+        group: "unusable-result",
+        kind: "worker-failed",
+        summary: "The review worker finished without the identity its review needs to be accepted.",
+        detail: reason,
+        jobId: job.id,
+      });
       return;
     }
     const checkout = await this.readWorkerCheckout(runtime, job);
@@ -775,13 +831,21 @@ export class WorkerWorkflow {
       review.generation !== job.generation ||
       review.lens !== job.reviewLens
     ) {
+      const reason = `stale or dirty review evidence for ${job.reviewLens} at ${job.head}; review was not accepted`;
       await this.consumeJob(
         task.id,
         job.id,
         claim,
         {
           type: "block",
-          reason: `stale or dirty review evidence for ${job.reviewLens} at ${job.head}; review was not accepted`,
+          reason,
+          cause: {
+            group: "unusable-result",
+            kind: "stale-review-state",
+            summary: "The review evidence no longer matches the checkout it was supposed to cover.",
+            detail: reason,
+            jobId: job.id,
+          },
         },
         instructionOptions(result.instructionRevision),
       );
@@ -789,13 +853,14 @@ export class WorkerWorkflow {
     }
     const expectedReviewMode: ReviewMode = runtime.reviewMode ?? "review_changed_diff";
     if (review.mode !== undefined && review.mode !== expectedReviewMode) {
-      await this.failJob(
-        task,
-        job,
-        `review result mode ${review.mode} does not match ${expectedReviewMode}`,
-        claim,
-        true,
-      );
+      const reason = `review result mode ${review.mode} does not match ${expectedReviewMode}`;
+      await this.failJob(task, job, reason, claim, true, false, {
+        group: "unusable-result",
+        kind: "worker-failed",
+        summary: "The review ran in a different mode than the task expected.",
+        detail: reason,
+        jobId: job.id,
+      });
       return;
     }
     await this.consumeJob(
@@ -828,22 +893,39 @@ export class WorkerWorkflow {
     }
     const expectedHead = job.head;
     if (expectedHead === undefined) {
-      await this.failJob(task, job, "validation job has no expected HEAD", claim);
+      const reason = "validation job has no expected HEAD";
+      await this.failJob(task, job, reason, claim, true, false, {
+        group: "unusable-result",
+        kind: "worker-failed",
+        summary: "The validation job is missing the HEAD it was supposed to check.",
+        detail: reason,
+        jobId: job.id,
+      });
       return;
     }
     const contract = job.contract;
     const policyDigest = job.policyDigest;
     if (contract === undefined || policyDigest === undefined) {
-      await this.failJob(task, job, "validation job has no contract identity", claim);
+      const reason = "validation job has no contract identity";
+      await this.failJob(task, job, reason, claim, true, false, {
+        group: "unusable-result",
+        kind: "worker-failed",
+        summary: "The validation job is missing the contract identity it was supposed to check.",
+        detail: reason,
+        jobId: job.id,
+      });
       return;
     }
     if (policyIdentity(task.policy) !== policyDigest) {
-      await this.failJob(
-        task,
-        job,
-        "validation evidence was produced under a different policy identity",
-        claim,
-      );
+      const reason = "validation evidence was produced under a different policy identity";
+      await this.failJob(task, job, reason, claim, true, false, {
+        group: "unusable-result",
+        kind: "worker-failed",
+        summary:
+          "The validation evidence was produced under a policy that no longer matches this task.",
+        detail: reason,
+        jobId: job.id,
+      });
       return;
     }
     const checkout = await this.readWorkerCheckout(runtime, job);
@@ -937,6 +1019,7 @@ export class WorkerWorkflow {
     claim: OperationClaim,
     block = true,
     quarantine = false,
+    cause?: BlockCause,
   ): Promise<void> {
     await withStateLock(this.#deps.home, async () => {
       await this.#deps.store.exclusive(async () => {
@@ -997,7 +1080,7 @@ export class WorkerWorkflow {
               };
         });
         await writeRuntimeState(this.#deps.runtimePath, next);
-        if (quarantine || block) await this.#deps.blockTask(task.id, reason);
+        if (quarantine || block) await this.#deps.blockTask(task.id, reason, cause);
       });
     });
   }
@@ -1005,6 +1088,7 @@ export class WorkerWorkflow {
     taskId: string,
     reason: string,
     claim: OperationClaim,
+    cause?: BlockCause,
   ): Promise<void> {
     await withStateLock(this.#deps.home, async () => {
       await this.#deps.store.exclusive(async (store) => {
@@ -1022,7 +1106,7 @@ export class WorkerWorkflow {
         }
         const task = await store.read(taskId);
         if (task?.generation !== runtime.operation.generation) return;
-        await this.#deps.blockTask(taskId, reason);
+        await this.#deps.blockTask(taskId, reason, cause);
       });
     });
   }
@@ -1132,7 +1216,14 @@ export class WorkerWorkflow {
         });
         await writeRuntimeState(this.#deps.runtimePath, retired);
         if (job.role === "reviewer" || job.role === "verifier") {
-          await this.#deps.blockTask(taskId, staleReason);
+          await this.#deps.blockTask(taskId, staleReason, {
+            group: "unusable-result",
+            kind: "stale-review-state",
+            summary:
+              "The review's result was produced against an instruction that is no longer current.",
+            detail: staleReason,
+            jobId: job.id,
+          });
         }
         return task;
       }
@@ -1178,9 +1269,17 @@ export class WorkerWorkflow {
           try {
             nextTask = transitionTask(task, event, context);
           } catch (error) {
+            const reason = `durable result could not be applied: ${describeError(error)}`;
             effectiveEvent = {
               type: "block",
-              reason: `durable result could not be applied: ${describeError(error)}`,
+              reason,
+              cause: {
+                group: "lost-resource",
+                kind: "persistence-failed",
+                summary: "This step's result could not be applied to the task's durable record.",
+                detail: reason,
+                jobId: job.id,
+              },
             };
             nextTask = transitionTask(task, effectiveEvent, context);
           }
@@ -1242,9 +1341,17 @@ export class WorkerWorkflow {
           try {
             nextTask = transitionTask(task, event, context);
           } catch (error) {
+            const reason = `durable result could not be applied: ${describeError(error)}`;
             effectiveEvent = {
               type: "block",
-              reason: `durable result could not be applied: ${describeError(error)}`,
+              reason,
+              cause: {
+                group: "lost-resource",
+                kind: "persistence-failed",
+                summary: "This step's result could not be applied to the task's durable record.",
+                detail: reason,
+                jobId: job.id,
+              },
             };
             nextTask = transitionTask(task, effectiveEvent, context);
           }
@@ -1582,17 +1689,31 @@ export class WorkerWorkflow {
         await this.saveWorktree(task.id, { ...error.lease, baseHead: "unknown" }, claim);
       }
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        `worktree allocation failed: ${describeError(error)}`,
-        claim,
-      );
-      await this.blockIfOperationClaim(task.id, "worktree allocation returned no lease", claim);
+      const allocationFailedReason = `worktree allocation failed: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, allocationFailedReason, claim, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: "The task's worktree could not be allocated.",
+        detail: allocationFailedReason,
+      });
+      const noLeaseReason = "worktree allocation returned no lease";
+      await this.blockIfOperationClaim(task.id, noLeaseReason, claim, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: "The task's worktree could not be allocated.",
+        detail: noLeaseReason,
+      });
       return;
     }
     if (lease === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(task.id, "worktree allocation returned no lease", claim);
+      const noLeaseReason = "worktree allocation returned no lease";
+      await this.blockIfOperationClaim(task.id, noLeaseReason, claim, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: "The task's worktree could not be allocated.",
+        detail: noLeaseReason,
+      });
       return;
     }
     const launch = await this.ensureLaunchEndpoint(
@@ -1618,11 +1739,13 @@ export class WorkerWorkflow {
       if (launch.created) {
         await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
       }
-      await this.blockIfOperationClaim(
-        task.id,
-        `task start transition failed ${launch.created ? "after pane allocation" : "with recovered pane"}: ${describeError(error)}`,
-        claim,
-      );
+      const reason = `task start transition failed ${launch.created ? "after pane allocation" : "with recovered pane"}: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "transition-failed",
+        summary: "The task could not be moved into its start stage.",
+        detail: reason,
+      });
       return;
     }
     const currentTask = await this.#deps.getTask(task.id);
@@ -1636,21 +1759,25 @@ export class WorkerWorkflow {
     const currentRuntime = await this.#deps.runtimeFor(task.id);
     if (currentRuntime === undefined || currentRuntime.worktree === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        "runtime lost its acquired worktree before worker launch",
-        claim,
-      );
+      const reason = "runtime lost its acquired worktree before worker launch";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "The task's worktree is missing, so no further work can run against it.",
+        detail: reason,
+      });
       return;
     }
     const writer = currentWriter(currentRuntime);
     if (writer === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        "runtime lost its worker endpoint before launch",
-        claim,
-      );
+      const reason = "runtime lost its worker endpoint before launch";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "The task's worker pane is missing, so no further work can run against it.",
+        detail: reason,
+      });
       return;
     }
     await this.launchAgent(currentTask, currentRuntime, writer, role);
@@ -1737,7 +1864,13 @@ export class WorkerWorkflow {
   async beginFixes(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
     const recoveryFix = task.stage !== "awaiting-fixes";
     if (!recoveryFix && task.reviewHead === undefined) {
-      await this.#deps.blockTask(task.id, "fix stage has no reviewed HEAD");
+      const reason = "fix stage has no reviewed HEAD";
+      await this.#deps.blockTask(task.id, reason, {
+        group: "user-decision",
+        kind: "prerequisite-not-met",
+        summary: "The fix stage has no reviewed HEAD to build a fix on top of.",
+        detail: reason,
+      });
       return;
     }
     if (!recoveryFix && task.reviewRound >= task.policy.config.maxFixRounds) {
@@ -1763,11 +1896,13 @@ export class WorkerWorkflow {
     }
     if (operation.fixContext === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        "fix admission has no durable context snapshot",
-        claim,
-      );
+      const reason = "fix admission has no durable context snapshot";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "persistence-failed",
+        summary: "The findings this fix round is supposed to address were not durably recorded.",
+        detail: reason,
+      });
       return;
     }
     const fixContext = operation.fixContext;
@@ -1790,22 +1925,27 @@ export class WorkerWorkflow {
       if (written !== true) return;
     } catch (error) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        `fix context could not be persisted: ${describeError(error)}`,
-        claim,
-      );
+      const reason = `fix context could not be persisted: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "persistence-failed",
+        summary:
+          "The findings this fix round is supposed to address could not be durably recorded.",
+        detail: reason,
+      });
       return;
     }
     const nextTask = await this.#deps.getTask(task.id);
     const nextRuntime = await this.#deps.runtimeFor(task.id);
     if (nextRuntime === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        "fix round lost its durable runtime metadata before launch",
-        claim,
-      );
+      const reason = "fix round lost its durable runtime metadata before launch";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "safety-stop",
+        kind: "runtime-metadata-missing",
+        summary: "The task's durable runtime metadata is missing, so this fix round cannot launch.",
+        detail: reason,
+      });
       return;
     }
     const writer = currentWriter(nextRuntime);
@@ -1865,12 +2005,14 @@ export class WorkerWorkflow {
     const lease = runtime.worktree;
     if (lease === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        "relaunch requires an existing durable worktree",
-        claim,
-      );
-      return { relaunched: false, reason: "relaunch requires an existing durable worktree" };
+      const reason = "relaunch requires an existing durable worktree";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "The task's worktree is missing, so relaunch has nothing to relaunch into.",
+        detail: reason,
+      });
+      return { relaunched: false, reason };
     }
     // Re-entry never refuses on a moved source repository HEAD (only first launch does, via
     // assertSourceUnchanged); it only records the observation durably and notes it in plain English.
@@ -1899,12 +2041,14 @@ export class WorkerWorkflow {
       if (launch.created) {
         await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
       }
-      await this.blockIfOperationClaim(
-        task.id,
-        `relaunch transition failed: ${describeError(error)}`,
-        claim,
-      );
-      return { relaunched: false, reason: `relaunch transition failed: ${describeError(error)}` };
+      const reason = `relaunch transition failed: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "transition-failed",
+        summary: "The task could not be moved back into its relaunched stage.",
+        detail: reason,
+      });
+      return { relaunched: false, reason };
     }
     const currentTask = await this.#deps.getTask(task.id);
     if (currentTask.stage !== task.stage) {
@@ -2062,7 +2206,14 @@ export class WorkerWorkflow {
         );
         const currentTask = await this.#deps.getTask(taskId);
         if (!["blocked", "cancelled", "completed", "merged"].includes(currentTask.stage)) {
-          await this.#deps.blockTask(taskId, reason);
+          const cause: BlockCause = {
+            group: "safety-stop",
+            kind: "quarantined-unknown-outcome",
+            summary:
+              "A durable record this step needed to retry safely could not be trusted, so the task was quarantined for a person to inspect.",
+            detail: reason,
+          };
+          await this.#deps.blockTask(taskId, reason, cause);
         }
       });
     });
@@ -2171,19 +2322,30 @@ export class WorkerWorkflow {
 
   async startValidation(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
     if (task.reviewHead === undefined || task.worktree === undefined) {
-      await this.#deps.blockTask(task.id, "validation requires a task worktree and reviewed HEAD");
+      const reason = "validation requires a task worktree and reviewed HEAD";
+      await this.#deps.blockTask(task.id, reason, {
+        group: "user-decision",
+        kind: "prerequisite-not-met",
+        summary:
+          "Validation needs a task worktree and a reviewed HEAD, and this task has neither yet.",
+        detail: reason,
+      });
       return;
     }
     let planned: PlannedValidation;
     try {
       planned = planValidation(task, task.reviewHead);
     } catch (error) {
-      await this.#deps.blockTask(
-        task.id,
+      const reason =
         error instanceof ValidationConfigurationError
           ? `validation refused: ${error.message}`
-          : `validation contract could not be planned: ${describeError(error)}`,
-      );
+          : `validation contract could not be planned: ${describeError(error)}`;
+      await this.#deps.blockTask(task.id, reason, {
+        group: "user-decision",
+        kind: "validation-config-refused",
+        summary: "Validation's configuration was refused, so it could not be planned.",
+        detail: reason,
+      });
       return;
     }
     const plan = planned.plan;
@@ -2197,7 +2359,13 @@ export class WorkerWorkflow {
     }
     if (runtime.worktree === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(task.id, "validation runtime lost its worktree", claim);
+      const reason = "validation runtime lost its worktree";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "The task's worktree is missing, so validation cannot run against it.",
+        detail: reason,
+      });
       return;
     }
     let checkout: CurrentCheckout;
@@ -2208,11 +2376,13 @@ export class WorkerWorkflow {
       });
     } catch (error) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        `validation checkout could not be verified: ${describeError(error)}`,
-        claim,
-      );
+      const reason = `validation checkout could not be verified: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "checkout-unverifiable",
+        summary: "The task's checkout could not be verified, so validation could not start.",
+        detail: reason,
+      });
       return;
     }
     if (
@@ -2221,23 +2391,37 @@ export class WorkerWorkflow {
       checkout.checkpoint.unmerged
     ) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        "validation refused because the task worktree is stale or dirty",
-        claim,
-      );
+      const reason = "validation refused because the task worktree is stale or dirty";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "user-decision",
+        kind: "prerequisite-not-met",
+        summary: "Validation refused to run because the task worktree is stale or dirty.",
+        detail: reason,
+      });
       return;
     }
     const validationCwd = runtime.worktree?.path;
     if (validationCwd === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(task.id, "validation runtime lost its worktree", claim);
+      const reason = "validation runtime lost its worktree";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "The task's worktree is missing, so validation cannot run against it.",
+        detail: reason,
+      });
       return;
     }
     const writer = currentWriter(runtime);
     if (writer === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(task.id, "validation has no owned implementer pane", claim);
+      const reason = "validation has no owned implementer pane";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "Validation has no owned implementer pane to check against.",
+        detail: reason,
+      });
       return;
     }
     let validationEndpoint: Endpoint | undefined;
@@ -2332,11 +2516,13 @@ export class WorkerWorkflow {
       }
     } catch (error) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        `validation pane allocation failed: ${describeError(error)}`,
-        claim,
-      );
+      const reason = `validation pane allocation failed: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: "The pane validation needs could not be allocated.",
+        detail: reason,
+      });
       return;
     }
     const validationEndpointReady = validationEndpoint;
@@ -2415,11 +2601,13 @@ export class WorkerWorkflow {
       await this.appendJob(task.id, durableJob, claim);
     } catch (error) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        `validation job could not be persisted: ${describeError(error)}`,
-        claim,
-      );
+      const reason = `validation job could not be persisted: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "persistence-failed",
+        summary: "The validation job could not be durably recorded.",
+        detail: reason,
+      });
       return;
     }
     await this.launchJob(
@@ -2611,12 +2799,24 @@ export class WorkerWorkflow {
 
   async advanceReview(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
     if (task.reviewHead === undefined || task.worktree === undefined) {
-      await this.#deps.blockTask(task.id, "review requires a task worktree and reviewed HEAD");
+      const reason = "review requires a task worktree and reviewed HEAD";
+      await this.#deps.blockTask(task.id, reason, {
+        group: "user-decision",
+        kind: "prerequisite-not-met",
+        summary: "Review needs a task worktree and a reviewed HEAD, and this task has neither yet.",
+        detail: reason,
+      });
       return;
     }
     const runtime = await this.#deps.runtimeFor(task.id);
     if (runtime === undefined) {
-      await this.#deps.blockTask(task.id, "review has no durable runtime metadata");
+      const reason = "review has no durable runtime metadata";
+      await this.#deps.blockTask(task.id, reason, {
+        group: "safety-stop",
+        kind: "runtime-metadata-missing",
+        summary: "The task's durable runtime metadata is missing, so review cannot proceed.",
+        detail: reason,
+      });
       return;
     }
     // A lens whose most recent job failed and is still unresolved either blocks (a genuine content
@@ -2627,10 +2827,13 @@ export class WorkerWorkflow {
     // picked up as `nextLens` below instead.
     const failedReview = unresolvedReviewFailure(task, runtime);
     if (failedReview !== undefined && !isQuarantinedReviewFailure(failedReview)) {
-      await this.#deps.blockTask(
-        task.id,
-        failedReview.error ?? `review ${failedReview.reviewLens ?? "worker"} failed`,
-      );
+      const reason = failedReview.error ?? `review ${failedReview.reviewLens ?? "worker"} failed`;
+      await this.#deps.blockTask(task.id, reason, {
+        group: "unusable-result",
+        kind: "review-lens-failed",
+        summary: "A review lens failed and left nothing further to build on.",
+        detail: reason,
+      });
       return;
     }
     for (const reviewer of runtime.endpoints) {
@@ -2651,10 +2854,15 @@ export class WorkerWorkflow {
         }
         // Foreign ownership or a proof failure (stale heartbeat, PID no longer foreground): the pane
         // is never touched without proof either way, so this blocks instead of retrying forever.
-        await this.#deps.blockTask(
-          task.id,
-          `review pane ${reviewer.paneId} ownership could not be proven: ${describeError(error)}`,
-        );
+        const reason = `review pane ${reviewer.paneId} ownership could not be proven: ${describeError(error)}`;
+        await this.#deps.blockTask(task.id, reason, {
+          group: "safety-stop",
+          kind: "ownership-unprovable",
+          summary:
+            "The review pane's ownership could not be proven, so it is never touched without proof.",
+          detail: reason,
+          paneId: reviewer.paneId,
+        });
         return;
       }
     }
@@ -2667,7 +2875,13 @@ export class WorkerWorkflow {
       currentCheckout.dirty ||
       currentCheckout.unmerged
     ) {
-      await this.#deps.blockTask(task.id, "review refused because the worktree is stale or dirty");
+      const reason = "review refused because the worktree is stale or dirty";
+      await this.#deps.blockTask(task.id, reason, {
+        group: "user-decision",
+        kind: "prerequisite-not-met",
+        summary: "Review refused to run because the task worktree is stale or dirty.",
+        detail: reason,
+      });
       return;
     }
     const reviewHead = task.reviewHead;
@@ -2708,7 +2922,13 @@ export class WorkerWorkflow {
     const writer = currentWriter(reservedRuntime);
     if (writer === undefined && reservedRuntime.reviewMode !== "review_existing_head") {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(task.id, "review has no writer endpoint", claim);
+      const reason = "review has no writer endpoint";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "Review has no writer pane to review against.",
+        detail: reason,
+      });
       return;
     }
     let endpoint: Endpoint | undefined;
@@ -2794,11 +3014,13 @@ export class WorkerWorkflow {
       }
     } catch (error) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(
-        task.id,
-        `review pane allocation failed: ${describeError(error)}`,
-        claim,
-      );
+      const reason = `review pane allocation failed: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: "The pane review needs could not be allocated.",
+        detail: reason,
+      });
       return;
     }
     const reviewEndpoint = endpoint;
@@ -2974,11 +3196,14 @@ export class WorkerWorkflow {
       ) {
         await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
       }
-      await this.blockIfOperationClaim(
-        task.id,
-        `review job could not be prepared: ${describeError(error)}`,
-        claim,
-      );
+      const reason = `review job could not be prepared: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "persistence-failed",
+        summary: "The review job could not be durably prepared.",
+        detail: reason,
+        paneId: reviewEndpoint.paneId,
+      });
     }
   }
 
@@ -3326,7 +3551,14 @@ export class WorkerWorkflow {
             },
           }));
           await writeRuntimeState(this.#deps.runtimePath, quarantined);
-          await this.#deps.blockTask(taskId, reason);
+          await this.#deps.blockTask(taskId, reason, {
+            group: "lost-resource",
+            kind: "resource-lost",
+            summary:
+              "The worker's launch could not be proven to have started, so its pane is not trusted.",
+            detail: reason,
+            jobId,
+          });
         });
 
         return;
