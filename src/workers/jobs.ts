@@ -15,7 +15,7 @@ import {
   type UserCheckEvidence,
 } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
-import { isClipPath, isImagePath } from "../tasks/user-checks.ts";
+import { isClipPath, isImagePath, MAX_USER_CHECK_FILE_BYTES } from "../tasks/user-checks.ts";
 import type { ExecutionIdentity } from "./execution-gate.ts";
 
 /** Bounds on the implementer's saved "you check" evidence, checked at submission and again after
@@ -612,6 +612,9 @@ export async function checkUserCheckFiles(
       }
       if (stats.size <= 0) {
         return `${path} is empty`;
+      }
+      if (stats.size > MAX_USER_CHECK_FILE_BYTES) {
+        return `${path} is larger than ${MAX_USER_CHECK_FILE_BYTES} bytes`;
       }
       let realPath: string;
       try {

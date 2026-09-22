@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, readFile } from "node:fs/promises";
+import { access, lstat, open } from "node:fs/promises";
 import { extname } from "node:path";
 import type {
   CustomMessageContent,
@@ -9,14 +9,18 @@ import type {
 import type { RequestDeliveryRecord, TaskRecord } from "../contracts.ts";
 import type { TandemService } from "../service/controller.ts";
 import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
-import { isClipPath, USER_CHECK_QUESTION_ID_PREFIX } from "../tasks/user-checks.ts";
+import {
+  isClipPath,
+  MAX_USER_CHECK_FILE_BYTES,
+  USER_CHECK_QUESTION_ID_PREFIX,
+} from "../tasks/user-checks.ts";
 import { buildResearchFollowUpContent } from "./research-follow-up.ts";
 import { ACTION_SUMMARY_MAX_TEXT, compactText, prioritizeTasks } from "./summary.ts";
 
 const MAX_NOTIFICATION_BATCH = 8;
 const TANDEM_NOTIFICATION_ENTRY = "tandem-notification";
 const MAX_ATTACHMENT_IMAGES = 8;
-const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = MAX_USER_CHECK_FILE_BYTES;
 
 /** Proof that a recorded report is still readable, so the follow-up decision may trust it. */
 export type ResearchReportProbe = (reportPath: string) => Promise<boolean>;
@@ -42,15 +46,27 @@ const IMAGE_MIME_TYPES: Readonly<Record<string, string>> = {
 };
 
 /** Default {@link ReadUserCheckAttachment}: reads the file and base64-encodes it, inferring the
- *  MIME type from its extension. */
+ *  MIME type from its extension. Refuses anything but a regular file within
+ *  {@link MAX_ATTACHMENT_BYTES}, checked with `lstat` before ever opening the path and again against
+ *  the open file descriptor, and opens with `O_NOFOLLOW` so a symlink swapped in between the two
+ *  checks is refused rather than followed. */
 export async function readUserCheckAttachment(
   path: string,
 ): Promise<ReadableAttachment | undefined> {
   const mimeType = IMAGE_MIME_TYPES[extname(path).toLowerCase()];
   if (mimeType === undefined) return undefined;
   try {
-    const bytes = await readFile(path);
-    return { type: "image", data: bytes.toString("base64"), mimeType };
+    const preCheck = await lstat(path);
+    if (!preCheck.isFile() || preCheck.size > MAX_ATTACHMENT_BYTES) return undefined;
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.size > MAX_ATTACHMENT_BYTES) return undefined;
+      const bytes = await handle.readFile();
+      return { type: "image", data: bytes.toString("base64"), mimeType };
+    } finally {
+      await handle.close();
+    }
   } catch {
     return undefined;
   }
@@ -245,8 +261,9 @@ function judgmentIdentifiers(notifications: readonly NotificationRef[]): string 
 /**
  * The displayed judgment content, with builder screenshots attached inline when the batch includes
  * a user-check question. Bounded to {@link MAX_ATTACHMENT_IMAGES} images of at most
- * {@link MAX_ATTACHMENT_BYTES} each; clips and oversized or unreadable files fall back to a `Clip:`
- * text line instead, since OMP cannot inline video.
+ * {@link MAX_ATTACHMENT_BYTES} each; a genuine video clip falls back to a `Clip:` text line (OMP
+ * cannot inline video), and an image that didn't make the cut falls back to its own distinct label
+ * instead of being mislabeled as a clip.
  */
 async function judgmentMessageContent(
   notifications: readonly NotificationRef[],
@@ -263,12 +280,12 @@ async function judgmentMessageContent(
       continue;
     }
     if (images.length >= MAX_ATTACHMENT_IMAGES) {
-      fallbackLines.push(`Clip: ${path}`);
+      fallbackLines.push(`Not attached (already at the image limit): ${path}`);
       continue;
     }
     const image = await readAttachment(path);
     if (image === undefined || Buffer.byteLength(image.data, "base64") > MAX_ATTACHMENT_BYTES) {
-      fallbackLines.push(`Clip: ${path}`);
+      fallbackLines.push(`Not attached (too large or unreadable): ${path}`);
       continue;
     }
     images.push(image);

@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zod } from "@oh-my-pi/pi-coding-agent";
+import { MAX_USER_CHECK_FILE_BYTES } from "../../src/tasks/user-checks.ts";
 import { runWorkerJob } from "../../src/worker.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import {
@@ -634,6 +635,20 @@ test("checkUserCheckFiles rejects symlinks, empty files, paths outside the direc
     expect(await checkUserCheckFiles(directory, [{ criterion: "a", paths: [missing] }])).toContain(
       "does not exist",
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkUserCheckFiles rejects a file over the size cap", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-user-checks-size-"));
+  try {
+    const directory = join(root, "user-checks");
+    await mkdir(directory, { recursive: true });
+    const oversized = join(directory, "oversized.png");
+    await writeFile(oversized, Buffer.alloc(MAX_USER_CHECK_FILE_BYTES + 1, 1));
+    const reason = await checkUserCheckFiles(directory, [{ criterion: "a", paths: [oversized] }]);
+    expect(reason).toContain("larger than");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

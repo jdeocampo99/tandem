@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-coding-agent";
@@ -12,7 +12,10 @@ import type {
   TaskRecord,
 } from "../../src/contracts.ts";
 import { executeTandemAction, parseTandemCommand } from "../../src/extension/actions.ts";
-import { deliverPendingNotifications } from "../../src/extension/notifications.ts";
+import {
+  deliverPendingNotifications,
+  readUserCheckAttachment,
+} from "../../src/extension/notifications.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/extension/summary.ts";
 import { createTandemExtension, reviewStatus } from "../../src/extension.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
@@ -20,6 +23,7 @@ import { createTandemService, type TandemService } from "../../src/service/contr
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";
+import { userCheckQuestionId } from "../../src/tasks/user-checks.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
 
 const models: Readonly<
@@ -1332,6 +1336,97 @@ test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct
   expect(turns[0]).not.toMatchObject({ triggerTurn: true });
   expect(turns[1]).toMatchObject({ triggerTurn: true });
   expect(acknowledged.sort()).toEqual(["task-exhausted:exhausted-1", "task-ready:ready-1"]);
+});
+
+test("readUserCheckAttachment refuses a symlink and an oversized file before reading", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-attachment-"));
+  try {
+    const good = join(root, "good.png");
+    await writeFile(good, "not actually a png, but small");
+    const read = await readUserCheckAttachment(good);
+    expect(read?.mimeType).toBe("image/png");
+    expect(read?.data).toBe(Buffer.from("not actually a png, but small").toString("base64"));
+
+    const outside = join(root, "outside.png");
+    await writeFile(outside, "outside content");
+    const link = join(root, "escape.png");
+    await symlink(outside, link);
+    expect(await readUserCheckAttachment(link)).toBeUndefined();
+
+    const oversized = join(root, "oversized.png");
+    await writeFile(oversized, Buffer.alloc(5 * 1024 * 1024 + 1, 1));
+    expect(await readUserCheckAttachment(oversized)).toBeUndefined();
+
+    expect(await readUserCheckAttachment(join(root, "missing.png"))).toBeUndefined();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a user-check judgment message labels a clip, an over-the-limit image, and an unreadable image distinctly", async () => {
+  const sent: string[] = [];
+  const service: Pick<TandemService, "acknowledge" | "acknowledgeRequest"> = {
+    acknowledgeRequest: async () => {
+      throw new Error("no request notification is expected in this scenario");
+    },
+    acknowledge: async (taskId) => task({ id: taskId }),
+  };
+  const sink = notificationSink(
+    (content) => sent.push(content),
+    () => undefined,
+  );
+  const context = notificationContext(() => undefined);
+
+  // 8 images succeed (the attachment cap), so a 9th image is skipped for the limit, not mislabeled
+  // as a clip; "bad.png" fails to read (oversized or unreadable) before the cap is reached.
+  const okImages = Array.from({ length: 8 }, (_, index) => `/evidence/img${index}.png`);
+  const paths = [
+    "/evidence/clip.mp4",
+    ...okImages.slice(0, 7),
+    "/evidence/bad.png",
+    okImages[7],
+    "/evidence/img8.png",
+  ] as string[];
+
+  const readyTask = task({
+    id: "task-user-check",
+    stage: "ready",
+    reviewHead: "head-1",
+    generation: 0,
+    userCheckCriteria: ["The layout matches the design"],
+    userCheck: { head: "head-1", generation: 0, evidence: [{ criterion: "c", paths }] },
+    communication: {
+      revision: 1,
+      question: { id: userCheckQuestionId(0, "head-1"), text: "Does it look right?" },
+      messages: [],
+    },
+    notifications: [
+      { id: "uc-1", message: "Does it look right?", acknowledged: false, kind: "coordinator" },
+    ],
+  });
+
+  await deliverPendingNotifications({
+    pi: sink,
+    service,
+    tasks: [readyTask],
+    requests: [],
+    delivered: new Set<string>(),
+    unacknowledged: new Set<string>(),
+    ctx: context,
+    reportReadable: async () => true,
+    readAttachment: async (path) => {
+      if (path === "/evidence/bad.png") return undefined;
+      return { type: "image", data: "eA==", mimeType: "image/png" };
+    },
+  });
+
+  expect(sent).toHaveLength(2);
+  const content = sent[1] ?? "";
+  expect(content).toContain("Clip: /evidence/clip.mp4");
+  expect(content).toContain("Not attached (too large or unreadable): /evidence/bad.png");
+  expect(content).toContain("Not attached (already at the image limit): /evidence/img8.png");
+  expect(content).not.toContain("Clip: /evidence/bad.png");
+  expect(content).not.toContain("Clip: /evidence/img8.png");
 });
 
 test("a draft pull request is summarized as unfinished visibility, never as acceptance", () => {

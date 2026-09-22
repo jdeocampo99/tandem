@@ -38,6 +38,10 @@ export const USER_CHECK_EXTENSIONS = {
   clip: [".webm", ".mp4", ".mov"],
 } as const;
 
+/** Cap on a single "you check" evidence file's size, shared by submission-time verification
+ *  (`checkUserCheckFiles`) and inline attachment (`readUserCheckAttachment`). */
+export const MAX_USER_CHECK_FILE_BYTES = 5 * 1024 * 1024;
+
 function hasExtension(path: string, extensions: readonly string[]): boolean {
   const lower = path.toLowerCase();
   return extensions.some((extension) => lower.endsWith(extension));
