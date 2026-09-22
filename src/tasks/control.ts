@@ -2,7 +2,14 @@ import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { closeEndpoint, type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
-import type { Clock, CommandRunner, Endpoint, IdFactory, TaskRecord } from "../contracts.ts";
+import type {
+  BlockCause,
+  Clock,
+  CommandRunner,
+  Endpoint,
+  IdFactory,
+  TaskRecord,
+} from "../contracts.ts";
 import { activeRuntimeJob, taskRuntime } from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
 import { readRuntimeState, writeRuntimeState } from "../runtime/persistence.ts";
@@ -109,7 +116,7 @@ export type TaskControlDependencies = Readonly<{
   ) => Promise<void>;
   readonly context: () => TaskTransitionContext;
   readonly transition: (taskId: string, event: TaskEvent) => Promise<TaskRecord>;
-  readonly blockTask: (taskId: string, reason: string) => Promise<TaskRecord>;
+  readonly blockTask: (taskId: string, reason: string, cause?: BlockCause) => Promise<TaskRecord>;
   readonly publishTaskInbox: (task: TaskRecord) => Promise<void>;
   readonly saveEndpoint: (
     taskId: string,

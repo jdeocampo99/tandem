@@ -24,6 +24,7 @@ import { type OnboardRepoResult, onboardRepo, resolveRepoPolicy } from "../confi
 import type { RequestBriefRecord, RequestDeliveryRecord, ReviewResult } from "../contracts.ts";
 import {
   type AnswerTaskInput,
+  type BlockCause,
   type Clock,
   type CommandRunner,
   type IdFactory,
@@ -64,6 +65,7 @@ import { PresentationRuntimeWorkflow } from "../presentations/workflow.ts";
 import {
   CentralRecoveryWorkflow,
   RESTART_QUESTION_ID_PREFIX,
+  reportBlock,
   VALIDATION_RETRY_QUESTION_ID_PREFIX,
 } from "../recovery/central.ts";
 import {
@@ -689,7 +691,7 @@ class TandemController {
       updateTask: (taskId, transform) => this.updateTask(taskId, transform),
       transition: (taskId, event) => this.transition(taskId, event),
       context: () => this.context(),
-      blockTask: (taskId, reason) => this.blockTask(taskId, reason),
+      blockTask: (taskId, reason, cause) => this.blockTask(taskId, reason, cause),
       publishTaskInbox: (task) => this.#source.publishTaskInbox(task),
       removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
@@ -714,7 +716,7 @@ class TandemController {
       reconcileJob: (task, runtime, job) => this.#worker.reconcileJob(task, runtime, job),
       context: () => this.context(),
       transition: (taskId, event) => this.transition(taskId, event),
-      blockTask: (taskId, reason) => this.blockTask(taskId, reason),
+      blockTask: (taskId, reason, cause) => this.blockTask(taskId, reason, cause),
       publishTaskInbox: (task) => this.#source.publishTaskInbox(task),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       saveEndpoint: (taskId, endpoint, claim) => this.#worker.saveEndpoint(taskId, endpoint, claim),
@@ -804,7 +806,8 @@ class TandemController {
         }
         return { started: true };
       },
-      blockTask: (taskId, reason) => this.blockTask(taskId, reason).then(() => undefined),
+      blockTask: (taskId, reason, cause) =>
+        this.blockTask(taskId, reason, cause).then(() => undefined),
       removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
       relaunchReviewer: (task) => this.#worker.advanceReview(task),
     });
@@ -1635,6 +1638,7 @@ class TandemController {
     options: Readonly<{
       readonly runtimeError?: boolean;
       readonly reservation?: DurableReservation;
+      readonly cause?: BlockCause;
     }> = {},
   ): Promise<void> {
     const claim = operationClaim(capturedRuntime?.operation);
@@ -1678,7 +1682,13 @@ class TandemController {
         await store.update(currentTask.id, currentTask.revision, (task) =>
           transitionTask(
             task,
-            { type: "block", reason: text(reason, "block reason") },
+            {
+              type: "block",
+              // `reason` (kept in `lastError` above) stays the raw diagnostic text; the block
+              // itself prefers the cause's user-facing summary when one was recorded.
+              reason: text(options.cause?.summary ?? reason, "block reason"),
+              ...(options.cause === undefined ? {} : { cause: options.cause }),
+            },
             this.context(),
           ),
         );
@@ -2029,6 +2039,13 @@ class TandemController {
         await this.blockTaskIfReconcileClaim(task, runtime, reason, {
           runtimeError: true,
           reservation,
+          cause: {
+            group: "safety-stop",
+            kind: "identity-mismatch",
+            summary:
+              "The recorded reservation and operation no longer identify the same piece of work, so nothing was launched.",
+            detail: reason,
+          },
         });
         return;
       }
@@ -2077,10 +2094,12 @@ class TandemController {
       case "implementing": {
         if (runtime.endpointLaunch !== undefined) return;
         if (runtime.worktree === undefined) {
-          await this.blockTask(
-            task.id,
-            `task is ${task.stage} but its durable worktree is missing`,
-          );
+          await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
+            group: "lost-resource",
+            kind: "resource-lost",
+            summary: "The task's worktree is missing, so no further work can run against it.",
+            detail: `task is ${task.stage} but its durable worktree is missing`,
+          });
           return;
         }
         const writer = currentWriter(runtime);
@@ -2313,10 +2332,14 @@ class TandemController {
     return this.#deps.store.update(taskId, current.revision, transform);
   }
 
-  private async blockTask(taskId: string, reason: string): Promise<TaskRecord> {
+  private async blockTask(taskId: string, reason: string, cause?: BlockCause): Promise<TaskRecord> {
     const task = await this.get(taskId);
     if (["cancelled", "completed", "merged", "paused", "blocked"].includes(task.stage)) return task;
-    return this.transition(taskId, { type: "block", reason: text(reason, "block reason") });
+    return this.transition(taskId, {
+      type: "block",
+      reason: text(reason, "block reason"),
+      ...(cause === undefined ? {} : { cause }),
+    });
   }
 
   private async resultExists(path: string): Promise<boolean> {

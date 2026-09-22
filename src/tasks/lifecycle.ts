@@ -1,4 +1,5 @@
 import {
+  type BlockCause,
   type Endpoint,
   type Finding,
   type FindingSeverity,
@@ -159,6 +160,9 @@ type CancelEvent = Readonly<{
 type BlockEvent = Readonly<{
   readonly type: "block";
   readonly reason: string;
+  /** Typed cause behind `reason`, when the caller has one. Optional so every existing free-text
+   *  block keeps working unchanged; a caller that has a cause should always supply it. */
+  readonly cause?: BlockCause;
 }>;
 
 /**
@@ -745,8 +749,13 @@ function clearReviewHead(task: TaskRecord): Omit<TaskRecord, "reviewHead"> {
 
 function clearPreviousAndBlock(
   task: TaskRecord,
-): Omit<TaskRecord, "previousStage" | "blockReason"> {
-  const { previousStage: _previousStage, blockReason: _blockReason, ...rest } = task;
+): Omit<TaskRecord, "previousStage" | "blockReason" | "blockCause"> {
+  const {
+    previousStage: _previousStage,
+    blockReason: _blockReason,
+    blockCause: _blockCause,
+    ...rest
+  } = task;
   return rest;
 }
 
@@ -1251,7 +1260,12 @@ export function transitionTask(
       return commitWithNotification(
         task,
         context,
-        { stage: "blocked", previousStage: task.stage, blockReason: event.reason },
+        {
+          stage: "blocked",
+          previousStage: task.stage,
+          blockReason: event.reason,
+          ...(event.cause === undefined ? {} : { blockCause: event.cause }),
+        },
         `Task ${task.id} blocked: ${event.reason}`,
         "coordinator",
       );

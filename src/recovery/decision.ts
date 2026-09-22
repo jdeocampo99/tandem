@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { IsoTimestamp } from "../contracts.ts";
+import type { BlockCause, BlockCauseKind, IsoTimestamp } from "../contracts.ts";
 
 /** Version of the durable recovery decision and bounded-wait contract. */
 export const RECOVERY_CONTRACT_SCHEMA_VERSION = 1;
@@ -258,8 +258,29 @@ export function recoveryEvidenceIdentity(
 }
 
 /**
+ * A stable identity for one block cause, keyed to the task, its generation, the cause's own kind,
+ * and (when the site recorded one) the exact job it happened to. Unlike `recoveryEvidenceIdentity`,
+ * this never hashes `summary`: rewording a cause's plain-English summary can never orphan an
+ * outstanding recovery question or decision, because nothing about the wording feeds the identity.
+ */
+export function blockCauseEvidenceIdentity(
+  input: Readonly<{
+    readonly taskId: string;
+    readonly generation: number;
+    readonly kind: BlockCauseKind;
+    readonly jobId?: string;
+  }>,
+): string {
+  const parts = [input.taskId, String(input.generation), input.kind, input.jobId ?? ""];
+  return createHash("sha256").update(parts.join(" ")).digest("hex").slice(0, 32);
+}
+
+/**
  * Reads the durable blockers recorded for one task and answers what the coordinator is deciding
- * about. Blockers are ordered by authority, so the task's own reason wins over a runtime note.
+ * about. Blockers are ordered by authority, so the task's own reason wins over a runtime note. When
+ * the task's own blocker carries a typed `cause`, the evidence identity is keyed off the cause's kind
+ * (and job, when it has one) via `blockCauseEvidenceIdentity` instead of the free-text hash, so a
+ * later rewording of the summary can never orphan an outstanding decision or question.
  */
 export function classifyRecoveryEvidence(
   input: Readonly<{
@@ -268,6 +289,8 @@ export function classifyRecoveryEvidence(
     readonly requestId?: string;
     readonly blockers: readonly string[];
     readonly observedAt: IsoTimestamp;
+    /** The task's own typed block cause, when one was recorded for its current blocker. */
+    readonly cause?: BlockCause;
   }>,
 ): RecoveryEvidence | undefined {
   const blockers = input.blockers.filter((entry) => entry.trim().length > 0);
@@ -278,9 +301,18 @@ export function classifyRecoveryEvidence(
     availability === undefined ? "durable-blocker" : "temporary-availability";
   const knownAvailableAt =
     availability === undefined ? undefined : availabilityTimeIn(availability, input.observedAt);
+  const identity =
+    kind === "durable-blocker" && input.cause !== undefined
+      ? blockCauseEvidenceIdentity({
+          taskId: input.taskId,
+          generation: input.generation,
+          kind: input.cause.kind,
+          ...(input.cause.jobId === undefined ? {} : { jobId: input.cause.jobId }),
+        })
+      : recoveryEvidenceIdentity({ ...input, kind, summary });
   return {
     kind,
-    identity: recoveryEvidenceIdentity({ ...input, kind, summary }),
+    identity,
     summary: boundedSummary(summary),
     observedAt: input.observedAt,
     ...(knownAvailableAt === undefined ? {} : { knownAvailableAt }),

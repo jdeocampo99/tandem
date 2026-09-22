@@ -4299,6 +4299,11 @@ test("TAG-989 maxed awaiting-fixes intent cannot reserve, launch, or advance wor
       expect(runtime?.operation).toBeUndefined();
       expect(runtime?.endpoints).toEqual([endpoint]);
       expect(runtime?.jobs.some(activeRuntimeJob)).toBe(false);
+      expect(after.blockCause).toMatchObject({
+        group: "user-decision",
+        kind: "fix-rounds-exhausted",
+      });
+      expect(after.blockReason).toBe(after.blockCause?.summary);
     },
   );
 });
@@ -4398,6 +4403,73 @@ test("legacy incomplete reservation is quarantined without inventing an operatio
       expect(runtime?.reservation?.phase).toBe("reserved");
       expect(runtime?.lastError).toContain("legacy reservation");
       expect(activeReservations(recovered)).toBe(1);
+    },
+  );
+});
+
+test("a reservation and operation with mismatched identities are quarantined with a safety-stop cause", async () => {
+  await withFixture(
+    { kind: "scout", stage: "queued", runner: { active: false } },
+    async ({ home, lease, service, runnerState }) => {
+      const state = await readRuntime(home);
+      const initialRuntime = state.tasks[0];
+      if (initialRuntime === undefined) throw new Error("fixture runtime missing");
+      const operation: DurableOperation = {
+        schemaVersion: 1,
+        id: "operation-other",
+        taskId: "task-1",
+        kind: "scout",
+        role: "scout",
+        generation: 0,
+        inputHead: SOURCE_CHECKPOINT.head,
+        policyDigest: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
+        instructionRevision: 0,
+        jobId: "job-other",
+        phase: "running",
+        fencingRevision: 1,
+        claimOwner: "seeded-controller",
+        createdAt: TIMESTAMP,
+        effects: [],
+      };
+      await writeRuntimeState(runtimeFile(home), {
+        ...state,
+        tasks: [
+          {
+            ...initialRuntime,
+            worktree: lease,
+            reservation: { ...reservationFor("task-1"), operationId: "operation-mine" },
+            operation,
+          },
+        ],
+      });
+
+      await service.tick();
+
+      expect(runnerState.launches).toBe(0);
+      const task = await service.get("task-1");
+      expect(task.stage).toBe("blocked");
+      expect(task.blockCause).toMatchObject({
+        group: "safety-stop",
+        kind: "identity-mismatch",
+      });
+      expect(task.blockReason).toBe(task.blockCause?.summary);
+    },
+  );
+});
+
+test("an implementing task with no durable worktree blocks with a lost-resource cause", async () => {
+  await withFixture(
+    { kind: "implementation", stage: "implementing", runner: { active: false } },
+    async ({ service }) => {
+      await service.tick();
+
+      const task = await service.get("task-1");
+      expect(task.stage).toBe("blocked");
+      expect(task.blockCause).toMatchObject({
+        group: "lost-resource",
+        kind: "resource-lost",
+      });
+      expect(task.blockReason).toBe(task.blockCause?.summary);
     },
   );
 });

@@ -1,5 +1,9 @@
 import {
   type AgentRole,
+  BLOCK_CAUSE_GROUP_BY_KIND,
+  BLOCK_CAUSE_GROUPS,
+  BLOCK_CAUSE_KINDS,
+  type BlockCause,
   type CheckOrigin,
   type Endpoint,
   type Finding,
@@ -122,6 +126,7 @@ const TOP_LEVEL_KEYS = [
   "skill",
   "reportPath",
   "blockReason",
+  "blockCause",
   "notifications",
   "communication",
   "pullRequest",
@@ -810,6 +815,34 @@ function parseTaskCleanup(value: unknown, source: string): TaskCleanupState {
   };
 }
 
+/**
+ * `group` is stored alongside `kind` (rather than re-derived on read) so a record round-trips
+ * byte-for-byte, but it must still agree with `BLOCK_CAUSE_GROUP_BY_KIND`; a mismatch means the
+ * record was hand-edited or corrupted, not a legitimate new pairing.
+ */
+function parseBlockCause(value: unknown, source: string): BlockCause {
+  if (!isRecord(value)) failState(source, "block cause must be an object");
+  assertExactKeys(value, ["group", "kind", "detail", "summary", "jobId", "paneId"], source);
+  const kind = requiredEnum(value, "kind", BLOCK_CAUSE_KINDS, source);
+  const group = requiredEnum(value, "group", BLOCK_CAUSE_GROUPS, source);
+  if (group !== BLOCK_CAUSE_GROUP_BY_KIND[kind]) {
+    failState(
+      source,
+      `group ${group} does not match the group ${BLOCK_CAUSE_GROUP_BY_KIND[kind]} for kind ${kind}`,
+    );
+  }
+  const jobId = optionalText(value, "jobId", source);
+  const paneId = optionalText(value, "paneId", source);
+  return {
+    group,
+    kind,
+    detail: requiredText(value, "detail", source),
+    summary: requiredText(value, "summary", source),
+    ...(jobId === undefined ? {} : { jobId }),
+    ...(paneId === undefined ? {} : { paneId }),
+  };
+}
+
 function parseResearchHandoff(value: unknown, source: string): ResearchHandoff {
   if (!isRecord(value)) failState(source, "research handoff must be an object");
   assertExactKeys(
@@ -943,6 +976,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   }
   const reportPath = optionalText(value, "reportPath", source);
   const blockReason = optionalText(value, "blockReason", source);
+  const blockCauseValue = Object.hasOwn(value, "blockCause")
+    ? requiredValue(value, "blockCause", source)
+    : undefined;
   const communicationValue = Object.hasOwn(value, "communication")
     ? requiredValue(value, "communication", source)
     : undefined;
@@ -1050,6 +1086,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
       : { reviewLevel: parseReviewLevelRecord(reviewLevelValue, `${source}.reviewLevel`) }),
     ...(reportPath === undefined ? {} : { reportPath }),
     ...(blockReason === undefined ? {} : { blockReason }),
+    ...(blockCauseValue === undefined
+      ? {}
+      : { blockCause: parseBlockCause(blockCauseValue, `${source}.blockCause`) }),
     ...(communication === undefined ? {} : { communication }),
     ...(pullRequestValue === undefined
       ? {}

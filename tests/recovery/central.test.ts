@@ -2,13 +2,15 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  CommandRequest,
-  CommandResult,
-  Endpoint,
-  ResolvedPolicy,
-  TaskRecord,
-  WorktreeLease,
+import {
+  type BlockCause,
+  blockCause,
+  type CommandRequest,
+  type CommandResult,
+  type Endpoint,
+  type ResolvedPolicy,
+  type TaskRecord,
+  type WorktreeLease,
 } from "../../src/contracts.ts";
 import {
   CentralRecoveryWorkflow,
@@ -16,6 +18,7 @@ import {
   RESTART_QUESTION_ID_PREFIX,
   type RelaunchWorker,
   type RevalidateWorker,
+  reportBlock,
 } from "../../src/recovery/central.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { DurableJob, RuntimeState } from "../../src/runtime/schema.ts";
@@ -667,4 +670,20 @@ test("a relaunch refusal blocks the task with the refusal reason", async () => {
   } finally {
     await f.cleanup();
   }
+});
+
+test("reportBlock records the typed cause and blocks through the given effect, unchanged from today's block", async () => {
+  const calls: Array<{ taskId: string; reason: string; cause: BlockCause | undefined }> = [];
+  const cause = blockCause("runtime-metadata-missing", {
+    summary: "Tandem lost track of this task's durable runtime record.",
+    detail: "durable runtime metadata is missing; no re-entry is possible",
+  });
+  await reportBlock(
+    async (taskId, reason, causeArg) => {
+      calls.push({ taskId, reason, cause: causeArg });
+    },
+    "task-1",
+    cause,
+  );
+  expect(calls).toEqual([{ taskId: "task-1", reason: cause.summary, cause }]);
 });
