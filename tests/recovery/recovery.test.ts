@@ -693,6 +693,52 @@ test("delivery preflight rejects duplicate PR metadata", async () => {
   }
 });
 
+test("delivery preflight's user-check check refuses a pending hands-on criterion", async () => {
+  const f = await fixture({ stage: "ready" });
+  try {
+    await f.store.update(f.task.id, f.task.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: NOW,
+      userCheckCriteria: ["Streak bar glows at 5 in a row"],
+    }));
+
+    const value = await f.workflow.deliveryPreflight("task-1", "owner/repo", "main");
+    const userCheck = value.checks.find((check) => check.name === "user-check");
+    expect(userCheck?.passed).toBe(false);
+    expect(userCheck?.detail).toContain("waiting for your check of 1 hands-on criteria");
+    expect(value.ready).toBe(false);
+    expect(value.refusals.join("\n")).toContain("user-check:");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("delivery preflight's user-check check passes once the hands-on criterion is confirmed", async () => {
+  const f = await fixture({ stage: "ready" });
+  try {
+    await f.store.update(f.task.id, f.task.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: NOW,
+      userCheckCriteria: ["Streak bar glows at 5 in a row"],
+      userCheck: {
+        head: HEAD,
+        generation: current.generation,
+        evidence: [{ criterion: "Streak bar glows at 5 in a row", paths: ["/home/jobs/a.png"] }],
+        answer: { outcome: "confirmed", answeredAt: NOW },
+      },
+    }));
+
+    const value = await f.workflow.deliveryPreflight("task-1", "owner/repo", "main");
+    const userCheck = value.checks.find((check) => check.name === "user-check");
+    expect(userCheck?.passed).toBe(true);
+    expect(value.refusals.join("\n")).not.toContain("user-check:");
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("a preapproved action runs once scope, ownership, and the prior outcome are proven", async () => {
   const f = await fixture({
     endpoint: "missing",
