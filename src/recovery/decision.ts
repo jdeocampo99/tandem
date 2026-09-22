@@ -295,10 +295,15 @@ export function classifyRecoveryEvidence(
 ): RecoveryEvidence | undefined {
   const blockers = input.blockers.filter((entry) => entry.trim().length > 0);
   const availability = blockers.find((entry) => isTemporaryAvailabilityText(entry));
-  const summary = availability ?? blockers[0];
-  if (summary === undefined) return undefined;
+  const rawSummary = availability ?? blockers[0];
+  if (rawSummary === undefined) return undefined;
   const kind: RecoveryEvidenceKind =
     availability === undefined ? "durable-blocker" : "temporary-availability";
+  // Prefer the task's own typed cause for the plain-English summary a person reads: it is
+  // deliberately free of task/job/pane identifiers, unlike the raw blocker text this falls back to
+  // for a task that has not yet recorded one.
+  const summary =
+    kind === "durable-blocker" && input.cause !== undefined ? input.cause.summary : rawSummary;
   const knownAvailableAt =
     availability === undefined ? undefined : availabilityTimeIn(availability, input.observedAt);
   const identity =
@@ -309,7 +314,7 @@ export function classifyRecoveryEvidence(
           kind: input.cause.kind,
           ...(input.cause.jobId === undefined ? {} : { jobId: input.cause.jobId }),
         })
-      : recoveryEvidenceIdentity({ ...input, kind, summary });
+      : recoveryEvidenceIdentity({ ...input, kind, summary: rawSummary });
   return {
     kind,
     identity,

@@ -698,7 +698,9 @@ test("a block event's typed cause is recorded alongside its free-text reason and
     context(),
   );
   expect(blocked.stage).toBe("blocked");
-  expect(blocked.blockReason).toBe("task is implementing but its durable worktree is missing");
+  expect(blocked.blockCause?.detail).toBe(
+    "task is implementing but its durable worktree is missing",
+  );
   expect(blocked.blockCause).toEqual(cause);
 
   const resumed = transitionTask(blocked, { type: "resume" }, context());

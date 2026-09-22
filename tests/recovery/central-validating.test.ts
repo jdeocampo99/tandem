@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
+  BlockCause,
   CommandRequest,
   CommandResult,
   Endpoint,
@@ -247,8 +248,10 @@ async function fixture(options: FixtureOptions = {}) {
   };
 
   const blockedReasons: string[] = [];
-  const blockTask = async (_taskId: string, reason: string): Promise<void> => {
+  const blockedCauses: (BlockCause | undefined)[] = [];
+  const blockTask = async (_taskId: string, reason: string, cause?: BlockCause): Promise<void> => {
     blockedReasons.push(reason);
+    blockedCauses.push(cause);
   };
 
   const workflow = new CentralRecoveryWorkflow({
@@ -274,6 +277,7 @@ async function fixture(options: FixtureOptions = {}) {
     runtimePath: runtimeFile(home),
     revalidateCalls,
     blockedReasons,
+    blockedCauses,
     setRevalidateOutcome: (
       outcome: Readonly<{ readonly started: boolean; readonly reason?: string }>,
     ) => {
@@ -475,7 +479,25 @@ test("a revalidate refusal blocks the task with the refusal reason", async () =>
     if (task === undefined) throw new Error("fixture task missing");
     const outcome = await f.workflow.recoverStuckWorker(task);
     expect(outcome.action).toBe("blocked");
-    expect(f.blockedReasons.join("\n")).toContain("validation refused a stale worktree");
+    expect(f.blockedCauses.at(-1)?.detail).toContain("validation refused a stale worktree");
+    expect(f.blockedCauses.at(-1)?.kind).toBe("allocation-failed");
+    expect(f.blockedCauses.at(-1)?.group).toBe("lost-resource");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a task with no durable runtime metadata blocks with a runtime-metadata-missing cause", async () => {
+  const f = await fixture();
+  try {
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    // No matching entry exists in runtime state for this id, so central recovery cannot read one.
+    const ghost: TaskRecord = { ...task, id: "task-ghost" };
+    const outcome = await f.workflow.recoverStuckWorker(ghost);
+    expect(outcome.action).toBe("blocked");
+    expect(f.blockedCauses.at(-1)?.kind).toBe("runtime-metadata-missing");
+    expect(f.blockedCauses.at(-1)?.group).toBe("safety-stop");
   } finally {
     await f.cleanup();
   }

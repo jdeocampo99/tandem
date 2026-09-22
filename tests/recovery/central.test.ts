@@ -257,8 +257,10 @@ async function fixture(options: FixtureOptions = {}) {
   };
 
   const blockedReasons: string[] = [];
-  const blockTask = async (_taskId: string, reason: string): Promise<void> => {
+  const blockedCauses: (BlockCause | undefined)[] = [];
+  const blockTask = async (_taskId: string, reason: string, cause?: BlockCause): Promise<void> => {
     blockedReasons.push(reason);
+    blockedCauses.push(cause);
   };
 
   const removedEndpoints: string[] = [];
@@ -295,6 +297,7 @@ async function fixture(options: FixtureOptions = {}) {
     relaunchCalls,
     revalidateCalls,
     blockedReasons,
+    blockedCauses,
     removedEndpoints,
     relaunchReviewerCalls,
     setRelaunchOutcome: (
@@ -640,6 +643,8 @@ test('answering "restart" that cannot re-prove death is refused, not applied on 
     expect(decision?.disposition).toBe("refused");
     expect(decision?.ownership).toBe("unknown");
     expect(decision?.priorOutcome).toBe("uncertain");
+    expect(f.blockedCauses.at(-1)?.kind).toBe("ownership-unprovable");
+    expect(f.blockedCauses.at(-1)?.group).toBe("safety-stop");
   } finally {
     await f.cleanup();
   }
@@ -666,7 +671,25 @@ test("a relaunch refusal blocks the task with the refusal reason", async () => {
     if (task === undefined) throw new Error("fixture task missing");
     const outcome = await f.workflow.recoverStuckWorker(task);
     expect(outcome.action).toBe("blocked");
-    expect(f.blockedReasons.join("\n")).toContain("worktree lease could not be reconfirmed");
+    expect(f.blockedCauses.at(-1)?.detail).toContain("worktree lease could not be reconfirmed");
+    expect(f.blockedCauses.at(-1)?.kind).toBe("allocation-failed");
+    expect(f.blockedCauses.at(-1)?.group).toBe("lost-resource");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a task with no durable runtime metadata blocks with a runtime-metadata-missing cause", async () => {
+  const f = await fixture();
+  try {
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    // No matching entry exists in runtime state for this id, so central recovery cannot read one.
+    const ghost: TaskRecord = { ...task, id: "task-ghost" };
+    const outcome = await f.workflow.recoverStuckWorker(ghost);
+    expect(outcome.action).toBe("blocked");
+    expect(f.blockedCauses.at(-1)?.kind).toBe("runtime-metadata-missing");
+    expect(f.blockedCauses.at(-1)?.group).toBe("safety-stop");
   } finally {
     await f.cleanup();
   }

@@ -1257,16 +1257,18 @@ export function transitionTask(
       if (!isNonEmptyText(event.reason)) {
         throw new TaskTransitionError("invalid-input", task, "Block requires a non-empty reason");
       }
+      // A typed cause always shows its plain-English summary; the technical text stays in its detail.
+      const shown = event.cause?.summary ?? event.reason;
       return commitWithNotification(
         task,
         context,
         {
           stage: "blocked",
           previousStage: task.stage,
-          blockReason: event.reason,
+          blockReason: shown,
           ...(event.cause === undefined ? {} : { blockCause: event.cause }),
         },
-        `Task ${task.id} blocked: ${event.reason}`,
+        `Task ${task.id} blocked: ${shown}`,
         "coordinator",
       );
     }

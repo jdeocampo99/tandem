@@ -160,7 +160,8 @@ test("an unreadable Herdr pane fences the task without releasing its capacity", 
     const snapshot = await world.snapshot();
     const task = await service.get(SCENARIO_TASK_ID);
     expect(task.stage).toBe("blocked");
-    expect(task.blockReason).toContain("scheduler failure");
+    expect(task.blockCause?.kind).toBe("transition-failed");
+    expect(task.blockCause?.detail).toContain("scheduler failure");
     expect(snapshot.resources.quarantined).toContain(`task:${SCENARIO_TASK_ID}`);
     expect(snapshot.resources.retained).toContain("lease:lease-1");
     expect(snapshot.resources.retained).toContain("reservation:reservation-1");
