@@ -21,7 +21,7 @@ import {
   resolveBalancedProfile,
 } from "../config/operating-profile.ts";
 import { type OnboardRepoResult, onboardRepo, resolveRepoPolicy } from "../config/repositories.ts";
-import type { RequestDeliveryRecord, ReviewResult } from "../contracts.ts";
+import type { RequestBriefRecord, RequestDeliveryRecord, ReviewResult } from "../contracts.ts";
 import {
   type AnswerTaskInput,
   type Clock,
@@ -932,13 +932,26 @@ class TandemController {
       ...(input.enabledProviders === undefined ? {} : { enabledProviders: input.enabledProviders }),
     });
   }
-  /** Classified outside the store lock so a bounded classifier call never delays other work. */
+  /**
+   * Classified outside the store lock so a bounded classifier call never delays other work. A scout
+   * under a request is classified from the brief's goal and scope, which record what the user wants
+   * from the whole request; the scout objective is coordinator-written and carries the scout's own
+   * read-only guardrails ("do not implement"), which would otherwise read as the user's intent.
+   * Constraints and non-goals stay out for the same reason.
+   */
   private async continuationFor(
     input: CreateTaskRequest,
+    brief: RequestBriefRecord | undefined,
   ): Promise<ResearchContinuation | undefined> {
     if (input.kind !== "scout" || input.researchContinuation !== undefined) return undefined;
+    const objective =
+      brief === undefined
+        ? typeof input.objective === "string"
+          ? input.objective
+          : ""
+        : [brief.draft.content.goal, ...brief.draft.content.scope].join("\n");
     const classified = await this.#deps.classifyResearchContinuation({
-      objective: typeof input.objective === "string" ? input.objective : "",
+      objective,
       taskKind: input.kind,
     });
     return classified.continuation;
@@ -947,8 +960,11 @@ class TandemController {
   async create(input: CreateTaskRequest): Promise<TaskRecord> {
     await this.ensureSourceReady();
     if (!isRecord(input)) throw new TypeError("create input must be an object");
-    if (input.requestId !== undefined) await this.#requests.requireRequest(input.requestId);
-    const classifiedContinuation = await this.continuationFor(input);
+    const brief =
+      input.requestId === undefined
+        ? undefined
+        : await this.#requests.requireRequest(input.requestId);
+    const classifiedContinuation = await this.continuationFor(input, brief);
     return this.#deps.store.exclusive(async (store) => {
       const source = await mapTaskSource(
         this.#deps.run,
