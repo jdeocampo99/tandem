@@ -58,7 +58,9 @@ import {
 import type { RecoveryAvailabilityWait } from "./wait.ts";
 
 const MAX_RECOVERY_ATTEMPTS = 3;
-const MAX_VALIDATION_RETRIES = 3;
+/** Shared with central recovery's validating re-entry: one budget for every validation retry,
+ *  whether spent by the explicit `validation-retry` action or by an automatic infra-loss re-entry. */
+export const MAX_VALIDATION_RETRIES = 3;
 const MAX_EVIDENCE_REPAIRS = 3;
 const REQUIRED_REVIEW_LENSES = FINAL_REVIEW_LENSES;
 const LOCK_RETRY_COUNT = 3;

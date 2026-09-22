@@ -1969,7 +1969,7 @@ from its current stage. It is always the same three moves:
    | --- | --- | --- |
    | `implementing` | Relaunch: new durable operation, a fresh pane only if one is not already owned, a new worker started through the normal launch path | Yes |
    | `scouting` | The identical relaunch path as `implementing` | Yes |
-   | `validating` | — | Not yet |
+   | `validating` | Revalidate: rerun validation at the exact same reviewed HEAD as a new durable job, through the normal `WorkerWorkflow.startValidation` entry point | Yes |
    | `reviewing` | — | Not yet |
    | `awaiting-fixes` | The same `implementing` relaunch path (see below) | Yes |
 
@@ -2003,6 +2003,21 @@ through the existing question-id-bound answer API. Every recovery answer, this o
 stored as a decision, never as a worker instruction: answering it never bumps
 `task.communication.revision`, so it can never be mistaken for a new canonical instruction a worker
 must apply.
+
+Validating's re-entry shares the same stop/save/proof machinery against a reviewer-role pane and a
+`"validation"` job instead of a worker pane: a validation job that dies for an infrastructure reason
+(its pane disappears, or `validation-worker` stops without writing a durable result — see
+`WorkerWorkflow.reconcileMissingEndpoint` and the validation branch of `reconcileJob`) settles as
+failed without blocking, so the task stays at `validating` with no active job or reservation and a
+terminal failed job behind it; central recovery picks that shape up on the next reconcile tick
+instead of the task sitting blocked for a human. It is bounded by `MAX_VALIDATION_RETRIES` (3), the
+exact same budget the explicit `validation-retry` recovery action spends from — central recovery
+never adds a second counter for it, and a genuine task-code validation failure (a real result was
+produced, however it came out) never reaches this path at all, since a real result always moves the
+task to `reviewing` or `awaiting-fixes` via the normal lifecycle event. Budget exhaustion or an
+unprovable pane asks a "retry"/"stop" question through the same plain-English shape and answer API,
+under its own `VALIDATION_RETRY_QUESTION_ID_PREFIX` so it never misroutes into the implementing/
+scouting restart handler.
 
 ### First-class bounded recovery actions
 

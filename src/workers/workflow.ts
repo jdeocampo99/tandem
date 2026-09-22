@@ -452,13 +452,17 @@ export class WorkerWorkflow {
     } catch (error) {
       if (isMissing(error)) {
         if (!isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) return;
+        // The validation runner process is gone without writing a durable result: an infrastructure
+        // loss, not a genuine result. Settle the job as failed and release its reservation without
+        // blocking, so the task stays at `validating` and central recovery's stop/save/re-entry
+        // (bounded by the validation retry budget) can pick it up instead of sitting blocked.
         await this.failJob(
           task,
           job,
           `validation stopped without durable evidence: ${describeError(error)}`,
           claim,
-          true,
-          true,
+          false,
+          false,
         );
         return;
       }
@@ -475,16 +479,18 @@ export class WorkerWorkflow {
   ): Promise<void> {
     if (!isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) return;
     const resultExists = await this.#deps.resultExists(job.resultPath);
-    await this.failJob(
-      task,
-      job,
-      resultExists
-        ? "owned endpoint disappeared; durable result cannot be trusted without stopped-pane proof"
-        : "owned endpoint disappeared before a durable result was written",
-      claim,
-      true,
-      true,
-    );
+    const reason = resultExists
+      ? "owned endpoint disappeared; durable result cannot be trusted without stopped-pane proof"
+      : "owned endpoint disappeared before a durable result was written";
+    if (job.kind === "validation") {
+      // A lost validation pane is an infrastructure loss, not a genuine result: settle the job as
+      // failed and release its reservation without blocking, so the task stays at `validating` and
+      // central recovery's stop/save/re-entry (bounded by the validation retry budget) can pick it
+      // up on the next reconcile tick instead of the task sitting blocked for a human.
+      await this.failJob(task, job, reason, claim, false, false);
+      return;
+    }
+    await this.failJob(task, job, reason, claim, true, true);
   }
 
   private async observeWorkerProgress(
