@@ -524,7 +524,7 @@ onboarding never writes application files.
 For a canonical Git root, Tandem stores the record at:
 
 ```text
-<home>/repositories/<key>/config.json
+<home>/repositories/<key>/settings.toml
 ```
 
 `<key>` is the first 24 hexadecimal characters of the SHA-256 digest of the canonical realpath
@@ -709,37 +709,29 @@ Existing readers of this log remain compatible with events recorded before usage
 [prompt-routing PRD](jev-prompt-routing-prd.md), [integration overview](jev-prd.md), and
 [evaluation plan](jev-evaluation.md).
 
-### Central config envelope
+### Central settings file
 
-The envelope has exactly these outer fields and no others:
+Each project's settings live in `<home>/repositories/<key>/settings.toml`: the repository-policy keys
+below at the top level, plus `repoPath`, which must equal the canonical repository root:
 
-```json
-{
-  "schemaVersion": 1,
-  "repoPath": "/absolute/canonical/repository",
-  "policy": {
-    "version": 1,
-    "validationCommands": [
-      {
-        "name": "package:ci:local",
-        "argv": ["bun", "run", "ci:local"],
-        "surfaces": [],
-        "timeoutMs": 600000
-      }
-    ],
-    "setupCommands": ["bun install --frozen-lockfile"]
-  }
-}
+```toml
+repoPath = "/absolute/canonical/repository"
+setupCommands = ["npm ci"]
+validationCommands = ["npm run ci:local"]
+# maxWorkers = 3
 ```
 
-The path and command list above are illustrative placeholders. The writer must substitute the observed
-canonical `repoPath` and literal command objects returned by `onboard`. Default setup writes a `policy`
-object with exactly `version: 1` and the `validationCommands` and `setupCommands` arrays returned by discovery; it does not
-add inherited defaults to the file. Every read validates the outer fields, `schemaVersion`, matching
-canonical `repoPath`, and the inner policy.
+Setup writes this file once, exclusively. It fills in the discovered `setupCommands` (the install for
+the first lockfile found) and `validationCommands` (package scripts run with that lockfile's package
+manager, `bun` when there is none). Every other setting is included commented out, with a
+description and an example; a test uncomments them all and checks the result still parses. Proposed
+commands are plain strings, so they cover every surface. Edit the file with `tandem config`.
 
-`policy` is the existing strict repository-policy override object. Its optional top-level keys
-are:
+Projects saved before `settings.toml` keep their `config.json` envelope
+(`{ "schemaVersion": 1, "repoPath", "policy": { ... } }`), which is still read, validated, and never
+rewritten. A project directory holding both files is refused until one is removed.
+
+The repository-policy keys, all optional, are:
 
 | Key | Type and behavior |
 | --- | --- |
@@ -1901,7 +1893,7 @@ are Tandem-owned state, not files in target repositories:
 | Path | Contents |
 | --- | --- |
 | `<home>/models.json` | Strict global model preference envelope for all five roles; approved updates atomically replace it with mode `0600`. |
-| `<home>/repositories/<key>/config.json` | Private central policy envelope for the canonical repository root; `<key>` is the first 24 hex characters of its SHA-256 realpath digest. |
+| `<home>/repositories/<key>/settings.toml` | Private central settings for the canonical repository root (legacy projects: `config.json` envelope); `<key>` is the first 24 hex characters of its SHA-256 realpath digest. |
 | `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. Launch discovers these across every session directory, so one repository keeps one active coordinator. |
 | `<home>/coordinator-registry/repository-<digest>.lock` | Native `O_EXLOCK` coordination lock for one canonical repository, shared by every session in this home and acquired before the per-session launch lock. |
 | `<home>/coordinator-scripts/*.sh` | Atomically written `0700` launch scripts containing the coordinator command and scoped environment overrides; kept outside project checkouts. |

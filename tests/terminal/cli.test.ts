@@ -587,19 +587,12 @@ test("CLI preserves trailing-space repository and home paths for central setup",
       readonly configPath: string;
       readonly repoPath: string;
     };
-    const envelope = JSON.parse(await readFile(setup.configPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
+    const settings = Bun.TOML.parse(await readFile(setup.configPath, "utf8"));
 
     expect(result.approved).toBe(true);
     expect(setup.repoPath).toBe(await realpath(requestedRepo));
     expect(setup.configPath).toContain(join("tandem-home ", "repositories"));
-    expect(envelope).toMatchObject({
-      schemaVersion: 1,
-      repoPath: setup.repoPath,
-      policy: { version: 1, validationCommands: [] },
-    });
+    expect(settings).toEqual({ repoPath: setup.repoPath });
     await expect(readFile(join(requestedRepo, ".tandem.json"), "utf8")).rejects.toThrow();
     await expect(readFile(join(ordinaryRepo, ".tandem.json"), "utf8")).rejects.toThrow();
   } finally {

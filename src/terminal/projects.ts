@@ -42,20 +42,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export async function readRegisteredProjects(home: string): Promise<readonly string[]> {
-  const directory = join(home, "repositories");
-  let entries: readonly Dirent[];
-  try {
-    entries = await readdir(directory, { withFileTypes: true });
-  } catch (error) {
-    if (isMissing(error)) return [];
-    throw error;
-  }
-  const projects: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
-    const configPath = join(directory, entry.name, "config.json");
+/** Reads a project's settings.toml, or the config.json envelope projects were saved in before it. */
+async function readProjectRecord(
+  projectDirectory: string,
+): Promise<{ configPath: string; parsed: Record<string, unknown> } | undefined> {
+  for (const file of ["settings.toml", "config.json"]) {
+    const configPath = join(projectDirectory, file);
     let details: Stats;
     try {
       details = await lstat(configPath);
@@ -69,16 +61,38 @@ export async function readRegisteredProjects(home: string): Promise<readonly str
     const text = await readFile(configPath, "utf8");
     let parsed: unknown;
     try {
-      parsed = JSON.parse(text) as unknown;
+      parsed = file.endsWith(".toml") ? Bun.TOML.parse(text) : (JSON.parse(text) as unknown);
     } catch (error) {
       throw new Error(
-        `registered project record ${configPath} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+        `registered project record ${configPath} is invalid: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    if (!isRecord(parsed) || parsed.schemaVersion !== 1 || typeof parsed.repoPath !== "string") {
-      throw new Error(
-        `registered project record ${configPath} has no valid schemaVersion or repoPath`,
-      );
+    if (!isRecord(parsed) || (file === "config.json" && parsed.schemaVersion !== 1)) {
+      throw new Error(`registered project record ${configPath} has no valid schemaVersion`);
+    }
+    return { configPath, parsed };
+  }
+  return undefined;
+}
+
+export async function readRegisteredProjects(home: string): Promise<readonly string[]> {
+  const directory = join(home, "repositories");
+  let entries: readonly Dirent[];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (isMissing(error)) return [];
+    throw error;
+  }
+  const projects: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const record = await readProjectRecord(join(directory, entry.name));
+    if (record === undefined) continue;
+    const { configPath, parsed } = record;
+    if (typeof parsed.repoPath !== "string") {
+      throw new Error(`registered project record ${configPath} has no valid repoPath`);
     }
     const repoPath = parsed.repoPath.trim();
     if (repoPath.length === 0 || !isAbsolute(repoPath)) {

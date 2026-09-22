@@ -55,6 +55,7 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/** Writes the legacy config.json envelope beside settings.toml, which is still read. */
 async function writeCentralEnvelope(
   configPath: string,
   repoPath: string,
@@ -62,7 +63,7 @@ async function writeCentralEnvelope(
 ): Promise<void> {
   await mkdir(dirname(configPath), { recursive: true });
   await writeFile(
-    configPath,
+    join(dirname(configPath), "config.json"),
     `${JSON.stringify({ schemaVersion: 1, repoPath, policy }, null, 2)}\n`,
     "utf8",
   );
@@ -140,7 +141,7 @@ test("clean-bound policy reads guidance and onboarding metadata from the checkou
 
     const preview = await onboardRepo({ repoPath: repo, checkoutPath: clean, home });
     expect(preview.validationCommands.map((command) => command.argv)).toEqual([
-      ["bun", "run", "test"],
+      ["/bin/sh", "-c", "bun run test"],
     ]);
     await writeCentralEnvelope(preview.configPath, repo, {
       instructionFiles: { implementation: ["docs/implementation.md"] },
@@ -239,8 +240,8 @@ test("read-only onboarding leaves the target and absent Tandem home untouched", 
     expect(first.approvalRequired).toBe(true);
     expect(first.modelSettings.configured).toBe(false);
     expect(first.validationCommands.map((command) => command.argv)).toEqual([
-      ["bun", "run", "lint"],
-      ["bun", "run", "test"],
+      ["/bin/sh", "-c", "bun run lint"],
+      ["/bin/sh", "-c", "bun run test"],
     ]);
     expect(await pathExists(home)).toBe(false);
     expect(await pathExists(first.configPath)).toBe(false);
@@ -270,7 +271,7 @@ test("onboardRepo prefers an explicit ci:local proposal when discovered", async 
     expect(proposal.unresolved).toEqual([]);
     expect(proposal.approvalRequired).toBe(true);
     expect(proposal.validationCommands.map((entry) => entry.argv)).toEqual([
-      ["bun", "run", "ci:local"],
+      ["/bin/sh", "-c", "bun run ci:local"],
     ]);
   });
 });
@@ -471,8 +472,10 @@ test("onboardRepo proposes a frozen install from the lockfile and saves it", asy
     expect(proposal.setupCommands.map((entry) => entry.argv)).toEqual([install]);
 
     const written = await onboardRepo({ repoPath: repo, home, write: true });
-    const saved = JSON.parse(await readFile(written.configPath, "utf8"));
-    expect(saved.policy.setupCommands).toEqual(["pnpm install --frozen-lockfile"]);
+    const text = await readFile(written.configPath, "utf8");
+    expect(written.configPath.endsWith("settings.toml")).toBe(true);
+    expect(text).toContain('setupCommands = ["pnpm install --frozen-lockfile"]');
+    expect(text).toContain("# maxWorkers = 3");
     const resolved = await resolveRepoPolicy({ repoPath: repo, home });
     expect(resolved.config.setupCommands.map((entry) => entry.argv)).toEqual([install]);
   });
@@ -503,4 +506,36 @@ test("commands can be written as plain strings that run through the shell", () =
   ]);
   expect(() => parsePolicy({ setupCommands: ["npm ci", "npm ci"] })).toThrow("duplicate");
   expect(() => parsePolicy({ setupCommands: ["  "] })).toThrow(TypeError);
+});
+
+test("every commented-out setting in a new settings.toml is valid once uncommented", async () => {
+  await withFixture("template-repo", async ({ repo, home }) => {
+    const written = await onboardRepo({ repoPath: repo, home, write: true });
+    const text = await readFile(written.configPath, "utf8");
+    // Uncomment only setting lines ("# key = ..." and "# [table]"), not prose comments.
+    const enabled = text.replace(/^# (?=[A-Za-z]+ = |\[)/gmu, "");
+    const settings = Bun.TOML.parse(enabled) as Record<string, unknown>;
+    expect(Object.keys(settings).sort()).toEqual([
+      "instructionFiles",
+      "instructions",
+      "maxFixRounds",
+      "maxWorkers",
+      "models",
+      "repoPath",
+      "requestBudget",
+      "setupCommands",
+      "validationCommands",
+    ]);
+    const { repoPath, ...policy } = settings;
+    expect(repoPath).toBe(repo);
+    expect(() => parsePolicy(policy)).not.toThrow();
+  });
+});
+
+test("a project with both settings.toml and config.json is refused rather than guessed", async () => {
+  await withFixture("both-formats-repo", async ({ repo, home }) => {
+    const written = await onboardRepo({ repoPath: repo, home, write: true });
+    await writeCentralEnvelope(written.configPath, repo, {});
+    await expect(resolveRepoPolicy({ repoPath: repo, home })).rejects.toThrow("keep one");
+  });
 });
