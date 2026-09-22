@@ -190,6 +190,7 @@ Tandem reuses your remembered setup when reconnecting or configuring models:
 ```sh
 tandem --continue /absolute/path/to/repo
 tandem configure /absolute/path/to/repo
+tandem config /absolute/path/to/repo   # open the project's settings file in $EDITOR
 ```
 
 `configure` remains a single-project catalogue-anchor flow: it asks for and saves all six global role

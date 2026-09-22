@@ -79,7 +79,7 @@ migration or recovery; `tandem --reset --force [PATH ...]` cancels selected acti
 Keep default worker/fix limits, script identifiers, hash paths, raw commands, and JSON in structured
 details; share them only on request or when the user must choose meaningful custom settings. Capture
 each JSON result and project `repoPath`, `modelSettings`, `configPath`, `existingConfig`,
-`validationCommands`, and `unresolved` before presenting or acting; retain full details without
+`validationCommands`, `setupCommands`, and `unresolved` before presenting or acting; retain full details without
 dumping raw payloads, repeating discovery, or hiding CLI failures.
 
 For normal user-facing onboarding and launch, prefer `tandem [PATH ...]`: bare `tandem` opens or
@@ -99,6 +99,7 @@ bun "<tandem-root>/src/cli.ts" onboard --repo "<canonical-repo>" --home "<home>"
     modelSettings,
     configPath,
     validationCommands,
+    setupCommands,
     unresolved
   }'
 bun "<tandem-root>/src/cli.ts" models --repo "<canonical-repo>" --home "<home>" --json |

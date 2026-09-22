@@ -4,6 +4,7 @@ import type {
   RepoPolicy,
   RequestBudgetPolicy,
   ReviewLevelPolicy,
+  SetupCommand,
   ValidationCommand,
 } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
@@ -32,6 +33,7 @@ const POLICY_KEYS: Readonly<Record<string, true>> = {
   instructions: true,
   instructionFiles: true,
   validationCommands: true,
+  setupCommands: true,
   maxWorkers: true,
   maxFixRounds: true,
   reviewLevels: true,
@@ -42,6 +44,12 @@ const COMMAND_KEYS: Readonly<Record<string, true>> = {
   name: true,
   argv: true,
   surfaces: true,
+  timeoutMs: true,
+};
+
+const SETUP_COMMAND_KEYS: Readonly<Record<string, true>> = {
+  name: true,
+  argv: true,
   timeoutMs: true,
 };
 
@@ -169,6 +177,41 @@ function readValidationCommands(
   return [...base, ...parsed];
 }
 
+function readArgv(value: unknown, field: string): readonly string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`${field} must be a non-empty array`);
+  }
+  return value.map((argument: unknown, index) =>
+    readNonEmptyString(argument, `${field}[${index}]`),
+  );
+}
+
+/** Reads the worktree setup commands, appended after the base layer's like validation commands. */
+function readSetupCommands(value: unknown, base: readonly SetupCommand[]): readonly SetupCommand[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError("setupCommands must be an array of command objects");
+  }
+  const parsed: SetupCommand[] = [...base];
+  const names = new Set(base.map((command) => command.name));
+  for (let index = 0; index < value.length; index += 1) {
+    const field = `setupCommands[${index}]`;
+    const commandValue: unknown = value[index];
+    if (!isRecord(commandValue)) throw new TypeError(`${field} must be an object`);
+    assertKnownKeys(commandValue, SETUP_COMMAND_KEYS, field);
+    const name = readNonEmptyString(commandValue.name, `${field}.name`);
+    if (names.has(name)) {
+      throw new TypeError(`setupCommands contains duplicate command name ${JSON.stringify(name)}`);
+    }
+    names.add(name);
+    parsed.push({
+      name,
+      argv: readArgv(commandValue.argv, `${field}.argv`),
+      timeoutMs: readPositiveInteger(commandValue.timeoutMs, `${field}.timeoutMs`),
+    });
+  }
+  return parsed;
+}
+
 function readBoolean(value: unknown, field: string): boolean {
   if (typeof value !== "boolean") throw new TypeError(`${field} must be a boolean`);
   return value;
@@ -248,6 +291,11 @@ export function copyPolicy(policy: PolicyBase): RepoPolicy {
       surfaces: [...command.surfaces],
       timeoutMs: command.timeoutMs,
     })),
+    setupCommands: policy.setupCommands.map((command) => ({
+      name: command.name,
+      argv: [...command.argv],
+      timeoutMs: command.timeoutMs,
+    })),
     maxWorkers: policy.maxWorkers,
     maxFixRounds: policy.maxFixRounds,
     reviewLevels: { ...policy.reviewLevels },
@@ -297,6 +345,9 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
         base.validationCommands,
       )
     : [...base.validationCommands];
+  const setupCommands = hasKey(input, "setupCommands")
+    ? readSetupCommands(input.setupCommands, base.setupCommands)
+    : [...base.setupCommands];
 
   const maxWorkers = hasKey(input, "maxWorkers")
     ? readPositiveInteger(input.maxWorkers, "maxWorkers")
@@ -317,6 +368,7 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     instructions,
     instructionFiles,
     validationCommands,
+    setupCommands,
     maxWorkers,
     maxFixRounds,
     reviewLevels,
@@ -346,6 +398,7 @@ function buildDefaultPolicy(): RepoPolicy {
       review: [],
     },
     validationCommands: [],
+    setupCommands: [],
     maxWorkers: 3,
     maxFixRounds: 3,
     reviewLevels: { ...DEFAULT_REVIEW_LEVEL_POLICY },

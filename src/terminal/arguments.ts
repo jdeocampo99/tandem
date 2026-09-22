@@ -1,5 +1,6 @@
 export type TerminalCommand =
   | "launch"
+  | "config"
   | "configure"
   | "migrate-state"
   | "logs"
@@ -155,6 +156,10 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       command = "configure";
       continue;
     }
+    if (parseOptions && command === undefined && token === "config") {
+      command = "config";
+      continue;
+    }
     if (parseOptions && command === undefined && token === "logs") {
       command = "logs";
       continue;
@@ -189,6 +194,14 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   }
   if (resolvedCommand === "configure" && paths.length > 1) {
     throw new Error("tandem configure accepts at most one project path");
+  }
+  if (resolvedCommand === "config" && paths.length > 1) {
+    throw new Error("tandem config accepts at most one project path");
+  }
+  if (resolvedCommand === "config" && (reset || restart)) {
+    throw new Error(
+      "tandem --reset/--restart are launch-only; they cannot be combined with config",
+    );
   }
   if (force && !reset) {
     throw new Error("tandem --force requires --reset");

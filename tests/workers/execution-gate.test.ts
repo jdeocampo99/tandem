@@ -24,6 +24,7 @@ const policy: ResolvedPolicy = {
     instructions: channels,
     instructionFiles: channels,
     validationCommands: [],
+    setupCommands: [],
     maxWorkers: 2,
     maxFixRounds: 1,
     reviewLevels: {

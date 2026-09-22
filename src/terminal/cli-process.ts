@@ -24,6 +24,7 @@ export type RunInteractive = (
     readonly argv: readonly string[];
     readonly cwd: string;
     readonly env?: Readonly<Record<string, string>>;
+    readonly timeoutMs?: number;
   }>,
 ) => Promise<number>;
 
@@ -79,6 +80,7 @@ export const defaultRunInteractive: RunInteractive = async (request) => {
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
+    ...(request.timeoutMs === undefined ? {} : { timeout: request.timeoutMs }),
   });
   return child.exited;
 };
