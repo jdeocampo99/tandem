@@ -603,6 +603,105 @@ test("approve confirmation exposes active non-superseded communication deltas an
   expect(prompts[0]).toBe("Includes 2 directions you gave after the plan.");
 });
 
+function userCheckTask(): TaskRecord {
+  return task({
+    userCheckCriteria: ["Streak bar glows at 5 in a row"],
+    reviewHead: "commit-1",
+    communication: {
+      revision: 0,
+      messages: [],
+      question: {
+        id: "user-check-0-commit-1",
+        text: 'Does "Implement the requested change" look right? No screenshots were saved.',
+      },
+    },
+  });
+}
+
+test("answering 'yes' to a user-check question requires ctx.ui.confirm with the short question", async () => {
+  const pending = userCheckTask();
+  const answerCalls: Array<{ taskId: string; questionId: string; text: string }> = [];
+  const service = {
+    get: async () => pending,
+    answer: async (input: { taskId: string; questionId: string; text: string }) => {
+      answerCalls.push(input);
+      return { taskId: pending.id, stage: pending.stage, revision: 0, messages: [] };
+    },
+  } as unknown as TandemService;
+  const prompts: Array<{ readonly title: string; readonly message: string }> = [];
+  let allow = false;
+  const context = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      confirm: async (title: string, message: string) => {
+        prompts.push({ title, message });
+        return allow;
+      },
+    },
+  } as unknown as ExtensionContext;
+  const answerAction = {
+    action: "answer" as const,
+    taskId: "task-1",
+    questionId: "user-check-0-commit-1",
+    text: "yes",
+  };
+
+  const refused = await executeTandemAction(answerAction, service, context);
+  expect(refused.approved).toBe(false);
+  expect(prompts).toHaveLength(1);
+  expect(prompts[0]?.title).toBe('Does "Implement the requested change" look right?');
+  expect(prompts[0]?.message).toBe("No screenshots were saved.");
+  expect(answerCalls).toEqual([]);
+
+  allow = true;
+  await executeTandemAction(answerAction, service, context);
+  expect(prompts).toHaveLength(2);
+  expect(answerCalls).toEqual([
+    { taskId: "task-1", questionId: "user-check-0-commit-1", text: "yes" },
+  ]);
+});
+
+test("a non-yes reply to a user-check question does not require confirmation", async () => {
+  const pending = userCheckTask();
+  const answerCalls: unknown[] = [];
+  const service = {
+    get: async () => pending,
+    answer: async (input: unknown) => {
+      answerCalls.push(input);
+      return { taskId: pending.id, stage: "awaiting-fixes", revision: 1, messages: [] };
+    },
+  } as unknown as TandemService;
+  const prompts: unknown[] = [];
+  const context = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      confirm: async (title: string, message: string) => {
+        prompts.push({ title, message });
+        return false;
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  const result = await executeTandemAction(
+    {
+      action: "answer",
+      taskId: "task-1",
+      questionId: "user-check-0-commit-1",
+      text: "The color is wrong.",
+    },
+    service,
+    context,
+  );
+
+  expect(prompts).toHaveLength(0);
+  expect(result.approved).toBeUndefined();
+  expect(answerCalls).toEqual([
+    { taskId: "task-1", questionId: "user-check-0-commit-1", text: "The color is wrong." },
+  ]);
+});
+
 test("extension setup approval preserves the write boundary and metadata", async () => {
   const prompts: Array<{ readonly title: string; readonly message: string }> = [];
   const writeCalls: string[] = [];
