@@ -506,7 +506,8 @@ function parseCreatedEndpoint(
 
 function parseSplitEndpoint(
   payload: unknown,
-  writer: Endpoint,
+  anchor: Endpoint,
+  role: AgentRole,
   generation: number,
   operation: string,
   response: string,
@@ -522,23 +523,53 @@ function parseSplitEndpoint(
   );
   const tabId = requiredString(pane.tab_id, "result.pane.tab_id", operation, response);
   const paneId = requiredString(pane.pane_id, "result.pane.pane_id", operation, response);
-  if (workspaceId !== writer.workspaceId) {
+  if (workspaceId !== anchor.workspaceId || tabId !== anchor.tabId) {
     throw new EndpointOwnershipError(
-      writer,
-      `reviewer split landed in workspace ${JSON.stringify(workspaceId)} instead of ${JSON.stringify(writer.workspaceId)}`,
+      anchor,
+      `${operation} landed in workspace ${JSON.stringify(workspaceId)}, tab ${JSON.stringify(tabId)} instead of workspace ${JSON.stringify(anchor.workspaceId)}, tab ${JSON.stringify(anchor.tabId)}`,
     );
   }
-  if (paneId === writer.paneId) {
-    throw new AdapterProtocolError(operation, "reviewer split reused the writer pane id", response);
+  if (paneId === anchor.paneId) {
+    throw new AdapterProtocolError(operation, "split reused the anchor pane id", response);
   }
   return {
-    sessionId: writer.sessionId,
+    sessionId: anchor.sessionId,
     workspaceId,
     tabId,
     paneId,
-    role: "reviewer",
+    role: checkedRole(role),
     generation: checkedGeneration(generation),
   };
+}
+
+/** Opens a new, unfocused pane to the right of `anchor`, proven to share its workspace and tab. */
+async function splitPane(
+  run: CommandRunner,
+  anchor: Endpoint,
+  cwd: string,
+  role: AgentRole,
+  generation: number,
+  operation: string,
+): Promise<Endpoint> {
+  const request = herdrRequest(anchor.sessionId, cwd, [
+    "pane",
+    "split",
+    anchor.paneId,
+    "--direction",
+    "right",
+    "--cwd",
+    checkedPath(cwd, "cwd"),
+    "--no-focus",
+  ]);
+  const result = await runChecked(run, request, operation);
+  return parseSplitEndpoint(
+    parseJson(result.stdout, operation),
+    anchor,
+    role,
+    generation,
+    operation,
+    result.stdout,
+  );
 }
 
 function parseHerdrStatus(
@@ -891,23 +922,72 @@ export async function createReviewerEndpoint(
       `writer cwd ${JSON.stringify(writerPane.foregroundCwd)} does not match reviewer cwd ${JSON.stringify(input.cwd)}`,
     );
   }
-  const request = herdrRequest(input.sessionId, input.cwd, [
-    "pane",
-    "split",
-    input.writer.paneId,
-    "--direction",
-    "right",
-    "--cwd",
-    checkedPath(input.cwd, "cwd"),
-    "--no-focus",
-  ]);
-  const result = await runChecked(run, request, "herdr reviewer pane split");
-  const endpoint = parseSplitEndpoint(
-    parseJson(result.stdout, "herdr reviewer pane split"),
+  const endpoint = await splitPane(
+    run,
     input.writer,
+    input.cwd,
+    "reviewer",
     input.generation,
     "herdr reviewer pane split",
+  );
+  return { endpoint, warnings: [] };
+}
+
+export type SplitBesidePaneInput = Readonly<{
+  sessionId: string;
+  cwd: string;
+  /** The existing pane to split; the new pane lands beside it in the same workspace and tab. */
+  anchorPaneId: string;
+  role: AgentRole;
+  generation: number;
+}>;
+
+/**
+ * Opens a fresh pane beside an existing one. The anchor's workspace and tab are read from Herdr
+ * first so the split is proven to land next to it; nothing is ever written to the anchor itself.
+ */
+export async function splitBesidePane(
+  run: CommandRunner,
+  input: SplitBesidePaneInput,
+): Promise<HerdrEndpointResult> {
+  const operation = "herdr anchor pane get";
+  const anchorPaneId = checkedText(input.anchorPaneId, "anchorPaneId");
+  const request = herdrRequest(input.sessionId, input.cwd, ["pane", "get", anchorPaneId]);
+  const result = await runChecked(run, request, operation);
+  const root = requiredRecord(
+    parseJson(result.stdout, operation),
+    "response",
+    operation,
     result.stdout,
+  );
+  const payload = requiredRecord(root.result, "result", operation, result.stdout);
+  const pane = requiredRecord(payload.pane, "result.pane", operation, result.stdout);
+  const anchor: Endpoint = {
+    sessionId: checkedSession(input.sessionId),
+    workspaceId: requiredString(
+      pane.workspace_id,
+      "result.pane.workspace_id",
+      operation,
+      result.stdout,
+    ),
+    tabId: requiredString(pane.tab_id, "result.pane.tab_id", operation, result.stdout),
+    paneId: requiredString(pane.pane_id, "result.pane.pane_id", operation, result.stdout),
+    role: checkedRole(input.role),
+    generation: checkedGeneration(input.generation),
+  };
+  if (anchor.paneId !== anchorPaneId) {
+    throw new EndpointOwnershipError(
+      anchor,
+      `Herdr described pane ${JSON.stringify(anchor.paneId)} instead of anchor ${JSON.stringify(anchorPaneId)}`,
+    );
+  }
+  const endpoint = await splitPane(
+    run,
+    anchor,
+    input.cwd,
+    input.role,
+    input.generation,
+    "herdr pane split",
   );
   return { endpoint, warnings: [] };
 }

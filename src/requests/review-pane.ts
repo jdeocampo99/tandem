@@ -7,6 +7,7 @@ import {
   type HerdrPaneInspection,
   inspectEndpoint,
   sendCommand,
+  splitBesidePane,
 } from "../adapters/herdr.ts";
 import { EndpointBusyError } from "../adapters/primitives.ts";
 import type {
@@ -33,6 +34,12 @@ export type RequestReviewPaneDependencies = Readonly<{
   readonly home: string;
   readonly sessionId: string;
   readonly parentWorkspaceId: string | undefined;
+  /**
+   * The Herdr pane the coordinator itself runs in, when known. The review pane opens as a split
+   * beside it so the user sees the brief in the tab they are already looking at. The coordinator
+   * pane is only ever the split anchor: it is never written to, rendered into, or closed.
+   */
+  readonly coordinatorPaneId: string | undefined;
   readonly clock: Clock;
 }>;
 
@@ -57,7 +64,7 @@ export async function projectRequestBriefPane(
   const renderedPath = await writeRenderedBrief(deps.home, record);
   const existing = record.reviewPane;
   if (existing !== undefined && existing.status !== "closed") {
-    const ownership = await proveOwnedPane(deps.run, existing.endpoint, record.repoPath);
+    const ownership = await proveOwnedPane(deps, existing.endpoint, record.repoPath);
     if (ownership.kind === "owned") {
       return renderInto(deps, record, existing.endpoint, renderedPath);
     }
@@ -93,7 +100,7 @@ export async function closeRequestBriefPane(
     observedAt: deps.clock(),
     ...(reason === undefined ? {} : { reason }),
   });
-  const ownership = await proveOwnedPane(deps.run, pane.endpoint, record.repoPath);
+  const ownership = await proveOwnedPane(deps, pane.endpoint, record.repoPath);
   if (ownership.kind === "missing") return settled("closed", "pane was already gone");
   if (ownership.kind === "busy") return settled("retained", ownership.reason);
   if (ownership.kind === "unowned") return settled("quarantined", ownership.reason);
@@ -137,13 +144,22 @@ async function writeRenderedBrief(home: string, record: RequestBriefRecord): Pro
 /**
  * Confirms the recorded pane is still the same pane, in the same workspace and tab, sitting in the
  * directory it was opened in, with nothing running in it. A pane that appears more than once, has
- * moved, or has been taken over is `unowned`, which every caller treats as do-not-touch.
+ * moved, or has been taken over is `unowned`, which every caller treats as do-not-touch. The
+ * review pane shares the coordinator's tab, so a record naming the coordinator's own pane is
+ * `unowned` before Herdr is even asked: that pane is never the brief's to write to or close.
  */
 async function proveOwnedPane(
-  run: CommandRunner,
+  deps: RequestReviewPaneDependencies,
   endpoint: Endpoint,
   repoPath: string,
 ): Promise<PaneOwnership> {
+  const run = deps.run;
+  if (endpoint.paneId === deps.coordinatorPaneId) {
+    return {
+      kind: "unowned",
+      reason: `review pane record names the coordinator's own pane ${JSON.stringify(endpoint.paneId)}`,
+    };
+  }
   let inspection: HerdrPaneInspection;
   try {
     const panes = await readSessionSnapshot(run, endpoint.sessionId, repoPath, true);
@@ -178,10 +194,25 @@ async function proveOwnedPane(
   return { kind: "owned" };
 }
 
+/**
+ * Opens the review pane as a split beside the coordinator's own pane, in the coordinator's
+ * workspace and tab. When the coordinator's pane is unknown (no Herdr context), it falls back to a
+ * separate "Tandem request brief" workspace placed after the parent workspace.
+ */
 async function openReviewPane(
   deps: RequestReviewPaneDependencies,
   record: RequestBriefRecord,
 ): Promise<Endpoint> {
+  if (deps.coordinatorPaneId !== undefined) {
+    const split = await splitBesidePane(deps.run, {
+      sessionId: deps.sessionId,
+      cwd: record.repoPath,
+      anchorPaneId: deps.coordinatorPaneId,
+      role: "coordinator",
+      generation: 0,
+    });
+    return split.endpoint;
+  }
   const created = await createTaskEndpoint(deps.run, {
     sessionId: deps.sessionId,
     cwd: record.repoPath,

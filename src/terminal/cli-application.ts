@@ -125,6 +125,9 @@ function serviceOptions(environment: TandemBoundaryEnvironment): TandemServiceOp
     ...(environment.parentWorkspaceId === undefined
       ? {}
       : { parentWorkspaceId: environment.parentWorkspaceId }),
+    ...(environment.coordinatorPaneId === undefined
+      ? {}
+      : { coordinatorPaneId: environment.coordinatorPaneId }),
     poolRoot: environment.poolRoot,
     ...(environment.sourceRepo === undefined
       ? {}

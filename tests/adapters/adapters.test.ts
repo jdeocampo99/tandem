@@ -14,6 +14,7 @@ import {
   createTaskEndpoint,
   inspectEndpoint,
   sendCommand,
+  splitBesidePane,
   taskWorkspaceLabel,
 } from "../../src/adapters/herdr.ts";
 import {
@@ -138,6 +139,61 @@ test("refuses a reviewer in a different physical worktree", async () => {
       { sessionId: "session-1", cwd: "/tmp/worktree", writer: endpoint(), generation: 2 },
       { realpath: async (path) => path },
     ),
+  ).rejects.toBeInstanceOf(EndpointOwnershipError);
+});
+
+test("splits beside an anchor pane in its own workspace and tab without touching the anchor", async () => {
+  const runner = scriptedRunner([
+    result(panePayload({ paneId: "anchor-1" })),
+    result(panePayload({ paneId: "split-1" })),
+  ]);
+  const split = await splitBesidePane(runner.run, {
+    sessionId: "session-1",
+    cwd: "/tmp/repo",
+    anchorPaneId: "anchor-1",
+    role: "coordinator",
+    generation: 0,
+  });
+
+  expect(split.endpoint).toEqual({
+    sessionId: "session-1",
+    workspaceId: "workspace-1",
+    tabId: "tab-1",
+    paneId: "split-1",
+    role: "coordinator",
+    generation: 0,
+  });
+  expect(runner.calls.map((call) => call.argv)).toEqual([
+    ["herdr", "--session", "session-1", "pane", "get", "anchor-1"],
+    [
+      "herdr",
+      "--session",
+      "session-1",
+      "pane",
+      "split",
+      "anchor-1",
+      "--direction",
+      "right",
+      "--cwd",
+      "/tmp/repo",
+      "--no-focus",
+    ],
+  ]);
+});
+
+test("refuses a split that lands outside the anchor's tab", async () => {
+  const runner = scriptedRunner([
+    result(panePayload({ paneId: "anchor-1" })),
+    result(panePayload({ paneId: "split-1", tabId: "tab-2" })),
+  ]);
+  await expect(
+    splitBesidePane(runner.run, {
+      sessionId: "session-1",
+      cwd: "/tmp/repo",
+      anchorPaneId: "anchor-1",
+      role: "coordinator",
+      generation: 0,
+    }),
   ).rejects.toBeInstanceOf(EndpointOwnershipError);
 });
 

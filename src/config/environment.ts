@@ -9,6 +9,11 @@ export type TandemBoundaryEnvironment = Readonly<{
   readonly home: string;
   readonly sessionId: string;
   readonly parentWorkspaceId?: string;
+  /**
+   * The Herdr pane this process runs in, known only inside an active Herdr context whose session
+   * is the Tandem session. Presentation placement only; it never grants ownership of that pane.
+   */
+  readonly coordinatorPaneId?: string;
   readonly poolRoot: string;
   readonly repo: string;
   readonly sourceRepo?: string;
@@ -107,10 +112,27 @@ export function processEnvironmentSnapshot(
     "HERDR_SESSION",
     "HERDR_SESSION_NAME",
     "HERDR_WORKSPACE_ID",
+    "HERDR_PANE_ID",
   ]) {
     values[key] = process.env[key];
   }
   return values;
+}
+
+/**
+ * The pane Herdr says this process runs in, only when Herdr is active and its session is the
+ * Tandem session; a pane id from another session would name a pane Tandem cannot address.
+ */
+function herdrPaneInSession(
+  source: TandemEnvironmentSource,
+  sessionId: string,
+): string | undefined {
+  const active = source.HERDR_ENV?.trim().toLowerCase();
+  if (active !== "1" && active !== "true") return undefined;
+  const herdrSession = (source.HERDR_SESSION ?? source.HERDR_SESSION_NAME)?.trim();
+  if (herdrSession !== sessionId) return undefined;
+  const paneId = source.HERDR_PANE_ID?.trim();
+  return paneId === undefined || paneId.length === 0 || paneId.includes("\0") ? undefined : paneId;
 }
 
 /** Resolve Tandem's process-boundary environment without leaking it into domain code. */
@@ -141,6 +163,10 @@ export function resolveTandemEnvironment(
     overrides.parentWorkspaceId ?? source.TANDEM_PARENT_WORKSPACE ?? source.HERDR_WORKSPACE_ID,
     "TANDEM_PARENT_WORKSPACE",
   );
+  const coordinatorPaneId =
+    overrides.coordinatorPaneId === undefined
+      ? herdrPaneInSession(source, sessionId)
+      : readBoundaryText(overrides.coordinatorPaneId, "coordinatorPaneId");
   const poolRoot = readBoundaryPath(
     overrides.poolRoot ?? source.TANDEM_POOL_ROOT ?? join(home, "pool"),
     "TANDEM_POOL_ROOT",
@@ -155,6 +181,7 @@ export function resolveTandemEnvironment(
     home,
     sessionId,
     ...(parentWorkspaceId === undefined ? {} : { parentWorkspaceId }),
+    ...(coordinatorPaneId === undefined ? {} : { coordinatorPaneId }),
     poolRoot,
     repo,
     ...(sourceRepo === undefined ? {} : { sourceRepo }),
@@ -176,6 +203,9 @@ export function environmentForContext(
       ...(options.environment?.parentWorkspaceId === undefined
         ? {}
         : { parentWorkspaceId: options.environment.parentWorkspaceId }),
+      ...(options.environment?.coordinatorPaneId === undefined
+        ? {}
+        : { coordinatorPaneId: options.environment.coordinatorPaneId }),
       ...(options.environment?.poolRoot === undefined
         ? {}
         : { poolRoot: options.environment.poolRoot }),
