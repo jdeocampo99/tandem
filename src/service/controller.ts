@@ -1552,11 +1552,16 @@ class TandemController {
         await this.reconcileTask(task);
       } catch (error) {
         if (captureSucceeded) {
-          await this.blockTaskIfReconcileClaim(
-            task,
-            capturedRuntime,
-            `scheduler failure: ${describeError(error)}`,
-          );
+          const reason = `scheduler failure: ${describeError(error)}`;
+          await this.blockTaskIfReconcileClaim(task, capturedRuntime, reason, {
+            cause: {
+              group: "lost-resource",
+              kind: "transition-failed",
+              summary:
+                "An internal scheduling step failed, so this task could not advance this turn.",
+              detail: reason,
+            },
+          });
         }
       }
     }
@@ -1703,6 +1708,7 @@ class TandemController {
     capturedTask: TaskRecord,
     reservation: DurableReservation,
     reason: string,
+    cause?: BlockCause,
   ): Promise<void> {
     await withStateLock(this.#deps.home, async () => {
       await this.#deps.store.exclusive(async (store) => {
@@ -1745,7 +1751,13 @@ class TandemController {
         await store.update(currentTask.id, currentTask.revision, (task) =>
           transitionTask(
             task,
-            { type: "block", reason: text(reason, "block reason") },
+            {
+              type: "block",
+              // `reason` (kept as `lastError` above) stays the raw diagnostic text; the block
+              // itself prefers the cause's user-facing summary when one was recorded.
+              reason: text(cause?.summary ?? reason, "block reason"),
+              ...(cause === undefined ? {} : { cause }),
+            },
             this.context(),
           ),
         );
@@ -1996,7 +2008,13 @@ class TandemController {
     }
     const loadedRuntime = await this.runtimeFor(task.id);
     if (loadedRuntime === undefined) {
-      await this.blockTask(task.id, "durable runtime metadata is missing; no worker was launched");
+      await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
+        group: "safety-stop",
+        kind: "runtime-metadata-missing",
+        summary:
+          "Tandem lost this task's durable runtime record, so no worker could be launched for it.",
+        detail: "durable runtime metadata is missing; no worker was launched",
+      });
       return;
     }
     let runtime = loadedRuntime;
@@ -2034,7 +2052,13 @@ class TandemController {
       if (runtime.operation === undefined) {
         const reason =
           "legacy reservation has no durable operation; quarantined without clearing reservation or checkpoint";
-        await this.quarantineLegacyReservation(task, reservation, reason);
+        await this.quarantineLegacyReservation(task, reservation, reason, {
+          group: "safety-stop",
+          kind: "quarantined-unknown-outcome",
+          summary:
+            "This task's reservation has no matching operation record, so it was quarantined without touching its worktree or checkpoint.",
+          detail: reason,
+        });
         return;
       }
       if (reservation.operationId !== runtime.operation.id) {
@@ -2120,10 +2144,13 @@ class TandemController {
         const admittedWriter = currentWriter(admission.runtime);
         if (admission.runtime.worktree === undefined || admittedWriter === undefined) {
           await this.#worker.releaseUnlaunchedTaskReservation(task.id, admission.reservation.id);
-          await this.blockTask(
-            task.id,
-            `task is ${task.stage} but its worker resources are missing`,
-          );
+          await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
+            group: "lost-resource",
+            kind: "resource-lost",
+            summary:
+              "The task's worker resources are missing, so no further work can run against it.",
+            detail: `task is ${task.stage} but its worker resources are missing`,
+          });
           return;
         }
         await this.#worker.launchAgent(

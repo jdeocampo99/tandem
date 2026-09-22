@@ -4403,6 +4403,13 @@ test("legacy incomplete reservation is quarantined without inventing an operatio
       expect(runtime?.reservation?.phase).toBe("reserved");
       expect(runtime?.lastError).toContain("legacy reservation");
       expect(activeReservations(recovered)).toBe(1);
+      const task = await service.get("task-1");
+      expect(task.stage).toBe("blocked");
+      expect(task.blockCause).toMatchObject({
+        group: "safety-stop",
+        kind: "quarantined-unknown-outcome",
+      });
+      expect(task.blockReason).toBe(task.blockCause?.summary);
     },
   );
 });
@@ -4470,6 +4477,88 @@ test("an implementing task with no durable worktree blocks with a lost-resource 
         kind: "resource-lost",
       });
       expect(task.blockReason).toBe(task.blockCause?.summary);
+    },
+  );
+});
+
+test("a task with no durable runtime record blocks with a safety-stop cause", async () => {
+  await withFixture({ kind: "scout", stage: "queued" }, async ({ home, service }) => {
+    const state = await readRuntime(home);
+    await writeRuntimeState(runtimeFile(home), {
+      ...state,
+      tasks: state.tasks.filter((entry) => entry.taskId !== "task-1"),
+    });
+
+    await service.tick();
+
+    const task = await service.get("task-1");
+    expect(task.stage).toBe("blocked");
+    expect(task.blockCause).toMatchObject({
+      group: "safety-stop",
+      kind: "runtime-metadata-missing",
+    });
+    expect(task.blockReason).toBe(task.blockCause?.summary);
+  });
+});
+
+test("a scheduler failure while advancing a task blocks with a lost-resource cause", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      runner: { active: false, paneState: "foreign" },
+    },
+    async ({ home, lease, service }) => {
+      const endpoint = endpointFor("implementer");
+      const job = workerJob(home, endpoint, "implementer", "running");
+      await seedTaskResources(home, lease, [endpoint], [job]);
+
+      await service.tick();
+
+      const task = await service.get("task-1");
+      expect(task.stage).toBe("blocked");
+      expect(task.blockCause).toMatchObject({
+        group: "lost-resource",
+        kind: "transition-failed",
+      });
+      expect(task.blockReason).toBe(task.blockCause?.summary);
+    },
+  );
+});
+
+test("steer without a reviewed HEAD blocks with a user-decision cause", async () => {
+  await withFixture({ kind: "implementation", stage: "reviewing" }, async ({ service }) => {
+    await service.steer({ taskId: "task-1", text: "Keep the current scope." });
+
+    const task = await service.get("task-1");
+    expect(task.stage).toBe("blocked");
+    expect(task.blockCause).toMatchObject({
+      group: "user-decision",
+      kind: "prerequisite-not-met",
+    });
+    expect(task.blockReason).toBe(task.blockCause?.summary);
+  });
+});
+
+test("pause records a lost-resource cause when the worker pane cannot be proven stopped", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      runner: { active: false, paneState: "foreign" },
+    },
+    async ({ home, lease, service }) => {
+      const endpoint = endpointFor("implementer");
+      await seedTaskResources(home, lease, [endpoint], []);
+
+      const paused = await service.pause("task-1");
+
+      expect(paused.stage).toBe("blocked");
+      expect(paused.blockCause).toMatchObject({
+        group: "lost-resource",
+        kind: "resource-lost",
+      });
+      expect(paused.blockReason).toBe(paused.blockCause?.summary);
     },
   );
 });

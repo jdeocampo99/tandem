@@ -335,6 +335,7 @@ export class TaskControlWorkflow {
     reason: string,
     block: boolean,
     expectedLaunch?: DurableEndpointLaunch,
+    cause?: BlockCause,
   ): Promise<boolean> {
     return withStateLock(this.#deps.home, async () =>
       this.#deps.store.exclusive(async (store) => {
@@ -381,7 +382,11 @@ export class TaskControlWorkflow {
           await store.update(currentTask.id, currentTask.revision, (entry) =>
             transitionTask(
               entry,
-              { type: "block", reason: text(reason, "block reason") },
+              {
+                type: "block",
+                reason: text(cause?.summary ?? reason, "block reason"),
+                ...(cause === undefined ? {} : { cause }),
+              },
               this.#deps.context(),
             ),
           );
@@ -429,6 +434,13 @@ export class TaskControlWorkflow {
           recovery.status === "ambiguous" ||
             isOlderThan(launch.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS),
           launch,
+          {
+            group: "lost-resource",
+            kind: "resource-lost",
+            summary:
+              "The worker's pane could not be relocated after a restart, so it could not resume.",
+            detail: reason,
+          },
         );
         return undefined;
       }
@@ -554,6 +566,12 @@ export class TaskControlWorkflow {
         const state = await readRuntimeState(this.#deps.runtimePath);
         if (stopFailure !== undefined) {
           const blockedReason = `could not safely ${action} task ${taskId}: ${stopFailure}`;
+          const cause: BlockCause = {
+            group: "lost-resource",
+            kind: "resource-lost",
+            summary: `Tandem could not confirm the worker actually stopped, so ${action} could not complete safely.`,
+            detail: blockedReason,
+          };
           const failedState = replaceRuntimeTask(state, taskId, (entry) => ({
             ...entry,
             lastError: blockedReason,
@@ -564,7 +582,7 @@ export class TaskControlWorkflow {
               ? current
               : transitionTask(
                   current,
-                  { type: "block", reason: blockedReason },
+                  { type: "block", reason: cause.summary, cause },
                   this.#deps.context(),
                 );
           if (blocked !== current) await store.update(current.id, current.revision, () => blocked);
@@ -986,10 +1004,18 @@ export class TaskControlWorkflow {
         return updated;
       }
       if (task.reviewHead === undefined) {
+        const reason = "cannot redirect task without reviewed HEAD";
+        const cause: BlockCause = {
+          group: "user-decision",
+          kind: "prerequisite-not-met",
+          summary:
+            "This task has no reviewed commit yet, so it cannot be redirected with a new instruction.",
+          detail: reason,
+        };
         const blocked = withInstruction(
           transitionTask(
             task,
-            { type: "block", reason: "cannot redirect task without reviewed HEAD" },
+            { type: "block", reason: cause.summary, cause },
             this.#deps.context(),
           ),
         );
@@ -1036,12 +1062,23 @@ export class TaskControlWorkflow {
       }
       if (stopFailure !== undefined) {
         const reason = `could not safely redirect task ${taskId}: ${stopFailure}`;
+        const cause: BlockCause = {
+          group: "lost-resource",
+          kind: "resource-lost",
+          summary:
+            "Tandem could not confirm the worker actually stopped, so the task could not be redirected.",
+          detail: reason,
+        };
         await writeRuntimeState(
           this.#deps.runtimePath,
           replaceRuntimeTask(requested, taskId, (current) => ({ ...current, lastError: reason })),
         );
         const blocked = withInstruction(
-          transitionTask(task, { type: "block", reason }, this.#deps.context()),
+          transitionTask(
+            task,
+            { type: "block", reason: cause.summary, cause },
+            this.#deps.context(),
+          ),
         );
         await store.update(task.id, task.revision, () => blocked);
         await this.#deps.publishTaskInbox(blocked);
@@ -1062,8 +1099,19 @@ export class TaskControlWorkflow {
         } catch (error) {
           if (!isMissingEndpoint(error)) {
             const reason = `reviewer pane ${endpoint.paneId} could not close: ${describeError(error)}`;
+            const cause: BlockCause = {
+              group: "lost-resource",
+              kind: "resource-lost",
+              summary: "A reviewer pane could not be closed, so the task could not be redirected.",
+              detail: reason,
+              paneId: endpoint.paneId,
+            };
             const blocked = withInstruction(
-              transitionTask(task, { type: "block", reason }, this.#deps.context()),
+              transitionTask(
+                task,
+                { type: "block", reason: cause.summary, cause },
+                this.#deps.context(),
+              ),
             );
             await store.update(task.id, task.revision, () => blocked);
             await this.#deps.publishTaskInbox(blocked);
