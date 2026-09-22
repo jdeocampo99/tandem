@@ -3253,12 +3253,23 @@ test("failed review results block the task instead of advancing into a review lo
         await service.tick();
         const blocked = await service.get("task-1");
         expect(blocked.stage).toBe("blocked");
-        expect(blocked.blockReason).toContain("stale worker instruction");
+        // A completed result without proof of the canonical instruction is still refused as stale.
+        // A failed result never carries that proof by design (the worker extension omits it), so it
+        // surfaces the worker's own reported reason instead of a manufactured staleness error.
+        if (status === "completed") {
+          expect(blocked.blockReason).toContain("stale worker instruction");
+        } else {
+          expect(blocked.blockReason).toContain("review output identity mismatch");
+        }
 
         await service.tick();
         const runtime = await readRuntime(home);
         expect(runtime.tasks[0]?.jobs).toHaveLength(1);
-        expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("failed");
+        // A completed-but-stale result is refused before it is ever consumed; a genuinely failed
+        // result is consumed normally into the task's block, exactly like any other failed worker.
+        expect(runtime.tasks[0]?.jobs[0]?.phase).toBe(
+          status === "completed" ? "failed" : "consumed",
+        );
       },
     );
   }

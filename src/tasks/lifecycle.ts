@@ -64,6 +64,17 @@ type StartEvent = Readonly<{
   readonly endpoints: readonly Endpoint[];
 }>;
 
+/**
+ * Central recovery's single re-entry path for a stage whose worker is proven dead: it replaces the
+ * current endpoint set with a freshly launched one without touching the worktree, stage, or reviewed
+ * evidence. It never mutates a prior job or result; a new durable operation and job back it.
+ */
+type RelaunchEvent = Readonly<{
+  readonly type: "relaunch";
+  readonly endpoints: readonly Endpoint[];
+  readonly generation: number;
+}>;
+
 type ImplementationCompleteEvent = Readonly<{
   readonly type: "implementation-complete";
   readonly head: string;
@@ -177,6 +188,7 @@ type AcknowledgeNotificationEvent = Readonly<{
 export type TaskEvent =
   | ApprovalEvent
   | StartEvent
+  | RelaunchEvent
   | ImplementationCompleteEvent
   | RetryValidationEvent
   | BeginExistingReviewEvent
@@ -871,6 +883,16 @@ export function transitionTask(
       return commitTask(task, context.now, {
         stage: task.kind === "scout" ? "scouting" : "implementing",
         worktree: event.worktree,
+        endpoints: [...event.endpoints],
+      });
+    }
+    case "relaunch": {
+      if (task.stage !== "implementing" && task.stage !== "scouting") {
+        invalidStage(task, event.type, ["implementing", "scouting"]);
+      }
+      assertCurrentGeneration(task, event.generation, "Relaunch");
+      assertEndpoints(event.endpoints, task);
+      return commitTask(task, context.now, {
         endpoints: [...event.endpoints],
       });
     }

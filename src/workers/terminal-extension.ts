@@ -48,6 +48,10 @@ function now(): string {
   return new Date().toISOString();
 }
 
+function describeExtensionError(error: unknown): string {
+  return error instanceof Error && error.message.trim().length > 0 ? error.message : String(error);
+}
+
 async function readJob(path: string): Promise<WorkerJob> {
   const value: unknown = JSON.parse(await Bun.file(path).text());
   return parseWorkerJob(value);
@@ -276,6 +280,27 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     await persistResult(result);
   };
 
+  /**
+   * Persists a durable failure result carrying the real reason before aborting, so a later recovery
+   * notice can say what actually happened instead of a bare "aborted" with no cause. Best-effort: if
+   * the write that just failed (heartbeat/control polling) keeps failing here too, the pane still
+   * aborts rather than hanging.
+   */
+  const abortWithReason = async (ctx: ExtensionContext, reason: string): Promise<void> => {
+    if (resultPublished || delegatedSettled) {
+      ctx.abort();
+      return;
+    }
+    resultPublished = true;
+    delegatedSettled = true;
+    try {
+      await persistResult(failureFor(job, reason));
+    } catch {
+      // Best effort only; the durable write already failed once for this pane.
+    }
+    ctx.abort();
+  };
+
   const timeout = async (ctx: ExtensionContext): Promise<void> => {
     if (delegatedSettled || resultPublished || timeoutRequested) return;
     timeoutRequested = true;
@@ -355,10 +380,20 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     agentActive = true;
     void reportStatus();
     ctx.setInterval(() => {
-      void pollControl(ctx).catch(() => ctx.abort());
+      void pollControl(ctx).catch((error) => {
+        void abortWithReason(
+          ctx,
+          `interactive worker control polling failed: ${describeExtensionError(error)}`,
+        );
+      });
     }, TERMINAL_POLL_MS);
     ctx.setInterval(() => {
-      void persistState(currentState.phase, currentState.completed).catch(() => ctx.abort());
+      void persistState(currentState.phase, currentState.completed).catch((error) => {
+        void abortWithReason(
+          ctx,
+          `interactive worker heartbeat could not be persisted: ${describeExtensionError(error)}`,
+        );
+      });
       void reportStatus();
     }, TERMINAL_HEARTBEAT_MS);
     if (job.timeoutMs !== undefined) {

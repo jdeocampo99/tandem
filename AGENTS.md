@@ -23,7 +23,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Request briefs, approval revisions, review pane | [requests/](src/requests/): `brief.ts`, `store.ts`, `store-codec.ts`, `markdown.ts`, `review-pane.ts`, `workflow.ts` |
 | Whole-request membership, dependencies, integration, single-PR delivery | [requests/](src/requests/): `aggregate.ts`, `delivery.ts`, `delivery-store.ts`, `delivery-codec.ts`; [delivery/integration.ts](src/delivery/integration.ts) |
 | Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts` |
-| Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/workflow.ts](src/recovery/workflow.ts) |
+| Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `workflow.ts`, `conversation.ts`, `decision.ts`, `wait.ts`, `central.ts` (stop/save/re-enter) |
 | Request usage, cost, quota, elapsed-time receipts | [runtime/](src/runtime/): `usage.ts`, `usage-events.ts`, `usage-ledger.ts`, `usage-codec.ts`, `usage-receipt.ts` |
 | Standing request budgets and spending decisions | [runtime/](src/runtime/): `budget.ts`, `budget-gate.ts` |
 | Model tier evidence and economical routing | [config/model-tier.ts](src/config/model-tier.ts), [workers/execution-routing.ts](src/workers/execution-routing.ts) |
@@ -100,6 +100,7 @@ Before changing behavior, read its contract:
 - Capacity/disk admission: [Safe automatic maintenance](docs/agent-reference.md#safe-automatic-maintenance).
 - PRs/artifacts: [Pull-request delivery](docs/agent-reference.md#pull-request-delivery), [Presentations and Lavish](docs/agent-reference.md#presentations-and-lavish).
 - Persistence/restart/locking: [Recovery and durable state](docs/agent-reference.md#recovery-durable-state-and-compaction), [Local limits](docs/agent-reference.md#local-limits-and-source-of-truth).
+- Central recovery (stop/save/re-enter, stage re-entry table, restart budget): [Central recovery: stop, save, re-enter](docs/agent-reference.md#central-recovery-stop-save-re-enter).
 - Recovery/rescue workflow: [First-class bounded recovery actions](docs/agent-reference.md#first-class-bounded-recovery-actions).
 - Recovery decisions/availability waits: [Conversational recovery and bounded availability waits](docs/agent-reference.md#conversational-recovery-and-bounded-availability-waits).
 - Stale records/panes/leases: [Reconciling Tandem resources across sessions](docs/agent-reference.md#reconciling-tandem-resources-across-sessions).

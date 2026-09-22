@@ -61,10 +61,12 @@ import { PresentationFeedbackWorkflow } from "../presentations/feedback.ts";
 import { type PresentationRecord, readPresentationRecord } from "../presentations/records.ts";
 import { preparePresentation } from "../presentations/session.ts";
 import { PresentationRuntimeWorkflow } from "../presentations/workflow.ts";
+import { CentralRecoveryWorkflow, RESTART_QUESTION_ID_PREFIX } from "../recovery/central.ts";
 import {
   type RecoveryConversationOutcome,
   RecoveryConversationWorkflow,
 } from "../recovery/conversation.ts";
+import { RECOVERY_QUESTION_ID_PREFIX } from "../recovery/decision.ts";
 import {
   type DeliveryPreflightResult,
   type EvidenceRepairResult,
@@ -602,6 +604,7 @@ class TandemController {
   readonly #control: TaskControlWorkflow;
   readonly #recovery: RecoveryWorkflow;
   readonly #recoveryConversation: RecoveryConversationWorkflow;
+  readonly #recoveryCentral: CentralRecoveryWorkflow;
   readonly #requests: RequestBriefWorkflow;
   readonly #requestDelivery: RequestDeliveryWorkflow;
   readonly #usage: RequestUsageLedger;
@@ -762,6 +765,19 @@ class TandemController {
         const decision = await this.#requests.dispatchDecisionForTask(task);
         return decision === undefined || decision.allowed ? undefined : decision.reason;
       },
+    });
+    this.#recoveryCentral = new CentralRecoveryWorkflow({
+      home: deps.home,
+      sessionId: deps.sessionId,
+      run: deps.run,
+      clock: deps.clock,
+      idFactory: deps.idFactory,
+      store: deps.store,
+      runtimePath: deps.runtimePath,
+      getTask: (taskId) => this.get(taskId),
+      relaunchWorker: (task, extraInstructions) =>
+        this.#worker.relaunchWorker(task, extraInstructions),
+      blockTask: (taskId, reason) => this.blockTask(taskId, reason).then(() => undefined),
     });
   }
 
@@ -1154,6 +1170,22 @@ class TandemController {
     const answer = singleLine(input.text, "text");
     const task = await this.get(taskId);
     if (task.communication?.question?.id === questionId) {
+      // A recovery question's answer is a recovery decision, never a worker instruction: it must
+      // never bump task.communication.revision, so neither path here goes through appendAnswer.
+      if (questionId.startsWith(RESTART_QUESTION_ID_PREFIX)) {
+        await this.#recoveryCentral.answerRestartQuestion(taskId, questionId, answer);
+        return this.messages(taskId);
+      }
+      if (questionId.startsWith(RECOVERY_QUESTION_ID_PREFIX)) {
+        const outcome = await this.#recoveryConversation.answerQuestion(taskId, questionId, answer);
+        if (outcome.resumed) {
+          const resumed = await this.#control.resumeTask(taskId);
+          if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage)) {
+            await this.reconcileTask(resumed);
+          }
+        }
+        return this.messages(taskId);
+      }
       const result = await this.#source.appendAnswer(taskId, questionId, answer);
       if (result.resumed) {
         const resumed = await this.#control.resumeTask(taskId);
@@ -2001,7 +2033,11 @@ class TandemController {
         }
         const writer = currentWriter(runtime);
         if (writer === undefined) {
-          await this.blockTask(task.id, `task is ${task.stage} but its worker endpoint is missing`);
+          // No owned pane is recorded and no job or reservation is active: the prior worker is
+          // either already proven dead or needs the stop ladder run against a stale record. Central
+          // recovery owns the stop/save/re-entry decision here; it blocks or asks itself when it
+          // cannot proceed automatically.
+          await this.#recoveryCentral.recoverStuckWorker(task);
           return;
         }
         const admission = await this.#worker.reserveTask(task.id, workerRoleForTask(task));

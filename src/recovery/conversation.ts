@@ -14,10 +14,10 @@ import { transitionTask } from "../tasks/lifecycle.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import {
   chooseRecoveryAction,
-  classifyEndpointOwnership,
-  classifyPriorOutcome,
   classifyRecoveryEvidence,
+  formatRecoveryQuestion,
   preapprovedRecoveryAction,
+  RECOVERY_QUESTION_ID_PREFIX,
   type RecoveryActionName,
   type RecoveryDecisionReceipt,
   type RecoveryDisposition,
@@ -76,7 +76,7 @@ export type RecoveryConversationOutcome = Readonly<{
 /** Keeps the durable receipt list bounded while the most recent decisions stay inspectable. */
 const MAX_RECOVERY_DECISION_RECEIPTS = 10;
 
-const QUESTION_ID_PREFIX = "recovery-";
+const QUESTION_ID_PREFIX = RECOVERY_QUESTION_ID_PREFIX;
 
 type DecisionDraft = Omit<RecoveryDecisionReceipt, "schemaVersion" | "id" | "decidedAt">;
 
@@ -138,18 +138,23 @@ function questionText(
   recommendedAction: RecoveryActionName | undefined,
   consequences: string,
 ): string {
-  const recommendation =
+  const want =
     recommendedAction === undefined
-      ? "No supported recovery action is proven, so none is recommended"
-      : `Recommended action: ${recommendedAction}`;
-  return [
-    `Task ${task.id}${task.requestId === undefined ? "" : ` in request ${task.requestId}`} is blocked: ${evidence.summary}.`,
-    `${recommendation}. ${consequences}`,
-    "Nothing has been changed; the worktree, reports, provenance, and unmerged changes are preserved.",
-  ].join(" ");
+      ? `Nothing yet: no supported recovery action is proven safe, so I am asking before touching anything. ${consequences}`
+      : `Run ${recommendedAction}. ${consequences}`;
+  return formatRecoveryQuestion({
+    what: `Task ${task.id}${task.requestId === undefined ? "" : ` in request ${task.requestId}`} is blocked: ${evidence.summary}.`,
+    want,
+    risk: "Nothing has changed yet; the worktree, reports, provenance, and unmerged changes are preserved either way.",
+  });
 }
 
-function taskAsking(
+/**
+ * Blocks a task on a durable question without appending a worker-instruction message, so answering
+ * it never bumps `task.communication.revision`. Exported for the central recovery module's own
+ * restart question, which follows the exact same shape.
+ */
+export function taskAsking(
   task: TaskRecord,
   question: TaskQuestion,
   notificationId: string,
@@ -246,6 +251,72 @@ export class RecoveryConversationWorkflow {
       }
     }
     return outcomes;
+  }
+
+  /**
+   * Answers a durable evidence-based recovery question (never a restart question, which the central
+   * recovery module owns). Clears the question and records the free-text reply as a decision receipt
+   * without ever calling `appendTaskMessage`: a recovery answer is a decision, never a worker
+   * instruction, so `task.communication.revision` is left exactly as it was. The task may still
+   * resume from `blocked` the same way answering any question does; nothing here applies an action
+   * by itself, since a plain-text reply does not carry the parameters some recovery actions need.
+   */
+  public async answerQuestion(
+    taskId: string,
+    questionId: string,
+    text: string,
+  ): Promise<Readonly<{ readonly changed: boolean; readonly resumed: boolean }>> {
+    const task = await this.#deps.getTask(taskId);
+    if (task.communication?.question?.id !== questionId) return { changed: false, resumed: false };
+    const runtime = taskRuntime(await readRuntimeState(this.#deps.runtimePath), taskId);
+    const priorDecision = (runtime?.recoveryDecisions ?? []).find(
+      (entry) => entry.questionId === questionId,
+    );
+    let changed = false;
+    let resumed = false;
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      if (current === undefined || current.communication?.question?.id !== questionId) return;
+      const { question: _question, ...withoutQuestion } = current.communication ?? {
+        revision: 0,
+        messages: [],
+      };
+      const updated = await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: this.#deps.clock(),
+        communication: withoutQuestion,
+      }));
+      changed = true;
+      resumed =
+        updated.stage === "blocked" &&
+        updated.previousStage !== undefined &&
+        updated.previousStage !== "paused" &&
+        updated.previousStage !== "blocked";
+    });
+    if (changed && priorDecision !== undefined) {
+      await this.saveDecision(taskId, {
+        taskId,
+        generation: priorDecision.generation,
+        ...(priorDecision.requestId === undefined ? {} : { requestId: priorDecision.requestId }),
+        evidence: priorDecision.evidence,
+        ownership: priorDecision.ownership,
+        priorOutcome: priorDecision.priorOutcome,
+        ...(priorDecision.recommendedAction === undefined
+          ? {}
+          : { recommendedAction: priorDecision.recommendedAction }),
+        approval: priorDecision.approval,
+        unmetProofs: priorDecision.unmetProofs,
+        consequences: priorDecision.consequences,
+        disposition: "refused",
+        dispositionReason: `the user answered without invoking a recovery action: ${text}`.slice(
+          0,
+          500,
+        ),
+        questionId,
+      });
+    }
+    return { changed, resumed };
   }
 
   private async abandonWait(
@@ -365,22 +436,10 @@ export class RecoveryConversationWorkflow {
     if (!(await this.#deps.taskInScope(task))) {
       return this.refuseOutOfScope(task, evidence);
     }
-    const inspection = await this.#deps.recovery.inspect(task.id);
     const plan = await this.#deps.recovery.plan(task.id);
-    const runtime = taskRuntime(await readRuntimeState(this.#deps.runtimePath), task.id);
-    const ownership = classifyEndpointOwnership(inspection.endpoints);
-    const priorOutcome = classifyPriorOutcome({
-      jobs: inspection.jobs,
-      operations: inspection.operations,
-    });
-    const facts = await this.provenFacts({
-      task,
-      runtime,
-      inspection,
-      plan,
-      ownership,
-      priorOutcome,
-    });
+    const ownership = plan.ownership;
+    const priorOutcome = plan.priorOutcome;
+    const facts = await this.provenFacts({ task, plan });
     const choice = chooseRecoveryAction({
       plannedAction: plan.operation.name,
       plannedEffect: plan.operation.effect,
@@ -418,34 +477,16 @@ export class RecoveryConversationWorkflow {
     return this.ask(task, evidence, draft);
   }
 
+  /**
+   * `plan()` is the single planner and already proved every fact it can prove; this only supplies
+   * the one fact it cannot (`request-approval-current`, which needs the request brief this module
+   * alone has access to). Nothing here reclassifies ownership, prior outcome, or any other proof.
+   */
   private async provenFacts(
-    input: Readonly<{
-      readonly task: TaskRecord;
-      readonly runtime: RuntimeTaskState | undefined;
-      readonly inspection: RecoveryInspection;
-      readonly plan: RecoveryPlan;
-      readonly ownership: ReturnType<typeof classifyEndpointOwnership>;
-      readonly priorOutcome: ReturnType<typeof classifyPriorOutcome>;
-    }>,
+    input: Readonly<{ readonly task: TaskRecord; readonly plan: RecoveryPlan }>,
   ): Promise<RecoveryProvenFacts> {
     const requestHold = await this.#deps.requestDispatchHold(input.task);
-    return {
-      // Scope is proved by the caller, which refuses an out-of-scope task before inspecting it.
-      "task-in-scope": true,
-      "task-scope-approved": input.task.scopeApproved,
-      "request-approval-current": requestHold === undefined,
-      "repository-identity-proven": input.inspection.repository.identity === "proven",
-      "endpoint-ownership-proven": input.ownership === "proven-owned",
-      "prior-outcome-known": input.priorOutcome === "known",
-      "no-active-durable-job": !input.inspection.jobs.some((job) => job.active),
-      "no-pending-stop-request": input.runtime?.stopRequest === undefined,
-      "reviewed-head-exact-and-clean":
-        input.inspection.review.exactHead &&
-        input.inspection.review.clean &&
-        !input.inspection.review.unmerged,
-      "recovery-attempt-budget-remaining": input.plan.budget.recoveryRemaining > 0,
-      "evidence-repair-budget-remaining": input.plan.budget.evidenceRepairsRemaining > 0,
-    };
+    return { ...input.plan.facts, "request-approval-current": requestHold === undefined };
   }
 
   private async applyPreapproved(

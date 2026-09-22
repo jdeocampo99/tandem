@@ -1941,10 +1941,54 @@ Positive native identity or matching durable result evidence may continue recove
 conflicting, or ambiguous evidence quarantines the operation and retains its reservation/resources
 rather than guessing. A failure preserves reports and worktree state.
 
+### Central recovery: stop, save, re-enter
+
+`src/recovery/central.ts` is the single mechanism that gets a stuck task back into its core loop
+from its current stage. It is always the same three moves:
+
+1. **Stop** — prove whatever Tandem owns for the task is actually dead. A durable failed/aborted
+   result is proof by itself; otherwise the stop ladder runs in order: control-file pause, an
+   interrupted pane, a direct signal to the recorded pid (sent only once it is proven to be the
+   pane's own foreground process), proof of exit, then closing the pane Tandem now owns
+   proven-stopped. A pane whose ownership cannot be proven, or that cannot be proven stopped, is
+   never touched; recovery asks instead of guessing.
+2. **Save** — the worktree is always preserved; before re-entry, its uncommitted diff and untracked
+   file list are snapshotted as durable evidence under the task's job directory.
+3. **Re-enter** — the task's current stage owns exactly one re-entry action, looked up from a small
+   typed table so a later stage can be added without touching the stop/save/proof machinery:
+
+   | Stage | Re-entry | Wired |
+   | --- | --- | --- |
+   | `implementing` | Relaunch: new durable operation, a fresh pane only if one is not already owned, a new worker started through the normal launch path | Yes |
+   | `scouting` | The identical relaunch path as `implementing` | Yes |
+   | `validating` | — | Not yet |
+   | `reviewing` | — | Not yet |
+   | `awaiting-fixes` | — | Not yet |
+
+   Relaunch (`WorkerWorkflow.relaunchWorker`) never mutates the dead job or its result; it admits a
+   brand-new operation through the same reservation and budget gate every launch uses, so a fresh
+   receipt, instruction revision, and prompt are built exactly as for any other launch. The worker is
+   told a prior attempt may have left partial edits and to inspect `git status`/`git diff` before
+   continuing.
+
+Automatic re-entry is bounded to two restarts per task generation; a new generation resets the
+counter. A dead job that failed again inside its own startup grace window, in the same failure class
+as the restart before it (for example a provider outage), does not spend a third automatic restart —
+Tandem asks instead, since retrying blindly would likely repeat the same failure. Each automatic
+restart writes one plain-English coordinator notification naming what happened, that the edits are
+kept, and which restart it is out of the budget. The third-restart question, and any question raised
+because death could not be proven, use the same plain-English shape as every other recovery question
+(what happened, what Tandem wants to do, what is risked either way; see below) and are answered
+through the existing question-id-bound answer API. Every recovery answer, this one included, is
+stored as a decision, never as a worker instruction: answering it never bumps
+`task.communication.revision`, so it can never be mistaken for a new canonical instruction a worker
+must apply.
+
 ### First-class bounded recovery actions
 
 The advanced CLI exposes the durable recovery workflow without editing SQLite or inspecting
-model output:
+model output. Central recovery's re-entry composes with these same entry points and their locks,
+fencing, ownership checks, budgets, and quarantine behavior; it does not duplicate them.
 
 ```sh
 tandem inspect TASK_ID --json
@@ -1981,11 +2025,16 @@ reports are refused.
 ### Conversational recovery and bounded availability waits
 
 The `recovery-decide` extension action settles one task's current recovery decision from durable
-state alone. It reads the task's recorded blockers, classifies endpoint ownership and the prior
-worker outcome, re-reads the dry-run plan, and then does exactly one of three things: run a
-preapproved action, hold a bounded wait, or ask one question. Every mutation still goes through
-`reconcile`, `review-existing`, `validation-retry`, or `evidence-repair`, so their locks, fencing,
-ownership checks, budgets, and quarantine behavior decide the result.
+state alone. It reads the task's recorded blockers, re-reads the dry-run plan, and then does exactly
+one of three things: run a preapproved action, hold a bounded wait, or ask one question. Every
+mutation still goes through `reconcile`, `review-existing`, `validation-retry`, or `evidence-repair`,
+so their locks, fencing, ownership checks, budgets, and quarantine behavior decide the result.
+`recovery-plan` (`RecoveryWorkflow.plan()`) is the single planner: it classifies endpoint ownership
+and the prior worker outcome itself and proposes an action only once that action's own proofs all
+hold, so an unproven action (for example evidence-repair while the prior outcome is still uncertain)
+is never proposed in the first place. `recovery-decide` reads those same classifications back off the
+plan rather than re-deriving them, and adds only the one fact the plan cannot itself prove — whether
+the governing request's approval is still current.
 
 The preapproval policy enumerates both the eligible actions and the proof each one needs; an action
 is never eligible because of its name. `reconcile` and `evidence-repair` are the only unattended
@@ -1993,12 +2042,17 @@ actions, and each runs only with the task in scope, its scope approved, its requ
 current, canonical repository identity proven, every endpoint proved owned, the prior outcome known,
 no active durable job, no pending stop request, and its own budget remaining; `evidence-repair` also
 requires the exact clean reviewed HEAD. Everything else, including `review-existing` and
-`validation-retry`, produces one bounded question carrying the recommendation, its expected effect,
-and the remaining budgets, and executes nothing until it is answered through the existing
-question-id-bound answer API. Foreign or unknown ownership, an uncertain worker outcome, a stale
-request agreement, or an exhausted budget leaves every resource intact and asks. Scope and
-acceptance changes, cap increases, higher-cost or higher-quota tiers, publication, merge, deploy,
-and destructive work keep their separate explicit approvals.
+`validation-retry`, produces one bounded question in the same plain-English shape as central
+recovery's own questions — what happened, what Tandem wants to do, what is risked either way, with
+IDs and other identifiers confined to the recommendation/consequences detail rather than the
+headline — carrying the recommendation, its expected effect, and the remaining budgets, and executes
+nothing until it is answered through the existing question-id-bound answer API. Answering it clears
+the question and records the reply as a decision without bumping `task.communication.revision`; a
+plain-text reply does not itself invoke reconcile/review-existing/validation-retry/evidence-repair,
+each of which stays a separate explicit call. Foreign or unknown ownership, an uncertain worker
+outcome, a stale request agreement, or an exhausted budget leaves every resource intact and asks.
+Scope and acceptance changes, cap increases, higher-cost or higher-quota tiers, publication, merge,
+deploy, and destructive work keep their separate explicit approvals.
 
 A confirmed temporary quota or availability block persists a bounded wait tied to the original
 request and task. When durable evidence already names an availability time more than five minutes
