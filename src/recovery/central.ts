@@ -8,9 +8,16 @@
  *
  * This slice wires only the `implementing` (and, since it shares the exact same path, `scouting`)
  * stage's re-entry: a dead worker with no owned pane recorded gets a fresh worker launched through
- * `WorkerWorkflow.relaunchWorker`, bounded by a per-generation restart budget. `validating`,
- * `reviewing`, and `awaiting-fixes` are not wired yet; each can be added later as its own stage
- * branch in `recoverStuckWorker()` below without touching the stop/save/proof machinery.
+ * `WorkerWorkflow.relaunchWorker`, bounded by a per-generation restart budget. `validating` and
+ * `reviewing` are not wired yet; each can be added later as its own stage branch in
+ * `recoverStuckWorker()` below without touching the stop/save/proof machinery.
+ *
+ * `awaiting-fixes` needs no branch of its own here: `WorkerWorkflow.beginFixes` atomically admits
+ * the fix round and transitions the task to `implementing` (bumping generation and the review-round
+ * counter) before it ever touches a pane, so by the time a fixer's launch turns out to be unproven
+ * (its carried-forward pane is gone), the task is already `implementing` and this same re-entry
+ * picks it up on the next reconcile tick. The review round it already spent is never spent twice;
+ * this path only relaunches within that same generation.
  */
 import { join } from "node:path";
 import { closeEndpoint, inspectEndpoint, interruptEndpoint } from "../adapters/herdr.ts";

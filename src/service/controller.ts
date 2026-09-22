@@ -2017,6 +2017,10 @@ class TandemController {
         return;
       }
       case "awaiting-fixes":
+        // beginFixes admits the fix round and transitions the task to `implementing` before it ever
+        // touches a pane; if the carried-forward pane turns out to be gone, it leaves the task there
+        // unblocked rather than blocking, so the `implementing` branch below's central recovery
+        // picks it up on the next tick (see src/recovery/central.ts).
         await this.#worker.beginFixes(task);
         return;
       case "validating":

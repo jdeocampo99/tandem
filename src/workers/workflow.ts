@@ -1790,8 +1790,17 @@ export class WorkerWorkflow {
     }
     const writer = currentWriter(nextRuntime);
     if (writer === undefined) {
+      // The pane this fix round expected to reuse (the original implementer's, carried through
+      // review) is gone. The begin-fixes transition above already committed this generation and its
+      // review round, so this is never blocked here: release the reservation and leave the task at
+      // `implementing` with no owned pane and no active job/reservation. The next reconcile tick
+      // routes it through the already-wired implementing-stage central recovery (stop/save/re-enter,
+      // `src/recovery/central.ts`), which proves the old pane dead (or finds none ever ran this
+      // generation), snapshots any partial edits, and relaunches a fresh pane in the same preserved
+      // worktree. `runtime.fixContextPath` survives that relaunch's own admission untouched (a plain
+      // relaunch never overwrites it), so the new worker is told the same findings again without
+      // spending another code-fix round.
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(task.id, "fix round has no owned implementer pane", claim);
       return;
     }
     await this.launchAgent(nextTask, nextRuntime, writer, "implementer");
