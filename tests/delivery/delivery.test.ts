@@ -335,6 +335,54 @@ test("refuses delivery when final evidence was recorded under a superseded polic
   );
 });
 
+test("a legacy task with no userCheckCriteria is unaffected by the you-check gate", () => {
+  const legacy = task();
+  expect(legacy.userCheckCriteria).toBeUndefined();
+  expect(() => assertTaskShape(legacy)).not.toThrow();
+  expect(describeTaskPr(legacy, summary)).not.toContain('"you check"');
+});
+
+test("assertTaskShape and describeTaskPr refuse delivery while a hands-on check is pending", () => {
+  const pending: TaskRecord = {
+    ...task(),
+    userCheckCriteria: ["Streak bar glows at 5 in a row"],
+  };
+  expect(() => assertTaskShape(pending)).toThrow(
+    /requires your check of 1 hands-on criteria at HEAD head-1/u,
+  );
+  expect(() => describeTaskPr(pending, summary)).toThrow(/requires your check of 1/u);
+});
+
+test("assertTaskShape and describeTaskPr allow delivery once the hands-on check is confirmed", () => {
+  const confirmed: TaskRecord = {
+    ...task(),
+    userCheckCriteria: ["Streak bar glows at 5 in a row"],
+    userCheck: {
+      head: "head-1",
+      generation: 0,
+      evidence: [{ criterion: "Streak bar glows at 5 in a row", paths: ["/home/jobs/a.png"] }],
+      answer: { outcome: "confirmed", answeredAt: "2030-01-02T03:04:05.000Z" },
+    },
+  };
+  expect(() => assertTaskShape(confirmed)).not.toThrow();
+  const rendered = describeTaskPr(confirmed, summary);
+  expect(rendered).toContain('1 "you check" criteria confirmed by the user');
+});
+
+test("assertTaskShape still refuses a stale userCheck bound to a superseded HEAD or generation", () => {
+  const stale: TaskRecord = {
+    ...task(),
+    userCheckCriteria: ["Streak bar glows at 5 in a row"],
+    userCheck: {
+      head: "old-head",
+      generation: 0,
+      evidence: [],
+      answer: { outcome: "confirmed", answeredAt: "2030-01-02T03:04:05.000Z" },
+    },
+  };
+  expect(() => assertTaskShape(stale)).toThrow(/requires your check of 1 hands-on criteria/u);
+});
+
 test("publishes the exact task branch only after identity checks and avoids duplicate pull requests", async () => {
   const runner = publishRunner();
   const published = await publishReviewedTask({

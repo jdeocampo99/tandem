@@ -216,6 +216,43 @@ test("a member absent from the integrated commit refuses the delivery", () => {
   expect(status.refusals.join(" ")).toContain("task-2 is not contained in the integrated commit");
 });
 
+test("a member waiting on its hands-on check refuses the delivery", () => {
+  const status = requestAcceptanceStatus({
+    integration: integration(),
+    members: [
+      member({
+        userCheckCriteria: ["Streak bar glows at 5 in a row"],
+      }),
+    ],
+    criteria: CRITERIA,
+  });
+
+  expect(status.satisfied).toBe(false);
+  expect(status.refusals.join(" ")).toContain(
+    "task-1 is waiting for your check of its hands-on criteria",
+  );
+});
+
+test("a member with a confirmed hands-on check does not refuse the delivery on that basis", () => {
+  const status = requestAcceptanceStatus({
+    integration: integration(),
+    members: [
+      member({
+        userCheckCriteria: ["Streak bar glows at 5 in a row"],
+        userCheck: {
+          head: MEMBER_HEAD,
+          generation: 0,
+          evidence: [{ criterion: "Streak bar glows at 5 in a row", paths: ["/home/jobs/a.png"] }],
+          answer: { outcome: "confirmed", answeredAt: NOW },
+        },
+      }),
+    ],
+    criteria: CRITERIA,
+  });
+
+  expect(status.refusals.join(" ")).not.toContain("hands-on criteria");
+});
+
 test("the request pull request body describes the checks in plain terms and lists members by id alone", () => {
   const body = describeRequestPr(
     { integration: integration(), members: [member()], criteria: CRITERIA },
