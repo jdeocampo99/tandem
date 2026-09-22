@@ -106,6 +106,51 @@ test("restarting an owned coordinator replaces only its pane and keeps the same 
   });
 });
 
+test("restart relaunches an exited coordinator beside a pane someone reused, without touching it", async () => {
+  await withScenario({}, async (world) => {
+    const rehomed: RehomeCall[] = [];
+    const first = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, rehomed),
+    );
+    // Ctrl-C exited the coordinator, then a plain `omp` was started by hand in its pane.
+    world.replaceForeground(first.paneId ?? "", ["omp"]);
+
+    const second = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, rehomed),
+    );
+
+    const record = await readCoordinatorRecord(
+      recordPath(world.home, world.sessionId, world.repoPath),
+    );
+    expect(second.restarted).toBe(false);
+    expect(second.paneId).not.toBe(first.paneId);
+    expect(second.command).toContain("--continue");
+    expect(record?.endpoint.paneId).toBe(second.paneId ?? "");
+    expect(world.paneIsPresent(first.paneId ?? "")).toBe(true);
+    expect(world.paneIsPresent(second.paneId ?? "")).toBe(true);
+  });
+});
+
+test("restart still refuses while the coordinator runs outside its recorded pane", async () => {
+  await withScenario({}, async (world) => {
+    const rehomed: RehomeCall[] = [];
+    const first = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, rehomed),
+    );
+    const other = world.openPane({ paneId: "pane-elsewhere", cwd: world.repoPath });
+    world.replaceForeground(other.paneId, first.command);
+    world.replaceForeground(first.paneId ?? "", ["omp"]);
+
+    await expect(
+      restartCoordinator(launchRequest(world), launchDependencies(world, rehomed)),
+    ).rejects.toThrow(/still running elsewhere .* then run `tandem restart`/u);
+    expect(world.paneIsPresent(first.paneId ?? "")).toBe(true);
+  });
+});
+
 test("a launch interrupted at the Herdr boundary leaves no owner, no orphan pane, and no stray lease", async () => {
   await withScenario({}, async (world) => {
     const rehomed: RehomeCall[] = [];

@@ -518,7 +518,9 @@ async function waitForCoordinatorOwnership(
       // The fresh pane can briefly look unrecorded or mismatched before its OMP foreground settles.
       if (
         !(error instanceof Error) ||
-        !/does not match recorded OMP command|pre-registry Tandem coordinator/.test(error.message)
+        !/coordinator is still running elsewhere|pre-registry Tandem coordinator/.test(
+          error.message,
+        )
       ) {
         throw error;
       }

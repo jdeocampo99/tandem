@@ -12,7 +12,7 @@ import {
 import {
   assertStoppedCoordinatorShell,
   commandErrorCode,
-  findResetCoordinator,
+  findRestartCoordinator,
   findRunningCoordinator,
   parseJson,
   sameCommand,
@@ -109,7 +109,7 @@ export async function restartCoordinator(
     });
     const stopped =
       previous === undefined
-        ? await findResetCoordinator(dependencies.run, {
+        ? await findRestartCoordinator(dependencies.run, {
             home: request.home,
             sessionId: request.sessionId,
             repoPath: request.repo,

@@ -325,6 +325,12 @@ export function fakePool(input: PoolInput): Pool {
     if (program === "git") return gitCommand(request.argv, request.cwd);
     if (program === "treehouse") return treehouseCommand(request.argv);
     if (program === "herdr") return herdrCommand(request.argv);
+    if (program === "ps") {
+      const lines = [...panes.values()].flatMap((pane) =>
+        pane.omp === undefined ? [] : [`700 ${pane.omp.join(" ")}`],
+      );
+      return ok(lines.join("\n"));
+    }
     throw new Error(`unexpected command ${request.argv.join(" ")}`);
   };
 
