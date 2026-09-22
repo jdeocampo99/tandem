@@ -19,7 +19,7 @@ import {
   type WorkerJob,
   type WorkerResult,
 } from "./workers/jobs.ts";
-import { WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
+import { SUBMIT_REPORT_TOOL, WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
 
 export type WorkerClock = () => string;
 export type WorkerResultWriter = (resultPath: string, result: WorkerResult) => void | Promise<void>;
@@ -32,10 +32,18 @@ export type WorkerRunOptions = Readonly<{
   ) => ExecutionAdmission | PromiseLike<ExecutionAdmission>;
 }>;
 
-const SCOUT_TOOLS = ["read", "grep", "glob", "web_search"] as const;
-const READ_ONLY_TOOLS = ["read", "grep", "glob"] as const;
-const IMPLEMENTER_TOOLS = ["read", "grep", "glob", "edit", "write", "bash"] as const;
-const PRESENTATION_TOOLS = ["read", "grep", "glob", "write", "edit"] as const;
+const SCOUT_TOOLS = ["read", "grep", "glob", "web_search", SUBMIT_REPORT_TOOL] as const;
+const READ_ONLY_TOOLS = ["read", "grep", "glob", SUBMIT_REPORT_TOOL] as const;
+const IMPLEMENTER_TOOLS = [
+  "read",
+  "grep",
+  "glob",
+  "edit",
+  "write",
+  "bash",
+  SUBMIT_REPORT_TOOL,
+] as const;
+const PRESENTATION_TOOLS = ["read", "grep", "glob", "write", "edit", SUBMIT_REPORT_TOOL] as const;
 const WORKER_CONFIG_PATH = fileURLToPath(new URL("./worker-config.yml", import.meta.url));
 const WORKER_CONTROL_PATH = fileURLToPath(new URL("./worker-control.ts", import.meta.url));
 

@@ -1238,7 +1238,7 @@ Validation evidence written before contracts existed loads unchanged and is mark
 
 Local runner checks and GitHub checks stay distinct. Runner evidence is stamped `origin: "local"` and satisfies only local manifest requirements; remote required checks remain the GitHub-observed `RemoteCheck` rollup asserted at merge. A local pass cannot be relabeled as a remote check, and `tandem inspect` reports the iteration/final and local/remote split alongside the passing count.
 
-Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Textual scout and implementer results must start with exactly one role-appropriate `Outcome: completed|needs-decision|failed` (scouts) or `Outcome: implemented|needs-decision|failed` (implementers) line. Reviewer, verifier, and presentation workers may use `Outcome: needs-decision` for a genuine blocker; otherwise reviewer/verifier success remains the strict `ReviewResult` JSON contract and presentation success remains its `Artifact: <absolute path>` contract. Any `needs-decision` result emits exactly one bounded single-line `Question: ...` and optional bounded single-line `Recommendation: ...` (each no more than 1,000 characters); durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
+Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Workers submit results with the typed `submit_report` tool: an `outcome` (`implemented|needs-decision|failed` for implementers, `completed|needs-decision|failed` for every other role), a Markdown `report` body (required except for reviewers and verifiers), and role-specific fields. A `needs-decision` submission carries exactly one bounded single-line `question` and an optional bounded single-line `recommendation` (each no more than 1,000 characters). A completed reviewer or verifier submits a structured `review` that must match `ReviewResult` and the job's lens, HEAD, and generation; a completed presentation submits an absolute `artifactPath`. A submission that breaks these rules is returned to the worker as a tool error naming the fix and never settles the job, so formatting slips are corrected in the conversation. The controller renders the report file from the structured fields; durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
 
 ### Incremental review briefs and finding status
 
@@ -1438,9 +1438,11 @@ Scouts, implementers, reviewers, verifiers, and presentation workers launch inte
 inherited terminal input and output. They do not use `-p` or `--mode json`. Open the child's Herdr
 subtree to inspect its conversation or send a message directly.
 
-The worker extension writes the existing private result file from the final native `agent_end`
-event. Continuing events are not completion, and later human conversation never overwrites that
-delegated result. Terminal output is display only; large reports do not pass through a captured
+Workers deliver their result only by calling the `submit_report` tool; the worker extension writes
+the private result file from that call. A settled `agent_end` without a submission is conversation,
+not completion, so human messages before or after the report never become or overwrite the delegated
+result. A settled `agent_end` still fails the job on a provider error, abort, model substitution, or
+requested timeout. Terminal output is display only; large reports do not pass through a captured
 JSONL stream. The scheduler can consume a result while OMP remains open, after checking the
 job identity, generation, native PID, physical checkout, and fresh terminal heartbeat.
 
