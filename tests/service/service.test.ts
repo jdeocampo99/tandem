@@ -2098,7 +2098,7 @@ test("a catalogue that no longer lists the pinned model stops the task and asks 
       expect(pause?.pinnedSelector).toBe("test/implementer");
       const stopped = await service.get("task-1");
       const questions = stopped.notifications.filter((notification) =>
-        notification.message.startsWith("Routing decision"),
+        notification.message.includes("Tandem paused a model change"),
       );
       expect(questions).toHaveLength(1);
       expect(questions[0]?.kind).toBe("coordinator");

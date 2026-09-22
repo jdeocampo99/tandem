@@ -16,6 +16,7 @@
 
 import { createHash } from "node:crypto";
 import type { IsoTimestamp, RequestBudgetPolicy } from "../contracts.ts";
+import { formatDecisionQuestion } from "../tasks/question.ts";
 import type {
   DurableOperationPhase,
   RequestBudgetPause,
@@ -155,10 +156,15 @@ export type RequestSpendGovernance = Readonly<{
   readonly identity: RequestSpendIdentity;
 }>;
 
-/** What an approver claims to be authorizing; it must name the exact decision it answers. */
+/**
+ * What an approver claims to be authorizing. `decisionId` is optional: a request has at most one
+ * pending spending decision at a time, so omitting it resolves to that single pending decision;
+ * naming one still binds the approval to it exactly, so it cannot travel to a later pause the
+ * approver never saw.
+ */
 export type RequestSpendAuthorization = Readonly<{
   readonly requestId: string;
-  readonly decisionId: string;
+  readonly decisionId?: string | undefined;
   readonly capMicros: number;
 }>;
 
@@ -410,9 +416,11 @@ export function reconcileRequestBudgetReservations(
 }
 
 /**
- * Records one explicit decision to spend more. The claim must name the pending decision exactly,
- * so an approval cannot travel to a later pause, a different request, or a cap the approver never
- * saw; a restart that finds no answer finds the pause still standing.
+ * Records one explicit decision to spend more. A named decision must match the pending one
+ * exactly, so an approval cannot travel to a later pause, a different request, or a cap the
+ * approver never saw; a restart that finds no answer finds the pause still standing. Omitting
+ * `decisionId` resolves to the single decision this request has pending — there is never more
+ * than one at a time — and still fails closed when none is pending.
  */
 export function authorizeRequestSpend(
   budget: RequestBudgetState | undefined,
@@ -427,7 +435,7 @@ export function authorizeRequestSpend(
       intent.requestId,
     );
   }
-  if (pause.decisionId !== intent.decisionId) {
+  if (intent.decisionId !== undefined && pause.decisionId !== intent.decisionId) {
     throw new RequestBudgetError(
       "stale-decision",
       `Decision ${intent.decisionId} is not the pending decision ${pause.decisionId} for request ${intent.requestId}`,
@@ -502,25 +510,39 @@ export function describeSpendMicros(value: number | "unavailable"): string {
   return `USD ${(value / USD_MICROS_PER_DOLLAR).toFixed(6)}`;
 }
 
+/** Plain dollars for a user-facing prompt; an unmeasured amount is named, never shown as zero. */
+function formatDollars(value: number | "unavailable"): string {
+  if (value === "unavailable") return "an unknown amount";
+  return `$${(value / USD_MICROS_PER_DOLLAR).toFixed(2)}`;
+}
+
 /**
- * The whole spending decision in one question: the cap in force, what has been charged, what is
- * still reserved, what the next step is estimated to cost, and why the request stopped. Estimates
- * are labelled as estimates and unmeasured amounts are named as unmeasured.
+ * The whole spending decision as one plain-English prompt: the cap in force, what has been
+ * charged, what is still reserved, what the next step is estimated to cost, and why the request
+ * stopped. Estimates are labelled as estimates, unmeasured amounts are named as unmeasured, and no
+ * task, decision, or request id appears in the text — a caller that needs one for a tool call
+ * reads it off `pause` directly. `taskObjective`, when the caller has it, names the task that
+ * raised the pause in its own words instead of its id.
  */
-export function describeRequestSpendDecision(pause: RequestBudgetPause): string {
-  return [
-    `Spending decision ${pause.decisionId} for this request: ${PAUSE_EXPLANATIONS[pause.reason]}.`,
-    `Cap in force ${describeSpendMicros(pause.capMicros)}; charged so far ${describeSpendMicros(pause.committedMicros)} (observed only); reserved for work already admitted ${describeSpendMicros(pause.reservedMicros)} (estimate); next step estimated at ${describeSpendMicros(pause.nextStepMicros)}.`,
+export function describeRequestSpendDecision(
+  pause: RequestBudgetPause,
+  taskObjective?: string,
+): string {
+  const subject = taskObjective === undefined ? "this request" : `"${taskObjective}"`;
+  const unpriced =
     pause.unpricedSamples === 0
-      ? undefined
-      : `${pause.unpricedSamples} recorded sample(s) carry no published price and ${pause.unmeasuredTokenSamples} reported no tokens, so the charged figure is a floor on what this request cost, not a measurement of it.`,
+      ? ""
+      : ` ${pause.unpricedSamples} recorded step(s) have no published price and ${pause.unmeasuredTokenSamples} reported no usage at all, so the charged total is a floor on the real cost, not a measurement of it.`;
+  const unaccounted =
     pause.unaccountedSamples === 0
-      ? undefined
-      : `${pause.unaccountedSamples} of those have no reserved estimate standing for them either, so their cost stays unknown until you accept it; authorizing this decision accepts exactly that much unmeasured work, and later unmeasured work asks again.`,
-    "Nothing under this request will start until this decision is answered through budget-approve naming it. Tandem will not switch models, skip checks, narrow review, or replan to fit, and it will not invent a charge or turn subscription quota into cash to close the gap.",
-  ]
-    .filter((line): line is string => line !== undefined)
-    .join(" ");
+      ? ""
+      : ` ${pause.unaccountedSamples} of those also have no cost estimate standing in for them, so approving this decision accepts that much unknown spending; anything still unmeasured after this asks again.`;
+  return formatDecisionQuestion({
+    what: `Spending on ${subject} is paused: ${PAUSE_EXPLANATIONS[pause.reason]}. Cap in force ${formatDollars(pause.capMicros)}; charged so far ${formatDollars(pause.committedMicros)} (observed only); reserved for work already started ${formatDollars(pause.reservedMicros)} (estimate); the next step is estimated at ${formatDollars(pause.nextStepMicros)}.${unpriced}${unaccounted}`,
+    recommendation:
+      "Tell me the new spending cap and I will raise it and continue exactly what was planned.",
+    risk: "Nothing new starts under this request until you decide. Tandem will not switch models, skip checks, narrow review, or replan to fit, and it will not invent a charge or turn included usage into cash to close the gap. Work already running finishes or unwinds safely either way.",
+  });
 }
 
 const SETTLED_OPERATION_PHASES: readonly DurableOperationPhase[] = [
@@ -531,10 +553,10 @@ const SETTLED_OPERATION_PHASES: readonly DurableOperationPhase[] = [
 
 const PAUSE_EXPLANATIONS: Readonly<Record<RequestBudgetPause["reason"], string>> = {
   "estimate-unavailable":
-    "no conservative per-operation estimate is configured, so the next step's exposure is unknown",
+    "Tandem has no cost estimate for the next step, so it doesn't know what it would spend",
   "exposure-unaccounted":
-    "work it has already done carries no published price and no reserved estimate, so what it has cost is unknown rather than zero",
-  "cap-would-be-exceeded": "the next step no longer fits under the cap",
+    "work it has already done carries no published price and no cost estimate, so what it has spent so far is unknown rather than zero",
+  "cap-would-be-exceeded": "the next step no longer fits under the current spending cap",
 };
 
 const DECISION_ID_PREFIX = "spend-";

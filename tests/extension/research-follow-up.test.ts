@@ -215,9 +215,9 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
       reportReadable: isResearchReportReadable,
     });
 
-    expect(first).toHaveLength(1);
-    expect(first[0]).toContain("Evidence report: ");
-    expect(first[0]).toContain("Post-research follow-up: implementation-interview");
+    expect(first).toHaveLength(2);
+    expect(first[1]).toContain("Evidence report: ");
+    expect(first[1]).toContain("Post-research follow-up: implementation-interview");
     expect(second).toEqual(first);
   } finally {
     await rm(home, { recursive: true, force: true });
@@ -245,9 +245,9 @@ test("an unreadable report downgrades the recorded interview to a disclosed bloc
       reportReadable: isResearchReportReadable,
     });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toContain("Post-research follow-up: disclose-blocker");
-    expect(sent[0]).toContain("no readable completed report is recorded");
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain("Post-research follow-up: disclose-blocker");
+    expect(sent[1]).toContain("no readable completed report is recorded");
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -277,7 +277,7 @@ test("an implementation-interview wake approves no scope and creates no implemen
     expect(after.map((entry) => entry.id)).toEqual(["scout-task"]);
     expect(after.every((entry) => entry.kind === "scout")).toBe(true);
     expect(after[0]?.researchHandoffs).toBeUndefined();
-    expect(sent[0]).toContain("It stays awaiting-approval");
+    expect(sent[1]).toContain("It stays awaiting-approval");
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -388,7 +388,7 @@ test("the delivered wake matches the pure decision for the same durable record",
     const expected = buildResearchFollowUpContent(
       decideResearchFollowUp({ task: record, reportReadable: true }),
     );
-    expect(sent[0]).toContain(expected);
+    expect(sent[1]).toContain(expected);
   } finally {
     await rm(home, { recursive: true, force: true });
   }

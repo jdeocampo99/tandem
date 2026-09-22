@@ -64,7 +64,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "request-merge": { min: 3, max: 3 },
   "request-split": { min: 2, max: 2 },
   "budget-show": { min: 2, max: 2 },
-  "budget-approve": { min: 4, max: 4 },
+  "budget-approve": { min: 3, max: 4 },
   "review-existing": { min: 3, max: 3 },
   "validation-retry": { min: 2, max: 2 },
   "evidence-repair": { min: 2, max: 2 },
@@ -144,7 +144,8 @@ export type TandemAction =
   | Readonly<{
       readonly action: "budget-approve";
       readonly requestId: string;
-      readonly decisionId: string;
+      /** The pending decision to answer; omitted resolves to the request's one pending decision. */
+      readonly decisionId?: string | undefined;
       readonly capMicros: number;
     }>
   | Readonly<{
@@ -386,9 +387,11 @@ async function approvalPrompt(
   }
   if (action.action === "budget-approve") {
     const readout = await service.requestSpend(action.requestId);
+    const naming =
+      action.decisionId === undefined ? "" : `, answering decision ${action.decisionId}`;
     return {
       title: "Authorize more spending on this request?",
-      message: `Raise the cap for request ${action.requestId} to ${describeSpendMicros(action.capMicros)}, answering decision ${action.decisionId}.\n\n${summarizeRequestSpend(readout)}\n\nAuthorizing spending resumes admission under the new cap only; it does not approve scope, publication, merge, deployment, or destructive work.`,
+      message: `Raise the cap for request ${action.requestId} to ${describeSpendMicros(action.capMicros)}${naming}.\n\n${summarizeRequestSpend(readout)}\n\nAuthorizing spending resumes admission under the new cap only; it does not approve scope, publication, merge, deployment, or destructive work.`,
     };
   }
   if (!("taskId" in action))
@@ -967,7 +970,10 @@ export function parseTandemCommand(input: string): TandemAction {
     case "budget-show":
       return { action: "budget-show", requestId: value(1, "budget-show") };
     case "budget-approve": {
-      const capMicros = Number(value(3, "budget-approve cap in USD micro-dollars"));
+      // Three words (requestId, cap) resolves to the request's one pending decision; four words
+      // (requestId, decisionId, cap) names it explicitly.
+      const capIndex = words.length === 4 ? 3 : 2;
+      const capMicros = Number(value(capIndex, "budget-approve cap in USD micro-dollars"));
       if (!Number.isSafeInteger(capMicros) || capMicros < 0) {
         throw new TypeError(
           "budget-approve cap must be a non-negative integer number of USD micro-dollars",
@@ -976,7 +982,7 @@ export function parseTandemCommand(input: string): TandemAction {
       return {
         action: "budget-approve",
         requestId: value(1, "budget-approve"),
-        decisionId: value(2, "budget-approve decision id"),
+        ...(words.length === 4 ? { decisionId: value(2, "budget-approve decision id") } : {}),
         capMicros,
       };
     }

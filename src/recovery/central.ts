@@ -35,13 +35,13 @@ import {
 import type { DurableJob, RuntimeRecoveryState, RuntimeTaskState } from "../runtime/schema.ts";
 import { isTerminalTask, replaceRuntimeTask, workerRoleForTask } from "../service/records.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
+import { formatDecisionQuestion } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import { readWorkerTerminal, type WorkerTerminalJob } from "../workers/terminal.ts";
 import { pauseWorkerTerminal } from "../workers/terminal-control.ts";
 import { taskAsking } from "./conversation.ts";
 import {
   classifyRestartFailure,
-  formatRecoveryQuestion,
   RECOVERY_QUESTION_ID_PREFIX,
   type RecoveryDecisionReceipt,
   type RecoveryEvidence,
@@ -513,9 +513,9 @@ export class CentralRecoveryWorkflow {
     parts: Readonly<{ readonly what: string; readonly risk: string }>,
   ): Promise<CentralRecoveryOutcome> {
     const questionId = `${RESTART_QUESTION_ID_PREFIX}${incidentIdentity}`;
-    const text = formatRecoveryQuestion({
+    const text = formatDecisionQuestion({
       what: parts.what,
-      want: RESTART_QUESTION_WANT,
+      recommendation: RESTART_QUESTION_WANT,
       risk: parts.risk,
     });
     const details = `Details: task ${task.id}${task.requestId === undefined ? "" : `, request ${task.requestId}`}, generation ${task.generation}, dead job ${deadJobId}.`;

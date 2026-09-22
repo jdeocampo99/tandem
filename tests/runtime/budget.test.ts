@@ -9,6 +9,7 @@ import type {
   TaskRecord,
 } from "../../src/contracts.ts";
 import {
+  describeRequestSpendDecision,
   observeRequestCharges,
   type RequestSpendAdmission,
   requestBudgetFor,
@@ -23,6 +24,7 @@ import { chargeMicrosForTokens, JEV_PRICING_SNAPSHOT } from "../../src/runtime/u
 import { providerSampleEvent } from "../../src/runtime/usage-events.ts";
 import { createRequestUsageLedger } from "../../src/runtime/usage-ledger.ts";
 import { createTaskStore, type TaskStore } from "../../src/tasks/store.ts";
+import { expectNoIdentifiers } from "../tasks/question.test.ts";
 
 const REQUEST_ID = "req-budget";
 const HEAD = "0123456789abcdef0123456789abcdef01234567";
@@ -414,6 +416,75 @@ test("an authorization is bound to its decision and is required again once super
     },
     { capMicros: 100_000, operationEstimateMicros: 400_000 },
   );
+});
+
+test("the rendered spending prompt never names the task, decision, or request id", async () => {
+  await withBudgetWorld(
+    async (world, tasks) => {
+      const task = tasks[0];
+      if (task === undefined) throw new Error("the world seeded no task");
+      const stopped = await world.admit(task, "op-a");
+      if (stopped.outcome !== "paused") throw new Error("the first admission should have paused");
+
+      const withoutObjective = describeRequestSpendDecision(stopped.pause);
+      expectNoIdentifiers(withoutObjective, [
+        stopped.pause.decisionId,
+        stopped.pause.taskId,
+        REQUEST_ID,
+      ]);
+      expect(withoutObjective).toContain("this request");
+      expect(withoutObjective).toContain("$");
+      expect(withoutObjective).not.toContain("USD");
+
+      const withObjective = describeRequestSpendDecision(
+        stopped.pause,
+        "Ship the new pricing page",
+      );
+      expect(withObjective).toContain('"Ship the new pricing page"');
+      expectNoIdentifiers(withObjective, [
+        stopped.pause.decisionId,
+        stopped.pause.taskId,
+        REQUEST_ID,
+      ]);
+    },
+    { capMicros: 100_000, operationEstimateMicros: 400_000 },
+  );
+});
+
+test("an authorization may omit the decision id, resolving to the request's one pending decision", async () => {
+  await withBudgetWorld(
+    async (world, tasks) => {
+      const task = tasks[0];
+      if (task === undefined) throw new Error("the world seeded no task");
+      const stopped = await world.admit(task, "op-a");
+      if (stopped.outcome !== "paused") throw new Error("the first admission should have paused");
+
+      const authorized = await world.gate.authorizeSpend({
+        requestId: REQUEST_ID,
+        capMicros: 5_000_000,
+      });
+      expect(authorized.pause).toBeUndefined();
+      expect(authorized.approval?.capMicros).toBe(5_000_000);
+      expect(authorized.approval?.decisionId).toBe(stopped.pause.decisionId);
+      expect((await world.admit(task, "op-a")).outcome).toBe("admitted");
+    },
+    { capMicros: 100_000, operationEstimateMicros: 400_000 },
+  );
+});
+
+test("an authorization with no pending decision refuses closed, named or not", async () => {
+  await withBudgetWorld(async (world) => {
+    await expect(
+      world.gate.authorizeSpend({ requestId: REQUEST_ID, capMicros: 5_000_000 }),
+    ).rejects.toThrow(/no pending spending decision/u);
+    await expect(
+      world.gate.authorizeSpend({
+        requestId: REQUEST_ID,
+        decisionId: "spend-nothing-pending",
+        capMicros: 5_000_000,
+      }),
+    ).rejects.toThrow(/no pending spending decision/u);
+  });
 });
 
 test("a restart reconciles reservations without double counting or losing one", async () => {

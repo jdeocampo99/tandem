@@ -16,6 +16,7 @@ import {
   resolvedExecutionModel,
   resolveExecutionRouting,
 } from "../../src/workers/execution-routing.ts";
+import { expectNoIdentifiers } from "../tasks/question.test.ts";
 
 const PINNED: ModelSpec = { model: "alpha/base", thinking: "high" };
 
@@ -396,7 +397,36 @@ test("unknown tier evidence pauses rather than classifying the move as comparabl
 
   expect(pause.reason).toBe("tier-evidence-indeterminate");
   expect(pause.evidenceGaps).toEqual(["catalogue-cost-unpublished"]);
-  expect(describeExecutionRoutingDecision(pause)).toContain("catalogue-cost-unpublished");
+  // The evidence gap's plain-English translation appears; its raw machine identifier never does.
+  expect(describeExecutionRoutingDecision(pause)).toContain(
+    "no published price for one of the models",
+  );
+  expect(describeExecutionRoutingDecision(pause)).not.toContain("catalogue-cost-unpublished");
+});
+
+test("the rendered routing prompt never names a task, decision, generation, or attempt id", () => {
+  const pause = pauseOf(
+    resolveExecutionRouting(
+      routingRequest({
+        admission: { status: "paused", exposure: MEASURED },
+        boundary: replacementBoundary(),
+        catalogue: reassignableCatalogue(),
+      }),
+    ),
+  );
+  const withoutObjective = describeExecutionRoutingDecision(pause);
+  expectNoIdentifiers(withoutObjective, [
+    pause.decisionId,
+    pause.taskId,
+    pause.jobId,
+    pause.operationId,
+  ]);
+  expect(withoutObjective).toContain("this task");
+
+  // A caller that has the task's own words for it names the task that way instead of "this task".
+  const withObjective = describeExecutionRoutingDecision(pause, "Add dark mode to settings");
+  expect(withObjective).toContain('"Add dark mode to settings"');
+  expectNoIdentifiers(withObjective, [pause.taskId, pause.decisionId]);
 });
 
 test("a catalogue contradicting the pinned model pauses rather than falling back silently", () => {

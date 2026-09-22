@@ -194,7 +194,7 @@ export function registerTandemOmp(
       .object({
         action: z.literal("budget-approve"),
         requestId: z.string(),
-        decisionId: z.string(),
+        decisionId: z.string().optional(),
         capMicros: z.number().int().nonnegative(),
       })
       .strict(),

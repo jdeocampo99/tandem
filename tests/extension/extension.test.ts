@@ -1187,13 +1187,19 @@ test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct
     reportReadable: async () => true,
   });
 
-  expect(sent).toHaveLength(1);
-  const content = sent[0] ?? "";
-  expect(content).toContain("[task-ready] Ready: task task-ready passed");
+  expect(sent).toHaveLength(2);
+  const identifiers = sent[0] ?? "";
+  const content = sent[1] ?? "";
+  expect(identifiers).toContain("task task-ready");
+  expect(identifiers).toContain("task task-exhausted");
+  expect(content).not.toContain("[task-ready]");
+  expect(content).not.toContain("[task-exhausted]");
+  expect(content).toContain("Ready: task task-ready passed");
   expect(content).toContain("Ready is not publication, merge, or deploy approval");
-  expect(content).toContain("[task-exhausted] Task task-exhausted blocked: bounded review loop");
+  expect(content).toContain("Task task-exhausted blocked: bounded review loop");
   expect(content).toContain("the task is not ready or accepted");
-  expect(turns[0]).toMatchObject({ triggerTurn: true });
+  expect(turns[0]).not.toMatchObject({ triggerTurn: true });
+  expect(turns[1]).toMatchObject({ triggerTurn: true });
   expect(acknowledged.sort()).toEqual(["task-exhausted:exhausted-1", "task-ready:ready-1"]);
 });
 
@@ -1258,21 +1264,22 @@ test("a failed acknowledgement retries on the next tick without waking the coord
       reportReadable: async () => true,
     });
 
-  // The wake reaches the coordinator, then the acknowledgement loses the state-lock race.
+  // The wake reaches the coordinator (a hidden identifiers message, then the displayed prompt),
+  // then the acknowledgement loses the state-lock race.
   await deliver();
-  expect(sent).toHaveLength(1);
+  expect(sent).toHaveLength(2);
   expect(acknowledged).toHaveLength(0);
   expect(unacknowledgedKeys.has("task-1:blocked-notification")).toBe(true);
 
   // Later ticks over the same still-unacknowledged record must not send the wake a second time.
   await deliver();
   await deliver();
-  expect(sent).toHaveLength(1);
+  expect(sent).toHaveLength(2);
 
   // Once the lock is free the acknowledgement lands, exactly once, with no further wake.
   acknowledgementsFail = false;
   await deliver();
-  expect(sent).toHaveLength(1);
+  expect(sent).toHaveLength(2);
   expect(acknowledged).toEqual(["task-1:blocked-notification"]);
   expect(unacknowledgedKeys.size).toBe(0);
 
@@ -1352,13 +1359,15 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
 
   expect(blocked.stage).toBe("blocked");
   expect(blocked.notifications.at(-1)?.kind).toBe("coordinator");
-  expect(sent).toHaveLength(1);
-  expect(sent[0]?.content).toContain("worktree allocation failed before worker launch");
-  expect(sent[0]?.content).toContain(
-    "Question question-1: Should the existing API remain unchanged?",
-  );
-  expect(sent[0]?.content).toContain("Recommendation: Keep the existing API unchanged.");
-  expect(sent[0]?.content).toContain("Evidence report: /tmp/tandem/task-1/report.txt");
+  expect(sent).toHaveLength(2);
+  expect(sent[0]?.content).toContain("task task-1");
+  expect(sent[0]?.content).toContain("question question-1");
+  expect(sent[1]?.content).not.toContain("[task-1]");
+  expect(sent[1]?.content).not.toContain("question-1");
+  expect(sent[1]?.content).toContain("worktree allocation failed before worker launch");
+  expect(sent[1]?.content).toContain("Should the existing API remain unchanged?");
+  expect(sent[1]?.content).toContain("Recommendation: Keep the existing API unchanged.");
+  expect(sent[1]?.content).toContain("Evidence report: /tmp/tandem/task-1/report.txt");
   expect(modelTurns).toBe(1);
   expect(notices).toHaveLength(0);
   expect(acknowledged).toEqual(["task-1:blocked-notification"]);
@@ -1439,9 +1448,11 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         ctx: context,
         reportReadable: async () => true,
       });
-      expect(sent).toHaveLength(1);
-      expect(sent[0]?.content).toContain("/tmp/tandem/scout-report.txt");
-      expect(sent[0]?.options).toEqual({ deliverAs: "followUp", triggerTurn: true });
+      expect(sent).toHaveLength(2);
+      expect(sent[0]?.content).toContain("task scout-task");
+      expect(sent[0]?.options).toEqual({ deliverAs: "followUp" });
+      expect(sent[1]?.content).toContain("/tmp/tandem/scout-report.txt");
+      expect(sent[1]?.options).toEqual({ deliverAs: "followUp", triggerTurn: true });
       expect(notices).toHaveLength(0);
     } finally {
       await service.shutdown();
@@ -1466,7 +1477,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         ctx: context,
         reportReadable: async () => true,
       });
-      expect(sent).toHaveLength(1);
+      expect(sent).toHaveLength(2);
 
       let retryScouting = await store.create({
         id: "scout-retry",
@@ -1533,8 +1544,8 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         ctx: context,
         reportReadable: async () => true,
       });
-      expect(retrySent).toHaveLength(1);
-      expect(retrySent[0]).toContain("/tmp/tandem/scout-retry-report.txt");
+      expect(retrySent).toHaveLength(2);
+      expect(retrySent[1]).toContain("/tmp/tandem/scout-retry-report.txt");
       expect((await reopened.get("scout-retry")).notifications.at(-1)?.acknowledged).toBe(true);
     } finally {
       await reopened.shutdown();
@@ -1672,10 +1683,12 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     reportReadable: async () => true,
   });
 
-  expect(sent).toHaveLength(1);
-  expect(sent[0]?.content).toContain("Latest scout report needs review.");
-  expect(sent[0]?.content).toContain("Owner decision required.");
-  expect(sent[0]?.content).not.toContain("Earlier scout evidence.");
+  expect(sent).toHaveLength(2);
+  expect(sent[0]?.content).toContain("task task-1");
+  expect(sent[0]?.content).toContain("task blocked");
+  expect(sent[1]?.content).toContain("Latest scout report needs review.");
+  expect(sent[1]?.content).toContain("Owner decision required.");
+  expect(sent[1]?.content).not.toContain("Earlier scout evidence.");
   expect(modelTurns).toBe(1);
   expect(notices.join("\n")).toContain("Earlier scout evidence.");
   expect(entries).toHaveLength(1);
@@ -1701,7 +1714,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     ctx: context,
     reportReadable: async () => true,
   });
-  expect(sent).toHaveLength(1);
+  expect(sent).toHaveLength(2);
   expect(modelTurns).toBe(1);
   expect(acknowledged).toHaveLength(4);
   expect(acknowledged.filter((value) => value === "task-1:scout-old")).toHaveLength(2);
@@ -1758,8 +1771,10 @@ test("notification kind controls whether presentation bookkeeping wakes the coor
     ctx: context,
     reportReadable: async () => true,
   });
-  expect(sent).toHaveLength(1);
-  expect(sent[0]).toContain("[task-coordinator]");
+  expect(sent).toHaveLength(2);
+  expect(sent[0]).toContain("task task-coordinator");
+  expect(sent[1]).not.toContain("[task-coordinator]");
+  expect(sent[1]).toContain("Presentation presentation-1 received feedback");
   expect(notices).toHaveLength(1);
   expect(notices[0]).toContain("[task-1]");
   expect(acknowledged).toHaveLength(2);
@@ -1823,8 +1838,8 @@ test("legacy scout recovery survives a later routine presentation notice", async
     reportReadable: async () => true,
   });
 
-  expect(sent).toHaveLength(1);
-  expect(sent[0]?.content).toContain("Legacy scout report requires coordinator review.");
+  expect(sent).toHaveLength(2);
+  expect(sent[1]?.content).toContain("Legacy scout report requires coordinator review.");
   expect(modelTurns).toBe(1);
   expect(notices.join("\n")).toContain("Presentation presentation-1 is ready.");
   expect(acknowledged).toEqual(["task-1:legacy-report", "task-1:routine-presentation"]);
@@ -1852,7 +1867,7 @@ test("legacy scout recovery survives a later routine presentation notice", async
     reportReadable: async () => true,
   });
 
-  expect(sent).toHaveLength(1);
+  expect(sent).toHaveLength(2);
   expect(modelTurns).toBe(1);
 });
 
@@ -2063,8 +2078,10 @@ test("a request decision wakes the coordinator while routine request state stays
     reportReadable: async () => true,
   });
 
-  expect(sent).toHaveLength(1);
-  expect(sent[0]).toContain("[req-deciding] Request req-deciding needs a decision");
+  expect(sent).toHaveLength(2);
+  expect(sent[0]).toContain("request req-deciding");
+  expect(sent[1]).not.toContain("[req-deciding]");
+  expect(sent[1]).toContain("Request req-deciding needs a decision");
   expect(notified).toEqual([]);
   expect(acknowledged).toEqual(["req-deciding:req-deciding:conflict:conflict-1"]);
 });
@@ -2132,11 +2149,13 @@ test("a recovery question wakes the coordinator once with its recommendation and
     reportReadable: async () => true,
   });
 
-  expect(sent).toHaveLength(1);
-  expect(sent[0]?.content).toContain("Question recovery-3f2a:");
-  expect(sent[0]?.content).toContain("Recommended action: review-existing");
-  expect(sent[0]?.content).toContain("Recommendation: review-existing:");
-  expect(sent[0]?.options).toMatchObject({ triggerTurn: true });
+  expect(sent).toHaveLength(2);
+  expect(sent[0]?.content).toContain("task task-1");
+  expect(sent[0]?.content).toContain("question recovery-3f2a");
+  expect(sent[1]?.content).not.toContain("Question recovery-3f2a:");
+  expect(sent[1]?.content).toContain("Recommended action: review-existing");
+  expect(sent[1]?.content).toContain("Recommendation: review-existing:");
+  expect(sent[1]?.options).toMatchObject({ triggerTurn: true });
   expect(notices).toHaveLength(0);
   expect(acknowledged).toEqual(["task-1:recovery-notification"]);
 });
