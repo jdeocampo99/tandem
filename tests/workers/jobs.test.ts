@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zod } from "@oh-my-pi/pi-coding-agent";
 import { runWorkerJob } from "../../src/worker.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import {
+  checkUserCheckFiles,
   parseWorkerJob,
   parseWorkerResult,
   persistWorkerResult,
@@ -509,6 +510,133 @@ test("requires absolute paths and strict result fields at the wire boundary", ()
       finishedAt: "2030-01-02T03:04:05.000Z",
     }),
   ).toThrow(TypeError);
+});
+
+test("parseWorkerJob accepts userChecks only for an implementer job", () => {
+  const root = process.cwd();
+  const implementer = parseWorkerJob({
+    ...makeJob(root, "implementer"),
+    userChecks: { directory: "/tmp/user-checks", criteria: ["Streak bar glows"] },
+  });
+  expect(implementer.userChecks).toEqual({
+    directory: "/tmp/user-checks",
+    criteria: ["Streak bar glows"],
+  });
+
+  expect(() =>
+    parseWorkerJob({
+      ...makeJob(root, "reviewer"),
+      userChecks: { directory: "/tmp/user-checks", criteria: ["Streak bar glows"] },
+    }),
+  ).toThrow(TypeError);
+  expect(() =>
+    parseWorkerJob({
+      ...makeJob(root, "implementer"),
+      userChecks: { directory: "relative/dir", criteria: ["Streak bar glows"] },
+    }),
+  ).toThrow(TypeError);
+  expect(() =>
+    parseWorkerJob({
+      ...makeJob(root, "implementer"),
+      userChecks: { directory: "/tmp/user-checks", criteria: [] },
+    }),
+  ).toThrow(TypeError);
+});
+
+test("parseWorkerResult accepts userCheckEvidence only for an implementer result", () => {
+  const implementerResult = parseWorkerResult({
+    id: "job-1",
+    taskId: "task-1",
+    generation: 0,
+    role: "implementer",
+    status: "completed",
+    text: "Committed the change.",
+    finishedAt: "2030-01-02T03:04:05.000Z",
+    userCheckEvidence: [{ criterion: "Streak bar glows", paths: ["/tmp/user-checks/a.png"] }],
+  });
+  expect(implementerResult.userCheckEvidence).toEqual([
+    { criterion: "Streak bar glows", paths: ["/tmp/user-checks/a.png"] },
+  ]);
+
+  expect(() =>
+    parseWorkerResult({
+      id: "job-1",
+      taskId: "task-1",
+      generation: 0,
+      role: "scout",
+      status: "completed",
+      text: "report",
+      finishedAt: "2030-01-02T03:04:05.000Z",
+      userCheckEvidence: [{ criterion: "Streak bar glows", paths: ["/tmp/a.png"] }],
+    }),
+  ).toThrow(TypeError);
+});
+
+test("parseReviewResult accepts handToUser as an array of non-empty strings", () => {
+  const withHandToUser = parseWorkerResult({
+    id: "job-1",
+    taskId: "task-1",
+    generation: 3,
+    role: "reviewer",
+    status: "completed",
+    text: "{}",
+    finishedAt: "2030-01-02T03:04:05.000Z",
+    review: review({ handToUser: ["An untestable visual criterion"] }),
+  });
+  expect(withHandToUser.review?.handToUser).toEqual(["An untestable visual criterion"]);
+
+  expect(() =>
+    parseWorkerResult({
+      id: "job-1",
+      taskId: "task-1",
+      generation: 3,
+      role: "reviewer",
+      status: "completed",
+      text: "{}",
+      finishedAt: "2030-01-02T03:04:05.000Z",
+      review: review({ handToUser: [""] }),
+    }),
+  ).toThrow(TypeError);
+});
+
+test("checkUserCheckFiles rejects symlinks, empty files, paths outside the directory, and bad extensions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-user-checks-"));
+  try {
+    const directory = join(root, "user-checks");
+    await mkdir(directory, { recursive: true });
+    const good = join(directory, "good.png");
+    await writeFile(good, "not actually a png, but non-empty");
+    expect(
+      await checkUserCheckFiles(directory, [{ criterion: "a", paths: [good] }]),
+    ).toBeUndefined();
+
+    const empty = join(directory, "empty.png");
+    await writeFile(empty, "");
+    expect(await checkUserCheckFiles(directory, [{ criterion: "a", paths: [empty] }])).toContain(
+      "empty",
+    );
+
+    const badExtension = join(directory, "clip.mov.txt");
+    await writeFile(badExtension, "content");
+    expect(
+      await checkUserCheckFiles(directory, [{ criterion: "a", paths: [badExtension] }]),
+    ).toContain("not a supported");
+
+    const outsidePath = join(root, "outside.png");
+    await writeFile(outsidePath, "outside content");
+    const link = join(directory, "escape.png");
+    await symlink(outsidePath, link);
+    const escapeReason = await checkUserCheckFiles(directory, [{ criterion: "a", paths: [link] }]);
+    expect(escapeReason).toBeDefined();
+    expect(escapeReason).toMatch(/regular file|outside the user-check directory/u);
+
+    const missing = join(directory, "missing.png");
+    expect(await checkUserCheckFiles(directory, [{ criterion: "a", paths: [missing] }])).toContain(
+      "does not exist",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("atomically writes private results and rejects stale identities", async () => {
