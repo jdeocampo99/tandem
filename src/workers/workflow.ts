@@ -1581,99 +1581,35 @@ export class WorkerWorkflow {
       await this.blockIfOperationClaim(task.id, "worktree allocation returned no lease", claim);
       return;
     }
-    const endpoint = currentWriter({ ...runtime, worktree: lease });
-    if (endpoint === undefined) {
-      const created = await this.withOperationEffect(
+    const launch = await this.ensureLaunchEndpoint(
+      task,
+      runtime,
+      claim,
+      role,
+      lease,
+      reservation.reservation,
+      ["queued"],
+    );
+    if (launch === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      return;
+    }
+    try {
+      await this.transitionIfOperationClaim(task.id, claim, {
+        type: "start",
+        worktree: lease,
+        endpoints: [launch.endpoint],
+      });
+    } catch (error) {
+      if (launch.created) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      }
+      await this.blockIfOperationClaim(
         task.id,
+        `task start transition failed ${launch.created ? "after pane allocation" : "with recovered pane"}: ${describeError(error)}`,
         claim,
-        task.generation,
-        ["queued"],
-        async ({ task: currentTask, runtime: currentRuntime }) => {
-          const workspaceLabel = taskWorkspaceLabel(
-            currentRuntime.taskName,
-            currentTask.objective,
-            role,
-          );
-          const endpointLaunch = endpointLaunchFor(
-            reservation.reservation,
-            this.#deps.sessionId,
-            currentRuntime.taskName,
-            workspaceLabel,
-            lease.path,
-            role,
-            currentTask.generation,
-            this.#deps.clock(),
-            this.#deps.parentWorkspaceId,
-            claim.id,
-          );
-          await this.setReservationPhase(task.id, "endpoint", claim);
-          if (!(await this.saveEndpointLaunch(task.id, endpointLaunch, claim))) return undefined;
-          await this.recordOperationEffect(
-            task.id,
-            claim,
-            `endpoint:${claim.id}`,
-            "endpoint",
-            "intent",
-            endpointLaunch.workspaceLabel,
-          );
-          const result = await createTaskEndpoint(this.#deps.run, {
-            sessionId: this.#deps.sessionId,
-            cwd: lease.path,
-            taskName: currentRuntime.taskName,
-            workspaceLabel: endpointLaunch.workspaceLabel,
-            role,
-            generation: currentTask.generation,
-            ...(this.#deps.parentWorkspaceId === undefined
-              ? {}
-              : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
-          });
-          await this.recordOperationEffect(
-            task.id,
-            claim,
-            `endpoint:${claim.id}`,
-            "endpoint",
-            "succeeded",
-            endpointLaunch.workspaceLabel,
-            JSON.stringify(result.endpoint),
-          );
-          await this.saveEndpoint(task.id, result.endpoint, claim);
-          return result;
-        },
       );
-      if (created === undefined) {
-        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-        return;
-      }
-      try {
-        await this.transitionIfOperationClaim(task.id, claim, {
-          type: "start",
-          worktree: lease,
-          endpoints: [created.endpoint],
-        });
-      } catch (error) {
-        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-        await this.blockIfOperationClaim(
-          task.id,
-          `task start transition failed after pane allocation: ${describeError(error)}`,
-          claim,
-        );
-        return;
-      }
-    } else {
-      try {
-        await this.transitionIfOperationClaim(task.id, claim, {
-          type: "start",
-          worktree: lease,
-          endpoints: [endpoint],
-        });
-      } catch (error) {
-        await this.blockIfOperationClaim(
-          task.id,
-          `task start transition failed with recovered pane: ${describeError(error)}`,
-          claim,
-        );
-        return;
-      }
+      return;
     }
     const currentTask = await this.#deps.getTask(task.id);
     const expectedStage = role === "scout" ? "scouting" : "implementing";
@@ -1704,6 +1640,84 @@ export class WorkerWorkflow {
       return;
     }
     await this.launchAgent(currentTask, currentRuntime, writer, role);
+  }
+
+  /**
+   * Ensures the task has an owned launch pane: returns the endpoint already recorded, or creates a
+   * fresh one and records its endpoint-launch intent exactly as any other launch. Shared by
+   * `startQueuedTask` (queued-only) and `relaunchWorker` (implementing/scouting re-entry); only the
+   * stages the underlying effect is allowed to run in differ between the two callers.
+   */
+  private async ensureLaunchEndpoint(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    claim: OperationClaim,
+    role: WorkerRole,
+    lease: NonNullable<RuntimeTaskState["worktree"]>,
+    reservation: DurableReservation,
+    allowedStages: readonly TaskRecord["stage"][],
+  ): Promise<Readonly<{ readonly endpoint: Endpoint; readonly created: boolean }> | undefined> {
+    const existing = currentWriter({ ...runtime, worktree: lease });
+    if (existing !== undefined) return { endpoint: existing, created: false };
+    const created = await this.withOperationEffect(
+      task.id,
+      claim,
+      task.generation,
+      allowedStages,
+      async ({ task: currentTask, runtime: currentRuntime }) => {
+        const workspaceLabel = taskWorkspaceLabel(
+          currentRuntime.taskName,
+          currentTask.objective,
+          role,
+        );
+        const endpointLaunch = endpointLaunchFor(
+          reservation,
+          this.#deps.sessionId,
+          currentRuntime.taskName,
+          workspaceLabel,
+          lease.path,
+          role,
+          currentTask.generation,
+          this.#deps.clock(),
+          this.#deps.parentWorkspaceId,
+          claim.id,
+        );
+        await this.setReservationPhase(task.id, "endpoint", claim);
+        if (!(await this.saveEndpointLaunch(task.id, endpointLaunch, claim))) return undefined;
+        await this.recordOperationEffect(
+          task.id,
+          claim,
+          `endpoint:${claim.id}`,
+          "endpoint",
+          "intent",
+          endpointLaunch.workspaceLabel,
+        );
+        const result = await createTaskEndpoint(this.#deps.run, {
+          sessionId: this.#deps.sessionId,
+          cwd: lease.path,
+          taskName: currentRuntime.taskName,
+          workspaceLabel: endpointLaunch.workspaceLabel,
+          role,
+          generation: currentTask.generation,
+          ...(this.#deps.parentWorkspaceId === undefined
+            ? {}
+            : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
+        });
+        await this.recordOperationEffect(
+          task.id,
+          claim,
+          `endpoint:${claim.id}`,
+          "endpoint",
+          "succeeded",
+          endpointLaunch.workspaceLabel,
+          JSON.stringify(result.endpoint),
+        );
+        await this.saveEndpoint(task.id, result.endpoint, claim);
+        return result;
+      },
+    );
+    if (created === undefined) return undefined;
+    return { endpoint: created.endpoint, created: true };
   }
 
   async beginFixes(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
@@ -1795,7 +1809,13 @@ export class WorkerWorkflow {
   async relaunchWorker(
     task: TaskRecord,
     extraInstructions: readonly string[],
-  ): Promise<Readonly<{ readonly relaunched: boolean; readonly reason?: string }>> {
+  ): Promise<
+    Readonly<{
+      readonly relaunched: boolean;
+      readonly reason?: string;
+      readonly sourceDriftNote?: string;
+    }>
+  > {
     const role = workerRoleForTask(task);
     const allowedStages: readonly TaskRecord["stage"][] = ["implementing", "scouting"];
     const reservation = await this.reserveTask(task.id, role);
@@ -1823,80 +1843,33 @@ export class WorkerWorkflow {
       );
       return { relaunched: false, reason: "relaunch requires an existing durable worktree" };
     }
-    let launchedEndpoint = currentWriter({ ...runtime, worktree: lease });
-    if (launchedEndpoint === undefined) {
-      const created = await this.withOperationEffect(
-        task.id,
-        claim,
-        task.generation,
-        allowedStages,
-        async ({ task: currentTask, runtime: currentRuntime }) => {
-          const workspaceLabel = taskWorkspaceLabel(
-            currentRuntime.taskName,
-            currentTask.objective,
-            role,
-          );
-          const endpointLaunch = endpointLaunchFor(
-            reservation.reservation,
-            this.#deps.sessionId,
-            currentRuntime.taskName,
-            workspaceLabel,
-            lease.path,
-            role,
-            currentTask.generation,
-            this.#deps.clock(),
-            this.#deps.parentWorkspaceId,
-            claim.id,
-          );
-          await this.setReservationPhase(task.id, "endpoint", claim);
-          if (!(await this.saveEndpointLaunch(task.id, endpointLaunch, claim))) return undefined;
-          await this.recordOperationEffect(
-            task.id,
-            claim,
-            `endpoint:${claim.id}`,
-            "endpoint",
-            "intent",
-            endpointLaunch.workspaceLabel,
-          );
-          const result = await createTaskEndpoint(this.#deps.run, {
-            sessionId: this.#deps.sessionId,
-            cwd: lease.path,
-            taskName: currentRuntime.taskName,
-            workspaceLabel: endpointLaunch.workspaceLabel,
-            role,
-            generation: currentTask.generation,
-            ...(this.#deps.parentWorkspaceId === undefined
-              ? {}
-              : { parentWorkspaceId: this.#deps.parentWorkspaceId }),
-          });
-          await this.recordOperationEffect(
-            task.id,
-            claim,
-            `endpoint:${claim.id}`,
-            "endpoint",
-            "succeeded",
-            endpointLaunch.workspaceLabel,
-            JSON.stringify(result.endpoint),
-          );
-          await this.saveEndpoint(task.id, result.endpoint, claim);
-          return result;
-        },
-      );
-      if (created === undefined) {
-        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-        return { relaunched: false, reason: "relaunch could not allocate a worker pane" };
-      }
-      launchedEndpoint = created.endpoint;
+    // Re-entry never refuses on a moved source repository HEAD (only first launch does, via
+    // assertSourceUnchanged); it only records the observation durably and notes it in plain English.
+    const sourceDriftNote = await this.noteSourceDriftIfMoved(task, runtime, operation, claim);
+    const launch = await this.ensureLaunchEndpoint(
+      task,
+      runtime,
+      claim,
+      role,
+      lease,
+      reservation.reservation,
+      allowedStages,
+    );
+    if (launch === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      return { relaunched: false, reason: "relaunch could not allocate a worker pane" };
     }
     try {
       await this.transitionIfOperationClaim(
         task.id,
         claim,
-        { type: "relaunch", endpoints: [launchedEndpoint], generation: task.generation },
+        { type: "relaunch", endpoints: [launch.endpoint], generation: task.generation },
         allowedStages,
       );
     } catch (error) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      if (launch.created) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      }
       await this.blockIfOperationClaim(
         task.id,
         `relaunch transition failed: ${describeError(error)}`,
@@ -1925,7 +1898,39 @@ export class WorkerWorkflow {
       return { relaunched: false, reason: "relaunch lost its worker endpoint before launch" };
     }
     await this.launchAgent(currentTask, currentRuntime, writer, role, { extraInstructions });
-    return { relaunched: true };
+    return { relaunched: true, ...(sourceDriftNote === undefined ? {} : { sourceDriftNote }) };
+  }
+
+  /**
+   * Re-entry only ever notes a moved source repository HEAD; it never refuses on it the way first
+   * launch's `assertSourceUnchanged` does. When the current source HEAD no longer matches the
+   * operation's recorded `inputHead`, the observation is recorded as a durable operation effect and
+   * a plain-English note (no hashes) is returned for the restart notice.
+   */
+  private async noteSourceDriftIfMoved(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    operation: DurableOperation,
+    claim: OperationClaim,
+  ): Promise<string | undefined> {
+    let current: GitCheckpoint;
+    try {
+      current = await readCheckpoint(this.#deps.run, { repo: taskSourcePath(task, runtime) });
+    } catch {
+      return undefined;
+    }
+    if (current.head === operation.inputHead) return undefined;
+    const note = "the source repository has moved since this task started";
+    await this.recordOperationEffect(
+      task.id,
+      claim,
+      `source-drift:${claim.id}`,
+      "worker",
+      "unknown",
+      note,
+      JSON.stringify({ inputHead: operation.inputHead, observedHead: current.head }),
+    );
+    return note;
   }
 
   private async restoreResourceEffect(

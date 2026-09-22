@@ -430,7 +430,36 @@ test("a repeated same-class failure inside the startup grace window asks instead
   }
 });
 
-test("answering a restart question records a decision without bumping communication.revision", async () => {
+test("a restart question offers explicit choices and refuses anything but an exact match", async () => {
+  const f = await fixture({ staleEndpoint: "foreign", job: deadJob() });
+  try {
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    await f.workflow.recoverStuckWorker(task);
+    const asked = await f.store.read("task-1");
+    const questionId = asked?.communication?.question?.id;
+    if (questionId === undefined) throw new Error("expected a restart question to be recorded");
+    expect(asked?.communication?.question?.text).toContain('"restart"');
+    expect(asked?.communication?.question?.text).toContain('"stop"');
+    // No task/generation/job identifiers leak into the plain-English question text itself.
+    expect(asked?.communication?.question?.text).not.toContain("task-1");
+    expect(asked?.communication?.question?.recommendation).toContain("task task-1");
+
+    // A loose reply that used to be treated as approval ("ok" matches the old regex) is refused
+    // outright, and the question is left exactly as it was — no decision, no state change.
+    await expect(
+      f.workflow.answerRestartQuestion("task-1", questionId, "ok but stop"),
+    ).rejects.toThrow(/only accepts "restart" or "stop"/u);
+    const untouched = await f.store.read("task-1");
+    expect(untouched?.communication?.question?.id).toBe(questionId);
+    expect(untouched?.revision).toBe(asked?.revision);
+    expect(f.relaunchCalls).toHaveLength(0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test('answering "stop" records a decision without bumping communication.revision', async () => {
   const f = await fixture({ staleEndpoint: "foreign", job: deadJob() });
   try {
     const task = await f.store.read("task-1");
@@ -441,22 +470,25 @@ test("answering a restart question records a decision without bumping communicat
     if (questionId === undefined) throw new Error("expected a restart question to be recorded");
     const beforeRevision = asked?.communication?.revision ?? 0;
 
-    await f.workflow.answerRestartQuestion("task-1", questionId, "no, leave it blocked");
+    await f.workflow.answerRestartQuestion("task-1", questionId, "stop");
 
     const declined = await f.store.read("task-1");
     expect(declined?.communication?.question).toBeUndefined();
     expect(declined?.communication?.revision ?? 0).toBe(beforeRevision);
     const state = await readRuntimeState(f.runtimePath);
     const decisions = state.tasks[0]?.recoveryDecisions ?? [];
-    expect(
-      decisions.some((entry) => entry.questionId === questionId && entry.disposition === "refused"),
-    ).toBe(true);
+    const decision = decisions.findLast((entry) => entry.questionId === questionId);
+    expect(decision?.disposition).toBe("refused");
+    // Nothing was re-proven for "stop"; the receipt must not claim ownership/outcome were proven.
+    expect(decision?.ownership).toBe("unknown");
+    expect(decision?.priorOutcome).toBe("uncertain");
+    expect(f.relaunchCalls).toHaveLength(0);
   } finally {
     await f.cleanup();
   }
 });
 
-test("approving a restart question relaunches once more without bumping communication.revision", async () => {
+test('answering "restart" re-proves death and records what was actually proven, not a blind "yes"', async () => {
   const f = await fixture({ job: deadJob() });
   try {
     const state = await readRuntimeState(f.runtimePath);
@@ -482,7 +514,7 @@ test("approving a restart question relaunches once more without bumping communic
     if (questionId === undefined) throw new Error("expected a restart question to be recorded");
     const beforeRevision = asked?.communication?.revision ?? 0;
 
-    await f.workflow.answerRestartQuestion("task-1", questionId, "yes, restart it");
+    await f.workflow.answerRestartQuestion("task-1", questionId, "restart");
 
     expect(f.relaunchCalls).toHaveLength(1);
     const approved = await f.store.read("task-1");
@@ -490,10 +522,56 @@ test("approving a restart question relaunches once more without bumping communic
     expect(approved?.communication?.revision ?? 0).toBe(beforeRevision);
     const after = await readRuntimeState(f.runtimePath);
     expect(after.tasks[0]?.recovery?.restarts).toBe(MAX_AUTOMATIC_RESTARTS_PER_GENERATION + 1);
+    const decisions = after.tasks[0]?.recoveryDecisions ?? [];
+    const decision = decisions.findLast((entry) => entry.questionId === questionId);
+    // These reflect forceOneMoreRestart's own re-proof of death, not the fact that the user said yes.
+    expect(decision?.disposition).toBe("applied");
+    expect(decision?.ownership).toBe("proven-owned");
+    expect(decision?.priorOutcome).toBe("known");
   } finally {
     await f.cleanup();
   }
 });
+
+test('answering "restart" that cannot re-prove death is refused, not applied on trust', async () => {
+  const f = await fixture({ staleEndpoint: "alive-forever", job: deadJob() });
+  try {
+    const state = await readRuntimeState(f.runtimePath);
+    await writeRuntimeState(f.runtimePath, {
+      ...state,
+      tasks: state.tasks.map((entry) => ({
+        ...entry,
+        recovery: {
+          schemaVersion: 1 as const,
+          recoveryAttempts: 0,
+          validationRetries: 0,
+          evidenceRepairs: 0,
+          restarts: MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
+          restartGeneration: 0,
+        },
+      })),
+    });
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    await f.workflow.recoverStuckWorker(task);
+    const asked = await f.store.read("task-1");
+    const questionId = asked?.communication?.question?.id;
+    if (questionId === undefined) throw new Error("expected a restart question to be recorded");
+
+    await f.workflow.answerRestartQuestion("task-1", questionId, "restart");
+
+    // The stale pane still cannot be proven stopped, so the approval never reaches relaunch.
+    expect(f.relaunchCalls).toHaveLength(0);
+    const after = await readRuntimeState(f.runtimePath);
+    const decisions = after.tasks[0]?.recoveryDecisions ?? [];
+    const decision = decisions.findLast((entry) => entry.questionId === questionId);
+    expect(decision?.disposition).toBe("refused");
+    expect(decision?.ownership).toBe("unknown");
+    expect(decision?.priorOutcome).toBe("uncertain");
+  } finally {
+    await f.cleanup();
+  }
+}, 25_000);
 
 test("a stage other than implementing or scouting is reported as skipped", async () => {
   const f = await fixture();

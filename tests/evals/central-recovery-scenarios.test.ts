@@ -6,6 +6,7 @@ import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runt
 import type { DurableJob } from "../../src/runtime/schema.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import {
+  SCENARIO_NEXT_HEAD,
   SCENARIO_NOW,
   SCENARIO_TASK_ID,
   type ScenarioWorld,
@@ -179,6 +180,52 @@ test("central recovery restarts a dead implementer twice, then asks a bounded qu
     expect(snapshot.resources.retained).toContain(`worktree:${lease.leaseId}`);
     expect(snapshot.resources.released).not.toContain(`worktree:${lease.leaseId}`);
     expect(snapshot.trace.some((event) => event.action === "treehouse return")).toBe(false);
+
+    await service.shutdown();
+  });
+}, 20_000);
+
+test("central recovery notes a moved source repository HEAD on re-entry without refusing", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const job1 = deadJob(world, lease.path, "job-1");
+    await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "implementing",
+      worktree: lease,
+      endpoints: [],
+    });
+    await seedScenarioRuntime(
+      world,
+      scenarioRuntimeTask({ worktree: lease, endpoints: [], jobs: [job1] }),
+    );
+    // The source repository moved on since this task's worktree was pinned.
+    world.patchCheckout(world.repoPath, { head: SCENARIO_NEXT_HEAD });
+
+    const service = createTandemService({
+      home: world.home,
+      sessionId: world.sessionId,
+      poolRoot: world.poolRoot,
+      run: world.run,
+      clock: world.clock,
+      idFactory: world.idFactory,
+      workerTimeoutMs: 1_500,
+    });
+
+    await service.tick();
+    const task = await service.get(SCENARIO_TASK_ID);
+    // Re-entry never refuses on the drift: the worker still relaunches.
+    expect(task.stage).toBe("implementing");
+    const notice = task.notifications.find((entry) => entry.message.includes("Restart 1 of 2"));
+    expect(notice?.message).toContain("source repository has moved");
+    // No hashes/IDs leak into the plain-English notice; those live only in the durable effect.
+    expect(notice?.message).not.toContain(SCENARIO_NEXT_HEAD);
+
+    const state = await readRuntimeState(runtimeFile(world.home));
+    const operation = state.tasks[0]?.operation;
+    const driftEffect = operation?.effects.find((effect) => effect.id.startsWith("source-drift:"));
+    expect(driftEffect).toBeDefined();
+    expect(driftEffect?.receipt).toContain(SCENARIO_NEXT_HEAD);
 
     await service.shutdown();
   });

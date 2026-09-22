@@ -104,6 +104,35 @@ function failureFor(job: WorkerJob, error: unknown, text = ""): WorkerResult {
   return resultFor(job, "failed", text, { error: message });
 }
 
+export type AbortWithReasonState = Readonly<{
+  readonly resultPublished: boolean;
+  readonly delegatedSettled: boolean;
+}>;
+
+export type AbortWithReasonPlan = Readonly<{
+  /** Whether this call is the one that should persist a durable failure result before aborting. */
+  readonly shouldPersistResult: boolean;
+  /** The failure result to persist; present exactly when `shouldPersistResult` is true. */
+  readonly result?: WorkerResult;
+}>;
+
+/**
+ * The pure decision behind aborting on a heartbeat/control-poll write failure: persist a durable
+ * failure result carrying the real reason exactly once, before the pane aborts, so a later recovery
+ * notice can say what actually happened instead of a bare "aborted" with no cause. A result already
+ * published or a delegated agent-end already settled means the extension must not publish a second,
+ * conflicting result. Extracted as a pure function so this decision is testable without a full OMP
+ * extension-context harness.
+ */
+export function planAbortWithReason(
+  job: WorkerJob,
+  state: AbortWithReasonState,
+  reason: string,
+): AbortWithReasonPlan {
+  if (state.resultPublished || state.delegatedSettled) return { shouldPersistResult: false };
+  return { shouldPersistResult: true, result: failureFor(job, reason) };
+}
+
 async function instructionRevision(job: WorkerJob, required: boolean): Promise<number | undefined> {
   if (job.communication === undefined) return undefined;
   try {
@@ -281,22 +310,20 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   };
 
   /**
-   * Persists a durable failure result carrying the real reason before aborting, so a later recovery
-   * notice can say what actually happened instead of a bare "aborted" with no cause. Best-effort: if
-   * the write that just failed (heartbeat/control polling) keeps failing here too, the pane still
-   * aborts rather than hanging.
+   * Applies `planAbortWithReason`'s decision and then aborts. Best-effort: if the write that just
+   * failed (heartbeat/control polling) keeps failing here too, the pane still aborts rather than
+   * hanging.
    */
   const abortWithReason = async (ctx: ExtensionContext, reason: string): Promise<void> => {
-    if (resultPublished || delegatedSettled) {
-      ctx.abort();
-      return;
-    }
-    resultPublished = true;
-    delegatedSettled = true;
-    try {
-      await persistResult(failureFor(job, reason));
-    } catch {
-      // Best effort only; the durable write already failed once for this pane.
+    const plan = planAbortWithReason(job, { resultPublished, delegatedSettled }, reason);
+    if (plan.shouldPersistResult && plan.result !== undefined) {
+      resultPublished = true;
+      delegatedSettled = true;
+      try {
+        await persistResult(plan.result);
+      } catch {
+        // Best effort only; the durable write already failed once for this pane.
+      }
     }
     ctx.abort();
   };

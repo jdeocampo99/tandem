@@ -133,7 +133,6 @@ function waitIsDue(wait: RecoveryAvailabilityWait, now: IsoTimestamp): boolean {
 }
 
 function questionText(
-  task: TaskRecord,
   evidence: RecoveryEvidence,
   recommendedAction: RecoveryActionName | undefined,
   consequences: string,
@@ -143,10 +142,15 @@ function questionText(
       ? `Nothing yet: no supported recovery action is proven safe, so I am asking before touching anything. ${consequences}`
       : `Run ${recommendedAction}. ${consequences}`;
   return formatRecoveryQuestion({
-    what: `Task ${task.id}${task.requestId === undefined ? "" : ` in request ${task.requestId}`} is blocked: ${evidence.summary}.`,
+    what: `A task is blocked: ${evidence.summary}.`,
     want,
     risk: "Nothing has changed yet; the worktree, reports, provenance, and unmerged changes are preserved either way.",
   });
+}
+
+/** Identifiers belong only in the recommendation's details, never in the plain-English question text. */
+function recoveryQuestionDetails(task: TaskRecord): string {
+  return `Details: task ${task.id}${task.requestId === undefined ? "" : `, request ${task.requestId}`}.`;
 }
 
 /**
@@ -534,12 +538,14 @@ export class RecoveryConversationWorkflow {
     evidence: RecoveryEvidence,
     draft: DecisionDraft,
   ): Promise<RecoveryConversationOutcome> {
+    const recommendationPrefix =
+      draft.recommendedAction === undefined
+        ? draft.consequences
+        : `${draft.recommendedAction}: ${draft.consequences}`;
     const question: TaskQuestion = {
       id: questionIdFor(evidence),
-      text: questionText(task, evidence, draft.recommendedAction, draft.consequences),
-      ...(draft.recommendedAction === undefined
-        ? {}
-        : { recommendation: `${draft.recommendedAction}: ${draft.consequences}` }),
+      text: questionText(evidence, draft.recommendedAction, draft.consequences),
+      recommendation: `${recommendationPrefix} ${recoveryQuestionDetails(task)}`,
     };
     const asked = await this.recordQuestion(task.id, question);
     const receipt = await this.saveDecision(task.id, { ...draft, questionId: question.id });

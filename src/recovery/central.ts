@@ -67,7 +67,14 @@ export const RESTART_QUESTION_ID_PREFIX = `${RECOVERY_QUESTION_ID_PREFIX}restart
 export type RelaunchWorker = (
   task: TaskRecord,
   extraInstructions: readonly string[],
-) => Promise<Readonly<{ readonly relaunched: boolean; readonly reason?: string }>>;
+) => Promise<
+  Readonly<{
+    readonly relaunched: boolean;
+    readonly reason?: string;
+    /** Plain-English note when the source repository moved since the task started; never a refusal. */
+    readonly sourceDriftNote?: string;
+  }>
+>;
 
 export type CentralRecoveryDependencies = Readonly<{
   readonly home: string;
@@ -135,6 +142,25 @@ type DeathProof = Readonly<{
   readonly elapsedMs?: number;
 }>;
 
+/** The only two answers a restart question accepts; anything else is refused. */
+type RestartChoice = "restart" | "stop";
+
+/** Exact-match only: a restart question is never approved by a loose "ok"/"yes"/"sure". */
+function parseRestartChoice(text: string): RestartChoice | undefined {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "restart" || normalized === "stop" ? normalized : undefined;
+}
+
+/** What answering "restart" actually proved and did, so the decision receipt records reality. */
+type ForcedRestartOutcome = Readonly<{
+  readonly relaunched: boolean;
+  readonly proven: boolean;
+  readonly reasonSummary: string;
+}>;
+
+const RESTART_QUESTION_WANT =
+  'Reply "restart" to start a fresh worker in the same worktree and keep every edit, or "stop" to leave it blocked so you can look at it yourself.';
+
 /**
  * Central recovery: stop, save, re-enter. Only the `implementing`/`scouting` stage's re-entry is
  * wired in this slice; every other stage is reported as `skipped` so a caller falls back to whatever
@@ -184,10 +210,9 @@ export class CentralRecoveryWorkflow {
       deadJobId: proof.deadJobId,
     });
     if (!proof.proven) {
-      return this.askRestart(task, incidentIdentity, now, {
-        what: `The worker for task ${task.id} stopped, but I could not prove it is actually gone (${proof.reasonSummary}).`,
-        want: "Ask before touching anything: I will not restart, close a pane, or retry work I cannot prove is dead.",
-        risk: "Restarting now could run two workers on the same worktree at once. Nothing has changed; your worktree and history are preserved.",
+      return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
+        what: `The worker stopped, but I could not prove it is actually gone (${proof.reasonSummary}).`,
+        risk: "If you choose restart, Tandem checks again first and will not run two workers on the same worktree at once. Nothing has changed yet either way; your worktree and history are preserved.",
       });
     }
 
@@ -195,9 +220,8 @@ export class CentralRecoveryWorkflow {
     const restartsUsed =
       recovery.restartGeneration === task.generation ? (recovery.restarts ?? 0) : 0;
     if (restartsUsed >= MAX_AUTOMATIC_RESTARTS_PER_GENERATION) {
-      return this.askRestart(task, incidentIdentity, now, {
-        what: `The worker for task ${task.id} stopped again (${proof.reasonSummary}); I already restarted it automatically ${restartsUsed} time(s) this generation.`,
-        want: "Ask before restarting a third time: say to restart and I will start a fresh worker in the same worktree, keeping every edit, or say to stop and leave it for you to inspect.",
+      return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
+        what: `The worker stopped again (${proof.reasonSummary}); I already restarted it automatically ${restartsUsed} time(s) this generation.`,
         risk: "Restarting again may just repeat the same failure if it is not a one-off. Nothing is discarded either way; your worktree, reports, and history are preserved.",
       });
     }
@@ -208,9 +232,8 @@ export class CentralRecoveryWorkflow {
     const sameClassAsLastRestart =
       restartsUsed > 0 && recovery.lastRestartFailureClass === failureClass;
     if (withinImmediateWindow && sameClassAsLastRestart) {
-      return this.askRestart(task, incidentIdentity, now, {
-        what: `The worker for task ${task.id} failed again within ${Math.round((proof.elapsedMs ?? 0) / 1000)}s of starting, the same way (${proof.reasonSummary}) as the restart before it.`,
-        want: "Ask instead of restarting again automatically: this pattern looks systemic (for example a provider outage) rather than a one-off, so restarting blindly would likely just fail the same way again.",
+      return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
+        what: `The worker failed again within ${Math.round((proof.elapsedMs ?? 0) / 1000)}s of starting, the same way (${proof.reasonSummary}) as the restart before it.`,
         risk: "Nothing has changed; your worktree, reports, and history are preserved either way.",
       });
     }
@@ -246,7 +269,7 @@ export class CentralRecoveryWorkflow {
         },
       })),
     );
-    const notice = `The worker stopped (${proof.reasonSummary}). I restarted it; your edits are kept. (Restart ${restartsUsed + 1} of ${MAX_AUTOMATIC_RESTARTS_PER_GENERATION}.)`;
+    const notice = `The worker stopped (${proof.reasonSummary}). I restarted it; your edits are kept. (Restart ${restartsUsed + 1} of ${MAX_AUTOMATIC_RESTARTS_PER_GENERATION}.)${relaunch.sourceDriftNote === undefined ? "" : ` Note: ${relaunch.sourceDriftNote}.`}`;
     await this.#deps.store.exclusive(async (store) => {
       const current = await store.read(task.id);
       if (current === undefined) return;
@@ -280,10 +303,14 @@ export class CentralRecoveryWorkflow {
   }
 
   /**
-   * Answers the one question central recovery ever asks (the 3rd-restart or unproven-death
-   * question). The reply is stored as a recovery decision, never as a worker instruction: it clears
-   * the question directly and never calls `appendTaskMessage`, so `task.communication.revision` is
-   * left exactly as it was.
+   * Answers the one question central recovery ever asks (the 3rd-restart, unproven-death, or
+   * same-failure-class question). Only an exact "restart" or "stop" is accepted; anything else is
+   * refused with a plain-English error and the question stays open untouched. The reply is stored as
+   * a recovery decision, never as a worker instruction: it clears the question directly and never
+   * calls `appendTaskMessage`, so `task.communication.revision` is left exactly as it was. Choosing
+   * "restart" never trusts the answer as proof by itself: it re-proves death the same way an
+   * automatic restart does, and the decision records what was actually proven, not what the user
+   * wished for.
    */
   public async answerRestartQuestion(
     taskId: string,
@@ -293,8 +320,13 @@ export class CentralRecoveryWorkflow {
     if (!questionId.startsWith(RESTART_QUESTION_ID_PREFIX)) return { handled: false };
     const task = await this.#deps.getTask(taskId);
     if (task.communication?.question?.id !== questionId) return { handled: false };
+    const choice = parseRestartChoice(text);
+    if (choice === undefined) {
+      throw new Error(
+        `a recovery restart question only accepts "restart" or "stop"; received ${JSON.stringify(text.trim())}. The question is still open.`,
+      );
+    }
     const now = this.#deps.clock();
-    const approved = /^(y|yes|approve|approved|restart|proceed|go|ok|okay)\b/iu.test(text.trim());
     let cleared: TaskRecord | undefined;
     await this.#deps.store.exclusive(async (store) => {
       const current = await store.read(taskId);
@@ -311,29 +343,52 @@ export class CentralRecoveryWorkflow {
       }));
     });
     const evidenceIdentity = questionId.slice(RESTART_QUESTION_ID_PREFIX.length);
+    if (choice === "stop") {
+      await this.saveDecision(taskId, {
+        taskId,
+        generation: task.generation,
+        ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+        evidence: this.evidenceFor(evidenceIdentity, "user answered the restart question", now),
+        ownership: "unknown",
+        priorOutcome: "uncertain",
+        approval: "user-approval",
+        unmetProofs: [],
+        consequences: "the user chose to leave the task blocked",
+        disposition: "refused",
+        dispositionReason: 'user answered "stop"',
+        questionId,
+      });
+      return { handled: true };
+    }
+    // choice === "restart": reuse the same three-move path, treating this approval as spending one
+    // more restart, but never as proof by itself — forceOneMoreRestart re-proves death first.
+    const resumed = cleared === undefined ? undefined : await this.resumeFromAsk(cleared);
+    const outcome: ForcedRestartOutcome =
+      resumed === undefined
+        ? {
+            relaunched: false,
+            proven: false,
+            reasonSummary: "the task could not be resumed from blocked",
+          }
+        : await this.forceOneMoreRestart(resumed);
     await this.saveDecision(taskId, {
       taskId,
       generation: task.generation,
       ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
-      evidence: this.evidenceFor(evidenceIdentity, "user answered the restart question", now),
-      ownership: approved ? "proven-owned" : "unknown",
-      priorOutcome: approved ? "known" : "uncertain",
+      evidence: this.evidenceFor(evidenceIdentity, outcome.reasonSummary, now),
+      ownership: outcome.proven ? "proven-owned" : "unknown",
+      priorOutcome: outcome.proven ? "known" : "uncertain",
       approval: "user-approval",
       unmetProofs: [],
-      consequences: approved
-        ? "the user approved restarting past the automatic budget"
-        : "the user declined a further restart",
-      disposition: approved ? "applied" : "refused",
-      dispositionReason: `user answered: ${text}`.slice(0, 500),
+      consequences: outcome.relaunched
+        ? "the user chose to restart; the prior worker was re-proven dead and a new one was launched"
+        : `the user chose to restart, but ${outcome.reasonSummary}`,
+      disposition: outcome.relaunched ? "applied" : "refused",
+      dispositionReason: outcome.relaunched
+        ? 'user answered "restart"; relaunched after re-proving the prior worker was dead'
+        : `user answered "restart" but ${outcome.reasonSummary}`,
       questionId,
     });
-    if (approved && cleared !== undefined) {
-      // The person explicitly authorized one more restart; reuse the same three-move path with a
-      // budget that treats this approval as spending exactly one more restart. Asking blocked the
-      // task, so it is resumed back to implementing/scouting first.
-      const resumed = await this.resumeFromAsk(cleared);
-      if (resumed !== undefined) await this.forceOneMoreRestart(resumed);
-    }
     return { handled: true };
   }
 
@@ -357,20 +412,35 @@ export class CentralRecoveryWorkflow {
     });
   }
 
-  /** After an explicit user approval, relaunch once more without re-asking the same question. */
-  private async forceOneMoreRestart(task: TaskRecord): Promise<void> {
+  /**
+   * After an explicit user approval, re-proves death and relaunches once more without re-asking the
+   * same question. Returns what was actually proven and done so the caller's decision receipt never
+   * has to guess.
+   */
+  private async forceOneMoreRestart(task: TaskRecord): Promise<ForcedRestartOutcome> {
     const state = await readRuntimeState(this.#deps.runtimePath);
     const runtime = taskRuntime(state, task.id);
-    if (runtime === undefined || (task.stage !== "implementing" && task.stage !== "scouting"))
-      return;
-    if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) return;
+    if (runtime === undefined || (task.stage !== "implementing" && task.stage !== "scouting")) {
+      return {
+        relaunched: false,
+        proven: false,
+        reasonSummary: "the task is no longer implementing or scouting",
+      };
+    }
+    if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) {
+      return {
+        relaunched: false,
+        proven: false,
+        reasonSummary: "an active job or reservation already owns this task",
+      };
+    }
     const proof = await this.proveDeath(task, runtime);
     if (!proof.proven) {
       await this.#deps.blockTask(
         task.id,
         `the approved restart could not proceed: ${proof.reasonSummary}`,
       );
-      return;
+      return { relaunched: false, proven: false, reasonSummary: proof.reasonSummary };
     }
     const recovery = defaultRecovery(runtime);
     const restartsUsed =
@@ -385,7 +455,7 @@ export class CentralRecoveryWorkflow {
         task.id,
         `the approved restart could not launch a new worker: ${relaunch.reason ?? "relaunch was refused"}`,
       );
-      return;
+      return { relaunched: false, proven: true, reasonSummary: proof.reasonSummary };
     }
     const now = this.#deps.clock();
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
@@ -402,12 +472,13 @@ export class CentralRecoveryWorkflow {
         },
       })),
     );
+    const notice = `The worker stopped (${proof.reasonSummary}). You approved another restart; I restarted it and your edits are kept.${relaunch.sourceDriftNote === undefined ? "" : ` Note: ${relaunch.sourceDriftNote}.`}`;
     await this.#deps.store.exclusive(async (store) => {
       const current = await store.read(task.id);
       if (current === undefined) return;
       const notification: Notification = {
         id: this.#deps.idFactory(),
-        message: `The worker stopped (${proof.reasonSummary}). You approved another restart; I restarted it and your edits are kept.`,
+        message: notice,
         acknowledged: false,
         kind: "coordinator",
       };
@@ -418,6 +489,7 @@ export class CentralRecoveryWorkflow {
         notifications: [...entry.notifications, notification],
       }));
     });
+    return { relaunched: true, proven: true, reasonSummary: proof.reasonSummary };
   }
 
   private evidenceFor(
@@ -428,15 +500,30 @@ export class CentralRecoveryWorkflow {
     return { kind: "durable-blocker", identity, summary, observedAt };
   }
 
+  /**
+   * Asks the one question central recovery ever asks, in plain English with no identifiers in the
+   * what/want/risk text: task, generation, and dead-job identity go only in the recommendation's
+   * details, which is already a separate line wherever a question is displayed.
+   */
   private async askRestart(
     task: TaskRecord,
     incidentIdentity: string,
+    deadJobId: string,
     now: IsoTimestamp,
-    parts: Readonly<{ readonly what: string; readonly want: string; readonly risk: string }>,
+    parts: Readonly<{ readonly what: string; readonly risk: string }>,
   ): Promise<CentralRecoveryOutcome> {
     const questionId = `${RESTART_QUESTION_ID_PREFIX}${incidentIdentity}`;
-    const text = formatRecoveryQuestion(parts);
-    const question: TaskQuestion = { id: questionId, text, recommendation: parts.want };
+    const text = formatRecoveryQuestion({
+      what: parts.what,
+      want: RESTART_QUESTION_WANT,
+      risk: parts.risk,
+    });
+    const details = `Details: task ${task.id}${task.requestId === undefined ? "" : `, request ${task.requestId}`}, generation ${task.generation}, dead job ${deadJobId}.`;
+    const question: TaskQuestion = {
+      id: questionId,
+      text,
+      recommendation: `${RESTART_QUESTION_WANT} ${details}`,
+    };
     await this.#deps.store.exclusive(async (store) => {
       const current = await store.read(task.id);
       if (current === undefined || isTerminalTask(current)) return;
@@ -453,9 +540,9 @@ export class CentralRecoveryWorkflow {
       priorOutcome: "uncertain",
       approval: "user-approval",
       unmetProofs: [],
-      consequences: parts.want,
+      consequences: RESTART_QUESTION_WANT,
       disposition: "asked",
-      dispositionReason: parts.want,
+      dispositionReason: RESTART_QUESTION_WANT,
       questionId,
     });
     return { taskId: task.id, action: "asked", reason: text };
