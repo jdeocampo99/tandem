@@ -727,13 +727,7 @@ The envelope has exactly these outer fields and no others:
         "timeoutMs": 600000
       }
     ],
-    "setupCommands": [
-      {
-        "name": "install:bun.lock",
-        "argv": ["bun", "install", "--frozen-lockfile"],
-        "timeoutMs": 600000
-      }
-    ]
+    "setupCommands": ["bun install --frozen-lockfile"]
   }
 }
 ```
@@ -753,8 +747,8 @@ are:
 | `models` | Partial map of `coordinator`, `scout`, `implementer`, `reviewer`, and `presentation` to `{ "model": "provider/model", "thinking": "..." }`; selectors are exact `provider/model` strings. |
 | `instructions` | Appendable arrays for `implementation`, `validation`, and `review`; each entry is non-empty text. |
 | `instructionFiles` | Appendable arrays for the same channels; every path uses relative POSIX syntax and remains physically inside the target repository. |
-| `validationCommands` | Appendable `{ "name", "argv", "surfaces", "timeoutMs" }` objects; `argv` is non-empty, `surfaces` is a string array, `timeoutMs` is positive, and names do not conflict with inherited commands. |
-| `setupCommands` | Appendable `{ "name", "argv", "timeoutMs" }` objects that prepare a fresh worktree, typically a frozen dependency install. Onboarding proposes one from the first lockfile it finds (`bun.lock`/`bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `uv.lock`). An implementer runs them in its own pane before OMP starts, on every launch; a nonzero exit or timeout fails that worker with the command named. The delivery worktree runs them before final validation. Pinned with the task like the rest of the policy, so edits apply to new tasks only. |
+| `validationCommands` | Appendable plain command strings (e.g. `"npm test"`) or `{ "name", "argv", "surfaces", "timeoutMs" }` objects. A string runs through `/bin/sh -c`, is its own name, covers every surface, and gets a 10-minute timeout. For objects, `argv` is non-empty, `surfaces` is a string array, `timeoutMs` is positive, and names do not conflict with inherited commands. |
+| `setupCommands` | Appendable plain command strings (e.g. `"npm ci"`) or `{ "name", "argv", "timeoutMs" }` objects that prepare a fresh worktree, typically a frozen dependency install. Onboarding proposes one from the first lockfile it finds (`bun.lock`/`bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `uv.lock`). An implementer runs them in its own pane before OMP starts, on every launch; a nonzero exit or timeout fails that worker with the command named. The delivery worktree runs them before final validation. Pinned with the task like the rest of the policy, so edits apply to new tasks only. |
 | `maxWorkers` | Positive integer concurrency limit. |
 | `maxFixRounds` | Positive integer review-fix limit. |
 | `reviewLevels` | Optional `{ "deepScrutiny", "jevAssistance", "sourceTransmission" }`; the two booleans and `sourceTransmission` default to `false` and `jevAssistance` defaults to `"off"` (the only other value is `"shadow"`). See [Risk-based review levels](#risk-based-review-levels); any move past `shadow` requires the documented evaluation first. A stored or configured `reducedRouting` key is a legacy field: it decodes without error but is silently ignored. |
