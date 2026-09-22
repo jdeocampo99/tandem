@@ -4334,6 +4334,43 @@ test("awaiting-fixes below the budget resumes through one durable fix operation"
   );
 });
 
+test("awaiting-fixes whose carried-forward pane is already gone lands at implementing unblocked, not blocked", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "awaiting-fixes",
+      taskEdits: { reviewRound: 0, reviewHead: "review-head" },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, service, runnerState }) => {
+      // No owned pane is seeded: the original implementer's pane (carried forward through review)
+      // is already gone before this fix round can reuse it.
+      await seedTaskResources(home, lease, [], []);
+      const before = await service.get("task-1");
+
+      await service.tick();
+
+      const task = await service.get("task-1");
+      const state = await readRuntime(home);
+      const runtime = state.tasks[0];
+      // begin-fixes already committed the fix round's admission (one review round, one generation)
+      // before discovering the pane is gone; central recovery's implementing-stage re-entry owns
+      // getting the task the rest of the way, so this never blocks here.
+      expect(task.stage).toBe("implementing");
+      expect(task.reviewRound).toBe(before.reviewRound + 1);
+      expect(task.generation).toBe(before.generation + 1);
+      expect(task.blockReason).toBeUndefined();
+      expect(runtime?.jobs.some(activeRuntimeJob)).toBe(false);
+      expect(runtime?.reservation === undefined || runtime.reservation.phase === "released").toBe(
+        true,
+      );
+      expect(runnerState.launches).toBe(0);
+      // The persisted fix-context path survives so a later relaunch still finds the same findings.
+      expect(runtime?.fixContextPath).toBeDefined();
+    },
+  );
+});
+
 test("legacy incomplete reservation is quarantined without inventing an operation", async () => {
   await withFixture(
     { kind: "scout", stage: "queued", runner: { active: false } },

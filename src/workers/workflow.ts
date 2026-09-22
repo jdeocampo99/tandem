@@ -31,6 +31,7 @@ import type {
   TaskQuestion,
   TaskRecord,
 } from "../contracts.ts";
+import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "../recovery/central-review.ts";
 import {
   activeReservations,
   activeRuntimeJob,
@@ -452,13 +453,17 @@ export class WorkerWorkflow {
     } catch (error) {
       if (isMissing(error)) {
         if (!isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) return;
+        // The validation runner process is gone without writing a durable result: an infrastructure
+        // loss, not a genuine result. Settle the job as failed and release its reservation without
+        // blocking, so the task stays at `validating` and central recovery's stop/save/re-entry
+        // (bounded by the validation retry budget) can pick it up instead of sitting blocked.
         await this.failJob(
           task,
           job,
           `validation stopped without durable evidence: ${describeError(error)}`,
           claim,
-          true,
-          true,
+          false,
+          false,
         );
         return;
       }
@@ -475,16 +480,18 @@ export class WorkerWorkflow {
   ): Promise<void> {
     if (!isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) return;
     const resultExists = await this.#deps.resultExists(job.resultPath);
-    await this.failJob(
-      task,
-      job,
-      resultExists
-        ? "owned endpoint disappeared; durable result cannot be trusted without stopped-pane proof"
-        : "owned endpoint disappeared before a durable result was written",
-      claim,
-      true,
-      true,
-    );
+    const reason = resultExists
+      ? "owned endpoint disappeared; durable result cannot be trusted without stopped-pane proof"
+      : "owned endpoint disappeared before a durable result was written";
+    if (job.kind === "validation") {
+      // A lost validation pane is an infrastructure loss, not a genuine result: settle the job as
+      // failed and release its reservation without blocking, so the task stays at `validating` and
+      // central recovery's stop/save/re-entry (bounded by the validation retry budget) can pick it
+      // up on the next reconcile tick instead of the task sitting blocked for a human.
+      await this.failJob(task, job, reason, claim, false, false);
+      return;
+    }
+    await this.failJob(task, job, reason, claim, true, true);
   }
 
   private async observeWorkerProgress(
@@ -1790,8 +1797,17 @@ export class WorkerWorkflow {
     }
     const writer = currentWriter(nextRuntime);
     if (writer === undefined) {
+      // The pane this fix round expected to reuse (the original implementer's, carried through
+      // review) is gone. The begin-fixes transition above already committed this generation and its
+      // review round, so this is never blocked here: release the reservation and leave the task at
+      // `implementing` with no owned pane and no active job/reservation. The next reconcile tick
+      // routes it through the already-wired implementing-stage central recovery (stop/save/re-enter,
+      // `src/recovery/central.ts`), which proves the old pane dead (or finds none ever ran this
+      // generation), snapshots any partial edits, and relaunches a fresh pane in the same preserved
+      // worktree. `runtime.fixContextPath` survives that relaunch's own admission untouched (a plain
+      // relaunch never overwrites it), so the new worker is told the same findings again without
+      // spending another code-fix round.
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      await this.blockIfOperationClaim(task.id, "fix round has no owned implementer pane", claim);
       return;
     }
     await this.launchAgent(nextTask, nextRuntime, writer, "implementer");
@@ -2590,13 +2606,14 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, "review has no durable runtime metadata");
       return;
     }
-    const failedReview = runtime.jobs.find(
-      (job) =>
-        (job.role === "reviewer" || job.role === "verifier") &&
-        job.generation === task.generation &&
-        job.phase === "failed",
-    );
-    if (failedReview !== undefined) {
+    // A lens whose most recent job failed and is still unresolved either blocks (a genuine content
+    // failure the worker itself reported, a stale canonical instruction, or a malformed result) or,
+    // when the job's own recorded reason is a durable-quarantine one (proven-unowned: the pane or its
+    // result disappeared, never proof of a real outcome), is left for central recovery's `reviewing`
+    // re-entry, which the caller runs before this method and which clears the dead lens so it is
+    // picked up as `nextLens` below instead.
+    const failedReview = unresolvedReviewFailure(task, runtime);
+    if (failedReview !== undefined && !isQuarantinedReviewFailure(failedReview)) {
       await this.#deps.blockTask(
         task.id,
         failedReview.error ?? `review ${failedReview.reviewLens ?? "worker"} failed`,
@@ -2615,8 +2632,16 @@ export class WorkerWorkflow {
         )
           return;
       } catch (error) {
-        if (!isMissingEndpoint(error)) throw error;
-        await this.#deps.removeEndpoint(task.id, reviewer.paneId);
+        if (isMissingEndpoint(error)) {
+          await this.#deps.removeEndpoint(task.id, reviewer.paneId);
+          return;
+        }
+        // Foreign ownership or a proof failure (stale heartbeat, PID no longer foreground): the pane
+        // is never touched without proof either way, so this blocks instead of retrying forever.
+        await this.#deps.blockTask(
+          task.id,
+          `review pane ${reviewer.paneId} ownership could not be proven: ${describeError(error)}`,
+        );
         return;
       }
     }

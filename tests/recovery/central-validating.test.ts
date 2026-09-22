@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -12,11 +12,11 @@ import type {
 } from "../../src/contracts.ts";
 import {
   CentralRecoveryWorkflow,
-  MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
-  RESTART_QUESTION_ID_PREFIX,
   type RelaunchWorker,
   type RevalidateWorker,
+  VALIDATION_RETRY_QUESTION_ID_PREFIX,
 } from "../../src/recovery/central.ts";
+import { MAX_VALIDATION_RETRIES } from "../../src/recovery/workflow.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { DurableJob, RuntimeState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
@@ -66,23 +66,21 @@ function lease(path: string): WorktreeLease {
   };
 }
 
-function endpoint(paneId: string): Endpoint {
+function reviewerEndpoint(paneId: string): Endpoint {
   return {
     sessionId: "session-1",
     workspaceId: "workspace-1",
     tabId: "tab-1",
     paneId,
-    role: "implementer",
+    role: "reviewer",
     generation: 0,
   };
 }
 
-// A job that ran for well beyond the startup grace period by default, so tests that do not care
-// about the same-failure-class guard never accidentally trip it on a zero-elapsed, reused fixture.
 const DEFAULT_JOB_CREATED_AT = "2030-01-01T00:00:00.000Z";
 const DEFAULT_JOB_CONSUMED_AT = "2030-01-01T00:00:30.000Z";
 
-function deadJob(
+function deadValidationJob(
   input: Readonly<{ error?: string; createdAt?: string; consumedAt?: string }> = {},
 ): DurableJob {
   return {
@@ -90,8 +88,8 @@ function deadJob(
     id: "job-1",
     taskId: "task-1",
     generation: 0,
-    role: "implementer",
-    kind: "worker",
+    role: "validation",
+    kind: "validation",
     cwd: "/tmp/worktree",
     jobPath: "/tmp/worktree/job.json",
     resultPath: "/tmp/worktree/result.json",
@@ -100,7 +98,7 @@ function deadJob(
     launchAttempted: true,
     createdAt: input.createdAt ?? DEFAULT_JOB_CREATED_AT,
     consumedAt: input.consumedAt ?? DEFAULT_JOB_CONSUMED_AT,
-    error: input.error ?? "worker aborted without a logged reason",
+    error: input.error ?? "validation stopped without durable evidence: pane is missing",
   };
 }
 
@@ -111,10 +109,10 @@ type FixtureOptions = Readonly<{
 }>;
 
 async function fixture(options: FixtureOptions = {}) {
-  const home = await mkdtemp(join(tmpdir(), "tandem-central-recovery-"));
+  const home = await mkdtemp(join(tmpdir(), "tandem-central-validating-"));
   const worktreePath = join(home, "worktree");
   await mkdir(worktreePath, { recursive: true });
-  let now = NOW;
+  const now = NOW;
   const clock = (): string => now;
   let id = 0;
   const idFactory = (): string => `id-${++id}`;
@@ -123,19 +121,20 @@ async function fixture(options: FixtureOptions = {}) {
     id: "task-1",
     repoPath: home,
     kind: "implementation",
-    objective: "recover a stuck worker",
-    acceptanceCriteria: ["the worker restarts safely"],
+    objective: "recover a stuck validation run",
+    acceptanceCriteria: ["validation reruns safely"],
     surfaces: ["runtime"],
     policy,
   });
   const staleEndpoints: Endpoint[] =
-    options.staleEndpoint === undefined ? [] : [endpoint("pane-stale")];
+    options.staleEndpoint === undefined ? [] : [reviewerEndpoint("pane-stale")];
   await store.update("task-1", 0, (current) => ({
     ...current,
     revision: current.revision + 1,
     updatedAt: NOW,
-    stage: "implementing",
+    stage: "validating",
     scopeApproved: true,
+    reviewHead: "head-1",
     worktree: lease(worktreePath),
     endpoints: staleEndpoints,
   }));
@@ -182,8 +181,6 @@ async function fixture(options: FixtureOptions = {}) {
     if (request.argv[0] === "herdr") {
       const words = request.argv.slice(3);
       const action = words[0] === "pane" ? words[1] : undefined;
-      // "process-info" carries its pane id after a "--pane" flag; every other pane action carries
-      // it directly as the next positional argument.
       const paneId = action === "process-info" ? words[3] : words[2];
       if (action === undefined || paneId !== "pane-stale") {
         return result(JSON.stringify({ result: { type: "ok" } }));
@@ -235,14 +232,10 @@ async function fixture(options: FixtureOptions = {}) {
     return current;
   };
 
-  const relaunchCalls: { extraInstructions: readonly string[] }[] = [];
-  let relaunchOutcome: Readonly<{ readonly relaunched: boolean; readonly reason?: string }> = {
-    relaunched: true,
-  };
-  const relaunchWorker: RelaunchWorker = async (_task, extraInstructions) => {
-    relaunchCalls.push({ extraInstructions });
-    return relaunchOutcome;
-  };
+  const relaunchWorker: RelaunchWorker = async () => ({
+    relaunched: false,
+    reason: "not exercised by validating tests",
+  });
 
   const revalidateCalls: TaskRecord[] = [];
   let revalidateOutcome: Readonly<{ readonly started: boolean; readonly reason?: string }> = {
@@ -258,16 +251,6 @@ async function fixture(options: FixtureOptions = {}) {
     blockedReasons.push(reason);
   };
 
-  const removedEndpoints: string[] = [];
-  const removeEndpoint = async (_taskId: string, paneId: string): Promise<void> => {
-    removedEndpoints.push(paneId);
-  };
-
-  const relaunchReviewerCalls: TaskRecord[] = [];
-  const relaunchReviewer = async (task: TaskRecord): Promise<void> => {
-    relaunchReviewerCalls.push(task);
-  };
-
   const workflow = new CentralRecoveryWorkflow({
     home,
     sessionId: "session-1",
@@ -280,8 +263,8 @@ async function fixture(options: FixtureOptions = {}) {
     relaunchWorker,
     revalidate,
     blockTask,
-    removeEndpoint,
-    relaunchReviewer,
+    removeEndpoint: async () => {},
+    relaunchReviewer: async () => {},
   });
 
   return {
@@ -289,111 +272,52 @@ async function fixture(options: FixtureOptions = {}) {
     store,
     workflow,
     runtimePath: runtimeFile(home),
-    relaunchCalls,
     revalidateCalls,
     blockedReasons,
-    removedEndpoints,
-    relaunchReviewerCalls,
-    setRelaunchOutcome: (
-      outcome: Readonly<{ readonly relaunched: boolean; readonly reason?: string }>,
-    ) => {
-      relaunchOutcome = outcome;
-    },
     setRevalidateOutcome: (
       outcome: Readonly<{ readonly started: boolean; readonly reason?: string }>,
     ) => {
       revalidateOutcome = outcome;
     },
-    setNow: (value: string) => {
-      now = value;
-    },
     cleanup: () => rm(home, { recursive: true, force: true }),
   };
 }
 
-test("a task with nothing owned and no dead job re-enters with restart 1 of 2", async () => {
+test("a task with no dead validation job is skipped, leaving the normal entry point to run", async () => {
   const f = await fixture();
   try {
     const task = await f.store.read("task-1");
     if (task === undefined) throw new Error("fixture task missing");
     const outcome = await f.workflow.recoverStuckWorker(task);
+    expect(outcome.action).toBe("skipped");
+    expect(f.revalidateCalls).toHaveLength(0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a dead validation job re-enters with retry 1 of the shared validation-retry budget", async () => {
+  const f = await fixture({ job: deadValidationJob() });
+  try {
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    const outcome = await f.workflow.recoverStuckWorker(task);
     expect(outcome.action).toBe("relaunched");
-    expect(f.relaunchCalls).toHaveLength(1);
-    expect(f.relaunchCalls[0]?.extraInstructions.join(" ")).toContain("restart 1 of 2");
+    expect(f.revalidateCalls).toHaveLength(1);
+    expect(outcome.reason).toContain("Retry 1 of 3");
     const state = await readRuntimeState(f.runtimePath);
-    expect(state.tasks[0]?.recovery?.restarts).toBe(1);
-    expect(state.tasks[0]?.recovery?.restartGeneration).toBe(0);
+    expect(state.tasks[0]?.recovery?.validationRetries).toBe(1);
     const notified = await f.store.read("task-1");
-    expect(notified?.notifications.some((entry) => entry.message.includes("restarted it"))).toBe(
-      true,
-    );
+    expect(
+      notified?.notifications.some((entry) => entry.message.includes("reran it at the same")),
+    ).toBe(true);
   } finally {
     await f.cleanup();
   }
 });
 
-test("a proven-failed job re-enters with its own error as the reason and worktree is snapshotted", async () => {
-  const f = await fixture({ job: deadJob({ error: "worker timed out after 60000ms" }) });
-  try {
-    const task = await f.store.read("task-1");
-    if (task === undefined) throw new Error("fixture task missing");
-    const outcome = await f.workflow.recoverStuckWorker(task);
-    expect(outcome.action).toBe("relaunched");
-    expect(f.relaunchCalls[0]?.extraInstructions.join(" ")).toContain(
-      "worker timed out after 60000ms",
-    );
-    const snapshotDirectory = join(f.home, "jobs", "task-1", "0", "recovery-restart-1");
-    expect(await readFile(join(snapshotDirectory, "uncommitted.diff"), "utf8")).toContain(
-      "diff contents",
-    );
-    expect(await readFile(join(snapshotDirectory, "untracked-files.txt"), "utf8")).toContain(
-      "untracked.txt",
-    );
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("a quarantined operation is settled once death is proven, so the relaunch is not paused", async () => {
-  const f = await fixture({ job: deadJob() });
-  try {
-    const state = await readRuntimeState(f.runtimePath);
-    await writeRuntimeState(f.runtimePath, {
-      ...state,
-      tasks: state.tasks.map((entry) => ({
-        ...entry,
-        operation: {
-          schemaVersion: 1 as const,
-          id: "operation-dead",
-          taskId: "task-1",
-          kind: "implementation" as const,
-          role: "implementer" as const,
-          generation: 0,
-          inputHead: "head-1",
-          policyDigest: "policy-digest",
-          instructionRevision: 0,
-          jobId: entry.jobs[0]?.id ?? "job-dead",
-          phase: "quarantined" as const,
-          fencingRevision: 1,
-          claimOwner: "test-controller",
-          createdAt: NOW,
-          effects: [],
-        },
-      })),
-    });
-    const task = await f.store.read("task-1");
-    if (task === undefined) throw new Error("fixture task missing");
-    const outcome = await f.workflow.recoverStuckWorker(task);
-    expect(outcome.action).toBe("relaunched");
-    const after = await readRuntimeState(f.runtimePath);
-    expect(after.tasks[0]?.operation?.phase).toBe("failed");
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("a stale endpoint proven stopped via the stop ladder is cleared before re-entry", async () => {
-  const f = await fixture({ staleEndpoint: "alive-then-gone", job: deadJob() });
+test("a stale validation endpoint proven stopped via the stop ladder is cleared before re-entry", async () => {
+  const f = await fixture({ staleEndpoint: "alive-then-gone", job: deadValidationJob() });
   try {
     const task = await f.store.read("task-1");
     if (task === undefined) throw new Error("fixture task missing");
@@ -406,84 +330,33 @@ test("a stale endpoint proven stopped via the stop ladder is cleared before re-e
   }
 });
 
-test("an already-missing stale endpoint counts as proven dead without a close call", async () => {
-  const f = await fixture({ staleEndpoint: "already-missing", job: deadJob() });
-  try {
-    const task = await f.store.read("task-1");
-    if (task === undefined) throw new Error("fixture task missing");
-    const outcome = await f.workflow.recoverStuckWorker(task);
-    expect(outcome.action).toBe("relaunched");
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("a foreign stale endpoint is never touched; central recovery asks instead of restarting", async () => {
-  const f = await fixture({ staleEndpoint: "foreign", job: deadJob() });
+test("a foreign stale validation endpoint is never touched; central recovery asks instead of rerunning", async () => {
+  const f = await fixture({ staleEndpoint: "foreign", job: deadValidationJob() });
   try {
     const task = await f.store.read("task-1");
     if (task === undefined) throw new Error("fixture task missing");
     const outcome = await f.workflow.recoverStuckWorker(task);
     expect(outcome.action).toBe("asked");
-    expect(f.relaunchCalls).toHaveLength(0);
+    expect(f.revalidateCalls).toHaveLength(0);
     const after = await f.store.read("task-1");
     expect(after?.endpoints).toHaveLength(1);
-    expect(after?.communication?.question?.id.startsWith(RESTART_QUESTION_ID_PREFIX)).toBe(true);
+    expect(after?.communication?.question?.id.startsWith(VALIDATION_RETRY_QUESTION_ID_PREFIX)).toBe(
+      true,
+    );
     expect(after?.communication?.revision ?? 0).toBe(0);
   } finally {
     await f.cleanup();
   }
 });
 
-test("a stale endpoint that never proves stopped is never closed and central recovery asks", async () => {
-  const f = await fixture({ staleEndpoint: "alive-forever", job: deadJob() });
-  try {
-    const task = await f.store.read("task-1");
-    if (task === undefined) throw new Error("fixture task missing");
-    const outcome = await f.workflow.recoverStuckWorker(task);
-    expect(outcome.action).toBe("asked");
-    expect(f.relaunchCalls).toHaveLength(0);
-    const after = await f.store.read("task-1");
-    expect(after?.endpoints).toHaveLength(1);
-  } finally {
-    await f.cleanup();
-  }
-}, 15_000);
-
-test("the restart budget allows two automatic restarts per generation and asks on the third", async () => {
-  const f = await fixture({ job: deadJob() });
-  try {
-    for (let attempt = 1; attempt <= MAX_AUTOMATIC_RESTARTS_PER_GENERATION; attempt += 1) {
-      const task = await f.store.read("task-1");
-      if (task === undefined) throw new Error("fixture task missing");
-      const outcome = await f.workflow.recoverStuckWorker(task);
-      expect(outcome.action).toBe("relaunched");
-    }
-    const thirdTask = await f.store.read("task-1");
-    if (thirdTask === undefined) throw new Error("fixture task missing");
-    const third = await f.workflow.recoverStuckWorker(thirdTask);
-    expect(third.action).toBe("asked");
-    expect(f.relaunchCalls).toHaveLength(MAX_AUTOMATIC_RESTARTS_PER_GENERATION);
-    const asked = await f.store.read("task-1");
-    expect(asked?.communication?.question?.id.startsWith(RESTART_QUESTION_ID_PREFIX)).toBe(true);
-    expect(asked?.communication?.revision ?? 0).toBe(0);
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("a repeated same-class failure inside the startup grace window asks instead of restarting again", async () => {
+test("the validation retry budget is exhausted at 3 and central recovery asks instead of rerunning", async () => {
   const f = await fixture({
-    job: deadJob({ error: "provider rate limit exceeded", createdAt: NOW, consumedAt: NOW }),
+    job: deadValidationJob(),
     recovery: {
       schemaVersion: 1,
       recoveryAttempts: 0,
-      validationRetries: 0,
+      validationRetries: MAX_VALIDATION_RETRIES,
       evidenceRepairs: 0,
-      restarts: 1,
-      restartGeneration: 0,
-      lastRestartFailureClass: "provider-unavailable",
-      lastRestartAt: NOW,
     },
   });
   try {
@@ -491,55 +364,56 @@ test("a repeated same-class failure inside the startup grace window asks instead
     if (task === undefined) throw new Error("fixture task missing");
     const outcome = await f.workflow.recoverStuckWorker(task);
     expect(outcome.action).toBe("asked");
-    expect(f.relaunchCalls).toHaveLength(0);
+    expect(f.revalidateCalls).toHaveLength(0);
+    const asked = await f.store.read("task-1");
+    expect(asked?.communication?.question?.id.startsWith(VALIDATION_RETRY_QUESTION_ID_PREFIX)).toBe(
+      true,
+    );
     const state = await readRuntimeState(f.runtimePath);
-    expect(state.tasks[0]?.recovery?.restarts).toBe(1);
+    expect(state.tasks[0]?.recovery?.validationRetries).toBe(MAX_VALIDATION_RETRIES);
   } finally {
     await f.cleanup();
   }
 });
 
-test("a restart question offers explicit choices and refuses anything but an exact match", async () => {
-  const f = await fixture({ staleEndpoint: "foreign", job: deadJob() });
+test("a validation-retry question offers explicit retry/stop choices and refuses anything else", async () => {
+  const f = await fixture({ staleEndpoint: "foreign", job: deadValidationJob() });
   try {
     const task = await f.store.read("task-1");
     if (task === undefined) throw new Error("fixture task missing");
     await f.workflow.recoverStuckWorker(task);
     const asked = await f.store.read("task-1");
     const questionId = asked?.communication?.question?.id;
-    if (questionId === undefined) throw new Error("expected a restart question to be recorded");
-    expect(asked?.communication?.question?.text).toContain('"restart"');
+    if (questionId === undefined) throw new Error("expected a validation-retry question");
+    expect(asked?.communication?.question?.text).toContain('"retry"');
     expect(asked?.communication?.question?.text).toContain('"stop"');
-    // No task/generation/job identifiers leak into the plain-English question text itself.
     expect(asked?.communication?.question?.text).not.toContain("task-1");
     expect(asked?.communication?.question?.recommendation).toContain("task task-1");
 
-    // A loose reply that used to be treated as approval ("ok" matches the old regex) is refused
-    // outright, and the question is left exactly as it was — no decision, no state change.
     await expect(
-      f.workflow.answerRestartQuestion("task-1", questionId, "ok but stop"),
-    ).rejects.toThrow(/only accepts "restart" or "stop"/u);
+      f.workflow.answerValidationRetryQuestion("task-1", questionId, "sure"),
+    ).rejects.toThrow(/only accepts "retry" or "stop"/u);
     const untouched = await f.store.read("task-1");
     expect(untouched?.communication?.question?.id).toBe(questionId);
     expect(untouched?.revision).toBe(asked?.revision);
-    expect(f.relaunchCalls).toHaveLength(0);
+    expect(f.revalidateCalls).toHaveLength(0);
   } finally {
     await f.cleanup();
   }
 });
 
 test('answering "stop" records a decision without bumping communication.revision', async () => {
-  const f = await fixture({ staleEndpoint: "foreign", job: deadJob() });
+  const f = await fixture({ staleEndpoint: "foreign", job: deadValidationJob() });
   try {
     const task = await f.store.read("task-1");
     if (task === undefined) throw new Error("fixture task missing");
     await f.workflow.recoverStuckWorker(task);
     const asked = await f.store.read("task-1");
     const questionId = asked?.communication?.question?.id;
-    if (questionId === undefined) throw new Error("expected a restart question to be recorded");
+    if (questionId === undefined) throw new Error("expected a validation-retry question");
     const beforeRevision = asked?.communication?.revision ?? 0;
 
-    await f.workflow.answerRestartQuestion("task-1", questionId, "stop");
+    await f.workflow.answerValidationRetryQuestion("task-1", questionId, "stop");
 
     const declined = await f.store.read("task-1");
     expect(declined?.communication?.question).toBeUndefined();
@@ -548,52 +422,43 @@ test('answering "stop" records a decision without bumping communication.revision
     const decisions = state.tasks[0]?.recoveryDecisions ?? [];
     const decision = decisions.findLast((entry) => entry.questionId === questionId);
     expect(decision?.disposition).toBe("refused");
-    // Nothing was re-proven for "stop"; the receipt must not claim ownership/outcome were proven.
     expect(decision?.ownership).toBe("unknown");
     expect(decision?.priorOutcome).toBe("uncertain");
-    expect(f.relaunchCalls).toHaveLength(0);
+    expect(f.revalidateCalls).toHaveLength(0);
   } finally {
     await f.cleanup();
   }
 });
 
-test('answering "restart" re-proves death and records what was actually proven, not a blind "yes"', async () => {
-  const f = await fixture({ job: deadJob() });
+test('answering "retry" re-proves death and reruns validation, recording what was actually proven', async () => {
+  const f = await fixture({
+    job: deadValidationJob(),
+    recovery: {
+      schemaVersion: 1,
+      recoveryAttempts: 0,
+      validationRetries: MAX_VALIDATION_RETRIES,
+      evidenceRepairs: 0,
+    },
+  });
   try {
-    const state = await readRuntimeState(f.runtimePath);
-    await writeRuntimeState(f.runtimePath, {
-      ...state,
-      tasks: state.tasks.map((entry) => ({
-        ...entry,
-        recovery: {
-          schemaVersion: 1 as const,
-          recoveryAttempts: 0,
-          validationRetries: 0,
-          evidenceRepairs: 0,
-          restarts: MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
-          restartGeneration: 0,
-        },
-      })),
-    });
     const task = await f.store.read("task-1");
     if (task === undefined) throw new Error("fixture task missing");
     await f.workflow.recoverStuckWorker(task);
     const asked = await f.store.read("task-1");
     const questionId = asked?.communication?.question?.id;
-    if (questionId === undefined) throw new Error("expected a restart question to be recorded");
+    if (questionId === undefined) throw new Error("expected a validation-retry question");
     const beforeRevision = asked?.communication?.revision ?? 0;
 
-    await f.workflow.answerRestartQuestion("task-1", questionId, "restart");
+    await f.workflow.answerValidationRetryQuestion("task-1", questionId, "retry");
 
-    expect(f.relaunchCalls).toHaveLength(1);
+    expect(f.revalidateCalls).toHaveLength(1);
     const approved = await f.store.read("task-1");
     expect(approved?.communication?.question).toBeUndefined();
     expect(approved?.communication?.revision ?? 0).toBe(beforeRevision);
     const after = await readRuntimeState(f.runtimePath);
-    expect(after.tasks[0]?.recovery?.restarts).toBe(MAX_AUTOMATIC_RESTARTS_PER_GENERATION + 1);
+    expect(after.tasks[0]?.recovery?.validationRetries).toBe(MAX_VALIDATION_RETRIES + 1);
     const decisions = after.tasks[0]?.recoveryDecisions ?? [];
     const decision = decisions.findLast((entry) => entry.questionId === questionId);
-    // These reflect forceOneMoreRestart's own re-proof of death, not the fact that the user said yes.
     expect(decision?.disposition).toBe("applied");
     expect(decision?.ownership).toBe("proven-owned");
     expect(decision?.priorOutcome).toBe("known");
@@ -602,68 +467,28 @@ test('answering "restart" re-proves death and records what was actually proven, 
   }
 });
 
-test('answering "restart" that cannot re-prove death is refused, not applied on trust', async () => {
-  const f = await fixture({ staleEndpoint: "alive-forever", job: deadJob() });
+test("a revalidate refusal blocks the task with the refusal reason", async () => {
+  const f = await fixture({ job: deadValidationJob() });
+  f.setRevalidateOutcome({ started: false, reason: "validation refused a stale worktree" });
   try {
-    const state = await readRuntimeState(f.runtimePath);
-    await writeRuntimeState(f.runtimePath, {
-      ...state,
-      tasks: state.tasks.map((entry) => ({
-        ...entry,
-        recovery: {
-          schemaVersion: 1 as const,
-          recoveryAttempts: 0,
-          validationRetries: 0,
-          evidenceRepairs: 0,
-          restarts: MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
-          restartGeneration: 0,
-        },
-      })),
-    });
     const task = await f.store.read("task-1");
     if (task === undefined) throw new Error("fixture task missing");
-    await f.workflow.recoverStuckWorker(task);
-    const asked = await f.store.read("task-1");
-    const questionId = asked?.communication?.question?.id;
-    if (questionId === undefined) throw new Error("expected a restart question to be recorded");
-
-    await f.workflow.answerRestartQuestion("task-1", questionId, "restart");
-
-    // The stale pane still cannot be proven stopped, so the approval never reaches relaunch.
-    expect(f.relaunchCalls).toHaveLength(0);
-    const after = await readRuntimeState(f.runtimePath);
-    const decisions = after.tasks[0]?.recoveryDecisions ?? [];
-    const decision = decisions.findLast((entry) => entry.questionId === questionId);
-    expect(decision?.disposition).toBe("refused");
-    expect(decision?.ownership).toBe("unknown");
-    expect(decision?.priorOutcome).toBe("uncertain");
+    const outcome = await f.workflow.recoverStuckWorker(task);
+    expect(outcome.action).toBe("blocked");
+    expect(f.blockedReasons.join("\n")).toContain("validation refused a stale worktree");
   } finally {
     await f.cleanup();
   }
-}, 25_000);
+});
 
-test("a stage other than implementing or scouting is reported as skipped", async () => {
+test("a stage other than implementing, scouting, or validating is reported as skipped", async () => {
   const f = await fixture();
   try {
     const task = await f.store.read("task-1");
     if (task === undefined) throw new Error("fixture task missing");
     const outcome = await f.workflow.recoverStuckWorker({ ...task, stage: "reviewing" });
     expect(outcome.action).toBe("skipped");
-    expect(f.relaunchCalls).toHaveLength(0);
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("a relaunch refusal blocks the task with the refusal reason", async () => {
-  const f = await fixture({ job: deadJob() });
-  f.setRelaunchOutcome({ relaunched: false, reason: "worktree lease could not be reconfirmed" });
-  try {
-    const task = await f.store.read("task-1");
-    if (task === undefined) throw new Error("fixture task missing");
-    const outcome = await f.workflow.recoverStuckWorker(task);
-    expect(outcome.action).toBe("blocked");
-    expect(f.blockedReasons.join("\n")).toContain("worktree lease could not be reconfirmed");
+    expect(f.revalidateCalls).toHaveLength(0);
   } finally {
     await f.cleanup();
   }

@@ -61,7 +61,11 @@ import { PresentationFeedbackWorkflow } from "../presentations/feedback.ts";
 import { type PresentationRecord, readPresentationRecord } from "../presentations/records.ts";
 import { preparePresentation } from "../presentations/session.ts";
 import { PresentationRuntimeWorkflow } from "../presentations/workflow.ts";
-import { CentralRecoveryWorkflow, RESTART_QUESTION_ID_PREFIX } from "../recovery/central.ts";
+import {
+  CentralRecoveryWorkflow,
+  RESTART_QUESTION_ID_PREFIX,
+  VALIDATION_RETRY_QUESTION_ID_PREFIX,
+} from "../recovery/central.ts";
 import {
   type RecoveryConversationOutcome,
   RecoveryConversationWorkflow,
@@ -781,7 +785,28 @@ class TandemController {
       getTask: (taskId) => this.get(taskId),
       relaunchWorker: (task, extraInstructions) =>
         this.#worker.relaunchWorker(task, extraInstructions),
+      revalidate: async (task) => {
+        // startValidation never throws for an expected precondition failure (a stale/dirty
+        // worktree, a missing worktree, a lost writer pane, ...); it blocks the task directly and
+        // resolves normally. Re-read the task afterward so a self-block is reported as `started:
+        // false` instead of central recovery believing re-entry succeeded.
+        try {
+          await this.#worker.startValidation(task);
+        } catch (error) {
+          return { started: false, reason: describeError(error) };
+        }
+        const current = await this.get(task.id);
+        if (current.stage === "blocked") {
+          return {
+            started: false,
+            reason: current.blockReason ?? "validation could not be restarted",
+          };
+        }
+        return { started: true };
+      },
       blockTask: (taskId, reason) => this.blockTask(taskId, reason).then(() => undefined),
+      removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
+      relaunchReviewer: (task) => this.#worker.advanceReview(task),
     });
   }
 
@@ -1178,6 +1203,10 @@ class TandemController {
       // never bump task.communication.revision, so neither path here goes through appendAnswer.
       if (questionId.startsWith(RESTART_QUESTION_ID_PREFIX)) {
         await this.#recoveryCentral.answerRestartQuestion(taskId, questionId, answer);
+        return this.messages(taskId);
+      }
+      if (questionId.startsWith(VALIDATION_RETRY_QUESTION_ID_PREFIX)) {
+        await this.#recoveryCentral.answerValidationRetryQuestion(taskId, questionId, answer);
         return this.messages(taskId);
       }
       if (questionId.startsWith(RECOVERY_QUESTION_ID_PREFIX)) {
@@ -2017,14 +2046,33 @@ class TandemController {
         return;
       }
       case "awaiting-fixes":
+        // beginFixes admits the fix round and transitions the task to `implementing` before it ever
+        // touches a pane; if the carried-forward pane turns out to be gone, it leaves the task there
+        // unblocked rather than blocking, so the `implementing` branch below's central recovery
+        // picks it up on the next tick (see src/recovery/central.ts).
         await this.#worker.beginFixes(task);
         return;
-      case "validating":
+      case "validating": {
+        // A validation job that died for an infrastructure reason settles without blocking (see
+        // WorkerWorkflow.reconcileJob's validation branches), leaving the task at `validating` with
+        // no active job/reservation and a terminal failed job behind it. Central recovery owns the
+        // stop/save/re-entry decision for that shape; it reports `skipped` for a fresh entry (no
+        // dead job) so the normal startValidation path runs unchanged.
+        const recovered = await this.#recoveryCentral.recoverStuckWorker(task);
+        if (recovered.action !== "skipped") return;
         await this.#worker.startValidation(task);
         return;
-      case "reviewing":
+      }
+      case "reviewing": {
+        // A resumed reviewing task can carry a quarantined (proven-unowned) reviewer/verifier job
+        // left over from before it was blocked. Central recovery owns the stop/save/re-entry
+        // decision for that case, exactly as it does for implementing/scouting; "skipped" means
+        // nothing needs recovery, so review advances normally.
+        const recovered = await this.#recoveryCentral.recoverStuckWorker(task);
+        if (recovered.action !== "skipped") return;
         await this.#worker.advanceReview(task);
         return;
+      }
       case "scouting":
       case "implementing": {
         if (runtime.endpointLaunch !== undefined) return;
