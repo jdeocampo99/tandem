@@ -1050,7 +1050,7 @@ export function summarizeRequestSpend(readout: RequestSpendReadout): string {
   lines.push(
     pause === undefined
       ? "No spending decision is pending; admission is passive and nothing is being asked."
-      : `A spending decision is pending: ${describePauseReason(pause.reason)}. Raised at ${pause.observedAt}; the next step is estimated at ${formatDollars(pause.nextStepMicros)}. Answer it with budget-approve; Tandem will not economize to fit.`,
+      : `A spending decision is pending. ${describePauseReason(pause.reason)} Raised at ${pause.observedAt}; the next step is estimated at ${formatDollars(pause.nextStepMicros)}. Answer it with budget-approve; Tandem will not economize to fit.`,
   );
   if (readout.reconciledAt !== undefined) {
     lines.push(

@@ -61,6 +61,6 @@ test("a pending spending decision explains itself in plain English and does not 
       },
     }),
   );
-  expect(text).toContain("A spending decision is pending: the next step no longer fits");
+  expect(text).toContain("A spending decision is pending. The next step won't fit under the cap.");
   expectNoIdentifiers(text, ["spend-9", "task-9"]);
 });

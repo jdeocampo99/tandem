@@ -1569,10 +1569,10 @@ Compact `steer` and `answer` output reports only the latest recorded entry; comp
 output prioritizes the current question and pending/latest entries. Older history remains available
 in structured JSON/details.
 
-If directions arrive before initial approval, the `approve` confirmation includes the current
-communication revision and every effective, non-superseded communication delta (including answers
-that carry implementation direction). It omits superseded messages and the full communication JSON,
-so the approval boundary stays clear without hiding what the worker will receive.
+Every approval prompt is one short question plus at most one short line: the task named by its
+objective's first sentence, never a path, hash, branch, criteria list, or id (`tandem inspect` has
+those). If directions arrive before initial approval, the `approve` confirmation says how many
+effective, non-superseded directions the worker will also receive.
 
 The derived inbox is recoverable and may briefly lag canonical task state. Reconciliation repairs
 the projection; it never accepts an older result or drops a pending direction. Paused,
@@ -2011,8 +2011,8 @@ as the restart before it (for example a provider outage), does not spend a third
 Tandem asks instead, since retrying blindly would likely repeat the same failure. Each automatic
 restart writes one plain-English coordinator notification naming what happened, that the edits are
 kept, and which restart it is out of the budget. The third-restart question, and any question raised
-because death could not be proven, use the same plain-English shape as every other recovery question
-(what happened, what Tandem wants to do, what is risked either way; see below) and are answered
+because death could not be proven, use the same short shape as every other question Tandem asks
+(one plain-English question plus at most one short sentence; see below) and are answered
 through the existing question-id-bound answer API. Every recovery answer, this one included, is
 stored as a decision, never as a worker instruction: answering it never bumps
 `task.communication.revision`, so it can never be mistaken for a new canonical instruction a worker
@@ -2150,10 +2150,10 @@ actions, and each runs only with the task in scope, its scope approved, its requ
 current, canonical repository identity proven, every endpoint proved owned, the prior outcome known,
 no active durable job, no pending stop request, and its own budget remaining; `evidence-repair` also
 requires the exact clean reviewed HEAD. Everything else, including `review-existing` and
-`validation-retry`, produces one bounded question in the same plain-English shape as central
-recovery's own questions — what happened, what Tandem wants to do, what is risked either way, with
-IDs and other identifiers confined to the recommendation/consequences detail rather than the
-headline — carrying the recommendation, its expected effect, and the remaining budgets, and executes
+`validation-retry`, produces one bounded question in the same short shape as central recovery's
+own questions: the task's name, the recommended step as a question, and the reason in one clipped
+sentence. IDs, the expected effect, and the remaining budgets go only in the recommendation detail
+and the decision record. It executes
 nothing until it is answered through the existing question-id-bound answer API. Answering it clears
 the question and records the reply as a decision without bumping `task.communication.revision`; a
 plain-text reply does not itself invoke reconcile/review-existing/validation-retry/evidence-repair,

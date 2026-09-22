@@ -740,8 +740,9 @@ test("an action outside the preapproved set asks one bounded question and runs n
     const after = await f.store.read("task-1");
     const question = after?.communication?.question;
     expect(question?.id).toBe(outcome.decision?.questionId);
-    expect(question?.text).toContain("review-existing");
-    expect(question?.text).toContain("Remaining budget");
+    expect(question?.text).toBe(
+      '"recover a durable task" is stuck. Should I review it as it stands? The reviewer never reported a result for the reviewed HEAD.',
+    );
     expect(question?.recommendation).toContain("review-existing");
     expect(after?.notifications.filter((entry) => !entry.acknowledged)).toHaveLength(1);
     const state = await readRuntimeState(f.runtimePath);
@@ -848,7 +849,7 @@ test("durable evidence of a delay beyond five minutes asks immediately", async (
     expect(outcome.wait?.disposition).toBe("asked");
     expect(outcome.wait?.knownAvailableAt).toBe(minutesAfter(NOW, 30));
     expect((await f.store.read("task-1"))?.communication?.question?.text).toContain(
-      "provider quota exhausted",
+      "Provider quota exhausted",
     );
   } finally {
     await f.cleanup();

@@ -31,7 +31,7 @@ function policyWithBudget(requestBudget: RequestBudgetPolicy): ResolvedPolicy {
 }
 
 function budgetDecisionNotices(messages: readonly string[]): readonly string[] {
-  return messages.filter((message) => message.includes("Spending on "));
+  return messages.filter((message) => message.includes("What should the spending cap"));
 }
 
 test("a request whose next step cannot fit stops before launch and asks exactly once", async () => {

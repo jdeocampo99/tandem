@@ -11,7 +11,7 @@ import { readRuntimeState, updateRuntimeState } from "../runtime/persistence.ts"
 import type { RuntimeTaskState } from "../runtime/schema.ts";
 import { isTerminalTask, replaceRuntimeTask } from "../service/records.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
-import { formatDecisionQuestion } from "../tasks/question.ts";
+import { formatDecisionQuestion, shortNote, taskName } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import {
   type CentralRecoveryOutcome,
@@ -155,19 +155,25 @@ function centralRecoveryDisposition(action: CentralRecoveryOutcome["action"]): R
   }
 }
 
+const RECOVERY_ACTION_ASKS: Readonly<Record<RecoveryActionName, string>> = {
+  reconcile: "clean up its leftovers",
+  "review-existing": "review it as it stands",
+  "validation-retry": "rerun its checks",
+  "evidence-repair": "rebuild its reports",
+};
+
 function questionText(
+  task: TaskRecord,
   evidence: RecoveryEvidence,
   recommendedAction: RecoveryActionName | undefined,
-  consequences: string,
 ): string {
-  const want =
-    recommendedAction === undefined
-      ? `Nothing yet: no supported recovery action is proven safe, so I am asking before touching anything. ${consequences}`
-      : `Run ${recommendedAction}. ${consequences}`;
+  const name = taskName(task.objective);
   return formatDecisionQuestion({
-    what: `A task is blocked: ${evidence.summary}.`,
-    recommendation: want,
-    risk: "Nothing has changed yet; the worktree, reports, provenance, and unmerged changes are preserved either way.",
+    ask:
+      recommendedAction === undefined
+        ? `${name} is stuck, and I can't fix it safely on my own. What should I do?`
+        : `${name} is stuck. Should I ${RECOVERY_ACTION_ASKS[recommendedAction]}?`,
+    note: shortNote(evidence.summary),
   });
 }
 
@@ -580,7 +586,7 @@ export class RecoveryConversationWorkflow {
         : `${draft.recommendedAction}: ${draft.consequences}`;
     const question: TaskQuestion = {
       id: questionIdFor(evidence),
-      text: questionText(evidence, draft.recommendedAction, draft.consequences),
+      text: questionText(task, evidence, draft.recommendedAction),
       recommendation: `${recommendationPrefix} ${recoveryQuestionDetails(task)}`,
     };
     const asked = await this.recordQuestion(task.id, question);

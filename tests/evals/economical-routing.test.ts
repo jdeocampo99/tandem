@@ -139,10 +139,10 @@ test("an unaccounted spending decision stops the task before routing is ever res
 
     const stopped = await service.get(task.id);
     const messages = stopped.notifications.map((entry) => entry.message);
-    expect(messages.filter((message) => message.includes("Spending on "))).toHaveLength(1);
     expect(
-      messages.filter((message) => message.includes("Tandem paused a model change")),
-    ).toHaveLength(0);
+      messages.filter((message) => message.includes("What should the spending cap")),
+    ).toHaveLength(1);
+    expect(messages.filter((message) => message.startsWith("Keep "))).toHaveLength(0);
     await service.shutdown();
   });
 });

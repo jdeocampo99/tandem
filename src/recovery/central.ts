@@ -293,6 +293,16 @@ type ForcedValidationRetryOutcome = Readonly<{
   readonly reasonSummary: string;
 }>;
 
+const RESTART_REPLY = 'Reply "restart" or "stop".';
+const VALIDATION_RETRY_REPLY = 'Reply "retry" or "stop".';
+
+/** The durable record keeps the technical cause the short question leaves out. */
+function evidenceSummary(
+  parts: Readonly<{ readonly ask: string; readonly cause?: string }>,
+): string {
+  return parts.cause === undefined ? parts.ask : `${parts.ask} (${parts.cause})`;
+}
+
 const VALIDATION_RETRY_QUESTION_WANT =
   'Reply "retry" to rerun validation at the same reviewed commit, or "stop" to leave it blocked so you can look at it yourself.';
 
@@ -355,8 +365,8 @@ export class CentralRecoveryWorkflow {
     });
     if (!proof.proven) {
       return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
-        what: `The worker stopped, but I could not prove it is actually gone (${proof.reasonSummary}).`,
-        risk: "If you choose restart, Tandem checks again first and will not run two workers on the same worktree at once. Nothing has changed yet either way; your worktree and history are preserved.",
+        ask: "The worker stopped but may still be running. Restart it?",
+        cause: proof.reasonSummary,
       });
     }
 
@@ -386,8 +396,8 @@ export class CentralRecoveryWorkflow {
       recovery.restartGeneration === task.generation ? (recovery.restarts ?? 0) : 0;
     if (restartsUsed >= MAX_AUTOMATIC_RESTARTS_PER_GENERATION) {
       return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
-        what: `The worker stopped again (${proof.reasonSummary}); I already restarted it automatically ${restartsUsed} time(s) this generation.`,
-        risk: "Restarting again may just repeat the same failure if it is not a one-off. Nothing is discarded either way; your worktree, reports, and history are preserved.",
+        ask: `The worker stopped again after ${restartsUsed} restart${restartsUsed === 1 ? "" : "s"}. Restart once more?`,
+        cause: proof.reasonSummary,
       });
     }
 
@@ -398,8 +408,8 @@ export class CentralRecoveryWorkflow {
       restartsUsed > 0 && recovery.lastRestartFailureClass === failureClass;
     if (withinImmediateWindow && sameClassAsLastRestart) {
       return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
-        what: `The worker failed again within ${Math.round((proof.elapsedMs ?? 0) / 1000)}s of starting, the same way (${proof.reasonSummary}) as the restart before it.`,
-        risk: "Nothing has changed; your worktree, reports, and history are preserved either way.",
+        ask: "The worker failed the same way right after restarting. Restart again?",
+        cause: proof.reasonSummary,
       });
     }
 
@@ -577,8 +587,8 @@ export class CentralRecoveryWorkflow {
     });
     if (!proof.proven) {
       return this.askValidationRetry(task, incidentIdentity, proof.deadJobId, now, {
-        what: `Validation stopped, but I could not prove it is actually gone (${proof.reasonSummary}).`,
-        risk: "If you choose retry, Tandem checks again first and will not run two validation runs on the same worktree at once. Nothing has changed yet either way; your worktree and history are preserved.",
+        ask: "Checks stopped but may still be running. Retry them?",
+        cause: proof.reasonSummary,
       });
     }
 
@@ -586,8 +596,8 @@ export class CentralRecoveryWorkflow {
     const retriesUsed = recovery.validationRetries;
     if (retriesUsed >= MAX_VALIDATION_RETRIES) {
       return this.askValidationRetry(task, incidentIdentity, proof.deadJobId, now, {
-        what: `Validation stopped again (${proof.reasonSummary}); the validation retry budget (${retriesUsed} of ${MAX_VALIDATION_RETRIES}) is already spent.`,
-        risk: "Retrying again may just repeat the same failure if it is not a one-off. Nothing is discarded either way; your worktree, reports, and history are preserved.",
+        ask: `Checks stopped again after ${retriesUsed} retr${retriesUsed === 1 ? "y" : "ies"}. Retry once more?`,
+        cause: proof.reasonSummary,
       });
     }
 
@@ -720,8 +730,7 @@ export class CentralRecoveryWorkflow {
       );
       if (!stopped) {
         return this.askRestart(task, incidentIdentity, deadReview.id, now, {
-          what: `The ${lensLabel} reviewer stopped, but I could not prove it is actually gone.`,
-          risk: "If you choose restart, Tandem checks again first and will not run two reviewers on the same worktree at once. Nothing has changed yet either way; your worktree and history are preserved.",
+          ask: `The ${lensLabel} reviewer stopped but may still be running. Restart it?`,
         });
       }
       await this.#deps.removeEndpoint(task.id, endpoint.paneId);
@@ -735,8 +744,7 @@ export class CentralRecoveryWorkflow {
     });
     if (checkout.head !== task.reviewHead || checkout.dirty || checkout.unmerged) {
       return this.askRestart(task, incidentIdentity, deadReview.id, now, {
-        what: `The ${lensLabel} reviewer stopped, and the worktree no longer matches the exact commit this review was checking.`,
-        risk: "Relaunching now would review the wrong changes. Nothing has changed yet either way; your worktree and history are preserved.",
+        ask: `The ${lensLabel} reviewer stopped, and the code changed since review began. Restart review anyway?`,
       });
     }
 
@@ -745,8 +753,7 @@ export class CentralRecoveryWorkflow {
       recovery.restartGeneration === task.generation ? (recovery.restarts ?? 0) : 0;
     if (restartsUsed >= MAX_AUTOMATIC_RESTARTS_PER_GENERATION) {
       return this.askRestart(task, incidentIdentity, deadReview.id, now, {
-        what: `The ${lensLabel} reviewer stopped again; I already restarted review work automatically ${restartsUsed} time(s) this generation.`,
-        risk: "Restarting again may just repeat the same failure if it is not a one-off. Nothing is discarded either way; your worktree, reports, and history are preserved.",
+        ask: `The ${lensLabel} reviewer stopped again after ${restartsUsed} restart${restartsUsed === 1 ? "" : "s"}. Restart once more?`,
       });
     }
 
@@ -1360,23 +1367,19 @@ export class CentralRecoveryWorkflow {
   }
 
   /**
-   * Asks the one question central recovery ever asks, in plain English with no identifiers in the
-   * what/want/risk text: task, generation, and dead-job identity go only in the recommendation's
-   * details, which is already a separate line wherever a question is displayed.
+   * Asks the one question central recovery ever asks, as one short plain-English question with no
+   * identifiers: task, generation, and dead-job identity go only in the recommendation's details,
+   * and the technical cause only in the decision record.
    */
   private async askRestart(
     task: TaskRecord,
     incidentIdentity: string,
     deadJobId: string,
     now: IsoTimestamp,
-    parts: Readonly<{ readonly what: string; readonly risk: string }>,
+    parts: Readonly<{ readonly ask: string; readonly cause?: string }>,
   ): Promise<CentralRecoveryOutcome> {
     const questionId = `${RESTART_QUESTION_ID_PREFIX}${incidentIdentity}`;
-    const text = formatDecisionQuestion({
-      what: parts.what,
-      recommendation: RESTART_QUESTION_WANT,
-      risk: parts.risk,
-    });
+    const text = formatDecisionQuestion({ ask: parts.ask, note: RESTART_REPLY });
     const details = `Details: task ${task.id}${task.requestId === undefined ? "" : `, request ${task.requestId}`}, generation ${task.generation}, dead job ${deadJobId}.`;
     const question: TaskQuestion = {
       id: questionId,
@@ -1394,7 +1397,7 @@ export class CentralRecoveryWorkflow {
       taskId: task.id,
       generation: task.generation,
       ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
-      evidence: this.evidenceFor(incidentIdentity, parts.what, now),
+      evidence: this.evidenceFor(incidentIdentity, evidenceSummary(parts), now),
       ownership: "unknown",
       priorOutcome: "uncertain",
       approval: "user-approval",
@@ -1408,24 +1411,18 @@ export class CentralRecoveryWorkflow {
   }
 
   /**
-   * Asks the one question the validating re-entry ever asks, in the same plain-English shape as
-   * `askRestart`: what happened, what Tandem wants to do, what is risked either way, with no
-   * identifiers in that text (task, generation, and dead-job identity go only in the
-   * recommendation's details).
+   * Asks the one question the validating re-entry ever asks, in the same short shape as
+   * `askRestart`.
    */
   private async askValidationRetry(
     task: TaskRecord,
     incidentIdentity: string,
     deadJobId: string,
     now: IsoTimestamp,
-    parts: Readonly<{ readonly what: string; readonly risk: string }>,
+    parts: Readonly<{ readonly ask: string; readonly cause?: string }>,
   ): Promise<CentralRecoveryOutcome> {
     const questionId = `${VALIDATION_RETRY_QUESTION_ID_PREFIX}${incidentIdentity}`;
-    const text = formatDecisionQuestion({
-      what: parts.what,
-      recommendation: VALIDATION_RETRY_QUESTION_WANT,
-      risk: parts.risk,
-    });
+    const text = formatDecisionQuestion({ ask: parts.ask, note: VALIDATION_RETRY_REPLY });
     const details = `Details: task ${task.id}${task.requestId === undefined ? "" : `, request ${task.requestId}`}, generation ${task.generation}, dead job ${deadJobId}.`;
     const question: TaskQuestion = {
       id: questionId,
@@ -1443,7 +1440,7 @@ export class CentralRecoveryWorkflow {
       taskId: task.id,
       generation: task.generation,
       ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
-      evidence: this.evidenceFor(incidentIdentity, parts.what, now),
+      evidence: this.evidenceFor(incidentIdentity, evidenceSummary(parts), now),
       ownership: "unknown",
       priorOutcome: "uncertain",
       approval: "user-approval",

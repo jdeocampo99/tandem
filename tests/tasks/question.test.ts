@@ -1,32 +1,24 @@
 import { expect, test } from "bun:test";
-import { formatDecisionQuestion } from "../../src/tasks/question.ts";
+import { formatDecisionQuestion, shortNote, taskName } from "../../src/tasks/question.ts";
 
-test("formatDecisionQuestion renders what/recommendation/risk in order", () => {
-  const text = formatDecisionQuestion({
-    what: "A task is blocked.",
-    recommendation: "Run reconcile.",
-    risk: "Nothing changes until you decide.",
-  });
-  expect(text).toBe(
-    "What happened: A task is blocked. What I want to do: Run reconcile. What you risk: Nothing changes until you decide.",
+test("a question is the ask, then at most one short note", () => {
+  expect(formatDecisionQuestion({ ask: "Restart it?" })).toBe("Restart it?");
+  expect(formatDecisionQuestion({ ask: "Restart it?", note: 'Reply "restart" or "stop".' })).toBe(
+    'Restart it? Reply "restart" or "stop".',
   );
 });
 
-test("choices are appended as a labelled, comma-joined list when given", () => {
-  const withChoices = formatDecisionQuestion({
-    what: "A task is blocked.",
-    recommendation: "Pick one.",
-    risk: "Nothing changes until you decide.",
-    choices: ["restart", "stop"],
-  });
-  expect(withChoices).toContain("Choices: restart, stop.");
+test("a task is named by its first sentence, cut at a word", () => {
+  expect(taskName("Add a streak bar. Then polish it.")).toBe('"Add a streak bar"');
+  const long = taskName(
+    "Recover the already-implemented approved brief req-7367ed76 revision 2 from exact commit 7862bd0",
+  );
+  expect(long).toBe('"Recover the already-implemented approved brief…"');
+});
 
-  const withoutChoices = formatDecisionQuestion({
-    what: "A task is blocked.",
-    recommendation: "Pick one.",
-    risk: "Nothing changes until you decide.",
-  });
-  expect(withoutChoices).not.toContain("Choices:");
+test("a note is clipped to one line", () => {
+  expect(shortNote("The worker ran out of time")).toBe("The worker ran out of time.");
+  expect(shortNote("word ".repeat(40)).length).toBeLessThanOrEqual(101);
 });
 
 /**
