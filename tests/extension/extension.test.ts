@@ -471,7 +471,7 @@ test("recovery slash commands preserve exact-head and delivery arguments", () =>
       budget: { recoveryRemaining: 2 },
       refusals: [],
     }),
-  ).toContain("dry-run review-existing");
+  ).toContain("recommended review-existing");
 });
 
 test("communication slash commands join quoted deltas and reject extra message arguments", () => {
@@ -537,7 +537,7 @@ test("communication summaries keep newest actionable state and question identity
   expect(overview).toContain("QUESTION_NEEDS_ID");
   expect(overview).toContain("RECOMMENDATION_VISIBLE");
   expect(overview).toContain("NEWEST_ACTIONABLE");
-  expect(overview).toContain("Last observed activity");
+  expect(overview).toContain("Last activity");
   expect(overview).toContain("2030-01-02T03:04:07.000Z");
   expect(overview).not.toContain("HISTORY_SENTINEL_1");
   expect(latest).toContain("NEWEST_ACTIONABLE");
@@ -545,7 +545,7 @@ test("communication summaries keep newest actionable state and question identity
   expect(latest).not.toContain("QUESTION_NEEDS_ID");
 });
 
-test("approve confirmation exposes active non-superseded communication deltas and revision", async () => {
+test("approve confirmation names the task by objective without ids or message history", async () => {
   const pending = task({
     communication: {
       revision: 3,
@@ -600,9 +600,8 @@ test("approve confirmation exposes active non-superseded communication deltas an
 
   expect(result.approved).toBe(false);
   expect(prompts).toHaveLength(1);
-  expect(prompts[0]).toContain("Communication revision 3");
-  expect(prompts[0]).toContain("Preserve the existing adapter.");
-  expect(prompts[0]).toContain("Use the compatibility path.");
+  expect(prompts[0]).toContain(pending.objective);
+  expect(prompts[0]).not.toContain("task-1");
   expect(prompts[0]).not.toContain("REPLACE_ME_OLD");
 });
 
@@ -791,7 +790,7 @@ test("configure-models forwards explicit provider enablement and recaps it in th
   expect(configureCalls).toEqual([
     { repoPath: "/repo", models, enabledProviders: ["openai-codex"] },
   ]);
-  expect(prompts[0]).toContain("Enabled providers");
+  expect(prompts[0]).toContain("Providers allowed to spend");
   expect(prompts[0]).toContain("openai-codex");
 });
 test("models summary surfaces discovered/enabled providers and a resolved Balanced proposal", () => {
@@ -818,9 +817,9 @@ test("models summary surfaces discovered/enabled providers and a resolved Balanc
     },
   });
 
-  expect(summary).toContain("Discovered providers");
+  expect(summary).toContain("Providers found");
   expect(summary).toContain("other-provider");
-  expect(summary).toContain("Enabled providers");
+  expect(summary).toContain("Providers allowed to spend");
   expect(summary).toContain("openai-codex/gpt-6-astra");
   expect(summary).toContain("Planning (coordinator)");
 });
@@ -840,8 +839,7 @@ test("models summary discloses unresolved Balanced roles with actionable reasons
     },
   });
 
-  expect(summary).toContain("unresolved");
-  expect(summary).toContain("no built-in pin, fuzzy alias, or silent fallback");
+  expect(summary).toContain("No suitable model was found for these roles");
   expect(summary).toContain("Planning (coordinator)");
   expect(summary).toContain("no provider is explicitly enabled");
 });
@@ -1063,16 +1061,13 @@ test("scout summaries and the durable digest carry the post-research disposition
     },
   });
   const summary = summarizeTandemActionValue("show", scout);
-  expect(summary).toContain("Post-research disposition: implementation-interview");
-  expect(summary).toContain("routing only");
-  expect(summary).toContain("selected by jev");
-  expect(summary).toContain("jev-continuation-1");
+  expect(summary).toContain("After research: summarize the report with its evidence");
 
   const digest = buildDurableDigest([scout]);
-  expect(digest).toContain("continuation: implementation-interview (jev; routing only)");
+  expect(digest).toContain("after research: implementation-interview");
 
   const legacyScout = task({ id: "legacy-scout", kind: "scout", stage: "completed" });
-  expect(buildDurableDigest([legacyScout])).toContain("continuation: ask-intent");
+  expect(buildDurableDigest([legacyScout])).toContain("after research: ask-intent");
   expect(buildDurableDigest([task({ id: "implementation-task" })])).not.toContain("continuation:");
 });
 
@@ -1109,8 +1104,7 @@ test("draft publication needs interactive human approval and never runs without 
   const refused = await executeTandemAction(parsed, service, refusingContext);
   expect(refused.approved).toBe(false);
   expect(published).toHaveLength(0);
-  expect(prompts[0]).toContain("unfinished draft");
-  expect(prompts[0]).toContain("it does not merge, deploy, or accept anything");
+  expect(prompts[0]).toContain("It isn't ready to merge.");
 
   const headless = await executeTandemAction(parsed, service, {
     hasUI: false,
@@ -1221,9 +1215,7 @@ test("a draft pull request is summarized as unfinished visibility, never as acce
   );
 
   expect(summary).toContain("Pull request: acme/repo#11 draft");
-  expect(summary).toContain(
-    "Draft visibility only: the draft is unfinished and is not evidence of readiness",
-  );
+  expect(summary).toContain("This is a draft: work in progress, not ready to merge.");
 });
 
 test("a failed acknowledgement retries on the next tick without waking the coordinator again", async () => {
@@ -1989,10 +1981,8 @@ test("extension cleanup skips confirmation for safe release and shows scope for 
 
   expect(cleanupInputs).toEqual([{}]);
   expect(prompts).toHaveLength(1);
-  expect(prompts[0]).toContain("/repo");
   expect(prompts[0]).toContain("Release the completed task resources");
-  expect(prompts[0]).toContain("review-head");
-  expect(prompts[0]).toContain("/tmp/treehouse/task-1");
+  expect(prompts[0]).toContain("can't be undone");
   expect(refused.approved).toBe(false);
 });
 

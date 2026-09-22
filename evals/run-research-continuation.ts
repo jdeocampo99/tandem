@@ -74,8 +74,7 @@ export { LiveJevBudgetExceededError };
 
 const FAKE_API_KEY = "fixture-key";
 const NOW = "2030-01-02T03:04:05.000Z";
-const IMPLEMENTATION_APPROVAL_DISCLAIMER =
-  "must not launch until the concrete scope is explicitly approved";
+const IMPLEMENTATION_APPROVAL_DISCLAIMER = "approve the concrete scope before starting";
 
 type ClassifyDeps = Readonly<{
   readonly config: ResearchContinuationClassifierConfig;

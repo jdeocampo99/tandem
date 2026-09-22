@@ -333,7 +333,7 @@ export function registerTandemOmp(
     name: "tandem",
     label: "Tandem",
     description:
-      "Inspect and control durable Tandem state with {request:{action:...}}, including bounded steer/answer/messages communication. Approval-bearing actions always require human confirmation; communication receipts never claim implementation completion.",
+      "Start, inspect, steer, and control Tandem work with {request:{action:...}}. Actions that need approval ask the user to confirm. A delivered message does not mean the work is done.",
     parameters: requestSchema,
     strict: true,
     approval: "write",

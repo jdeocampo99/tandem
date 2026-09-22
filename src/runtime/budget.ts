@@ -537,16 +537,14 @@ export function describeRequestSpendDecision(
   const unpriced =
     pause.unpricedSamples === 0
       ? ""
-      : ` ${pause.unpricedSamples} recorded step(s) have no published price and ${pause.unmeasuredTokenSamples} reported no usage at all, so the charged total is a floor on the real cost, not a measurement of it.`;
+      : " Some costs aren't measured, so the real total may be higher.";
   const unaccounted =
     pause.unaccountedSamples === 0
       ? ""
-      : ` ${pause.unaccountedSamples} of those also have no cost estimate standing in for them, so approving this decision accepts that much unknown spending; anything still unmeasured after this asks again.`;
+      : ` Raising the cap also accepts ${pause.unaccountedSamples} step(s) of unknown cost.`;
   return formatDecisionQuestion({
-    what: `Spending on ${subject} is paused: ${PAUSE_EXPLANATIONS[pause.reason]}. Cap in force ${formatDollars(pause.capMicros)}; charged so far ${formatDollars(pause.committedMicros)} (observed only); reserved for work already started ${formatDollars(pause.reservedMicros)} (estimate); the next step is estimated at ${formatDollars(pause.nextStepMicros)}.${unpriced}${unaccounted}`,
-    recommendation:
-      "Tell me the new spending cap and I will raise it and continue exactly what was planned.",
-    risk: "Nothing new starts under this request until you decide. Tandem will not switch models, skip checks, narrow review, or replan to fit, and it will not invent a charge or turn included usage into cash to close the gap. Work already running finishes or unwinds safely either way.",
+    what: `Spending on ${subject} is paused: ${PAUSE_EXPLANATIONS[pause.reason]}. ${formatDollars(pause.committedMicros)} spent plus ${formatDollars(pause.reservedMicros)} set aside of a ${formatDollars(pause.capMicros)} cap; the next step would cost about ${formatDollars(pause.nextStepMicros)}.${unpriced}${unaccounted}`,
+    recommendation: "Tell me a new cap and I'll continue as planned.",
   });
 }
 

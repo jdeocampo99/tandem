@@ -139,12 +139,11 @@ function questionText(
 ): string {
   const want =
     recommendedAction === undefined
-      ? `Nothing yet: no supported recovery action is proven safe, so I am asking before touching anything. ${consequences}`
-      : `Run ${recommendedAction}. ${consequences}`;
+      ? `I don't have a safe fix to try, so I haven't changed anything. ${consequences}`
+      : `I'd like to run ${recommendedAction}. ${consequences}`;
   return formatDecisionQuestion({
-    what: `A task is blocked: ${evidence.summary}.`,
+    what: `A task is stuck: ${evidence.summary}.`,
     recommendation: want,
-    risk: "Nothing has changed yet; the worktree, reports, provenance, and unmerged changes are preserved either way.",
   });
 }
 

@@ -306,16 +306,11 @@ export function describeExecutionRoutingDecision(
   const gaps =
     pause.evidenceGaps.length === 0
       ? ""
-      : ` Missing or unclear pricing: ${pause.evidenceGaps.map(describeEvidenceGap).join("; ")}. Tandem never treats an unpublished cost or allowance as free or as proof a move is comparable.`;
+      : ` Missing or unclear pricing: ${pause.evidenceGaps.map(describeEvidenceGap).join("; ")}.`;
   const usage = describeUnobservedUsage(pause);
-  const providers =
-    pause.enabledProviders.length === 0
-      ? " No provider is enabled for spending, so no alternative is authorized by discovery alone."
-      : ` Providers enabled for spending: ${pause.enabledProviders.join(", ")}.`;
   return formatDecisionQuestion({
-    what: `Before running ${subject}, Tandem paused a model change: ${ROUTING_PAUSE_EXPLANATIONS[pause.reason]}.${candidate}${gaps}${usage === undefined ? "" : ` ${usage}`}${providers}`,
+    what: `Before running ${subject}, Tandem paused a model change: ${ROUTING_PAUSE_EXPLANATIONS[pause.reason]}.${candidate}${gaps}${usage === undefined ? "" : ` ${usage}`}`,
     recommendation: `Keep using ${pause.pinnedSelector} (thinking: ${pause.pinnedThinking}) unless you say otherwise.`,
-    risk: "Nothing for this task starts until you decide. Tandem will not move to a higher-cost or higher-quota model on its own, even when it is prepaid or bundled, and it will not proceed on pricing it cannot prove.",
   });
 }
 

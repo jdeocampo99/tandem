@@ -19,19 +19,19 @@ export function describeResearchDisposition(disposition: ResearchContinuationDis
 function describeResearchOverride(override: ResearchContinuationOverride): string {
   switch (override) {
     case "not-a-scout":
-      return "this task is not a scout";
+      return "this task is not research";
     case "open-question":
-      return "a durable needs-decision question is open";
+      return "the task has an open question";
     case "blocked":
-      return "the scout is blocked";
+      return "the research is blocked";
     case "cancelled":
-      return "the scout was cancelled";
+      return "the research was cancelled";
     case "incomplete":
-      return "the scout has not reached durable completed state";
+      return "the research has not finished";
     case "stale-generation":
-      return "the waking notification is bound to an older generation";
+      return "this notice is out of date";
     case "missing-report":
-      return "no readable completed report is recorded";
+      return "there is no readable report";
   }
 }
 
@@ -50,20 +50,20 @@ function followUpSteps(decision: ResearchFollowUpDecision): readonly string[] {
       ];
     case "implementation-interview":
       return [
-        "Summarize the report and cite the evidence it records.",
+        "Summarize the report and what it found.",
         "Propose one initial direction drawn from that evidence, then ask focused questions covering desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility, and approval; offer a default for each.",
         "Stay inside the report and the user's request; do not widen scope on your own.",
-        "Only after the user answers may you create an implementation task citing this scout in researchTaskIds. It stays awaiting-approval and must not launch until the concrete scope is explicitly approved.",
+        "Only after the user answers may you create an implementation task, passing this task in researchTaskIds. It waits for the user to approve the concrete scope before starting.",
       ];
     case "answer-question":
       return [
-        "Resolve the open question first; it outranks the recorded disposition.",
-        "Answer through the questionId-bound API only when explicit prior direction, the approved scope, or unambiguous in-scope repository facts settle it; otherwise ask the user.",
+        "Answer the open question first.",
+        "Answer it yourself (answer with its questionId) only when the user's earlier direction, the approved scope, or clear repository facts settle it; otherwise ask the user.",
         "Do not start the implementation interview or create an implementation task from this wake.",
       ];
     case "disclose-blocker":
       return [
-        "Disclose the exact durable blocker and say plainly that no usable research result is available.",
+        "Tell the user plainly what blocked the research and that there is no usable result.",
         "Do not start the implementation interview or create an implementation task from this wake.",
       ];
   }
@@ -79,7 +79,7 @@ export function buildResearchFollowUpContent(decision: ResearchFollowUpDecision)
       ? ""
       : ` because ${describeResearchOverride(decision.override)}`;
   const lines = [
-    `Post-research follow-up: ${decision.followUp}${reason}; recorded disposition ${decision.disposition} (routing only, never permission).`,
+    `Research follow-up: ${decision.followUp}${reason}.`,
     ...followUpSteps(decision).map((step) => `- ${step}`),
   ];
   return lines.join("\n");

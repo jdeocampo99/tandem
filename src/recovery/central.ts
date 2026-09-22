@@ -159,7 +159,7 @@ type ForcedRestartOutcome = Readonly<{
 }>;
 
 const RESTART_QUESTION_WANT =
-  'Reply "restart" to start a fresh worker in the same worktree and keep every edit, or "stop" to leave it blocked so you can look at it yourself.';
+  'Reply "restart" to try again with every edit kept, or "stop" to leave it for you to look at.';
 
 /**
  * Central recovery: stop, save, re-enter. Only the `implementing`/`scouting` stage's re-entry is
@@ -211,8 +211,7 @@ export class CentralRecoveryWorkflow {
     });
     if (!proof.proven) {
       return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
-        what: `The worker stopped, but I could not prove it is actually gone (${proof.reasonSummary}).`,
-        risk: "If you choose restart, Tandem checks again first and will not run two workers on the same worktree at once. Nothing has changed yet either way; your worktree and history are preserved.",
+        what: `The work stopped, but I can't confirm it has fully exited (${proof.reasonSummary}).`,
       });
     }
 
@@ -221,8 +220,7 @@ export class CentralRecoveryWorkflow {
       recovery.restartGeneration === task.generation ? (recovery.restarts ?? 0) : 0;
     if (restartsUsed >= MAX_AUTOMATIC_RESTARTS_PER_GENERATION) {
       return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
-        what: `The worker stopped again (${proof.reasonSummary}); I already restarted it automatically ${restartsUsed} time(s) this generation.`,
-        risk: "Restarting again may just repeat the same failure if it is not a one-off. Nothing is discarded either way; your worktree, reports, and history are preserved.",
+        what: `The work stopped again (${proof.reasonSummary}) after ${restartsUsed} automatic restart(s), so another restart may fail the same way.`,
       });
     }
 
@@ -233,8 +231,7 @@ export class CentralRecoveryWorkflow {
       restartsUsed > 0 && recovery.lastRestartFailureClass === failureClass;
     if (withinImmediateWindow && sameClassAsLastRestart) {
       return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
-        what: `The worker failed again within ${Math.round((proof.elapsedMs ?? 0) / 1000)}s of starting, the same way (${proof.reasonSummary}) as the restart before it.`,
-        risk: "Nothing has changed; your worktree, reports, and history are preserved either way.",
+        what: `The work failed again ${Math.round((proof.elapsedMs ?? 0) / 1000)}s after restarting, the same way as before (${proof.reasonSummary}).`,
       });
     }
 
@@ -502,7 +499,7 @@ export class CentralRecoveryWorkflow {
 
   /**
    * Asks the one question central recovery ever asks, in plain English with no identifiers in the
-   * what/want/risk text: task, generation, and dead-job identity go only in the recommendation's
+   * what/want text: task, generation, and dead-job identity go only in the recommendation's
    * details, which is already a separate line wherever a question is displayed.
    */
   private async askRestart(
@@ -510,13 +507,12 @@ export class CentralRecoveryWorkflow {
     incidentIdentity: string,
     deadJobId: string,
     now: IsoTimestamp,
-    parts: Readonly<{ readonly what: string; readonly risk: string }>,
+    parts: Readonly<{ readonly what: string }>,
   ): Promise<CentralRecoveryOutcome> {
     const questionId = `${RESTART_QUESTION_ID_PREFIX}${incidentIdentity}`;
     const text = formatDecisionQuestion({
       what: parts.what,
       recommendation: RESTART_QUESTION_WANT,
-      risk: parts.risk,
     });
     const details = `Details: task ${task.id}${task.requestId === undefined ? "" : `, request ${task.requestId}`}, generation ${task.generation}, dead job ${deadJobId}.`;
     const question: TaskQuestion = {

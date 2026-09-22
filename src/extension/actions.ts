@@ -1,23 +1,14 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type {
-  RepoPolicy,
-  RequestBriefContent,
-  SkillInvocation,
-  TaskKind,
-  TaskRecord,
-} from "../contracts.ts";
+import type { RepoPolicy, RequestBriefContent, SkillInvocation, TaskKind } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import { formatDollars } from "../runtime/budget.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
-import { activeTaskMessages, MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import { formatDecisionQuestion } from "../tasks/question.ts";
 import {
   ACTION_SUMMARY_MAX_TEXT,
-  compactList,
   compactText,
   projectName,
   summarizeModelAssignments,
-  summarizeRequestSpend,
 } from "./summary.ts";
 
 const TANDEM_COMMAND_ARITY: Readonly<
@@ -284,74 +275,25 @@ function requiresHumanApproval(action: TandemAction): boolean {
  * publish/merge prompt where the exact SHA is not something a person can judge by; other prompts
  * keep the hash for a technical reviewer verifying exact state before an approval.
  */
-function taskApprovalDetails(
-  task: TaskRecord,
-  includeDirections = false,
-  plainCheckpoint = false,
-): string {
-  const checkpoint = plainCheckpoint
-    ? task.reviewHead !== undefined
-      ? "the version of the work that was reviewed"
-      : "the version this work started from"
-    : (task.reviewHead ??
-      task.worktree?.baseHead ??
-      "service-pinned source checkpoint (exact hash is not materialized on this task record)");
-  const worktree =
-    task.worktree === undefined
-      ? undefined
-      : `worktree ${compactText(task.worktree.path, ACTION_SUMMARY_MAX_TEXT)}; branch ${compactText(task.worktree.branch, ACTION_SUMMARY_MAX_TEXT)}`;
-  const pullRequest =
-    task.pullRequest === undefined
-      ? undefined
-      : `pull request ${compactText(task.pullRequest.repository, 140)}#${task.pullRequest.number} ${task.pullRequest.state}; head ${compactText(task.pullRequest.head, 140)}; base ${compactText(task.pullRequest.base, 140)}`;
-  const communicationDetails =
-    includeDirections && task.communication !== undefined
-      ? (() => {
-          const entries = activeTaskMessages(task.communication);
-          return `Communication revision ${task.communication.revision}; active deltas: ${
-            entries.length === 0
-              ? "none"
-              : entries
-                  .map(
-                    (message) =>
-                      `${message.kind} ${compactText(message.id, 100)}: ${compactText(message.text, MAX_TASK_MESSAGE_CHARS)}`,
-                  )
-                  .join("; ")
-          }`;
-        })()
-      : undefined;
-  return [
-    `Repository: ${compactText(task.repoPath, ACTION_SUMMARY_MAX_TEXT)}`,
-    `Scope: ${compactText(task.objective, ACTION_SUMMARY_MAX_TEXT)}`,
-    `Acceptance criteria (${task.acceptanceCriteria.length}): ${compactList(task.acceptanceCriteria, 4, 110)}`,
-    `Checkpoint: ${compactText(checkpoint, 160)}`,
-    worktree === undefined ? undefined : `Worktree: ${worktree}`,
-    pullRequest === undefined ? undefined : `Pull request: ${pullRequest}`,
-    communicationDetails,
-  ]
-    .filter((entry): entry is string => entry !== undefined)
-    .join("; ");
-}
-
 /** The three whole-request actions that need a human decision, each one separately. */
 function requestApprovalPrompt(
   action: Extract<TandemAction, { action: "request-publish" | "request-merge" | "request-split" }>,
 ): Readonly<{ readonly title: string; readonly message: string }> {
   if (action.action === "request-publish") {
     return {
-      title: "Publish the request pull request?",
-      message: `Publish one verified pull request on ${action.repository} (${action.title}, base ${action.base}) for request ${action.requestId}. Publication is not merge approval and never merges or deploys.`,
+      title: "Open the pull request for this request?",
+      message: `"${action.title}" on ${action.repository}, into ${action.base}. It won't be merged yet.`,
     };
   }
   if (action.action === "request-merge") {
     return {
-      title: "Merge the request pull request?",
-      message: `Merge the single pull request for request ${action.requestId} using ${action.method}, after its required remote checks are observed as successful.`,
+      title: "Merge the pull request for this request?",
+      message: `Merges with ${action.method} once its checks pass.`,
     };
   }
   return {
-    title: "Split this request across several pull requests?",
-    message: `Allow request ${action.requestId} to deliver its members through separate pull requests instead of one. One verified pull request is the default outcome.`,
+    title: "Split this request into several pull requests?",
+    message: "By default it ships as one pull request.",
   };
 }
 
@@ -368,7 +310,7 @@ async function approvalPrompt(
     const providerDetails =
       action.enabledProviders === undefined
         ? ""
-        : `\n\nEnabled providers (explicit spending permission, replaces any saved set): ${
+        : `\n\nProviders allowed to spend (replaces the saved list): ${
             action.enabledProviders.length === 0 ? "none" : action.enabledProviders.join(", ")
           }.`;
     return {
@@ -406,83 +348,75 @@ async function approvalPrompt(
       title: "Approve this request brief?",
       message: formatDecisionQuestion({
         what,
-        recommendation: "Record this as the agreed scope.",
-        risk: "Approving records the agreement only; it does not authorize provider activation, publication, merge, deployment, or destructive work.",
+        recommendation: "Approve it as the agreed plan?",
       }),
     };
   }
   if (action.action === "budget-approve") {
-    const readout = await service.requestSpend(action.requestId);
-    const naming =
-      action.decisionId === undefined ? "" : `, answering decision ${action.decisionId}`;
     return {
-      title: "Authorize more spending on this request?",
-      message: `Raise the cap for request ${action.requestId} to ${formatDollars(action.capMicros)}${naming}.\n\n${summarizeRequestSpend(readout)}\n\nAuthorizing spending resumes admission under the new cap only; it does not approve scope, publication, merge, deployment, or destructive work.`,
+      title: `Raise this request's spending cap to ${formatDollars(action.capMicros)}?`,
+      message: "Work picks up where it paused.",
     };
   }
   if (!("taskId" in action))
     return { title: "Confirm Tandem action", message: "Allow this Tandem action?" };
   const task = await service.get(action.taskId);
-  const details = taskApprovalDetails(
-    task,
-    action.action === "approve",
-    action.action === "publish" || action.action === "draft" || action.action === "merge",
-  );
+  const objective = `"${compactText(task.objective, ACTION_SUMMARY_MAX_TEXT)}"`;
   switch (action.action) {
     case "approve":
       return {
-        title: "Approve Tandem scope?",
-        message: `Dispatch implementation for task ${action.taskId}: ${details}?`,
+        title: "Start building this?",
+        message: `${objective}, with ${task.acceptanceCriteria.length} acceptance criteria.`,
       };
     case "cancel":
       return {
-        title: "Cancel Tandem task?",
-        message: `Stop owned work for task ${action.taskId} and preserve reports: ${details}?`,
+        title: "Cancel this task?",
+        message: `${objective}. Its work and reports are kept.`,
       };
     case "publish":
       return {
-        title: "Publish reviewed pull request?",
-        message: `Publish ${action.repository} (${action.title}, base ${action.base}) for task ${action.taskId}: ${details}?`,
+        title: "Open the pull request?",
+        message: `"${action.title}" for ${objective}, into ${action.base}. It won't be merged yet.`,
       };
     case "draft":
       return {
-        title: "Publish unfinished draft pull request?",
-        message: `Publish or update an unfinished draft on ${action.repository} (${action.title}, base ${action.base}) for task ${action.taskId}. A draft shows progress only; it does not merge, deploy, or accept anything: ${details}?`,
+        title: "Open a draft pull request?",
+        message: `Shows progress on ${objective}. It isn't ready to merge.`,
       };
     case "merge":
       return {
-        title: "Merge reviewed pull request?",
-        message: `Merge task ${action.taskId} using ${action.method}: ${details}?`,
+        title: "Merge the pull request?",
+        message: `${objective}, using ${action.method}.`,
       };
     case "recovery-decide":
       return {
-        title: "Let Tandem settle this recovery decision?",
-        message: `Read durable state for task ${action.taskId} and either run a preapproved recovery action whose scope, ownership, and prior outcome are proven, wait at most five minutes for a confirmed availability block, or ask one question. It never retries uncertain work, publishes, merges, or deploys: ${details}?`,
+        title: "Let Tandem try to unstick this task?",
+        message: `${objective}. It only runs a fix you've already allowed, or asks you.`,
       };
     case "reconcile":
       return {
-        title: "Reconcile Tandem recovery state?",
-        message: `Clear only proven stale resources for task ${action.taskId}; preserve its worktree: ${details}?`,
+        title: "Clean up leftovers from this task?",
+        message: `${objective}. Its work is kept.`,
       };
     case "review-existing":
       return {
-        title: "Review the existing exact HEAD?",
-        message: `Run worker-free validation and read-only reviews at ${action.head} for task ${action.taskId}: ${details}?`,
+        title: "Check and review the work as it stands?",
+        message: `${objective}. Runs the checks and a fresh review without changing code.`,
       };
     case "validation-retry":
       return {
-        title: "Retry validation without an implementer?",
-        message: `Run bounded validation again for task ${action.taskId}: ${details}?`,
+        title: "Run the checks again?",
+        message: `${objective}.`,
       };
     case "evidence-repair":
       return {
-        title: "Repair durable evidence?",
-        message: `Reconstruct only HEAD-matching reports for task ${action.taskId}: ${details}?`,
+        title: "Rebuild this task's missing check records?",
+        message: `${objective}. Only records that match the current code are rebuilt.`,
       };
     case "cleanup":
       return {
-        title: "Discard Tandem task worktree?",
-        message: `Discard owned worktree for task ${action.taskId}: ${details}?`,
+        title: "Delete this task's working copy?",
+        message: `${objective}. This can't be undone.`,
       };
     default:
       return { title: "Confirm Tandem action", message: "Allow this Tandem action?" };
