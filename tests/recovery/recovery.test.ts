@@ -266,6 +266,13 @@ async function fixture(options: FixtureOptions = {}) {
       getTask,
       taskInScope: async () => options.outOfScope !== true,
       requestDispatchHold: async () => options.requestHold,
+      // These fixtures exercise the old decision rules directly; central recovery's own blocked-task
+      // re-entry is covered separately in tests/recovery/central.test.ts.
+      recoverBlockedTask: async (task) => ({
+        taskId: task.id,
+        action: "skipped",
+        reason: "central recovery is not under test here",
+      }),
     });
   return {
     home,

@@ -12,7 +12,10 @@
  * only the quarantined lens at the exact reviewed HEAD (`recoverStuckReviewer`), sharing the restart
  * budget. `awaiting-fixes` needs no branch: `beginFixes` moves the task to `implementing` and spends
  * the review round before touching a pane, so a missing pane is picked up by the implementing
- * re-entry without spending another round.
+ * re-entry without spending another round. Before spending a restart on `implementing` (including a
+ * fix round), `recoverStuckWorker` checks whether the dead worker already finished and adopts its
+ * committed HEAD instead (`adoptImplementerCommit`) — see `recoverBlockedTask` for how a `blocked`
+ * task with a recoverable cause reaches any of this without a person asking.
  */
 import { join } from "node:path";
 import { readCheckpoint } from "../adapters/git.ts";
@@ -28,6 +31,7 @@ import type {
   Notification,
   TaskQuestion,
   TaskRecord,
+  TaskStage,
 } from "../contracts.ts";
 import { activeRuntimeJob, taskRuntime, unreleasedReservation } from "../runtime/activity.ts";
 import {
@@ -46,13 +50,19 @@ import { pauseWorkerTerminal } from "../workers/terminal-control.ts";
 import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "./central-review.ts";
 import { taskAsking } from "./conversation.ts";
 import {
+  type CentralRecoveryAction,
+  type CentralRecoveryOutcome,
   classifyRestartFailure,
+  isLegacyWorkerDeathBlockText,
+  isRecoverableBlockCause,
   RECOVERY_QUESTION_ID_PREFIX,
   type RecoveryDecisionReceipt,
   type RecoveryEvidence,
   restartIncidentIdentity,
 } from "./decision.ts";
-import { MAX_VALIDATION_RETRIES } from "./workflow.ts";
+import { MAX_VALIDATION_RETRIES, pointTaskBranchAtCommit } from "./workflow.ts";
+
+export type { CentralRecoveryAction, CentralRecoveryOutcome };
 
 /** The two-restart budget every task generation gets before central recovery has to ask. */
 export const MAX_AUTOMATIC_RESTARTS_PER_GENERATION = 2;
@@ -113,14 +123,6 @@ export type CentralRecoveryDependencies = Readonly<{
   readonly relaunchReviewer: (task: TaskRecord) => Promise<void>;
 }>;
 
-export type CentralRecoveryAction = "relaunched" | "asked" | "blocked" | "skipped";
-
-export type CentralRecoveryOutcome = Readonly<{
-  readonly taskId: string;
-  readonly action: CentralRecoveryAction;
-  readonly reason: string;
-}>;
-
 /** The shared shape every `blockTask` dependency across the codebase already has, widened only to
  *  accept the optional typed cause `reportBlock` forwards through it. */
 export type BlockTaskEffect = (
@@ -144,6 +146,53 @@ export async function reportBlock(
   cause: BlockCause,
 ): Promise<void> {
   await blockTask(taskId, cause.summary, cause);
+}
+
+/** The `previousStage` values a blocked task's re-entry knows how to carry forward. `awaiting-fixes`
+ *  resumes there and stops: the next reconcile pass's own `beginFixes` call carries it into
+ *  `implementing`, whose re-entry is wired below, so nothing here needs to duplicate that hand-off. */
+const BLOCKED_TASK_REENTRY_STAGES: ReadonlySet<TaskStage> = new Set([
+  "implementing",
+  "scouting",
+  "validating",
+  "reviewing",
+  "awaiting-fixes",
+]);
+
+/**
+ * Whether a `blocked` task is one central recovery may re-enter automatically, without a person
+ * choosing to. Every condition here is a refusal, never a discovery: an ineligible task is left
+ * exactly as blocked as it already was, for a caller (the scheduler tick, or conversational
+ * recovery) to fall back to its own handling.
+ *
+ *  - The task must actually be blocked, with a `previousStage` this module knows how to resume into.
+ *  - Its cause must be recoverable: a typed `lost-resource`/`unusable-result` cause
+ *    (`isRecoverableBlockCause`), or — for a block recorded before every site carried a typed cause —
+ *    free text matching a known worker-death shape (`isLegacyWorkerDeathBlockText`). A
+ *    `user-decision` or `safety-stop` cause, and any other free text, is never eligible: only a
+ *    person resolves those.
+ *  - An unanswered question that is not itself a recovery question means a person is already being
+ *    asked something else; central recovery never barges in ahead of that.
+ *  - A pending stop request means a person already asked to stop the task; central recovery never
+ *    restarts work underneath a stop.
+ */
+export function canCentralRecoverBlockedTask(
+  task: TaskRecord,
+  runtime: RuntimeTaskState | undefined,
+): boolean {
+  if (task.stage !== "blocked") return false;
+  if (task.previousStage === undefined || !BLOCKED_TASK_REENTRY_STAGES.has(task.previousStage)) {
+    return false;
+  }
+  const recoverable =
+    task.blockCause !== undefined
+      ? isRecoverableBlockCause(task.blockCause)
+      : isLegacyWorkerDeathBlockText(task.blockReason ?? "");
+  if (!recoverable) return false;
+  const question = task.communication?.question;
+  if (question !== undefined && !question.id.startsWith(RECOVERY_QUESTION_ID_PREFIX)) return false;
+  if (runtime?.stopRequest !== undefined) return false;
+  return true;
 }
 
 function defaultRecovery(runtime: RuntimeTaskState | undefined): RuntimeRecoveryState {
@@ -248,9 +297,10 @@ const VALIDATION_RETRY_QUESTION_WANT =
   'Reply "retry" to rerun validation at the same reviewed commit, or "stop" to leave it blocked so you can look at it yourself.';
 
 /**
- * Central recovery: stop, save, re-enter. The `implementing`/`scouting` and `validating` stages'
- * re-entry are wired; every other stage is reported as `skipped` so a caller falls back to whatever
- * it did before.
+ * Central recovery: stop, save, re-enter. The `implementing`/`scouting`, `validating`, and
+ * `reviewing` stages' re-entry are wired via `recoverStuckWorker`; a `blocked` task with a
+ * recoverable cause reaches the same re-entry through `recoverBlockedTask` without a person asking.
+ * Every other stage is reported as `skipped` so a caller falls back to whatever it did before.
  */
 export class CentralRecoveryWorkflow {
   readonly #deps: CentralRecoveryDependencies;
@@ -308,6 +358,27 @@ export class CentralRecoveryWorkflow {
         what: `The worker stopped, but I could not prove it is actually gone (${proof.reasonSummary}).`,
         risk: "If you choose restart, Tandem checks again first and will not run two workers on the same worktree at once. Nothing has changed yet either way; your worktree and history are preserved.",
       });
+    }
+
+    // A dead implementer (including a fix-round implementer) may have already finished: adopt its
+    // committed HEAD instead of spending a restart on rerunning work that already happened. Never for
+    // `scouting`, which has no comparable finished-commit shape.
+    if (task.kind === "implementation" && task.stage === "implementing") {
+      const adoption = await this.adoptableImplementerCommit(task);
+      if (adoption.head !== undefined) {
+        const adoptedOutcome = await this.adoptImplementerCommit(
+          task,
+          adoption.head,
+          adoption.detached ?? false,
+          incidentIdentity,
+          proof,
+          now,
+        );
+        // `undefined` means adoption turned out not to be safe after all (the branch-pointing step
+        // could not proceed without forcing something away); fall through to the ordinary relaunch
+        // path below rather than treating that as ineligibility to restart at all.
+        if (adoptedOutcome !== undefined) return adoptedOutcome;
+      }
     }
 
     const recovery = defaultRecovery(runtime);
@@ -398,6 +469,59 @@ export class CentralRecoveryWorkflow {
       dispositionReason: notice,
     });
     return { taskId: task.id, action: "relaunched", reason: notice };
+  }
+
+  /**
+   * The scheduler tick's and conversational recovery's shared entry point for a `blocked` task:
+   * when `canCentralRecoverBlockedTask` says the block is automatically recoverable, resumes the
+   * task to its previous stage and runs that stage's own stop/save/re-entry (`recoverStuckWorker`,
+   * which already dispatches `implementing`/`scouting`/`validating`/`reviewing`) exactly as if the
+   * task had never blocked. `awaiting-fixes` resumes and stops there: its own next reconcile pass
+   * carries it into `implementing` through the ordinary `beginFixes` hand-off, so nothing here
+   * duplicates that. Anything not eligible is reported `skipped`, so the caller falls back to
+   * whatever it did before — leaving the task blocked, or conversational recovery's own decision
+   * rules.
+   */
+  public async recoverBlockedTask(task: TaskRecord): Promise<CentralRecoveryOutcome> {
+    if (task.stage !== "blocked") {
+      return { taskId: task.id, action: "skipped", reason: "task is not blocked" };
+    }
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    const runtime = taskRuntime(state, task.id);
+    if (!canCentralRecoverBlockedTask(task, runtime)) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "block is not eligible for automatic recovery",
+      };
+    }
+    const resumed = await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined || current.stage !== "blocked") return current;
+      return store.update(current.id, current.revision, (entry) =>
+        transitionTask(
+          entry,
+          { type: "resume" },
+          { now: this.#deps.clock(), notificationId: this.#deps.idFactory() },
+        ),
+      );
+    });
+    if (resumed === undefined || resumed.stage === "blocked") {
+      return { taskId: task.id, action: "skipped", reason: "task could not be resumed" };
+    }
+    if (
+      resumed.stage !== "implementing" &&
+      resumed.stage !== "scouting" &&
+      resumed.stage !== "validating" &&
+      resumed.stage !== "reviewing"
+    ) {
+      return {
+        taskId: task.id,
+        action: "resumed",
+        reason: `resumed to ${resumed.stage}; its own next reconcile pass carries the recovery forward`,
+      };
+    }
+    return this.recoverStuckWorker(resumed);
   }
 
   /**
@@ -1351,6 +1475,189 @@ export class CentralRecoveryWorkflow {
         ].slice(-MAX_RECOVERY_DECISION_RECEIPTS),
       })),
     );
+  }
+
+  /**
+   * Whether a dead implementer (including a fix-round implementer) already finished: the task
+   * worktree is clean, not unmerged, checked out on the task's own branch, and HEAD is a new commit
+   * strictly ahead of the task's base — and that HEAD is not something already reviewed. Review
+   * evidence is pinned to an exact HEAD the same way `recoverStuckReviewer` treats it, so a HEAD that
+   * already has a review result attached is never re-adopted as if it were new.
+   */
+  /**
+   * A worker that committed and then died is exactly as likely to have left the worktree detached
+   * (it never switched back to the task branch) as still on the task branch, and the live incident
+   * this feature exists for was detached. Detached and on-the-task's-own-branch are both adoptable;
+   * a checkout on some *other* named branch is someone else's work and is never adopted. When
+   * detached, this also checks (read-only) that the task branch, if it already exists, is an
+   * ancestor of the adopted commit — `adoptImplementerCommit`'s later `pointTaskBranchAtCommit` call
+   * must never force the branch away from real work, so an eligible-looking-but-diverged branch is
+   * screened out here rather than discovered mid-mutation.
+   */
+  private async adoptableImplementerCommit(
+    task: TaskRecord,
+  ): Promise<Readonly<{ readonly head?: string; readonly detached?: boolean }>> {
+    if (task.worktree === undefined) return {};
+    const { path, baseHead, branch } = task.worktree;
+    try {
+      const checkout = await readCheckpoint(this.#deps.run, { repo: path, baseRef: baseHead });
+      if (checkout.dirty || checkout.unmerged || checkout.head === baseHead) return {};
+      if (task.reviewHead === checkout.head) return {};
+      if (task.reviews.some((review) => review.head === checkout.head)) return {};
+      const onBranch = await this.#deps.run({
+        argv: ["git", "-C", path, "branch", "--show-current"],
+        cwd: path,
+      });
+      if (onBranch.code !== 0) return {};
+      const currentBranch = onBranch.stdout.trim();
+      const detached = currentBranch.length === 0;
+      if (!detached && currentBranch !== branch) return {};
+      const ancestor = await this.#deps.run({
+        argv: ["git", "-C", path, "merge-base", "--is-ancestor", baseHead, checkout.head],
+        cwd: path,
+      });
+      if (ancestor.code !== 0) return {};
+      if (detached) {
+        const branchHead = await this.#deps.run({
+          argv: ["git", "-C", path, "rev-parse", "--verify", `refs/heads/${branch}`],
+          cwd: path,
+        });
+        if (branchHead.code === 0) {
+          const branchAncestor = await this.#deps.run({
+            argv: [
+              "git",
+              "-C",
+              path,
+              "merge-base",
+              "--is-ancestor",
+              branchHead.stdout.trim(),
+              checkout.head,
+            ],
+            cwd: path,
+          });
+          // The task branch already exists and is not an ancestor of the adopted commit: it holds
+          // real work the adoption would otherwise force away. Never adopted; falls back to relaunch.
+          if (branchAncestor.code !== 0) return {};
+        }
+      }
+      return { head: checkout.head, detached };
+    } catch {
+      // An unreadable checkout is never treated as an adoptable commit; the caller falls back to
+      // the ordinary relaunch path, which re-derives its own proof from the same worktree.
+      return {};
+    }
+  }
+
+  /**
+   * Records a dead implementer's already-committed HEAD exactly as a successful implementer result
+   * would: the same `implementation-complete` lifecycle event `WorkerWorkflow` applies when a worker
+   * completes with a clean committed checkpoint (see `src/workers/workflow.ts`'s implementer result
+   * handling), setting `reviewHead` and advancing the task to `validating` → `reviewing`. Validation
+   * and a fresh review still gate quality from there, so no user approval is needed to send an
+   * already-finished commit through them instead of paying for a worker to redo the same work.
+   *
+   * When the worktree was left detached (the worker never switched back to the task branch — the
+   * shape the live incident this exists for actually had), the task branch is pointed at the adopted
+   * commit first, via `pointTaskBranchAtCommit`, the same branch repair `reconcile`'s
+   * `repairDetachedTaskBranch` uses. `adoptableImplementerCommit` already proved, read-only, that
+   * doing so is safe (the branch does not exist yet, or is an ancestor of the adopted commit); a
+   * failure here despite that is treated as ineligibility, not a block: returns `undefined` so the
+   * caller falls back to the ordinary relaunch path instead of discarding anything.
+   */
+  private async adoptImplementerCommit(
+    task: TaskRecord,
+    head: string,
+    detached: boolean,
+    incidentIdentity: string,
+    proof: DeathProof,
+    now: IsoTimestamp,
+  ): Promise<CentralRecoveryOutcome | undefined> {
+    const branch = task.worktree?.branch;
+    const path = task.worktree?.path;
+    if (branch === undefined || path === undefined) return undefined;
+    if (detached) {
+      try {
+        await pointTaskBranchAtCommit(this.#deps, path, branch, head);
+      } catch {
+        return undefined;
+      }
+    }
+    await this.settleProvenQuarantine(task.id);
+    const reportPath = join(
+      taskJobsDirectory(this.#deps.home, task.id),
+      String(task.generation),
+      "recovery-adopt-commit",
+      "report.txt",
+    );
+    await writeTextAtomically(
+      reportPath,
+      [
+        "Central recovery adopted this commit after the worker stopped mid-task.",
+        "",
+        `The worker stopped (${proof.reasonSummary}) after committing its work and exited without`,
+        "reporting a result. Recovery confirmed the worktree was clean and at a new commit strictly",
+        "ahead of the task's base, and sent that commit to validation and review instead of rerunning",
+        "the worker.",
+        "",
+        `Adopted commit: ${head}`,
+        detached
+          ? `The worktree was left detached at that commit; recovery pointed branch ${branch} at it.`
+          : `Worktree branch: ${branch}.`,
+      ].join("\n"),
+    );
+    const adopted = await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined || current.stage !== "implementing") return undefined;
+      return store.update(current.id, current.revision, (entry) =>
+        transitionTask(
+          entry,
+          { type: "implementation-complete", head, generation: entry.generation, reportPath },
+          { now: this.#deps.clock(), notificationId: this.#deps.idFactory() },
+        ),
+      );
+    });
+    if (adopted === undefined || adopted.reviewHead !== head) {
+      const reason = "the task could not be moved to validating with the adopted commit";
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "lost-resource",
+        kind: "transition-failed",
+        summary: "Tandem found the worker's finished commit, but couldn't record it.",
+        detail: reason,
+      });
+      return { taskId: task.id, action: "blocked", reason };
+    }
+    const notice =
+      "The worker stopped after committing its work. I'm sending that commit to checks and review instead of redoing it.";
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) return;
+      const notification: Notification = {
+        id: this.#deps.idFactory(),
+        message: notice,
+        acknowledged: false,
+        kind: "coordinator",
+      };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: this.#deps.clock(),
+        notifications: [...entry.notifications, notification],
+      }));
+    });
+    await this.saveDecision(task.id, {
+      taskId: task.id,
+      generation: task.generation,
+      ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+      evidence: this.evidenceFor(incidentIdentity, proof.reasonSummary, now),
+      ownership: "proven-owned",
+      priorOutcome: "known",
+      approval: "preapproved",
+      unmetProofs: [],
+      consequences: notice,
+      disposition: "applied",
+      dispositionReason: notice,
+    });
+    return { taskId: task.id, action: "adopted", reason: notice };
   }
 
   /** Snapshots the worktree's uncommitted diff and untracked files as durable evidence before relaunch. */

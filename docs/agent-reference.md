@@ -2018,14 +2018,47 @@ unprovable pane asks a "retry"/"stop" question through the same plain-English sh
 under its own `VALIDATION_RETRY_QUESTION_ID_PREFIX` so it never misroutes into the implementing/
 scouting restart handler.
 
+**A `blocked` task re-enters automatically when its cause is recoverable.**
+`CentralRecoveryWorkflow.recoverBlockedTask` (`src/recovery/central.ts`) is the single entry point: a
+task is eligible only when it is `blocked`, its `previousStage` is one this module already re-enters
+(`implementing`, `scouting`, `validating`, `reviewing`, or `awaiting-fixes`, which resumes and stops
+there so the ordinary `beginFixes` hand-off carries it into `implementing`), and its block is
+recoverable — a typed `lost-resource` cause, a typed `unusable-result` cause whose kind is still
+infrastructure-shaped (`worker-failed`, `stale-review-state`, `no-clean-checkpoint`; never
+`review-lens-failed`, a lens that ran and reported its own failure), or — for a block recorded before
+every site carried a typed cause — free text matching a known worker-death shape
+(`isLegacyWorkerDeathBlockText` in `src/recovery/decision.ts`). A `user-decision` or `safety-stop`
+cause is never eligible, nor is a task with an unanswered non-recovery question or a pending stop
+request: only a person resolves those. Eligible or not, `recoverBlockedTask` never mutates an
+ineligible task; it resumes the task to its previous stage (the same `"resume"` lifecycle event
+answering a recovery question already uses) and then runs that stage's own re-entry
+(`recoverStuckWorker`), so the restart/validation-retry budgets and the stop ladder are exactly the
+same ones a task that was never blocked would spend. This is wired at both places a blocked task is
+reconsidered: the scheduler tick (`ServiceController.reconcileTask`, so it happens without anyone
+asking) and `recovery-decide` (`RecoveryConversationWorkflow.decide`, which delegates to it first and
+reports what it did instead of recommending one of the older recovery actions).
+
+**`implementing` re-entry adopts an already-finished commit instead of relaunching a worker.** Before
+spending a restart, `recoverStuckWorker` checks whether the dead worker (including a fix-round
+implementer) already finished: the task worktree is clean, not unmerged, checked out on the task's
+own branch, and `HEAD` is a new commit strictly ahead of the task's base (`worktree.baseHead`) that is
+not already recorded as reviewed. When it is, central recovery records it exactly as a successful
+implementer result would — the same `implementation-complete` lifecycle event
+`WorkerWorkflow`'s implementer result handling applies, setting `reviewHead` and advancing the task to
+`validating` → `reviewing` — instead of paying for a worker to redo work that already happened.
+Validation and a fresh review still gate quality from there, so no user approval is needed. A dirty or
+unmerged worktree, or `HEAD` still at base, falls back to the ordinary relaunch unchanged.
+
 ### Typed block causes
 
 A blocking site may record a `BlockCause` (`src/contracts.ts`) alongside the task's free-text
 `blockReason`: a closed `kind`, its `group`, an internal `detail` (raw error/site text, for
 diagnosis), and a plain-English `summary` (what happened, no ids) that becomes the block's
 user-facing reason. `reportBlock` (`src/recovery/central.ts`) is the one entry point for reporting a
-cause — it records the cause and blocks exactly like today's free-text block; it does not yet trigger
-automatic recovery. `blockCause` is optional and additive on `TaskRecord`; records written before it
+cause — it records the cause and blocks exactly like today's free-text block. Whether the resulting
+block is later re-entered automatically is decided separately, the next time the task is reconsidered,
+by `recoverBlockedTask` (see above); `reportBlock` itself never triggers recovery synchronously.
+`blockCause` is optional and additive on `TaskRecord`; records written before it
 existed load with no cause. Recovery question/decision identity for a caused block is keyed off
 `(taskId, generation, cause.kind, cause.jobId?)` (`blockCauseEvidenceIdentity` in
 `src/recovery/decision.ts`) instead of hashing the summary text, so rewording a summary can never
