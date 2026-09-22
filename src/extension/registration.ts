@@ -194,14 +194,15 @@ export function registerTandemOmp(
       .object({
         action: z.literal("budget-approve"),
         requestId: z.string(),
-        decisionId: z.string(),
+        decisionId: z.string().optional(),
         capMicros: z.number().int().nonnegative(),
       })
       .strict(),
     z
       .object({
         action: z.literal("brief-approve"),
-        requestId: z.string(),
+        /** Omitted resolves to the one request whose brief is awaiting approval. */
+        requestId: z.string().optional(),
         briefRevision: z.number().int().positive(),
         contentDigest: z.string(),
       })

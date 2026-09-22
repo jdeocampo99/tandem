@@ -11,11 +11,11 @@ import { readRuntimeState, updateRuntimeState } from "../runtime/persistence.ts"
 import type { RuntimeTaskState } from "../runtime/schema.ts";
 import { isTerminalTask, replaceRuntimeTask } from "../service/records.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
+import { formatDecisionQuestion } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import {
   chooseRecoveryAction,
   classifyRecoveryEvidence,
-  formatRecoveryQuestion,
   preapprovedRecoveryAction,
   RECOVERY_QUESTION_ID_PREFIX,
   type RecoveryActionName,
@@ -141,9 +141,9 @@ function questionText(
     recommendedAction === undefined
       ? `Nothing yet: no supported recovery action is proven safe, so I am asking before touching anything. ${consequences}`
       : `Run ${recommendedAction}. ${consequences}`;
-  return formatRecoveryQuestion({
+  return formatDecisionQuestion({
     what: `A task is blocked: ${evidence.summary}.`,
-    want,
+    recommendation: want,
     risk: "Nothing has changed yet; the worktree, reports, provenance, and unmerged changes are preserved either way.",
   });
 }

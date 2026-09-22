@@ -6,8 +6,7 @@ import {
   MODEL_ROLE_ORDER,
   type TaskRecord,
 } from "../contracts.ts";
-import { describeSpendMicros, type RequestSpendReadout } from "../runtime/budget.ts";
-import { USD_MICROS_PER_DOLLAR } from "../runtime/usage.ts";
+import { describePauseReason, formatDollars, type RequestSpendReadout } from "../runtime/budget.ts";
 import type {
   AdditionalCharges,
   ElapsedMillis,
@@ -964,7 +963,7 @@ function describeDuration(value: ElapsedMillis): string {
 
 /** Never presents an unmeasured charge as zero, and never lets one read as a saving. */
 function describeCharges(charges: AdditionalCharges): string {
-  const amount = `${charges.currency} ${(charges.amountMicros / USD_MICROS_PER_DOLLAR).toFixed(6)}`;
+  const amount = formatDollars(charges.amountMicros);
   const priced = charges.actualSamples + charges.estimatedSamples;
   const counted =
     priced === 0
@@ -1036,22 +1035,22 @@ function summarizeRequestReceipt(value: unknown): string {
 export function summarizeRequestSpend(readout: RequestSpendReadout): string {
   const { cap, exposure, pause } = readout;
   const lines = [
-    `${readout.requestId}: cap ${cap.source === "none" ? "none in force" : `${describeSpendMicros(cap.capMicros)} from ${cap.source}`}; approval ${readout.approvalState}`,
+    `${readout.requestId}: cap ${cap.source === "none" ? "none in force" : `${formatDollars(cap.capMicros)} from ${cap.source}`}; approval ${readout.approvalState}`,
     `Charged (observed): ${describeCharges(readout.charges)}`,
-    `Reserved (estimate): ${describeSpendMicros(exposure.reservedMicros)} across ${exposure.inFlightReservations} in-flight and ${exposure.settledEstimateReservations} settled-but-unpriced operation(s)`,
-    `Accounted exposure: ${describeSpendMicros(exposure.totalMicros)} (a floor on what this request cost, not a measurement)`,
+    `Reserved (estimate): ${formatDollars(exposure.reservedMicros)} across ${exposure.inFlightReservations} in-flight and ${exposure.settledEstimateReservations} settled-but-unpriced operation(s)`,
+    `Accounted exposure: ${formatDollars(exposure.totalMicros)} (a floor on what this request cost, not a measurement)`,
     `Unmeasured: ${exposure.unpricedSamples} sample(s) carry no published price and ${exposure.unmeasuredTokenSamples} reported no tokens; ${exposure.unaccountedSamples} of them have no reserved estimate standing for them`,
     `Included quota: ${describeQuota(readout.quota)}`,
   ];
   if (readout.approval !== undefined) {
     lines.push(
-      `Authorized ${describeSpendMicros(readout.approval.capMicros)} on decision ${readout.approval.decisionId} at ${readout.approval.approvedAt}, replacing ${describeSpendMicros(readout.approval.previousCapMicros)}, accepting ${readout.approval.acknowledgedUnaccountedSamples} unmeasured sample(s).`,
+      `Authorized ${formatDollars(readout.approval.capMicros)} on decision ${readout.approval.decisionId} at ${readout.approval.approvedAt}, replacing ${formatDollars(readout.approval.previousCapMicros)}, accepting ${readout.approval.acknowledgedUnaccountedSamples} unmeasured sample(s).`,
     );
   }
   lines.push(
     pause === undefined
       ? "No spending decision is pending; admission is passive and nothing is being asked."
-      : `Pending decision ${pause.decisionId} (${pause.reason}) raised at ${pause.observedAt} by task ${pause.taskId}; next step estimated at ${describeSpendMicros(pause.nextStepMicros)}. Answer it with budget-approve; Tandem will not economize to fit.`,
+      : `A spending decision is pending: ${describePauseReason(pause.reason)}. Raised at ${pause.observedAt}; the next step is estimated at ${formatDollars(pause.nextStepMicros)}. Answer it with budget-approve; Tandem will not economize to fit.`,
   );
   if (readout.reconciledAt !== undefined) {
     lines.push(

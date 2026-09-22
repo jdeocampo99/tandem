@@ -20,7 +20,9 @@ export type RequestBriefErrorCode =
   | "request-not-found"
   | "request-mismatch"
   | "stale-revision"
-  | "stale-content";
+  | "stale-content"
+  | "no-pending-approval"
+  | "ambiguous-pending-approval";
 
 export class RequestBriefError extends Error {
   readonly code: RequestBriefErrorCode;
@@ -261,6 +263,29 @@ export function requestApprovalState(record: RequestBriefRecord): RequestApprova
   return record.approval.agreementDigest === record.draft.agreementDigest
     ? "current"
     : "superseded";
+}
+
+/**
+ * The one request whose brief is awaiting approval, so an approver need not name it. Fails closed
+ * rather than guessing: an approval must never land on a request the caller did not mean, so zero
+ * or several candidates are both refused with the exact ids, for the caller to name one explicitly.
+ */
+export function singlePendingApprovalId(records: readonly RequestBriefRecord[]): string {
+  const pending = records.filter((record) => requestApprovalState(record) !== "current");
+  if (pending.length === 0) {
+    throw new RequestBriefError("no-pending-approval", "No request brief is awaiting approval");
+  }
+  if (pending.length > 1) {
+    throw new RequestBriefError(
+      "ambiguous-pending-approval",
+      `Several requests have a brief awaiting approval (${pending.map((record) => record.id).join(", ")}); name one explicitly`,
+    );
+  }
+  const only = pending[0];
+  if (only === undefined) {
+    throw new RequestBriefError("no-pending-approval", "No request brief is awaiting approval");
+  }
+  return only.id;
 }
 
 export function decideRequestDispatch(record: RequestBriefRecord): RequestDispatchDecision {

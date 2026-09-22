@@ -122,6 +122,7 @@ function deliveryKey(notification: NotificationRef): string {
   return `${notification.taskId}:${notification.notificationId}`;
 }
 
+/** Routine (non-judgment) notifications: informational only, so the task id stays as a label. */
 function notificationContent(notifications: readonly NotificationRef[]): string {
   return notifications
     .map((notification) => {
@@ -143,6 +144,49 @@ function notificationContent(notifications: readonly NotificationRef[]): string 
       return lines.join("\n");
     })
     .join("\n");
+}
+
+/**
+ * Judgment-needed notifications shown to the user: no task, notification, or question id in the
+ * text. The same ids, needed for the model to act, travel separately through
+ * {@link judgmentIdentifiers} on a message the user never sees.
+ */
+function judgmentDisplayContent(notifications: readonly NotificationRef[]): string {
+  return notifications
+    .map((notification) => {
+      const lines = [compactText(notification.message, ACTION_SUMMARY_MAX_TEXT)];
+      if (notification.questionText !== undefined) {
+        lines.push(compactText(notification.questionText, ACTION_SUMMARY_MAX_TEXT));
+        if (notification.recommendation !== undefined)
+          lines.push(
+            `Recommendation: ${compactText(notification.recommendation, ACTION_SUMMARY_MAX_TEXT)}`,
+          );
+      }
+      if (notification.reportPath !== undefined)
+        lines.push(`Evidence report: ${compactText(notification.reportPath, 180)}`);
+      if (notification.followUp !== undefined) lines.push(notification.followUp);
+      return lines.join("\n");
+    })
+    .join("\n");
+}
+
+/**
+ * The task/request and question ids the displayed judgment-needed text just left out, in the same
+ * order, for a tool call to act on. Sent as a `display: false` companion message: it still reaches
+ * the model's context (a custom message's `content` is converted to LLM history regardless of
+ * `display`), but the host transcript never renders it, so the user never sees an id.
+ */
+function judgmentIdentifiers(notifications: readonly NotificationRef[]): string {
+  const lines = notifications.map((notification) => {
+    const ref = `${notification.scope} ${notification.taskId}, notification ${notification.notificationId}`;
+    return notification.questionId === undefined
+      ? ref
+      : `${ref}, question ${notification.questionId}`;
+  });
+  return [
+    "Identifiers for the item(s) above, in the same order (never display or repeat these to the user):",
+    ...lines,
+  ].join("\n");
 }
 
 type NotificationMessageSink = Pick<ExtensionAPI, "sendMessage" | "appendEntry">;
@@ -191,13 +235,23 @@ export async function deliverPendingNotifications(
       pi.appendEntry(TANDEM_NOTIFICATION_ENTRY, { notifications: routine, content });
     }
     if (actionable.length > 0) {
-      const content = notificationContent(actionable);
+      // The identifiers land in context first (hidden), then the clean prompt the user reads;
+      // only the second call triggers the turn, so the model responds once with both in hand.
       pi.sendMessage(
         {
           customType: TANDEM_NOTIFICATION_ENTRY,
-          content,
-          display: true,
+          content: judgmentIdentifiers(actionable),
+          display: false,
           details: { notifications: actionable },
+          attribution: "agent",
+        },
+        { deliverAs: "followUp" },
+      );
+      pi.sendMessage(
+        {
+          customType: TANDEM_NOTIFICATION_ENTRY,
+          content: judgmentDisplayContent(actionable),
+          display: true,
           attribution: "agent",
         },
         { deliverAs: "followUp", triggerTurn: true },

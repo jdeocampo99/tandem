@@ -39,7 +39,7 @@ export class RequestDeliveryError extends Error {
 /** The task fields whole-request coordination reads; the task record stays the owner of all of them. */
 export type RequestMemberTask = Pick<
   TaskRecord,
-  "id" | "kind" | "stage" | "surfaces" | "requestId" | "reviewHead" | "blockReason"
+  "id" | "kind" | "stage" | "surfaces" | "requestId" | "reviewHead" | "blockReason" | "objective"
 >;
 
 /** One member held back, naming the work it waits on rather than widening its scope. */
@@ -246,40 +246,64 @@ function conflictedTaskIds(record: RequestDeliveryRecord): readonly string[] {
     .flatMap((conflict) => conflict.taskIds);
 }
 
+/** The task's objective, quoted for a person to read; falls back when it is not known here. */
+function taskTitle(tasks: readonly RequestMemberTask[], taskId: string): string {
+  const objective = tasks.find((task) => task.id === taskId)?.objective;
+  return objective !== undefined && objective.length > 0 ? `"${objective}"` : "a task";
+}
+
+/** Swaps known task ids inside system-generated text for their quoted titles. */
+function withTaskTitles(
+  text: string,
+  replacements: ReadonlyArray<readonly [id: string, title: string]>,
+): string {
+  return replacements.reduce((current, [id, title]) => current.split(id).join(title), text);
+}
+
 function decisionRequests(
   record: RequestDeliveryRecord,
   approvalState: RequestApprovalState,
+  tasks: readonly RequestMemberTask[],
 ): readonly RequestDecisionRequest[] {
   const decisions: RequestDecisionRequest[] = [];
   if (approvalState === "superseded") {
     decisions.push({
       id: `${record.id}:reapproval`,
-      subject: record.id,
-      detail: `Request ${record.id} changed what was agreed after approval; its brief needs reapproval before member work continues`,
+      subject: "brief approval",
+      detail:
+        "what was agreed changed after approval; the brief needs reapproval before member work continues",
     });
   }
   for (const conflict of record.conflicts) {
     if (conflict.decision !== undefined) continue;
+    const titles = conflict.taskIds.map((taskId) => taskTitle(tasks, taskId));
     decisions.push({
       id: `${record.id}:conflict:${conflict.id}`,
-      subject: conflict.taskIds.join(", "),
-      detail: `Conflict ${conflict.id} between ${conflict.taskIds.join(" and ")}: ${conflict.reason}`,
+      subject: titles.join(", "),
+      detail: `${titles.join(" and ")} conflict: ${conflict.reason}`,
     });
   }
   for (const member of record.members) {
     if (member.status !== "quarantined") continue;
+    const title = taskTitle(tasks, member.taskId);
     decisions.push({
       id: `${record.id}:member:${member.taskId}`,
-      subject: member.taskId,
-      detail: `Membership of ${member.taskId} is quarantined: ${member.quarantineReason ?? "unknown reason"}`,
+      subject: title,
+      detail: `${title} is on hold because ${member.quarantineReason ?? "the reason is unknown"}`,
     });
   }
   for (const dependency of record.dependencies) {
     if (dependency.status !== "quarantined") continue;
+    const taskTitleText = taskTitle(tasks, dependency.taskId);
+    const dependsOnTitle = taskTitle(tasks, dependency.dependsOn);
+    const reason = withTaskTitles(dependency.quarantineReason ?? "the reason is unknown", [
+      [dependency.taskId, taskTitleText],
+      [dependency.dependsOn, dependsOnTitle],
+    ]);
     decisions.push({
       id: `${record.id}:dependency:${dependency.taskId}:${dependency.dependsOn}`,
-      subject: `${dependency.taskId} -> ${dependency.dependsOn}`,
-      detail: `Dependency of ${dependency.taskId} on ${dependency.dependsOn} is quarantined: ${dependency.quarantineReason ?? "unknown reason"}`,
+      subject: `${taskTitleText} and ${dependsOnTitle}`,
+      detail: `${taskTitleText} is on hold because ${reason}`,
     });
   }
   return decisions;
@@ -652,7 +676,7 @@ export function summarizeRequestProgress(
 ): RequestAggregate {
   const { record, tasks } = input;
   const members = activeMembers(record);
-  const decisions = decisionRequests(record, input.approvalState);
+  const decisions = decisionRequests(record, input.approvalState, tasks);
   const disputed = new Set(conflictedTaskIds(record));
   const active: string[] = [];
   const completed: string[] = [];

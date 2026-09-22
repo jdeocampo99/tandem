@@ -453,18 +453,3 @@ export function restartIncidentIdentity(
     .digest("hex")
     .slice(0, 32);
 }
-
-/**
- * The plain-English shape every recovery question and coordinator notice uses: what happened, what
- * Tandem wants to do about it, and what the person answering risks either way. IDs, paths, and other
- * identifiers belong in a details/consequences string, never in `what`.
- */
-export function formatRecoveryQuestion(
-  input: Readonly<{ readonly what: string; readonly want: string; readonly risk: string }>,
-): string {
-  return [
-    `What happened: ${input.what}`,
-    `What I want to do: ${input.want}`,
-    `What you risk: ${input.risk}`,
-  ].join(" ");
-}

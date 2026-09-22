@@ -7,9 +7,10 @@ import type {
   TaskRecord,
 } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
-import { describeSpendMicros } from "../runtime/budget.ts";
+import { formatDollars } from "../runtime/budget.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
 import { activeTaskMessages, MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
+import { formatDecisionQuestion } from "../tasks/question.ts";
 import {
   ACTION_SUMMARY_MAX_TEXT,
   compactList,
@@ -53,7 +54,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   reconcile: { min: 2, max: 2 },
   "brief-show": { min: 2, max: 2 },
   "brief-review": { min: 2, max: 2 },
-  "brief-approve": { min: 4, max: 4 },
+  "brief-approve": { min: 3, max: 4 },
   "request-receipt": { min: 2, max: 2 },
   "request-show": { min: 2, max: 2 },
   "request-relate": { min: 4, max: 4 },
@@ -64,7 +65,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "request-merge": { min: 3, max: 3 },
   "request-split": { min: 2, max: 2 },
   "budget-show": { min: 2, max: 2 },
-  "budget-approve": { min: 4, max: 4 },
+  "budget-approve": { min: 3, max: 4 },
   "review-existing": { min: 3, max: 3 },
   "validation-retry": { min: 2, max: 2 },
   "evidence-repair": { min: 2, max: 2 },
@@ -144,12 +145,14 @@ export type TandemAction =
   | Readonly<{
       readonly action: "budget-approve";
       readonly requestId: string;
-      readonly decisionId: string;
+      /** The pending decision to answer; omitted resolves to the request's one pending decision. */
+      readonly decisionId?: string | undefined;
       readonly capMicros: number;
     }>
   | Readonly<{
       readonly action: "brief-approve";
-      readonly requestId: string;
+      /** Omitted resolves to the one request whose brief is awaiting approval. */
+      readonly requestId?: string | undefined;
       readonly briefRevision: number;
       readonly contentDigest: string;
     }>
@@ -276,11 +279,23 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "evidence-repair"
   );
 }
-function taskApprovalDetails(task: TaskRecord, includeDirections = false): string {
-  const checkpoint =
-    task.reviewHead ??
-    task.worktree?.baseHead ??
-    "service-pinned source checkpoint (exact hash is not materialized on this task record)";
+/**
+ * `plainCheckpoint` names the reviewed commit in plain terms instead of its raw hash, for a
+ * publish/merge prompt where the exact SHA is not something a person can judge by; other prompts
+ * keep the hash for a technical reviewer verifying exact state before an approval.
+ */
+function taskApprovalDetails(
+  task: TaskRecord,
+  includeDirections = false,
+  plainCheckpoint = false,
+): string {
+  const checkpoint = plainCheckpoint
+    ? task.reviewHead !== undefined
+      ? "the version of the work that was reviewed"
+      : "the version this work started from"
+    : (task.reviewHead ??
+      task.worktree?.baseHead ??
+      "service-pinned source checkpoint (exact hash is not materialized on this task record)");
   const worktree =
     task.worktree === undefined
       ? undefined
@@ -378,23 +393,41 @@ async function approvalPrompt(
     return requestApprovalPrompt(action);
   }
   if (action.action === "brief-approve") {
-    const view = await service.requestBrief(action.requestId);
+    const requestId = action.requestId ?? (await service.pendingBriefApprovalId());
+    const view = await service.requestBrief(requestId);
+    const goal = view.record.draft.content.goal;
+    const what =
+      view.approvalState === "unapproved"
+        ? `The brief for "${goal}" has not been approved yet.`
+        : view.approvalState === "superseded"
+          ? `The brief for "${goal}" changed after it was last approved.`
+          : `The brief for "${goal}" is already approved as it stands.`;
     return {
       title: "Approve this request brief?",
-      message: `Approve request ${action.requestId} at brief revision ${action.briefRevision} (${view.approvalState}; durable draft is at revision ${view.record.draft.revision}). Approving the brief records the agreement only; it does not authorize provider activation, publication, merge, deployment, or destructive work.`,
+      message: formatDecisionQuestion({
+        what,
+        recommendation: "Record this as the agreed scope.",
+        risk: "Approving records the agreement only; it does not authorize provider activation, publication, merge, deployment, or destructive work.",
+      }),
     };
   }
   if (action.action === "budget-approve") {
     const readout = await service.requestSpend(action.requestId);
+    const naming =
+      action.decisionId === undefined ? "" : `, answering decision ${action.decisionId}`;
     return {
       title: "Authorize more spending on this request?",
-      message: `Raise the cap for request ${action.requestId} to ${describeSpendMicros(action.capMicros)}, answering decision ${action.decisionId}.\n\n${summarizeRequestSpend(readout)}\n\nAuthorizing spending resumes admission under the new cap only; it does not approve scope, publication, merge, deployment, or destructive work.`,
+      message: `Raise the cap for request ${action.requestId} to ${formatDollars(action.capMicros)}${naming}.\n\n${summarizeRequestSpend(readout)}\n\nAuthorizing spending resumes admission under the new cap only; it does not approve scope, publication, merge, deployment, or destructive work.`,
     };
   }
   if (!("taskId" in action))
     return { title: "Confirm Tandem action", message: "Allow this Tandem action?" };
   const task = await service.get(action.taskId);
-  const details = taskApprovalDetails(task, action.action === "approve");
+  const details = taskApprovalDetails(
+    task,
+    action.action === "approve",
+    action.action === "publish" || action.action === "draft" || action.action === "merge",
+  );
   switch (action.action) {
     case "approve":
       return {
@@ -667,7 +700,7 @@ export async function executeTandemAction(
     case "brief-approve":
       return textResult(
         await service.approveRequestBrief({
-          requestId: action.requestId,
+          ...(action.requestId === undefined ? {} : { requestId: action.requestId }),
           briefRevision: action.briefRevision,
           contentDigest: action.contentDigest,
         }),
@@ -967,7 +1000,10 @@ export function parseTandemCommand(input: string): TandemAction {
     case "budget-show":
       return { action: "budget-show", requestId: value(1, "budget-show") };
     case "budget-approve": {
-      const capMicros = Number(value(3, "budget-approve cap in USD micro-dollars"));
+      // Three words (requestId, cap) resolves to the request's one pending decision; four words
+      // (requestId, decisionId, cap) names it explicitly.
+      const capIndex = words.length === 4 ? 3 : 2;
+      const capMicros = Number(value(capIndex, "budget-approve cap in USD micro-dollars"));
       if (!Number.isSafeInteger(capMicros) || capMicros < 0) {
         throw new TypeError(
           "budget-approve cap must be a non-negative integer number of USD micro-dollars",
@@ -976,13 +1012,26 @@ export function parseTandemCommand(input: string): TandemAction {
       return {
         action: "budget-approve",
         requestId: value(1, "budget-approve"),
-        decisionId: value(2, "budget-approve decision id"),
+        ...(words.length === 4 ? { decisionId: value(2, "budget-approve decision id") } : {}),
         capMicros,
       };
     }
     case "brief-review":
       return { action: "brief-review", requestId: value(1, "brief-review") };
     case "brief-approve": {
+      // Three words (revision, digest) resolves to the one request awaiting approval; four words
+      // (requestId, revision, digest) names it explicitly.
+      if (words.length === 3) {
+        const briefRevision = Number(value(1, "brief-approve revision"));
+        if (!Number.isSafeInteger(briefRevision) || briefRevision < 1) {
+          throw new TypeError("brief-approve revision must be a positive integer");
+        }
+        return {
+          action: "brief-approve",
+          briefRevision,
+          contentDigest: value(2, "brief-approve content digest"),
+        };
+      }
       const briefRevision = Number(value(2, "brief-approve revision"));
       if (!Number.isSafeInteger(briefRevision) || briefRevision < 1) {
         throw new TypeError("brief-approve revision must be a positive integer");

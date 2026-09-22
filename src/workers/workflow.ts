@@ -3417,7 +3417,7 @@ export class WorkerWorkflow {
         ...current.notifications,
         {
           id: singleLine(this.#deps.idFactory(), "budget decision notification id"),
-          message: describeRequestSpendDecision(spend.pause),
+          message: describeRequestSpendDecision(spend.pause, task.objective),
           acknowledged: false,
           kind: "coordinator" as const,
         },
@@ -3519,7 +3519,7 @@ export class WorkerWorkflow {
         ...current.notifications,
         {
           id: singleLine(this.#deps.idFactory(), "routing decision notification id"),
-          message: describeExecutionRoutingDecision(pause),
+          message: describeExecutionRoutingDecision(pause, task.objective),
           acknowledged: false,
           kind: "coordinator" as const,
         },
