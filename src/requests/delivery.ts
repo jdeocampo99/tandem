@@ -503,7 +503,7 @@ export class RequestDeliveryWorkflow {
     };
   }
 
-  /** Runs the pinned validation commands in the delivery worktree at the integrated commit. */
+  /** Prepares the delivery worktree, then runs the pinned validation commands at the integrated commit. */
   async #verifyIntegration(
     input: Readonly<{
       readonly brief: RequestBriefRecord;
@@ -515,6 +515,18 @@ export class RequestDeliveryWorkflow {
   ): Promise<readonly PinnedValidationEvidence[]> {
     const first = input.members[0];
     if (first === undefined) throw new Error("integration requires at least one member");
+    for (const command of first.policy.config.setupCommands) {
+      const result = await this.#deps.run({
+        argv: command.argv,
+        cwd: input.worktreePath,
+        timeoutMs: command.timeoutMs,
+      });
+      if (result.code !== 0) {
+        throw new Error(
+          `worktree setup command ${JSON.stringify(command.name)} exited with code ${result.code}: ${result.stderr.trim().slice(-2000)}`,
+        );
+      }
+    }
     const contract = integratedAcceptanceContract({
       policy: first.policy,
       surfaces: input.members.flatMap((member) => member.surfaces),

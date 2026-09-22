@@ -55,6 +55,7 @@ const policyConfig: RepoPolicy = {
   validationCommands: [
     { name: "check", argv: ["bun", "run", "check"], surfaces: ["delivery"], timeoutMs: 10_000 },
   ],
+  setupCommands: [],
   maxWorkers: 3,
   maxFixRounds: 3,
   reviewLevels: {

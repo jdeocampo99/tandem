@@ -50,6 +50,7 @@ function policy(overrides: Partial<ReviewLevelPolicy> = {}): ResolvedPolicy {
         { name: "check", argv: ["bun", "run", "check"], surfaces: ["service"], timeoutMs: 1_000 },
         { name: "test", argv: ["bun", "test"], surfaces: ["service"], timeoutMs: 1_000 },
       ],
+      setupCommands: [],
       maxWorkers: 3,
       maxFixRounds: 3,
       reviewLevels: { ...DEFAULT_REVIEW_LEVEL_POLICY, ...overrides },

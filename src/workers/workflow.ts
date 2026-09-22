@@ -3304,6 +3304,9 @@ export class WorkerWorkflow {
       ...(this.#deps.workerTimeoutMs === undefined
         ? {}
         : { timeoutMs: this.#deps.workerTimeoutMs }),
+      ...(role === "implementer" && task.policy.config.setupCommands.length > 0
+        ? { setup: task.policy.config.setupCommands }
+        : {}),
     };
     const specWritten = await this.withOperationEffect(
       task.id,

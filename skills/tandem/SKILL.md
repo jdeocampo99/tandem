@@ -41,6 +41,7 @@ tandem /absolute/path/to/repo
 tandem /absolute/path/to/first-repo /absolute/path/to/second-repo
 tandem --continue /absolute/path/to/repo
 tandem configure /absolute/path/to/repo
+tandem config /absolute/path/to/repo
 tandem --reset
 tandem --reset --force
 ```

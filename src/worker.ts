@@ -157,6 +157,21 @@ async function existingResult(job: WorkerJob): Promise<WorkerResult | undefined>
   }
 }
 
+/**
+ * Prepares the worktree (e.g. installs dependencies) in the worker's own pane so the output is
+ * visible and the coordinator never blocks on it. Reruns on every launch; installers are idempotent.
+ */
+async function runSetup(job: WorkerJob, run: RunInteractive): Promise<void> {
+  for (const command of job.setup ?? []) {
+    const exit = await run({ argv: command.argv, cwd: job.cwd, timeoutMs: command.timeoutMs });
+    if (exit !== 0) {
+      throw new Error(
+        `worktree setup command ${JSON.stringify(command.name)} (${command.argv.join(" ")}) exited with code ${exit}`,
+      );
+    }
+  }
+}
+
 export async function runWorkerJob(
   jobPath: string,
   options: WorkerRunOptions = {},
@@ -203,6 +218,7 @@ export async function runWorkerJob(
   const run = options.run ?? defaultRunInteractive;
   let childExit: number;
   try {
+    await runSetup(job, run);
     const prompt = await promptWithInitialCommunication(job);
     childExit = await run(buildWorkerCommand(job, prompt, absoluteJobPath));
   } catch (error) {

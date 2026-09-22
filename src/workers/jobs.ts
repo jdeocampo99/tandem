@@ -11,6 +11,7 @@ import {
   type ReviewLens,
   type ReviewMode,
   type ReviewResult,
+  type SetupCommand,
   type ThinkingLevel,
 } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
@@ -42,6 +43,8 @@ export type WorkerJob = Readonly<{
     readonly initialRevision: number;
   }>;
   readonly timeoutMs?: number;
+  /** The pinned worktree setup commands an implementer runs before OMP starts. */
+  readonly setup?: readonly SetupCommand[];
 }>;
 export type WorkerQuestion = Readonly<{
   readonly text: string;
@@ -143,6 +146,25 @@ function readPositiveInteger(value: unknown, field: string): number {
     throw new TypeError(`${field} must be a positive integer`);
   }
   return value;
+}
+
+function readSetupCommands(value: unknown): readonly SetupCommand[] {
+  if (!Array.isArray(value)) throw new TypeError("setup must be an array");
+  return value.map((entry: unknown, index) => {
+    const field = `setup[${index}]`;
+    if (!isRecord(entry)) throw new TypeError(`${field} must be an object`);
+    const argv = entry.argv;
+    if (!Array.isArray(argv) || argv.length === 0) {
+      throw new TypeError(`${field}.argv must be a non-empty array`);
+    }
+    return {
+      name: readSingleLineText(entry.name, `${field}.name`),
+      argv: argv.map((argument: unknown, argumentIndex) =>
+        readNonEmptyText(argument, `${field}.argv[${argumentIndex}]`),
+      ),
+      timeoutMs: readPositiveInteger(entry.timeoutMs, `${field}.timeoutMs`),
+    };
+  });
 }
 
 function readExecutionIdentity(value: unknown): ExecutionIdentity {
@@ -345,6 +367,10 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     value.communication === undefined ? undefined : readWorkerCommunication(value.communication);
   const timeoutMs =
     value.timeoutMs === undefined ? undefined : readPositiveInteger(value.timeoutMs, "timeoutMs");
+  const setup = value.setup === undefined ? undefined : readSetupCommands(value.setup);
+  if (setup !== undefined && role !== "implementer") {
+    throw new TypeError("setup is only permitted for implementer jobs");
+  }
 
   return {
     schemaVersion: 1,
@@ -361,6 +387,7 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     ...(review === undefined ? {} : { review }),
     ...(communication === undefined ? {} : { communication }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(setup === undefined ? {} : { setup }),
   };
 }
 export function parseWorkerResult(value: unknown): WorkerResult {

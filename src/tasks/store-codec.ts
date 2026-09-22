@@ -39,6 +39,7 @@ import {
   type ReviewResult,
   SAFETY_FLOOR_ORDER,
   type SafetyFloor,
+  type SetupCommand,
   type SkillInvocation,
   type TaskCleanupState,
   type TaskCleanupStatus,
@@ -307,6 +308,7 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       "instructions",
       "instructionFiles",
       "validationCommands",
+      "setupCommands",
       "maxWorkers",
       "maxFixRounds",
       "reviewLevels",
@@ -368,11 +370,35 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
     validationCommands: validationCommands.map((entry, index) =>
       parseValidationCommand(entry, `${source}.validationCommands[${index}]`),
     ),
+    setupCommands: parseSetupCommands(value, source),
     maxWorkers: requiredInteger(value, "maxWorkers", source, 1),
     maxFixRounds: requiredInteger(value, "maxFixRounds", source, 0),
     reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`),
     requestBudget: parseRequestBudgetPolicy(value, `${source}.requestBudget`),
   };
+}
+
+/**
+ * Reads the pinned worktree setup commands. A record written before setup commands existed names
+ * none, and it loads with none, which is exactly how that record's worktrees were prepared.
+ */
+function parseSetupCommands(record: UnknownRecord, source: string): readonly SetupCommand[] {
+  if (!Object.hasOwn(record, "setupCommands")) return [];
+  const value = requiredValue(record, "setupCommands", source);
+  if (!Array.isArray(value)) {
+    failState(`${source}.setupCommands`, "setupCommands must be an array");
+  }
+  const entries: readonly unknown[] = value;
+  return entries.map((entry, index) => {
+    const entrySource = `${source}.setupCommands[${index}]`;
+    if (!isRecord(entry)) failState(entrySource, "setup command must be an object");
+    assertExactKeys(entry, ["name", "argv", "timeoutMs"], entrySource);
+    return {
+      name: requiredText(entry, "name", entrySource),
+      argv: requiredTextArray(entry, "argv", entrySource),
+      timeoutMs: requiredInteger(entry, "timeoutMs", entrySource, 1),
+    };
+  });
 }
 
 /**

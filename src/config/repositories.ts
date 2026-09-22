@@ -6,6 +6,7 @@ import type {
   RepoPolicy,
   ResolvedGuidance,
   ResolvedPolicy,
+  SetupCommand,
   ValidationCommand,
 } from "../contracts.ts";
 import { type ModelSettings, readModelSettingsAt } from "./models.ts";
@@ -76,6 +77,7 @@ export type OnboardRepoResult = Readonly<{
   policy: RepoPolicy;
   proposedPolicy: RepoPolicy;
   validationCommands: readonly ValidationCommand[];
+  setupCommands: readonly SetupCommand[];
   unresolved: readonly string[];
 }>;
 
@@ -407,6 +409,29 @@ function proposeValidationCommands(packageText: string | undefined): ValidationP
   };
 }
 
+/** Lockfile → the install that reproduces it exactly; the first lockfile found wins. */
+const LOCKFILE_INSTALLS: readonly (readonly [string, readonly string[]])[] = [
+  ["bun.lock", ["bun", "install", "--frozen-lockfile"]],
+  ["bun.lockb", ["bun", "install", "--frozen-lockfile"]],
+  ["pnpm-lock.yaml", ["pnpm", "install", "--frozen-lockfile"]],
+  ["yarn.lock", ["yarn", "install", "--immutable"]],
+  ["package-lock.json", ["npm", "ci"]],
+  ["uv.lock", ["uv", "sync", "--frozen"]],
+];
+
+/** Proposes one dependency install for fresh worktrees from the checkout's lockfile, if any. */
+async function proposeSetupCommands(
+  root: string,
+  readText: PolicyTextReader | undefined,
+): Promise<readonly SetupCommand[]> {
+  for (const [lockfile, argv] of LOCKFILE_INSTALLS) {
+    if ((await readRepositoryFile(root, lockfile, readText, false)) !== undefined) {
+      return [{ name: `install:${lockfile}`, argv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS }];
+    }
+  }
+  return [];
+}
+
 function appendValidationCommands(
   base: RepoPolicy,
   commands: readonly ValidationCommand[],
@@ -434,17 +459,26 @@ function onboardingUnresolved(
   return deduplicateStrings(unresolved);
 }
 
-function serializeCentralConfig(root: string, commands: readonly ValidationCommand[]): string {
+function serializeCentralConfig(
+  root: string,
+  commands: readonly ValidationCommand[],
+  setupCommands: readonly SetupCommand[],
+): string {
   return `${JSON.stringify(
     {
       schemaVersion: CENTRAL_SCHEMA_VERSION,
       repoPath: root,
-      policy: { version: 1, validationCommands: commands },
+      policy: { version: 1, validationCommands: commands, setupCommands },
     },
     null,
     2,
   )}
 `;
+}
+
+/** The absolute path of a repository's central settings file, whether or not it exists yet. */
+export async function centralConfigPath(repoPath: string, home: string): Promise<string> {
+  return centralPaths(await repositoryRoot(repoPath), await configuredHome(home)).config;
 }
 
 /** Discovers package scripts from the requested checkout without executing them; write=true creates only a missing central policy. */
@@ -474,16 +508,17 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     false,
   );
   const proposal = proposeValidationCommands(packageText);
+  const setupCommands = await proposeSetupCommands(checkoutRoot, options.readText);
   const proposedPolicy = existingConfig
     ? copyPolicy(currentPolicy)
-    : appendValidationCommands(global, proposal.commands);
+    : parsePolicyOverride({ setupCommands }, appendValidationCommands(global, proposal.commands));
   const unresolved = onboardingUnresolved(proposal, proposedPolicy);
 
   let written = false;
   if (options.write === true) {
     await writeCentralConfig(
       paths,
-      serializeCentralConfig(root, proposal.commands),
+      serializeCentralConfig(root, proposal.commands, setupCommands),
       options.writeText,
     );
     written = true;
@@ -494,11 +529,12 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     configPath: paths.config,
     existingConfig,
     written,
-    approvalRequired: !written && proposal.approvalRequired,
+    approvalRequired: !written && (proposal.approvalRequired || setupCommands.length > 0),
     modelSettings,
     policy: existingConfig ? currentPolicy : proposedPolicy,
     proposedPolicy,
     validationCommands: proposedPolicy.validationCommands,
+    setupCommands: proposedPolicy.setupCommands,
     unresolved,
   };
 }
