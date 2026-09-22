@@ -6,22 +6,17 @@ const SECTION_TITLES: Readonly<Record<keyof RequestBriefContent, string>> = {
   scope: "Scope",
   constraints: "Constraints",
   nonGoals: "Non-goals",
-  acceptanceCriteria: "Acceptance criteria",
+  acceptanceCriteria: "Tandem will check",
+  userCheckCriteria: "You'll check (screenshots at the end)",
   recommendedApproach: "Recommended approach",
   keyDecisions: "Key decisions",
   openQuestions: "Unresolved questions",
   researchLinks: "Research links",
 };
 
-const LIST_SECTIONS = [
-  "scope",
-  "constraints",
-  "nonGoals",
-  "acceptanceCriteria",
-  "keyDecisions",
-  "openQuestions",
-  "researchLinks",
-] as const;
+const LEADING_LIST_SECTIONS = ["scope", "constraints", "nonGoals"] as const;
+
+const TRAILING_LIST_SECTIONS = ["keyDecisions", "openQuestions", "researchLinks"] as const;
 
 /**
  * Renders the current draft as the read-only view of the durable record. It is a projection only:
@@ -46,7 +41,24 @@ export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
     `## ${SECTION_TITLES.recommendedApproach}`,
     content.recommendedApproach,
   ];
-  for (const section of LIST_SECTIONS) {
+  for (const section of LEADING_LIST_SECTIONS) {
+    lines.push("", `## ${SECTION_TITLES[section]}`, ...bullets(content[section]));
+  }
+  const userCheckCriteria = content.userCheckCriteria ?? [];
+  lines.push(
+    "",
+    `## ${SECTION_TITLES.acceptanceCriteria}`,
+    ...checkedBullets(content.acceptanceCriteria, "✓"),
+  );
+  if (userCheckCriteria.length > 0) {
+    lines.push(
+      "",
+      `## ${SECTION_TITLES.userCheckCriteria}`,
+      ...checkedBullets(userCheckCriteria, "◻"),
+    );
+  }
+  lines.push("", "Reply in the main conversation to move a criterion between the groups.");
+  for (const section of TRAILING_LIST_SECTIONS) {
     lines.push("", `## ${SECTION_TITLES[section]}`, ...bullets(content[section]));
   }
   return `${lines.join("\n")}\n`;
@@ -65,4 +77,10 @@ function approvalLine(record: RequestBriefRecord): string {
 
 function bullets(entries: readonly string[]): readonly string[] {
   return entries.length === 0 ? ["- None recorded."] : entries.map((entry) => `- ${entry}`);
+}
+
+function checkedBullets(entries: readonly string[], mark: "✓" | "◻"): readonly string[] {
+  return entries.length === 0
+    ? ["- None recorded."]
+    : entries.map((entry) => `- ${mark} ${entry}`);
 }

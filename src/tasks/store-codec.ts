@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import {
   type AgentRole,
   BLOCK_CAUSE_GROUP_BY_KIND,
@@ -45,6 +46,9 @@ import {
   type TaskKind,
   type TaskRecord,
   type TaskStage,
+  type UserCheckAnswer,
+  type UserCheckEvidence,
+  type UserCheckRecord,
   type ValidationCommand,
   type ValidationContractName,
   type ValidationEvidence,
@@ -104,6 +108,8 @@ const TOP_LEVEL_KEYS = [
   "kind",
   "objective",
   "acceptanceCriteria",
+  "userCheckCriteria",
+  "userCheck",
   "surfaces",
   "stage",
   "previousStage",
@@ -555,7 +561,7 @@ export function parseReview(value: unknown, source: string): ReviewResult {
   }
   assertExactKeys(
     value,
-    ["lens", "head", "generation", "pass", "findings", "summary", "mode"],
+    ["lens", "head", "generation", "pass", "findings", "summary", "mode", "handToUser"],
     source,
   );
   const findingsValue = requiredValue(value, "findings", source);
@@ -567,6 +573,9 @@ export function parseReview(value: unknown, source: string): ReviewResult {
   if (mode !== undefined && mode !== "review_changed_diff" && mode !== "review_existing_head") {
     failState(`${source}.mode`, `unsupported review mode ${mode}`);
   }
+  const handToUser = Object.hasOwn(value, "handToUser")
+    ? requiredTextArray(value, "handToUser", source)
+    : undefined;
   return {
     lens: requiredEnum(value, "lens", REVIEW_LENSES, source),
     head: requiredText(value, "head", source),
@@ -575,6 +584,7 @@ export function parseReview(value: unknown, source: string): ReviewResult {
     findings: findings.map((entry, index) => parseFinding(entry, `${source}.findings[${index}]`)),
     summary: requiredText(value, "summary", source),
     ...(mode === undefined ? {} : { mode: mode as ReviewMode }),
+    ...(handToUser === undefined ? {} : { handToUser }),
   };
 }
 
@@ -704,6 +714,75 @@ function parseIterationScope(value: unknown, source: string): IterationScope {
     reproduces: requiredTextArray(value, "reproduces", source),
     surfaces: requiredTextArray(value, "surfaces", source),
     findingIds: requiredTextArray(value, "findingIds", source),
+  };
+}
+
+const USER_CHECK_ANSWER_OUTCOMES = ["confirmed", "changes-requested"] as const;
+
+function parseUserCheckEvidence(value: unknown, source: string): UserCheckEvidence {
+  if (!isRecord(value)) {
+    failState(source, "user check evidence must be an object");
+  }
+  assertExactKeys(value, ["criterion", "paths"], source);
+  const criterion = requiredText(value, "criterion", source);
+  const pathsValue = requiredValue(value, "paths", source);
+  if (!Array.isArray(pathsValue)) {
+    failState(`${source}.paths`, "paths must be an array");
+  }
+  const paths: readonly unknown[] = pathsValue;
+  if (
+    !paths.every(
+      (entry) => typeof entry === "string" && entry.trim().length > 0 && isAbsolute(entry),
+    )
+  ) {
+    failState(`${source}.paths`, "paths must be non-empty absolute strings");
+  }
+  return { criterion, paths: paths as readonly string[] };
+}
+
+function parseUserCheckAnswer(value: unknown, source: string): UserCheckAnswer {
+  if (!isRecord(value)) {
+    failState(source, "user check answer must be an object");
+  }
+  assertExactKeys(value, ["outcome", "answeredAt", "text"], source);
+  const outcome = requiredEnum(value, "outcome", USER_CHECK_ANSWER_OUTCOMES, source);
+  const answeredAt = requiredText(value, "answeredAt", source);
+  const text = optionalText(value, "text", source);
+  if (outcome === "changes-requested" && text === undefined) {
+    failState(source, "changes-requested user check answers require text");
+  }
+  if (outcome === "confirmed" && text !== undefined) {
+    failState(source, "confirmed user check answers must not carry text");
+  }
+  return {
+    outcome,
+    answeredAt,
+    ...(text === undefined ? {} : { text }),
+  };
+}
+
+function parseUserCheckRecord(value: unknown, source: string): UserCheckRecord {
+  if (!isRecord(value)) {
+    failState(source, "user check record must be an object");
+  }
+  assertExactKeys(value, ["head", "generation", "evidence", "answer"], source);
+  const evidenceValue = requiredValue(value, "evidence", source);
+  if (!Array.isArray(evidenceValue)) {
+    failState(`${source}.evidence`, "evidence must be an array");
+  }
+  const evidenceEntries: readonly unknown[] = evidenceValue;
+  const answerValue = Object.hasOwn(value, "answer")
+    ? requiredValue(value, "answer", source)
+    : undefined;
+  return {
+    head: requiredText(value, "head", source),
+    generation: requiredInteger(value, "generation", source),
+    evidence: evidenceEntries.map((entry, index) =>
+      parseUserCheckEvidence(entry, `${source}.evidence[${index}]`),
+    ),
+    ...(answerValue === undefined
+      ? {}
+      : { answer: parseUserCheckAnswer(answerValue, `${source}.answer`) }),
   };
 }
 
@@ -1017,6 +1096,12 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   const skillValue = Object.hasOwn(value, "skill")
     ? requiredValue(value, "skill", source)
     : undefined;
+  const userCheckCriteriaValue = Object.hasOwn(value, "userCheckCriteria")
+    ? requiredTextArray(value, "userCheckCriteria", source)
+    : undefined;
+  const userCheckValue = Object.hasOwn(value, "userCheck")
+    ? requiredValue(value, "userCheck", source)
+    : undefined;
   const kind = requiredEnum(value, "kind", TASK_KINDS, source);
   const researchContinuation = parseResearchContinuation(value, kind, source);
   const taskBase = {
@@ -1028,6 +1113,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     kind,
     objective: requiredText(value, "objective", source),
     acceptanceCriteria: requiredTextArray(value, "acceptanceCriteria", source),
+    ...(userCheckCriteriaValue === undefined
+      ? {}
+      : { userCheckCriteria: userCheckCriteriaValue }),
     surfaces: requiredTextArray(value, "surfaces", source),
     stage: requiredEnum(value, "stage", TASK_STAGES, source),
     scopeApproved: requiredBoolean(value, "scopeApproved", source),
@@ -1096,6 +1184,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     ...(cleanupValue === undefined
       ? {}
       : { cleanup: parseTaskCleanup(cleanupValue, `${source}.cleanup`) }),
+    ...(userCheckValue === undefined
+      ? {}
+      : { userCheck: parseUserCheckRecord(userCheckValue, `${source}.userCheck`) }),
   };
 }
 

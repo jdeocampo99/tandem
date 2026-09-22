@@ -298,7 +298,27 @@ export type ReviewResult = {
   readonly findings: readonly Finding[];
   readonly summary: string;
   readonly mode?: ReviewMode;
+  /** Acceptance-criteria text this lens could not prove from runner evidence or the source at this
+   *  HEAD. Tandem hands these to the user as "you check" items instead of asking a repeated question. */
+  readonly handToUser?: readonly string[];
 };
+
+/** One "you check" criterion and the builder's screenshots/clips for it (absolute paths). */
+export type UserCheckEvidence = Readonly<{ readonly criterion: string; readonly paths: readonly string[] }>;
+
+export type UserCheckAnswer = Readonly<{
+  readonly outcome: "confirmed" | "changes-requested";
+  readonly answeredAt: IsoTimestamp;
+  readonly text?: string; // only for changes-requested
+}>;
+
+/** Builder evidence for the "you check" criteria, bound to one generation and HEAD. */
+export type UserCheckRecord = Readonly<{
+  readonly head: string;
+  readonly generation: number;
+  readonly evidence: readonly UserCheckEvidence[];
+  readonly answer?: UserCheckAnswer;
+}>;
 
 /** Names the two validation contracts: targeted fix-time checks and the complete final gate. */
 export type ValidationContractName = "iteration" | "final";
@@ -470,6 +490,9 @@ export type RequestBriefContent = Readonly<{
   readonly keyDecisions: readonly string[];
   readonly openQuestions: readonly string[];
   readonly researchLinks: readonly string[];
+  /** "You check" criteria: hands-on/visual items the user judges from builder screenshots, not a
+   *  validation command. Part of the agreement; omitted when empty. */
+  readonly userCheckCriteria?: readonly string[];
 }>;
 
 /** Whether a revision changed what was agreed or only annotated it. */
@@ -749,7 +772,13 @@ export type TaskRecord = {
   readonly requestId?: string;
   readonly kind: TaskKind;
   readonly objective: string;
+  /** The "Tandem checks" list: proven by a validation command and judged by review lenses. */
   readonly acceptanceCriteria: readonly string[];
+  /** The "you check" list: hands-on/visual criteria the user judges from builder screenshots. Review
+   *  lenses never block or ask on these. */
+  readonly userCheckCriteria?: readonly string[];
+  /** Builder evidence for `userCheckCriteria`, bound to one generation and HEAD, and the user's answer. */
+  readonly userCheck?: UserCheckRecord;
   readonly surfaces: readonly string[];
   readonly stage: TaskStage;
   readonly previousStage?: TaskStage;

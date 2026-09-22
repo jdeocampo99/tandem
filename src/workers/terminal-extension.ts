@@ -7,6 +7,7 @@ import { runCommand } from "../adapters/commands.ts";
 import { createHerdrStatusReporter, type HerdrAgentState } from "../adapters/herdr-status.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import {
+  checkUserCheckFiles,
   parseWorkerJob,
   parseWorkerResult,
   persistWorkerResult,
@@ -80,6 +81,7 @@ function resultFor(
     readonly error?: string;
     readonly instructionRevision?: number;
     readonly question?: WorkerQuestion;
+    readonly userCheckEvidence?: WorkerResult["userCheckEvidence"];
   }> = {},
 ): WorkerResult {
   return parseWorkerResult({
@@ -256,6 +258,10 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     try {
       assertSelectedModel(expectedModelParts(job.model.model), ctx.model);
       const report = resolveSubmittedReport(job, submission);
+      if (report.userCheckEvidence !== undefined && job.userChecks !== undefined) {
+        const rejection = await checkUserCheckFiles(job.userChecks.directory, report.userCheckEvidence);
+        if (rejection !== undefined) return new ReportRejection(rejection);
+      }
       const revision = await instructionRevision(job, report.status !== "failed");
       return resultFor(job, report.status, report.text, {
         ...(report.error === undefined ? {} : { error: report.error }),
@@ -263,6 +269,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
         ...(report.artifactPath === undefined ? {} : { artifactPath: report.artifactPath }),
         ...(report.review === undefined ? {} : { review: report.review }),
         ...(revision === undefined ? {} : { instructionRevision: revision }),
+        ...(report.userCheckEvidence === undefined ? {} : { userCheckEvidence: report.userCheckEvidence }),
       });
     } catch (error) {
       if (error instanceof ReportRejection) return error;
@@ -315,6 +322,12 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
           .strict(),
       ),
       summary: z.string(),
+      handToUser: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Exact text of any Tandem-check criterion that neither runner evidence nor the source can prove; Tandem hands it to the user instead of asking again.",
+        ),
     })
     .strict();
   pi.registerTool({
@@ -352,6 +365,20 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
         ...(reviews
           ? {
               review: reviewSchema.optional().describe("Required for completed: the ReviewResult."),
+            }
+          : {}),
+        ...(job.role === "implementer" && job.userChecks !== undefined
+          ? {
+              userCheckEvidence: z
+                .array(
+                  z
+                    .object({ criterion: z.string(), paths: z.array(z.string()) })
+                    .strict(),
+                )
+                .optional()
+                .describe(
+                  "Required for completed: at least one screenshot or clip path per \"you check\" criterion, saved under the user-check directory named in your brief.",
+                ),
             }
           : {}),
       })

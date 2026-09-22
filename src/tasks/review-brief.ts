@@ -97,6 +97,11 @@ export type ReviewBriefScope = Readonly<{
   /** The approved surfaces, joined and bounded for rendering. */
   readonly surfaces: string;
   readonly acceptanceCriteria: readonly string[];
+  /** "You check" criteria: judged by the user from builder screenshots, never by this review. */
+  readonly userCheckCriteria: readonly string[];
+  /** `criterion: path, path…` lines, only when the builder's evidence is bound to this HEAD and
+   *  generation. Shown by the builder, not proof. */
+  readonly builderEvidence: readonly string[];
   readonly principles: readonly string[];
   readonly nonGoals: readonly string[];
 }>;
@@ -349,6 +354,25 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
     task.acceptanceCriteria,
     REVIEW_BRIEF_LIMITS.maxAcceptanceCriteria,
   ).kept.map((entry) => truncateText(entry, REVIEW_BRIEF_LIMITS.maxDescriptionBytes));
+  const userCheckCriteria = boundedList(
+    task.userCheckCriteria ?? [],
+    REVIEW_BRIEF_LIMITS.maxAcceptanceCriteria,
+  ).kept.map((entry) => truncateText(entry, REVIEW_BRIEF_LIMITS.maxDescriptionBytes));
+  const builderEvidenceEntries =
+    task.userCheck !== undefined &&
+    task.userCheck.head === head &&
+    task.userCheck.generation === task.generation
+      ? task.userCheck.evidence
+      : [];
+  const builderEvidence = boundedList(
+    builderEvidenceEntries,
+    REVIEW_BRIEF_LIMITS.maxEvidenceEntries,
+  ).kept.map((entry) =>
+    truncateText(
+      `${entry.criterion}: ${entry.paths.join(", ")}`,
+      REVIEW_BRIEF_LIMITS.maxDescriptionBytes,
+    ),
+  );
   const nonGoals = boundedList(
     [`Do not change files outside the approved surfaces: ${surfaces}.`, ...STANDING_NON_GOALS],
     REVIEW_BRIEF_LIMITS.maxNonGoals,
@@ -397,6 +421,8 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       scopeApproved: task.scopeApproved,
       surfaces,
       acceptanceCriteria: criteria,
+      userCheckCriteria,
+      builderEvidence,
       principles: FUNCTION_REVIEW_PRINCIPLE_NAMES,
       nonGoals,
     },
@@ -497,8 +523,20 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     `- objective: ${brief.scope.objective}`,
     `- scope approved: ${brief.scope.scopeApproved}`,
     `- surfaces: ${brief.scope.surfaces}`,
-    "- acceptance criteria:",
+    "- acceptance criteria (Tandem checks):",
     ...brief.scope.acceptanceCriteria.map((entry) => `  - ${entry}`),
+    ...(brief.scope.userCheckCriteria.length === 0
+      ? []
+      : [
+          "- you check (judged by the user, not by this review; never block or ask on these):",
+          ...brief.scope.userCheckCriteria.map((entry) => `  - ${entry}`),
+        ]),
+    ...(brief.scope.builderEvidence.length === 0
+      ? []
+      : [
+          "- shown by the builder (not proof):",
+          ...brief.scope.builderEvidence.map((entry) => `  - ${entry}`),
+        ]),
     "",
     "## Applicable principles (mandatory; a violation blocks regardless of suggestion status)",
     ...bullets(brief.scope.principles),

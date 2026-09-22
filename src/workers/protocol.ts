@@ -1,8 +1,9 @@
-import { isAbsolute } from "node:path";
-import type { ReviewResult } from "../contracts.ts";
+import { isAbsolute, relative, sep } from "node:path";
+import type { ReviewResult, UserCheckEvidence } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import {
   parseReviewResult,
+  readUserCheckEvidenceArray,
   type WorkerJob,
   type WorkerQuestion,
   type WorkerRole,
@@ -230,6 +231,7 @@ export type SubmittedReport = Readonly<{
   readonly recommendation?: string | undefined;
   readonly artifactPath?: string | undefined;
   readonly review?: unknown;
+  readonly userCheckEvidence?: unknown;
 }>;
 
 export type ResolvedReport = Readonly<{
@@ -239,6 +241,7 @@ export type ResolvedReport = Readonly<{
   readonly question?: WorkerQuestion;
   readonly artifactPath?: string;
   readonly review?: ReviewResult;
+  readonly userCheckEvidence?: readonly UserCheckEvidence[];
 }>;
 
 /**
@@ -269,6 +272,9 @@ export function resolveSubmittedReport(
   if (submission.review !== undefined && !reviews) {
     throw new ReportRejection(`${role} reports do not take a review`);
   }
+  if (submission.userCheckEvidence !== undefined && (role !== "implementer" || job.userChecks === undefined)) {
+    throw new ReportRejection(`${role} reports do not take userCheckEvidence`);
+  }
 
   if (status !== "completed") {
     if (submission.artifactPath !== undefined) {
@@ -276,6 +282,9 @@ export function resolveSubmittedReport(
     }
     if (submission.review !== undefined) {
       throw new ReportRejection("review is only for a completed review");
+    }
+    if (submission.userCheckEvidence !== undefined) {
+      throw new ReportRejection("userCheckEvidence is only for a completed implementer report");
     }
     return {
       status,
@@ -299,7 +308,60 @@ export function resolveSubmittedReport(
       artifactPath,
     };
   }
+  if (role === "implementer" && job.userChecks !== undefined) {
+    const evidence = normalizeUserCheckEvidence(job.userChecks, submission.userCheckEvidence);
+    ensureUserCheckCoverage(job.userChecks, evidence);
+    return {
+      status,
+      text: renderReport(submission.outcome, undefined, undefined, report),
+      userCheckEvidence: evidence,
+    };
+  }
   return { status, text: renderReport(submission.outcome, undefined, undefined, report) };
+}
+
+function isWithinDirectory(directory: string, path: string): boolean {
+  if (!isAbsolute(path)) return false;
+  const rel = relative(directory, path);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+function normalizeUserCheckEvidence(
+  userChecks: NonNullable<WorkerJob["userChecks"]>,
+  raw: unknown,
+): readonly UserCheckEvidence[] {
+  if (raw === undefined) return [];
+  let evidence: readonly UserCheckEvidence[];
+  try {
+    evidence = readUserCheckEvidenceArray(raw);
+  } catch (error) {
+    throw new ReportRejection(error instanceof Error ? error.message : "userCheckEvidence is invalid");
+  }
+  for (const entry of evidence) {
+    if (!userChecks.criteria.includes(entry.criterion)) {
+      throw new ReportRejection(`userCheckEvidence names an unknown criterion: ${entry.criterion}`);
+    }
+    for (const path of entry.paths) {
+      if (!isWithinDirectory(userChecks.directory, path)) {
+        throw new ReportRejection(`userCheckEvidence path ${path} is outside the user-check directory`);
+      }
+    }
+  }
+  return evidence;
+}
+
+function ensureUserCheckCoverage(
+  userChecks: NonNullable<WorkerJob["userChecks"]>,
+  evidence: readonly UserCheckEvidence[],
+): void {
+  for (const criterion of userChecks.criteria) {
+    const entry = evidence.find((candidate) => candidate.criterion === criterion);
+    if (entry === undefined || entry.paths.length === 0) {
+      throw new ReportRejection(
+        `save at least one screenshot or clip for "${criterion}" before submitting`,
+      );
+    }
+  }
 }
 
 function decisionQuestion(submission: SubmittedReport): WorkerQuestion {
@@ -345,6 +407,13 @@ function submittedReview(job: WorkerJob, value: unknown): ReviewResult {
     throw new ReportRejection(
       `review must be bound to lens ${job.review.lens}, head ${job.review.head}, generation ${job.generation}`,
     );
+  }
+  if (review.handToUser !== undefined && review.handToUser.length > 0) {
+    const criteria = job.review.criteria ?? [];
+    const unknown = review.handToUser.find((entry) => !criteria.includes(entry));
+    if (unknown !== undefined) {
+      throw new ReportRejection(`handToUser names a criterion that is not a Tandem check: ${unknown}`);
+    }
   }
   return review;
 }

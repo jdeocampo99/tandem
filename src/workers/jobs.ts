@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute } from "node:path";
+import { chmod, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, sep } from "node:path";
 import {
   type AgentRole,
   type Finding,
@@ -12,15 +12,24 @@ import {
   type ReviewMode,
   type ReviewResult,
   type ThinkingLevel,
+  type UserCheckEvidence,
 } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
+import { isClipPath, isImagePath } from "../tasks/user-checks.ts";
 import type { ExecutionIdentity } from "./execution-gate.ts";
+
+/** Bounds on the implementer's saved "you check" evidence, checked at submission and again after
+ *  the job completes. */
+const MAX_USER_CHECK_FILES_PER_CRITERION = 8;
+const MAX_USER_CHECK_FILES_TOTAL = 24;
 
 export type WorkerRole = Exclude<AgentRole, "coordinator">;
 
 export type WorkerReviewContext = Readonly<{
   readonly head: string;
   readonly lens: ReviewLens;
+  /** The Tandem-check acceptance criteria, used to validate `ReviewResult.handToUser`. */
+  readonly criteria?: readonly string[];
 }>;
 
 export type WorkerJob = Readonly<{
@@ -42,6 +51,8 @@ export type WorkerJob = Readonly<{
     readonly initialRevision: number;
   }>;
   readonly timeoutMs?: number;
+  /** "You check" directory and criteria; only an implementer job may carry this. */
+  readonly userChecks?: Readonly<{ readonly directory: string; readonly criteria: readonly string[] }>;
 }>;
 export type WorkerQuestion = Readonly<{
   readonly text: string;
@@ -63,6 +74,9 @@ export type WorkerResult = Readonly<{
   readonly error?: string;
   readonly instructionRevision?: number;
   readonly finishedAt: string;
+  /** The implementer's saved evidence for each "you check" criterion; only an implementer result
+   *  may carry this. */
+  readonly userCheckEvidence?: readonly UserCheckEvidence[];
 }>;
 
 export type WorkerResultExpectation = Readonly<{
@@ -208,15 +222,45 @@ function readModel(value: unknown): ModelSpec {
   return { model, thinking: value.thinking };
 }
 
+function readTextArray(value: unknown, field: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${field} must be an array of non-empty strings`);
+  }
+  return value.map((entry, index) => readNonEmptyText(entry, `${field}[${index}]`));
+}
+
 function readReviewContext(value: unknown): WorkerReviewContext {
   if (!isRecord(value)) {
     throw new TypeError("review must be an object");
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "head" && key !== "lens" && key !== "criteria") {
+      throw new TypeError(`review contains unknown field ${key}`);
+    }
   }
   const head = readSingleLineText(value.head, "review.head");
   if (!isReviewLens(value.lens)) {
     throw new TypeError("review.lens must be a valid review lens");
   }
-  return { head, lens: value.lens };
+  const criteria = value.criteria === undefined ? undefined : readTextArray(value.criteria, "review.criteria");
+  return { head, lens: value.lens, ...(criteria === undefined ? {} : { criteria }) };
+}
+
+function readUserChecks(
+  value: unknown,
+): Readonly<{ directory: string; criteria: readonly string[] }> {
+  if (!isRecord(value)) throw new TypeError("userChecks must be an object");
+  for (const key of Object.keys(value)) {
+    if (key !== "directory" && key !== "criteria") {
+      throw new TypeError(`userChecks contains unknown field ${key}`);
+    }
+  }
+  const directory = readAbsolutePath(value.directory, "userChecks.directory");
+  const criteria = readTextArray(value.criteria, "userChecks.criteria");
+  if (criteria.length === 0) {
+    throw new TypeError("userChecks.criteria must contain at least one entry");
+  }
+  return { directory, criteria };
 }
 
 function readWorkerCommunication(
@@ -266,6 +310,29 @@ function readFinding(value: unknown, index: number): Finding {
       : { id, severity: value.severity, verdict: value.verdict, file, line, description };
 }
 
+function readUserCheckEvidenceEntry(value: unknown, index: number): UserCheckEvidence {
+  if (!isRecord(value)) {
+    throw new TypeError(`userCheckEvidence[${index}] must be an object`);
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "criterion" && key !== "paths") {
+      throw new TypeError(`userCheckEvidence[${index}] contains unknown field ${key}`);
+    }
+  }
+  const criterion = readNonEmptyText(value.criterion, `userCheckEvidence[${index}].criterion`);
+  const paths = readTextArray(value.paths, `userCheckEvidence[${index}].paths`).map((path, pathIndex) =>
+    readAbsolutePath(path, `userCheckEvidence[${index}].paths[${pathIndex}]`),
+  );
+  return { criterion, paths };
+}
+
+export function readUserCheckEvidenceArray(value: unknown): readonly UserCheckEvidence[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError("userCheckEvidence must be an array");
+  }
+  return value.map((entry, index) => readUserCheckEvidenceEntry(entry, index));
+}
+
 function isFindingSeverity(value: unknown): value is FindingSeverity {
   return value === "P0" || value === "P1" || value === "P2" || value === "P3";
 }
@@ -302,6 +369,8 @@ export function parseReviewResult(value: unknown): ReviewResult {
             throw new TypeError("review.mode must be review_changed_diff or review_existing_head");
           })();
   const summary = readNonEmptyText(value.summary, "review.summary");
+  const handToUser =
+    value.handToUser === undefined ? undefined : readTextArray(value.handToUser, "review.handToUser");
   return {
     lens: value.lens,
     head,
@@ -310,6 +379,7 @@ export function parseReviewResult(value: unknown): ReviewResult {
     findings,
     summary,
     ...(mode === undefined ? {} : { mode }),
+    ...(handToUser === undefined ? {} : { handToUser }),
   };
 }
 
@@ -345,6 +415,10 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     value.communication === undefined ? undefined : readWorkerCommunication(value.communication);
   const timeoutMs =
     value.timeoutMs === undefined ? undefined : readPositiveInteger(value.timeoutMs, "timeoutMs");
+  const userChecks = value.userChecks === undefined ? undefined : readUserChecks(value.userChecks);
+  if (userChecks !== undefined && role !== "implementer") {
+    throw new TypeError("userChecks is only permitted for implementer jobs");
+  }
 
   return {
     schemaVersion: 1,
@@ -361,6 +435,7 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     ...(review === undefined ? {} : { review }),
     ...(communication === undefined ? {} : { communication }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(userChecks === undefined ? {} : { userChecks }),
   };
 }
 export function parseWorkerResult(value: unknown): WorkerResult {
@@ -398,6 +473,13 @@ export function parseWorkerResult(value: unknown): WorkerResult {
       : readNonNegativeInteger(value.instructionRevision, "instructionRevision");
   const question = value.question === undefined ? undefined : readWorkerQuestion(value.question);
   const finishedAt = readSingleLineText(value.finishedAt, "finishedAt");
+  const userCheckEvidence =
+    value.userCheckEvidence === undefined
+      ? undefined
+      : readUserCheckEvidenceArray(value.userCheckEvidence);
+  if (userCheckEvidence !== undefined && role !== "implementer") {
+    throw new TypeError("userCheckEvidence is only permitted for implementer results");
+  }
 
   const requiresReview = role === "reviewer" || role === "verifier";
   if (review === undefined && requiresReview && status === "completed") {
@@ -426,6 +508,7 @@ export function parseWorkerResult(value: unknown): WorkerResult {
     ...(instructionRevision === undefined ? {} : { instructionRevision }),
     ...(question === undefined ? {} : { question }),
     finishedAt,
+    ...(userCheckEvidence === undefined ? {} : { userCheckEvidence }),
   };
 }
 
@@ -480,6 +563,68 @@ export async function readWorkerResult(
     throw new Error("worker result role does not match");
   }
   return result;
+}
+
+/**
+ * Verifies "you check" evidence on disk: every path must be a non-empty regular file (never a
+ * symlink), of a supported screenshot or clip type, and lexically inside the job's private
+ * user-check directory once symlinks are resolved. Returns the reason for the first failure found,
+ * or `undefined` when every path passes. Called both at `submit_report` and again after the job
+ * completes, since the worker's claim about its own files is never trusted on its own.
+ */
+export async function checkUserCheckFiles(
+  directory: string,
+  evidence: readonly UserCheckEvidence[],
+): Promise<string | undefined> {
+  let realDirectory: string;
+  try {
+    realDirectory = await realpath(directory);
+  } catch {
+    return `the user-check directory ${directory} could not be read`;
+  }
+  let total = 0;
+  for (const entry of evidence) {
+    if (entry.paths.length > MAX_USER_CHECK_FILES_PER_CRITERION) {
+      return `"${entry.criterion}" has more than ${MAX_USER_CHECK_FILES_PER_CRITERION} files`;
+    }
+    for (const path of entry.paths) {
+      total += 1;
+      if (total > MAX_USER_CHECK_FILES_TOTAL) {
+        return `more than ${MAX_USER_CHECK_FILES_TOTAL} user-check files were submitted`;
+      }
+      if (!isImagePath(path) && !isClipPath(path)) {
+        return `${path} is not a supported screenshot or clip file type`;
+      }
+      let stats: Awaited<ReturnType<typeof lstat>>;
+      try {
+        stats = await lstat(path);
+      } catch {
+        return `${path} does not exist`;
+      }
+      if (!stats.isFile()) {
+        return `${path} must be a regular file, not a symlink or directory`;
+      }
+      if (stats.size <= 0) {
+        return `${path} is empty`;
+      }
+      let realPath: string;
+      try {
+        realPath = await realpath(path);
+      } catch {
+        return `${path} could not be resolved`;
+      }
+      const relativePath = relative(realDirectory, realPath);
+      if (
+        relativePath === "" ||
+        relativePath === ".." ||
+        relativePath.startsWith(`..${sep}`) ||
+        isAbsolute(relativePath)
+      ) {
+        return `${path} is outside the user-check directory`;
+      }
+    }
+  }
+  return undefined;
 }
 
 export async function persistWorkerResult(resultPath: string, result: WorkerResult): Promise<void> {

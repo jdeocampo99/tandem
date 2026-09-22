@@ -70,6 +70,10 @@ const AGREEMENT_FIELDS = [
 
 const ANNOTATION_FIELDS = ["openQuestions", "researchLinks"] as const;
 
+/** Not an agreement field: moving a criterion here changes the agreement digest by its own rule
+ *  in `canonicalAgreement`, without being fed through `AGREEMENT_FIELDS` directly. */
+const USER_CHECK_FIELD = "userCheckCriteria" as const;
+
 const TEXT_FIELDS = ["goal", "recommendedApproach"] as const;
 
 const LIST_FIELDS = [
@@ -80,6 +84,7 @@ const LIST_FIELDS = [
   "keyDecisions",
   "openQuestions",
   "researchLinks",
+  "userCheckCriteria",
 ] as const;
 
 /** Stages whose work is actually under way, and so must stop while a brief awaits reapproval. */
@@ -117,12 +122,15 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
     throw new RequestBriefError("invalid-content", "A request brief must be an object");
   }
   const record = value as Record<string, unknown>;
-  const allowed: readonly string[] = [...AGREEMENT_FIELDS, ...ANNOTATION_FIELDS];
+  const allowed: readonly string[] = [...AGREEMENT_FIELDS, ...ANNOTATION_FIELDS, USER_CHECK_FIELD];
   for (const key of Object.keys(record)) {
     if (!allowed.includes(key)) {
       throw new RequestBriefError("invalid-content", `A request brief has no field ${key}`);
     }
   }
+  const userCheckCriteria = Object.hasOwn(record, USER_CHECK_FIELD)
+    ? briefList(record, USER_CHECK_FIELD)
+    : [];
   const content: RequestBriefContent = {
     goal: briefText(record, "goal"),
     scope: briefList(record, "scope"),
@@ -133,6 +141,7 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
     keyDecisions: briefList(record, "keyDecisions"),
     openQuestions: briefList(record, "openQuestions"),
     researchLinks: briefList(record, "researchLinks"),
+    ...(userCheckCriteria.length === 0 ? {} : { userCheckCriteria }),
   };
   const bytes = Buffer.byteLength(JSON.stringify(content), "utf8");
   if (bytes > MAX_REQUEST_BRIEF_BYTES) {
@@ -328,7 +337,9 @@ function canonicalContent(content: RequestBriefContent): string {
 }
 
 function canonicalAgreement(content: RequestBriefContent): string {
-  return JSON.stringify(AGREEMENT_FIELDS.map((field) => content[field]));
+  const fields = AGREEMENT_FIELDS.map((field) => content[field]);
+  const userChecks = content.userCheckCriteria ?? [];
+  return JSON.stringify(userChecks.length === 0 ? fields : [...fields, userChecks]);
 }
 
 function checkedLine(value: unknown, field: string): string {

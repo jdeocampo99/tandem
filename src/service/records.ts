@@ -35,6 +35,8 @@ export type TaskCreationRequest = Readonly<{
   readonly kind: "scout" | "implementation";
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
+  /** The "you check" list: hands-on/visual criteria the user judges from builder screenshots. */
+  readonly userCheckCriteria?: readonly string[];
   readonly surfaces: readonly string[];
   /** The request brief this task is created under, when one governs it. */
   readonly requestId?: string;
@@ -327,6 +329,9 @@ export function buildPrompt(
     role,
     objective: task.objective,
     acceptanceCriteria: task.acceptanceCriteria,
+    ...(task.userCheckCriteria === undefined || task.userCheckCriteria.length === 0
+      ? {}
+      : { userCheckCriteria: task.userCheckCriteria }),
     instructions: [...guidance, ...extraInstructions],
     reportPath,
     ...(review === undefined ? {} : { review }),
@@ -524,6 +529,9 @@ export function taskInputFor(
     kind: request.kind,
     objective: text(request.objective, "objective"),
     acceptanceCriteria: readTextList(request.acceptanceCriteria, "acceptanceCriteria"),
+    ...(request.userCheckCriteria === undefined
+      ? {}
+      : { userCheckCriteria: readTextList(request.userCheckCriteria, "userCheckCriteria") }),
     surfaces: readTextList(request.surfaces, "surfaces"),
     policy,
     ...(request.requestId === undefined ? {} : { requestId: request.requestId }),

@@ -15,9 +15,12 @@ import {
   type ReviewLens,
   type ReviewResult,
   type SkillInvocation,
+  type TaskCommunication,
   type TaskKind,
   type TaskRecord,
   type TaskStage,
+  type UserCheckEvidence,
+  type UserCheckRecord,
   type ValidationContractName,
   type ValidationEvidence,
   type WorktreeLease,
@@ -28,17 +31,23 @@ import {
   finalAcceptanceStatus,
   isPinnedEvidence,
 } from "./acceptance.ts";
+import { appendTaskMessage } from "./communication-protocol.ts";
 import { recordReviewFindings } from "./findings.ts";
+import { taskName } from "./question.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
 import { checkSkillInvocation } from "./skill-invocation.ts";
+import { USER_CHECK_QUESTION_ID_PREFIX, userCheckCriteriaOf, userCheckQuestion } from "./user-checks.ts";
 
 export type TaskInput = Readonly<{
   readonly id: string;
   readonly repoPath: string;
   readonly kind: TaskKind;
   readonly objective: string;
+  /** The "Tandem checks" list, proven by a validation command. */
   readonly acceptanceCriteria: readonly string[];
+  /** The "you check" list: hands-on/visual criteria the user judges from builder screenshots. */
+  readonly userCheckCriteria?: readonly string[];
   readonly surfaces: readonly string[];
   readonly policy: TaskRecord["policy"];
   /** The approved request brief this task is created under, when one governs it. */
@@ -81,6 +90,7 @@ type ImplementationCompleteEvent = Readonly<{
   readonly head: string;
   readonly generation: number;
   readonly reportPath?: string;
+  readonly userCheckEvidence?: readonly UserCheckEvidence[];
 }>;
 
 type ValidationEvent = Readonly<{
@@ -189,6 +199,24 @@ type AcknowledgeNotificationEvent = Readonly<{
   readonly notificationId: string;
 }>;
 
+/** The user answered "yes" to the end-of-task "you check" question. */
+type ConfirmUserCheckEvent = Readonly<{
+  readonly type: "confirm-user-check";
+  readonly head: string;
+  readonly generation: number;
+  readonly questionId: string;
+}>;
+
+/** The user replied with anything other than "yes"; the reply becomes a fix round. */
+type RequestUserCheckChangesEvent = Readonly<{
+  readonly type: "request-user-check-changes";
+  readonly head: string;
+  readonly generation: number;
+  readonly questionId: string;
+  readonly answerId: string;
+  readonly text: string;
+}>;
+
 export type TaskEvent =
   | ApprovalEvent
   | StartEvent
@@ -209,7 +237,9 @@ export type TaskEvent =
   | CancelEvent
   | BlockEvent
   | MergeEvent
-  | AcknowledgeNotificationEvent;
+  | AcknowledgeNotificationEvent
+  | ConfirmUserCheckEvent
+  | RequestUserCheckChangesEvent;
 
 export type TaskTransitionErrorCode =
   | "invalid-stage"
@@ -303,6 +333,9 @@ function assertTaskInput(input: TaskInput): void {
     throw new TypeError("Task objective must be a non-empty string");
   }
   assertTextList(input.acceptanceCriteria, "acceptanceCriteria");
+  if (input.userCheckCriteria !== undefined) {
+    assertTextList(input.userCheckCriteria, "userCheckCriteria");
+  }
   assertTextList(input.surfaces, "surfaces");
   if (input.requestId !== undefined && !isSafeRequestId(input.requestId)) {
     throw new TypeError(`Unsafe request id: ${String(input.requestId)}`);
@@ -632,6 +665,26 @@ function assertReview(review: ReviewResult, task: TaskRecord): void {
       "Review must identify a known lens, head, and generation",
     );
   }
+  if (review.handToUser !== undefined) {
+    if (
+      !Array.isArray(review.handToUser) ||
+      review.handToUser.some((text) => !isNonEmptyText(text))
+    ) {
+      throw new TaskTransitionError(
+        "invalid-review",
+        task,
+        "Review handToUser must contain only non-empty strings",
+      );
+    }
+    const unknown = review.handToUser.find((text) => !task.acceptanceCriteria.includes(text));
+    if (unknown !== undefined) {
+      throw new TaskTransitionError(
+        "invalid-review",
+        task,
+        `Review handToUser names a criterion that is not a Tandem check: ${unknown}`,
+      );
+    }
+  }
   if (
     review.mode !== undefined &&
     review.mode !== "review_changed_diff" &&
@@ -765,6 +818,19 @@ function clearCleanup(task: TaskRecord): Omit<TaskRecord, "cleanup"> {
   return rest;
 }
 
+/**
+ * Drops a stale "you check" end question so re-entering validation or review never leaves a
+ * question referring to a HEAD or generation the task has moved past.
+ */
+function withoutUserCheckQuestion(task: TaskRecord): TaskRecord {
+  const question = task.communication?.question;
+  if (question === undefined || !question.id.startsWith(USER_CHECK_QUESTION_ID_PREFIX)) {
+    return task;
+  }
+  const { question: _question, ...communicationRest } = task.communication as TaskCommunication;
+  return { ...task, communication: communicationRest };
+}
+
 function cloneGuidanceEntries(entries: readonly ResolvedGuidance[]): readonly ResolvedGuidance[] {
   return entries.map((entry) => ({
     text: entry.text,
@@ -826,6 +892,9 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     kind: input.kind,
     objective: input.objective,
     acceptanceCriteria: [...input.acceptanceCriteria],
+    ...(input.userCheckCriteria === undefined || input.userCheckCriteria.length === 0
+      ? {}
+      : { userCheckCriteria: [...input.userCheckCriteria] }),
     surfaces: [...input.surfaces],
     stage: scopeApproved ? "queued" : "awaiting-approval",
     scopeApproved,
@@ -922,6 +991,15 @@ export function transitionTask(
         reviewHead: event.head,
         validationEvidence: [],
         ...(event.reportPath === undefined ? {} : { reportPath: event.reportPath }),
+        ...(userCheckCriteriaOf(task).length === 0
+          ? {}
+          : {
+              userCheck: {
+                head: event.head,
+                generation: event.generation,
+                evidence: event.userCheckEvidence ?? [],
+              },
+            }),
       });
     }
     case "retry-validation":
@@ -943,7 +1021,7 @@ export function transitionTask(
         );
       }
       assertCurrentGeneration(task, event.generation, `${event.type} generation`);
-      const withoutBlock = clearIterationScope(clearPreviousAndBlock(task));
+      const withoutBlock = withoutUserCheckQuestion(clearIterationScope(clearPreviousAndBlock(task)));
       return commitTask(withoutBlock, context.now, {
         stage: "validating",
         reviewHead: event.head,
@@ -1015,6 +1093,7 @@ export function transitionTask(
           `Review lens ${event.review.lens} already exists for head ${event.review.head} generation ${event.review.generation}`,
         );
       }
+      const handToUser = event.review.handToUser ?? [];
       return commitTask(task, context.now, {
         reviews: [...task.reviews, event.review],
         findingLedger: recordReviewFindings({
@@ -1022,6 +1101,14 @@ export function transitionTask(
           review: event.review,
           reviewRound: task.reviewRound,
         }),
+        ...(handToUser.length === 0
+          ? {}
+          : {
+              acceptanceCriteria: task.acceptanceCriteria.filter(
+                (text) => !handToUser.includes(text),
+              ),
+              userCheckCriteria: [...userCheckCriteriaOf(task), ...handToUser],
+            }),
       });
     }
     case "finish-review": {
@@ -1056,8 +1143,34 @@ export function transitionTask(
       }
       const acceptance = finalAcceptanceStatus(task, event.head);
       if (acceptance.satisfied) {
+        const withoutIterationScope = clearIterationScope(task);
+        if (userCheckCriteriaOf(task).length > 0) {
+          const existing = task.userCheck;
+          const userCheck: UserCheckRecord =
+            existing !== undefined &&
+            existing.head === event.head &&
+            existing.generation === task.generation
+              ? existing
+              : { head: event.head, generation: task.generation, evidence: [] };
+          const provisional: TaskRecord = { ...withoutIterationScope, userCheck };
+          const question = userCheckQuestion(provisional, event.head);
+          return commitWithNotification(
+            withoutIterationScope,
+            context,
+            {
+              stage: "ready",
+              userCheck,
+              communication: {
+                ...(task.communication ?? { revision: 0, messages: [] }),
+                question,
+              },
+            },
+            question.text,
+            "coordinator",
+          );
+        }
         return commitWithNotification(
-          clearIterationScope(task),
+          withoutIterationScope,
           context,
           { stage: "ready" },
           readySummary(task, event.head, required),
@@ -1093,7 +1206,7 @@ export function transitionTask(
         invalidStage(task, event.type, ["validating", "reviewing", "awaiting-fixes", "ready"]);
       }
       assertHeadEvent(task, event.head, event.generation, "Evidence invalidation");
-      const withoutHead = clearIterationScope(clearReviewHead(task));
+      const withoutHead = withoutUserCheckQuestion(clearIterationScope(clearReviewHead(task)));
       return commitTask(withoutHead, context.now, {
         stage: "implementing",
         generation: task.generation + 1,
@@ -1334,6 +1447,88 @@ export function transitionTask(
       const notifications = [...task.notifications];
       notifications[index] = { ...current, acknowledged: true };
       return commitTask(task, context.now, { notifications });
+    }
+    case "confirm-user-check": {
+      if (task.stage !== "ready") {
+        invalidStage(task, event.type, ["ready"]);
+      }
+      assertHeadEvent(task, event.head, event.generation, "User check confirmation");
+      assertCurrentHead(task, event.head, "User check confirmation");
+      const question = task.communication?.question;
+      if (
+        question === undefined ||
+        question.id !== event.questionId ||
+        !question.id.startsWith(USER_CHECK_QUESTION_ID_PREFIX)
+      ) {
+        throw new TaskTransitionError(
+          "invalid-input",
+          task,
+          `User check confirmation questionId ${event.questionId} does not match the current question`,
+        );
+      }
+      const { question: _question, ...communicationRest } = task.communication as TaskCommunication;
+      return commitWithNotification(
+        task,
+        context,
+        {
+          communication: communicationRest,
+          userCheck: {
+            head: event.head,
+            generation: event.generation,
+            evidence: task.userCheck?.evidence ?? [],
+            answer: { outcome: "confirmed", answeredAt: context.now },
+          },
+        },
+        `You checked ${taskName(task.objective)}; it can go to a PR.`,
+      );
+    }
+    case "request-user-check-changes": {
+      if (task.stage !== "ready") {
+        invalidStage(task, event.type, ["ready"]);
+      }
+      assertHeadEvent(task, event.head, event.generation, "User check changes");
+      assertCurrentHead(task, event.head, "User check changes");
+      const question = task.communication?.question;
+      if (
+        question === undefined ||
+        question.id !== event.questionId ||
+        !question.id.startsWith(USER_CHECK_QUESTION_ID_PREFIX)
+      ) {
+        throw new TaskTransitionError(
+          "invalid-input",
+          task,
+          `User check changes questionId ${event.questionId} does not match the current question`,
+        );
+      }
+      if (!isNonEmptyText(event.text)) {
+        throw new TaskTransitionError(
+          "invalid-input",
+          task,
+          "User check changes requires non-empty text",
+        );
+      }
+      const communication = appendTaskMessage(task.communication, {
+        id: event.answerId,
+        kind: "answer",
+        text: event.text,
+        createdAt: context.now,
+        replyTo: event.questionId,
+      });
+      return commitWithNotification(
+        task,
+        context,
+        {
+          stage: "awaiting-fixes",
+          communication,
+          userCheck: {
+            head: event.head,
+            generation: event.generation,
+            evidence: task.userCheck?.evidence ?? [],
+            answer: { outcome: "changes-requested", text: event.text, answeredAt: context.now },
+          },
+        },
+        `You asked for changes to ${taskName(task.objective)}; starting a fix round.`,
+      );
     }
     default: {
       const neverEvent: never = event;

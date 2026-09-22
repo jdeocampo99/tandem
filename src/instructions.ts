@@ -11,6 +11,9 @@ export type AgentBriefInput = Readonly<{
   readonly role: AgentRole;
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
+  /** "You check" criteria: hands-on/visual items the user judges from builder screenshots, not a
+   *  validation command. Never acceptance criteria for a review lens. */
+  readonly userCheckCriteria?: readonly string[];
   readonly instructions: readonly string[];
   readonly reportPath: string;
   readonly review?: AgentBriefReview;
@@ -74,6 +77,7 @@ Good: "I restarted the fix on a clean copy, and nothing from the old attempt was
 ## How you work
 - Start research on your own as soon as you understand the request. If research cannot start, tell the user and ask before researching yourself.
 - Before any implementation, interview the user: ask pointed questions about behavior, risk, and what must not change, with a sensible default for each. Silence is not approval. Create implementation work only after they approve the concrete scope.
+- Tag each acceptance criterion as a Tandem check (a validation command can prove it) or a you-check (visual or hands-on; the user judges it from screenshots, never a command). Pass the you-check ones as userCheckCriteria on create or brief-draft; moving a criterion between the two groups later is an ordinary revision. When a task with you-check items is ready, show its short question with the screenshots and relay the user's exact reply through answer; send "yes" only when they actually said yes.
 - When a worker asks a question, answer it yourself only when the user's earlier direction, the approved scope, or clear repository facts already settle it and the answer is not destructive. Otherwise ask the user.
 - Only the tool says when work is done. A passed-along message or a started task is not done.
 - Never merge, publish, deploy, or destroy anything unless the user asks for that specific action.
@@ -82,15 +86,15 @@ Good: "I restarted the fix on a clean copy, and nothing from the old attempt was
 
 export const COORDINATOR_TOOL_GUIDANCE = `## The tandem tool
 Call it with {request: {action: ...}}. Its text is a short summary; details and report paths hold the rest. The tool refuses unsafe actions and asks the user to confirm anything that needs approval, so you do not need to police that yourself.
-- create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, and skill with the exact name when the user invokes a skill.
+- create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, skill with the exact name when the user invokes a skill, and userCheckCriteria for any visual/hands-on criteria the user will judge from screenshots.
 - approve: record the user's approval of an implementation scope.
 - steer: pass a user direction to a running task within approved scope. Send short changes, and use supersedes to replace an outdated one. It is delivered at the next safe point.
-- answer: reply to a worker's question by its questionId.
+- answer: reply to a worker's question by its questionId. A task's ready-stage user-check- question is shown to the user verbatim with its attachments; relay their exact reply, and send "yes" only when they actually said yes.
 - list, show, inspect, messages: read tasks. Read messages only when the user asks or before a decision that depends on them; do not poll.
 - pause, resume, cancel, restart, tick: control tasks.
 - recovery-plan, recovery-decide: when a task is stuck, use recovery-decide instead of guessing a fix. It either runs a preapproved fix, waits briefly, or asks one question; answer that question with answer.
 - review-existing, validation-retry, evidence-repair, reconcile, delivery-preflight, cleanup: recovery and housekeeping actions; each needs the user's approval.
-- brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, acceptance criteria, approach, decisions, open questions). The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. brief-approve takes the exact briefRevision and contentDigest shown. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
+- brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, acceptance criteria, userCheckCriteria, approach, decisions, open questions). The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. brief-approve takes the exact briefRevision and contentDigest shown. Changing scope, acceptance, you-check items, design, or constraints needs reapproval and pauses the work until then.
 - request-show, request-relate, request-conflict, request-decide, request-integrate, request-split: coordinate the tasks inside one request.
 - draft, publish, merge, request-publish, request-merge: pull requests. Each needs the user's explicit approval.
 - budget-show, budget-approve: when a request hits its spending cap, it pauses on one question. Show it once; do not work around it. budget-approve takes the new cap in USD micro-dollars. Never call an unmeasured cost zero or free.
@@ -144,13 +148,13 @@ export const REVIEW_LENSES = [
     id: "coverage",
     title: "Coverage and affected surface",
     instructions:
-      "Check the changed behavior, affected callers, relevant tests, reports, and task acceptance criteria. Identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Keep the reviewer read-only, use runner-produced targeted validation, and bind every report to HEAD and generation.",
+      "Check the changed behavior, affected callers, relevant tests, reports, and Tandem-check acceptance criteria. Identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Keep the reviewer read-only, use runner-produced targeted validation, and bind every report to HEAD and generation.",
   },
   {
     id: "verification",
     title: "Independent verification",
     instructions:
-      "Use a fresh reviewer or verifier context with no implementer conversation. Inspect the exact HEAD and generation under review, bind the report to HEAD and generation, rely only on targeted validation performed by the runner, and distinguish confirmed from plausible findings. Do not run or claim unobserved commands, do not modify the worktree, and do not invent verification results.",
+      "Use a fresh reviewer or verifier context with no implementer conversation. Inspect the exact HEAD and generation under review against the Tandem-check acceptance criteria, bind the report to HEAD and generation, rely only on targeted validation performed by the runner, and distinguish confirmed from plausible findings. Do not run or claim unobserved commands, do not modify the worktree, and do not invent verification results.",
   },
 ] as const satisfies readonly ReviewLens[];
 
@@ -203,6 +207,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Bind the report to the exact HEAD and generation. The runner performs targeted validation; do not invent or claim its results.",
     SUBMIT_REPORT_INSTRUCTION,
     "On a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; otherwise submit outcome completed with the review field following the ReviewResult schema and selected-lens instructions supplied below.",
+    "If a Tandem-check criterion can't be proven by runner evidence or by reading the source at this HEAD, don't ask a question and don't fail the lens for it: put its exact text in the review's handToUser list; Tandem hands it to the user.",
   ],
   verifier: [
     "Verify the exact task HEAD and generation from a fresh context without relying on implementer conversation.",
@@ -210,6 +215,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     SUBMIT_REPORT_INSTRUCTION,
     "Use only runner-produced targeted validation evidence and report the observed command, result, and scope; never synthesize evidence.",
     "On a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; otherwise submit outcome completed with the review field following the ReviewResult schema and selected-lens instructions supplied below. Bind lens, HEAD, and generation to the requested review context; pass is the boolean verdict.",
+    "If a Tandem-check criterion can't be proven by runner evidence or by reading the source at this HEAD, don't ask a question and don't fail the lens for it: put its exact text in the review's handToUser list; Tandem hands it to the user.",
   ],
   presentation: [
     "Presentation alone may write the artifact at the supplied absolute path using only read, grep, glob, write, and edit.",
@@ -220,8 +226,8 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
   ],
 };
 const REVIEW_RESULT_SCHEMA = `Set the submit_report review field to one ReviewResult object with these keys:
-{"lens":"<behavior|design|coverage|verification>","head":"<exact HEAD>","generation":0,"pass":true,"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>"}],"summary":"<evidence-backed summary>"}
-Use the selected lens, exact HEAD, and exact generation supplied by the coordinator. Allowed lens values are behavior, design, coverage, and verification; severity values are P0, P1, P2, and P3; verdict values are confirmed and plausible; pass is boolean. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
+{"lens":"<behavior|design|coverage|verification>","head":"<exact HEAD>","generation":0,"pass":true,"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>"}],"summary":"<evidence-backed summary>","handToUser":["<exact Tandem-check criterion>"]}
+Use the selected lens, exact HEAD, and exact generation supplied by the coordinator. Allowed lens values are behavior, design, coverage, and verification; severity values are P0, P1, P2, and P3; verdict values are confirmed and plausible; pass is boolean. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied. handToUser is optional: list the exact text of any Tandem-check acceptance criterion that neither runner evidence nor the source at this HEAD can prove; never fail the lens or ask a needs-decision question for it instead.`;
 
 function readNonEmptyText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -344,6 +350,10 @@ export function buildAgentBrief(input: AgentBriefInput): string {
 
   const objective = readNonEmptyText(input.objective, "objective");
   const acceptanceCriteria = readPromptList(input.acceptanceCriteria, "acceptanceCriteria");
+  const userCheckCriteria =
+    input.userCheckCriteria === undefined
+      ? []
+      : readPromptList(input.userCheckCriteria, "userCheckCriteria");
   const instructions = readPromptList(input.instructions, "instructions");
   const reportPath = readSingleLineText(input.reportPath, "reportPath");
   const review = input.review === undefined ? undefined : readReviewContext(input.review);
@@ -361,14 +371,34 @@ export function buildAgentBrief(input: AgentBriefInput): string {
           `Submit the final ${input.role} report with submit_report; do not write a report file.`,
           `The controller persists the submitted report at ${reportPath}.`,
         ];
+  const acceptanceSection: readonly string[] =
+    userCheckCriteria.length === 0
+      ? ["## Acceptance criteria", ...formatBullets(acceptanceCriteria)]
+      : [
+          "## Acceptance criteria (Tandem checks)",
+          ...formatBullets(acceptanceCriteria),
+          "",
+          "## You check (the user judges these from screenshots)",
+          ...formatBullets(userCheckCriteria),
+          "",
+          ...(input.role === "implementer"
+            ? [
+                "Before submitting, save at least one screenshot or short clip per item, taken at your final commit, into the user-check directory named below, and list them in submit_report userCheckEvidence. Keep your ad-hoc Playwright runs; never commit these files.",
+              ]
+            : input.role === "reviewer" || input.role === "verifier"
+              ? [
+                  "These are not acceptance criteria for any lens. Any builder screenshots are shown by the builder, not proof. Do not fail a lens, raise a finding, or ask a needs-decision question about them, and never require runner evidence for them.",
+                ]
+              : []),
+        ];
+
   const lines: string[] = [
     `# Tandem ${input.role} brief`,
     "",
     "## Objective",
     objective,
     "",
-    "## Acceptance criteria",
-    ...formatBullets(acceptanceCriteria),
+    ...acceptanceSection,
     "",
     "## Instructions",
     ...formatBullets(instructions),

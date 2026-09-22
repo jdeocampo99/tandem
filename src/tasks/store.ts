@@ -179,6 +179,9 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
       acceptanceCriteria: input.acceptanceCriteria,
       surfaces: input.surfaces,
       policy: input.policy,
+      ...(input.userCheckCriteria === undefined
+        ? {}
+        : { userCheckCriteria: input.userCheckCriteria }),
       ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
       ...(input.researchHandoffs === undefined ? {} : { researchHandoffs: input.researchHandoffs }),
       ...(input.researchContinuation === undefined
