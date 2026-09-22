@@ -1265,9 +1265,9 @@ export class CentralRecoveryWorkflow {
     parts: Readonly<{ readonly what: string; readonly risk: string }>,
   ): Promise<CentralRecoveryOutcome> {
     const questionId = `${VALIDATION_RETRY_QUESTION_ID_PREFIX}${incidentIdentity}`;
-    const text = formatRecoveryQuestion({
+    const text = formatDecisionQuestion({
       what: parts.what,
-      want: VALIDATION_RETRY_QUESTION_WANT,
+      recommendation: VALIDATION_RETRY_QUESTION_WANT,
       risk: parts.risk,
     });
     const details = `Details: task ${task.id}${task.requestId === undefined ? "" : `, request ${task.requestId}`}, generation ${task.generation}, dead job ${deadJobId}.`;
