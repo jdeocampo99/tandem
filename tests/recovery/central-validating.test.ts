@@ -263,6 +263,8 @@ async function fixture(options: FixtureOptions = {}) {
     relaunchWorker,
     revalidate,
     blockTask,
+    removeEndpoint: async () => {},
+    relaunchReviewer: async () => {},
   });
 
   return {

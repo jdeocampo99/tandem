@@ -1969,9 +1969,9 @@ from its current stage. It is always the same three moves:
    | --- | --- | --- |
    | `implementing` | Relaunch: new durable operation, a fresh pane only if one is not already owned, a new worker started through the normal launch path | Yes |
    | `scouting` | The identical relaunch path as `implementing` | Yes |
-   | `validating` | Revalidate: rerun validation at the exact same reviewed HEAD as a new durable job, through the normal `WorkerWorkflow.startValidation` entry point | Yes |
-   | `reviewing` | — | Not yet |
-   | `awaiting-fixes` | The same `implementing` relaunch path (see below) | Yes |
+   | `validating` | Rerun validation at the exact reviewed HEAD as a new durable job, within the validation retry budget | Yes |
+   | `reviewing` | Relaunch only the dead reviewer/verifier lens at the exact reviewed HEAD; recorded lenses are kept | Yes |
+   | `awaiting-fixes` | The `implementing` relaunch (see below) | Yes |
 
    Relaunch (`WorkerWorkflow.relaunchWorker`) never mutates the dead job or its result; it admits a
    brand-new operation through the same reservation and budget gate every launch uses, so a fresh
@@ -1979,17 +1979,16 @@ from its current stage. It is always the same three moves:
    told a prior attempt may have left partial edits and to inspect `git status`/`git diff` before
    continuing.
 
-   `awaiting-fixes` needs no stage branch of its own: `WorkerWorkflow.beginFixes` admits the fix
-   round and transitions the task to `implementing` (bumping generation, consuming one review round,
-   and durably recording `runtime.fixContextPath`) atomically, before it ever touches a pane. If the
-   pane it expected to reuse (the original implementer's, carried through review) turns out to be
-   gone, it does not block; it releases the reservation and leaves the task at `implementing` with no
-   owned pane, and the `implementing` re-entry above picks it up on the next reconcile tick exactly as
-   it would for any other dead implementer. A plain relaunch's own admission never overwrites an
-   already-set `fixContextPath`, so the relaunched worker is still told to read the same findings from
-   it — and because the review round was already spent once by the original `begin-fixes` transition,
-   any number of crash-restarts within that same generation never spend another one; only an
-   explicitly new fix round (a fresh `begin-fixes` transition) does.
+   `awaiting-fixes` has no branch of its own: `beginFixes` moves the task to `implementing` and
+   spends the review round before touching a pane, so a missing pane leaves it unblocked at
+   `implementing` for that re-entry. The relaunched fixer keeps the same `fixContextPath` findings,
+   and crash-restarts never spend another review round.
+
+   `reviewing` re-entry covers only a lens whose job was quarantined (pane or result proven gone) and
+   is not yet recorded for the reviewed HEAD. Real findings, stale instructions, and malformed results
+   still block as before. After the stop ladder proves the pane gone, the stale operation is settled
+   to `failed` so the relaunch is not paused on an uncertain prior outcome. A moved, dirty, or
+   unmerged worktree asks instead of relaunching.
 
 Automatic re-entry is bounded to two restarts per task generation; a new generation resets the
 counter. A dead job that failed again inside its own startup grace window, in the same failure class

@@ -258,6 +258,16 @@ async function fixture(options: FixtureOptions = {}) {
     blockedReasons.push(reason);
   };
 
+  const removedEndpoints: string[] = [];
+  const removeEndpoint = async (_taskId: string, paneId: string): Promise<void> => {
+    removedEndpoints.push(paneId);
+  };
+
+  const relaunchReviewerCalls: TaskRecord[] = [];
+  const relaunchReviewer = async (task: TaskRecord): Promise<void> => {
+    relaunchReviewerCalls.push(task);
+  };
+
   const workflow = new CentralRecoveryWorkflow({
     home,
     sessionId: "session-1",
@@ -270,6 +280,8 @@ async function fixture(options: FixtureOptions = {}) {
     relaunchWorker,
     revalidate,
     blockTask,
+    removeEndpoint,
+    relaunchReviewer,
   });
 
   return {
@@ -280,6 +292,8 @@ async function fixture(options: FixtureOptions = {}) {
     relaunchCalls,
     revalidateCalls,
     blockedReasons,
+    removedEndpoints,
+    relaunchReviewerCalls,
     setRelaunchOutcome: (
       outcome: Readonly<{ readonly relaunched: boolean; readonly reason?: string }>,
     ) => {
@@ -335,6 +349,44 @@ test("a proven-failed job re-enters with its own error as the reason and worktre
     expect(await readFile(join(snapshotDirectory, "untracked-files.txt"), "utf8")).toContain(
       "untracked.txt",
     );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a quarantined operation is settled once death is proven, so the relaunch is not paused", async () => {
+  const f = await fixture({ job: deadJob() });
+  try {
+    const state = await readRuntimeState(f.runtimePath);
+    await writeRuntimeState(f.runtimePath, {
+      ...state,
+      tasks: state.tasks.map((entry) => ({
+        ...entry,
+        operation: {
+          schemaVersion: 1 as const,
+          id: "operation-dead",
+          taskId: "task-1",
+          kind: "implementation" as const,
+          role: "implementer" as const,
+          generation: 0,
+          inputHead: "head-1",
+          policyDigest: "policy-digest",
+          instructionRevision: 0,
+          jobId: entry.jobs[0]?.id ?? "job-dead",
+          phase: "quarantined" as const,
+          fencingRevision: 1,
+          claimOwner: "test-controller",
+          createdAt: NOW,
+          effects: [],
+        },
+      })),
+    });
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    const outcome = await f.workflow.recoverStuckWorker(task);
+    expect(outcome.action).toBe("relaunched");
+    const after = await readRuntimeState(f.runtimePath);
+    expect(after.tasks[0]?.operation?.phase).toBe("failed");
   } finally {
     await f.cleanup();
   }

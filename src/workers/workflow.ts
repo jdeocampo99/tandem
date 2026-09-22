@@ -31,6 +31,7 @@ import type {
   TaskQuestion,
   TaskRecord,
 } from "../contracts.ts";
+import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "../recovery/central-review.ts";
 import {
   activeReservations,
   activeRuntimeJob,
@@ -2605,13 +2606,14 @@ export class WorkerWorkflow {
       await this.#deps.blockTask(task.id, "review has no durable runtime metadata");
       return;
     }
-    const failedReview = runtime.jobs.find(
-      (job) =>
-        (job.role === "reviewer" || job.role === "verifier") &&
-        job.generation === task.generation &&
-        job.phase === "failed",
-    );
-    if (failedReview !== undefined) {
+    // A lens whose most recent job failed and is still unresolved either blocks (a genuine content
+    // failure the worker itself reported, a stale canonical instruction, or a malformed result) or,
+    // when the job's own recorded reason is a durable-quarantine one (proven-unowned: the pane or its
+    // result disappeared, never proof of a real outcome), is left for central recovery's `reviewing`
+    // re-entry, which the caller runs before this method and which clears the dead lens so it is
+    // picked up as `nextLens` below instead.
+    const failedReview = unresolvedReviewFailure(task, runtime);
+    if (failedReview !== undefined && !isQuarantinedReviewFailure(failedReview)) {
       await this.#deps.blockTask(
         task.id,
         failedReview.error ?? `review ${failedReview.reviewLens ?? "worker"} failed`,
@@ -2630,8 +2632,16 @@ export class WorkerWorkflow {
         )
           return;
       } catch (error) {
-        if (!isMissingEndpoint(error)) throw error;
-        await this.#deps.removeEndpoint(task.id, reviewer.paneId);
+        if (isMissingEndpoint(error)) {
+          await this.#deps.removeEndpoint(task.id, reviewer.paneId);
+          return;
+        }
+        // Foreign ownership or a proof failure (stale heartbeat, PID no longer foreground): the pane
+        // is never touched without proof either way, so this blocks instead of retrying forever.
+        await this.#deps.blockTask(
+          task.id,
+          `review pane ${reviewer.paneId} ownership could not be proven: ${describeError(error)}`,
+        );
         return;
       }
     }
