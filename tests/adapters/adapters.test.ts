@@ -588,6 +588,82 @@ test("pins a newly acquired lease to the captured commit when the pool checkout 
   }
 });
 
+test("reuses a leftover task branch with no extra commits and refuses one that holds work", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-treehouse-leftover-"));
+  const repo = join(home, "repo");
+  const pool = join(home, "pool");
+  const slot = join(pool, "slot");
+  await mkdir(repo, { recursive: true });
+  await mkdir(pool, { recursive: true });
+  const environment = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "Tandem Test",
+    GIT_AUTHOR_EMAIL: "tandem@example.test",
+    GIT_COMMITTER_NAME: "Tandem Test",
+    GIT_COMMITTER_EMAIL: "tandem@example.test",
+  };
+  const spawn = async (argv: readonly string[], cwd: string): Promise<CommandResult> => {
+    const child = Bun.spawn([...argv], { cwd, env: environment, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    return { stdout, stderr, code };
+  };
+  const runGit = async (args: readonly string[], cwd = repo): Promise<string> => {
+    const outcome = await spawn(["git", ...args], cwd);
+    if (outcome.code !== 0) throw new Error(`git ${args.join(" ")} failed: ${outcome.stderr}`);
+    return outcome.stdout.trim();
+  };
+  const run: CommandRunner = async (request) => {
+    if (request.argv[0] === "treehouse" && request.argv.includes("status")) return result("[]");
+    if (request.argv[0] === "treehouse" && request.argv.includes("get")) {
+      return result(
+        JSON.stringify({
+          path: slot,
+          lease_id: "lease-leftover",
+          lease_holder: "tandem-leftover",
+          leased_at: "2030-01-02T03:04:05.000Z",
+        }),
+      );
+    }
+    return spawn(request.argv, request.cwd);
+  };
+  const acquire = async (sourceHead: string) =>
+    acquireWorktree(run, {
+      repo,
+      root: pool,
+      tandemId: "tandem-leftover",
+      taskName: "Leftover",
+      sourceHead,
+    });
+  try {
+    await runGit(["init", "-b", "main"]);
+    await writeFile(join(repo, "source.txt"), "A\n");
+    await runGit(["add", "source.txt"]);
+    await runGit(["commit", "-m", "A"]);
+    const first = await runGit(["rev-parse", "HEAD"]);
+    await runGit(["worktree", "add", "--detach", slot, first]);
+    const branch = (await acquire(first)).branch;
+
+    // A later home asks for the same branch at a newer source: it moves forward.
+    await runGit(["switch", "--detach"], slot);
+    await runGit(["commit", "--allow-empty", "-m", "B"]);
+    const second = await runGit(["rev-parse", "HEAD"]);
+    await acquire(second);
+    expect(await runGit(["branch", "--show-current"], slot)).toBe(branch);
+    expect(await runGit(["rev-parse", "HEAD"], slot)).toBe(second);
+
+    // Once the branch holds a commit the source lacks, it is refused rather than moved.
+    await runGit(["commit", "--allow-empty", "-m", "work"], slot);
+    await runGit(["switch", "--detach", second], slot);
+    await expect(acquire(second)).rejects.toThrow("already exists with commits");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("preserves acquired lease identity when post-acquire validation fails", async () => {
   const runner = scriptedRunner([
     result("[]"),
