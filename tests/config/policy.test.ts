@@ -463,15 +463,14 @@ test("onboardRepo proposes a frozen install from the lockfile and saves it", asy
 
     const proposal = await onboardRepo({ repoPath: repo, home });
     expect(proposal.approvalRequired).toBe(true);
-    expect(proposal.setupCommands.map((entry) => entry.argv)).toEqual([
-      ["pnpm", "install", "--frozen-lockfile"],
-    ]);
+    const install = ["/bin/sh", "-c", "pnpm install --frozen-lockfile"];
+    expect(proposal.setupCommands.map((entry) => entry.argv)).toEqual([install]);
 
-    await onboardRepo({ repoPath: repo, home, write: true });
+    const written = await onboardRepo({ repoPath: repo, home, write: true });
+    const saved = JSON.parse(await readFile(written.configPath, "utf8"));
+    expect(saved.policy.setupCommands).toEqual(["pnpm install --frozen-lockfile"]);
     const resolved = await resolveRepoPolicy({ repoPath: repo, home });
-    expect(resolved.config.setupCommands.map((entry) => entry.argv)).toEqual([
-      ["pnpm", "install", "--frozen-lockfile"],
-    ]);
+    expect(resolved.config.setupCommands.map((entry) => entry.argv)).toEqual([install]);
   });
 });
 
@@ -480,4 +479,24 @@ test("onboardRepo proposes no setup without a lockfile", async () => {
     const proposal = await onboardRepo({ repoPath: repo, home });
     expect(proposal.setupCommands).toEqual([]);
   });
+});
+
+test("commands can be written as plain strings that run through the shell", () => {
+  const policy = parsePolicy({
+    setupCommands: ["npm ci"],
+    validationCommands: ["npm run lint && npm test"],
+  });
+  expect(policy.setupCommands).toEqual([
+    { name: "npm ci", argv: ["/bin/sh", "-c", "npm ci"], timeoutMs: 600_000 },
+  ]);
+  expect(policy.validationCommands).toEqual([
+    {
+      name: "npm run lint && npm test",
+      argv: ["/bin/sh", "-c", "npm run lint && npm test"],
+      surfaces: [],
+      timeoutMs: 600_000,
+    },
+  ]);
+  expect(() => parsePolicy({ setupCommands: ["npm ci", "npm ci"] })).toThrow("duplicate");
+  expect(() => parsePolicy({ setupCommands: ["  "] })).toThrow(TypeError);
 });

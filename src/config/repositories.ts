@@ -10,7 +10,12 @@ import type {
   ValidationCommand,
 } from "../contracts.ts";
 import { type ModelSettings, readModelSettingsAt } from "./models.ts";
-import { copyPolicy, parsePolicy, parsePolicyOverride } from "./policy.ts";
+import {
+  copyPolicy,
+  DEFAULT_COMMAND_TIMEOUT_MS,
+  parsePolicy,
+  parsePolicyOverride,
+} from "./policy.ts";
 import {
   assertContainedReference,
   assertPhysicalRepositoryReference,
@@ -37,7 +42,6 @@ const ROOT_GUIDANCE_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
 const CENTRAL_REPOSITORY_DIRECTORY = "repositories";
 const CENTRAL_CONFIG_FILE = "config.json";
 const CENTRAL_SCHEMA_VERSION = 1;
-const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
 
 /** Reads an absolute Tandem or target-repository file; return undefined only when the optional file is absent. */
 export type PolicyTextReader = (
@@ -410,24 +414,25 @@ function proposeValidationCommands(packageText: string | undefined): ValidationP
 }
 
 /** Lockfile → the install that reproduces it exactly; the first lockfile found wins. */
-const LOCKFILE_INSTALLS: readonly (readonly [string, readonly string[]])[] = [
-  ["bun.lock", ["bun", "install", "--frozen-lockfile"]],
-  ["bun.lockb", ["bun", "install", "--frozen-lockfile"]],
-  ["pnpm-lock.yaml", ["pnpm", "install", "--frozen-lockfile"]],
-  ["yarn.lock", ["yarn", "install", "--immutable"]],
-  ["package-lock.json", ["npm", "ci"]],
-  ["uv.lock", ["uv", "sync", "--frozen"]],
+const LOCKFILE_INSTALLS: readonly (readonly [string, string])[] = [
+  ["bun.lock", "bun install --frozen-lockfile"],
+  ["bun.lockb", "bun install --frozen-lockfile"],
+  ["pnpm-lock.yaml", "pnpm install --frozen-lockfile"],
+  ["yarn.lock", "yarn install --immutable"],
+  ["package-lock.json", "npm ci"],
+  ["uv.lock", "uv sync --frozen"],
 ];
 
-/** Proposes one dependency install for fresh worktrees from the checkout's lockfile, if any. */
+/**
+ * Proposes one dependency install for fresh worktrees from the checkout's lockfile, if any, as the
+ * plain-string form so the saved settings file stays easy to read and edit.
+ */
 async function proposeSetupCommands(
   root: string,
   readText: PolicyTextReader | undefined,
-): Promise<readonly SetupCommand[]> {
-  for (const [lockfile, argv] of LOCKFILE_INSTALLS) {
-    if ((await readRepositoryFile(root, lockfile, readText, false)) !== undefined) {
-      return [{ name: `install:${lockfile}`, argv, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS }];
-    }
+): Promise<readonly string[]> {
+  for (const [lockfile, command] of LOCKFILE_INSTALLS) {
+    if ((await readRepositoryFile(root, lockfile, readText, false)) !== undefined) return [command];
   }
   return [];
 }
@@ -462,7 +467,7 @@ function onboardingUnresolved(
 function serializeCentralConfig(
   root: string,
   commands: readonly ValidationCommand[],
-  setupCommands: readonly SetupCommand[],
+  setupCommands: readonly string[],
 ): string {
   return `${JSON.stringify(
     {
