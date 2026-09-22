@@ -44,6 +44,7 @@ import {
 } from "../tasks/acceptance.ts";
 import { type TaskEvent, transitionTask } from "../tasks/lifecycle.ts";
 import type { TaskStore } from "../tasks/store.ts";
+import { userCheckCriteriaOf, userCheckStatus } from "../tasks/user-checks.ts";
 import type { ValidationJob, ValidationResult } from "../validation-worker.ts";
 import { runValidation } from "../workers/validation.ts";
 import {
@@ -1653,6 +1654,15 @@ export class RecoveryWorkflow {
       name: "remote",
       passed: remoteMatches,
       detail: remote === undefined ? "origin unavailable" : remote,
+    });
+    const userCheck = userCheckStatus(task);
+    const userCheckPassed = userCheck === "none" || userCheck === "confirmed";
+    checks.push({
+      name: "user-check",
+      passed: userCheckPassed,
+      detail: userCheckPassed
+        ? "no pending hands-on criteria"
+        : `waiting for your check of ${userCheckCriteriaOf(task).length} hands-on criteria`,
     });
     const qualityChecks = [
       { name: "generated-database-types", argv: ["bun", "run", "db:types:check"] as const },

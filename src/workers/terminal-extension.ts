@@ -259,7 +259,10 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       assertSelectedModel(expectedModelParts(job.model.model), ctx.model);
       const report = resolveSubmittedReport(job, submission);
       if (report.userCheckEvidence !== undefined && job.userChecks !== undefined) {
-        const rejection = await checkUserCheckFiles(job.userChecks.directory, report.userCheckEvidence);
+        const rejection = await checkUserCheckFiles(
+          job.userChecks.directory,
+          report.userCheckEvidence,
+        );
         if (rejection !== undefined) return new ReportRejection(rejection);
       }
       const revision = await instructionRevision(job, report.status !== "failed");
@@ -269,7 +272,9 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
         ...(report.artifactPath === undefined ? {} : { artifactPath: report.artifactPath }),
         ...(report.review === undefined ? {} : { review: report.review }),
         ...(revision === undefined ? {} : { instructionRevision: revision }),
-        ...(report.userCheckEvidence === undefined ? {} : { userCheckEvidence: report.userCheckEvidence }),
+        ...(report.userCheckEvidence === undefined
+          ? {}
+          : { userCheckEvidence: report.userCheckEvidence }),
       });
     } catch (error) {
       if (error instanceof ReportRejection) return error;
@@ -370,14 +375,10 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
         ...(job.role === "implementer" && job.userChecks !== undefined
           ? {
               userCheckEvidence: z
-                .array(
-                  z
-                    .object({ criterion: z.string(), paths: z.array(z.string()) })
-                    .strict(),
-                )
+                .array(z.object({ criterion: z.string(), paths: z.array(z.string()) }).strict())
                 .optional()
                 .describe(
-                  "Required for completed: at least one screenshot or clip path per \"you check\" criterion, saved under the user-check directory named in your brief.",
+                  'Required for completed: at least one screenshot or clip path per "you check" criterion, saved under the user-check directory named in your brief.',
                 ),
             }
           : {}),

@@ -161,6 +161,7 @@ import {
   type TaskStoreTransaction,
   transitionStoredTask,
 } from "../tasks/store.ts";
+import { isUserCheckYes, USER_CHECK_QUESTION_ID_PREFIX } from "../tasks/user-checks.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
@@ -194,6 +195,8 @@ export type CreateTaskRequest = Readonly<{
   readonly kind: "scout" | "implementation";
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
+  /** The "you check" list: hands-on/visual criteria the user judges from builder screenshots. */
+  readonly userCheckCriteria?: readonly string[];
   readonly surfaces: readonly string[];
   /** The request brief this task is created under; dispatch stays blocked while it is superseded. */
   readonly requestId?: string;
@@ -1209,6 +1212,37 @@ class TandemController {
     const answer = singleLine(input.text, "text");
     const task = await this.get(taskId);
     if (task.communication?.question?.id === questionId) {
+      // A "you check" answer is a human judgment on hands-on criteria, never a recovery decision or
+      // a worker instruction; "yes" clears the question without bumping the revision, and anything
+      // else becomes a fix-round answer message.
+      if (questionId.startsWith(USER_CHECK_QUESTION_ID_PREFIX)) {
+        if (task.stage !== "ready") {
+          throw new Error("That check is no longer waiting on you.");
+        }
+        if (task.reviewHead === undefined) {
+          throw new Error(`task ${taskId} has no reviewed HEAD to check`);
+        }
+        if (isUserCheckYes(answer)) {
+          await this.transition(taskId, {
+            type: "confirm-user-check",
+            head: task.reviewHead,
+            generation: task.generation,
+            questionId,
+          });
+          return this.messages(taskId);
+        }
+        const updated = await this.transition(taskId, {
+          type: "request-user-check-changes",
+          head: task.reviewHead,
+          generation: task.generation,
+          questionId,
+          answerId: singleLine(this.#deps.idFactory(), "answer id"),
+          text: answer,
+        });
+        await this.#source.publishTaskInbox(updated);
+        await this.reconcileTask(updated);
+        return this.messages(taskId);
+      }
       // A recovery question's answer is a recovery decision, never a worker instruction: it must
       // never bump task.communication.revision, so neither path here goes through appendAnswer.
       if (questionId.startsWith(RESTART_QUESTION_ID_PREFIX)) {

@@ -1113,9 +1113,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     kind,
     objective: requiredText(value, "objective", source),
     acceptanceCriteria: requiredTextArray(value, "acceptanceCriteria", source),
-    ...(userCheckCriteriaValue === undefined
-      ? {}
-      : { userCheckCriteria: userCheckCriteriaValue }),
+    ...(userCheckCriteriaValue === undefined ? {} : { userCheckCriteria: userCheckCriteriaValue }),
     surfaces: requiredTextArray(value, "surfaces", source),
     stage: requiredEnum(value, "stage", TASK_STAGES, source),
     scopeApproved: requiredBoolean(value, "scopeApproved", source),

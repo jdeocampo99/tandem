@@ -124,7 +124,6 @@ import {
 } from "../tasks/communication-protocol.ts";
 import { describeFixRoundExhaustion } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
-import { userCheckCriteriaOf, userCheckFinding } from "../tasks/user-checks.ts";
 import type {
   ReviewAssistanceOutcome,
   ReviewAssistanceRuntime,
@@ -149,6 +148,7 @@ import {
   requiredReviewLenses,
 } from "../tasks/review-levels.ts";
 import type { TaskStore, TaskStoreTransaction } from "../tasks/store.ts";
+import { userCheckCriteriaOf, userCheckFinding } from "../tasks/user-checks.ts";
 import {
   readValidationResult,
   type ValidationJob,
@@ -3261,7 +3261,8 @@ export class WorkerWorkflow {
     const sessionDirectory =
       role === "implementer" || role === "scout" ? runtime.sessionDirectory : undefined;
     const userCheckCriteria = role === "implementer" ? userCheckCriteriaOf(task) : [];
-    const userCheckDirectory = userCheckCriteria.length === 0 ? undefined : join(directory, "user-checks");
+    const userCheckDirectory =
+      userCheckCriteria.length === 0 ? undefined : join(directory, "user-checks");
     const extra = [
       ...(options.extraInstructions ?? []),
       ...(priorReportPath === undefined

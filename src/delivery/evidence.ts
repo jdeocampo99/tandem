@@ -20,6 +20,7 @@ import {
   ValidationConfigurationError,
 } from "../tasks/acceptance.ts";
 import { recordedReviewLevel } from "../tasks/review-levels.ts";
+import { userCheckCriteriaOf, userCheckStatus } from "../tasks/user-checks.ts";
 
 export type PrSummary = Readonly<{
   readonly tldr: readonly string[];
@@ -177,6 +178,12 @@ export function assertTaskShape(task: TaskRecord): DeliveryTaskShape {
   assertEvidence(task, head);
   assertCurrentReviews(task, head);
   assertFinalAcceptance(task, head);
+  const status = userCheckStatus(task);
+  if (status !== "none" && status !== "confirmed") {
+    throw new Error(
+      `delivery requires your check of ${userCheckCriteriaOf(task).length} hands-on criteria at HEAD ${head}`,
+    );
+  }
   return { cwd, branch, head };
 }
 
@@ -206,12 +213,18 @@ export function describeTaskPr(task: TaskRecord, summary: PrSummary): string {
   const evidence = assertEvidence(task, shape.head);
   const manifest = finalAcceptanceContract(task, shape.head);
   const validatedSummary = validateSummary(summary);
+  const userCheckCount = userCheckCriteriaOf(task).length;
   return renderPrDescription({
     tldr: validatedSummary.tldr,
     what: validatedSummary.what,
     why: validatedSummary.why,
     validation: [
       `final acceptance manifest at HEAD ${shape.head}: ${manifest.requirements.length} required checks, ${manifest.lenses.length} review lenses, ${manifest.criteria.length} acceptance criteria`,
+      ...(userCheckCount === 0
+        ? []
+        : [
+            `${userCheckCount} "you check" criteria confirmed by the user from builder screenshots at HEAD ${shape.head}`,
+          ]),
       ...evidence.map(evidenceBullet),
     ],
   });
@@ -252,6 +265,10 @@ function memberRefusals(input: RequestAcceptanceInput): readonly string[] {
     }
     if (policyIdentity(member.policy) !== integration.policyDigest) {
       refusals.push(`member ${member.id} is pinned to a different repository policy`);
+    }
+    const status = userCheckStatus(member);
+    if (status !== "none" && status !== "confirmed") {
+      refusals.push(`member ${member.id} is waiting for your check of its hands-on criteria`);
     }
   }
   for (const member of input.members) {
@@ -578,6 +595,8 @@ export function summarizeDraftProgress(
   candidateHead = task.reviewHead,
 ): DraftProgress {
   assertDraftTaskShape(task);
+  const userCheckCount = userCheckCriteriaOf(task).length;
+  const status = userCheckStatus(task);
   return {
     reviewLevel: pinnedReviewLevel(task),
     activity: draftActivity(task),
@@ -585,6 +604,9 @@ export function summarizeDraftProgress(
     remainingChecks: [
       ...draftRemainingChecks(task, candidateHead),
       "Runner-owned required GitHub checks on the delivered commit.",
+      ...(userCheckCount === 0 || status === "confirmed"
+        ? []
+        : [`Your check of ${userCheckCount} item(s).`]),
     ].map(draftText),
   };
 }

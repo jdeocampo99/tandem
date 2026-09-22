@@ -304,7 +304,10 @@ export type ReviewResult = {
 };
 
 /** One "you check" criterion and the builder's screenshots/clips for it (absolute paths). */
-export type UserCheckEvidence = Readonly<{ readonly criterion: string; readonly paths: readonly string[] }>;
+export type UserCheckEvidence = Readonly<{
+  readonly criterion: string;
+  readonly paths: readonly string[];
+}>;
 
 export type UserCheckAnswer = Readonly<{
   readonly outcome: "confirmed" | "changes-requested";

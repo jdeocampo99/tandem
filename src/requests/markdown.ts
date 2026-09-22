@@ -80,7 +80,5 @@ function bullets(entries: readonly string[]): readonly string[] {
 }
 
 function checkedBullets(entries: readonly string[], mark: "✓" | "◻"): readonly string[] {
-  return entries.length === 0
-    ? ["- None recorded."]
-    : entries.map((entry) => `- ${mark} ${entry}`);
+  return entries.length === 0 ? ["- None recorded."] : entries.map((entry) => `- ${mark} ${entry}`);
 }

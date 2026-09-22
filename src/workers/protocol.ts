@@ -272,7 +272,10 @@ export function resolveSubmittedReport(
   if (submission.review !== undefined && !reviews) {
     throw new ReportRejection(`${role} reports do not take a review`);
   }
-  if (submission.userCheckEvidence !== undefined && (role !== "implementer" || job.userChecks === undefined)) {
+  if (
+    submission.userCheckEvidence !== undefined &&
+    (role !== "implementer" || job.userChecks === undefined)
+  ) {
     throw new ReportRejection(`${role} reports do not take userCheckEvidence`);
   }
 
@@ -335,7 +338,9 @@ function normalizeUserCheckEvidence(
   try {
     evidence = readUserCheckEvidenceArray(raw);
   } catch (error) {
-    throw new ReportRejection(error instanceof Error ? error.message : "userCheckEvidence is invalid");
+    throw new ReportRejection(
+      error instanceof Error ? error.message : "userCheckEvidence is invalid",
+    );
   }
   for (const entry of evidence) {
     if (!userChecks.criteria.includes(entry.criterion)) {
@@ -343,7 +348,9 @@ function normalizeUserCheckEvidence(
     }
     for (const path of entry.paths) {
       if (!isWithinDirectory(userChecks.directory, path)) {
-        throw new ReportRejection(`userCheckEvidence path ${path} is outside the user-check directory`);
+        throw new ReportRejection(
+          `userCheckEvidence path ${path} is outside the user-check directory`,
+        );
       }
     }
   }
@@ -412,7 +419,9 @@ function submittedReview(job: WorkerJob, value: unknown): ReviewResult {
     const criteria = job.review.criteria ?? [];
     const unknown = review.handToUser.find((entry) => !criteria.includes(entry));
     if (unknown !== undefined) {
-      throw new ReportRejection(`handToUser names a criterion that is not a Tandem check: ${unknown}`);
+      throw new ReportRejection(
+        `handToUser names a criterion that is not a Tandem check: ${unknown}`,
+      );
     }
   }
   return review;

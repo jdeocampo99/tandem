@@ -52,7 +52,10 @@ export type WorkerJob = Readonly<{
   }>;
   readonly timeoutMs?: number;
   /** "You check" directory and criteria; only an implementer job may carry this. */
-  readonly userChecks?: Readonly<{ readonly directory: string; readonly criteria: readonly string[] }>;
+  readonly userChecks?: Readonly<{
+    readonly directory: string;
+    readonly criteria: readonly string[];
+  }>;
 }>;
 export type WorkerQuestion = Readonly<{
   readonly text: string;
@@ -242,7 +245,8 @@ function readReviewContext(value: unknown): WorkerReviewContext {
   if (!isReviewLens(value.lens)) {
     throw new TypeError("review.lens must be a valid review lens");
   }
-  const criteria = value.criteria === undefined ? undefined : readTextArray(value.criteria, "review.criteria");
+  const criteria =
+    value.criteria === undefined ? undefined : readTextArray(value.criteria, "review.criteria");
   return { head, lens: value.lens, ...(criteria === undefined ? {} : { criteria }) };
 }
 
@@ -320,8 +324,8 @@ function readUserCheckEvidenceEntry(value: unknown, index: number): UserCheckEvi
     }
   }
   const criterion = readNonEmptyText(value.criterion, `userCheckEvidence[${index}].criterion`);
-  const paths = readTextArray(value.paths, `userCheckEvidence[${index}].paths`).map((path, pathIndex) =>
-    readAbsolutePath(path, `userCheckEvidence[${index}].paths[${pathIndex}]`),
+  const paths = readTextArray(value.paths, `userCheckEvidence[${index}].paths`).map(
+    (path, pathIndex) => readAbsolutePath(path, `userCheckEvidence[${index}].paths[${pathIndex}]`),
   );
   return { criterion, paths };
 }
@@ -370,7 +374,9 @@ export function parseReviewResult(value: unknown): ReviewResult {
           })();
   const summary = readNonEmptyText(value.summary, "review.summary");
   const handToUser =
-    value.handToUser === undefined ? undefined : readTextArray(value.handToUser, "review.handToUser");
+    value.handToUser === undefined
+      ? undefined
+      : readTextArray(value.handToUser, "review.handToUser");
   return {
     lens: value.lens,
     head,

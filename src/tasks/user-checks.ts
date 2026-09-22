@@ -77,9 +77,12 @@ function evidenceNote(evidence: readonly UserCheckEvidence[]): string {
   const parts: string[] = [];
   if (images > 0) parts.push(`${images} screenshot${images === 1 ? "" : "s"}`);
   if (clips > 0) parts.push(`${clips} clip${clips === 1 ? "" : "s"}`);
-  const base = parts.length === 0 ? "No screenshots were saved." : `${parts.join(" and ")} attached.`;
+  const base =
+    parts.length === 0 ? "No screenshots were saved." : `${parts.join(" and ")} attached.`;
   const withNote =
-    withoutEvidence > 0 ? `${base} ${withoutEvidence} item${withoutEvidence === 1 ? "" : "s"} have none.` : base;
+    withoutEvidence > 0
+      ? `${base} ${withoutEvidence} item${withoutEvidence === 1 ? "" : "s"} have none.`
+      : base;
   return withNote.length <= 100 ? withNote : base;
 }
 
@@ -93,7 +96,10 @@ export function userCheckQuestion(task: TaskRecord, head: string): TaskQuestion 
 }
 
 export function isUserCheckYes(text: string): boolean {
-  const normalized = text.trim().toLowerCase().replace(/[.!]+$/u, "");
+  const normalized = text
+    .trim()
+    .toLowerCase()
+    .replace(/[.!]+$/u, "");
   return normalized === "yes" || normalized === "y";
 }
 

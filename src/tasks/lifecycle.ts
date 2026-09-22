@@ -37,7 +37,11 @@ import { taskName } from "./question.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
 import { checkSkillInvocation } from "./skill-invocation.ts";
-import { USER_CHECK_QUESTION_ID_PREFIX, userCheckCriteriaOf, userCheckQuestion } from "./user-checks.ts";
+import {
+  USER_CHECK_QUESTION_ID_PREFIX,
+  userCheckCriteriaOf,
+  userCheckQuestion,
+} from "./user-checks.ts";
 
 export type TaskInput = Readonly<{
   readonly id: string;
@@ -1021,7 +1025,9 @@ export function transitionTask(
         );
       }
       assertCurrentGeneration(task, event.generation, `${event.type} generation`);
-      const withoutBlock = withoutUserCheckQuestion(clearIterationScope(clearPreviousAndBlock(task)));
+      const withoutBlock = withoutUserCheckQuestion(
+        clearIterationScope(clearPreviousAndBlock(task)),
+      );
       return commitTask(withoutBlock, context.now, {
         stage: "validating",
         reviewHead: event.head,
