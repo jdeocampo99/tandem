@@ -385,6 +385,81 @@ test("keeps implementation behind explicit approval and binds starts to a worktr
   expect(started.endpoints?.[0]?.generation).toBe(started.generation);
 });
 
+test("relaunch replaces the endpoint set from implementing or scouting without touching stage or worktree", () => {
+  const implementing = startImplementation();
+  const relaunched = transitionTask(
+    implementing,
+    {
+      type: "relaunch",
+      endpoints: [{ ...endpoint(implementing.generation), paneId: "pane-relaunch" }],
+      generation: implementing.generation,
+    },
+    context(),
+  );
+  expect(relaunched.stage).toBe("implementing");
+  expect(relaunched.worktree).toEqual(implementing.worktree);
+  expect(relaunched.reviewHead).toBe(implementing.reviewHead);
+  expect(relaunched.endpoints).toEqual([
+    { ...endpoint(implementing.generation), paneId: "pane-relaunch" },
+  ]);
+  expect(relaunched.revision).toBe(implementing.revision + 1);
+
+  const scoutApproved = transitionTask(
+    createTask(
+      { ...implementationInput, id: "scout-task", kind: "scout" },
+      "2026-09-15T00:00:00.000Z",
+    ),
+    {
+      type: "start",
+      worktree,
+      endpoints: [{ ...endpoint(0), role: "scout" }],
+    },
+    context(),
+  );
+  expect(scoutApproved.stage).toBe("scouting");
+  const scoutRelaunched = transitionTask(
+    scoutApproved,
+    {
+      type: "relaunch",
+      endpoints: [{ ...endpoint(0), role: "scout", paneId: "pane-scout-relaunch" }],
+      generation: scoutApproved.generation,
+    },
+    context(),
+  );
+  expect(scoutRelaunched.stage).toBe("scouting");
+  expect(scoutRelaunched.endpoints?.[0]?.paneId).toBe("pane-scout-relaunch");
+});
+
+test("relaunch refuses a stale generation and any stage other than implementing or scouting", () => {
+  const implementing = startImplementation();
+  expect(() =>
+    transitionTask(
+      implementing,
+      {
+        type: "relaunch",
+        endpoints: [endpoint(implementing.generation)],
+        generation: implementing.generation + 1,
+      },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+
+  const queued = transitionTask(
+    createTask(implementationInput, "2026-09-15T00:00:00.000Z"),
+    {
+      type: "approve",
+    },
+    context(),
+  );
+  expect(() =>
+    transitionTask(
+      queued,
+      { type: "relaunch", endpoints: [endpoint(queued.generation)], generation: queued.generation },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+});
+
 test("requires current-head validation and all four current-generation lenses before ready", () => {
   let task = implementationToReviewing();
   expect(task.stage).toBe("reviewing");

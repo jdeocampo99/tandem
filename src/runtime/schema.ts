@@ -300,8 +300,19 @@ export type RuntimeRecoveryState = Readonly<{
   readonly recoveryAttempts: number;
   readonly validationRetries: number;
   readonly evidenceRepairs: number;
-  readonly lastOperation?: "reconcile" | "validation-retry" | "evidence-repair" | "review-existing";
+  readonly lastOperation?:
+    | "reconcile"
+    | "validation-retry"
+    | "evidence-repair"
+    | "review-existing"
+    | "relaunch";
   readonly lastAt?: IsoTimestamp;
+  /** Automatic worker restarts already used for the task's current generation; a new generation resets it. */
+  readonly restarts?: number;
+  readonly restartGeneration?: number;
+  /** The failure class the most recent restart responded to, read by the same-class guard. */
+  readonly lastRestartFailureClass?: "provider-unavailable" | "unknown";
+  readonly lastRestartAt?: IsoTimestamp;
 }>;
 
 export type RuntimeTaskState = Readonly<{
@@ -1203,13 +1214,42 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
               ? undefined
               : enumValue(
                   value.recovery.lastOperation,
-                  ["reconcile", "validation-retry", "evidence-repair", "review-existing"] as const,
+                  [
+                    "reconcile",
+                    "validation-retry",
+                    "evidence-repair",
+                    "review-existing",
+                    "relaunch",
+                  ] as const,
                   `${field}.recovery.lastOperation`,
                 );
           const lastAt =
             value.recovery.lastAt === undefined
               ? undefined
               : singleLine(value.recovery.lastAt, `${field}.recovery.lastAt`);
+          const restarts =
+            value.recovery.restarts === undefined
+              ? undefined
+              : nonNegativeInteger(value.recovery.restarts, `${field}.recovery.restarts`);
+          const restartGeneration =
+            value.recovery.restartGeneration === undefined
+              ? undefined
+              : nonNegativeInteger(
+                  value.recovery.restartGeneration,
+                  `${field}.recovery.restartGeneration`,
+                );
+          const lastRestartFailureClass =
+            value.recovery.lastRestartFailureClass === undefined
+              ? undefined
+              : enumValue(
+                  value.recovery.lastRestartFailureClass,
+                  ["provider-unavailable", "unknown"] as const,
+                  `${field}.recovery.lastRestartFailureClass`,
+                );
+          const lastRestartAt =
+            value.recovery.lastRestartAt === undefined
+              ? undefined
+              : singleLine(value.recovery.lastRestartAt, `${field}.recovery.lastRestartAt`);
           return {
             schemaVersion: 1 as const,
             recoveryAttempts: nonNegativeInteger(
@@ -1226,6 +1266,10 @@ function parseTask(value: unknown, field: string): RuntimeTaskState {
             ),
             ...(lastOperation === undefined ? {} : { lastOperation }),
             ...(lastAt === undefined ? {} : { lastAt }),
+            ...(restarts === undefined ? {} : { restarts }),
+            ...(restartGeneration === undefined ? {} : { restartGeneration }),
+            ...(lastRestartFailureClass === undefined ? {} : { lastRestartFailureClass }),
+            ...(lastRestartAt === undefined ? {} : { lastRestartAt }),
           };
         })();
   const recoveryDecisions =

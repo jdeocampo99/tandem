@@ -45,7 +45,16 @@ import { type TaskEvent, transitionTask } from "../tasks/lifecycle.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import type { ValidationJob, ValidationResult } from "../validation-worker.ts";
 import { runValidation } from "../workers/validation.ts";
-import type { RecoveryDecisionReceipt } from "./decision.ts";
+import {
+  classifyEndpointOwnership,
+  classifyPriorOutcome,
+  RECOVERY_ACTION_REQUIRED_PROOFS,
+  type RecoveryDecisionReceipt,
+  type RecoveryOwnership,
+  type RecoveryPriorOutcome,
+  type RecoveryProof,
+  type RecoveryProvenFacts,
+} from "./decision.ts";
 import type { RecoveryAvailabilityWait } from "./wait.ts";
 
 const MAX_RECOVERY_ATTEMPTS = 3;
@@ -198,6 +207,13 @@ export type RecoveryPlan = Readonly<{
   }>;
   readonly refusals: readonly string[];
   readonly recommendedActions: readonly string[];
+  /** Ownership and prior-outcome classifications, so a caller never re-derives them from inspection. */
+  readonly ownership: RecoveryOwnership;
+  readonly priorOutcome: RecoveryPriorOutcome;
+  /** Every proof this plan could itself determine; `request-approval-current` is always `true` here
+   *  because only a request-aware caller (conversational recovery) can prove it, and it must
+   *  overwrite this placeholder before treating an action as preapproved. */
+  readonly facts: RecoveryProvenFacts;
 }>;
 
 export type ReconciliationResult = Readonly<{
@@ -802,41 +818,87 @@ export class RecoveryWorkflow {
     };
   }
 
+  /**
+   * The single planner: an action is proposed only once its own `RecoveryProvenFacts` all hold.
+   * There is no second planner layered above this — a caller such as conversational recovery reads
+   * `ownership`, `priorOutcome`, and `facts` back from this plan rather than reclassifying them, and
+   * may only replace the one fact this plan cannot itself prove (`request-approval-current`).
+   */
   public async plan(taskId: string): Promise<RecoveryPlan> {
+    const task = await this.#deps.getTask(taskId);
     const inspection = await this.inspect(taskId);
     const runtime = await this.runtime(taskId);
     const recovery = defaultRecovery(runtime);
     const reasons = [...inspection.safetyReasons];
     const refusals: string[] = [];
+    const budget = {
+      recoveryUsed: recovery.recoveryAttempts,
+      recoveryRemaining: Math.max(0, MAX_RECOVERY_ATTEMPTS - recovery.recoveryAttempts),
+      validationRetriesUsed: recovery.validationRetries,
+      validationRetriesRemaining: Math.max(0, MAX_VALIDATION_RETRIES - recovery.validationRetries),
+      evidenceRepairsUsed: recovery.evidenceRepairs,
+      evidenceRepairsRemaining: Math.max(0, MAX_EVIDENCE_REPAIRS - recovery.evidenceRepairs),
+    };
+    const ownership = classifyEndpointOwnership(inspection.endpoints);
+    const priorOutcome = classifyPriorOutcome({
+      jobs: inspection.jobs,
+      operations: inspection.operations,
+    });
+    const facts: RecoveryProvenFacts = {
+      "task-in-scope": true,
+      "task-scope-approved": task.scopeApproved,
+      // Only a request-aware caller can prove this; conversational recovery overwrites it.
+      "request-approval-current": true,
+      "repository-identity-proven": inspection.repository.identity === "proven",
+      "endpoint-ownership-proven": ownership === "proven-owned",
+      "prior-outcome-known": priorOutcome === "known",
+      "no-active-durable-job": !inspection.jobs.some((job) => job.active),
+      "no-pending-stop-request": runtime?.stopRequest === undefined,
+      "reviewed-head-exact-and-clean":
+        inspection.review.exactHead && inspection.review.clean && !inspection.review.unmerged,
+      "recovery-attempt-budget-remaining": budget.recoveryRemaining > 0,
+      "evidence-repair-budget-remaining": budget.evidenceRepairsRemaining > 0,
+    };
     let name: RecoveryPlan["operation"]["name"] = "none";
     let effect = "no state change";
-    if (
-      inspection.endpoints.some(
-        (entry) => entry.ownership === "foreign" || entry.ownership === "unknown",
-      )
-    ) {
+    const proposeIfProven = (
+      candidate: Exclude<RecoveryPlan["operation"]["name"], "none">,
+      candidateEffect: string,
+    ): void => {
+      const unmet = RECOVERY_ACTION_REQUIRED_PROOFS[candidate].filter(
+        (proof: RecoveryProof) => !facts[proof],
+      );
+      if (unmet.length === 0) {
+        name = candidate;
+        effect = candidateEffect;
+        return;
+      }
+      reasons.push(`${candidate} is not proposed: unmet proof(s) ${unmet.join(", ")}`);
+    };
+    if (ownership === "foreign" || ownership === "unknown") {
       refusals.push("endpoint ownership is unknown or foreign; no resource mutation is safe");
     } else if (
       inspection.endpoints.some((entry) => entry.state === "missing" || entry.state === "stopped")
     ) {
-      name = "reconcile";
-      effect =
-        "clear only proven stale endpoint records, repair a detached exact reviewed branch, and preserve worktree";
-    } else if (
-      inspection.stage === "blocked" &&
-      inspection.review.exactHead &&
-      inspection.review.clean &&
-      !inspection.review.unmerged
-    ) {
-      name = "review-existing";
-      effect =
-        "run validation and launch bounded reviews at the exact existing HEAD without an implementer";
+      proposeIfProven(
+        "reconcile",
+        "clear only proven stale endpoint records, repair a detached exact reviewed branch, and preserve worktree",
+      );
+    } else if (inspection.stage === "blocked" && facts["reviewed-head-exact-and-clean"]) {
+      proposeIfProven(
+        "review-existing",
+        "run validation and launch bounded reviews at the exact existing HEAD without an implementer",
+      );
     } else if (inspection.jobs.some((job) => job.kind === "validation" && !job.resultExists)) {
-      name = "validation-retry";
-      effect = "rerun validation in a durable worker-free job, bounded by validation retry budget";
+      proposeIfProven(
+        "validation-retry",
+        "rerun validation in a durable worker-free job, bounded by validation retry budget",
+      );
     } else if (inspection.artifacts.some((artifact) => !artifact.exists)) {
-      name = "evidence-repair";
-      effect = "repair durable reports and provenance from existing state without a pane";
+      proposeIfProven(
+        "evidence-repair",
+        "repair durable reports and provenance from existing state without a pane",
+      );
     }
     const safeToReuse =
       inspection.review.exactHead &&
@@ -871,19 +933,12 @@ export class RecoveryWorkflow {
           .map((entry) => entry.id),
       },
       operation: { name, effect },
-      budget: {
-        recoveryUsed: recovery.recoveryAttempts,
-        recoveryRemaining: Math.max(0, MAX_RECOVERY_ATTEMPTS - recovery.recoveryAttempts),
-        validationRetriesUsed: recovery.validationRetries,
-        validationRetriesRemaining: Math.max(
-          0,
-          MAX_VALIDATION_RETRIES - recovery.validationRetries,
-        ),
-        evidenceRepairsUsed: recovery.evidenceRepairs,
-        evidenceRepairsRemaining: Math.max(0, MAX_EVIDENCE_REPAIRS - recovery.evidenceRepairs),
-      },
+      budget,
       refusals,
       recommendedActions: inspection.recommendations,
+      ownership,
+      priorOutcome,
+      facts,
     };
   }
 

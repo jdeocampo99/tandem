@@ -348,6 +348,33 @@ test("recovery plan is dry-run and reports budgets", async () => {
   }
 });
 
+test("plan never proposes evidence-repair while the prior outcome is uncertain", async () => {
+  // Reproduces the motivating incident directly: a structurally "missing artifact" condition alone
+  // used to be enough for the old symptom ladder to propose evidence-repair, even though the prior
+  // operation's outcome was not actually known (quarantined). The planner must refuse to propose any
+  // action whose own proofs are unmet, not just apply extra approval gating around it afterward.
+  const f = await fixture({ job: job("consumed"), currentHead: "different-head" });
+  try {
+    const state = await readRuntimeState(f.runtimePath);
+    await writeRuntimeState(f.runtimePath, {
+      ...state,
+      tasks: state.tasks.map((entry) =>
+        entry.operation === undefined
+          ? entry
+          : { ...entry, operation: { ...entry.operation, phase: "quarantined" as const } },
+      ),
+    });
+    const plan = await f.workflow.plan("task-1");
+    expect(plan.priorOutcome).toBe("uncertain");
+    expect(plan.facts["prior-outcome-known"]).toBe(false);
+    expect(plan.operation.name).toBe("none");
+    expect(plan.reasons.join("\n")).toContain("evidence-repair is not proposed");
+    expect(plan.reasons.join("\n")).toContain("prior-outcome-known");
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("reconciliation repairs a detached reviewed worktree branch", async () => {
   const f = await fixture({ detached: true, separateSource: true });
   try {
