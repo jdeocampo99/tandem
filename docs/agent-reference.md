@@ -856,6 +856,22 @@ criterion's exact text in the completed `ReviewResult.handToUser` list instead. 
 that text out of `acceptanceCriteria` and into `userCheckCriteria` on the task, so an unprovable
 criterion always ends with the human "yes", never a repeated verifier question.
 
+The `approve` confirmation (scope approval, not a request brief's own approval) shows both lists in
+full, not just a you-check count: `Tandem will check:` with each Tandem-check criterion, then
+`You'll check (screenshots at the end):` with each you-check one, when the task has any. The question
+itself — `Start building "<task>"?` — stays the one short line the short-question format requires; the
+lists live in the confirmation's message body underneath it.
+
+A task governed by a request brief (`requestId` set) may cover any subset of that brief's approved
+criteria, but every criterion it carries must appear in the brief's current draft tagged the same
+way: a criterion the brief tags "you check" can never become one of the task's Tandem checks, and
+vice versa, and a criterion the brief never named at all is refused outright. This is checked both at
+`create` and again at `approve`, since a brief revision after a task was created never updates that
+task's own frozen snapshot on its own; a task still `awaiting-approval` when the brief's split changes
+underneath it is refused at `approve` until it is recreated with the corrected split. A **standalone**
+task (no `requestId`) has no brief to re-check against and no update path at all: its split is fixed
+at creation, and changing it means cancelling the task and creating it again — never an in-place edit.
+
 For an implementer job whose task has "you check" criteria, the controller creates a private
 `user-checks/` directory inside the job's own directory under `<home>` (never inside the repository,
 so nothing there is committed) and names it in the worker's brief. `submit_report` takes an

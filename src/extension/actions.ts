@@ -368,19 +368,19 @@ async function approvalPrompt(
       // Directions given after the plan go to the worker too, so the approval names them.
       const directions =
         task.communication === undefined ? 0 : activeTaskMessages(task.communication).length;
-      const userChecks = task.userCheckCriteria?.length ?? 0;
+      const userChecks = task.userCheckCriteria ?? [];
+      const parts = [
+        directions === 0
+          ? ""
+          : `Includes ${directions} direction${directions === 1 ? "" : "s"} you gave after the plan.`,
+        `Tandem will check:\n${task.acceptanceCriteria.map((entry) => `✓ ${entry}`).join("\n")}`,
+        userChecks.length === 0
+          ? ""
+          : `You'll check (screenshots at the end):\n${userChecks.map((entry) => `◻ ${entry}`).join("\n")}`,
+      ].filter((part) => part.length > 0);
       return {
         title: `Start building ${name}?`,
-        message: [
-          directions === 0
-            ? ""
-            : `Includes ${directions} direction${directions === 1 ? "" : "s"} you gave after the plan.`,
-          userChecks === 0
-            ? ""
-            : `You'll check ${userChecks} thing${userChecks === 1 ? "" : "s"} at the end.`,
-        ]
-          .filter((part) => part.length > 0)
-          .join(" "),
+        message: parts.join("\n\n"),
       };
     }
     case "cancel":

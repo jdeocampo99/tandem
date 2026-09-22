@@ -600,7 +600,45 @@ test("approve confirmation exposes active non-superseded communication deltas an
 
   expect(result.approved).toBe(false);
   expect(prompts).toHaveLength(1);
-  expect(prompts[0]).toBe("Includes 2 directions you gave after the plan.");
+  expect(prompts[0]).toContain("Includes 2 directions you gave after the plan.");
+  expect(prompts[0]).toContain("Tandem will check:\n✓ Keep the durable behavior intact.");
+  expect(prompts[0]).not.toContain("You'll check");
+});
+
+test("approve confirmation shows both criteria lists, not just a you-check count", async () => {
+  const pending = task({
+    acceptanceCriteria: ["Streak logic has unit tests", "Build and lint pass"],
+    userCheckCriteria: ["Streak bar glows at 5 in a row", "Flashcard mode also glows"],
+  });
+  const prompts: string[] = [];
+  const service = {
+    get: async () => pending,
+    approve: async () => pending,
+  } as unknown as TandemService;
+  const context = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      confirm: async (title: string, message: string) => {
+        prompts.push(`${title}\n${message}`);
+        return false;
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  await executeTandemAction({ action: "approve", taskId: "task-1" }, service, context);
+
+  expect(prompts).toHaveLength(1);
+  const [title, ...body] = prompts[0]?.split("\n") ?? [];
+  // The question itself stays exactly one line; the two lists live in the message body.
+  expect(title).toBe(`Start building ${JSON.stringify("Implement the requested change")}?`);
+  const message = body.join("\n");
+  expect(message).toContain(
+    "Tandem will check:\n✓ Streak logic has unit tests\n✓ Build and lint pass",
+  );
+  expect(message).toContain(
+    "You'll check (screenshots at the end):\n◻ Streak bar glows at 5 in a row\n◻ Flashcard mode also glows",
+  );
 });
 
 function userCheckTask(): TaskRecord {
