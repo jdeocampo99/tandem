@@ -361,7 +361,12 @@ const BRIEF: RequestBriefContent = {
   scope: ["src/requests"],
   constraints: ["SQLite stays authoritative"],
   nonGoals: ["no second ledger"],
-  acceptanceCriteria: ["dispatch is blocked while the brief is superseded"],
+  // Matches seedScenarioTask's fixed acceptanceCriteria below, since this scenario's member task's
+  // criteria must be agreed by the brief it is created under.
+  acceptanceCriteria: [
+    "dispatch is blocked while the brief is superseded",
+    "the durable outcome is observable",
+  ],
   recommendedApproach: "One record with monotonic draft revisions",
   keyDecisions: ["the pane is a projection the coordinator owns"],
   openQuestions: [],

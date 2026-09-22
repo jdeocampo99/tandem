@@ -83,7 +83,7 @@ import {
   type ReviewExistingResult,
   type ValidationRetryResult,
 } from "../recovery/workflow.ts";
-import { requestApprovalState } from "../requests/brief.ts";
+import { assertTaskCriteriaWithinBrief, requestApprovalState } from "../requests/brief.ts";
 import {
   type MergeRequestInput,
   type PublishRequestInput,
@@ -1065,6 +1065,17 @@ class TandemController {
         source.repoPath,
         policy,
       );
+      // Only an implementation task's criteria are checked against the brief: a scout's
+      // acceptanceCriteria names its research objectives, not delivery criteria, and scouts are
+      // never admitted as request members (src/requests/delivery.ts's admit()).
+      if (brief !== undefined && taskInput.kind === "implementation") {
+        assertTaskCriteriaWithinBrief(
+          brief.draft.content,
+          taskInput.acceptanceCriteria,
+          taskInput.userCheckCriteria,
+          brief.id,
+        );
+      }
       const id = singleLine(this.#deps.idFactory(), "task id");
       if (
         this.#deps.refreshSource !== undefined &&
@@ -1119,6 +1130,18 @@ class TandemController {
     const dispatch = await this.#requests.dispatchDecisionForTask(task);
     if (dispatch !== undefined && !dispatch.allowed) {
       throw new Error(`Task ${task.id} cannot be dispatched: ${dispatch.reason}`);
+    }
+    if (task.requestId !== undefined && task.kind === "implementation") {
+      // A brief revision after this task was created may have moved a criterion between groups;
+      // the task's own frozen snapshot never updates itself, so approval re-checks it against the
+      // brief's current draft rather than dispatching a criteria split nobody actually agreed to.
+      const brief = await this.#requests.requireRequest(task.requestId);
+      assertTaskCriteriaWithinBrief(
+        brief.draft.content,
+        task.acceptanceCriteria,
+        task.userCheckCriteria,
+        brief.id,
+      );
     }
     if (task.kind === "implementation") {
       const runtime = await this.runtimeFor(task.id);

@@ -21,6 +21,7 @@ import {
   type TandemService,
   type TandemServiceOptions,
 } from "../service/controller.ts";
+import { isUserCheckYes, USER_CHECK_QUESTION_ID_PREFIX } from "../tasks/user-checks.ts";
 import {
   CliConsentError,
   type CliInvocation,
@@ -494,6 +495,9 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
         const taskId = taskIdFor(invocation);
         const questionId = text(invocation.options.questionId, "questionId");
         const message = text(invocation.options.text, "text");
+        if (questionId.startsWith(USER_CHECK_QUESTION_ID_PREFIX) && isUserCheckYes(message)) {
+          requireYes(invocation, `confirming the "you check" for ${taskId}`);
+        }
         return {
           command: invocation.command,
           value: await getService(environment).answer({ taskId, questionId, text: message }),

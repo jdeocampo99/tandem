@@ -1022,6 +1022,198 @@ test("a scout under a request takes its post-research disposition from the brief
     await fixture.close();
   }
 });
+
+test("create refuses an implementation task whose criteria the governing brief never agreed to", async () => {
+  const fixture = await requestFixture([]);
+  try {
+    const drafted = await fixture.service.draftRequestBrief({
+      repoPath: fixture.repoPath,
+      reviewPane: false,
+      content: {
+        goal: "Add a streak bar",
+        scope: ["src/app"],
+        constraints: [],
+        nonGoals: [],
+        acceptanceCriteria: ["Streak logic has unit tests"],
+        userCheckCriteria: ["Streak bar glows at 5 in a row"],
+        recommendedApproach: "Own the streak in the session",
+        keyDecisions: [],
+        openQuestions: [],
+        researchLinks: [],
+      },
+    });
+
+    await expect(
+      fixture.service.create({
+        repoPath: fixture.repoPath,
+        kind: "implementation",
+        objective: "Add the streak bar",
+        acceptanceCriteria: ["Streak logic has unit tests", "An unrelated criterion"],
+        surfaces: ["src/app"],
+        requestId: drafted.record.id,
+      }),
+    ).rejects.toThrow(/never agreed to acceptance criterion "An unrelated criterion"/u);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("create refuses a task that tags a criterion in a different group than the brief does", async () => {
+  const fixture = await requestFixture([]);
+  try {
+    const drafted = await fixture.service.draftRequestBrief({
+      repoPath: fixture.repoPath,
+      reviewPane: false,
+      content: {
+        goal: "Add a streak bar",
+        scope: ["src/app"],
+        constraints: [],
+        nonGoals: [],
+        acceptanceCriteria: ["Streak logic has unit tests"],
+        userCheckCriteria: ["Streak bar glows at 5 in a row"],
+        recommendedApproach: "Own the streak in the session",
+        keyDecisions: [],
+        openQuestions: [],
+        researchLinks: [],
+      },
+    });
+
+    await expect(
+      fixture.service.create({
+        repoPath: fixture.repoPath,
+        kind: "implementation",
+        objective: "Add the streak bar",
+        acceptanceCriteria: ["Streak logic has unit tests", "Streak bar glows at 5 in a row"],
+        surfaces: ["src/app"],
+        requestId: drafted.record.id,
+      }),
+    ).rejects.toThrow(/tags "Streak bar glows at 5 in a row" as "you check"/u);
+
+    await expect(
+      fixture.service.create({
+        repoPath: fixture.repoPath,
+        kind: "implementation",
+        objective: "Add the streak bar",
+        acceptanceCriteria: ["Streak logic has unit tests"],
+        userCheckCriteria: ["Streak logic has unit tests"],
+        surfaces: ["src/app"],
+        requestId: drafted.record.id,
+      }),
+    ).rejects.toThrow(/tags "Streak logic has unit tests" as a Tandem check/u);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("create accepts a task whose criteria are a consistent subset of the brief", async () => {
+  const fixture = await requestFixture([]);
+  try {
+    const drafted = await fixture.service.draftRequestBrief({
+      repoPath: fixture.repoPath,
+      reviewPane: false,
+      content: {
+        goal: "Add a streak bar",
+        scope: ["src/app"],
+        constraints: [],
+        nonGoals: [],
+        acceptanceCriteria: ["Streak logic has unit tests", "Build and lint pass"],
+        userCheckCriteria: ["Streak bar glows at 5 in a row", "Flashcard mode also glows"],
+        recommendedApproach: "Own the streak in the session",
+        keyDecisions: [],
+        openQuestions: [],
+        researchLinks: [],
+      },
+    });
+    await fixture.service.approveRequestBrief({
+      requestId: drafted.record.id,
+      briefRevision: drafted.record.draft.revision,
+      contentDigest: drafted.record.draft.contentDigest,
+    });
+
+    const created = await fixture.service.create({
+      repoPath: fixture.repoPath,
+      kind: "implementation",
+      objective: "Add the streak bar",
+      acceptanceCriteria: ["Streak logic has unit tests"],
+      userCheckCriteria: ["Streak bar glows at 5 in a row"],
+      surfaces: ["src/app"],
+      requestId: drafted.record.id,
+    });
+
+    expect(created.acceptanceCriteria).toEqual(["Streak logic has unit tests"]);
+    expect(created.userCheckCriteria).toEqual(["Streak bar glows at 5 in a row"]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("approve refuses a task whose frozen criteria no longer match a reapproved brief revision", async () => {
+  const fixture = await requestFixture([]);
+  try {
+    const drafted = await fixture.service.draftRequestBrief({
+      repoPath: fixture.repoPath,
+      reviewPane: false,
+      content: {
+        goal: "Add a streak bar",
+        scope: ["src/app"],
+        constraints: [],
+        nonGoals: [],
+        acceptanceCriteria: ["Streak logic has unit tests", "The final layout matches the design"],
+        userCheckCriteria: [],
+        recommendedApproach: "Own the streak in the session",
+        keyDecisions: [],
+        openQuestions: [],
+        researchLinks: [],
+      },
+    });
+    await fixture.service.approveRequestBrief({
+      requestId: drafted.record.id,
+      briefRevision: drafted.record.draft.revision,
+      contentDigest: drafted.record.draft.contentDigest,
+    });
+
+    const created = await fixture.service.create({
+      repoPath: fixture.repoPath,
+      kind: "implementation",
+      objective: "Add the streak bar",
+      acceptanceCriteria: ["Streak logic has unit tests", "The final layout matches the design"],
+      surfaces: ["src/app"],
+      requestId: drafted.record.id,
+    });
+
+    // The verifier can't prove the layout criterion, so the brief is revised to move it into "you
+    // check" and reapproved; the task's own frozen snapshot still tags it as a Tandem check.
+    const revised = await fixture.service.draftRequestBrief({
+      repoPath: fixture.repoPath,
+      requestId: drafted.record.id,
+      reviewPane: false,
+      content: {
+        goal: "Add a streak bar",
+        scope: ["src/app"],
+        constraints: [],
+        nonGoals: [],
+        acceptanceCriteria: ["Streak logic has unit tests"],
+        userCheckCriteria: ["The final layout matches the design"],
+        recommendedApproach: "Own the streak in the session",
+        keyDecisions: [],
+        openQuestions: [],
+        researchLinks: [],
+      },
+    });
+    await fixture.service.approveRequestBrief({
+      requestId: drafted.record.id,
+      briefRevision: revised.record.draft.revision,
+      contentDigest: revised.record.draft.contentDigest,
+    });
+
+    await expect(fixture.service.approve(created.id)).rejects.toThrow(
+      /tags "The final layout matches the design" as "you check"/u,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("creates a bounded immutable scout handoff for a same-source implementation", async () => {
   await withFixture({ kind: "scout" }, async (fixtureValue) => {
     const report = `Outcome: completed\n${"界".repeat(3_000)}`;
@@ -5283,7 +5475,7 @@ async function requestFixture(
       scope: ["src/service"],
       constraints: ["one verified pull request by default"],
       nonGoals: ["no automatic merge"],
-      acceptanceCriteria: ["Both members are delivered together."],
+      acceptanceCriteria: ["Both members are delivered together.", "the member is reviewed"],
       recommendedApproach: "Coordinate the members around one request identity",
       keyDecisions: ["dependencies order the members"],
       openQuestions: [],

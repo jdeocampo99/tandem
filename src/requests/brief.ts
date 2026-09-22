@@ -22,7 +22,8 @@ export type RequestBriefErrorCode =
   | "stale-revision"
   | "stale-content"
   | "no-pending-approval"
-  | "ambiguous-pending-approval";
+  | "ambiguous-pending-approval"
+  | "criteria-not-agreed";
 
 export class RequestBriefError extends Error {
   readonly code: RequestBriefErrorCode;
@@ -323,6 +324,57 @@ export function tasksAwaitingReapproval(
   return tasks
     .filter((task) => task.requestId === record.id && PAUSABLE_STAGES.includes(task.stage))
     .map((task) => task.id);
+}
+
+/**
+ * Refuses a task's criteria the governing brief never agreed to, or that the task tags differently
+ * than the brief does. A member task may cover only part of the whole request's criteria — it need
+ * not repeat every criterion the brief lists — but every criterion it does carry must appear in the
+ * brief's current draft under the exact same group: a criterion the brief tags "you check" can never
+ * become one of the task's Tandem checks, and vice versa. This is the simplest rule that keeps a
+ * task's split from silently drifting from what was actually approved; it refuses on any mismatch
+ * rather than guessing which side is right.
+ */
+export function assertTaskCriteriaWithinBrief(
+  content: RequestBriefContent,
+  taskAcceptanceCriteria: readonly string[],
+  taskUserCheckCriteria: readonly string[] | undefined,
+  requestId: string,
+): void {
+  const briefTandemChecks = new Set(content.acceptanceCriteria);
+  const briefUserChecks = new Set(content.userCheckCriteria ?? []);
+  for (const criterion of taskAcceptanceCriteria) {
+    if (briefUserChecks.has(criterion)) {
+      throw new RequestBriefError(
+        "criteria-not-agreed",
+        `Request ${requestId}'s approved brief tags ${JSON.stringify(criterion)} as "you check"; the task cannot carry it as a Tandem check`,
+        requestId,
+      );
+    }
+    if (!briefTandemChecks.has(criterion)) {
+      throw new RequestBriefError(
+        "criteria-not-agreed",
+        `Request ${requestId}'s approved brief never agreed to acceptance criterion ${JSON.stringify(criterion)}`,
+        requestId,
+      );
+    }
+  }
+  for (const criterion of taskUserCheckCriteria ?? []) {
+    if (briefTandemChecks.has(criterion)) {
+      throw new RequestBriefError(
+        "criteria-not-agreed",
+        `Request ${requestId}'s approved brief tags ${JSON.stringify(criterion)} as a Tandem check; the task cannot carry it as "you check"`,
+        requestId,
+      );
+    }
+    if (!briefUserChecks.has(criterion)) {
+      throw new RequestBriefError(
+        "criteria-not-agreed",
+        `Request ${requestId}'s approved brief never agreed to "you check" criterion ${JSON.stringify(criterion)}`,
+        requestId,
+      );
+    }
+  }
 }
 
 function digestOf(value: string): string {

@@ -1440,6 +1440,121 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
   expect(stdout.join("")).toContain('"stage":"cancelled"');
 });
 
+test("answer requires --yes to confirm a user-check question, but not for an ordinary reply", async () => {
+  const answerCalls: Array<{ taskId: string; questionId: string; text: string }> = [];
+  const unused = async (): Promise<never> => {
+    throw new Error("unused service operation");
+  };
+  const view = { taskId: "task-1", stage: "ready" as const, revision: 0, messages: [] };
+  const service: TandemService = {
+    onboard: unused,
+    models: unused,
+    configureModels: unused,
+    create: unused,
+    list: unused,
+    get: unused,
+    inspect: unused,
+    recoveryPlan: unused,
+    recoveryDecide: unused,
+    reconcile: unused,
+    reviewExisting: unused,
+    validationRetry: unused,
+    repairEvidence: unused,
+    deliveryPreflight: unused,
+    approve: unused,
+    draftRequestBrief: unused,
+    reviewRequestBrief: unused,
+    approveRequestBrief: unused,
+    pendingBriefApprovalId: unused,
+    requestBrief: unused,
+    requestReceipt: unused,
+    listRequests: unused,
+    requestStatus: unused,
+    relateRequestTasks: unused,
+    recordRequestConflict: unused,
+    decideRequestConflict: unused,
+    recordRequestReview: unused,
+    integrateRequest: unused,
+    publishRequest: unused,
+    mergeRequest: unused,
+    approveRequestSplit: unused,
+    acknowledgeRequest: unused,
+    requestSpend: unused,
+    authorizeRequestSpend: unused,
+    tick: unused,
+    pause: unused,
+    resume: unused,
+    restart: unused,
+    cancel: unused,
+    steer: unused,
+    answer: async (input) => {
+      answerCalls.push(input);
+      return view;
+    },
+    messages: unused,
+    acknowledge: unused,
+    describePr: unused,
+    publish: unused,
+    publishDraft: unused,
+    merge: unused,
+    cleanup: unused,
+    present: unused,
+    presentations: unused,
+    feedback: unused,
+    shutdown: async () => undefined,
+  };
+  const dependencies: CliDependencies = {
+    processEnvironment: { TANDEM_HOME: "/tmp/tandem", TANDEM_REPO: "/repo" },
+    service,
+    stdout: () => undefined,
+    stderr: () => undefined,
+  };
+  const answerArgs = (text: string, extra: readonly string[] = []) => [
+    "answer",
+    "--task",
+    "task-1",
+    "--question",
+    "user-check-0-abc123",
+    "--text",
+    text,
+    "--json",
+    ...extra,
+  ];
+
+  const refused = await runCli(answerArgs("yes"), dependencies);
+  expect(refused.exitCode).toBe(2);
+  expect(refused.error?.name).toBe("CliConsentError");
+  expect(answerCalls).toEqual([]);
+
+  const refusedVariant = await runCli(answerArgs("Yes."), dependencies);
+  expect(refusedVariant.exitCode).toBe(2);
+  expect(refusedVariant.error?.name).toBe("CliConsentError");
+  expect(answerCalls).toEqual([]);
+
+  const confirmed = await runCli(answerArgs("yes", ["--yes"]), dependencies);
+  expect(confirmed.exitCode).toBe(0);
+  expect(answerCalls).toEqual([
+    { taskId: "task-1", questionId: "user-check-0-abc123", text: "yes" },
+  ]);
+
+  const fixReply = await runCli(answerArgs("The color is wrong."), dependencies);
+  expect(fixReply.exitCode).toBe(0);
+  expect(answerCalls).toHaveLength(2);
+  expect(answerCalls[1]).toEqual({
+    taskId: "task-1",
+    questionId: "user-check-0-abc123",
+    text: "The color is wrong.",
+  });
+
+  // A non-user-check question's "yes" is an ordinary answer and needs no --yes.
+  const ordinaryQuestion = await runCli(
+    ["answer", "--task", "task-1", "--question", "question-1", "--text", "yes", "--json"],
+    dependencies,
+  );
+  expect(ordinaryQuestion.exitCode).toBe(0);
+  expect(answerCalls).toHaveLength(3);
+});
+
 test("watch interruption stops its loop, closes owned polling, and removes signal handlers", async () => {
   const listeners = new Map<"SIGINT" | "SIGTERM", () => void>();
   let removedHandlers = 0;
