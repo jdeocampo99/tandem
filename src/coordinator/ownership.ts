@@ -20,6 +20,7 @@ import {
 import { readCoordinatorRecord } from "./registry.ts";
 
 const LEGACY_COORDINATOR_SESSION_DIRECTORY = "coordinator-sessions";
+export const COORDINATOR_SCRIPT_DIRECTORY = "coordinator-scripts";
 const LEGACY_COORDINATOR_REPOSITORY_KEY_LENGTH = 24;
 const COORDINATOR_EXTENSION_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -154,9 +155,23 @@ function ompLauncherIndex(argv: readonly string[]): number | undefined {
   return undefined;
 }
 
+/** `--continue` only resumes the saved conversation, so it never distinguishes one coordinator. */
 function normalizeOmpCommand(argv: readonly string[]): readonly string[] | undefined {
   const launcherIndex = ompLauncherIndex(argv);
-  return launcherIndex === undefined ? undefined : ["omp", ...argv.slice(launcherIndex + 1)];
+  return launcherIndex === undefined
+    ? undefined
+    : ["omp", ...argv.slice(launcherIndex + 1).filter((value) => value !== "--continue")];
+}
+
+/** The launch script Tandem writes, which waits in the pane after its coordinator exits. */
+function isCoordinatorBootstrap(argv: readonly string[]): boolean {
+  const script = argv[1] ?? "";
+  return (
+    argv.length === 2 &&
+    basename(argv[0] ?? "") === "sh" &&
+    basename(dirname(script)) === COORDINATOR_SCRIPT_DIRECTORY &&
+    /^coordinator-[0-9a-f]{16}-[0-9a-f]{16}-[0-9a-f]{16}\.sh$/u.test(basename(script))
+  );
 }
 
 function processLooksLikeOmp(process: {
@@ -448,13 +463,18 @@ async function findOwnedCoordinator(
   return record;
 }
 
+/**
+ * Proves the pane holds only its own terminal shell, or Tandem's launch script waiting to
+ * start the coordinator again after it exited.
+ */
 export function assertStoppedCoordinatorShell(inspection: HerdrPaneInspection): void {
   const { shellPid, foregroundProcesses } = inspection.processInfo;
+  const only = foregroundProcesses.length === 1 ? foregroundProcesses[0] : undefined;
   if (
     inspection.activeWorker ||
     shellPid === undefined ||
-    foregroundProcesses.length !== 1 ||
-    foregroundProcesses[0]?.pid !== shellPid
+    only === undefined ||
+    (only.pid !== shellPid && !isCoordinatorBootstrap(only.argv))
   ) {
     throw ownershipFailure("stopped coordinator pane does not prove its original terminal shell");
   }

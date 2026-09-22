@@ -68,7 +68,9 @@ function shellTokens(command: string): readonly string[] {
 async function bootstrappedCommand(paneRunCommand: string): Promise<readonly string[]> {
   const scriptPath = shellTokens(paneRunCommand)[1];
   if (scriptPath === undefined) throw new Error("pane run command named no bootstrap script");
-  const tokens = shellTokens(await readFile(scriptPath, "utf8"));
+  // The first command after the INT trap is the coordinator launch itself.
+  const lines = (await readFile(scriptPath, "utf8")).split("\n");
+  const tokens = shellTokens(lines[lines.indexOf("trap : INT") + 1] ?? "");
   const start = tokens.indexOf("omp");
   if (start === -1) throw new Error("coordinator bootstrap script never invokes omp");
   return tokens.slice(start);

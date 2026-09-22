@@ -248,9 +248,11 @@ async function bootstrapProcessArgv(command: string): Promise<readonly string[]>
   const scriptPath = tokens[1];
   if (tokens[0] !== "/bin/sh" || scriptPath === undefined) return tokens;
   const script = await readFile(scriptPath, "utf8");
-  const executed = script.split("\n").find((line) => line.startsWith("exec "));
+  // The first command after the INT trap is the coordinator launch itself.
+  const lines = script.split("\n");
+  const executed = lines[lines.indexOf("trap : INT") + 1];
   if (executed === undefined) return tokens;
-  const argv = parseQuotedCommand(executed.slice("exec ".length));
+  const argv = parseQuotedCommand(executed);
   const start = argv.findIndex((entry, position) => position > 0 && !entry.includes("="));
   return start === -1 ? argv : argv.slice(start);
 }

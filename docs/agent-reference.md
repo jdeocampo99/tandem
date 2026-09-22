@@ -440,6 +440,13 @@ falls back to stale source. The original checkout may be dirty and remains untou
 task records, and delivery retain the original identity as `TANDEM_REPO`; the owned source checkout
 is `TANDEM_SOURCE_REPO`, which users normally do not set themselves.
 
+The coordinator's pane runs a Tandem launch script under `<home>/coordinator-scripts/`. When the
+coordinator exits there (Ctrl-C, crash), the script stays and says so in plain English: Enter
+starts it again in the same pane with `--continue`, keeping the same record, lease, and pane;
+Ctrl-C leaves the user at the pane's own shell. `--continue` is not part of coordinator identity,
+and that script waiting at its offer counts as a stopped coordinator shell, so restart and reset
+may close the pane.
+
 A coordinator that exited (Ctrl-C, crash, or closed pane) counts as stopped. When its recorded pane
 now runs something else, such as a shell or an `omp` started by hand, Tandem checks every process on
 the machine for the coordinator's own `--session-dir`. If none is running, launch and restart open a
