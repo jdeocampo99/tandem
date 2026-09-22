@@ -25,6 +25,7 @@ import {
   TaskTransitionError,
   transitionTask,
 } from "../../src/tasks/lifecycle.ts";
+import { userCheckQuestionId } from "../../src/tasks/user-checks.ts";
 
 const models: RepoPolicy["models"] = {
   coordinator: { model: "coordinator-model", thinking: "high" },
@@ -100,10 +101,13 @@ function endpoint(generation: number): Endpoint {
 }
 
 let contextSequence = 0;
+const CONTEXT_BASE_MS = Date.UTC(2026, 8, 15, 0, 0, 0, 0);
 function context(): TaskTransitionContext {
   contextSequence += 1;
   return {
-    now: `2026-09-15T00:00:${String(contextSequence).padStart(2, "0")}.000Z`,
+    // Milliseconds since a fixed base, so an ever-growing call count across the whole file never
+    // overflows a two-digit seconds field into an invalid ISO timestamp.
+    now: new Date(CONTEXT_BASE_MS + contextSequence).toISOString(),
     notificationId: `notification-${contextSequence}`,
   };
 }
@@ -1097,6 +1101,51 @@ function readyImplementation(): TaskRecord {
   return transitionTask(ready, { type: "finish-review", head: "head-1", generation: 0 }, context());
 }
 
+const userCheckInput: TaskInput = {
+  ...implementationInput,
+  id: "user-check-task",
+  userCheckCriteria: ["Streak bar glows at 5 in a row"],
+};
+
+function startImplementationWith(input: TaskInput): TaskRecord {
+  let task = createTask(input, "2026-09-15T00:00:00.000Z");
+  task = transitionTask(task, { type: "approve" }, context());
+  return transitionTask(
+    task,
+    { type: "start", worktree, endpoints: [endpoint(task.generation)] },
+    context(),
+  );
+}
+
+function implementationToReviewingWith(input: TaskInput, head = "head-1"): TaskRecord {
+  let task = startImplementationWith(input);
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head, generation: task.generation },
+    context(),
+  );
+  return transitionTask(
+    task,
+    {
+      type: "validation-succeeded",
+      head,
+      generation: task.generation,
+      contract: "final",
+      policyDigest,
+      evidence: [evidence(head, "final")],
+    },
+    context(),
+  );
+}
+
+function readyImplementationWith(input: TaskInput): TaskRecord {
+  let ready = implementationToReviewingWith(input);
+  for (const lens of ALL_REVIEW_LENSES) {
+    ready = transitionTask(ready, { type: "record-review", review: review(lens) }, context());
+  }
+  return transitionTask(ready, { type: "finish-review", head: "head-1", generation: 0 }, context());
+}
+
 test("a request pull request merges a member only with proof that it carries its reviewed work", () => {
   const ready = { ...readyImplementation(), requestId: "req-1" };
   const pullRequest = {
@@ -1193,4 +1242,242 @@ test("without a request delivery proof a merge still has to be the reviewed head
       context(),
     ),
   ).toThrow(/must match the reviewed head/u);
+});
+
+test("createTask keeps userCheckCriteria and omits it when empty", () => {
+  const withCriteria = createTask(
+    { ...implementationInput, id: "with-user-check", userCheckCriteria: ["Streak bar glows"] },
+    "2026-09-15T00:00:00.000Z",
+  );
+  expect(withCriteria.userCheckCriteria).toEqual(["Streak bar glows"]);
+
+  const withoutCriteria = createTask(implementationInput, "2026-09-15T00:00:00.000Z");
+  expect(withoutCriteria.userCheckCriteria).toBeUndefined();
+
+  const withEmptyCriteria = createTask(
+    { ...implementationInput, id: "empty-user-check", userCheckCriteria: [] },
+    "2026-09-15T00:00:00.000Z",
+  );
+  expect(withEmptyCriteria.userCheckCriteria).toBeUndefined();
+});
+
+test("implementation-complete records userCheck only when the task has you-check criteria", () => {
+  const withoutCriteria = startImplementation();
+  const completedWithout = transitionTask(
+    withoutCriteria,
+    { type: "implementation-complete", head: "head-1", generation: withoutCriteria.generation },
+    context(),
+  );
+  expect(completedWithout.userCheck).toBeUndefined();
+
+  const withCriteria = startImplementationWith(userCheckInput);
+  const completed = transitionTask(
+    withCriteria,
+    {
+      type: "implementation-complete",
+      head: "head-1",
+      generation: withCriteria.generation,
+      userCheckEvidence: [{ criterion: "Streak bar glows at 5 in a row", paths: ["/tmp/a.png"] }],
+    },
+    context(),
+  );
+  expect(completed.userCheck).toEqual({
+    head: "head-1",
+    generation: withCriteria.generation,
+    evidence: [{ criterion: "Streak bar glows at 5 in a row", paths: ["/tmp/a.png"] }],
+  });
+
+  const withoutEvidenceArgument = transitionTask(
+    withCriteria,
+    { type: "implementation-complete", head: "head-1", generation: withCriteria.generation },
+    context(),
+  );
+  expect(withoutEvidenceArgument.userCheck).toEqual({
+    head: "head-1",
+    generation: withCriteria.generation,
+    evidence: [],
+  });
+});
+
+test("finish-review asks the end-of-task question only when the task has you-check criteria", () => {
+  const readyWithout = readyImplementation();
+  expect(readyWithout.communication?.question).toBeUndefined();
+  expect(readyWithout.notifications.at(-1)?.message).toContain("Ready: task");
+
+  const readyWith = readyImplementationWith(userCheckInput);
+  const question = readyWith.communication?.question;
+  expect(question?.id).toBe(userCheckQuestionId(0, "head-1"));
+  expect(question?.text).toContain("look right?");
+  expect(readyWith.notifications.at(-1)?.message).toBe(question?.text);
+  expect(readyWith.notifications.at(-1)?.kind).toBe("coordinator");
+  expect(readyWith.userCheck).toEqual({ head: "head-1", generation: 0, evidence: [] });
+});
+
+test("confirm-user-check clears the question without bumping communication.revision", () => {
+  const ready = readyImplementationWith(userCheckInput);
+  const questionId = ready.communication?.question?.id;
+  if (questionId === undefined) throw new Error("fixture is missing a user-check question");
+  const previousRevision = ready.communication?.revision ?? 0;
+
+  const confirmed = transitionTask(
+    ready,
+    { type: "confirm-user-check", head: "head-1", generation: ready.generation, questionId },
+    context(),
+  );
+  expect(confirmed.communication?.question).toBeUndefined();
+  expect(confirmed.communication?.revision).toBe(previousRevision);
+  expect(confirmed.userCheck?.answer?.outcome).toBe("confirmed");
+  expect(confirmed.stage).toBe("ready");
+  expect(confirmed.notifications.at(-1)?.message).toContain("it can go to a PR");
+});
+
+test("request-user-check-changes starts a fix round with the reply as the answer message", () => {
+  const ready = readyImplementationWith(userCheckInput);
+  const questionId = ready.communication?.question?.id;
+  if (questionId === undefined) throw new Error("fixture is missing a user-check question");
+
+  const changed = transitionTask(
+    ready,
+    {
+      type: "request-user-check-changes",
+      head: "head-1",
+      generation: ready.generation,
+      questionId,
+      answerId: "answer-1",
+      text: "The glow is the wrong color",
+    },
+    context(),
+  );
+  expect(changed.stage).toBe("awaiting-fixes");
+  expect(changed.communication?.question).toBeUndefined();
+  const lastMessage = changed.communication?.messages.at(-1);
+  expect(lastMessage?.id).toBe("answer-1");
+  expect(lastMessage?.kind).toBe("answer");
+  expect(lastMessage?.text).toBe("The glow is the wrong color");
+  expect(lastMessage?.replyTo).toBe(questionId);
+  expect(changed.userCheck?.answer?.outcome).toBe("changes-requested");
+  expect(changed.userCheck?.answer?.text).toBe("The glow is the wrong color");
+});
+
+test("confirm-user-check and request-user-check-changes refuse a stale identity or a non-ready stage", () => {
+  const ready = readyImplementationWith(userCheckInput);
+  const questionId = ready.communication?.question?.id;
+  if (questionId === undefined) throw new Error("fixture is missing a user-check question");
+
+  expect(() =>
+    transitionTask(
+      ready,
+      { type: "confirm-user-check", head: "wrong-head", generation: ready.generation, questionId },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+  expect(() =>
+    transitionTask(
+      ready,
+      { type: "confirm-user-check", head: "head-1", generation: 99, questionId },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+  expect(() =>
+    transitionTask(
+      ready,
+      {
+        type: "confirm-user-check",
+        head: "head-1",
+        generation: ready.generation,
+        questionId: "stale",
+      },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+
+  const readyWithoutCriteria = readyImplementation();
+  expect(() =>
+    transitionTask(
+      readyWithoutCriteria,
+      {
+        type: "confirm-user-check",
+        head: "head-1",
+        generation: readyWithoutCriteria.generation,
+        questionId: userCheckQuestionId(0, "head-1"),
+      },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+
+  const confirmed = transitionTask(
+    ready,
+    { type: "confirm-user-check", head: "head-1", generation: ready.generation, questionId },
+    context(),
+  );
+  expect(() =>
+    transitionTask(
+      confirmed,
+      { type: "confirm-user-check", head: "head-1", generation: confirmed.generation, questionId },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+});
+
+test("record-review's handToUser moves a Tandem check into you-check, and rejects an unknown criterion", () => {
+  let task = implementationToReviewing();
+  expect(task.acceptanceCriteria).toEqual(["The behavior is durable"]);
+  expect(task.userCheckCriteria).toBeUndefined();
+
+  expect(() =>
+    transitionTask(
+      task,
+      {
+        type: "record-review",
+        review: { ...review("behavior"), handToUser: ["Not a real criterion"] },
+      },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+
+  task = transitionTask(
+    task,
+    {
+      type: "record-review",
+      review: { ...review("behavior"), handToUser: ["The behavior is durable"] },
+    },
+    context(),
+  );
+  expect(task.acceptanceCriteria).toEqual([]);
+  expect(task.userCheckCriteria).toEqual(["The behavior is durable"]);
+});
+
+test("invalidate-evidence and begin-existing-review drop a stale user-check question", () => {
+  const ready = readyImplementationWith(userCheckInput);
+  expect(ready.communication?.question).toBeDefined();
+
+  const invalidated = transitionTask(
+    ready,
+    { type: "invalidate-evidence", head: "head-1", generation: ready.generation },
+    context(),
+  );
+  expect(invalidated.communication?.question).toBeUndefined();
+  expect(invalidated.stage).toBe("implementing");
+
+  const reEntered = transitionTask(
+    ready,
+    { type: "begin-existing-review", head: "head-1", generation: ready.generation },
+    context(),
+  );
+  expect(reEntered.communication?.question).toBeUndefined();
+  expect(reEntered.stage).toBe("validating");
+});
+
+test("retry-validation drops a stale user-check question", () => {
+  const ready = readyImplementationWith(userCheckInput);
+  const blocked = transitionTask(ready, { type: "block", reason: "manual" }, context());
+  expect(blocked.communication?.question).toBeDefined();
+
+  const retried = transitionTask(
+    blocked,
+    { type: "retry-validation", head: "head-1", generation: blocked.generation },
+    context(),
+  );
+  expect(retried.communication?.question).toBeUndefined();
+  expect(retried.stage).toBe("validating");
 });
