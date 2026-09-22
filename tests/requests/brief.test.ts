@@ -7,6 +7,7 @@ import {
   decideRequestDispatch,
   RequestBriefError,
   requestApprovalState,
+  requestBriefDigests,
   reviseRequestBriefRecord,
   tasksAwaitingReapproval,
 } from "../../src/requests/brief.ts";
@@ -185,4 +186,58 @@ test("brief content is validated at the boundary rather than stored as given", (
   expect(() => checkedRequestBriefContent(content({ keyDecisions: ["x".repeat(40_000)] }))).toThrow(
     /UTF-8 bytes/u,
   );
+});
+
+test("a brief without userCheckCriteria digests exactly as it did before the field existed", () => {
+  const digests = requestBriefDigests(checkedRequestBriefContent(content()));
+  // Computed from this same content literal with the pre-#84 digest algorithm (AGREEMENT_FIELDS
+  // alone, with no user-check contribution): the split must never change an existing brief's digest.
+  expect(digests.agreementDigest).toBe(
+    "74a95430904cba395789ce0926801dc88fbf7e9f3332a81faa7f1552a6c9219c",
+  );
+  expect(digests.contentDigest).toBe(
+    "777275e9c0fa047b1b96b0c7346d31163c8d3b3bba5daec125eb24c838465531",
+  );
+});
+
+test("checkedRequestBriefContent accepts an absent userCheckCriteria and normalizes an empty one away", () => {
+  const absent = checkedRequestBriefContent(content());
+  expect(absent.userCheckCriteria).toBeUndefined();
+  expect(requestBriefDigests(absent)).toEqual(
+    requestBriefDigests(checkedRequestBriefContent(content())),
+  );
+
+  const empty = checkedRequestBriefContent(content({ userCheckCriteria: [] }));
+  expect(empty.userCheckCriteria).toBeUndefined();
+  expect(requestBriefDigests(empty)).toEqual(requestBriefDigests(absent));
+});
+
+test("a non-empty userCheckCriteria changes the agreement digest but not the content-only fields", () => {
+  const withoutUserChecks = checkedRequestBriefContent(content());
+  const withUserChecks = checkedRequestBriefContent(
+    content({ userCheckCriteria: ["Streak bar glows at 5 in a row"] }),
+  );
+  expect(withUserChecks.userCheckCriteria).toEqual(["Streak bar glows at 5 in a row"]);
+  const before = requestBriefDigests(withoutUserChecks);
+  const after = requestBriefDigests(withUserChecks);
+  expect(after.agreementDigest).not.toBe(before.agreementDigest);
+  expect(after.contentDigest).not.toBe(before.contentDigest);
+});
+
+test("moving a criterion into userCheckCriteria is an agreement change that supersedes approval", () => {
+  const record = seeded();
+  const approved = approveRequestBriefRecord(
+    record,
+    { requestId: "req-1", briefRevision: 1, contentDigest: record.draft.contentDigest },
+    NOW,
+  );
+  expect(requestApprovalState(approved)).toBe("current");
+
+  const movedToUserCheck = reviseRequestBriefRecord(
+    approved,
+    content({ userCheckCriteria: ["one stable request id"] }),
+    LATER,
+  );
+  expect(movedToUserCheck.draft.changeKind).toBe("agreement");
+  expect(requestApprovalState(movedToUserCheck)).toBe("superseded");
 });

@@ -409,6 +409,152 @@ test("fails closed on a persisted skill record with an unexpected field", async 
   });
 });
 
+test("a record written before you-check criteria existed decodes with no userCheckCriteria or userCheck", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-user-check" });
+    expect(created.userCheckCriteria).toBeUndefined();
+    expect(created.userCheck).toBeUndefined();
+    rewritePayload(directory, created.id, (payload) => {
+      delete payload.userCheckCriteria;
+      delete payload.userCheck;
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("legacy task did not reload");
+    expect(reloaded.userCheckCriteria).toBeUndefined();
+    expect(reloaded.userCheck).toBeUndefined();
+    expect(reloaded).toEqual(created);
+  });
+});
+
+test("round-trips userCheckCriteria and a confirmed userCheck record through the store", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({
+      ...input,
+      id: "user-check-roundtrip",
+      userCheckCriteria: ["Streak bar glows at 5 in a row"],
+    });
+    expect(created.userCheckCriteria).toEqual(["Streak bar glows at 5 in a row"]);
+
+    const userCheck = {
+      head: "head-1",
+      generation: 0,
+      evidence: [
+        { criterion: "Streak bar glows at 5 in a row", paths: ["/home/jobs/task/0/job-1/a.png"] },
+      ],
+      answer: { outcome: "confirmed" as const, answeredAt: "2026-09-15T00:01:00.000Z" },
+    };
+    await store.update(created.id, created.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      userCheck,
+    }));
+
+    const reloaded = await makeStore(directory, "reload").read(created.id);
+    if (reloaded === undefined) throw new Error("task did not reload");
+    expect(reloaded.userCheckCriteria).toEqual(["Streak bar glows at 5 in a row"]);
+    expect(reloaded.userCheck).toEqual(userCheck);
+  });
+});
+
+test("round-trips a changes-requested userCheck answer with its text", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({
+      ...input,
+      id: "user-check-changes-roundtrip",
+      userCheckCriteria: ["Streak bar glows at 5 in a row"],
+    });
+    const userCheck = {
+      head: "head-1",
+      generation: 0,
+      evidence: [] as const,
+      answer: {
+        outcome: "changes-requested" as const,
+        text: "The glow is the wrong color",
+        answeredAt: "2026-09-15T00:01:00.000Z",
+      },
+    };
+    await store.update(created.id, created.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      userCheck,
+    }));
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("task did not reload");
+    expect(reloaded.userCheck).toEqual(userCheck);
+  });
+});
+
+test("fails closed on corrupt userCheck shapes", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({
+      ...input,
+      id: "corrupt-user-check",
+      userCheckCriteria: ["Streak bar glows at 5 in a row"],
+    });
+
+    rewritePayload(directory, created.id, (payload) => {
+      payload.userCheck = {
+        head: "head-1",
+        generation: 0,
+        evidence: [],
+        answer: { outcome: "maybe", answeredAt: "2026-09-15T00:01:00.000Z" },
+      };
+    });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+
+    rewritePayload(directory, created.id, (payload) => {
+      payload.userCheck = {
+        head: "head-1",
+        generation: 0,
+        evidence: [{ criterion: "Streak bar glows at 5 in a row", paths: ["relative/path.png"] }],
+      };
+    });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+
+    rewritePayload(directory, created.id, (payload) => {
+      payload.userCheck = {
+        head: "head-1",
+        generation: 0,
+        evidence: [],
+        answer: { outcome: "changes-requested", answeredAt: "2026-09-15T00:01:00.000Z" },
+      };
+    });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("round-trips a review's handToUser list", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "hand-to-user-roundtrip" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.stage = "reviewing";
+      payload.reviewHead = "head-1";
+      payload.reviews = [
+        {
+          lens: "behavior",
+          head: "head-1",
+          generation: 0,
+          pass: true,
+          findings: [],
+          summary: "behavior review passed",
+          handToUser: ["The state reloads"],
+        },
+      ];
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("task did not reload");
+    expect(reloaded.reviews[0]?.handToUser).toEqual(["The state reloads"]);
+  });
+});
+
 test("serializes CAS updates and rejects stale concurrent writers", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
