@@ -148,7 +148,7 @@ test("restart still refuses while the coordinator runs outside its recorded pane
 
     await expect(
       restartCoordinator(launchRequest(world), launchDependencies(world, rehomed)),
-    ).rejects.toThrow(/still running elsewhere .* then run `tandem restart`/u);
+    ).rejects.toThrow(/still running elsewhere .* then run `tandem update`/u);
     expect(world.paneIsPresent(first.paneId ?? "")).toBe(true);
   });
 });

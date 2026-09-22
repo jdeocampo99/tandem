@@ -432,15 +432,15 @@ async function findOwnedCoordinator(
       if (livePid !== undefined) {
         throw ownershipFailure(
           livePid === "unknown"
-            ? `pane ${record.endpoint.paneId} runs something other than the coordinator, and this record is too old to tell whether the coordinator is still running elsewhere. Close whatever runs in that pane, then run \`tandem restart\`.`
-            : `pane ${record.endpoint.paneId} runs something other than the coordinator, but the coordinator is still running elsewhere (process ${livePid}). Stop that process, then run \`tandem restart\`.`,
+            ? `pane ${record.endpoint.paneId} runs something other than the coordinator, and this record is too old to tell whether the coordinator is still running elsewhere. Close whatever runs in that pane, then run \`tandem update\`.`
+            : `pane ${record.endpoint.paneId} runs something other than the coordinator, but the coordinator is still running elsewhere (process ${livePid}). Stop that process, then run \`tandem update\`.`,
         );
       }
       // The coordinator exited and the pane now runs something else. That pane is no longer
       // ours to close, so it counts as stopped and a relaunch opens a fresh pane beside it.
       if (!includeAbandoned) {
         throw ownershipFailure(
-          `the coordinator isn't running in pane ${record.endpoint.paneId} any more, and something else is running there now. Run \`tandem restart\` to start it again in a new window.`,
+          `the coordinator isn't running in pane ${record.endpoint.paneId} any more, and something else is running there now. Run \`tandem update\` to start it again in a new window.`,
         );
       }
       return undefined;

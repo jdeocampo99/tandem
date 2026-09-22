@@ -243,7 +243,11 @@ export async function selectProjects(
   }
 
   let registered: readonly string[] | undefined;
-  if (invocation.command === "launch") {
+  if (
+    invocation.command === "launch" ||
+    invocation.command === "update" ||
+    invocation.command === "reset"
+  ) {
     registered = await readRegisteredProjects(environment.home);
     if (registered.length > 0) {
       return resolveProjectRoots(registered, environment, run);

@@ -39,11 +39,14 @@ From the Tandem checkout, run `bun install` and `bun link` once, then use:
 tandem
 tandem /absolute/path/to/repo
 tandem /absolute/path/to/first-repo /absolute/path/to/second-repo
-tandem --continue /absolute/path/to/repo
+tandem --fresh /absolute/path/to/repo
+tandem status
+tandem update
+tandem fix
 tandem configure /absolute/path/to/repo
 tandem config /absolute/path/to/repo
-tandem --reset
-tandem --reset --force
+tandem reset
+tandem reset --hard
 ```
 
 With no path, Tandem opens or reconnects every valid saved project under the selected home before
@@ -63,28 +66,36 @@ Explicit home, session, and pool flags or environment values remain advanced ove
 home bypasses the remembered home/session pair, and the pool defaults to `<selected-home>/pool`.
 Normal launches never overwrite the remembered setup.
 
-Use `tandem --reset` from a separate normal terminal when you deliberately need a clean reopen of
-Tandem coordinators. With no paths it selects every valid saved project; explicit paths select only
-that subset. Reset stops only idle coordinators with exact Tandem ownership, refuses busy, foreign,
-unknown, or unsafe work before closing any pane, and then runs the normal launch/one-attach flow.
-It preserves settings, conversation history, task records, worktrees, and repository files: reset is
-not migration, task recovery, a factory reset, or data wiping. Add `--continue` only to resume saved
-conversations; otherwise the reopened coordinators start fresh. Never run reset from inside Herdr.
+`tandem status` shows the Tandem code commit, open coordinators, and tasks that need the user or
+are working; `tandem status TASK_ID` prints one task's full durable inspection, and `--logs` shows
+prompt routing. `tandem update` replaces every saved project's coordinator with one running the
+latest local Tandem code, keeping chats and tasks (`--fresh` for new chats). `tandem fix` offers the
+offline migration when old-format state exists; otherwise it prints the reconcile dry run and asks
+before cleaning (`--yes` applies). Coordinator chats resume by default; `--fresh` starts new ones.
+
+Use `tandem reset` when you deliberately want to cancel all in-progress work. It cancels every
+in-progress task across saved projects, closes owned worker/validation/presentation terminals and
+coordinators (busy ones included), then reopens coordinators with fresh chats. It takes no paths and
+asks to confirm (or `--yes`). Onboarding, settings, task history, dirty task worktrees, and files
+remain intact. Foreign or ambiguous ownership and unsafe coordinator sources still refuse; reset is
+not migration, task recovery, or permission to discard changes. `update` and `reset` can run from a
+separate terminal or any Herdr pane except the coordinator pane they would close.
 
 Recorded coordinator panes left at their verified terminal shell are also closed by reset. Herdr
 removes empty workspaces after the last pane closes; extra panes stay open. Only generated old
 coordinator labels are retired, not custom labels. Labels never authorize closing unrelated terminals.
 
-For deliberate interruption during testing, use `tandem --reset --force [PATH ...]`. It cancels
-selected active tasks, closes owned worker/validation/presentation terminals and busy coordinators,
-then performs the normal relaunch. Without paths it affects all saved projects. Files, dirty task
-worktrees, completed task history, and settings remain intact. Foreign or ambiguous ownership and
-unsafe coordinator sources still refuse; this is not permission to wipe state or discard changes.
+`tandem reset --hard` is the only command that wipes state. After a best-effort reset it deletes the
+Tandem home (task history, onboarding, model settings, and every pool worktree, including unpushed or
+unmerged work), an outside pool root, and a remembered setup that points at that home, then prunes
+Git worktree records in each onboarded repository. The next `tandem` onboards from scratch. It lists
+what it will delete, asks first (or `--yes`), and refuses to delete `$HOME`, `/`, or anything that
+contains an onboarded repository. Never suggest it unless the user explicitly wants to start over.
 
 An explicit `tandem PATH` opens or reconnects only that project after ownership checks. A bare
 `tandem` applies the same checks to every project in its launch set (all saved projects when the
-registry is non-empty). Add `--continue` only when starting a stopped coordinator and resuming its
-saved conversation. An active coordinator stays pinned to its clean source `HEAD` even if the
+registry is non-empty). A stopped coordinator resumes its saved conversation unless `--fresh` is
+given. An active coordinator stays pinned to its clean source `HEAD` even if the
 original project advances; stop and relaunch when a fresh source snapshot is wanted. If an old
 pre-registry coordinator is detected, stop its Herdr pane/process once, confirm it exited, and
 relaunch. Tandem never adopts or duplicates it and never migrates existing tasks automatically.
@@ -92,19 +103,18 @@ relaunch. Tandem never adopts or duplicates it and never migrates existing tasks
 
 `<home>/state.sqlite` is the canonical task/runtime authority. Do not edit or resume legacy
 `runtime.json` or `tasks/*.json`, and do not retry work when an external outcome is uncertain. Legacy
-state requires an explicit offline two-step migration from a separate normal terminal:
+state requires an explicit offline migration with every Tandem pane stopped:
 
 ```sh
-tandem migrate-state --home "<home>"
-tandem migrate-state --home "<home>" --yes
+tandem fix --home "<home>"
 ```
 
-The first command is the read-only plan; only the second applies migration. Status and other
+It shows the plan and applies migration only after the user confirms (or with `--yes`). Status and other
 read-only planning never apply it. Migration archives and fences the original bytes while preserving
 IDs, generations, fix-round/policy, and checkpoints/history; it refuses live or ambiguous ownership
 and unsettled work. An unknown owned-operation outcome remains quarantined with capacity/resources
 retained: never clear a reservation, replace a task, or change policy to bypass unknown ownership.
-Reset is not migration or recovery; `tandem --reset --force [PATH ...]` cancels selected active tasks.
+Reset is not migration or recovery; `tandem reset` cancels all in-progress tasks across saved projects.
 
 ## The usual path
 

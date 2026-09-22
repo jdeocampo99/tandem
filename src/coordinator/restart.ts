@@ -129,7 +129,6 @@ export async function restartCoordinator(
       {
         ...request,
         sourceHead: sourceHead.head,
-        continueSession: true,
         headless: true,
         noAttach: true,
         restart: true,

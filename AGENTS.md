@@ -46,17 +46,18 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
   Queued/blocked is not completed. Preserve pinned policy, instruction provenance, and configured limits.
 - `<home>/state.sqlite` is the canonical task/runtime authority. Never edit legacy `runtime.json` or
   `tasks/*.json`; an offline legacy migration is an explicit two-step operation: inspect with
-  `tandem migrate-state --home PATH`, then apply with `tandem migrate-state --home PATH --yes`.
+  `tandem fix --home PATH` (it shows the plan and asks), then apply by confirming or with `--yes`.
   Read-only status/planning never applies; migration preserves durable records and archives/fences
   original bytes.
-- Never delete coordinator records, panes, worktrees, or lock files by hand; run the dry-run-by-default
-  `tandem reconcile-resources`, then `--yes`, which classifies every resource before changing any of it.
+- Never delete coordinator records, panes, worktrees, or lock files by hand; run `tandem fix`, which
+  prints a dry run and asks before cleaning (`--yes` applies) and classifies every resource before changing any of it.
 - Unknown owned-operation outcomes are quarantined with capacity/resources retained; never clear a
   reservation, replace a task, retry uncertain work, or change policy to bypass ownership. Reset is
-  not migration or recovery; `tandem --reset --force [PATH ...]` cancels selected active tasks.
+  not migration or recovery; `tandem reset` cancels all in-progress tasks across saved projects, and
+  `tandem reset --hard` deletes the whole Tandem home.
 - Child agents run interactive OMP. Fresh reviewers are read-only; stop implementer mutation during
   validation/review. Validation runs separately without a model. No remote fleets or alternate harnesses.
-- When a session is bad or blocked, inspect durable state first with `tandem inspect TASK_ID --json`, then run the read-only `tandem recovery-plan TASK_ID --json`. Apply only the recommended approved action; never manually edit SQLite/runtime state, reuse the worktree for a new task, or override unknown ownership.
+- When a session is bad or blocked, inspect durable state first with `tandem status TASK_ID --json`, then run the read-only `bun src/cli.ts recovery-plan TASK_ID --json`. Apply only the recommended approved action; never manually edit SQLite/runtime state, reuse the worktree for a new task, or override unknown ownership.
 
 ## Change and verify
 
