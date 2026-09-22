@@ -842,9 +842,15 @@ and nothing more: task scope approval, publication, merge, deploy, and destructi
 remain separate explicit approvals.
 
 With `reviewPane: true` the coordinator renders the current draft as read-only Markdown under
-`<home>/request-briefs/<requestId>.md` and shows it in one temporary Herdr pane it owns. The pane has
-no editing path; the user edits by replying in the main conversation. A tiny fix keeps the same
-approval contract with a compact in-chat brief and no pane at all.
+`<home>/request-briefs/<requestId>.md` and shows it in one temporary Herdr pane it owns. That pane
+opens as an unfocused split to the right of the coordinator's own pane, in the coordinator's
+workspace and tab, so the user sees the brief where they are already working. The coordinator's pane
+is known only when Tandem runs inside an active Herdr context (`HERDR_ENV`, `HERDR_PANE_ID`) whose
+session is the Tandem session; otherwise the pane falls back to a separate
+`Tandem request brief · <repo>` workspace. The coordinator's pane is only the split anchor: a brief
+record that names it is quarantined and never written to or closed. The pane has no editing path;
+the user edits by replying in the main conversation. A tiny fix keeps the same approval contract
+with a compact in-chat brief and no pane at all.
 
 Every pane operation proves exact ownership first, through the same native session snapshot,
 endpoint identity, stopped-pane, and close-verification checks the coordinator's own pane uses. The

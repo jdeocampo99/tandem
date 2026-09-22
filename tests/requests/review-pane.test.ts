@@ -1,7 +1,13 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Endpoint, RequestBriefContent, RequestBriefRecord } from "../../src/contracts.ts";
+import type {
+  CommandRequest,
+  CommandRunner,
+  Endpoint,
+  RequestBriefContent,
+  RequestBriefRecord,
+} from "../../src/contracts.ts";
 import { createRequestBriefRecord, withRequestReviewPane } from "../../src/requests/brief.ts";
 import {
   closeRequestBriefPane,
@@ -27,13 +33,36 @@ function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefCont
   };
 }
 
-function dependencies(world: ScenarioWorld): RequestReviewPaneDependencies {
+function dependencies(
+  world: ScenarioWorld,
+  coordinatorPaneId?: string,
+  run: CommandRunner = world.run,
+): RequestReviewPaneDependencies {
   return {
-    run: world.run,
+    run,
     home: world.home,
     sessionId: world.sessionId,
     parentWorkspaceId: undefined,
+    coordinatorPaneId,
     clock: () => NOW,
+  };
+}
+
+/** Records the argv of every Herdr command so a test can see which pane each one targeted. */
+function recordingRun(world: ScenarioWorld): Readonly<{
+  readonly run: CommandRunner;
+  readonly herdrCommands: (verb: string) => readonly (readonly string[])[];
+}> {
+  const calls: CommandRequest[] = [];
+  return {
+    run: async (request) => {
+      calls.push(request);
+      return world.run(request);
+    },
+    herdrCommands: (verb) =>
+      calls
+        .map((call) => call.argv)
+        .filter((argv) => argv[0] === "herdr" && argv[3] === "pane" && argv[4] === verb),
   };
 }
 
@@ -164,5 +193,84 @@ test("a failed render is reported without losing the durable brief", async () =>
     expect(projected.status).toBe("quarantined");
     expect(projected.reason).toContain("could not render revision 1");
     expect(await readFile(projected.renderedPath, "utf8")).toContain("Draft revision: 1");
+  });
+});
+
+test("with a known coordinator pane the brief opens as a split beside it, not a new workspace", async () => {
+  await withScenario({}, async (world) => {
+    const coordinator = world.openPane({ paneId: "pane-coordinator", cwd: world.repoPath });
+    const recorder = recordingRun(world);
+
+    const opened = await projectRequestBriefPane(
+      dependencies(world, coordinator.paneId, recorder.run),
+      record(world),
+    );
+
+    expect(opened.status).toBe("open");
+    expect(workspaceCreateCount(world)).toBe(0);
+    expect(recorder.herdrCommands("split")).toEqual([
+      [
+        "herdr",
+        "--session",
+        world.sessionId,
+        "pane",
+        "split",
+        coordinator.paneId,
+        "--direction",
+        "right",
+        "--cwd",
+        world.repoPath,
+        "--no-focus",
+      ],
+    ]);
+    expect(opened.endpoint.workspaceId).toBe(coordinator.workspaceId);
+    expect(opened.endpoint.tabId).toBe(coordinator.tabId);
+    expect(opened.endpoint.paneId).not.toBe(coordinator.paneId);
+    expect(recorder.herdrCommands("run").map((argv) => argv[5])).toEqual([opened.endpoint.paneId]);
+  });
+});
+
+test("closing a split brief pane closes only that pane and never the coordinator beside it", async () => {
+  await withScenario({}, async (world) => {
+    const coordinator = world.openPane({ paneId: "pane-coordinator", cwd: world.repoPath });
+    const recorder = recordingRun(world);
+    const deps = dependencies(world, coordinator.paneId, recorder.run);
+    const opened = await projectRequestBriefPane(deps, record(world));
+
+    const closed = await closeRequestBriefPane(
+      deps,
+      withRequestReviewPane(record(world), opened, NOW),
+    );
+
+    expect(closed?.status).toBe("closed");
+    expect(world.paneIsPresent(opened.endpoint.paneId)).toBe(false);
+    expect(world.paneIsPresent(coordinator.paneId)).toBe(true);
+    expect(recorder.herdrCommands("close").map((argv) => argv[5])).toEqual([
+      opened.endpoint.paneId,
+    ]);
+  });
+});
+
+test("a brief record naming the coordinator's own pane is quarantined and never written or closed", async () => {
+  await withScenario({}, async (world) => {
+    const coordinator = world.openPane({ paneId: "pane-coordinator", cwd: world.repoPath });
+    const recorder = recordingRun(world);
+    const deps = dependencies(world, coordinator.paneId, recorder.run);
+    const opened = await projectRequestBriefPane(deps, record(world));
+    const pointsAtCoordinator = withRequestReviewPane(
+      record(world),
+      { ...opened, endpoint: { ...coordinator, role: "coordinator" } },
+      NOW,
+    );
+
+    const closed = await closeRequestBriefPane(deps, pointsAtCoordinator);
+    const projected = await projectRequestBriefPane(deps, pointsAtCoordinator);
+
+    expect(closed?.status).toBe("quarantined");
+    expect(closed?.reason).toContain("coordinator's own pane");
+    expect(projected.status).toBe("quarantined");
+    expect(world.paneIsPresent(coordinator.paneId)).toBe(true);
+    expect(recorder.herdrCommands("close")).toEqual([]);
+    expect(recorder.herdrCommands("run").map((argv) => argv[5])).not.toContain(coordinator.paneId);
   });
 });

@@ -212,6 +212,8 @@ export type TandemServiceOptions = Readonly<{
   readonly home: string;
   readonly sessionId: string;
   readonly parentWorkspaceId?: string;
+  /** The Herdr pane the coordinator runs in; request review panes split beside it when known. */
+  readonly coordinatorPaneId?: string;
   readonly poolRoot?: string;
   readonly sourceWorkspace?: Readonly<{
     readonly repoPath: string;
@@ -363,6 +365,7 @@ type ServiceDependencies = Readonly<{
   home: string;
   sessionId: string;
   parentWorkspaceId: string | undefined;
+  coordinatorPaneId: string | undefined;
   poolRoot: string;
   sourceWorkspace:
     | Readonly<{
@@ -725,6 +728,7 @@ class TandemController {
       home: deps.home,
       sessionId: deps.sessionId,
       parentWorkspaceId: deps.parentWorkspaceId,
+      coordinatorPaneId: deps.coordinatorPaneId,
       run: deps.run,
       clock: deps.clock,
       store: deps.requestStore,
@@ -2338,6 +2342,10 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
       options.parentWorkspaceId === undefined
         ? undefined
         : singleLine(options.parentWorkspaceId, "parentWorkspaceId"),
+    coordinatorPaneId:
+      options.coordinatorPaneId === undefined
+        ? undefined
+        : singleLine(options.coordinatorPaneId, "coordinatorPaneId"),
     poolRoot,
     sourceWorkspace,
     refreshSource,

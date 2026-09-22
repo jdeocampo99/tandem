@@ -60,6 +60,9 @@ function serviceForContext(
     ...(environment.parentWorkspaceId === undefined
       ? {}
       : { parentWorkspaceId: environment.parentWorkspaceId }),
+    ...(environment.coordinatorPaneId === undefined
+      ? {}
+      : { coordinatorPaneId: environment.coordinatorPaneId }),
     poolRoot: environment.poolRoot,
     classifyResearchContinuation,
     ...(sourceRepo === undefined

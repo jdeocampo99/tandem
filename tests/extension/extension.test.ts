@@ -191,6 +191,29 @@ test("environment resolution applies explicit boundary values and ignores unrela
   });
 });
 
+test("the coordinator pane is known only inside an active Herdr context for the Tandem session", () => {
+  const fallback = { cwd: "/cwd", sessionId: "default-session" };
+  const herdr = {
+    TANDEM_HOME: "/env/home",
+    TANDEM_SESSION: "tandem-session",
+    HERDR_ENV: "1",
+    HERDR_SESSION: "tandem-session",
+    HERDR_PANE_ID: "pane-coordinator",
+  };
+
+  expect(resolveTandemEnvironment(herdr, fallback).coordinatorPaneId).toBe("pane-coordinator");
+  expect(
+    resolveTandemEnvironment({ ...herdr, HERDR_SESSION: "other-session" }, fallback)
+      .coordinatorPaneId,
+  ).toBeUndefined();
+  expect(
+    resolveTandemEnvironment({ ...herdr, HERDR_ENV: undefined }, fallback).coordinatorPaneId,
+  ).toBeUndefined();
+  expect(
+    resolveTandemEnvironment({ ...herdr, HERDR_PANE_ID: undefined }, fallback).coordinatorPaneId,
+  ).toBeUndefined();
+});
+
 test("remembered setup keeps home, session, and derived pool together without leaking into explicit homes", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-remembered-setup-"));
   const configRoot = join(root, "config");

@@ -31,6 +31,8 @@ export type RequestBriefWorkflowDependencies = Readonly<{
   readonly home: string;
   readonly sessionId: string;
   readonly parentWorkspaceId: string | undefined;
+  /** The Herdr pane the coordinator runs in; the review pane splits beside it when known. */
+  readonly coordinatorPaneId: string | undefined;
   readonly run: CommandRunner;
   readonly clock: Clock;
   readonly store: RequestBriefStore;
@@ -182,6 +184,7 @@ export class RequestBriefWorkflow {
       home: this.#deps.home,
       sessionId: this.#deps.sessionId,
       parentWorkspaceId: this.#deps.parentWorkspaceId,
+      coordinatorPaneId: this.#deps.coordinatorPaneId,
       clock: this.#deps.clock,
     };
   }
