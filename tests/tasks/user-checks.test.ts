@@ -9,6 +9,7 @@ import { createTask, type TaskInput } from "../../src/tasks/lifecycle.ts";
 import {
   isClipPath,
   isImagePath,
+  isPathWithinDirectory,
   isUserCheckYes,
   USER_CHECK_QUESTION_ID_PREFIX,
   userCheckCriteriaOf,
@@ -261,4 +262,13 @@ test("image and clip extensions are recognized case-insensitively", () => {
   expect(isClipPath("/a/b/clip.MP4")).toBe(true);
   expect(isClipPath("/a/b/clip.webm")).toBe(true);
   expect(isClipPath("/a/b/screenshot.png")).toBe(false);
+});
+
+test("isPathWithinDirectory is the one owner for both a submitted path and a resolved real path", () => {
+  expect(isPathWithinDirectory("/tmp/user-checks", "/tmp/user-checks/a.png")).toBe(true);
+  expect(isPathWithinDirectory("/tmp/user-checks", "/tmp/user-checks/sub/a.png")).toBe(true);
+  expect(isPathWithinDirectory("/tmp/user-checks", "/tmp/user-checks")).toBe(false);
+  expect(isPathWithinDirectory("/tmp/user-checks", "/tmp/other/a.png")).toBe(false);
+  expect(isPathWithinDirectory("/tmp/user-checks", "/tmp/user-checks-sibling/a.png")).toBe(false);
+  expect(isPathWithinDirectory("/tmp/user-checks", "relative/a.png")).toBe(false);
 });

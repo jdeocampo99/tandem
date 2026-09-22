@@ -1,6 +1,7 @@
-import { isAbsolute, relative, sep } from "node:path";
+import { isAbsolute } from "node:path";
 import type { ReviewResult, UserCheckEvidence } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
+import { isPathWithinDirectory } from "../tasks/user-checks.ts";
 import {
   parseReviewResult,
   readUserCheckEvidenceArray,
@@ -323,12 +324,6 @@ export function resolveSubmittedReport(
   return { status, text: renderReport(submission.outcome, undefined, undefined, report) };
 }
 
-function isWithinDirectory(directory: string, path: string): boolean {
-  if (!isAbsolute(path)) return false;
-  const rel = relative(directory, path);
-  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-}
-
 function normalizeUserCheckEvidence(
   userChecks: NonNullable<WorkerJob["userChecks"]>,
   raw: unknown,
@@ -347,7 +342,7 @@ function normalizeUserCheckEvidence(
       throw new ReportRejection(`userCheckEvidence names an unknown criterion: ${entry.criterion}`);
     }
     for (const path of entry.paths) {
-      if (!isWithinDirectory(userChecks.directory, path)) {
+      if (!isPathWithinDirectory(userChecks.directory, path)) {
         throw new ReportRejection(
           `userCheckEvidence path ${path} is outside the user-check directory`,
         );

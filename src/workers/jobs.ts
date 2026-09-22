@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, sep } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import {
   type AgentRole,
   type Finding,
@@ -15,7 +15,12 @@ import {
   type UserCheckEvidence,
 } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
-import { isClipPath, isImagePath, MAX_USER_CHECK_FILE_BYTES } from "../tasks/user-checks.ts";
+import {
+  isClipPath,
+  isImagePath,
+  isPathWithinDirectory,
+  MAX_USER_CHECK_FILE_BYTES,
+} from "../tasks/user-checks.ts";
 import type { ExecutionIdentity } from "./execution-gate.ts";
 
 /** Bounds on the implementer's saved "you check" evidence, checked at submission and again after
@@ -622,13 +627,7 @@ export async function checkUserCheckFiles(
       } catch {
         return `${path} could not be resolved`;
       }
-      const relativePath = relative(realDirectory, realPath);
-      if (
-        relativePath === "" ||
-        relativePath === ".." ||
-        relativePath.startsWith(`..${sep}`) ||
-        isAbsolute(relativePath)
-      ) {
+      if (!isPathWithinDirectory(realDirectory, realPath)) {
         return `${path} is outside the user-check directory`;
       }
     }

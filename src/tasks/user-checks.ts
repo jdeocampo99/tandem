@@ -4,6 +4,7 @@
  * these; the task asks one short end question instead. See docs/agent-reference.md.
  */
 
+import { isAbsolute, relative, sep } from "node:path";
 import type { Finding, TaskQuestion, TaskRecord, UserCheckEvidence } from "../contracts.js";
 import { type DecisionQuestion, formatDecisionQuestion, taskName } from "./question.js";
 
@@ -53,6 +54,17 @@ export function isImagePath(path: string): boolean {
 
 export function isClipPath(path: string): boolean {
   return hasExtension(path, USER_CHECK_EXTENSIONS.clip);
+}
+
+/** Whether `path` is lexically inside `directory`, given both are already absolute. Neither is
+ *  resolved here: a caller that needs symlink-resolved containment (evidence already saved to
+ *  disk) resolves both with `realpath` first and passes the resolved pair; a caller checking a raw
+ *  submitted path before any file necessarily exists (the worker's own report tool) passes it as
+ *  is. The single owner for both. */
+export function isPathWithinDirectory(directory: string, path: string): boolean {
+  if (!isAbsolute(path)) return false;
+  const rel = relative(directory, path);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 function countEvidence(evidence: readonly UserCheckEvidence[]): {
