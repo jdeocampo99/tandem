@@ -254,8 +254,9 @@ function decisionRequests(
   if (approvalState === "superseded") {
     decisions.push({
       id: `${record.id}:reapproval`,
-      subject: record.id,
-      detail: `Request ${record.id} changed what was agreed after approval; its brief needs reapproval before member work continues`,
+      subject: "brief approval",
+      detail:
+        "what was agreed changed after approval; the brief needs reapproval before member work continues",
     });
   }
   for (const conflict of record.conflicts) {

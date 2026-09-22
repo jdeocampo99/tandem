@@ -77,7 +77,7 @@ import {
   type ReviewExistingResult,
   type ValidationRetryResult,
 } from "../recovery/workflow.ts";
-import { type RequestApprovalIntent, requestApprovalState } from "../requests/brief.ts";
+import { requestApprovalState } from "../requests/brief.ts";
 import {
   type MergeRequestInput,
   type PublishRequestInput,
@@ -90,6 +90,7 @@ import {
 } from "../requests/delivery-store.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../requests/store.ts";
 import {
+  type ApproveRequestBriefInput,
   type DraftRequestBriefInput,
   type RequestBriefView,
   RequestBriefWorkflow,
@@ -274,7 +275,9 @@ export type TandemService = Readonly<{
   readonly approve: (id: string) => Promise<TaskRecord>;
   readonly draftRequestBrief: (input: DraftRequestBriefInput) => Promise<RequestBriefView>;
   readonly reviewRequestBrief: (requestId: string) => Promise<RequestBriefView>;
-  readonly approveRequestBrief: (intent: RequestApprovalIntent) => Promise<RequestBriefView>;
+  readonly approveRequestBrief: (intent: ApproveRequestBriefInput) => Promise<RequestBriefView>;
+  /** The one request whose brief is awaiting approval; fails closed when that is not unambiguous. */
+  readonly pendingBriefApprovalId: () => Promise<string>;
   readonly requestBrief: (requestId: string) => Promise<RequestBriefView>;
   readonly requestReceipt: (requestId: string) => Promise<RequestUsageReceipt>;
   readonly listRequests: () => Promise<readonly RequestDeliveryRecord[]>;
@@ -809,6 +812,7 @@ class TandemController {
       draftRequestBrief: (input) => this.draftRequestBrief(input),
       reviewRequestBrief: (requestId) => this.#requests.review(requestId),
       approveRequestBrief: (intent) => this.#requests.approve(intent),
+      pendingBriefApprovalId: () => this.#requests.pendingApprovalId(),
       requestBrief: (requestId) => this.#requests.read(requestId),
       requestReceipt: (requestId) => this.#usage.receipt(requestId),
       listRequests: () => this.#deps.requestDeliveryStore.list(),

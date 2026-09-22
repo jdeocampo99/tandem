@@ -216,14 +216,16 @@ test("a member absent from the integrated commit refuses the delivery", () => {
   expect(status.refusals.join(" ")).toContain("task-2 is not contained in the integrated commit");
 });
 
-test("the request pull request body names the integrated commit and every member it carries", () => {
+test("the request pull request body describes the checks in plain terms and lists members by id alone", () => {
   const body = describeRequestPr(
     { integration: integration(), members: [member()], criteria: CRITERIA },
     summary,
   );
 
-  expect(body).toContain(`final acceptance manifest at the integrated HEAD ${INTEGRATED_HEAD}`);
-  expect(body).toContain(`task-1 at ${MEMBER_HEAD}`);
+  expect(body).toContain("The checks ran on the latest version of the combined work");
+  expect(body).toContain("Combined from: task-1");
+  expect(body).not.toContain(`task-1 at ${MEMBER_HEAD}`);
+  expect(body).not.toContain("final acceptance manifest at the integrated HEAD");
 });
 
 test("a request draft stays visibly unfinished and lists what the request still owes", () => {
@@ -238,5 +240,7 @@ test("a request draft stays visibly unfinished and lists what the request still 
   });
 
   expect(body).toContain("Request req-1 is not finished.");
+  expect(body).toContain("This draft reflects the latest version of the combined work.");
+  expect(body).not.toContain(INTEGRATED_HEAD);
   expect(body).toContain("1 member(s) are still running");
 });

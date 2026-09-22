@@ -15,10 +15,12 @@ import { executeTandemAction, parseTandemCommand } from "../../src/extension/act
 import { deliverPendingNotifications } from "../../src/extension/notifications.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/extension/summary.ts";
 import { createTandemExtension, reviewStatus } from "../../src/extension.ts";
+import { createRequestBriefRecord } from "../../src/requests/brief.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";
+import { expectNoIdentifiers } from "../tasks/question.test.ts";
 
 const models: Readonly<
   Record<
@@ -2158,4 +2160,89 @@ test("a recovery question wakes the coordinator once with its recommendation and
   expect(sent[1]?.options).toMatchObject({ triggerTurn: true });
   expect(notices).toHaveLength(0);
   expect(acknowledged).toEqual(["task-1:recovery-notification"]);
+});
+
+test("brief-approve parses without a requestId when only revision and digest are given", () => {
+  const parsed = parseTandemCommand("brief-approve 3 digest-abc");
+  expect(parsed).toEqual({
+    action: "brief-approve",
+    briefRevision: 3,
+    contentDigest: "digest-abc",
+  });
+});
+
+test("brief-approve parses a named requestId when all three arguments are given", () => {
+  const parsed = parseTandemCommand("brief-approve req-1 3 digest-abc");
+  expect(parsed).toEqual({
+    action: "brief-approve",
+    requestId: "req-1",
+    briefRevision: 3,
+    contentDigest: "digest-abc",
+  });
+});
+
+function briefRecordFor(goal: string) {
+  return createRequestBriefRecord(
+    {
+      id: "req-9",
+      repoPath: "/repo",
+      content: {
+        goal,
+        scope: ["src/requests"],
+        constraints: [],
+        nonGoals: [],
+        acceptanceCriteria: ["it works"],
+        recommendedApproach: "do it",
+        keyDecisions: [],
+        openQuestions: [],
+        researchLinks: [],
+      },
+    },
+    "2030-01-01T00:00:00.000Z",
+  );
+}
+
+test("the brief-approve prompt names the request by its goal, never its id or revision, and omitting requestId resolves the one pending request", async () => {
+  const record = briefRecordFor("Ship the pricing widget");
+  const prompts: string[] = [];
+  const approveCalls: unknown[] = [];
+  const service = {
+    pendingBriefApprovalId: async () => record.id,
+    requestBrief: async (requestId: string) => {
+      expect(requestId).toBe(record.id);
+      return { record, approvalState: "unapproved", markdown: "", pausedTaskIds: [] };
+    },
+    approveRequestBrief: async (intent: unknown) => {
+      approveCalls.push(intent);
+      return { record, approvalState: "current", markdown: "", pausedTaskIds: [] };
+    },
+  } as unknown as TandemService;
+  const context = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      confirm: async (_title: string, message: string) => {
+        prompts.push(message);
+        return true;
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  const result = await executeTandemAction(
+    {
+      action: "brief-approve",
+      briefRevision: record.draft.revision,
+      contentDigest: record.draft.contentDigest,
+    },
+    service,
+    context,
+  );
+
+  expect(result.approved).toBe(true);
+  expect(prompts).toHaveLength(1);
+  expect(prompts[0]).toContain("Ship the pricing widget");
+  expectNoIdentifiers(prompts[0] ?? "", [record.id, record.draft.contentDigest]);
+  expect(approveCalls).toEqual([
+    { briefRevision: record.draft.revision, contentDigest: record.draft.contentDigest },
+  ]);
 });

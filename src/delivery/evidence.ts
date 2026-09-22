@@ -325,8 +325,8 @@ export function describeRequestPr(input: RequestAcceptanceInput, summary: PrSumm
     what: validatedSummary.what,
     why: validatedSummary.why,
     validation: [
-      `final acceptance manifest at the integrated HEAD ${contract.head}: ${contract.requirements.length} required checks, ${contract.lenses.length} review lenses, ${contract.criteria.length} approved acceptance criteria`,
-      `integrated members: ${input.integration.members.map((member) => `${member.taskId} at ${member.head}`).join(", ")}`,
+      `The checks ran on the latest version of the combined work: ${contract.requirements.length} required check(s), ${contract.lenses.length} review(s), and ${contract.criteria.length} accepted acceptance criteria.`,
+      `Combined from: ${input.integration.members.map((member) => member.taskId).join(", ")}`,
       ...input.integration.evidence.map(evidenceBullet),
     ],
   });
@@ -350,7 +350,7 @@ export function describeRequestDraftPr(input: RequestDraftDescriptionInput): str
   return renderDraftPrDescription({
     status: [
       `Request ${readSingleLine(input.requestId, "requestId")} is not finished.`,
-      `Draft commit: ${readSingleLine(input.integratedHead, "integratedHead")}.`,
+      "This draft reflects the latest version of the combined work.",
       `Objective: ${draftText(input.objective)}`,
       `Members: ${input.members.join(", ")}`,
     ],

@@ -10,12 +10,12 @@ import {
   assertSafeRequestId,
   checkedRequestBriefContent,
   decideRequestDispatch,
-  type RequestApprovalIntent,
   type RequestApprovalState,
   RequestBriefError,
   requestApprovalState,
   requestBriefDigests,
   reviseRequestBriefRecord,
+  singlePendingApprovalId,
   tasksAwaitingReapproval,
   withRequestReviewPane,
 } from "./brief.ts";
@@ -39,6 +39,19 @@ export type RequestBriefWorkflowDependencies = Readonly<{
   readonly listTasks: () => Promise<readonly TaskRecord[]>;
   /** The existing ownership-safe pause control; the workflow never stops work by itself. */
   readonly pauseTask: (taskId: string, reason: string) => Promise<void>;
+}>;
+
+/**
+ * What an approver claims to be approving. `requestId` is optional: when omitted, approval
+ * resolves to the one request whose brief is awaiting approval and fails closed when that is not
+ * unambiguous. `briefRevision` and `contentDigest` stay required in every case — they are what
+ * binds the approval to the exact text the approver saw, and a request can be redrafted at any
+ * time by another call, so resolving them automatically could silently approve text nobody read.
+ */
+export type ApproveRequestBriefInput = Readonly<{
+  readonly requestId?: string;
+  readonly briefRevision: number;
+  readonly contentDigest: string;
 }>;
 
 export type DraftRequestBriefInput = Readonly<{
@@ -94,10 +107,15 @@ export class RequestBriefWorkflow {
    * A pane that cannot be closed safely leaves the approval standing; approval is a conversation
    * decision, never a pane receipt.
    */
-  async approve(intent: RequestApprovalIntent): Promise<RequestBriefView> {
-    const current = await this.#require(intent.requestId);
+  async approve(intent: ApproveRequestBriefInput): Promise<RequestBriefView> {
+    const requestId = intent.requestId ?? (await this.pendingApprovalId());
+    const current = await this.#require(requestId);
     const approved = await this.#deps.store.update(current.id, current.revision, (record) =>
-      approveRequestBriefRecord(record, intent, this.#deps.clock()),
+      approveRequestBriefRecord(
+        record,
+        { requestId, briefRevision: intent.briefRevision, contentDigest: intent.contentDigest },
+        this.#deps.clock(),
+      ),
     );
     const pane = await closeRequestBriefPane(this.#paneDependencies(), approved);
     if (pane === undefined) return this.#view(approved, []);
@@ -131,6 +149,11 @@ export class RequestBriefWorkflow {
     return this.#require(requestId);
   }
 
+  /** The one request whose brief is awaiting approval; fails closed when that is not unambiguous. */
+  async pendingApprovalId(): Promise<string> {
+    return singlePendingApprovalId(await this.#deps.store.list());
+  }
+
   async #draftRecord(
     input: DraftRequestBriefInput,
     content: RequestBriefContent,
@@ -151,7 +174,7 @@ export class RequestBriefWorkflow {
     for (const taskId of taskIds) {
       await this.#deps.pauseTask(
         taskId,
-        `request ${record.id} brief revision ${record.draft.revision} needs reapproval`,
+        `what was agreed for "${record.draft.content.goal}" changed after approval and needs reapproval`,
       );
       paused.push(taskId);
     }

@@ -198,7 +198,11 @@ export class RequestDeliveryWorkflow {
     const settled = { ...loaded, record: quarantined };
     const aggregate = this.#aggregate(settled);
     const notified = await this.#update(quarantined, (current) =>
-      withRequestNotifications(current, interruptions(aggregate), this.#deps.clock()),
+      withRequestNotifications(
+        current,
+        interruptions(aggregate, settled.brief.draft.content.goal),
+        this.#deps.clock(),
+      ),
     );
     return this.#view({ ...settled, record: notified });
   }
@@ -608,7 +612,11 @@ export class RequestDeliveryWorkflow {
   async #reconciled(loaded: LoadedRequest): Promise<RequestDeliveryView> {
     const aggregate = this.#aggregate(loaded);
     const record = await this.#update(loaded.record, (current) =>
-      withRequestNotifications(current, interruptions(aggregate), this.#deps.clock()),
+      withRequestNotifications(
+        current,
+        interruptions(aggregate, loaded.brief.draft.content.goal),
+        this.#deps.clock(),
+      ),
     );
     return this.#view({ ...loaded, record });
   }
@@ -633,12 +641,14 @@ export class RequestDeliveryWorkflow {
 
 /**
  * The only request state that interrupts the main conversation: a decision the user must make, and
- * the request actually being delivered. Every other change stays passive and on demand.
+ * the request actually being delivered. Every other change stays passive and on demand. Requests
+ * are named by their goal, never their id, so a person reading the notification never has to look
+ * one up.
  */
-function interruptions(aggregate: RequestAggregate): readonly Notification[] {
+function interruptions(aggregate: RequestAggregate, requestGoal: string): readonly Notification[] {
   const entries = aggregate.decisions.map((decision) => ({
     id: decision.id,
-    message: `Request ${aggregate.requestId} needs a decision about ${decision.subject}: ${decision.detail}`,
+    message: `The request "${requestGoal}" needs a decision about ${decision.subject}: ${decision.detail}`,
     acknowledged: false,
     kind: "coordinator" as const,
   }));
@@ -647,7 +657,7 @@ function interruptions(aggregate: RequestAggregate): readonly Notification[] {
     ...entries,
     {
       id: `${aggregate.requestId}:delivered`,
-      message: `Request ${aggregate.requestId} is complete: one verified pull request delivers every approved task. Merge remains a separate explicit approval.`,
+      message: `The request "${requestGoal}" is complete: one verified pull request delivers every approved task. Merge remains a separate explicit approval.`,
       acknowledged: false,
       kind: "coordinator" as const,
     },

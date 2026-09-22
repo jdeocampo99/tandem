@@ -511,9 +511,14 @@ export function describeSpendMicros(value: number | "unavailable"): string {
 }
 
 /** Plain dollars for a user-facing prompt; an unmeasured amount is named, never shown as zero. */
-function formatDollars(value: number | "unavailable"): string {
+export function formatDollars(value: number | "unavailable"): string {
   if (value === "unavailable") return "an unknown amount";
   return `$${(value / USD_MICROS_PER_DOLLAR).toFixed(2)}`;
+}
+
+/** The plain-English reason a spending decision paused, for a user-facing prompt or summary. */
+export function describePauseReason(reason: RequestBudgetPause["reason"]): string {
+  return PAUSE_EXPLANATIONS[reason];
 }
 
 /**

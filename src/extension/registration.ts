@@ -201,7 +201,8 @@ export function registerTandemOmp(
     z
       .object({
         action: z.literal("brief-approve"),
-        requestId: z.string(),
+        /** Omitted resolves to the one request whose brief is awaiting approval. */
+        requestId: z.string().optional(),
         briefRevision: z.number().int().positive(),
         contentDigest: z.string(),
       })
