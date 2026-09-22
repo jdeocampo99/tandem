@@ -16,7 +16,7 @@
 
 import { createHash } from "node:crypto";
 import type { IsoTimestamp, RequestBudgetPolicy } from "../contracts.ts";
-import { formatDecisionQuestion } from "../tasks/question.ts";
+import { formatDecisionQuestion, taskName } from "../tasks/question.ts";
 import type {
   DurableOperationPhase,
   RequestBudgetPause,
@@ -522,29 +522,25 @@ export function describePauseReason(reason: RequestBudgetPause["reason"]): strin
 }
 
 /**
- * The whole spending decision as one plain-English prompt: the cap in force, what has been
- * charged, what is still reserved, what the next step is estimated to cost, and why the request
- * stopped. Estimates are labelled as estimates, unmeasured amounts are named as unmeasured, and no
- * task, decision, or request id appears in the text — a caller that needs one for a tool call
- * reads it off `pause` directly. `taskObjective`, when the caller has it, names the task that
- * raised the pause in its own words instead of its id.
+ * The spending decision as one short question: the new cap, why it stopped, and what is spent.
+ * No task, decision, or request id appears in the text; a caller that needs one for a tool call
+ * reads it off `pause` directly. `taskObjective`, when given, names the task in its own words.
  */
 export function describeRequestSpendDecision(
   pause: RequestBudgetPause,
   taskObjective?: string,
 ): string {
-  const subject = taskObjective === undefined ? "this request" : `"${taskObjective}"`;
-  const unpriced =
-    pause.unpricedSamples === 0
-      ? ""
-      : " Some costs aren't measured, so the real total may be higher.";
-  const unaccounted =
-    pause.unaccountedSamples === 0
-      ? ""
-      : ` Raising the cap also accepts ${pause.unaccountedSamples} step(s) of unknown cost.`;
+  const subject = taskObjective === undefined ? "this request" : taskName(taskObjective);
+  const spent = formatDollars(pause.committedMicros);
+  const unknown =
+    pause.unpricedSamples > 0 || pause.unaccountedSamples > 0 ? " Some costs are unknown." : "";
+  const reason =
+    pause.reason === "cap-would-be-exceeded"
+      ? `The next step (about ${formatDollars(pause.nextStepMicros)}) won't fit under ${formatDollars(pause.capMicros)}.`
+      : PAUSE_EXPLANATIONS[pause.reason];
   return formatDecisionQuestion({
-    what: `Spending on ${subject} is paused: ${PAUSE_EXPLANATIONS[pause.reason]}. ${formatDollars(pause.committedMicros)} spent plus ${formatDollars(pause.reservedMicros)} set aside of a ${formatDollars(pause.capMicros)} cap; the next step would cost about ${formatDollars(pause.nextStepMicros)}.${unpriced}${unaccounted}`,
-    recommendation: "Tell me a new cap and I'll continue as planned.",
+    ask: `What should the spending cap for ${subject} be?`,
+    note: `${reason} ${spent} spent so far.${unknown}`,
   });
 }
 
@@ -555,11 +551,9 @@ const SETTLED_OPERATION_PHASES: readonly DurableOperationPhase[] = [
 ];
 
 const PAUSE_EXPLANATIONS: Readonly<Record<RequestBudgetPause["reason"], string>> = {
-  "estimate-unavailable":
-    "Tandem has no cost estimate for the next step, so it doesn't know what it would spend",
-  "exposure-unaccounted":
-    "work it has already done carries no published price and no cost estimate, so what it has spent so far is unknown rather than zero",
-  "cap-would-be-exceeded": "the next step no longer fits under the current spending cap",
+  "estimate-unavailable": "I can't estimate what the next step costs.",
+  "exposure-unaccounted": "Some past work has no known price.",
+  "cap-would-be-exceeded": "The next step won't fit under the cap.",
 };
 
 const DECISION_ID_PREFIX = "spend-";

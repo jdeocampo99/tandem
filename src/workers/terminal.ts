@@ -7,6 +7,8 @@ import { writeJsonAtomically } from "../runtime/persistence.ts";
 import type { WorkerJob, WorkerRole } from "./jobs.ts";
 
 export const WORKER_JOB_PATH_ENV = "TANDEM_WORKER_JOB_PATH";
+/** The only channel a worker uses to deliver its delegated result. */
+export const SUBMIT_REPORT_TOOL = "submit_report";
 const HEARTBEAT_MAX_AGE_MS = 30_000;
 const CONTROL_TIMEOUT_MS = 10_000;
 const CONTROL_POLL_MS = 50;

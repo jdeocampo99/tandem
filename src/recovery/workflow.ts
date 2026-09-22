@@ -4,6 +4,7 @@ import { readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, inspectEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
+  BlockCause,
   Clock,
   CommandRunner,
   Endpoint,
@@ -58,7 +59,9 @@ import {
 import type { RecoveryAvailabilityWait } from "./wait.ts";
 
 const MAX_RECOVERY_ATTEMPTS = 3;
-const MAX_VALIDATION_RETRIES = 3;
+/** Shared with central recovery's validating re-entry: one budget for every validation retry,
+ *  whether spent by the explicit `validation-retry` action or by an automatic infra-loss re-entry. */
+export const MAX_VALIDATION_RETRIES = 3;
 const MAX_EVIDENCE_REPAIRS = 3;
 const REQUIRED_REVIEW_LENSES = FINAL_REVIEW_LENSES;
 const LOCK_RETRY_COUNT = 3;
@@ -162,6 +165,8 @@ export type RecoveryInspection = Readonly<{
     readonly error?: string;
   }>[];
   readonly pullRequest?: TaskRecord["pullRequest"];
+  /** The typed cause behind the task's current block, when the blocking site recorded one. */
+  readonly blockCause?: BlockCause;
   /** Durable receipts of conversational recovery decisions, oldest first. */
   readonly recoveryDecisions: readonly RecoveryDecisionReceipt[];
   /** Durable bounded availability waits, including the ones already settled. */
@@ -384,7 +389,7 @@ async function repositoryIdentityProven(
 }
 
 async function runGitChecked(
-  deps: RecoveryWorkflowDependencies,
+  deps: Readonly<{ readonly run: CommandRunner }>,
   cwd: string,
   args: readonly string[],
   operation: string,
@@ -395,6 +400,67 @@ async function runGitChecked(
   throw new Error(
     `${operation} failed with exit code ${result.code}${detail.length === 0 ? "" : `: ${detail}`}`,
   );
+}
+
+/**
+ * Points a task branch at a specific commit in its own worktree: fast-forwards the branch there if
+ * it already exists and the commit is a descendant of it, creates the branch there if it does not
+ * exist yet, or just checks it out if it is already there. Never forces the branch away from work it
+ * does not descend from: throws instead, so a caller can fall back rather than discard something.
+ * Shared by `repairDetachedTaskBranch` (repairing a detached worktree around the exact reviewed HEAD)
+ * and central recovery's adopt-commit re-entry (pointing the branch at a freshly adopted commit that
+ * has never been reviewed at all).
+ */
+export async function pointTaskBranchAtCommit(
+  deps: Readonly<{ readonly run: CommandRunner }>,
+  path: string,
+  branch: string,
+  targetHead: string,
+): Promise<void> {
+  const branchHead = await gitText(deps.run, path, [
+    "rev-parse",
+    "--verify",
+    `refs/heads/${branch}`,
+  ]);
+  if (branchHead !== undefined && branchHead !== targetHead) {
+    const ancestor = await deps.run({
+      argv: ["git", "-C", path, "merge-base", "--is-ancestor", branchHead, targetHead],
+      cwd: path,
+    });
+    if (ancestor.code !== 0) {
+      throw new Error(
+        `task branch ${JSON.stringify(branch)} is not an ancestor of target commit ${targetHead}`,
+      );
+    }
+    await runGitChecked(
+      deps,
+      path,
+      ["branch", "--force", branch, targetHead],
+      "task branch repair",
+    );
+    await runGitChecked(deps, path, ["switch", "--no-guess", branch], "task branch checkout");
+  } else if (branchHead === undefined) {
+    await runGitChecked(
+      deps,
+      path,
+      ["switch", "--no-guess", "--create", branch, targetHead],
+      "task branch creation",
+    );
+  } else {
+    await runGitChecked(deps, path, ["switch", "--no-guess", branch], "task branch checkout");
+  }
+  const repairedBranch = await gitText(deps.run, path, [
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    "HEAD",
+  ]);
+  const repairedHead = await gitText(deps.run, path, ["rev-parse", "HEAD"]);
+  if (repairedBranch !== branch || repairedHead !== targetHead) {
+    throw new Error(
+      `task branch repair ended at ${JSON.stringify(repairedBranch)} and ${String(repairedHead)}`,
+    );
+  }
 }
 
 async function repairDetachedTaskBranch(
@@ -415,50 +481,7 @@ async function repairDetachedTaskBranch(
   const path = inspection.worktree.path;
   if (path === undefined) return undefined;
   const branch = task.worktree.branch;
-  const branchHead = await gitText(deps.run, path, [
-    "rev-parse",
-    "--verify",
-    `refs/heads/${branch}`,
-  ]);
-  if (branchHead !== undefined && branchHead !== task.reviewHead) {
-    const ancestor = await deps.run({
-      argv: ["git", "-C", path, "merge-base", "--is-ancestor", branchHead, task.reviewHead],
-      cwd: path,
-    });
-    if (ancestor.code !== 0) {
-      throw new Error(
-        `task branch ${JSON.stringify(branch)} is not an ancestor of reviewed HEAD ${task.reviewHead}`,
-      );
-    }
-    await runGitChecked(
-      deps,
-      path,
-      ["branch", "--force", branch, task.reviewHead],
-      "task branch repair",
-    );
-    await runGitChecked(deps, path, ["switch", "--no-guess", branch], "task branch checkout");
-  } else if (branchHead === undefined) {
-    await runGitChecked(
-      deps,
-      path,
-      ["switch", "--no-guess", "--create", branch, task.reviewHead],
-      "task branch creation",
-    );
-  } else {
-    await runGitChecked(deps, path, ["switch", "--no-guess", branch], "task branch checkout");
-  }
-  const repairedBranch = await gitText(deps.run, path, [
-    "symbolic-ref",
-    "--quiet",
-    "--short",
-    "HEAD",
-  ]);
-  const repairedHead = await gitText(deps.run, path, ["rev-parse", "HEAD"]);
-  if (repairedBranch !== branch || repairedHead !== task.reviewHead) {
-    throw new Error(
-      `task branch repair ended at ${JSON.stringify(repairedBranch)} and ${String(repairedHead)}`,
-    );
-  }
+  await pointTaskBranchAtCommit(deps, path, branch, task.reviewHead);
   return branch;
 }
 
@@ -810,6 +833,7 @@ export class RecoveryWorkflow {
       reservations,
       operations,
       ...(task.pullRequest === undefined ? {} : { pullRequest: task.pullRequest }),
+      ...(task.blockCause === undefined ? {} : { blockCause: task.blockCause }),
       recoveryDecisions: runtime?.recoveryDecisions ?? [],
       availabilityWaits: runtime?.recoveryWaits ?? [],
       blocked,
@@ -956,7 +980,13 @@ export class RecoveryWorkflow {
       const reason = "reconciliation refused: canonical repository identity is not proven";
       const blockedChanged =
         !isTerminalTask(task) && task.stage !== "paused" && task.stage !== "blocked";
-      await this.block(task, reason);
+      await this.block(task, reason, {
+        group: "safety-stop",
+        kind: "ownership-unprovable",
+        summary:
+          "Tandem couldn't confirm this is the same repository the task started in, so it didn't touch anything.",
+        detail: reason,
+      });
       return {
         taskId,
         changed: blockedChanged,
@@ -973,7 +1003,14 @@ export class RecoveryWorkflow {
       const reason = `reconciliation refused: endpoint ownership is not proven for ${foreign.map((entry) => entry.endpoint.paneId).join(", ")}`;
       const blockedChanged =
         !isTerminalTask(task) && task.stage !== "paused" && task.stage !== "blocked";
-      await this.block(task, reason);
+      const singleForeignPaneId = foreign.length === 1 ? foreign[0]?.endpoint.paneId : undefined;
+      await this.block(task, reason, {
+        group: "safety-stop",
+        kind: "ownership-unprovable",
+        summary: "Tandem couldn't confirm a terminal belongs to this task, so it didn't touch it.",
+        detail: reason,
+        ...(singleForeignPaneId === undefined ? {} : { paneId: singleForeignPaneId }),
+      });
       return {
         taskId,
         changed: blockedChanged,
@@ -1725,7 +1762,7 @@ export class RecoveryWorkflow {
     return taskRuntime(await readRuntimeState(this.#deps.runtimePath), taskId);
   }
 
-  private async block(task: TaskRecord, reason: string): Promise<void> {
+  private async block(task: TaskRecord, reason: string, cause?: BlockCause): Promise<void> {
     if (isTerminalTask(task) || task.stage === "paused" || task.stage === "blocked") return;
     await withBoundedLock(this.#deps, async () =>
       this.#deps.store.exclusive(async (store) => {
@@ -1740,7 +1777,7 @@ export class RecoveryWorkflow {
         await store.update(current.id, current.revision, (entry) =>
           transitionTask(
             entry,
-            { type: "block", reason },
+            { type: "block", reason, ...(cause === undefined ? {} : { cause }) },
             { now: timestamp(this.#deps), notificationId: this.#deps.idFactory() },
           ),
         );

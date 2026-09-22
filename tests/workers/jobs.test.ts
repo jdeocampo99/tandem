@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { zod } from "@oh-my-pi/pi-coding-agent";
 import { runWorkerJob } from "../../src/worker.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import {
@@ -10,6 +11,7 @@ import {
   persistWorkerResult,
   readWorkerResult,
 } from "../../src/workers/jobs.ts";
+import type { SubmittedReport } from "../../src/workers/protocol.ts";
 import {
   readWorkerTerminal,
   requestWorkerTerminalCommand,
@@ -20,9 +22,17 @@ import { registerWorkerTerminalExtension } from "../../src/workers/terminal-exte
 const MODEL = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
 type Handler = (event: unknown, context: unknown) => unknown | Promise<unknown>;
+type SubmitReport = (
+  toolCallId: string,
+  params: SubmittedReport,
+  signal: undefined,
+  onUpdate: undefined,
+  context: unknown,
+) => Promise<unknown>;
 
 type Fixture = {
   readonly handlers: Map<string, Handler>;
+  readonly tools: Map<string, SubmitReport>;
   readonly intervals: Array<() => void>;
   readonly timeouts: Array<() => void>;
   readonly inputs: Array<(data: string) => unknown>;
@@ -46,6 +56,7 @@ type Fixture = {
 
 function fixture(): Fixture {
   const handlers = new Map<string, Handler>();
+  const tools = new Map<string, SubmitReport>();
   const intervals: Array<() => void> = [];
   const timeouts: Array<() => void> = [];
   const inputs: Array<(data: string) => unknown> = [];
@@ -76,7 +87,7 @@ function fixture(): Fixture {
     },
     shutdown: () => undefined,
   };
-  return { handlers, intervals, timeouts, inputs, state, context };
+  return { handlers, tools, intervals, timeouts, inputs, state, context };
 }
 
 function makeJob(root: string, role: WorkerJob["role"] = "implementer"): WorkerJob {
@@ -112,6 +123,33 @@ function agentEnd(text: string, willContinue?: boolean): unknown {
   };
 }
 
+async function submitReport(
+  f: Fixture,
+  report: SubmittedReport,
+  context: unknown = f.context,
+): Promise<{ readonly isError?: boolean; readonly content: readonly { readonly text: string }[] }> {
+  const execute = f.tools.get("submit_report");
+  if (execute === undefined) throw new Error("missing submit_report tool");
+  return (await execute("call-1", report, undefined, undefined, context)) as {
+    readonly isError?: boolean;
+    readonly content: readonly { readonly text: string }[];
+  };
+}
+
+const IMPLEMENTED: SubmittedReport = { outcome: "implemented", report: "Committed the change." };
+
+function review(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    lens: "behavior",
+    head: "abc123",
+    generation: 3,
+    pass: true,
+    findings: [],
+    summary: "No behavior findings.",
+    ...overrides,
+  };
+}
+
 async function startExtension(
   root: string,
   job: WorkerJob,
@@ -124,8 +162,12 @@ async function startExtension(
   process.env.TANDEM_WORKER_JOB_PATH = jobPath;
   const testFixture = fixture();
   const pi = {
+    zod,
     on(event: string, handler: Handler): void {
       testFixture.handlers.set(event, handler);
+    },
+    registerTool(tool: { name: string; execute: SubmitReport }): void {
+      testFixture.tools.set(tool.name, tool.execute);
     },
   };
   await registerWorkerTerminalExtension(pi as never);
@@ -151,10 +193,8 @@ test("persists native result before process shutdown and keeps very large report
   try {
     const job = makeJob(root);
     const { fixture: testFixture, terminalJob } = await startExtension(root, job);
-    const end = testFixture.handlers.get("agent_end");
-    if (end === undefined) throw new Error("missing agent_end handler");
-    const report = `Outcome: implemented\n${"x".repeat(4_500_000)}`;
-    await end(agentEnd(report), testFixture.context);
+    const body = "x".repeat(4_500_000);
+    await submitReport(testFixture, { outcome: "implemented", report: body });
     const persisted = await readWorkerResult(job.resultPath, {
       id: job.id,
       taskId: job.taskId,
@@ -162,7 +202,7 @@ test("persists native result before process shutdown and keeps very large report
       role: job.role,
     });
     expect(persisted.status).toBe("completed");
-    expect(persisted.text).toBe(report);
+    expect(persisted.text).toBe(`Outcome: implemented\n\n${body}`);
     expect((await readWorkerTerminal(terminalJob))?.completed).toBe(true);
   } finally {
     if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
@@ -171,35 +211,40 @@ test("persists native result before process shutdown and keeps very large report
   }
 });
 
-test("ignores continuing agent_end and never overwrites the delegated result from manual follow-up", async () => {
+test("only submit_report delivers the result; conversation turns before and after never do", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-native-worker-followup-"));
   const previous = process.env.TANDEM_WORKER_JOB_PATH;
   try {
     const job = makeJob(root);
-    const { fixture: testFixture } = await startExtension(root, job);
+    const { fixture: testFixture, terminalJob } = await startExtension(root, job);
     const end = testFixture.handlers.get("agent_end");
-    if (end === undefined) throw new Error("missing agent_end handler");
+    const tool = testFixture.handlers.get("tool_call");
+    if (end === undefined || tool === undefined) throw new Error("missing worker handlers");
     await end(
-      agentEnd("Outcome: needs-decision\nQuestion: Need approval", true),
+      agentEnd("Outcome: implemented\nlooks final but is only a reply", true),
       testFixture.context,
     );
-    await expect(
-      readWorkerResult(job.resultPath, {
-        id: job.id,
-        taskId: job.taskId,
-        generation: job.generation,
-      }),
-    ).rejects.toThrow();
-    const delegated = "Outcome: implemented\nfinished delegated report";
-    await end(agentEnd(delegated), testFixture.context);
-    await end(agentEnd("Outcome: implemented\nmanual follow-up"), testFixture.context);
+    await end(agentEnd("Sure, I will rename that helper next."), testFixture.context);
+    expect(await Bun.file(job.resultPath).exists()).toBe(false);
+    expect((await readWorkerTerminal(terminalJob))?.completed).toBe(false);
+    expect(await tool({ toolName: "edit" }, testFixture.context)).toBeUndefined();
+    await submitReport(testFixture, {
+      outcome: "implemented",
+      report: "finished delegated report",
+    });
+    await end(agentEnd("Report submitted."), testFixture.context);
+    await end(agentEnd("Happy to explain the change."), testFixture.context);
+    expect(await tool({ toolName: "submit_report" }, testFixture.context)).toMatchObject({
+      block: true,
+    });
     const persisted = await readWorkerResult(job.resultPath, {
       id: job.id,
       taskId: job.taskId,
       generation: job.generation,
       role: job.role,
     });
-    expect(persisted.text).toBe(delegated);
+    expect(persisted.status).toBe("completed");
+    expect(persisted.text).toBe("Outcome: implemented\n\nfinished delegated report");
   } finally {
     if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
     else process.env.TANDEM_WORKER_JOB_PATH = previous;
@@ -207,72 +252,104 @@ test("ignores continuing agent_end and never overwrites the delegated result fro
   }
 });
 
-test("rejects malformed review text at the native event boundary", async () => {
-  const root = await mkdtemp(join(tmpdir(), "tandem-native-worker-strict-"));
-  const previous = process.env.TANDEM_WORKER_JOB_PATH;
-  try {
-    const reviewer = makeJob(root, "reviewer");
-    const { fixture: testFixture } = await startExtension(root, reviewer);
-    const end = testFixture.handlers.get("agent_end");
-    if (end === undefined) throw new Error("missing agent_end handler");
-    await end(agentEnd("not strict review JSON"), testFixture.context);
-    const failed = await readWorkerResult(reviewer.resultPath, {
-      id: reviewer.id,
-      taskId: reviewer.taskId,
-      generation: reviewer.generation,
-      role: reviewer.role,
-    });
-    expect(failed.status).toBe("failed");
-    expect(failed.error).toContain("strict JSON");
-  } finally {
-    if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
-    else process.env.TANDEM_WORKER_JOB_PATH = previous;
-    await rm(root, { recursive: true, force: true });
-  }
-});
-test("all interactive worker roles persist the shared needs-decision report without changing review JSON success", async () => {
+test("malformed submissions are rejected back to the worker without settling the job", async () => {
   const previous = process.env.TANDEM_WORKER_JOB_PATH;
   const cases: readonly {
     readonly role: WorkerJob["role"];
-    readonly text: string;
+    readonly bad: SubmittedReport;
+    readonly rejection: string;
+    readonly good: SubmittedReport;
   }[] = [
     {
-      role: "scout",
-      text: "Outcome: needs-decision\nQuestion: Which source should be authoritative?\nRecommendation: Prefer the repository policy.",
-    },
-    {
-      role: "implementer",
-      text: "Outcome: needs-decision\nQuestion: Should the existing API remain unchanged?",
-    },
-    {
       role: "reviewer",
-      text: "Outcome: needs-decision\nQuestion: The selected review lens needs a decision.",
+      bad: { outcome: "completed", review: review({ head: "stale" }) },
+      rejection: "head abc123",
+      good: { outcome: "completed", review: review() },
     },
     {
       role: "verifier",
-      text: "Outcome: needs-decision\nQuestion: Validation evidence is ambiguous; which command is authoritative?",
+      bad: { outcome: "completed" },
+      rejection: "must include review",
+      good: { outcome: "completed", review: review() },
+    },
+    {
+      role: "implementer",
+      bad: { outcome: "needs-decision", report: "Blocked." },
+      rejection: "requires a question",
+      good: IMPLEMENTED,
+    },
+    {
+      role: "implementer",
+      bad: { outcome: "completed", report: "Done." },
+      rejection: "outcome must be one of implemented",
+      good: IMPLEMENTED,
+    },
+    {
+      role: "scout",
+      bad: { outcome: "completed", report: " " },
+      rejection: "report must not be empty",
+      good: { outcome: "completed", report: "Findings." },
+    },
+    {
+      role: "scout",
+      bad: { outcome: "needs-decision", report: "See.", question: "Which?\nOr this?" },
+      rejection: "single line",
+      good: { outcome: "completed", report: "Findings." },
     },
     {
       role: "presentation",
-      text: "Outcome: needs-decision\nQuestion: Which visual direction should the artifact follow?",
+      bad: { outcome: "completed", report: "The page is ready." },
+      rejection: "absolute artifactPath",
+      good: { outcome: "completed", report: "The page is ready.", artifactPath: "/tmp/page.html" },
     },
   ];
   try {
     for (const value of cases) {
-      const root = await mkdtemp(join(tmpdir(), "tandem-worker-question-"));
+      const root = await mkdtemp(join(tmpdir(), "tandem-native-worker-reject-"));
       try {
         const job = makeJob(root, value.role);
+        const { fixture: f, terminalJob } = await startExtension(root, job);
+        const rejected = await submitReport(f, value.bad);
+        expect(rejected.isError).toBe(true);
+        expect(rejected.content[0]?.text).toContain(value.rejection);
+        expect(await Bun.file(job.resultPath).exists()).toBe(false);
+        expect((await readWorkerTerminal(terminalJob))?.completed).toBe(false);
+        expect((await submitReport(f, value.good)).isError).toBeUndefined();
+        expect((await readWorkerResult(job.resultPath, job)).status).toBe("completed");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
+    else process.env.TANDEM_WORKER_JOB_PATH = previous;
+  }
+});
+
+test("every worker role submits a structured needs-decision, and reviews submit a structured result", async () => {
+  const previous = process.env.TANDEM_WORKER_JOB_PATH;
+  const roles = ["scout", "implementer", "reviewer", "verifier", "presentation"] as const;
+  try {
+    for (const role of roles) {
+      const root = await mkdtemp(join(tmpdir(), "tandem-worker-question-"));
+      try {
+        const job = makeJob(root, role);
         const { fixture: f } = await startExtension(root, job);
-        const end = f.handlers.get("agent_end");
-        if (end === undefined) throw new Error("missing agent_end handler");
-        await end(agentEnd(value.text), f.context);
+        await submitReport(f, {
+          outcome: "needs-decision",
+          report: "Evidence is in the brief.",
+          question: "Which source should be authoritative?",
+          recommendation: "Prefer the repository policy.",
+        });
         const result = await readWorkerResult(job.resultPath, job);
         expect(result.status).toBe("needs-decision");
-        expect(result.text).toBe(value.text);
-        expect(result.question?.text).toBe(value.text.match(/^Question:\s*(.+)$/m)?.[1]);
-        if (value.role === "scout") {
-          expect(result.question?.recommendation).toBe("Prefer the repository policy.");
-        }
+        expect(result.question).toEqual({
+          text: "Which source should be authoritative?",
+          recommendation: "Prefer the repository policy.",
+        });
+        expect(result.text).toBe(
+          "Outcome: needs-decision\nQuestion: Which source should be authoritative?\nRecommendation: Prefer the repository policy.\n\nEvidence is in the brief.",
+        );
         expect(result.review).toBeUndefined();
         expect(result.artifactPath).toBeUndefined();
       } finally {
@@ -284,20 +361,11 @@ test("all interactive worker roles persist the shared needs-decision report with
     try {
       const job = makeJob(root, "reviewer");
       const { fixture: f } = await startExtension(root, job);
-      const end = f.handlers.get("agent_end");
-      if (end === undefined) throw new Error("missing agent_end handler");
-      const review = JSON.stringify({
-        lens: "behavior",
-        head: "abc123",
-        generation: 3,
-        pass: true,
-        findings: [],
-        summary: "No behavior findings.",
-      });
-      await end(agentEnd(review), f.context);
+      await submitReport(f, { outcome: "completed", review: review() });
       const result = await readWorkerResult(job.resultPath, job);
       expect(result.status).toBe("completed");
       expect(result.review?.lens).toBe("behavior");
+      expect(JSON.parse(result.text)).toEqual(review());
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -307,52 +375,66 @@ test("all interactive worker roles persist the shared needs-decision report with
   }
 });
 
-test("rejects native model substitutions and missing role completion markers", async () => {
+test("a reported failure and a native model substitution both settle the job as failed", async () => {
   const previous = process.env.TANDEM_WORKER_JOB_PATH;
+  const substituted = { provider: MODEL.provider, id: "substituted-model" };
   const cases: readonly {
-    role: WorkerJob["role"];
-    text: string;
-    selectedModel?: typeof MODEL;
-    eventModel?: string;
+    readonly settle: (f: Fixture) => unknown;
+    readonly error: string;
   }[] = [
     {
-      role: "scout",
-      text: "report",
-      selectedModel: { provider: MODEL.provider, id: "substituted-model" },
+      settle: (f) => submitReport(f, { outcome: "failed", report: "The API is gone." }),
+      error: "scout reported a failed outcome",
     },
-    { role: "scout", text: "report", eventModel: "substituted-model" },
-    { role: "implementer", text: "I changed the requested files." },
-    { role: "presentation", text: "The page is ready." },
+    {
+      settle: (f) =>
+        submitReport(
+          f,
+          { outcome: "completed", report: "report" },
+          { ...f.context, model: substituted },
+        ),
+      error: "substituted-model",
+    },
+    {
+      settle: (f) => {
+        const end = f.handlers.get("agent_end");
+        if (end === undefined) throw new Error("missing agent_end handler");
+        return end(
+          {
+            type: "agent_end",
+            messages: [
+              {
+                role: "assistant",
+                provider: MODEL.provider,
+                model: substituted.id,
+                stopReason: "stop",
+                content: [{ type: "text", text: "report" }],
+              },
+            ],
+          },
+          f.context,
+        );
+      },
+      error: "substituted-model",
+    },
   ];
-  for (const value of cases) {
-    const root = await mkdtemp(join(tmpdir(), "tandem-native-contract-"));
-    try {
-      const job = makeJob(root, value.role);
-      const { fixture: f } = await startExtension(root, job);
-      const end = f.handlers.get("agent_end");
-      if (end === undefined) throw new Error("missing agent_end handler");
-      const event =
-        value.eventModel === undefined
-          ? agentEnd(value.text)
-          : {
-              type: "agent_end",
-              messages: [
-                {
-                  role: "assistant",
-                  provider: MODEL.provider,
-                  model: value.eventModel,
-                  stopReason: "stop",
-                  content: [{ type: "text", text: value.text }],
-                },
-              ],
-            };
-      await end(event, { ...f.context, model: value.selectedModel ?? MODEL });
-      expect((await readWorkerResult(job.resultPath, job)).status).toBe("failed");
-    } finally {
-      if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
-      else process.env.TANDEM_WORKER_JOB_PATH = previous;
-      await rm(root, { recursive: true, force: true });
+  try {
+    for (const value of cases) {
+      const root = await mkdtemp(join(tmpdir(), "tandem-native-contract-"));
+      try {
+        const job = makeJob(root, "scout");
+        const { fixture: f } = await startExtension(root, job);
+        await value.settle(f);
+        const result = await readWorkerResult(job.resultPath, job);
+        expect(result.status).toBe("failed");
+        expect(result.error).toContain(value.error);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     }
+  } finally {
+    if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
+    else process.env.TANDEM_WORKER_JOB_PATH = previous;
   }
 });
 
@@ -489,6 +571,7 @@ test("completed workers allow read-only conversation but refuse further mutation
     if (tool === undefined || end === undefined)
       throw new Error("worker lifecycle handlers missing");
     expect(await tool({ toolName: "edit" }, f.context)).toBeUndefined();
+    await submitReport(f, IMPLEMENTED);
     await end(agentEnd("Outcome: implemented"), f.context);
     expect(await tool({ toolName: "read" }, f.context)).toBeUndefined();
     expect(await tool({ toolName: "edit" }, f.context)).toMatchObject({ block: true });
@@ -567,6 +650,7 @@ test("closing freezes human input but permits legacy and Kitty exit keys", async
     if (end === undefined || input === undefined)
       throw new Error("worker lifecycle handlers missing");
     expect(input("human draft")).toBeUndefined();
+    await submitReport(f, IMPLEMENTED);
     await end(agentEnd("Outcome: implemented"), f.context);
     const close = requestWorkerTerminalCommand(terminalJob, "close", 1000);
     const deadline = Date.now() + 1000;

@@ -3,12 +3,13 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  InstructionChannels,
-  RepoPolicy,
-  ResolvedPolicy,
-  ReviewLevelRecord,
-  WorktreeLease,
+import {
+  blockCause,
+  type InstructionChannels,
+  type RepoPolicy,
+  type ResolvedPolicy,
+  type ReviewLevelRecord,
+  type WorktreeLease,
 } from "../../src/contracts.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { emptyRuntimeState } from "../../src/runtime/schema.ts";
@@ -217,6 +218,44 @@ test("loads a record written before the finding ledger existed with no prior fin
     if (reloaded === undefined) throw new Error("legacy task did not reload");
     expect(reloaded.findingLedger).toBeUndefined();
     expect(ledgerBlockers(reloaded.findingLedger ?? [])).toEqual([]);
+  });
+});
+
+test("persists a typed block cause and round-trips it through the store", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "block-cause-round-trip" });
+    const cause = blockCause("resource-lost", {
+      summary: "The task's worktree is missing, so no further work can run against it.",
+      detail: "task is implementing but its durable worktree is missing",
+      jobId: "job-1",
+    });
+    await store.update(created.id, created.revision, (current) =>
+      transitionTask(current, { type: "block", reason: cause.summary, cause }, transitionContext()),
+    );
+
+    const reloaded = await makeStore(directory, "reload").read(created.id);
+    if (reloaded === undefined) throw new Error("task did not reload");
+    expect(reloaded.blockCause).toEqual(cause);
+    expect(reloaded.blockReason).toBe(cause.summary);
+  });
+});
+
+test("loads a record written before the block cause existed with no cause", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-block-reason" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.stage = "blocked";
+      payload.previousStage = "implementing";
+      payload.blockReason = "worker timed out";
+      delete payload.blockCause;
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("legacy task did not reload");
+    expect(reloaded.blockReason).toBe("worker timed out");
+    expect(reloaded.blockCause).toBeUndefined();
   });
 });
 

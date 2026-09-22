@@ -1010,7 +1010,7 @@ export function summarizeRequestSpend(readout: RequestSpendReadout): string {
   lines.push(
     pause === undefined
       ? "No spending question is waiting."
-      : `Spending question waiting: ${describePauseReason(pause.reason)}. The next step is estimated at ${formatDollars(pause.nextStepMicros)}. Answer it with budget-approve.`,
+      : `Spending question waiting. ${describePauseReason(pause.reason)} The next step is estimated at ${formatDollars(pause.nextStepMicros)}. Answer it with budget-approve.`,
   );
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }

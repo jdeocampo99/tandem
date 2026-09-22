@@ -2098,7 +2098,7 @@ test("a catalogue that no longer lists the pinned model stops the task and asks 
       expect(pause?.pinnedSelector).toBe("test/implementer");
       const stopped = await service.get("task-1");
       const questions = stopped.notifications.filter((notification) =>
-        notification.message.includes("Tandem paused a model change"),
+        notification.message.startsWith("Keep "),
       );
       expect(questions).toHaveLength(1);
       expect(questions[0]?.kind).toBe("coordinator");
@@ -2602,7 +2602,9 @@ test("blocks a saved lease whose checkout moved before the first worker in both 
         const persisted = await readRuntime(home);
         const runtime = persisted.tasks[0];
         expect(task.stage).toBe("blocked");
-        expect(task.blockReason).toContain("saved worktree is not the captured source commit A");
+        expect(task.blockCause?.detail).toContain(
+          "saved worktree is not the captured source commit A",
+        );
         expect(runtime?.jobs).toHaveLength(0);
         expect(runtime?.worktree?.path).toBe(savedLease.path);
         expect(runtime?.worktree?.leaseId).toBe(savedLease.leaseId);
@@ -3257,9 +3259,9 @@ test("failed review results block the task instead of advancing into a review lo
         // A failed result never carries that proof by design (the worker extension omits it), so it
         // surfaces the worker's own reported reason instead of a manufactured staleness error.
         if (status === "completed") {
-          expect(blocked.blockReason).toContain("stale worker instruction");
+          expect(blocked.blockCause?.detail).toContain("stale worker instruction");
         } else {
-          expect(blocked.blockReason).toContain("review output identity mismatch");
+          expect(blocked.blockCause?.detail).toContain("review output identity mismatch");
         }
 
         await service.tick();
@@ -4299,6 +4301,11 @@ test("TAG-989 maxed awaiting-fixes intent cannot reserve, launch, or advance wor
       expect(runtime?.operation).toBeUndefined();
       expect(runtime?.endpoints).toEqual([endpoint]);
       expect(runtime?.jobs.some(activeRuntimeJob)).toBe(false);
+      expect(after.blockCause).toMatchObject({
+        group: "user-decision",
+        kind: "fix-rounds-exhausted",
+      });
+      expect(after.blockReason).toBe(after.blockCause?.summary);
     },
   );
 });
@@ -4334,6 +4341,43 @@ test("awaiting-fixes below the budget resumes through one durable fix operation"
   );
 });
 
+test("awaiting-fixes whose carried-forward pane is already gone lands at implementing unblocked, not blocked", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "awaiting-fixes",
+      taskEdits: { reviewRound: 0, reviewHead: "review-head" },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, service, runnerState }) => {
+      // No owned pane is seeded: the original implementer's pane (carried forward through review)
+      // is already gone before this fix round can reuse it.
+      await seedTaskResources(home, lease, [], []);
+      const before = await service.get("task-1");
+
+      await service.tick();
+
+      const task = await service.get("task-1");
+      const state = await readRuntime(home);
+      const runtime = state.tasks[0];
+      // begin-fixes already committed the fix round's admission (one review round, one generation)
+      // before discovering the pane is gone; central recovery's implementing-stage re-entry owns
+      // getting the task the rest of the way, so this never blocks here.
+      expect(task.stage).toBe("implementing");
+      expect(task.reviewRound).toBe(before.reviewRound + 1);
+      expect(task.generation).toBe(before.generation + 1);
+      expect(task.blockReason).toBeUndefined();
+      expect(runtime?.jobs.some(activeRuntimeJob)).toBe(false);
+      expect(runtime?.reservation === undefined || runtime.reservation.phase === "released").toBe(
+        true,
+      );
+      expect(runnerState.launches).toBe(0);
+      // The persisted fix-context path survives so a later relaunch still finds the same findings.
+      expect(runtime?.fixContextPath).toBeDefined();
+    },
+  );
+});
+
 test("legacy incomplete reservation is quarantined without inventing an operation", async () => {
   await withFixture(
     { kind: "scout", stage: "queued", runner: { active: false } },
@@ -4361,6 +4405,162 @@ test("legacy incomplete reservation is quarantined without inventing an operatio
       expect(runtime?.reservation?.phase).toBe("reserved");
       expect(runtime?.lastError).toContain("legacy reservation");
       expect(activeReservations(recovered)).toBe(1);
+      const task = await service.get("task-1");
+      expect(task.stage).toBe("blocked");
+      expect(task.blockCause).toMatchObject({
+        group: "safety-stop",
+        kind: "quarantined-unknown-outcome",
+      });
+      expect(task.blockReason).toBe(task.blockCause?.summary);
+    },
+  );
+});
+
+test("a reservation and operation with mismatched identities are quarantined with a safety-stop cause", async () => {
+  await withFixture(
+    { kind: "scout", stage: "queued", runner: { active: false } },
+    async ({ home, lease, service, runnerState }) => {
+      const state = await readRuntime(home);
+      const initialRuntime = state.tasks[0];
+      if (initialRuntime === undefined) throw new Error("fixture runtime missing");
+      const operation: DurableOperation = {
+        schemaVersion: 1,
+        id: "operation-other",
+        taskId: "task-1",
+        kind: "scout",
+        role: "scout",
+        generation: 0,
+        inputHead: SOURCE_CHECKPOINT.head,
+        policyDigest: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
+        instructionRevision: 0,
+        jobId: "job-other",
+        phase: "running",
+        fencingRevision: 1,
+        claimOwner: "seeded-controller",
+        createdAt: TIMESTAMP,
+        effects: [],
+      };
+      await writeRuntimeState(runtimeFile(home), {
+        ...state,
+        tasks: [
+          {
+            ...initialRuntime,
+            worktree: lease,
+            reservation: { ...reservationFor("task-1"), operationId: "operation-mine" },
+            operation,
+          },
+        ],
+      });
+
+      await service.tick();
+
+      expect(runnerState.launches).toBe(0);
+      const task = await service.get("task-1");
+      expect(task.stage).toBe("blocked");
+      expect(task.blockCause).toMatchObject({
+        group: "safety-stop",
+        kind: "identity-mismatch",
+      });
+      expect(task.blockReason).toBe(task.blockCause?.summary);
+    },
+  );
+});
+
+test("an implementing task with no durable worktree blocks with a lost-resource cause", async () => {
+  await withFixture(
+    { kind: "implementation", stage: "implementing", runner: { active: false } },
+    async ({ service }) => {
+      await service.tick();
+
+      const task = await service.get("task-1");
+      expect(task.stage).toBe("blocked");
+      expect(task.blockCause).toMatchObject({
+        group: "lost-resource",
+        kind: "resource-lost",
+      });
+      expect(task.blockReason).toBe(task.blockCause?.summary);
+    },
+  );
+});
+
+test("a task with no durable runtime record blocks with a safety-stop cause", async () => {
+  await withFixture({ kind: "scout", stage: "queued" }, async ({ home, service }) => {
+    const state = await readRuntime(home);
+    await writeRuntimeState(runtimeFile(home), {
+      ...state,
+      tasks: state.tasks.filter((entry) => entry.taskId !== "task-1"),
+    });
+
+    await service.tick();
+
+    const task = await service.get("task-1");
+    expect(task.stage).toBe("blocked");
+    expect(task.blockCause).toMatchObject({
+      group: "safety-stop",
+      kind: "runtime-metadata-missing",
+    });
+    expect(task.blockReason).toBe(task.blockCause?.summary);
+  });
+});
+
+test("a scheduler failure while advancing a task blocks with a lost-resource cause", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      runner: { active: false, paneState: "foreign" },
+    },
+    async ({ home, lease, service }) => {
+      const endpoint = endpointFor("implementer");
+      const job = workerJob(home, endpoint, "implementer", "running");
+      await seedTaskResources(home, lease, [endpoint], [job]);
+
+      await service.tick();
+
+      const task = await service.get("task-1");
+      expect(task.stage).toBe("blocked");
+      expect(task.blockCause).toMatchObject({
+        group: "lost-resource",
+        kind: "transition-failed",
+      });
+      expect(task.blockReason).toBe(task.blockCause?.summary);
+    },
+  );
+});
+
+test("steer without a reviewed HEAD blocks with a user-decision cause", async () => {
+  await withFixture({ kind: "implementation", stage: "reviewing" }, async ({ service }) => {
+    await service.steer({ taskId: "task-1", text: "Keep the current scope." });
+
+    const task = await service.get("task-1");
+    expect(task.stage).toBe("blocked");
+    expect(task.blockCause).toMatchObject({
+      group: "user-decision",
+      kind: "prerequisite-not-met",
+    });
+    expect(task.blockReason).toBe(task.blockCause?.summary);
+  });
+});
+
+test("pause records a lost-resource cause when the worker pane cannot be proven stopped", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      runner: { active: false, paneState: "foreign" },
+    },
+    async ({ home, lease, service }) => {
+      const endpoint = endpointFor("implementer");
+      await seedTaskResources(home, lease, [endpoint], []);
+
+      const paused = await service.pause("task-1");
+
+      expect(paused.stage).toBe("blocked");
+      expect(paused.blockCause).toMatchObject({
+        group: "lost-resource",
+        kind: "resource-lost",
+      });
+      expect(paused.blockReason).toBe(paused.blockCause?.summary);
     },
   );
 });

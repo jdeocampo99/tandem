@@ -24,6 +24,7 @@ import { type OnboardRepoResult, onboardRepo, resolveRepoPolicy } from "../confi
 import type { RequestBriefRecord, RequestDeliveryRecord, ReviewResult } from "../contracts.ts";
 import {
   type AnswerTaskInput,
+  type BlockCause,
   type Clock,
   type CommandRunner,
   type IdFactory,
@@ -61,7 +62,12 @@ import { PresentationFeedbackWorkflow } from "../presentations/feedback.ts";
 import { type PresentationRecord, readPresentationRecord } from "../presentations/records.ts";
 import { preparePresentation } from "../presentations/session.ts";
 import { PresentationRuntimeWorkflow } from "../presentations/workflow.ts";
-import { CentralRecoveryWorkflow, RESTART_QUESTION_ID_PREFIX } from "../recovery/central.ts";
+import {
+  CentralRecoveryWorkflow,
+  RESTART_QUESTION_ID_PREFIX,
+  reportBlock,
+  VALIDATION_RETRY_QUESTION_ID_PREFIX,
+} from "../recovery/central.ts";
 import {
   type RecoveryConversationOutcome,
   RecoveryConversationWorkflow,
@@ -688,7 +694,7 @@ class TandemController {
       updateTask: (taskId, transform) => this.updateTask(taskId, transform),
       transition: (taskId, event) => this.transition(taskId, event),
       context: () => this.context(),
-      blockTask: (taskId, reason) => this.blockTask(taskId, reason),
+      blockTask: (taskId, reason, cause) => this.blockTask(taskId, reason, cause),
       publishTaskInbox: (task) => this.#source.publishTaskInbox(task),
       removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
@@ -713,7 +719,7 @@ class TandemController {
       reconcileJob: (task, runtime, job) => this.#worker.reconcileJob(task, runtime, job),
       context: () => this.context(),
       transition: (taskId, event) => this.transition(taskId, event),
-      blockTask: (taskId, reason) => this.blockTask(taskId, reason),
+      blockTask: (taskId, reason, cause) => this.blockTask(taskId, reason, cause),
       publishTaskInbox: (task) => this.#source.publishTaskInbox(task),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       saveEndpoint: (taskId, endpoint, claim) => this.#worker.saveEndpoint(taskId, endpoint, claim),
@@ -772,6 +778,9 @@ class TandemController {
         const decision = await this.#requests.dispatchDecisionForTask(task);
         return decision === undefined || decision.allowed ? undefined : decision.reason;
       },
+      // Closes over `this`, not `#recoveryCentral` directly: `#recoveryCentral` is assigned right
+      // below, after this object is constructed, but before either workflow's methods can ever run.
+      recoverBlockedTask: (task) => this.#recoveryCentral.recoverBlockedTask(task),
     });
     this.#recoveryCentral = new CentralRecoveryWorkflow({
       home: deps.home,
@@ -784,7 +793,29 @@ class TandemController {
       getTask: (taskId) => this.get(taskId),
       relaunchWorker: (task, extraInstructions) =>
         this.#worker.relaunchWorker(task, extraInstructions),
-      blockTask: (taskId, reason) => this.blockTask(taskId, reason).then(() => undefined),
+      revalidate: async (task) => {
+        // startValidation never throws for an expected precondition failure (a stale/dirty
+        // worktree, a missing worktree, a lost writer pane, ...); it blocks the task directly and
+        // resolves normally. Re-read the task afterward so a self-block is reported as `started:
+        // false` instead of central recovery believing re-entry succeeded.
+        try {
+          await this.#worker.startValidation(task);
+        } catch (error) {
+          return { started: false, reason: describeError(error) };
+        }
+        const current = await this.get(task.id);
+        if (current.stage === "blocked") {
+          return {
+            started: false,
+            reason: current.blockReason ?? "validation could not be restarted",
+          };
+        }
+        return { started: true };
+      },
+      blockTask: (taskId, reason, cause) =>
+        this.blockTask(taskId, reason, cause).then(() => undefined),
+      removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
+      relaunchReviewer: (task) => this.#worker.advanceReview(task),
     });
   }
 
@@ -1184,6 +1215,10 @@ class TandemController {
         await this.#recoveryCentral.answerRestartQuestion(taskId, questionId, answer);
         return this.messages(taskId);
       }
+      if (questionId.startsWith(VALIDATION_RETRY_QUESTION_ID_PREFIX)) {
+        await this.#recoveryCentral.answerValidationRetryQuestion(taskId, questionId, answer);
+        return this.messages(taskId);
+      }
       if (questionId.startsWith(RECOVERY_QUESTION_ID_PREFIX)) {
         const outcome = await this.#recoveryConversation.answerQuestion(taskId, questionId, answer);
         if (outcome.resumed) {
@@ -1520,11 +1555,15 @@ class TandemController {
         await this.reconcileTask(task);
       } catch (error) {
         if (captureSucceeded) {
-          await this.blockTaskIfReconcileClaim(
-            task,
-            capturedRuntime,
-            `scheduler failure: ${describeError(error)}`,
-          );
+          const reason = `scheduler failure: ${describeError(error)}`;
+          await this.blockTaskIfReconcileClaim(task, capturedRuntime, reason, {
+            cause: {
+              group: "lost-resource",
+              kind: "transition-failed",
+              summary: "Something went wrong inside Tandem, so this task couldn't move forward.",
+              detail: reason,
+            },
+          });
         }
       }
     }
@@ -1610,6 +1649,7 @@ class TandemController {
     options: Readonly<{
       readonly runtimeError?: boolean;
       readonly reservation?: DurableReservation;
+      readonly cause?: BlockCause;
     }> = {},
   ): Promise<void> {
     const claim = operationClaim(capturedRuntime?.operation);
@@ -1653,7 +1693,13 @@ class TandemController {
         await store.update(currentTask.id, currentTask.revision, (task) =>
           transitionTask(
             task,
-            { type: "block", reason: text(reason, "block reason") },
+            {
+              type: "block",
+              // `reason` (kept in `lastError` above) stays the raw diagnostic text; the block
+              // itself prefers the cause's user-facing summary when one was recorded.
+              reason: text(options.cause?.summary ?? reason, "block reason"),
+              ...(options.cause === undefined ? {} : { cause: options.cause }),
+            },
             this.context(),
           ),
         );
@@ -1664,6 +1710,7 @@ class TandemController {
     capturedTask: TaskRecord,
     reservation: DurableReservation,
     reason: string,
+    cause?: BlockCause,
   ): Promise<void> {
     await withStateLock(this.#deps.home, async () => {
       await this.#deps.store.exclusive(async (store) => {
@@ -1706,7 +1753,13 @@ class TandemController {
         await store.update(currentTask.id, currentTask.revision, (task) =>
           transitionTask(
             task,
-            { type: "block", reason: text(reason, "block reason") },
+            {
+              type: "block",
+              // `reason` (kept as `lastError` above) stays the raw diagnostic text; the block
+              // itself prefers the cause's user-facing summary when one was recorded.
+              reason: text(cause?.summary ?? reason, "block reason"),
+              ...(cause === undefined ? {} : { cause }),
+            },
             this.context(),
           ),
         );
@@ -1957,7 +2010,12 @@ class TandemController {
     }
     const loadedRuntime = await this.runtimeFor(task.id);
     if (loadedRuntime === undefined) {
-      await this.blockTask(task.id, "durable runtime metadata is missing; no worker was launched");
+      await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
+        group: "safety-stop",
+        kind: "runtime-metadata-missing",
+        summary: "Tandem lost its saved record for this task, so it couldn't start a worker.",
+        detail: "durable runtime metadata is missing; no worker was launched",
+      });
       return;
     }
     let runtime = loadedRuntime;
@@ -1970,7 +2028,14 @@ class TandemController {
       await this.cleanupTerminalTask(task);
       return;
     }
-    if (task.stage === "paused" || task.stage === "blocked") return;
+    if (task.stage === "paused") return;
+    if (task.stage === "blocked") {
+      // A blocked task whose cause is recoverable (a worker/pane vanishing, not a person's decision)
+      // reaches central recovery here without anyone asking; anything not eligible is left exactly
+      // as blocked as it already was.
+      await this.#recoveryCentral.recoverBlockedTask(task);
+      return;
+    }
     if (
       runtime.operation !== undefined &&
       runtime.operation.claimOwner !== this.#worker.claimOwner
@@ -1995,7 +2060,13 @@ class TandemController {
       if (runtime.operation === undefined) {
         const reason =
           "legacy reservation has no durable operation; quarantined without clearing reservation or checkpoint";
-        await this.quarantineLegacyReservation(task, reservation, reason);
+        await this.quarantineLegacyReservation(task, reservation, reason, {
+          group: "safety-stop",
+          kind: "quarantined-unknown-outcome",
+          summary:
+            "Tandem's records for this task are incomplete, so it paused the task without touching your work.",
+          detail: reason,
+        });
         return;
       }
       if (reservation.operationId !== runtime.operation.id) {
@@ -2004,6 +2075,13 @@ class TandemController {
         await this.blockTaskIfReconcileClaim(task, runtime, reason, {
           runtimeError: true,
           reservation,
+          cause: {
+            group: "safety-stop",
+            kind: "identity-mismatch",
+            summary:
+              "Tandem's records for this task don't match each other, so it didn't start anything.",
+            detail: reason,
+          },
         });
         return;
       }
@@ -2021,22 +2099,43 @@ class TandemController {
         return;
       }
       case "awaiting-fixes":
+        // beginFixes admits the fix round and transitions the task to `implementing` before it ever
+        // touches a pane; if the carried-forward pane turns out to be gone, it leaves the task there
+        // unblocked rather than blocking, so the `implementing` branch below's central recovery
+        // picks it up on the next tick (see src/recovery/central.ts).
         await this.#worker.beginFixes(task);
         return;
-      case "validating":
+      case "validating": {
+        // A validation job that died for an infrastructure reason settles without blocking (see
+        // WorkerWorkflow.reconcileJob's validation branches), leaving the task at `validating` with
+        // no active job/reservation and a terminal failed job behind it. Central recovery owns the
+        // stop/save/re-entry decision for that shape; it reports `skipped` for a fresh entry (no
+        // dead job) so the normal startValidation path runs unchanged.
+        const recovered = await this.#recoveryCentral.recoverStuckWorker(task);
+        if (recovered.action !== "skipped") return;
         await this.#worker.startValidation(task);
         return;
-      case "reviewing":
+      }
+      case "reviewing": {
+        // A resumed reviewing task can carry a quarantined (proven-unowned) reviewer/verifier job
+        // left over from before it was blocked. Central recovery owns the stop/save/re-entry
+        // decision for that case, exactly as it does for implementing/scouting; "skipped" means
+        // nothing needs recovery, so review advances normally.
+        const recovered = await this.#recoveryCentral.recoverStuckWorker(task);
+        if (recovered.action !== "skipped") return;
         await this.#worker.advanceReview(task);
         return;
+      }
       case "scouting":
       case "implementing": {
         if (runtime.endpointLaunch !== undefined) return;
         if (runtime.worktree === undefined) {
-          await this.blockTask(
-            task.id,
-            `task is ${task.stage} but its durable worktree is missing`,
-          );
+          await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
+            group: "lost-resource",
+            kind: "resource-lost",
+            summary: "The task's working copy is missing.",
+            detail: `task is ${task.stage} but its durable worktree is missing`,
+          });
           return;
         }
         const writer = currentWriter(runtime);
@@ -2053,10 +2152,12 @@ class TandemController {
         const admittedWriter = currentWriter(admission.runtime);
         if (admission.runtime.worktree === undefined || admittedWriter === undefined) {
           await this.#worker.releaseUnlaunchedTaskReservation(task.id, admission.reservation.id);
-          await this.blockTask(
-            task.id,
-            `task is ${task.stage} but its worker resources are missing`,
-          );
+          await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
+            group: "lost-resource",
+            kind: "resource-lost",
+            summary: "The worker's terminal and files are gone.",
+            detail: `task is ${task.stage} but its worker resources are missing`,
+          });
           return;
         }
         await this.#worker.launchAgent(
@@ -2269,10 +2370,14 @@ class TandemController {
     return this.#deps.store.update(taskId, current.revision, transform);
   }
 
-  private async blockTask(taskId: string, reason: string): Promise<TaskRecord> {
+  private async blockTask(taskId: string, reason: string, cause?: BlockCause): Promise<TaskRecord> {
     const task = await this.get(taskId);
     if (["cancelled", "completed", "merged", "paused", "blocked"].includes(task.stage)) return task;
-    return this.transition(taskId, { type: "block", reason: text(reason, "block reason") });
+    return this.transition(taskId, {
+      type: "block",
+      reason: text(reason, "block reason"),
+      ...(cause === undefined ? {} : { cause }),
+    });
   }
 
   private async resultExists(path: string): Promise<boolean> {

@@ -6,16 +6,23 @@
  *   2. Save  - preserve the worktree and snapshot any uncommitted diff as durable evidence.
  *   3. Re-enter - hand the task back to its stage's single re-entry action.
  *
- * This slice wires only the `implementing` (and, since it shares the exact same path, `scouting`)
- * stage's re-entry: a dead worker with no owned pane recorded gets a fresh worker launched through
- * `WorkerWorkflow.relaunchWorker`, bounded by a per-generation restart budget. `validating`,
- * `reviewing`, and `awaiting-fixes` are not wired yet; each can be added later as its own stage
- * branch in `recoverStuckWorker()` below without touching the stop/save/proof machinery.
+ * Wired re-entries: `implementing`/`scouting` relaunch a dead worker through
+ * `WorkerWorkflow.relaunchWorker` within a per-generation restart budget; `validating` reruns
+ * validation within the validation retry budget (`recoverStuckValidation`); `reviewing` relaunches
+ * only the quarantined lens at the exact reviewed HEAD (`recoverStuckReviewer`), sharing the restart
+ * budget. `awaiting-fixes` needs no branch: `beginFixes` moves the task to `implementing` and spends
+ * the review round before touching a pane, so a missing pane is picked up by the implementing
+ * re-entry without spending another round. Before spending a restart on `implementing` (including a
+ * fix round), `recoverStuckWorker` checks whether the dead worker already finished and adopts its
+ * committed HEAD instead (`adoptImplementerCommit`) — see `recoverBlockedTask` for how a `blocked`
+ * task with a recoverable cause reaches any of this without a person asking.
  */
 import { join } from "node:path";
+import { readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, inspectEndpoint, interruptEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
+  BlockCause,
   Clock,
   CommandRunner,
   Endpoint,
@@ -24,6 +31,7 @@ import type {
   Notification,
   TaskQuestion,
   TaskRecord,
+  TaskStage,
 } from "../contracts.ts";
 import { activeRuntimeJob, taskRuntime, unreleasedReservation } from "../runtime/activity.ts";
 import {
@@ -39,14 +47,22 @@ import { formatDecisionQuestion } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import { readWorkerTerminal, type WorkerTerminalJob } from "../workers/terminal.ts";
 import { pauseWorkerTerminal } from "../workers/terminal-control.ts";
+import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "./central-review.ts";
 import { taskAsking } from "./conversation.ts";
 import {
+  type CentralRecoveryAction,
+  type CentralRecoveryOutcome,
   classifyRestartFailure,
+  isLegacyWorkerDeathBlockText,
+  isRecoverableBlockCause,
   RECOVERY_QUESTION_ID_PREFIX,
   type RecoveryDecisionReceipt,
   type RecoveryEvidence,
   restartIncidentIdentity,
 } from "./decision.ts";
+import { MAX_VALIDATION_RETRIES, pointTaskBranchAtCommit } from "./workflow.ts";
+
+export type { CentralRecoveryAction, CentralRecoveryOutcome };
 
 /** The two-restart budget every task generation gets before central recovery has to ask. */
 export const MAX_AUTOMATIC_RESTARTS_PER_GENERATION = 2;
@@ -76,6 +92,13 @@ export type RelaunchWorker = (
   }>
 >;
 
+/** Central recovery's re-entry for `validating`: rerun validation at the exact same reviewed HEAD
+ *  as a new durable job, through the stage's own normal entry point (`WorkerWorkflow.startValidation`).
+ *  Never mutates the dead job or its result. */
+export type RevalidateWorker = (
+  task: TaskRecord,
+) => Promise<Readonly<{ readonly started: boolean; readonly reason?: string }>>;
+
 export type CentralRecoveryDependencies = Readonly<{
   readonly home: string;
   readonly sessionId: string;
@@ -88,16 +111,89 @@ export type CentralRecoveryDependencies = Readonly<{
   /** Central recovery's only mutation for the implementing/scouting re-entry: a new operation, a
    *  new pane when one is not already owned, and a normal `launchAgent` launch. */
   readonly relaunchWorker: RelaunchWorker;
-  readonly blockTask: (taskId: string, reason: string) => Promise<void>;
+  /** Central recovery's only mutation for the validating re-entry. */
+  readonly revalidate: RevalidateWorker;
+  readonly blockTask: (taskId: string, reason: string, cause?: BlockCause) => Promise<void>;
+  /** Clears a proven-stopped owned pane from durable state; reused by the `reviewing` re-entry to
+   *  drop a dead reviewer/verifier endpoint before relaunch creates its replacement. */
+  readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
+  /** The reviewing stage's single re-entry action: `WorkerWorkflow.advanceReview`. Central recovery
+   *  never launches a review worker itself; once it has stopped, saved, and cleared the dead lens,
+   *  this is what actually relaunches it, exactly as it would for any other next-lens advancement. */
+  readonly relaunchReviewer: (task: TaskRecord) => Promise<void>;
 }>;
 
-export type CentralRecoveryAction = "relaunched" | "asked" | "blocked" | "skipped";
+/** The shared shape every `blockTask` dependency across the codebase already has, widened only to
+ *  accept the optional typed cause `reportBlock` forwards through it. */
+export type BlockTaskEffect = (
+  taskId: string,
+  reason: string,
+  cause?: BlockCause,
+) => Promise<unknown>;
 
-export type CentralRecoveryOutcome = Readonly<{
-  readonly taskId: string;
-  readonly action: CentralRecoveryAction;
-  readonly reason: string;
-}>;
+/**
+ * Recovery's single entry point for reporting why a task is blocked. A call site that already holds
+ * a `blockTask`-shaped effect (however it reaches storage) routes its typed cause through here instead
+ * of composing the reason text and cause by hand at the call site. For this PR it behaves exactly
+ * like today's block: the cause is recorded on the task record and the task is blocked, same as
+ * always; nothing here triggers automatic recovery yet. A future PR can change only this function's
+ * body to start routing `lost-resource`/`unusable-result` causes into automatic re-entry without
+ * touching any of its callers.
+ */
+export async function reportBlock(
+  blockTask: BlockTaskEffect,
+  taskId: string,
+  cause: BlockCause,
+): Promise<void> {
+  await blockTask(taskId, cause.summary, cause);
+}
+
+/** The `previousStage` values a blocked task's re-entry knows how to carry forward. `awaiting-fixes`
+ *  resumes there and stops: the next reconcile pass's own `beginFixes` call carries it into
+ *  `implementing`, whose re-entry is wired below, so nothing here needs to duplicate that hand-off. */
+const BLOCKED_TASK_REENTRY_STAGES: ReadonlySet<TaskStage> = new Set([
+  "implementing",
+  "scouting",
+  "validating",
+  "reviewing",
+  "awaiting-fixes",
+]);
+
+/**
+ * Whether a `blocked` task is one central recovery may re-enter automatically, without a person
+ * choosing to. Every condition here is a refusal, never a discovery: an ineligible task is left
+ * exactly as blocked as it already was, for a caller (the scheduler tick, or conversational
+ * recovery) to fall back to its own handling.
+ *
+ *  - The task must actually be blocked, with a `previousStage` this module knows how to resume into.
+ *  - Its cause must be recoverable: a typed `lost-resource`/`unusable-result` cause
+ *    (`isRecoverableBlockCause`), or — for a block recorded before every site carried a typed cause —
+ *    free text matching a known worker-death shape (`isLegacyWorkerDeathBlockText`). A
+ *    `user-decision` or `safety-stop` cause, and any other free text, is never eligible: only a
+ *    person resolves those.
+ *  - An unanswered question that is not itself a recovery question means a person is already being
+ *    asked something else; central recovery never barges in ahead of that.
+ *  - A pending stop request means a person already asked to stop the task; central recovery never
+ *    restarts work underneath a stop.
+ */
+export function canCentralRecoverBlockedTask(
+  task: TaskRecord,
+  runtime: RuntimeTaskState | undefined,
+): boolean {
+  if (task.stage !== "blocked") return false;
+  if (task.previousStage === undefined || !BLOCKED_TASK_REENTRY_STAGES.has(task.previousStage)) {
+    return false;
+  }
+  const recoverable =
+    task.blockCause !== undefined
+      ? isRecoverableBlockCause(task.blockCause)
+      : isLegacyWorkerDeathBlockText(task.blockReason ?? "");
+  if (!recoverable) return false;
+  const question = task.communication?.question;
+  if (question !== undefined && !question.id.startsWith(RECOVERY_QUESTION_ID_PREFIX)) return false;
+  if (runtime?.stopRequest !== undefined) return false;
+  return true;
+}
 
 function defaultRecovery(runtime: RuntimeTaskState | undefined): RuntimeRecoveryState {
   return (
@@ -142,6 +238,21 @@ type DeathProof = Readonly<{
   readonly elapsedMs?: number;
 }>;
 
+/** Which pane role and job role/kind `proveDeath`/`lastJobFor` look for. Defaults to the
+ *  implementing/scouting worker target; validating's reviewer pane and "validation" job pass their
+ *  own so the same stop ladder and job lookup serve both without duplicating either. */
+type ProveDeathTarget = Readonly<{
+  readonly endpointRole: Endpoint["role"];
+  readonly jobRole: DurableJob["role"];
+  readonly jobKind: DurableJob["kind"];
+}>;
+
+const VALIDATION_PROVE_DEATH_TARGET: ProveDeathTarget = {
+  endpointRole: "reviewer",
+  jobRole: "validation",
+  jobKind: "validation",
+};
+
 /** The only two answers a restart question accepts; anything else is refused. */
 type RestartChoice = "restart" | "stop";
 
@@ -159,12 +270,47 @@ type ForcedRestartOutcome = Readonly<{
 }>;
 
 const RESTART_QUESTION_WANT =
-  'Reply "restart" to try again with every edit kept, or "stop" to leave it for you to look at.';
+  'Reply "restart" to start a fresh worker in the same worktree and keep every edit, or "stop" to leave it blocked so you can look at it yourself.';
+
+/** Every validation-retry question's id starts with this, so an answer path can route to this
+ *  module's validating handler alone; distinct from `RESTART_QUESTION_ID_PREFIX` so the two never
+ *  collide or misroute into each other's stage-specific re-entry. */
+export const VALIDATION_RETRY_QUESTION_ID_PREFIX = `${RECOVERY_QUESTION_ID_PREFIX}validation-retry-`;
+
+/** The only two answers a validation-retry question accepts; anything else is refused. */
+type ValidationRetryChoice = "retry" | "stop";
+
+/** Exact-match only: a validation-retry question is never approved by a loose "ok"/"yes"/"sure". */
+function parseValidationRetryChoice(text: string): ValidationRetryChoice | undefined {
+  const normalized = text.trim().toLowerCase();
+  return normalized === "retry" || normalized === "stop" ? normalized : undefined;
+}
+
+/** What answering "retry" actually proved and did, so the decision receipt records reality. */
+type ForcedValidationRetryOutcome = Readonly<{
+  readonly started: boolean;
+  readonly proven: boolean;
+  readonly reasonSummary: string;
+}>;
+
+const RESTART_REPLY = 'Reply "restart" or "stop".';
+const VALIDATION_RETRY_REPLY = 'Reply "retry" or "stop".';
+
+/** The durable record keeps the technical cause the short question leaves out. */
+function evidenceSummary(
+  parts: Readonly<{ readonly ask: string; readonly cause?: string }>,
+): string {
+  return parts.cause === undefined ? parts.ask : `${parts.ask} (${parts.cause})`;
+}
+
+const VALIDATION_RETRY_QUESTION_WANT =
+  'Reply "retry" to rerun validation at the same reviewed commit, or "stop" to leave it blocked so you can look at it yourself.';
 
 /**
- * Central recovery: stop, save, re-enter. Only the `implementing`/`scouting` stage's re-entry is
- * wired in this slice; every other stage is reported as `skipped` so a caller falls back to whatever
- * it did before.
+ * Central recovery: stop, save, re-enter. The `implementing`/`scouting`, `validating`, and
+ * `reviewing` stages' re-entry are wired via `recoverStuckWorker`; a `blocked` task with a
+ * recoverable cause reaches the same re-entry through `recoverBlockedTask` without a person asking.
+ * Every other stage is reported as `skipped` so a caller falls back to whatever it did before.
  */
 export class CentralRecoveryWorkflow {
   readonly #deps: CentralRecoveryDependencies;
@@ -179,6 +325,8 @@ export class CentralRecoveryWorkflow {
    * there is no active durable job and no unreleased reservation; this defends the same invariant.
    */
   public async recoverStuckWorker(task: TaskRecord): Promise<CentralRecoveryOutcome> {
+    if (task.stage === "validating") return this.recoverStuckValidation(task);
+    if (task.stage === "reviewing") return this.recoverStuckReviewer(task);
     if (task.stage !== "implementing" && task.stage !== "scouting") {
       return {
         taskId: task.id,
@@ -189,9 +337,15 @@ export class CentralRecoveryWorkflow {
     const state = await readRuntimeState(this.#deps.runtimePath);
     const runtime = taskRuntime(state, task.id);
     if (runtime === undefined) {
-      const reason = "durable runtime metadata is missing; no re-entry is possible";
-      await this.#deps.blockTask(task.id, reason);
-      return { taskId: task.id, action: "blocked", reason };
+      const cause: BlockCause = {
+        group: "safety-stop",
+        kind: "runtime-metadata-missing",
+        summary:
+          "Tandem lost its saved record for this task, so it can't restart it automatically.",
+        detail: "durable runtime metadata is missing; no re-entry is possible",
+      };
+      await reportBlock(this.#deps.blockTask, task.id, cause);
+      return { taskId: task.id, action: "blocked", reason: cause.summary };
     }
     if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) {
       return {
@@ -211,8 +365,30 @@ export class CentralRecoveryWorkflow {
     });
     if (!proof.proven) {
       return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
-        what: `The work stopped, but I can't confirm it has fully exited (${proof.reasonSummary}).`,
+        ask: "The worker stopped but may still be running. Restart it?",
+        cause: proof.reasonSummary,
       });
+    }
+
+    // A dead implementer (including a fix-round implementer) may have already finished: adopt its
+    // committed HEAD instead of spending a restart on rerunning work that already happened. Never for
+    // `scouting`, which has no comparable finished-commit shape.
+    if (task.kind === "implementation" && task.stage === "implementing") {
+      const adoption = await this.adoptableImplementerCommit(task);
+      if (adoption.head !== undefined) {
+        const adoptedOutcome = await this.adoptImplementerCommit(
+          task,
+          adoption.head,
+          adoption.detached ?? false,
+          incidentIdentity,
+          proof,
+          now,
+        );
+        // `undefined` means adoption turned out not to be safe after all (the branch-pointing step
+        // could not proceed without forcing something away); fall through to the ordinary relaunch
+        // path below rather than treating that as ineligibility to restart at all.
+        if (adoptedOutcome !== undefined) return adoptedOutcome;
+      }
     }
 
     const recovery = defaultRecovery(runtime);
@@ -220,7 +396,8 @@ export class CentralRecoveryWorkflow {
       recovery.restartGeneration === task.generation ? (recovery.restarts ?? 0) : 0;
     if (restartsUsed >= MAX_AUTOMATIC_RESTARTS_PER_GENERATION) {
       return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
-        what: `The work stopped again (${proof.reasonSummary}) after ${restartsUsed} automatic restart(s), so another restart may fail the same way.`,
+        ask: `The worker stopped again after ${restartsUsed} restart${restartsUsed === 1 ? "" : "s"}. Restart once more?`,
+        cause: proof.reasonSummary,
       });
     }
 
@@ -231,7 +408,8 @@ export class CentralRecoveryWorkflow {
       restartsUsed > 0 && recovery.lastRestartFailureClass === failureClass;
     if (withinImmediateWindow && sameClassAsLastRestart) {
       return this.askRestart(task, incidentIdentity, proof.deadJobId, now, {
-        what: `The work failed again ${Math.round((proof.elapsedMs ?? 0) / 1000)}s after restarting, the same way as before (${proof.reasonSummary}).`,
+        ask: "The worker failed the same way right after restarting. Restart again?",
+        cause: proof.reasonSummary,
       });
     }
 
@@ -239,16 +417,20 @@ export class CentralRecoveryWorkflow {
     await this.snapshotWorktree(task, runtime, restartsUsed + 1);
 
     // --- Move 3: re-enter. ---
+    await this.settleProvenQuarantine(task.id);
     const extraInstructions = [
       `This is an automatic restart after the previous worker stopped without finishing (${proof.reasonSummary}). Uncommitted or partially applied changes from the previous attempt may already exist in this worktree. Run \`git status\` and \`git diff\` first, inspect any partial edits, and repair or complete them before continuing. This is restart ${restartsUsed + 1} of ${MAX_AUTOMATIC_RESTARTS_PER_GENERATION} for this generation.`,
     ];
     const relaunch = await this.#deps.relaunchWorker(task, extraInstructions);
     if (!relaunch.relaunched) {
       const reason = relaunch.reason ?? "relaunch was refused";
-      await this.#deps.blockTask(
-        task.id,
-        `automatic restart could not launch a new worker: ${reason}`,
-      );
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: `Tandem tried to restart the worker automatically, but it couldn't start.`,
+        detail: `automatic restart could not launch a new worker: ${reason}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
       return { taskId: task.id, action: "blocked", reason };
     }
 
@@ -297,6 +479,365 @@ export class CentralRecoveryWorkflow {
       dispositionReason: notice,
     });
     return { taskId: task.id, action: "relaunched", reason: notice };
+  }
+
+  /**
+   * The scheduler tick's and conversational recovery's shared entry point for a `blocked` task:
+   * when `canCentralRecoverBlockedTask` says the block is automatically recoverable, resumes the
+   * task to its previous stage and runs that stage's own stop/save/re-entry (`recoverStuckWorker`,
+   * which already dispatches `implementing`/`scouting`/`validating`/`reviewing`) exactly as if the
+   * task had never blocked. `awaiting-fixes` resumes and stops there: its own next reconcile pass
+   * carries it into `implementing` through the ordinary `beginFixes` hand-off, so nothing here
+   * duplicates that. Anything not eligible is reported `skipped`, so the caller falls back to
+   * whatever it did before — leaving the task blocked, or conversational recovery's own decision
+   * rules.
+   */
+  public async recoverBlockedTask(task: TaskRecord): Promise<CentralRecoveryOutcome> {
+    if (task.stage !== "blocked") {
+      return { taskId: task.id, action: "skipped", reason: "task is not blocked" };
+    }
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    const runtime = taskRuntime(state, task.id);
+    if (!canCentralRecoverBlockedTask(task, runtime)) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "block is not eligible for automatic recovery",
+      };
+    }
+    const resumed = await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined || current.stage !== "blocked") return current;
+      return store.update(current.id, current.revision, (entry) =>
+        transitionTask(
+          entry,
+          { type: "resume" },
+          { now: this.#deps.clock(), notificationId: this.#deps.idFactory() },
+        ),
+      );
+    });
+    if (resumed === undefined || resumed.stage === "blocked") {
+      return { taskId: task.id, action: "skipped", reason: "task could not be resumed" };
+    }
+    if (
+      resumed.stage !== "implementing" &&
+      resumed.stage !== "scouting" &&
+      resumed.stage !== "validating" &&
+      resumed.stage !== "reviewing"
+    ) {
+      return {
+        taskId: task.id,
+        action: "resumed",
+        reason: `resumed to ${resumed.stage}; its own next reconcile pass carries the recovery forward`,
+      };
+    }
+    return this.recoverStuckWorker(resumed);
+  }
+
+  /**
+   * Central recovery's `validating` re-entry. A validation job that dies for an infrastructure
+   * reason (its pane disappears, or it stops without writing durable evidence) is settled as failed
+   * without blocking the task (see `WorkerWorkflow.reconcileJob`'s validation branches), so the task
+   * stays at `validating` with no active job or reservation and a terminal failed job behind it —
+   * exactly the shape this method looks for. A task with no such dead job (a fresh entry into
+   * validating, or a job that settled through the normal result path, which always moves the task to
+   * `awaiting-fixes`/`reviewing` instead) is reported `skipped` so the caller falls back to the
+   * normal `startValidation` entry point unchanged; a genuine task-code validation failure never
+   * reaches this method at all. Bounded by `MAX_VALIDATION_RETRIES`, the exact same budget the
+   * explicit `validation-retry` recovery action spends from — central recovery never adds a second
+   * counter for it.
+   */
+  private async recoverStuckValidation(task: TaskRecord): Promise<CentralRecoveryOutcome> {
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    const runtime = taskRuntime(state, task.id);
+    if (runtime === undefined) {
+      const cause: BlockCause = {
+        group: "safety-stop",
+        kind: "runtime-metadata-missing",
+        summary:
+          "Tandem lost its saved record for this task, so it can't restart it automatically.",
+        detail: "durable runtime metadata is missing; no re-entry is possible",
+      };
+      await reportBlock(this.#deps.blockTask, task.id, cause);
+      return { taskId: task.id, action: "blocked", reason: cause.summary };
+    }
+    if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "an active job or an unreleased reservation already owns this task",
+      };
+    }
+    const lastJob = this.lastJobFor(runtime, task, "validation", "validation");
+    if (lastJob === undefined || lastJob.phase !== "failed") {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "no dead validation job needs recovery",
+      };
+    }
+
+    // --- Move 1: stop. Prove the prior validation run is dead before anything else runs. ---
+    const proof = await this.proveDeath(task, runtime, VALIDATION_PROVE_DEATH_TARGET);
+    const now = this.#deps.clock();
+    const incidentIdentity = restartIncidentIdentity({
+      taskId: task.id,
+      generation: task.generation,
+      deadJobId: proof.deadJobId,
+    });
+    if (!proof.proven) {
+      return this.askValidationRetry(task, incidentIdentity, proof.deadJobId, now, {
+        ask: "Checks stopped but may still be running. Retry them?",
+        cause: proof.reasonSummary,
+      });
+    }
+
+    const recovery = defaultRecovery(runtime);
+    const retriesUsed = recovery.validationRetries;
+    if (retriesUsed >= MAX_VALIDATION_RETRIES) {
+      return this.askValidationRetry(task, incidentIdentity, proof.deadJobId, now, {
+        ask: `Checks stopped again after ${retriesUsed} retr${retriesUsed === 1 ? "y" : "ies"}. Retry once more?`,
+        cause: proof.reasonSummary,
+      });
+    }
+
+    // --- Move 2: save. Snapshot uncommitted work before the next validation run can touch it. ---
+    await this.snapshotWorktree(task, runtime, retriesUsed + 1);
+
+    // --- Move 3: re-enter. ---
+    const revalidated = await this.#deps.revalidate(task);
+    if (!revalidated.started) {
+      const reason = revalidated.reason ?? "validation could not be restarted";
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: `Tandem tried to rerun the checks automatically, but they couldn't start.`,
+        detail: `automatic validation retry could not restart validation: ${reason}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
+      return { taskId: task.id, action: "blocked", reason };
+    }
+
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
+      replaceRuntimeTask(current, task.id, (entry) => ({
+        ...entry,
+        recovery: {
+          ...defaultRecovery(entry),
+          validationRetries: retriesUsed + 1,
+          lastOperation: "validation-retry",
+          lastAt: now,
+        },
+      })),
+    );
+    const notice = `Validation stopped (${proof.reasonSummary}). I reran it at the same reviewed commit. (Retry ${retriesUsed + 1} of ${MAX_VALIDATION_RETRIES}.)`;
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) return;
+      const notification: Notification = {
+        id: this.#deps.idFactory(),
+        message: notice,
+        acknowledged: false,
+        kind: "coordinator",
+      };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: now,
+        notifications: [...entry.notifications, notification],
+      }));
+    });
+    await this.saveDecision(task.id, {
+      taskId: task.id,
+      generation: task.generation,
+      ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+      evidence: this.evidenceFor(incidentIdentity, proof.reasonSummary, now),
+      ownership: "proven-owned",
+      priorOutcome: "known",
+      approval: "preapproved",
+      unmetProofs: [],
+      consequences: notice,
+      disposition: "applied",
+      dispositionReason: notice,
+    });
+    return { taskId: task.id, action: "relaunched", reason: notice };
+  }
+
+  /**
+   * Gets a `reviewing` task back into its core loop when its current reviewer/verifier lens was
+   * quarantined: a durable job proven dead only by its pane or result disappearing, never a lens that
+   * ran to completion and reported its own failure. The caller (the coordinator's reconcile loop) is
+   * expected to call this before `WorkerWorkflow.advanceReview`; a "skipped" outcome means nothing is
+   * wrong and the caller should proceed to `advanceReview` as normal, and a "relaunched" outcome means
+   * this already stopped and saved the dead lens and the caller's very next `advanceReview` call will
+   * relaunch it (its own instruction-revision and quarantine checks let it proceed once this has
+   * cleared the stale endpoint). Only the dead lens is ever touched: completed lenses already recorded
+   * in `task.reviews` are left exactly as they are, and a moved or dirty worktree is never relaunched
+   * against — it is asked about instead, since review evidence is pinned to the exact reviewed HEAD.
+   */
+  private async recoverStuckReviewer(task: TaskRecord): Promise<CentralRecoveryOutcome> {
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    const runtime = taskRuntime(state, task.id);
+    if (runtime === undefined) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "durable runtime metadata is missing",
+      };
+    }
+    if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "an active job or an unreleased reservation already owns this task",
+      };
+    }
+    const deadReview = unresolvedReviewFailure(task, runtime);
+    if (deadReview === undefined || !isQuarantinedReviewFailure(deadReview)) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "no unresolved reviewer/verifier failure eligible for automatic recovery",
+      };
+    }
+    if (task.worktree === undefined || task.reviewHead === undefined) {
+      return {
+        taskId: task.id,
+        action: "skipped",
+        reason: "review requires a task worktree and reviewed HEAD",
+      };
+    }
+
+    const now = this.#deps.clock();
+    const lensLabel = deadReview.reviewLens ?? "review";
+    const incidentIdentity = restartIncidentIdentity({
+      taskId: task.id,
+      generation: task.generation,
+      deadJobId: deadReview.id,
+    });
+
+    // --- Move 1: stop. Prove any pane the dead lens owned is actually gone before touching it. ---
+    const endpoint =
+      deadReview.endpoint ??
+      runtime.endpoints.find(
+        (candidate) =>
+          candidate.role === deadReview.role && candidate.generation === task.generation,
+      );
+    if (endpoint !== undefined) {
+      const stopped = await this.stopLadder(
+        endpoint,
+        task.worktree.path,
+        terminalJobFor(deadReview),
+      );
+      if (!stopped) {
+        return this.askRestart(task, incidentIdentity, deadReview.id, now, {
+          ask: `The ${lensLabel} reviewer stopped but may still be running. Restart it?`,
+        });
+      }
+      await this.#deps.removeEndpoint(task.id, endpoint.paneId);
+    }
+
+    // Review evidence is pinned to the exact reviewed HEAD; never relaunch across drift or a dirty
+    // worktree, since that would review the wrong changes.
+    const checkout = await readCheckpoint(this.#deps.run, {
+      repo: task.worktree.path,
+      baseRef: task.worktree.baseHead,
+    });
+    if (checkout.head !== task.reviewHead || checkout.dirty || checkout.unmerged) {
+      return this.askRestart(task, incidentIdentity, deadReview.id, now, {
+        ask: `The ${lensLabel} reviewer stopped, and the code changed since review began. Restart review anyway?`,
+      });
+    }
+
+    const recovery = defaultRecovery(runtime);
+    const restartsUsed =
+      recovery.restartGeneration === task.generation ? (recovery.restarts ?? 0) : 0;
+    if (restartsUsed >= MAX_AUTOMATIC_RESTARTS_PER_GENERATION) {
+      return this.askRestart(task, incidentIdentity, deadReview.id, now, {
+        ask: `The ${lensLabel} reviewer stopped again after ${restartsUsed} restart${restartsUsed === 1 ? "" : "s"}. Restart once more?`,
+      });
+    }
+
+    // --- Move 2: save. Snapshot uncommitted work before the next reviewer can touch it. ---
+    await this.snapshotWorktree(task, runtime, restartsUsed + 1);
+
+    // --- Move 3: re-enter. Nothing here launches a worker directly: clearing the dead endpoint,
+    // spending one restart, and settling the stale quarantined operation (this stop ladder's own
+    // proof is what turns its previously-uncertain outcome into a known-safe one) is enough for the
+    // caller's very next `advanceReview` call to relaunch exactly this lens through its own normal
+    // launch path, as a new fenced operation. Without settling the operation, the replacement
+    // attempt's own routing would re-read the same quarantined phase and pause again for approval,
+    // undoing the proof this stop ladder just established. ---
+    const failureClass = classifyRestartFailure(
+      deadReview.error ?? "reviewer stopped without a durable result",
+    );
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
+      replaceRuntimeTask(current, task.id, (entry) => ({
+        ...entry,
+        ...(entry.operation?.phase === "quarantined"
+          ? { operation: { ...entry.operation, phase: "failed" as const } }
+          : {}),
+        recovery: {
+          ...defaultRecovery(entry),
+          restarts: restartsUsed + 1,
+          restartGeneration: task.generation,
+          lastRestartFailureClass: failureClass,
+          lastRestartAt: now,
+          lastOperation: "relaunch",
+          lastAt: now,
+        },
+      })),
+    );
+    const notice = `The ${lensLabel} reviewer stopped (${deadReview.error ?? "no durable result arrived"}). I am restarting just that review pass; completed reviews are kept. (Restart ${restartsUsed + 1} of ${MAX_AUTOMATIC_RESTARTS_PER_GENERATION}.)`;
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) return;
+      const notification: Notification = {
+        id: this.#deps.idFactory(),
+        message: notice,
+        acknowledged: false,
+        kind: "coordinator",
+      };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: now,
+        notifications: [...entry.notifications, notification],
+      }));
+    });
+    await this.saveDecision(task.id, {
+      taskId: task.id,
+      generation: task.generation,
+      ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+      evidence: this.evidenceFor(
+        incidentIdentity,
+        deadReview.error ?? "reviewer stopped without a durable result",
+        now,
+      ),
+      ownership: "proven-owned",
+      priorOutcome: "known",
+      approval: "preapproved",
+      unmetProofs: [],
+      consequences: notice,
+      disposition: "applied",
+      dispositionReason: notice,
+    });
+    const refreshed = await this.#deps.getTask(task.id);
+    await this.#deps.relaunchReviewer(refreshed);
+    return { taskId: task.id, action: "relaunched", reason: notice };
+  }
+
+  /**
+   * Death was just proven, so a quarantined operation's uncertain outcome is now a known-safe
+   * failure. Settling it keeps the relaunch's routing from pausing on the same uncertainty.
+   */
+  private async settleProvenQuarantine(taskId: string): Promise<void> {
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
+      replaceRuntimeTask(current, taskId, (entry) =>
+        entry.operation?.phase === "quarantined"
+          ? { ...entry, operation: { ...entry.operation, phase: "failed" as const } }
+          : entry,
+      ),
+    );
   }
 
   /**
@@ -358,7 +899,8 @@ export class CentralRecoveryWorkflow {
       return { handled: true };
     }
     // choice === "restart": reuse the same three-move path, treating this approval as spending one
-    // more restart, but never as proof by itself — forceOneMoreRestart re-proves death first.
+    // more restart, but never as proof by itself — forceOneMoreRestart/forceOneMoreReviewRestart
+    // re-prove death first.
     const resumed = cleared === undefined ? undefined : await this.resumeFromAsk(cleared);
     const outcome: ForcedRestartOutcome =
       resumed === undefined
@@ -367,7 +909,9 @@ export class CentralRecoveryWorkflow {
             proven: false,
             reasonSummary: "the task could not be resumed from blocked",
           }
-        : await this.forceOneMoreRestart(resumed);
+        : resumed.stage === "reviewing"
+          ? await this.forceOneMoreReviewRestart(resumed)
+          : await this.forceOneMoreRestart(resumed);
     await this.saveDecision(taskId, {
       taskId,
       generation: task.generation,
@@ -389,11 +933,213 @@ export class CentralRecoveryWorkflow {
     return { handled: true };
   }
 
+  /**
+   * Answers the one question the validating re-entry ever asks (unproven-death, or validation-retry
+   * budget exhausted). Only an exact "retry" or "stop" is accepted; anything else is refused with a
+   * plain-English error and the question stays open untouched. The reply is stored as a recovery
+   * decision, never as a worker instruction: it clears the question directly and never bumps
+   * `task.communication.revision`. Choosing "retry" never trusts the answer as proof by itself: it
+   * re-proves death the same way an automatic retry does.
+   */
+  public async answerValidationRetryQuestion(
+    taskId: string,
+    questionId: string,
+    text: string,
+  ): Promise<Readonly<{ readonly handled: boolean }>> {
+    if (!questionId.startsWith(VALIDATION_RETRY_QUESTION_ID_PREFIX)) return { handled: false };
+    const task = await this.#deps.getTask(taskId);
+    if (task.communication?.question?.id !== questionId) return { handled: false };
+    const choice = parseValidationRetryChoice(text);
+    if (choice === undefined) {
+      throw new Error(
+        `a recovery validation-retry question only accepts "retry" or "stop"; received ${JSON.stringify(text.trim())}. The question is still open.`,
+      );
+    }
+    const now = this.#deps.clock();
+    let cleared: TaskRecord | undefined;
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      if (current === undefined || current.communication?.question?.id !== questionId) return;
+      const { question: _question, ...withoutQuestion } = current.communication ?? {
+        revision: 0,
+        messages: [],
+      };
+      cleared = await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: now,
+        communication: withoutQuestion,
+      }));
+    });
+    const evidenceIdentity = questionId.slice(VALIDATION_RETRY_QUESTION_ID_PREFIX.length);
+    if (choice === "stop") {
+      await this.saveDecision(taskId, {
+        taskId,
+        generation: task.generation,
+        ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+        evidence: this.evidenceFor(
+          evidenceIdentity,
+          "user answered the validation-retry question",
+          now,
+        ),
+        ownership: "unknown",
+        priorOutcome: "uncertain",
+        approval: "user-approval",
+        unmetProofs: [],
+        consequences: "the user chose to leave the task blocked",
+        disposition: "refused",
+        dispositionReason: 'user answered "stop"',
+        questionId,
+      });
+      return { handled: true };
+    }
+    // choice === "retry": reuse the same three-move path, treating this approval as spending one
+    // more validation retry, but never as proof by itself — forceOneMoreValidationRetry re-proves
+    // death first.
+    const resumed = cleared === undefined ? undefined : await this.resumeFromValidationAsk(cleared);
+    const outcome: ForcedValidationRetryOutcome =
+      resumed === undefined
+        ? {
+            started: false,
+            proven: false,
+            reasonSummary: "the task could not be resumed from blocked",
+          }
+        : await this.forceOneMoreValidationRetry(resumed);
+    await this.saveDecision(taskId, {
+      taskId,
+      generation: task.generation,
+      ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+      evidence: this.evidenceFor(evidenceIdentity, outcome.reasonSummary, now),
+      ownership: outcome.proven ? "proven-owned" : "unknown",
+      priorOutcome: outcome.proven ? "known" : "uncertain",
+      approval: "user-approval",
+      unmetProofs: [],
+      consequences: outcome.started
+        ? "the user chose to retry; the prior validation run was re-proven dead and a new one was started"
+        : `the user chose to retry, but ${outcome.reasonSummary}`,
+      disposition: outcome.started ? "applied" : "refused",
+      dispositionReason: outcome.started
+        ? 'user answered "retry"; restarted validation after re-proving the prior run was dead'
+        : `user answered "retry" but ${outcome.reasonSummary}`,
+      questionId,
+    });
+    return { handled: true };
+  }
+
+  /** Undoes the block that asking the validation-retry question applied, so revalidation can
+   *  proceed. */
+  private async resumeFromValidationAsk(task: TaskRecord): Promise<TaskRecord | undefined> {
+    if (task.stage !== "blocked") return task.stage === "validating" ? task : undefined;
+    if (task.previousStage !== "validating") return undefined;
+    return this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined || current.stage !== "blocked") return current;
+      return store.update(current.id, current.revision, (entry) =>
+        transitionTask(
+          entry,
+          { type: "resume" },
+          { now: this.#deps.clock(), notificationId: this.#deps.idFactory() },
+        ),
+      );
+    });
+  }
+
+  /**
+   * After an explicit user approval, re-proves death and reruns validation once more without
+   * re-asking the same question. Returns what was actually proven and done so the caller's decision
+   * receipt never has to guess.
+   */
+  private async forceOneMoreValidationRetry(
+    task: TaskRecord,
+  ): Promise<ForcedValidationRetryOutcome> {
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    const runtime = taskRuntime(state, task.id);
+    if (runtime === undefined || task.stage !== "validating") {
+      return {
+        started: false,
+        proven: false,
+        reasonSummary: "the task is no longer validating",
+      };
+    }
+    if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) {
+      return {
+        started: false,
+        proven: false,
+        reasonSummary: "an active job or reservation already owns this task",
+      };
+    }
+    const proof = await this.proveDeath(task, runtime, VALIDATION_PROVE_DEATH_TARGET);
+    if (!proof.proven) {
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "safety-stop",
+        kind: "ownership-unprovable",
+        summary: `You approved rerunning the checks, but Tandem couldn't confirm the old run stopped.`,
+        detail: `the approved validation retry could not proceed: ${proof.reasonSummary}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
+      return { started: false, proven: false, reasonSummary: proof.reasonSummary };
+    }
+    const recovery = defaultRecovery(runtime);
+    const retriesUsed = recovery.validationRetries;
+    await this.snapshotWorktree(task, runtime, retriesUsed + 1);
+    const revalidated = await this.#deps.revalidate(task);
+    if (!revalidated.started) {
+      const reason = revalidated.reason ?? "revalidation was refused";
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: `You approved rerunning the checks, but they couldn't start.`,
+        detail: `the approved validation retry could not restart validation: ${reason}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
+      return { started: false, proven: true, reasonSummary: proof.reasonSummary };
+    }
+    const now = this.#deps.clock();
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
+      replaceRuntimeTask(current, task.id, (entry) => ({
+        ...entry,
+        recovery: {
+          ...defaultRecovery(entry),
+          validationRetries: retriesUsed + 1,
+          lastOperation: "validation-retry",
+          lastAt: now,
+        },
+      })),
+    );
+    const notice = `Validation stopped (${proof.reasonSummary}). You approved another retry; I reran it at the same reviewed commit.`;
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) return;
+      const notification: Notification = {
+        id: this.#deps.idFactory(),
+        message: notice,
+        acknowledged: false,
+        kind: "coordinator",
+      };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: now,
+        notifications: [...entry.notifications, notification],
+      }));
+    });
+    return { started: true, proven: true, reasonSummary: proof.reasonSummary };
+  }
+
   /** Undoes the block that asking the restart question applied, so relaunch can proceed. */
   private async resumeFromAsk(task: TaskRecord): Promise<TaskRecord | undefined> {
-    if (task.stage !== "blocked")
-      return task.stage === "implementing" || task.stage === "scouting" ? task : undefined;
-    if (task.previousStage !== "implementing" && task.previousStage !== "scouting") {
+    if (task.stage !== "blocked") {
+      return task.stage === "implementing" ||
+        task.stage === "scouting" ||
+        task.stage === "reviewing"
+        ? task
+        : undefined;
+    }
+    if (
+      task.previousStage !== "implementing" &&
+      task.previousStage !== "scouting" &&
+      task.previousStage !== "reviewing"
+    ) {
       return undefined;
     }
     return this.#deps.store.exclusive(async (store) => {
@@ -433,25 +1179,33 @@ export class CentralRecoveryWorkflow {
     }
     const proof = await this.proveDeath(task, runtime);
     if (!proof.proven) {
-      await this.#deps.blockTask(
-        task.id,
-        `the approved restart could not proceed: ${proof.reasonSummary}`,
-      );
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "safety-stop",
+        kind: "ownership-unprovable",
+        summary: `You approved a restart, but Tandem couldn't confirm the old worker stopped.`,
+        detail: `the approved restart could not proceed: ${proof.reasonSummary}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
       return { relaunched: false, proven: false, reasonSummary: proof.reasonSummary };
     }
     const recovery = defaultRecovery(runtime);
     const restartsUsed =
       recovery.restartGeneration === task.generation ? (recovery.restarts ?? 0) : 0;
     await this.snapshotWorktree(task, runtime, restartsUsed + 1);
+    await this.settleProvenQuarantine(task.id);
     const extraInstructions = [
       `This is a restart the user explicitly approved after the automatic restart budget was reached (${proof.reasonSummary}). Uncommitted or partially applied changes from the previous attempt may already exist in this worktree. Run \`git status\` and \`git diff\` first, inspect any partial edits, and repair or complete them before continuing.`,
     ];
     const relaunch = await this.#deps.relaunchWorker(task, extraInstructions);
     if (!relaunch.relaunched) {
-      await this.#deps.blockTask(
-        task.id,
-        `the approved restart could not launch a new worker: ${relaunch.reason ?? "relaunch was refused"}`,
-      );
+      const reason = relaunch.reason ?? "relaunch was refused";
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: `You approved a restart, but the new worker couldn't start.`,
+        detail: `the approved restart could not launch a new worker: ${reason}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
       return { relaunched: false, proven: true, reasonSummary: proof.reasonSummary };
     }
     const now = this.#deps.clock();
@@ -489,6 +1243,121 @@ export class CentralRecoveryWorkflow {
     return { relaunched: true, proven: true, reasonSummary: proof.reasonSummary };
   }
 
+  /**
+   * The `reviewing` stage's equivalent of `forceOneMoreRestart`: after an explicit user approval,
+   * re-proves the dead lens's death and relaunches once more without re-asking. A proof failure (an
+   * unproven pane, or a worktree that has since moved off the reviewed HEAD) is refused outright, not
+   * re-asked; the caller records that refusal as the decision.
+   */
+  private async forceOneMoreReviewRestart(task: TaskRecord): Promise<ForcedRestartOutcome> {
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    const runtime = taskRuntime(state, task.id);
+    if (runtime === undefined || task.stage !== "reviewing") {
+      return { relaunched: false, proven: false, reasonSummary: "the task is no longer reviewing" };
+    }
+    if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) {
+      return {
+        relaunched: false,
+        proven: false,
+        reasonSummary: "an active job or reservation already owns this task",
+      };
+    }
+    const deadReview = unresolvedReviewFailure(task, runtime);
+    if (deadReview === undefined || !isQuarantinedReviewFailure(deadReview)) {
+      return {
+        relaunched: false,
+        proven: false,
+        reasonSummary: "no unresolved reviewer/verifier failure remains",
+      };
+    }
+    if (task.worktree === undefined || task.reviewHead === undefined) {
+      return {
+        relaunched: false,
+        proven: false,
+        reasonSummary: "review has no worktree or reviewed HEAD",
+      };
+    }
+    const lensLabel = deadReview.reviewLens ?? "review";
+    const endpoint =
+      deadReview.endpoint ??
+      runtime.endpoints.find(
+        (candidate) =>
+          candidate.role === deadReview.role && candidate.generation === task.generation,
+      );
+    if (endpoint !== undefined) {
+      const stopped = await this.stopLadder(
+        endpoint,
+        task.worktree.path,
+        terminalJobFor(deadReview),
+      );
+      if (!stopped) {
+        return {
+          relaunched: false,
+          proven: false,
+          reasonSummary: `the ${lensLabel} reviewer's pane could not be proven stopped`,
+        };
+      }
+      await this.#deps.removeEndpoint(task.id, endpoint.paneId);
+    }
+    const checkout = await readCheckpoint(this.#deps.run, {
+      repo: task.worktree.path,
+      baseRef: task.worktree.baseHead,
+    });
+    if (checkout.head !== task.reviewHead || checkout.dirty || checkout.unmerged) {
+      return {
+        relaunched: false,
+        proven: true,
+        reasonSummary: "the worktree no longer matches the exact reviewed commit",
+      };
+    }
+    const recovery = defaultRecovery(runtime);
+    const restartsUsed =
+      recovery.restartGeneration === task.generation ? (recovery.restarts ?? 0) : 0;
+    await this.snapshotWorktree(task, runtime, restartsUsed + 1);
+    const reasonSummary = deadReview.error ?? "reviewer stopped without a durable result";
+    const now = this.#deps.clock();
+    // Settle the stale quarantined operation the same way the automatic path does: this approval's
+    // own re-proof is what turns its previously-uncertain outcome into a known-safe one, so the
+    // replacement attempt's routing decision must not re-read the same quarantined phase and pause.
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
+      replaceRuntimeTask(current, task.id, (entry) => ({
+        ...entry,
+        ...(entry.operation?.phase === "quarantined"
+          ? { operation: { ...entry.operation, phase: "failed" as const } }
+          : {}),
+        recovery: {
+          ...defaultRecovery(entry),
+          restarts: restartsUsed + 1,
+          restartGeneration: task.generation,
+          lastRestartFailureClass: classifyRestartFailure(reasonSummary),
+          lastRestartAt: now,
+          lastOperation: "relaunch",
+          lastAt: now,
+        },
+      })),
+    );
+    const notice = `The ${lensLabel} reviewer stopped (${reasonSummary}). You approved another restart; I restarted just that review pass and completed reviews are kept.`;
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) return;
+      const notification: Notification = {
+        id: this.#deps.idFactory(),
+        message: notice,
+        acknowledged: false,
+        kind: "coordinator",
+      };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: now,
+        notifications: [...entry.notifications, notification],
+      }));
+    });
+    const refreshed = await this.#deps.getTask(task.id);
+    await this.#deps.relaunchReviewer(refreshed);
+    return { relaunched: true, proven: true, reasonSummary };
+  }
+
   private evidenceFor(
     identity: string,
     summary: string,
@@ -498,22 +1367,19 @@ export class CentralRecoveryWorkflow {
   }
 
   /**
-   * Asks the one question central recovery ever asks, in plain English with no identifiers in the
-   * what/want text: task, generation, and dead-job identity go only in the recommendation's
-   * details, which is already a separate line wherever a question is displayed.
+   * Asks the one question central recovery ever asks, as one short plain-English question with no
+   * identifiers: task, generation, and dead-job identity go only in the recommendation's details,
+   * and the technical cause only in the decision record.
    */
   private async askRestart(
     task: TaskRecord,
     incidentIdentity: string,
     deadJobId: string,
     now: IsoTimestamp,
-    parts: Readonly<{ readonly what: string }>,
+    parts: Readonly<{ readonly ask: string; readonly cause?: string }>,
   ): Promise<CentralRecoveryOutcome> {
     const questionId = `${RESTART_QUESTION_ID_PREFIX}${incidentIdentity}`;
-    const text = formatDecisionQuestion({
-      what: parts.what,
-      recommendation: RESTART_QUESTION_WANT,
-    });
+    const text = formatDecisionQuestion({ ask: parts.ask, note: RESTART_REPLY });
     const details = `Details: task ${task.id}${task.requestId === undefined ? "" : `, request ${task.requestId}`}, generation ${task.generation}, dead job ${deadJobId}.`;
     const question: TaskQuestion = {
       id: questionId,
@@ -531,7 +1397,7 @@ export class CentralRecoveryWorkflow {
       taskId: task.id,
       generation: task.generation,
       ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
-      evidence: this.evidenceFor(incidentIdentity, parts.what, now),
+      evidence: this.evidenceFor(incidentIdentity, evidenceSummary(parts), now),
       ownership: "unknown",
       priorOutcome: "uncertain",
       approval: "user-approval",
@@ -539,6 +1405,49 @@ export class CentralRecoveryWorkflow {
       consequences: RESTART_QUESTION_WANT,
       disposition: "asked",
       dispositionReason: RESTART_QUESTION_WANT,
+      questionId,
+    });
+    return { taskId: task.id, action: "asked", reason: text };
+  }
+
+  /**
+   * Asks the one question the validating re-entry ever asks, in the same short shape as
+   * `askRestart`.
+   */
+  private async askValidationRetry(
+    task: TaskRecord,
+    incidentIdentity: string,
+    deadJobId: string,
+    now: IsoTimestamp,
+    parts: Readonly<{ readonly ask: string; readonly cause?: string }>,
+  ): Promise<CentralRecoveryOutcome> {
+    const questionId = `${VALIDATION_RETRY_QUESTION_ID_PREFIX}${incidentIdentity}`;
+    const text = formatDecisionQuestion({ ask: parts.ask, note: VALIDATION_RETRY_REPLY });
+    const details = `Details: task ${task.id}${task.requestId === undefined ? "" : `, request ${task.requestId}`}, generation ${task.generation}, dead job ${deadJobId}.`;
+    const question: TaskQuestion = {
+      id: questionId,
+      text,
+      recommendation: `${VALIDATION_RETRY_QUESTION_WANT} ${details}`,
+    };
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined || isTerminalTask(current)) return;
+      if (current.communication?.question?.id === question.id) return;
+      const asked = taskAsking(current, question, this.#deps.idFactory(), this.#deps.clock());
+      await store.update(current.id, current.revision, () => asked);
+    });
+    await this.saveDecision(task.id, {
+      taskId: task.id,
+      generation: task.generation,
+      ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+      evidence: this.evidenceFor(incidentIdentity, evidenceSummary(parts), now),
+      ownership: "unknown",
+      priorOutcome: "uncertain",
+      approval: "user-approval",
+      unmetProofs: [],
+      consequences: VALIDATION_RETRY_QUESTION_WANT,
+      disposition: "asked",
+      dispositionReason: VALIDATION_RETRY_QUESTION_WANT,
       questionId,
     });
     return { taskId: task.id, action: "asked", reason: text };
@@ -563,6 +1472,189 @@ export class CentralRecoveryWorkflow {
         ].slice(-MAX_RECOVERY_DECISION_RECEIPTS),
       })),
     );
+  }
+
+  /**
+   * Whether a dead implementer (including a fix-round implementer) already finished: the task
+   * worktree is clean, not unmerged, checked out on the task's own branch, and HEAD is a new commit
+   * strictly ahead of the task's base — and that HEAD is not something already reviewed. Review
+   * evidence is pinned to an exact HEAD the same way `recoverStuckReviewer` treats it, so a HEAD that
+   * already has a review result attached is never re-adopted as if it were new.
+   */
+  /**
+   * A worker that committed and then died is exactly as likely to have left the worktree detached
+   * (it never switched back to the task branch) as still on the task branch, and the live incident
+   * this feature exists for was detached. Detached and on-the-task's-own-branch are both adoptable;
+   * a checkout on some *other* named branch is someone else's work and is never adopted. When
+   * detached, this also checks (read-only) that the task branch, if it already exists, is an
+   * ancestor of the adopted commit — `adoptImplementerCommit`'s later `pointTaskBranchAtCommit` call
+   * must never force the branch away from real work, so an eligible-looking-but-diverged branch is
+   * screened out here rather than discovered mid-mutation.
+   */
+  private async adoptableImplementerCommit(
+    task: TaskRecord,
+  ): Promise<Readonly<{ readonly head?: string; readonly detached?: boolean }>> {
+    if (task.worktree === undefined) return {};
+    const { path, baseHead, branch } = task.worktree;
+    try {
+      const checkout = await readCheckpoint(this.#deps.run, { repo: path, baseRef: baseHead });
+      if (checkout.dirty || checkout.unmerged || checkout.head === baseHead) return {};
+      if (task.reviewHead === checkout.head) return {};
+      if (task.reviews.some((review) => review.head === checkout.head)) return {};
+      const onBranch = await this.#deps.run({
+        argv: ["git", "-C", path, "branch", "--show-current"],
+        cwd: path,
+      });
+      if (onBranch.code !== 0) return {};
+      const currentBranch = onBranch.stdout.trim();
+      const detached = currentBranch.length === 0;
+      if (!detached && currentBranch !== branch) return {};
+      const ancestor = await this.#deps.run({
+        argv: ["git", "-C", path, "merge-base", "--is-ancestor", baseHead, checkout.head],
+        cwd: path,
+      });
+      if (ancestor.code !== 0) return {};
+      if (detached) {
+        const branchHead = await this.#deps.run({
+          argv: ["git", "-C", path, "rev-parse", "--verify", `refs/heads/${branch}`],
+          cwd: path,
+        });
+        if (branchHead.code === 0) {
+          const branchAncestor = await this.#deps.run({
+            argv: [
+              "git",
+              "-C",
+              path,
+              "merge-base",
+              "--is-ancestor",
+              branchHead.stdout.trim(),
+              checkout.head,
+            ],
+            cwd: path,
+          });
+          // The task branch already exists and is not an ancestor of the adopted commit: it holds
+          // real work the adoption would otherwise force away. Never adopted; falls back to relaunch.
+          if (branchAncestor.code !== 0) return {};
+        }
+      }
+      return { head: checkout.head, detached };
+    } catch {
+      // An unreadable checkout is never treated as an adoptable commit; the caller falls back to
+      // the ordinary relaunch path, which re-derives its own proof from the same worktree.
+      return {};
+    }
+  }
+
+  /**
+   * Records a dead implementer's already-committed HEAD exactly as a successful implementer result
+   * would: the same `implementation-complete` lifecycle event `WorkerWorkflow` applies when a worker
+   * completes with a clean committed checkpoint (see `src/workers/workflow.ts`'s implementer result
+   * handling), setting `reviewHead` and advancing the task to `validating` → `reviewing`. Validation
+   * and a fresh review still gate quality from there, so no user approval is needed to send an
+   * already-finished commit through them instead of paying for a worker to redo the same work.
+   *
+   * When the worktree was left detached (the worker never switched back to the task branch — the
+   * shape the live incident this exists for actually had), the task branch is pointed at the adopted
+   * commit first, via `pointTaskBranchAtCommit`, the same branch repair `reconcile`'s
+   * `repairDetachedTaskBranch` uses. `adoptableImplementerCommit` already proved, read-only, that
+   * doing so is safe (the branch does not exist yet, or is an ancestor of the adopted commit); a
+   * failure here despite that is treated as ineligibility, not a block: returns `undefined` so the
+   * caller falls back to the ordinary relaunch path instead of discarding anything.
+   */
+  private async adoptImplementerCommit(
+    task: TaskRecord,
+    head: string,
+    detached: boolean,
+    incidentIdentity: string,
+    proof: DeathProof,
+    now: IsoTimestamp,
+  ): Promise<CentralRecoveryOutcome | undefined> {
+    const branch = task.worktree?.branch;
+    const path = task.worktree?.path;
+    if (branch === undefined || path === undefined) return undefined;
+    if (detached) {
+      try {
+        await pointTaskBranchAtCommit(this.#deps, path, branch, head);
+      } catch {
+        return undefined;
+      }
+    }
+    await this.settleProvenQuarantine(task.id);
+    const reportPath = join(
+      taskJobsDirectory(this.#deps.home, task.id),
+      String(task.generation),
+      "recovery-adopt-commit",
+      "report.txt",
+    );
+    await writeTextAtomically(
+      reportPath,
+      [
+        "Central recovery adopted this commit after the worker stopped mid-task.",
+        "",
+        `The worker stopped (${proof.reasonSummary}) after committing its work and exited without`,
+        "reporting a result. Recovery confirmed the worktree was clean and at a new commit strictly",
+        "ahead of the task's base, and sent that commit to validation and review instead of rerunning",
+        "the worker.",
+        "",
+        `Adopted commit: ${head}`,
+        detached
+          ? `The worktree was left detached at that commit; recovery pointed branch ${branch} at it.`
+          : `Worktree branch: ${branch}.`,
+      ].join("\n"),
+    );
+    const adopted = await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined || current.stage !== "implementing") return undefined;
+      return store.update(current.id, current.revision, (entry) =>
+        transitionTask(
+          entry,
+          { type: "implementation-complete", head, generation: entry.generation, reportPath },
+          { now: this.#deps.clock(), notificationId: this.#deps.idFactory() },
+        ),
+      );
+    });
+    if (adopted === undefined || adopted.reviewHead !== head) {
+      const reason = "the task could not be moved to validating with the adopted commit";
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "lost-resource",
+        kind: "transition-failed",
+        summary: "Tandem found the worker's finished commit, but couldn't record it.",
+        detail: reason,
+      });
+      return { taskId: task.id, action: "blocked", reason };
+    }
+    const notice =
+      "The worker stopped after committing its work. I'm sending that commit to checks and review instead of redoing it.";
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) return;
+      const notification: Notification = {
+        id: this.#deps.idFactory(),
+        message: notice,
+        acknowledged: false,
+        kind: "coordinator",
+      };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: this.#deps.clock(),
+        notifications: [...entry.notifications, notification],
+      }));
+    });
+    await this.saveDecision(task.id, {
+      taskId: task.id,
+      generation: task.generation,
+      ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+      evidence: this.evidenceFor(incidentIdentity, proof.reasonSummary, now),
+      ownership: "proven-owned",
+      priorOutcome: "known",
+      approval: "preapproved",
+      unmetProofs: [],
+      consequences: notice,
+      disposition: "applied",
+      dispositionReason: notice,
+    });
+    return { taskId: task.id, action: "adopted", reason: notice };
   }
 
   /** Snapshots the worktree's uncommitted diff and untracked files as durable evidence before relaunch. */
@@ -596,19 +1688,29 @@ export class CentralRecoveryWorkflow {
   }
 
   /**
-   * Proof of death for the implementing/scouting re-entry. A candidate stale endpoint (one the task
-   * record still names but the durable runtime no longer owns) is run through the stop ladder first;
-   * only once nothing owned is left running is the prior job's outcome read.
+   * Proof of death for a stage's re-entry. A candidate stale endpoint (one the task record still
+   * names but the durable runtime no longer owns) is run through the stop ladder first; only once
+   * nothing owned is left running is the prior job's outcome read. Defaults to the implementing/
+   * scouting worker target when `target` is omitted.
    */
-  private async proveDeath(task: TaskRecord, runtime: RuntimeTaskState): Promise<DeathProof> {
-    const role = workerRoleForTask(task);
+  private async proveDeath(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    target?: ProveDeathTarget,
+  ): Promise<DeathProof> {
+    const resolved: ProveDeathTarget =
+      target ??
+      (() => {
+        const role = workerRoleForTask(task);
+        return { endpointRole: role, jobRole: role, jobKind: "worker" };
+      })();
     const staleEndpoint = (task.endpoints ?? []).find(
       (endpoint) =>
-        endpoint.role === role &&
+        endpoint.role === resolved.endpointRole &&
         endpoint.generation === task.generation &&
         !runtime.endpoints.some((owned) => owned.paneId === endpoint.paneId),
     );
-    const lastJob = this.lastJobFor(runtime, task, role);
+    const lastJob = this.lastJobFor(runtime, task, resolved.jobRole, resolved.jobKind);
     if (staleEndpoint !== undefined) {
       const cwd = runtime.worktree?.path;
       if (cwd === undefined) {
@@ -656,9 +1758,10 @@ export class CentralRecoveryWorkflow {
     runtime: RuntimeTaskState,
     task: TaskRecord,
     role: DurableJob["role"],
+    kind: DurableJob["kind"] = "worker",
   ): DurableJob | undefined {
     const candidates = runtime.jobs.filter(
-      (job) => job.kind === "worker" && job.role === role && job.generation === task.generation,
+      (job) => job.kind === kind && job.role === role && job.generation === task.generation,
     );
     return candidates.at(-1);
   }

@@ -266,6 +266,13 @@ async function fixture(options: FixtureOptions = {}) {
       getTask,
       taskInScope: async () => options.outOfScope !== true,
       requestDispatchHold: async () => options.requestHold,
+      // These fixtures exercise the old decision rules directly; central recovery's own blocked-task
+      // re-entry is covered separately in tests/recovery/central.test.ts.
+      recoverBlockedTask: async (task) => ({
+        taskId: task.id,
+        action: "skipped",
+        reason: "central recovery is not under test here",
+      }),
     });
   return {
     home,
@@ -472,6 +479,20 @@ test("foreign endpoint ownership blocks recovery", async () => {
     const value = await f.workflow.reconcile("task-1", true);
     expect(value.blocked).toBe(true);
     expect((await f.store.read("task-1"))?.stage).toBe("blocked");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("foreign endpoint ownership blocks a not-yet-blocked task with an ownership-unprovable cause", async () => {
+  const f = await fixture({ endpoint: "foreign", stage: "implementing" });
+  try {
+    const value = await f.workflow.reconcile("task-1", true);
+    expect(value.blocked).toBe(true);
+    const blocked = await f.store.read("task-1");
+    expect(blocked?.stage).toBe("blocked");
+    expect(blocked?.blockCause?.kind).toBe("ownership-unprovable");
+    expect(blocked?.blockCause?.group).toBe("safety-stop");
   } finally {
     await f.cleanup();
   }
@@ -719,8 +740,9 @@ test("an action outside the preapproved set asks one bounded question and runs n
     const after = await f.store.read("task-1");
     const question = after?.communication?.question;
     expect(question?.id).toBe(outcome.decision?.questionId);
-    expect(question?.text).toContain("review-existing");
-    expect(question?.text).toContain("Remaining budget");
+    expect(question?.text).toBe(
+      '"recover a durable task" is stuck. Should I review it as it stands? The reviewer never reported a result for the reviewed HEAD.',
+    );
     expect(question?.recommendation).toContain("review-existing");
     expect(after?.notifications.filter((entry) => !entry.acknowledged)).toHaveLength(1);
     const state = await readRuntimeState(f.runtimePath);
@@ -827,7 +849,7 @@ test("durable evidence of a delay beyond five minutes asks immediately", async (
     expect(outcome.wait?.disposition).toBe("asked");
     expect(outcome.wait?.knownAvailableAt).toBe(minutesAfter(NOW, 30));
     expect((await f.store.read("task-1"))?.communication?.question?.text).toContain(
-      "provider quota exhausted",
+      "Provider quota exhausted",
     );
   } finally {
     await f.cleanup();

@@ -17,18 +17,18 @@ import {
   type WorkerStatus,
 } from "./jobs.ts";
 import {
-  artifactPathFromText,
+  assertSelectedModel,
   expectedModelParts,
-  nativeAgentEndWillContinue,
-  parseNativeAgentEnd,
-  parseReviewWorkerText,
-  readNativeEventFailure,
-  reportedOutcome,
-  reportedQuestion,
+  nativeAgentEndFailure,
+  outcomesFor,
+  ReportRejection,
+  resolveSubmittedReport,
+  type SubmittedReport,
   WorkerOutputError,
 } from "./protocol.ts";
 import {
   readWorkerTerminalCommand,
+  SUBMIT_REPORT_TOOL,
   WORKER_JOB_PATH_ENV,
   type WorkerTerminalCommand,
   type WorkerTerminalJob,
@@ -239,75 +239,148 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       }
     }
   };
-  const publish = async (event: unknown, ctx: ExtensionContext): Promise<void> => {
-    if (resultPublished || nativeAgentEndWillContinue(event)) return;
-    if (pauseCommand !== undefined) {
-      await persistState("paused", currentState.completed, pauseCommand.id);
-      await reportStatus();
-      return;
-    }
-    if (timeoutRequested) {
-      resultPublished = true;
-      delegatedSettled = true;
-      const result = failureFor(job, `worker timed out after ${job.timeoutMs}ms`);
-      await persistResult(result);
-      return;
-    }
+  const settle = async (result: WorkerResult, ctx: ExtensionContext): Promise<void> => {
     resultPublished = true;
     delegatedSettled = true;
     if (timeoutTimer !== undefined) {
       ctx.clearTimer(timeoutTimer);
       timeoutTimer = undefined;
     }
-    let result: WorkerResult;
-    try {
-      const failure = readNativeEventFailure(event);
-      if (failure !== undefined) throw new WorkerOutputError(failure);
-      const parsed = parseNativeAgentEnd(event, expectedModelParts(job.model.model), ctx.model);
-      const outcome = reportedOutcome(job.role, parsed.text);
-      const question = reportedQuestion(job.role, outcome.status, parsed.text);
-      if (job.role === "reviewer" || job.role === "verifier") {
-        if (outcome.status === "needs-decision" || outcome.error !== undefined) {
-          const error = outcome.error ?? question.error;
-          const status = error === undefined ? "needs-decision" : "failed";
-          const revision = await instructionRevision(job, status !== "failed");
-          result = resultFor(job, status, parsed.text, {
-            ...(question.question === undefined ? {} : { question: question.question }),
-            ...(error === undefined ? {} : { error }),
-            ...(revision === undefined ? {} : { instructionRevision: revision }),
-          });
-        } else {
-          const review = parseReviewWorkerText(job, parsed.text);
-          const revision = await instructionRevision(job, true);
-          result = resultFor(job, "completed", parsed.text, {
-            review,
-            ...(revision === undefined ? {} : { instructionRevision: revision }),
-          });
-        }
-      } else {
-        const artifact =
-          outcome.status === "completed" ? artifactPathFromText(job.role, parsed.text) : {};
-        const error = outcome.error ?? question.error ?? artifact.error;
-        const status = error === undefined ? outcome.status : "failed";
-        const extras =
-          error === undefined
-            ? question.question === undefined
-              ? {}
-              : { question: question.question }
-            : { error };
-        const revision = await instructionRevision(job, status !== "failed");
-        result = resultFor(job, status, parsed.text, {
-          ...(artifact.artifactPath === undefined ? {} : { artifactPath: artifact.artifactPath }),
-          ...extras,
-          ...(revision === undefined ? {} : { instructionRevision: revision }),
-        });
-      }
-    } catch (error) {
-      const text = error instanceof WorkerOutputError ? error.outputText : "";
-      result = failureFor(job, error, text);
-    }
     await persistResult(result);
   };
+  // A ReportRejection goes back to the worker to fix; anything else is the job's result.
+  const submittedResult = async (
+    submission: SubmittedReport,
+    ctx: ExtensionContext,
+  ): Promise<WorkerResult | ReportRejection> => {
+    try {
+      assertSelectedModel(expectedModelParts(job.model.model), ctx.model);
+      const report = resolveSubmittedReport(job, submission);
+      const revision = await instructionRevision(job, report.status !== "failed");
+      return resultFor(job, report.status, report.text, {
+        ...(report.error === undefined ? {} : { error: report.error }),
+        ...(report.question === undefined ? {} : { question: report.question }),
+        ...(report.artifactPath === undefined ? {} : { artifactPath: report.artifactPath }),
+        ...(report.review === undefined ? {} : { review: report.review }),
+        ...(revision === undefined ? {} : { instructionRevision: revision }),
+      });
+    } catch (error) {
+      if (error instanceof ReportRejection) return error;
+      return failureFor(job, error);
+    }
+  };
+  // The delegated result comes only from submit_report, so conversation turns never become it.
+  const settleTurn = async (event: unknown, ctx: ExtensionContext): Promise<void> => {
+    if (pauseCommand !== undefined) {
+      await persistState("paused", currentState.completed, pauseCommand.id);
+      await reportStatus();
+      return;
+    }
+    if (timeoutRequested) {
+      await settle(failureFor(job, `worker timed out after ${job.timeoutMs}ms`), ctx);
+      return;
+    }
+    let failure: string | undefined;
+    try {
+      failure = nativeAgentEndFailure(event, expectedModelParts(job.model.model));
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    if (failure !== undefined) {
+      await settle(failureFor(job, failure), ctx);
+      return;
+    }
+    await persistState("idle", false);
+    await reportStatus();
+  };
+
+  const z = pi.zod;
+  const reviews = job.role === "reviewer" || job.role === "verifier";
+  const reviewSchema = z
+    .object({
+      lens: z.enum(["behavior", "design", "coverage", "verification"]),
+      head: z.string(),
+      generation: z.number().int().nonnegative(),
+      pass: z.boolean(),
+      findings: z.array(
+        z
+          .object({
+            id: z.string(),
+            severity: z.enum(["P0", "P1", "P2", "P3"]),
+            verdict: z.enum(["confirmed", "plausible"]),
+            file: z.string().optional(),
+            line: z.number().int().positive().optional(),
+            description: z.string(),
+          })
+          .strict(),
+      ),
+      summary: z.string(),
+    })
+    .strict();
+  pi.registerTool({
+    name: SUBMIT_REPORT_TOOL,
+    label: "Submit report",
+    description:
+      "Submit your final report to the Tandem coordinator once the delegated work is done. Only this call delivers the report; ordinary replies are conversation. A rejected submission explains what to fix; correct it and call again.",
+    parameters: z
+      .object({
+        outcome: z.enum(outcomesFor(job.role)),
+        report: z
+          .string()
+          .optional()
+          .describe(
+            reviews
+              ? "Optional context for a needs-decision or failed outcome."
+              : "The full report body in Markdown.",
+          ),
+        question: z
+          .string()
+          .optional()
+          .describe("Required for needs-decision: one bounded single-line question."),
+        recommendation: z
+          .string()
+          .optional()
+          .describe("Optional for needs-decision: one bounded single-line recommendation."),
+        ...(job.role === "presentation"
+          ? {
+              artifactPath: z
+                .string()
+                .optional()
+                .describe("Required for completed: the absolute path of the written artifact."),
+            }
+          : {}),
+        ...(reviews
+          ? {
+              review: reviewSchema.optional().describe("Required for completed: the ReviewResult."),
+            }
+          : {}),
+      })
+      .strict(),
+    strict: true,
+    loadMode: "essential",
+    approval: "read",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = await submittedResult(params, ctx);
+      if (result instanceof ReportRejection) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Report rejected: ${result.message}. Fix it and call ${SUBMIT_REPORT_TOOL} again.`,
+            },
+          ],
+          details: undefined,
+          isError: true,
+        };
+      }
+      await settle(result, ctx);
+      const summary =
+        result.error === undefined
+          ? `Report submitted with status ${result.status}.`
+          : `Report submitted with status ${result.status}: ${result.error}`;
+      return { content: [{ type: "text", text: summary }], details: undefined };
+    },
+  });
 
   /**
    * Applies `planAbortWithReason`'s decision and then aborts. Best-effort: if the write that just
@@ -334,10 +407,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     const wasIdle = ctx.isIdle();
     ctx.abort();
     if (!wasIdle) return;
-    resultPublished = true;
-    delegatedSettled = true;
-    const result = failureFor(job, `worker timed out after ${job.timeoutMs}ms`);
-    await persistResult(result);
+    await settle(failureFor(job, `worker timed out after ${job.timeoutMs}ms`), ctx);
   };
 
   const finishPause = async (): Promise<void> => {
@@ -465,8 +535,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       await reportStatus();
       return;
     }
-    await publish(event, ctx);
-    if (!resultPublished && pauseCommand === undefined) await persistState("idle", false);
+    await settleTurn(event, ctx);
   });
   pi.on("session_shutdown", async () => {
     closed = true;

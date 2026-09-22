@@ -1,15 +1,16 @@
 import { expect, test } from "bun:test";
-import type {
-  Endpoint,
-  Finding,
-  InstructionChannels,
-  PinnedValidationEvidence,
-  RepoPolicy,
-  ResearchContinuation,
-  ResolvedPolicy,
-  ReviewResult,
-  TaskRecord,
-  WorktreeLease,
+import {
+  blockCause,
+  type Endpoint,
+  type Finding,
+  type InstructionChannels,
+  type PinnedValidationEvidence,
+  type RepoPolicy,
+  type ResearchContinuation,
+  type ResolvedPolicy,
+  type ReviewResult,
+  type TaskRecord,
+  type WorktreeLease,
 } from "../../src/contracts.ts";
 import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
 import { ledgerBlockers } from "../../src/tasks/findings.ts";
@@ -632,6 +633,7 @@ test("pause, resume, block, cancel, scout completion, and merge remain distinct"
   );
   expect(blocked.stage).toBe("blocked");
   expect(blocked.notifications.at(-1)?.kind).toBe("coordinator");
+  expect(blocked.blockCause).toBeUndefined();
   task = transitionTask(blocked, { type: "resume" }, context());
   task = transitionTask(task, { type: "cancel", reason: "no longer needed" }, context());
   expect(task.stage).toBe("cancelled");
@@ -681,6 +683,29 @@ test("pause, resume, block, cancel, scout completion, and merge remain distinct"
     context(),
   );
   expect(merged.stage).toBe("merged");
+});
+
+test("a block event's typed cause is recorded alongside its free-text reason and cleared on resume", () => {
+  const task = startImplementation();
+  const cause = blockCause("resource-lost", {
+    summary: "The task's worktree is missing, so no further work can run against it.",
+    detail: "task is implementing but its durable worktree is missing",
+    jobId: "job-1",
+  });
+  const blocked = transitionTask(
+    task,
+    { type: "block", reason: "task is implementing but its durable worktree is missing", cause },
+    context(),
+  );
+  expect(blocked.stage).toBe("blocked");
+  expect(blocked.blockCause?.detail).toBe(
+    "task is implementing but its durable worktree is missing",
+  );
+  expect(blocked.blockCause).toEqual(cause);
+
+  const resumed = transitionTask(blocked, { type: "resume" }, context());
+  expect(resumed.blockCause).toBeUndefined();
+  expect(resumed.blockReason).toBeUndefined();
 });
 
 test("acknowledges notifications through a single revisioned mutation and exposes a digest", () => {

@@ -164,6 +164,9 @@ const COMMON_AGENT_INSTRUCTIONS = [
   "A needs-decision result is durable task communication that wakes the coordinator; do not prompt the user directly. Include the bounded question, optional recommendation, and report evidence needed for the coordinator to judge it.",
 ] as const;
 
+const SUBMIT_REPORT_INSTRUCTION =
+  "Deliver the final report only by calling submit_report once when the delegated work is done; ordinary replies, including answers to human follow-up messages, are conversation and never count as the report. If submit_report rejects the submission, fix what it names and call it again.";
+
 const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
   coordinator: [
     "Keep the main conversation authoritative and concise; delegate research automatically and disclose delegation blockers as coordinator-actionable notifications.",
@@ -179,39 +182,44 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
   scout: [
     "Research the requested scope in the configured Treehouse worktree and child Herdr workspace.",
     "Use native web_search for web discovery when needed; prefer official or primary sources, and use read for known URLs.",
-    "Start the final report with exactly one line: Outcome: completed|needs-decision|failed. For needs-decision, emit exactly one bounded single-line `Question: ...` and optional single-line `Recommendation: ...`; keep each under 1,000 characters and refer to the report for evidence.",
-    "Return a structured scout report with findings, evidence, affected paths, risks, and open questions; cite source URLs and separate verified facts from heuristic recommendations. Do not write a report file.",
+    SUBMIT_REPORT_INSTRUCTION,
+    "Submit outcome completed, needs-decision, or failed. For a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence.",
+    "Put a structured scout report in the report field with findings, evidence, affected paths, risks, and open questions; cite source URLs and separate verified facts from heuristic recommendations. Do not write a report file.",
     "If a required capability is missing or a tool fails, report the exact missing capability or tool failure and do not invent findings, citations, or a complete report.",
     "Use only read-only tools (read, grep, glob, and web_search) and do not run project-wide tests, builds, formatters, linters, or gates.",
   ],
   implementer: [
     "Implement only the explicitly approved scope in the assigned worktree and preserve affected callers.",
-    "Start the final report with exactly one line: Outcome: implemented|needs-decision|failed.",
-    "Create and report a commit checkpoint when implementation is complete; the checkpoint is expected before reporting implemented.",
-    "Return the final report to the coordinator; the report writer controller persists it. Do not merge, deploy, perform destructive actions, or claim validation that the runner did not perform.",
-    "For Outcome: needs-decision, emit exactly one bounded single-line `Question: ...` and optional single-line `Recommendation: ...`; keep each under 1,000 characters, refer to the report for evidence, and never dump logs or transcript text.",
+    SUBMIT_REPORT_INSTRUCTION,
+    "Submit outcome implemented, needs-decision, or failed, with the report body in the report field.",
+    "Create and report a commit checkpoint when implementation is complete; the checkpoint is expected before submitting implemented.",
+    "The controller persists the submitted report for the coordinator. Do not merge, deploy, perform destructive actions, or claim validation that the runner did not perform.",
+    "For a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; never dump logs or transcript text.",
   ],
   reviewer: [
     "Act as a fresh reviewer in a separate pane on the same task worktree; pause the implementer and remain read-only.",
     "Use only read-only tools (read, grep, and glob); do not write report files.",
     "Review the behavior, security, design, coverage, and verification lenses with evidence-backed findings only.",
     "Bind the report to the exact HEAD and generation. The runner performs targeted validation; do not invent or claim its results.",
-    "On a genuine blocker, return `Outcome: needs-decision` plus exactly one bounded single-line `Question: ...` and optional `Recommendation: ...`; otherwise return the exact ReviewResult JSON schema and selected-lens instructions supplied below.",
+    SUBMIT_REPORT_INSTRUCTION,
+    "On a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; otherwise submit outcome completed with the review field following the ReviewResult schema and selected-lens instructions supplied below.",
   ],
   verifier: [
     "Verify the exact task HEAD and generation from a fresh context without relying on implementer conversation.",
-    "Use only read-only tools (read, grep, and glob), do not write report files, and return the final verification report to the coordinator.",
+    "Use only read-only tools (read, grep, and glob) and do not write report files.",
+    SUBMIT_REPORT_INSTRUCTION,
     "Use only runner-produced targeted validation evidence and report the observed command, result, and scope; never synthesize evidence.",
-    "On a genuine blocker, return `Outcome: needs-decision` plus exactly one bounded single-line `Question: ...` and optional `Recommendation: ...`; otherwise return the exact ReviewResult JSON schema and selected-lens instructions supplied below. Bind lens, HEAD, and generation to the requested review context; pass is the boolean verdict.",
+    "On a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; otherwise submit outcome completed with the review field following the ReviewResult schema and selected-lens instructions supplied below. Bind lens, HEAD, and generation to the requested review context; pass is the boolean verdict.",
   ],
   presentation: [
     "Presentation alone may write the artifact at the supplied absolute path using only read, grep, glob, write, and edit.",
     "Never invoke bash, shell commands, or Lavish; the controller retrieves help/design/playbook guidance, verifies the artifact, opens Lavish, and owns the supervised continuous feedback listener and durable notification path.",
     "Never modify the repository, authorize implementation or other decisions, or claim that presentation approval is complete.",
-    "On a genuine blocker, return `Outcome: needs-decision` plus exactly one bounded single-line `Question: ...` and optional `Recommendation: ...`; otherwise return `Artifact: <absolute path>` plus a concise status. Feedback is externally managed by the controller's bounded public action and supervised automatic listener; never invoke Lavish or create an untracked background poll.",
+    SUBMIT_REPORT_INSTRUCTION,
+    "On a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; otherwise submit outcome completed with artifactPath set to the absolute artifact path and a concise status in the report field. Feedback is externally managed by the controller's bounded public action and supervised automatic listener; never invoke Lavish or create an untracked background poll.",
   ],
 };
-const REVIEW_RESULT_SCHEMA = `Return exactly one ReviewResult JSON object with these keys:
+const REVIEW_RESULT_SCHEMA = `Set the submit_report review field to one ReviewResult object with these keys:
 {"lens":"<behavior|design|coverage|verification>","head":"<exact HEAD>","generation":0,"pass":true,"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>"}],"summary":"<evidence-backed summary>"}
 Use the selected lens, exact HEAD, and exact generation supplied by the coordinator. Allowed lens values are behavior, design, coverage, and verification; severity values are P0, P1, P2, and P3; verdict values are confirmed and plausible; pass is boolean. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
 
@@ -347,11 +355,11 @@ export function buildAgentBrief(input: AgentBriefInput): string {
     input.role === "presentation"
       ? [
           `Write complete HTML at ${reportPath}; the coordinator supplies this as an absolute path.`,
-          "Return exactly one line beginning `Artifact: ` followed by the absolute path, plus a concise status line.",
+          "Submit it with submit_report: outcome completed, artifactPath set to that absolute path, and a concise status in the report field.",
         ]
       : [
-          `Return the final ${input.role} report to the coordinator; do not write a report file.`,
-          `The coordinator/report writer controller persists it at ${reportPath}.`,
+          `Submit the final ${input.role} report with submit_report; do not write a report file.`,
+          `The controller persists the submitted report at ${reportPath}.`,
         ];
   const lines: string[] = [
     `# Tandem ${input.role} brief`,
@@ -373,7 +381,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
           ...formatBullets([
             "This is an opaque, explicitly user-invoked capability; do not load, infer, or run any other skill.",
             "Tandem does not interpret this skill's domain semantics; follow the context below as the skill's own instructions within the objective and acceptance criteria above.",
-            "If running this skill needs a user decision, return Outcome: needs-decision through the existing report protocol; never open a separate user conversation or channel.",
+            "If running this skill needs a user decision, submit outcome needs-decision through submit_report; never open a separate user conversation or channel.",
           ]),
           "",
           skill.context,

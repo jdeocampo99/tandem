@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { readTreehousePoolStatus, releaseWorktree } from "../adapters/treehouse.ts";
 import type { CommandRunner, Endpoint, WorktreeLease } from "../contracts.ts";
@@ -422,7 +422,7 @@ export function decideCoordinatorReplacement(
 /** Whether the exact recorded lease is still held, before anything tries to return it. */
 type CoordinatorLeasePresence = "held" | "absent";
 
-async function readCoordinatorLeasePresence(
+export async function readCoordinatorLeasePresence(
   run: CommandRunner,
   repoPath: string,
   lease: WorktreeLease,
@@ -488,6 +488,21 @@ export async function quarantineCoordinatorLease(
     readonly newId: () => string;
   }>,
 ): Promise<CoordinatorResourceOutcome> {
+  // One note per lease: a repeated launch or reconcile must not bury it under copies.
+  const existing = (await listCoordinatorQuarantineRecords(input.home)).find(
+    (record) =>
+      record.lease.leaseId === input.lease.leaseId && record.lease.path === input.lease.path,
+  );
+  if (existing !== undefined) {
+    return {
+      outcome: "quarantined",
+      reason: input.reason,
+      quarantinePath: join(
+        coordinatorQuarantineDirectory(await canonicalHome(input.home)),
+        quarantineFileName(existing.quarantineId),
+      ),
+    };
+  }
   const quarantinePath = await writeCoordinatorQuarantineRecord(input.home, {
     schemaVersion: QUARANTINE_SCHEMA_VERSION,
     quarantineId: input.newId(),
@@ -500,6 +515,23 @@ export async function quarantineCoordinatorLease(
     ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
   });
   return { outcome: "quarantined", reason: input.reason, quarantinePath };
+}
+
+/**
+ * Deletes a quarantine note once Treehouse no longer holds the lease it tracks, because nothing
+ * is left for the note to protect. A lease that is still held keeps its note.
+ */
+export async function retireCoordinatorQuarantineNote(
+  run: CommandRunner,
+  home: string,
+  record: CoordinatorQuarantineRecord,
+): Promise<"retired" | "held"> {
+  if ((await readCoordinatorLeasePresence(run, record.repoPath, record.lease)) === "held") {
+    return "held";
+  }
+  const directory = coordinatorQuarantineDirectory(await canonicalHome(home));
+  await rm(join(directory, quarantineFileName(record.quarantineId)), { force: true });
+  return "retired";
 }
 
 /**

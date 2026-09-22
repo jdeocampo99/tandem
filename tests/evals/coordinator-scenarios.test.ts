@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { chmod, readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RequestBriefContent } from "../../src/contracts.ts";
 import type {
@@ -103,6 +105,123 @@ test("restarting an owned coordinator replaces only its pane and keeps the same 
     expect(world.paneIsPresent(second.paneId ?? "")).toBe(true);
     expect(snapshot.resources.retained).toContain("lease:lease-1");
     expect(snapshot.trace.some((event) => event.action === "treehouse return")).toBe(false);
+  });
+});
+
+test("restart relaunches an exited coordinator beside a pane someone reused, without touching it", async () => {
+  await withScenario({}, async (world) => {
+    const rehomed: RehomeCall[] = [];
+    const first = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, rehomed),
+    );
+    // Ctrl-C exited the coordinator, then a plain `omp` was started by hand in its pane.
+    world.replaceForeground(first.paneId ?? "", ["omp"]);
+
+    const second = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, rehomed),
+    );
+
+    const record = await readCoordinatorRecord(
+      recordPath(world.home, world.sessionId, world.repoPath),
+    );
+    expect(second.restarted).toBe(false);
+    expect(second.paneId).not.toBe(first.paneId);
+    expect(second.command).toContain("--continue");
+    expect(record?.endpoint.paneId).toBe(second.paneId ?? "");
+    expect(world.paneIsPresent(first.paneId ?? "")).toBe(true);
+    expect(world.paneIsPresent(second.paneId ?? "")).toBe(true);
+  });
+});
+
+test("restart still refuses while the coordinator runs outside its recorded pane", async () => {
+  await withScenario({}, async (world) => {
+    const rehomed: RehomeCall[] = [];
+    const first = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, rehomed),
+    );
+    const other = world.openPane({ paneId: "pane-elsewhere", cwd: world.repoPath });
+    world.replaceForeground(other.paneId, first.command);
+    world.replaceForeground(first.paneId ?? "", ["omp"]);
+
+    await expect(
+      restartCoordinator(launchRequest(world), launchDependencies(world, rehomed)),
+    ).rejects.toThrow(/still running elsewhere .* then run `tandem restart`/u);
+    expect(world.paneIsPresent(first.paneId ?? "")).toBe(true);
+  });
+});
+
+async function coordinatorScript(world: ScenarioWorld): Promise<string> {
+  const directory = join(world.home, "coordinator-scripts");
+  const [name] = await readdir(directory);
+  if (name === undefined) throw new Error("no coordinator launch script was written");
+  return join(directory, name);
+}
+
+test("after the coordinator exits, its pane offers to start it again with the saved conversation", async () => {
+  await withScenario({}, async (world) => {
+    await restartCoordinator(launchRequest(world), launchDependencies(world, []));
+    const script = await coordinatorScript(world);
+    const bin = join(world.home, "bin");
+    const calls = join(world.home, "omp-calls.txt");
+    await Bun.write(join(bin, "omp"), `#!/bin/sh\necho "$*" >> '${calls}'\n`);
+    await chmod(join(bin, "omp"), 0o755);
+
+    // Enter once (restart), then close stdin (leave).
+    const child = Bun.spawn(["/bin/sh", script], {
+      stdin: new TextEncoder().encode("\n"),
+      stdout: "pipe",
+      env: { PATH: `${bin}:/usr/bin:/bin` },
+    });
+    expect(await child.exited).toBe(0);
+    const output = await new Response(child.stdout).text();
+    expect(output.match(/Tandem's coordinator stopped\./gu)).toHaveLength(2);
+    const invocations = (await readFile(calls, "utf8")).trim().split("\n");
+    expect(invocations).toHaveLength(2);
+    expect(invocations[1]).toContain("--continue");
+  });
+});
+
+test("restart closes a pane whose launch script is waiting to start the coordinator again", async () => {
+  await withScenario({}, async (world) => {
+    const rehomed: RehomeCall[] = [];
+    const first = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, rehomed),
+    );
+    world.replaceForeground(first.paneId ?? "", ["/bin/sh", await coordinatorScript(world)]);
+
+    const second = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, rehomed),
+    );
+    expect(second.restarted).toBe(true);
+    expect(second.worktree.leaseId).toBe(first.worktree.leaseId);
+    expect(world.paneIsPresent(first.paneId ?? "")).toBe(false);
+    expect((await world.snapshot()).resources.quarantined).toEqual([]);
+  });
+});
+
+test("a coordinator started again from its pane is still the owned coordinator", async () => {
+  await withScenario({}, async (world) => {
+    const rehomed: RehomeCall[] = [];
+    const first = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, rehomed),
+    );
+    // Only --continue differs between a first start and a start from the pane's offer.
+    world.replaceForeground(
+      first.paneId ?? "",
+      first.command.filter((value) => value !== "--continue"),
+    );
+    const second = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, rehomed),
+    );
+    expect(second.restarted).toBe(true);
+    expect(second.previousPaneId).toBe(first.paneId ?? "");
   });
 });
 

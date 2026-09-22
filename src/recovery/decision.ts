@@ -1,8 +1,27 @@
 import { createHash } from "node:crypto";
-import type { IsoTimestamp } from "../contracts.ts";
+import type { BlockCause, BlockCauseKind, IsoTimestamp } from "../contracts.ts";
 
 /** Version of the durable recovery decision and bounded-wait contract. */
 export const RECOVERY_CONTRACT_SCHEMA_VERSION = 1;
+
+/**
+ * What one central recovery pass (`CentralRecoveryWorkflow`, in `./central.ts`) did for a task.
+ * Defined here rather than in `central.ts` so `./conversation.ts` can depend on it too without a
+ * cycle: `central.ts` already imports `taskAsking` from `./conversation.ts`.
+ */
+export type CentralRecoveryAction =
+  | "relaunched"
+  | "adopted"
+  | "resumed"
+  | "asked"
+  | "blocked"
+  | "skipped";
+
+export type CentralRecoveryOutcome = Readonly<{
+  readonly taskId: string;
+  readonly action: CentralRecoveryAction;
+  readonly reason: string;
+}>;
 
 /** Prefix shared by every durable recovery question id, so an answer path can recognize one. */
 export const RECOVERY_QUESTION_ID_PREFIX = "recovery-";
@@ -258,8 +277,29 @@ export function recoveryEvidenceIdentity(
 }
 
 /**
+ * A stable identity for one block cause, keyed to the task, its generation, the cause's own kind,
+ * and (when the site recorded one) the exact job it happened to. Unlike `recoveryEvidenceIdentity`,
+ * this never hashes `summary`: rewording a cause's plain-English summary can never orphan an
+ * outstanding recovery question or decision, because nothing about the wording feeds the identity.
+ */
+export function blockCauseEvidenceIdentity(
+  input: Readonly<{
+    readonly taskId: string;
+    readonly generation: number;
+    readonly kind: BlockCauseKind;
+    readonly jobId?: string;
+  }>,
+): string {
+  const parts = [input.taskId, String(input.generation), input.kind, input.jobId ?? ""];
+  return createHash("sha256").update(parts.join(" ")).digest("hex").slice(0, 32);
+}
+
+/**
  * Reads the durable blockers recorded for one task and answers what the coordinator is deciding
- * about. Blockers are ordered by authority, so the task's own reason wins over a runtime note.
+ * about. Blockers are ordered by authority, so the task's own reason wins over a runtime note. When
+ * the task's own blocker carries a typed `cause`, the evidence identity is keyed off the cause's kind
+ * (and job, when it has one) via `blockCauseEvidenceIdentity` instead of the free-text hash, so a
+ * later rewording of the summary can never orphan an outstanding decision or question.
  */
 export function classifyRecoveryEvidence(
   input: Readonly<{
@@ -268,19 +308,35 @@ export function classifyRecoveryEvidence(
     readonly requestId?: string;
     readonly blockers: readonly string[];
     readonly observedAt: IsoTimestamp;
+    /** The task's own typed block cause, when one was recorded for its current blocker. */
+    readonly cause?: BlockCause;
   }>,
 ): RecoveryEvidence | undefined {
   const blockers = input.blockers.filter((entry) => entry.trim().length > 0);
   const availability = blockers.find((entry) => isTemporaryAvailabilityText(entry));
-  const summary = availability ?? blockers[0];
-  if (summary === undefined) return undefined;
+  const rawSummary = availability ?? blockers[0];
+  if (rawSummary === undefined) return undefined;
   const kind: RecoveryEvidenceKind =
     availability === undefined ? "durable-blocker" : "temporary-availability";
+  // Prefer the task's own typed cause for the plain-English summary a person reads: it is
+  // deliberately free of task/job/pane identifiers, unlike the raw blocker text this falls back to
+  // for a task that has not yet recorded one.
+  const summary =
+    kind === "durable-blocker" && input.cause !== undefined ? input.cause.summary : rawSummary;
   const knownAvailableAt =
     availability === undefined ? undefined : availabilityTimeIn(availability, input.observedAt);
+  const identity =
+    kind === "durable-blocker" && input.cause !== undefined
+      ? blockCauseEvidenceIdentity({
+          taskId: input.taskId,
+          generation: input.generation,
+          kind: input.cause.kind,
+          ...(input.cause.jobId === undefined ? {} : { jobId: input.cause.jobId }),
+        })
+      : recoveryEvidenceIdentity({ ...input, kind, summary: rawSummary });
   return {
     kind,
-    identity: recoveryEvidenceIdentity({ ...input, kind, summary }),
+    identity,
     summary: boundedSummary(summary),
     observedAt: input.observedAt,
     ...(knownAvailableAt === undefined ? {} : { knownAvailableAt }),
@@ -422,6 +478,43 @@ function failingProofs(facts: RecoveryProvenFacts): readonly RecoveryProof[] {
 
 function describeRemainingBudget(budget: RecoveryBudgetRemaining): string {
   return `Remaining budget: ${budget.recoveryAttempts} recovery attempt(s), ${budget.validationRetries} validation retry/retries, ${budget.evidenceRepairs} evidence repair(s).`;
+}
+
+/** Block-cause kinds within `unusable-result` central recovery may still retry automatically for a
+ *  blocked task: each still reflects an infrastructure-shaped failure (a worker or review pane
+ *  vanishing, or a result invalidated by a stale instruction revision), never a lens that ran to
+ *  completion and reported its own failure (`review-lens-failed` is deliberately excluded). */
+const RECOVERABLE_UNUSABLE_RESULT_KINDS: ReadonlySet<BlockCauseKind> = new Set([
+  "worker-failed",
+  "stale-review-state",
+  "no-clean-checkpoint",
+]);
+
+/**
+ * Whether a blocked task's typed cause is one central recovery may re-enter automatically: any
+ * `lost-resource` cause (nothing about the task's own work is in question), or an `unusable-result`
+ * cause whose kind is still infrastructure-shaped. A `user-decision` or `safety-stop` cause is never
+ * recoverable automatically; only a person resolves those.
+ */
+export function isRecoverableBlockCause(cause: BlockCause): boolean {
+  if (cause.group === "lost-resource") return true;
+  return cause.group === "unusable-result" && RECOVERABLE_UNUSABLE_RESULT_KINDS.has(cause.kind);
+}
+
+/** Legacy free-text worker-death shapes recorded before every block site carried a typed
+ *  `BlockCause`. Central recovery's blocked-task re-entry recognizes only these shapes for a task
+ *  whose block predates the typed-cause migration; anything else with no typed cause is left alone. */
+const LEGACY_WORKER_DEATH_TEXT_PATTERNS: readonly RegExp[] = [
+  /\bstale worker instruction\b/iu,
+  /\bworker stopped without a durable result\b/iu,
+  /\bworker launch (?:could not be proven|was not proven|not proven)\b/iu,
+  /\bendpoint (?:is )?missing\b/iu,
+];
+
+/** Whether legacy free-text (no typed `BlockCause`) reads as a worker-death shape central recovery
+ *  may still re-enter automatically. */
+export function isLegacyWorkerDeathBlockText(value: string): boolean {
+  return LEGACY_WORKER_DEATH_TEXT_PATTERNS.some((pattern) => pattern.test(value));
 }
 
 /** The two failure classes the central recovery module distinguishes for the same-class guard. */

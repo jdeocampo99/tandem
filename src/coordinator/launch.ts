@@ -25,7 +25,7 @@ import {
   parallelCoordinatorsAllowed,
 } from "./exclusivity.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
-import { findRunningCoordinator } from "./ownership.ts";
+import { COORDINATOR_SCRIPT_DIRECTORY, findRunningCoordinator } from "./ownership.ts";
 import { COORDINATOR_LEASE_HOLDER_PREFIX, type CoordinatorRecord, recordPath } from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
 import {
@@ -328,13 +328,19 @@ function coordinatorPaneCommand(
   return quoteShellCommand(["env", ...assignments, ...argv]);
 }
 
+/**
+ * Writes the pane's launch script. It runs the coordinator, and when the coordinator exits
+ * (Ctrl-C, crash) it offers to start it again in the same pane, resuming the saved conversation.
+ * Ctrl-C at that offer leaves the user at the pane's own shell.
+ */
 async function writeCoordinatorBootstrap(
   paths: CoordinatorPaths,
   request: CoordinatorLaunchRequest,
   argv: readonly string[],
+  resumeArgv: readonly string[],
   environment: Readonly<Record<string, string>>,
 ): Promise<string> {
-  const directory = join(paths.home, "coordinator-scripts");
+  const directory = join(paths.home, COORDINATOR_SCRIPT_DIRECTORY);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
   const scriptPath = join(
@@ -342,7 +348,22 @@ async function writeCoordinatorBootstrap(
     `coordinator-${coordinatorHash(paths.repo)}-${coordinatorHash(request.sessionId)}-${coordinatorHash(argv.join("\0"))}.sh`,
   );
   const temporaryPath = `${scriptPath}.${process.pid}.${randomUUID()}.tmp`;
-  const script = `#!/bin/sh\nset -eu\nexec ${coordinatorPaneCommand(argv, environment)}\n`;
+  // The no-op INT trap keeps this script alive through the coordinator's own Ctrl-C handling;
+  // children still get the default signal behavior.
+  const script = [
+    "#!/bin/sh",
+    "set -u",
+    "trap : INT",
+    coordinatorPaneCommand(argv, environment),
+    "while :; do",
+    "  trap - INT",
+    `  printf '\\n%s\\n%s\\n' "Tandem's coordinator stopped." "Press Enter to start it again where you left off, or Ctrl-C to leave this shell."`,
+    "  read -r _ || exit 0",
+    "  trap : INT",
+    `  ${coordinatorPaneCommand(resumeArgv, environment)}`,
+    "done",
+    "",
+  ].join("\n");
   try {
     await writeFile(temporaryPath, script, {
       encoding: "utf8",
@@ -518,7 +539,9 @@ async function waitForCoordinatorOwnership(
       // The fresh pane can briefly look unrecorded or mismatched before its OMP foreground settles.
       if (
         !(error instanceof Error) ||
-        !/does not match recorded OMP command|pre-registry Tandem coordinator/.test(error.message)
+        !/coordinator is still running elsewhere|pre-registry Tandem coordinator/.test(
+          error.message,
+        )
       ) {
         throw error;
       }
@@ -845,10 +868,19 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     request.parentWorkspaceId ?? workspace.workspaceId,
     coordinatorCwd,
   );
+  const resumeArgv = buildCoordinatorArgv({
+    cwd: coordinatorCwd,
+    model: request.model,
+    configPath: request.configPath,
+    extensionPath: request.extensionPath,
+    continueSession: true,
+    sessionDirectory: paths.sessionDirectory,
+  });
   const bootstrapPath = await writeCoordinatorBootstrap(
     paths,
     request,
     argv,
+    resumeArgv,
     coordinatorEnvironment,
   );
   await runExternal(dependencies.run, {

@@ -3,13 +3,9 @@ import type { RepoPolicy, RequestBriefContent, SkillInvocation, TaskKind } from 
 import type { PrSummary } from "../delivery/evidence.ts";
 import { formatDollars } from "../runtime/budget.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
-import { formatDecisionQuestion } from "../tasks/question.ts";
-import {
-  ACTION_SUMMARY_MAX_TEXT,
-  compactText,
-  projectName,
-  summarizeModelAssignments,
-} from "./summary.ts";
+import { activeTaskMessages } from "../tasks/communication-protocol.ts";
+import { taskName } from "../tasks/question.ts";
+import { projectName, summarizeModelAssignments } from "./summary.ts";
 
 const TANDEM_COMMAND_ARITY: Readonly<
   Record<string, Readonly<{ readonly min: number; readonly max: number }>>
@@ -270,31 +266,30 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "evidence-repair"
   );
 }
-/**
- * `plainCheckpoint` names the reviewed commit in plain terms instead of its raw hash, for a
- * publish/merge prompt where the exact SHA is not something a person can judge by; other prompts
- * keep the hash for a technical reviewer verifying exact state before an approval.
- */
 /** The three whole-request actions that need a human decision, each one separately. */
 function requestApprovalPrompt(
   action: Extract<TandemAction, { action: "request-publish" | "request-merge" | "request-split" }>,
 ): Readonly<{ readonly title: string; readonly message: string }> {
   if (action.action === "request-publish") {
     return {
-      title: "Open the pull request for this request?",
-      message: `"${action.title}" on ${action.repository}, into ${action.base}. It won't be merged yet.`,
+      title: `Open a PR for "${action.title}"?`,
+      message: `Into ${action.base}. Nothing is merged.`,
     };
   }
   if (action.action === "request-merge") {
     return {
-      title: "Merge the pull request for this request?",
-      message: `Merges with ${action.method} once its checks pass.`,
+      title: "Merge this request's PR?",
+      message: `${capitalize(action.method)}, once checks pass.`,
     };
   }
   return {
-    title: "Split this request into several pull requests?",
-    message: "By default it ships as one pull request.",
+    title: "Split this request into several PRs?",
+    message: "One PR is the default.",
   };
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 async function approvalPrompt(
@@ -303,28 +298,20 @@ async function approvalPrompt(
 ): Promise<Readonly<{ readonly title: string; readonly message: string }>> {
   if (action.action === "configure-models") {
     const choices = summarizeModelAssignments(action.models);
-    const choiceDetails =
-      choices.length === 0
-        ? "No model choices were provided."
-        : choices.map((entry) => `- ${entry}`).join("\n");
-    const providerDetails =
+    const providers =
       action.enabledProviders === undefined
         ? ""
-        : `\n\nProviders allowed to spend (replaces the saved list): ${
-            action.enabledProviders.length === 0 ? "none" : action.enabledProviders.join(", ")
-          }.`;
+        : `\nCan spend on: ${action.enabledProviders.length === 0 ? "none" : action.enabledProviders.join(", ")}.`;
     return {
-      title: "Save Tandem model choices?",
-      message: `Proposed choices by job:\n${choiceDetails}${providerDetails}\n\nThese choices will be saved on this computer and reused across projects for future work. They replace any saved choices. Saving them does not change the project or start work.`,
+      title: "Save these model choices?",
+      message: `${choices.map((entry) => `- ${entry}`).join("\n")}${providers}`,
     };
   }
   if (action.action === "setup") {
     const onboarded = await service.onboard(action.repoPath, false);
-    const project = projectName(onboarded.repoPath);
     return {
-      title: `Save Tandem settings for ${project}?`,
-      message:
-        "Tandem will save these settings on this computer, outside the project. This does not change the app or start work.",
+      title: `Save Tandem settings for ${projectName(onboarded.repoPath)}?`,
+      message: "Saved outside the project.",
     };
   }
   if (
@@ -337,89 +324,71 @@ async function approvalPrompt(
   if (action.action === "brief-approve") {
     const requestId = action.requestId ?? (await service.pendingBriefApprovalId());
     const view = await service.requestBrief(requestId);
-    const goal = view.record.draft.content.goal;
-    const what =
-      view.approvalState === "unapproved"
-        ? `The brief for "${goal}" has not been approved yet.`
-        : view.approvalState === "superseded"
-          ? `The brief for "${goal}" changed after it was last approved.`
-          : `The brief for "${goal}" is already approved as it stands.`;
     return {
-      title: "Approve this request brief?",
-      message: formatDecisionQuestion({
-        what,
-        recommendation: "Approve it as the agreed plan?",
-      }),
+      title: "Approve this brief?",
+      message: taskName(view.record.draft.content.goal),
     };
   }
   if (action.action === "budget-approve") {
+    const readout = await service.requestSpend(action.requestId);
     return {
-      title: `Raise this request's spending cap to ${formatDollars(action.capMicros)}?`,
-      message: "Work picks up where it paused.",
+      title: `Raise the cap to ${formatDollars(action.capMicros)}?`,
+      message: `${formatDollars(readout.exposure.committedMicros)} spent so far.`,
     };
   }
-  if (!("taskId" in action))
-    return { title: "Confirm Tandem action", message: "Allow this Tandem action?" };
+  if (!("taskId" in action)) return { title: "Allow this Tandem action?", message: "" };
   const task = await service.get(action.taskId);
-  const objective = `"${compactText(task.objective, ACTION_SUMMARY_MAX_TEXT)}"`;
+  const name = taskName(task.objective);
   switch (action.action) {
-    case "approve":
+    case "approve": {
+      // Directions given after the plan go to the worker too, so the approval names them.
+      const directions =
+        task.communication === undefined ? 0 : activeTaskMessages(task.communication).length;
       return {
-        title: "Start building this?",
-        message: `${objective}, with ${task.acceptanceCriteria.length} acceptance criteria.`,
+        title: `Start building ${name}?`,
+        message:
+          directions === 0
+            ? ""
+            : `Includes ${directions} direction${directions === 1 ? "" : "s"} you gave after the plan.`,
       };
+    }
     case "cancel":
-      return {
-        title: "Cancel this task?",
-        message: `${objective}. Its work and reports are kept.`,
-      };
+      return { title: `Stop ${name}?`, message: "Its work and reports are kept." };
     case "publish":
       return {
-        title: "Open the pull request?",
-        message: `"${action.title}" for ${objective}, into ${action.base}. It won't be merged yet.`,
+        title: `Open a PR for ${name}?`,
+        message: `Into ${action.base}. Nothing is merged.`,
       };
     case "draft":
       return {
-        title: "Open a draft pull request?",
-        message: `Shows progress on ${objective}. It isn't ready to merge.`,
+        title: `Open a draft PR for ${name}?`,
+        message: "Shows progress only. Nothing is merged.",
       };
     case "merge":
       return {
-        title: "Merge the pull request?",
-        message: `${objective}, using ${action.method}.`,
+        title:
+          task.pullRequest === undefined
+            ? `Merge ${name}?`
+            : `Merge PR #${task.pullRequest.number}?`,
+        message: `${capitalize(action.method)}, once checks pass.`,
       };
     case "recovery-decide":
       return {
-        title: "Let Tandem try to unstick this task?",
-        message: `${objective}. It only runs a fix you've already allowed, or asks you.`,
+        title: `Fix ${name}?`,
+        message: "I'll use a fix you've already allowed, or ask you. Nothing gets published.",
       };
     case "reconcile":
-      return {
-        title: "Clean up leftovers from this task?",
-        message: `${objective}. Its work is kept.`,
-      };
+      return { title: `Clean up leftovers from ${name}?`, message: "Its work is kept." };
     case "review-existing":
-      return {
-        title: "Check and review the work as it stands?",
-        message: `${objective}. Runs the checks and a fresh review without changing code.`,
-      };
+      return { title: `Review ${name} as it stands?`, message: "" };
     case "validation-retry":
-      return {
-        title: "Run the checks again?",
-        message: `${objective}.`,
-      };
+      return { title: `Rerun checks for ${name}?`, message: "" };
     case "evidence-repair":
-      return {
-        title: "Rebuild this task's missing check records?",
-        message: `${objective}. Only records that match the current code are rebuilt.`,
-      };
+      return { title: `Rebuild the reports for ${name}?`, message: "" };
     case "cleanup":
-      return {
-        title: "Delete this task's working copy?",
-        message: `${objective}. This can't be undone.`,
-      };
+      return { title: `Delete the worktree for ${name}?`, message: "This discards its changes." };
     default:
-      return { title: "Confirm Tandem action", message: "Allow this Tandem action?" };
+      return { title: "Allow this Tandem action?", message: "" };
   }
 }
 

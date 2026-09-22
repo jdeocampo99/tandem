@@ -40,7 +40,7 @@ import type {
   ExecutionRoutingLimits,
   ExecutionRoutingPauseReason,
 } from "../runtime/schema.ts";
-import { formatDecisionQuestion } from "../tasks/question.ts";
+import { formatDecisionQuestion, taskName } from "../tasks/question.ts";
 import type { WorkerRole } from "./jobs.ts";
 
 /** Why no catalogue evidence is on hand. None of these ever reads as "nothing is included". */
@@ -287,93 +287,38 @@ export function executionRoutingPauseStands(
 }
 
 /**
- * The whole routing question in one plain-English prompt: the move that was on the table, why it
- * is not automatic, and what answering it means. It never proposes a saving, never offers to
- * proceed on the user's behalf, and never names a task, decision, generation, or attempt id — a
- * caller that needs those for durable records or a tool call reads them off `pause` directly,
- * never out of this text. `taskObjective`, when the caller has it, names the task in its own
- * words instead of its id; omit it and the prompt falls back to a generic "this task".
+ * The routing question as one short question: keep the pinned model, and why Tandem stopped.
+ * It never proposes a saving or names a task, decision, generation, or attempt id; a caller that
+ * needs those reads them off `pause` directly. `taskObjective`, when given, names the task.
  */
 export function describeExecutionRoutingDecision(
   pause: DurableExecutionRoutingPause,
   taskObjective?: string,
 ): string {
-  const subject = taskObjective === undefined ? "this task" : `"${taskObjective}"`;
-  const candidate =
-    pause.candidateSelector === undefined
-      ? ""
-      : ` The candidate is ${pause.candidateSelector}${pause.candidateProvider === undefined ? "" : ` from ${pause.candidateProvider}`}${pause.premiumAxis === undefined ? "" : `, which uses more ${PREMIUM_AXIS_NAMES[pause.premiumAxis]} than the current model`}.`;
-  const gaps =
-    pause.evidenceGaps.length === 0
-      ? ""
-      : ` Missing or unclear pricing: ${pause.evidenceGaps.map(describeEvidenceGap).join("; ")}.`;
-  const usage = describeUnobservedUsage(pause);
+  const subject = taskObjective === undefined ? "this task" : taskName(taskObjective);
+  const reason =
+    pause.reason === "premium-tier-requires-approval" && pause.candidateSelector !== undefined
+      ? `The only alternative, ${pause.candidateSelector}, costs more.`
+      : pause.reason === "usage-evidence-unmeasured" && pause.usageSource === "no-governing-request"
+        ? "No request tracks what this task spends."
+        : ROUTING_PAUSE_EXPLANATIONS[pause.reason];
   return formatDecisionQuestion({
-    what: `Before running ${subject}, Tandem paused a model change: ${ROUTING_PAUSE_EXPLANATIONS[pause.reason]}.${candidate}${gaps}${usage === undefined ? "" : ` ${usage}`}`,
-    recommendation: `Keep using ${pause.pinnedSelector} (thinking: ${pause.pinnedThinking}) unless you say otherwise.`,
+    ask: `Keep ${subject} on ${pause.pinnedSelector}?`,
+    note: reason,
   });
-}
-
-const EVIDENCE_GAP_EXPLANATIONS: Readonly<Record<ModelTierEvidenceGap, string>> = {
-  "incumbent-absent-from-catalogue": "the current model isn't listed",
-  "incumbent-ambiguous-in-catalogue": "the current model matches more than one listing",
-  "incumbent-thinking-level-unsupported":
-    "the current model doesn't support the configured thinking level",
-  "candidate-absent-from-catalogue": "the candidate model isn't listed",
-  "candidate-ambiguous-in-catalogue": "the candidate model matches more than one listing",
-  "candidate-thinking-level-unsupported":
-    "the candidate model doesn't support the configured thinking level",
-  "catalogue-cost-unpublished": "no published price for one of the models",
-  "included-allowance-unpublished": "no published included-usage allowance for one of the models",
-  "included-allowance-plan-differs":
-    "the two models are on different included-usage plans, so their allowances can't be compared",
-  "included-allowance-unit-differs":
-    "the two models measure included usage in different units, so their allowances can't be compared",
-};
-
-/** Plain English for one reason two models cannot be placed on the same tier scale. */
-function describeEvidenceGap(gap: ModelTierEvidenceGap): string {
-  return EVIDENCE_GAP_EXPLANATIONS[gap];
-}
-
-/**
- * What this request has spent that nobody reported. It is stated as unmeasured work rather than as
- * an amount, because the charged total beside it is a floor on the cost and not a measurement.
- */
-function describeUnobservedUsage(pause: DurableExecutionRoutingPause): string | undefined {
-  if (pause.usageSource === "no-governing-request") {
-    return "No request governs this task, so there is no accounting ledger to prove what a different model would draw.";
-  }
-  const unaccounted = pause.unaccountedSamples ?? 0;
-  const unmeasured = pause.unmeasuredTokenSamples ?? 0;
-  if (unaccounted === 0 && unmeasured === 0) return undefined;
-  return `${unaccounted} recorded sample(s) under this request carry no published price and no reserved estimate, and ${unmeasured} reported no tokens, so what this request has actually drawn is unknown rather than small. Nothing about a different model's cost or allowance can be proven against that.`;
 }
 
 const DECISION_ID_PREFIX = "routing-";
 
-const PREMIUM_AXIS_NAMES = {
-  "monetary-cost": "money",
-  "quota-consumption": "included allowance",
-} as const;
-
 const ROUTING_PAUSE_EXPLANATIONS: Readonly<Record<ExecutionRoutingPauseReason, string>> = {
-  "spending-decision-pending":
-    "this request already stopped on a separate spending decision, which comes first",
-  "prior-outcome-uncertain":
-    "Tandem can't yet prove what the last attempt actually did, so it is held as-is instead of being retried or replaced",
-  "pinned-model-absent-from-catalogue":
-    "the model you pinned isn't listed right now, so nothing confirms it can still run",
-  "pinned-model-ambiguous-in-catalogue":
-    "the model you pinned matches more than one listing, so which model would actually run is unknown",
-  "pinned-model-thinking-level-unsupported":
-    "the model you pinned no longer supports the thinking level configured for this step",
-  "premium-tier-requires-approval":
-    "the only replacement available costs more or uses more of your included usage, even when it is prepaid, bundled, or expected to bill nothing extra",
-  "tier-evidence-indeterminate":
-    "Tandem can't get clear pricing for the available replacements, so none of them can be treated as an equal swap",
-  "usage-evidence-unmeasured":
-    "Tandem can't fully see what this request has already spent, so it can't prove a replacement would cost no more than the model you pinned",
+  "spending-decision-pending": "A spending decision comes first.",
+  "prior-outcome-uncertain": "I can't tell what the last attempt did.",
+  "pinned-model-absent-from-catalogue": "That model isn't listed right now.",
+  "pinned-model-ambiguous-in-catalogue": "That model name matches more than one model.",
+  "pinned-model-thinking-level-unsupported": "It no longer supports this thinking level.",
+  "premium-tier-requires-approval": "The only alternative costs more.",
+  "tier-evidence-indeterminate": "I can't get clear pricing for the alternatives.",
+  "usage-evidence-unmeasured": "I can't see enough of what this request has spent.",
 };
 
 type ClassifiedCandidate = Readonly<{

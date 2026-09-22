@@ -506,7 +506,9 @@ export function recognizesAppliedEvent(task: TaskRecord, event: TaskEvent): bool
         task.reviews.some((review) => JSON.stringify(review) === JSON.stringify(event.review))
       );
     case "block":
-      return task.stage === "blocked" && task.blockReason === event.reason;
+      return (
+        task.stage === "blocked" && task.blockReason === (event.cause?.summary ?? event.reason)
+      );
     default:
       return false;
   }

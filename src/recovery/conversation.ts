@@ -11,9 +11,10 @@ import { readRuntimeState, updateRuntimeState } from "../runtime/persistence.ts"
 import type { RuntimeTaskState } from "../runtime/schema.ts";
 import { isTerminalTask, replaceRuntimeTask } from "../service/records.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
-import { formatDecisionQuestion } from "../tasks/question.ts";
+import { formatDecisionQuestion, shortNote, taskName } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import {
+  type CentralRecoveryOutcome,
   chooseRecoveryAction,
   classifyRecoveryEvidence,
   preapprovedRecoveryAction,
@@ -61,6 +62,11 @@ export type RecoveryConversationDependencies = Readonly<{
   readonly requestDispatchHold: (
     task: Pick<TaskRecord, "requestId">,
   ) => Promise<string | undefined>;
+  /** Central recovery's own blocked-task entry point (`CentralRecoveryWorkflow.recoverBlockedTask`
+   *  in `./central.ts`, injected rather than imported directly to avoid a cycle: `central.ts`
+   *  already depends on this module for `taskAsking`). Reports `skipped` for a task the old
+   *  decision rules below should still handle themselves. */
+  readonly recoverBlockedTask: (task: TaskRecord) => Promise<CentralRecoveryOutcome>;
 }>;
 
 /** What one conversational recovery pass settled, and whether it changed any durable state. */
@@ -132,18 +138,42 @@ function waitIsDue(wait: RecoveryAvailabilityWait, now: IsoTimestamp): boolean {
   return deadlineMs === undefined || nowMs === undefined || nowMs >= deadlineMs;
 }
 
+/** Maps what central recovery actually did to the disposition shape conversational recovery reports
+ *  through; never called for `"skipped"`, which the caller handles by falling back to the old rules. */
+function centralRecoveryDisposition(action: CentralRecoveryOutcome["action"]): RecoveryDisposition {
+  switch (action) {
+    case "relaunched":
+    case "adopted":
+    case "resumed":
+      return "applied";
+    case "asked":
+      return "asked";
+    case "blocked":
+      return "refused";
+    case "skipped":
+      return "none";
+  }
+}
+
+const RECOVERY_ACTION_ASKS: Readonly<Record<RecoveryActionName, string>> = {
+  reconcile: "clean up its leftovers",
+  "review-existing": "review it as it stands",
+  "validation-retry": "rerun its checks",
+  "evidence-repair": "rebuild its reports",
+};
+
 function questionText(
+  task: TaskRecord,
   evidence: RecoveryEvidence,
   recommendedAction: RecoveryActionName | undefined,
-  consequences: string,
 ): string {
-  const want =
-    recommendedAction === undefined
-      ? `I don't have a safe fix to try, so I haven't changed anything. ${consequences}`
-      : `I'd like to run ${recommendedAction}. ${consequences}`;
+  const name = taskName(task.objective);
   return formatDecisionQuestion({
-    what: `A task is stuck: ${evidence.summary}.`,
-    recommendation: want,
+    ask:
+      recommendedAction === undefined
+        ? `${name} is stuck, and I can't fix it safely on my own. What should I do?`
+        : `${name} is stuck. Should I ${RECOVERY_ACTION_ASKS[recommendedAction]}?`,
+    note: shortNote(evidence.summary),
   });
 }
 
@@ -199,11 +229,23 @@ export class RecoveryConversationWorkflow {
     this.#deps = deps;
   }
 
-  /** Reads durable state for one task and settles its current recovery decision. */
+  /** Reads durable state for one task and settles its current recovery decision. Delegates first to
+   *  central recovery: when the block is one it can re-enter automatically, its outcome is what
+   *  happened, reported through the same shape the old decision rules below would have produced, and
+   *  nothing here recommends an action central recovery has already carried out or asked about. */
   public async decide(taskId: string): Promise<RecoveryConversationOutcome> {
     const task = await this.#deps.getTask(taskId);
     if (isTerminalTask(task)) {
       return { taskId, status: "none", changed: false };
+    }
+    const centralOutcome = await this.#deps.recoverBlockedTask(task);
+    if (centralOutcome.action !== "skipped") {
+      return {
+        taskId,
+        ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+        status: centralRecoveryDisposition(centralOutcome.action),
+        changed: true,
+      };
     }
     const runtime = taskRuntime(await readRuntimeState(this.#deps.runtimePath), taskId);
     const evidence = classifyRecoveryEvidence({
@@ -212,6 +254,7 @@ export class RecoveryConversationWorkflow {
       ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
       blockers: durableBlockers(task, runtime),
       observedAt: this.#deps.clock(),
+      ...(task.blockCause === undefined ? {} : { cause: task.blockCause }),
     });
     if (evidence === undefined) return { taskId, status: "none", changed: false };
     if (evidence.kind !== "temporary-availability") {
@@ -543,7 +586,7 @@ export class RecoveryConversationWorkflow {
         : `${draft.recommendedAction}: ${draft.consequences}`;
     const question: TaskQuestion = {
       id: questionIdFor(evidence),
-      text: questionText(evidence, draft.recommendedAction, draft.consequences),
+      text: questionText(task, evidence, draft.recommendedAction),
       recommendation: `${recommendationPrefix} ${recoveryQuestionDetails(task)}`,
     };
     const asked = await this.recordQuestion(task.id, question);

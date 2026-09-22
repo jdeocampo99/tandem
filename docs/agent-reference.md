@@ -440,6 +440,21 @@ falls back to stale source. The original checkout may be dirty and remains untou
 task records, and delivery retain the original identity as `TANDEM_REPO`; the owned source checkout
 is `TANDEM_SOURCE_REPO`, which users normally do not set themselves.
 
+The coordinator's pane runs a Tandem launch script under `<home>/coordinator-scripts/`. When the
+coordinator exits there (Ctrl-C, crash), the script stays and says so in plain English: Enter
+starts it again in the same pane with `--continue`, keeping the same record, lease, and pane;
+Ctrl-C leaves the user at the pane's own shell. `--continue` is not part of coordinator identity,
+and that script waiting at its offer counts as a stopped coordinator shell, so restart and reset
+may close the pane.
+
+A coordinator that exited (Ctrl-C, crash, or closed pane) counts as stopped. When its recorded pane
+now runs something else, such as a shell or an `omp` started by hand, Tandem checks every process on
+the machine for the coordinator's own `--session-dir`. If none is running, launch and restart open a
+fresh pane with `--continue` and leave the old pane and whatever runs in it untouched; its lease is
+kept under a quarantine note. If the coordinator is still running elsewhere, or the record predates
+`--session-dir`, Tandem refuses and names the one step to take. Reset still refuses to close such a
+pane, because it is no longer Tandem's.
+
 An explicit `tandem PATH` opens or reconnects only that project after ownership checks. `--continue`
 resumes a stopped coordinator's saved conversation; `--restart` reloads the extension, prefetches
 fresh source before closing the old coordinator, and preserves child work and conversation history.
@@ -1238,7 +1253,7 @@ Validation evidence written before contracts existed loads unchanged and is mark
 
 Local runner checks and GitHub checks stay distinct. Runner evidence is stamped `origin: "local"` and satisfies only local manifest requirements; remote required checks remain the GitHub-observed `RemoteCheck` rollup asserted at merge. A local pass cannot be relabeled as a remote check, and `tandem inspect` reports the iteration/final and local/remote split alongside the passing count.
 
-Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Textual scout and implementer results must start with exactly one role-appropriate `Outcome: completed|needs-decision|failed` (scouts) or `Outcome: implemented|needs-decision|failed` (implementers) line. Reviewer, verifier, and presentation workers may use `Outcome: needs-decision` for a genuine blocker; otherwise reviewer/verifier success remains the strict `ReviewResult` JSON contract and presentation success remains its `Artifact: <absolute path>` contract. Any `needs-decision` result emits exactly one bounded single-line `Question: ...` and optional bounded single-line `Recommendation: ...` (each no more than 1,000 characters); durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
+Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Workers submit results with the typed `submit_report` tool: an `outcome` (`implemented|needs-decision|failed` for implementers, `completed|needs-decision|failed` for every other role), a Markdown `report` body (required except for reviewers and verifiers), and role-specific fields. A `needs-decision` submission carries exactly one bounded single-line `question` and an optional bounded single-line `recommendation` (each no more than 1,000 characters). A completed reviewer or verifier submits a structured `review` that must match `ReviewResult` and the job's lens, HEAD, and generation; a completed presentation submits an absolute `artifactPath`. A submission that breaks these rules is returned to the worker as a tool error naming the fix and never settles the job, so formatting slips are corrected in the conversation. The controller renders the report file from the structured fields; durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
 
 ### Incremental review briefs and finding status
 
@@ -1438,9 +1453,11 @@ Scouts, implementers, reviewers, verifiers, and presentation workers launch inte
 inherited terminal input and output. They do not use `-p` or `--mode json`. Open the child's Herdr
 subtree to inspect its conversation or send a message directly.
 
-The worker extension writes the existing private result file from the final native `agent_end`
-event. Continuing events are not completion, and later human conversation never overwrites that
-delegated result. Terminal output is display only; large reports do not pass through a captured
+Workers deliver their result only by calling the `submit_report` tool; the worker extension writes
+the private result file from that call. A settled `agent_end` without a submission is conversation,
+not completion, so human messages before or after the report never become or overwrite the delegated
+result. A settled `agent_end` still fails the job on a provider error, abort, model substitution, or
+requested timeout. Terminal output is display only; large reports do not pass through a captured
 JSONL stream. The scheduler can consume a result while OMP remains open, after checking the
 job identity, generation, native PID, physical checkout, and fresh terminal heartbeat.
 
@@ -1552,10 +1569,10 @@ Compact `steer` and `answer` output reports only the latest recorded entry; comp
 output prioritizes the current question and pending/latest entries. Older history remains available
 in structured JSON/details.
 
-If directions arrive before initial approval, the `approve` confirmation includes the current
-communication revision and every effective, non-superseded communication delta (including answers
-that carry implementation direction). It omits superseded messages and the full communication JSON,
-so the approval boundary stays clear without hiding what the worker will receive.
+Every approval prompt is one short question plus at most one short line: the task named by its
+objective's first sentence, never a path, hash, branch, criteria list, or id (`tandem inspect` has
+those). If directions arrive before initial approval, the `approve` confirmation says how many
+effective, non-superseded directions the worker will also receive.
 
 The derived inbox is recoverable and may briefly lag canonical task state. Reconciliation repairs
 the projection; it never accepts an older result or drops a pending direction. Paused,
@@ -1967,9 +1984,9 @@ from its current stage. It is always the same three moves:
    | --- | --- | --- |
    | `implementing` | Relaunch: new durable operation, a fresh pane only if one is not already owned, a new worker started through the normal launch path | Yes |
    | `scouting` | The identical relaunch path as `implementing` | Yes |
-   | `validating` | — | Not yet |
-   | `reviewing` | — | Not yet |
-   | `awaiting-fixes` | — | Not yet |
+   | `validating` | Rerun validation at the exact reviewed HEAD as a new durable job, within the validation retry budget | Yes |
+   | `reviewing` | Relaunch only the dead reviewer/verifier lens at the exact reviewed HEAD; recorded lenses are kept | Yes |
+   | `awaiting-fixes` | The `implementing` relaunch (see below) | Yes |
 
    Relaunch (`WorkerWorkflow.relaunchWorker`) never mutates the dead job or its result; it admits a
    brand-new operation through the same reservation and budget gate every launch uses, so a fresh
@@ -1977,18 +1994,103 @@ from its current stage. It is always the same three moves:
    told a prior attempt may have left partial edits and to inspect `git status`/`git diff` before
    continuing.
 
+   `awaiting-fixes` has no branch of its own: `beginFixes` moves the task to `implementing` and
+   spends the review round before touching a pane, so a missing pane leaves it unblocked at
+   `implementing` for that re-entry. The relaunched fixer keeps the same `fixContextPath` findings,
+   and crash-restarts never spend another review round.
+
+   `reviewing` re-entry covers only a lens whose job was quarantined (pane or result proven gone) and
+   is not yet recorded for the reviewed HEAD. Real findings, stale instructions, and malformed results
+   still block as before. After the stop ladder proves the pane gone, the stale operation is settled
+   to `failed` so the relaunch is not paused on an uncertain prior outcome. A moved, dirty, or
+   unmerged worktree asks instead of relaunching.
+
 Automatic re-entry is bounded to two restarts per task generation; a new generation resets the
 counter. A dead job that failed again inside its own startup grace window, in the same failure class
 as the restart before it (for example a provider outage), does not spend a third automatic restart —
 Tandem asks instead, since retrying blindly would likely repeat the same failure. Each automatic
 restart writes one plain-English coordinator notification naming what happened, that the edits are
 kept, and which restart it is out of the budget. The third-restart question, and any question raised
-because death could not be proven, use the same plain-English shape as every other recovery question
-(what happened, what Tandem wants to do, what is risked either way; see below) and are answered
+because death could not be proven, use the same short shape as every other question Tandem asks
+(one plain-English question plus at most one short sentence; see below) and are answered
 through the existing question-id-bound answer API. Every recovery answer, this one included, is
 stored as a decision, never as a worker instruction: answering it never bumps
 `task.communication.revision`, so it can never be mistaken for a new canonical instruction a worker
 must apply.
+
+Validating's re-entry shares the same stop/save/proof machinery against a reviewer-role pane and a
+`"validation"` job instead of a worker pane: a validation job that dies for an infrastructure reason
+(its pane disappears, or `validation-worker` stops without writing a durable result — see
+`WorkerWorkflow.reconcileMissingEndpoint` and the validation branch of `reconcileJob`) settles as
+failed without blocking, so the task stays at `validating` with no active job or reservation and a
+terminal failed job behind it; central recovery picks that shape up on the next reconcile tick
+instead of the task sitting blocked for a human. It is bounded by `MAX_VALIDATION_RETRIES` (3), the
+exact same budget the explicit `validation-retry` recovery action spends from — central recovery
+never adds a second counter for it, and a genuine task-code validation failure (a real result was
+produced, however it came out) never reaches this path at all, since a real result always moves the
+task to `reviewing` or `awaiting-fixes` via the normal lifecycle event. Budget exhaustion or an
+unprovable pane asks a "retry"/"stop" question through the same plain-English shape and answer API,
+under its own `VALIDATION_RETRY_QUESTION_ID_PREFIX` so it never misroutes into the implementing/
+scouting restart handler.
+
+**A `blocked` task re-enters automatically when its cause is recoverable.**
+`CentralRecoveryWorkflow.recoverBlockedTask` (`src/recovery/central.ts`) is the single entry point: a
+task is eligible only when it is `blocked`, its `previousStage` is one this module already re-enters
+(`implementing`, `scouting`, `validating`, `reviewing`, or `awaiting-fixes`, which resumes and stops
+there so the ordinary `beginFixes` hand-off carries it into `implementing`), and its block is
+recoverable — a typed `lost-resource` cause, a typed `unusable-result` cause whose kind is still
+infrastructure-shaped (`worker-failed`, `stale-review-state`, `no-clean-checkpoint`; never
+`review-lens-failed`, a lens that ran and reported its own failure), or — for a block recorded before
+every site carried a typed cause — free text matching a known worker-death shape
+(`isLegacyWorkerDeathBlockText` in `src/recovery/decision.ts`). A `user-decision` or `safety-stop`
+cause is never eligible, nor is a task with an unanswered non-recovery question or a pending stop
+request: only a person resolves those. Eligible or not, `recoverBlockedTask` never mutates an
+ineligible task; it resumes the task to its previous stage (the same `"resume"` lifecycle event
+answering a recovery question already uses) and then runs that stage's own re-entry
+(`recoverStuckWorker`), so the restart/validation-retry budgets and the stop ladder are exactly the
+same ones a task that was never blocked would spend. This is wired at both places a blocked task is
+reconsidered: the scheduler tick (`ServiceController.reconcileTask`, so it happens without anyone
+asking) and `recovery-decide` (`RecoveryConversationWorkflow.decide`, which delegates to it first and
+reports what it did instead of recommending one of the older recovery actions).
+
+**`implementing` re-entry adopts an already-finished commit instead of relaunching a worker.** Before
+spending a restart, `recoverStuckWorker` checks whether the dead worker (including a fix-round
+implementer) already finished: the task worktree is clean, not unmerged, checked out on the task's
+own branch, and `HEAD` is a new commit strictly ahead of the task's base (`worktree.baseHead`) that is
+not already recorded as reviewed. When it is, central recovery records it exactly as a successful
+implementer result would — the same `implementation-complete` lifecycle event
+`WorkerWorkflow`'s implementer result handling applies, setting `reviewHead` and advancing the task to
+`validating` → `reviewing` — instead of paying for a worker to redo work that already happened.
+Validation and a fresh review still gate quality from there, so no user approval is needed. A dirty or
+unmerged worktree, or `HEAD` still at base, falls back to the ordinary relaunch unchanged.
+
+### Typed block causes
+
+A blocking site may record a `BlockCause` (`src/contracts.ts`) alongside the task's free-text
+`blockReason`: a closed `kind`, its `group`, an internal `detail` (raw error/site text, for
+diagnosis), and a plain-English `summary` (what happened, no ids) that becomes the block's
+user-facing reason. `reportBlock` (`src/recovery/central.ts`) is the one entry point for reporting a
+cause — it records the cause and blocks exactly like today's free-text block. Whether the resulting
+block is later re-entered automatically is decided separately, the next time the task is reconsidered,
+by `recoverBlockedTask` (see above); `reportBlock` itself never triggers recovery synchronously.
+`blockCause` is optional and additive on `TaskRecord`; records written before it
+existed load with no cause. Recovery question/decision identity for a caused block is keyed off
+`(taskId, generation, cause.kind, cause.jobId?)` (`blockCauseEvidenceIdentity` in
+`src/recovery/decision.ts`) instead of hashing the summary text, so rewording a summary can never
+orphan an outstanding approval. `tandem inspect TASK_ID --json` includes `blockCause` when one was
+recorded. Only a few representative sites are migrated so far; most blocking call sites still pass
+free text only, and are migrated incrementally.
+
+The kinds are grouped by how automatically Tandem may ever act on them:
+
+- **lost-resource** (auto-recoverable later): `allocation-failed`, `resource-lost`,
+  `persistence-failed`, `transition-failed`, `checkout-unverifiable`.
+- **unusable-result** (the work left nothing to build on): `no-clean-checkpoint`,
+  `stale-review-state`, `review-lens-failed`, `worker-failed`.
+- **user-decision** (only a person can choose how to proceed): `fix-rounds-exhausted`,
+  `validation-config-refused`, `prerequisite-not-met`, `explicit-block`.
+- **safety-stop** (never automatic): `ownership-unprovable`, `runtime-metadata-missing`,
+  `identity-mismatch`, `quarantined-unknown-outcome`.
 
 ### First-class bounded recovery actions
 
@@ -2048,10 +2150,10 @@ actions, and each runs only with the task in scope, its scope approved, its requ
 current, canonical repository identity proven, every endpoint proved owned, the prior outcome known,
 no active durable job, no pending stop request, and its own budget remaining; `evidence-repair` also
 requires the exact clean reviewed HEAD. Everything else, including `review-existing` and
-`validation-retry`, produces one bounded question in the same plain-English shape as central
-recovery's own questions — what happened, what Tandem wants to do, what is risked either way, with
-IDs and other identifiers confined to the recommendation/consequences detail rather than the
-headline — carrying the recommendation, its expected effect, and the remaining budgets, and executes
+`validation-retry`, produces one bounded question in the same short shape as central recovery's
+own questions: the task's name, the recommended step as a question, and the reason in one clipped
+sentence. IDs, the expected effect, and the remaining budgets go only in the recommendation detail
+and the decision record. It executes
 nothing until it is answered through the existing question-id-bound answer API. Answering it clears
 the question and records the reply as a decision without bumping `task.communication.revision`; a
 plain-text reply does not itself invoke reconcile/review-existing/validation-retry/evidence-repair,
@@ -2106,8 +2208,10 @@ Classification:
   ownership;
 - a record Tandem cannot place or prove, such as one stored under a session directory it does not
   name, is quarantined with a durable note and nothing is closed or released;
-- existing quarantine notes and unreadable record files are listed with their path and reason, and
-  are never deleted.
+- unreadable record files are listed with their path and reason, and are never deleted;
+- an existing quarantine note is listed with its reason, and is removed only when no stored
+  coordinator record names its lease and Treehouse, re-read under the repository lock, no longer
+  holds that lease. A note whose lease cannot be read is kept.
 
 Without `--yes` the command changes nothing and reports what it would clean. `--discard` is valid
 only with `--yes`. Applying coordinator and pool-lease items takes the shared repository lock for
@@ -2116,7 +2220,7 @@ underneath them; task cleanup runs through its durable state-and-lease owner. A 
 lock and never disturbs a live coordinator. A `clean` plan item is a prediction: applying re-reads
 the resource and hands it back to its owner, which may still retain or quarantine it. Applying
 twice plans nothing to clean the second time, and a quarantine note is written once per lease rather
-than on every run. `--json` prints a versioned report (`schemaVersion`, `mode`, `home`, `cleaned`,
+than on every run or launch. `--json` prints a versioned report (`schemaVersion`, `mode`, `home`, `cleaned`,
 `retained`, `quarantined`, `failed`) whose entries carry the resource kind, id, repository, session,
 path, and reason. The exit code is non-zero only when the scan or an apply failed, never because a
 resource was deliberately retained.

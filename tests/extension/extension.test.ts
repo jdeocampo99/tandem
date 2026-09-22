@@ -545,7 +545,7 @@ test("communication summaries keep newest actionable state and question identity
   expect(latest).not.toContain("QUESTION_NEEDS_ID");
 });
 
-test("approve confirmation names the task by objective without ids or message history", async () => {
+test("approve confirmation exposes active non-superseded communication deltas and revision", async () => {
   const pending = task({
     communication: {
       revision: 3,
@@ -600,9 +600,7 @@ test("approve confirmation names the task by objective without ids or message hi
 
   expect(result.approved).toBe(false);
   expect(prompts).toHaveLength(1);
-  expect(prompts[0]).toContain(pending.objective);
-  expect(prompts[0]).not.toContain("task-1");
-  expect(prompts[0]).not.toContain("REPLACE_ME_OLD");
+  expect(prompts[0]).toBe("Includes 2 directions you gave after the plan.");
 });
 
 test("extension setup approval preserves the write boundary and metadata", async () => {
@@ -790,8 +788,7 @@ test("configure-models forwards explicit provider enablement and recaps it in th
   expect(configureCalls).toEqual([
     { repoPath: "/repo", models, enabledProviders: ["openai-codex"] },
   ]);
-  expect(prompts[0]).toContain("Providers allowed to spend");
-  expect(prompts[0]).toContain("openai-codex");
+  expect(prompts[0]).toContain("Can spend on: openai-codex.");
 });
 test("models summary surfaces discovered/enabled providers and a resolved Balanced proposal", () => {
   const summary = summarizeTandemActionValue("models", {
@@ -1104,7 +1101,7 @@ test("draft publication needs interactive human approval and never runs without 
   const refused = await executeTandemAction(parsed, service, refusingContext);
   expect(refused.approved).toBe(false);
   expect(published).toHaveLength(0);
-  expect(prompts[0]).toContain("It isn't ready to merge.");
+  expect(prompts[0]).toBe("Shows progress only. Nothing is merged.");
 
   const headless = await executeTandemAction(parsed, service, {
     hasUI: false,
@@ -1981,8 +1978,7 @@ test("extension cleanup skips confirmation for safe release and shows scope for 
 
   expect(cleanupInputs).toEqual([{}]);
   expect(prompts).toHaveLength(1);
-  expect(prompts[0]).toContain("Release the completed task resources");
-  expect(prompts[0]).toContain("can't be undone");
+  expect(prompts[0]).toBe("This discards its changes.");
   expect(refused.approved).toBe(false);
 });
 
