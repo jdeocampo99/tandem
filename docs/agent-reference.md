@@ -1969,13 +1969,25 @@ from its current stage. It is always the same three moves:
    | `scouting` | The identical relaunch path as `implementing` | Yes |
    | `validating` | — | Not yet |
    | `reviewing` | — | Not yet |
-   | `awaiting-fixes` | — | Not yet |
+   | `awaiting-fixes` | The same `implementing` relaunch path (see below) | Yes |
 
    Relaunch (`WorkerWorkflow.relaunchWorker`) never mutates the dead job or its result; it admits a
    brand-new operation through the same reservation and budget gate every launch uses, so a fresh
    receipt, instruction revision, and prompt are built exactly as for any other launch. The worker is
    told a prior attempt may have left partial edits and to inspect `git status`/`git diff` before
    continuing.
+
+   `awaiting-fixes` needs no stage branch of its own: `WorkerWorkflow.beginFixes` admits the fix
+   round and transitions the task to `implementing` (bumping generation, consuming one review round,
+   and durably recording `runtime.fixContextPath`) atomically, before it ever touches a pane. If the
+   pane it expected to reuse (the original implementer's, carried through review) turns out to be
+   gone, it does not block; it releases the reservation and leaves the task at `implementing` with no
+   owned pane, and the `implementing` re-entry above picks it up on the next reconcile tick exactly as
+   it would for any other dead implementer. A plain relaunch's own admission never overwrites an
+   already-set `fixContextPath`, so the relaunched worker is still told to read the same findings from
+   it — and because the review round was already spent once by the original `begin-fixes` transition,
+   any number of crash-restarts within that same generation never spend another one; only an
+   explicitly new fix round (a fresh `begin-fixes` transition) does.
 
 Automatic re-entry is bounded to two restarts per task generation; a new generation resets the
 counter. A dead job that failed again inside its own startup grace window, in the same failure class
