@@ -445,13 +445,18 @@ test("central recovery relaunches a fixer that dies mid-fix, keeping the same fi
  * quarantined; the task ends up `blocked` with a legacy free-text reason (no typed `BlockCause`,
  * exactly what a block recorded before the typed-cause migration looks like). Central recovery must
  * reach this task without anyone asking (gap 1), and once it proves the worker dead it must adopt the
- * commit already sitting in the worktree instead of paying for a worker to redo it (gap 2).
+ * commit already sitting in the worktree instead of paying for a worker to redo it (gap 2). The
+ * incident's worktree was actually left detached, not on the task branch; that specific shape (branch
+ * creation, fast-forward, and refusing a diverged branch) is exercised at the unit level in
+ * tests/recovery/central-recover-blocked.test.ts, since the branch-repair git sequencing it needs is
+ * finer-grained than this scenario's shared git fake models. This eval covers the on-branch case
+ * end to end through a real `service.tick()`.
  */
 test("a scheduler tick recovers a blocked quarantine-and-stale-instruction incident by adopting the worker's finished commit", async () => {
   await withScenario({}, async (world) => {
     const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
     // The worker committed on the task branch before OMP aborted: a clean worktree at a new commit
-    // strictly ahead of the task's base, exactly as the incident's worktree was left.
+    // strictly ahead of the task's base.
     const adoptedHead = "7862bd03abcdef7862bd03abcdef7862bd03ab";
     world.patchCheckout(lease.path, { head: adoptedHead, dirty: false, unmerged: false });
 

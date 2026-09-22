@@ -60,7 +60,7 @@ import {
   type RecoveryEvidence,
   restartIncidentIdentity,
 } from "./decision.ts";
-import { MAX_VALIDATION_RETRIES } from "./workflow.ts";
+import { MAX_VALIDATION_RETRIES, pointTaskBranchAtCommit } from "./workflow.ts";
 
 export type { CentralRecoveryAction, CentralRecoveryOutcome };
 
@@ -366,7 +366,18 @@ export class CentralRecoveryWorkflow {
     if (task.kind === "implementation" && task.stage === "implementing") {
       const adoption = await this.adoptableImplementerCommit(task);
       if (adoption.head !== undefined) {
-        return this.adoptImplementerCommit(task, adoption.head, incidentIdentity, proof, now);
+        const adoptedOutcome = await this.adoptImplementerCommit(
+          task,
+          adoption.head,
+          adoption.detached ?? false,
+          incidentIdentity,
+          proof,
+          now,
+        );
+        // `undefined` means adoption turned out not to be safe after all (the branch-pointing step
+        // could not proceed without forcing something away); fall through to the ordinary relaunch
+        // path below rather than treating that as ineligibility to restart at all.
+        if (adoptedOutcome !== undefined) return adoptedOutcome;
       }
     }
 
@@ -1473,9 +1484,19 @@ export class CentralRecoveryWorkflow {
    * evidence is pinned to an exact HEAD the same way `recoverStuckReviewer` treats it, so a HEAD that
    * already has a review result attached is never re-adopted as if it were new.
    */
+  /**
+   * A worker that committed and then died is exactly as likely to have left the worktree detached
+   * (it never switched back to the task branch) as still on the task branch, and the live incident
+   * this feature exists for was detached. Detached and on-the-task's-own-branch are both adoptable;
+   * a checkout on some *other* named branch is someone else's work and is never adopted. When
+   * detached, this also checks (read-only) that the task branch, if it already exists, is an
+   * ancestor of the adopted commit — `adoptImplementerCommit`'s later `pointTaskBranchAtCommit` call
+   * must never force the branch away from real work, so an eligible-looking-but-diverged branch is
+   * screened out here rather than discovered mid-mutation.
+   */
   private async adoptableImplementerCommit(
     task: TaskRecord,
-  ): Promise<Readonly<{ readonly head?: string }>> {
+  ): Promise<Readonly<{ readonly head?: string; readonly detached?: boolean }>> {
     if (task.worktree === undefined) return {};
     const { path, baseHead, branch } = task.worktree;
     try {
@@ -1487,13 +1508,39 @@ export class CentralRecoveryWorkflow {
         argv: ["git", "-C", path, "branch", "--show-current"],
         cwd: path,
       });
-      if (onBranch.code !== 0 || onBranch.stdout.trim() !== branch) return {};
+      if (onBranch.code !== 0) return {};
+      const currentBranch = onBranch.stdout.trim();
+      const detached = currentBranch.length === 0;
+      if (!detached && currentBranch !== branch) return {};
       const ancestor = await this.#deps.run({
         argv: ["git", "-C", path, "merge-base", "--is-ancestor", baseHead, checkout.head],
         cwd: path,
       });
       if (ancestor.code !== 0) return {};
-      return { head: checkout.head };
+      if (detached) {
+        const branchHead = await this.#deps.run({
+          argv: ["git", "-C", path, "rev-parse", "--verify", `refs/heads/${branch}`],
+          cwd: path,
+        });
+        if (branchHead.code === 0) {
+          const branchAncestor = await this.#deps.run({
+            argv: [
+              "git",
+              "-C",
+              path,
+              "merge-base",
+              "--is-ancestor",
+              branchHead.stdout.trim(),
+              checkout.head,
+            ],
+            cwd: path,
+          });
+          // The task branch already exists and is not an ancestor of the adopted commit: it holds
+          // real work the adoption would otherwise force away. Never adopted; falls back to relaunch.
+          if (branchAncestor.code !== 0) return {};
+        }
+      }
+      return { head: checkout.head, detached };
     } catch {
       // An unreadable checkout is never treated as an adoptable commit; the caller falls back to
       // the ordinary relaunch path, which re-derives its own proof from the same worktree.
@@ -1508,14 +1555,33 @@ export class CentralRecoveryWorkflow {
    * handling), setting `reviewHead` and advancing the task to `validating` → `reviewing`. Validation
    * and a fresh review still gate quality from there, so no user approval is needed to send an
    * already-finished commit through them instead of paying for a worker to redo the same work.
+   *
+   * When the worktree was left detached (the worker never switched back to the task branch — the
+   * shape the live incident this exists for actually had), the task branch is pointed at the adopted
+   * commit first, via `pointTaskBranchAtCommit`, the same branch repair `reconcile`'s
+   * `repairDetachedTaskBranch` uses. `adoptableImplementerCommit` already proved, read-only, that
+   * doing so is safe (the branch does not exist yet, or is an ancestor of the adopted commit); a
+   * failure here despite that is treated as ineligibility, not a block: returns `undefined` so the
+   * caller falls back to the ordinary relaunch path instead of discarding anything.
    */
   private async adoptImplementerCommit(
     task: TaskRecord,
     head: string,
+    detached: boolean,
     incidentIdentity: string,
     proof: DeathProof,
     now: IsoTimestamp,
-  ): Promise<CentralRecoveryOutcome> {
+  ): Promise<CentralRecoveryOutcome | undefined> {
+    const branch = task.worktree?.branch;
+    const path = task.worktree?.path;
+    if (branch === undefined || path === undefined) return undefined;
+    if (detached) {
+      try {
+        await pointTaskBranchAtCommit(this.#deps, path, branch, head);
+      } catch {
+        return undefined;
+      }
+    }
     await this.settleProvenQuarantine(task.id);
     const reportPath = join(
       taskJobsDirectory(this.#deps.home, task.id),
@@ -1529,11 +1595,14 @@ export class CentralRecoveryWorkflow {
         "Central recovery adopted this commit after the worker stopped mid-task.",
         "",
         `The worker stopped (${proof.reasonSummary}) after committing its work and exited without`,
-        "reporting a result. Recovery confirmed the worktree was clean, on the task branch, and at a",
-        "new commit strictly ahead of the task's base, and sent that commit to validation and review",
-        "instead of rerunning the worker.",
+        "reporting a result. Recovery confirmed the worktree was clean and at a new commit strictly",
+        "ahead of the task's base, and sent that commit to validation and review instead of rerunning",
+        "the worker.",
         "",
         `Adopted commit: ${head}`,
+        detached
+          ? `The worktree was left detached at that commit; recovery pointed branch ${branch} at it.`
+          : `Worktree branch: ${branch}.`,
       ].join("\n"),
     );
     const adopted = await this.#deps.store.exclusive(async (store) => {

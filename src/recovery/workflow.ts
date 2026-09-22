@@ -389,7 +389,7 @@ async function repositoryIdentityProven(
 }
 
 async function runGitChecked(
-  deps: RecoveryWorkflowDependencies,
+  deps: Readonly<{ readonly run: CommandRunner }>,
   cwd: string,
   args: readonly string[],
   operation: string,
@@ -400,6 +400,67 @@ async function runGitChecked(
   throw new Error(
     `${operation} failed with exit code ${result.code}${detail.length === 0 ? "" : `: ${detail}`}`,
   );
+}
+
+/**
+ * Points a task branch at a specific commit in its own worktree: fast-forwards the branch there if
+ * it already exists and the commit is a descendant of it, creates the branch there if it does not
+ * exist yet, or just checks it out if it is already there. Never forces the branch away from work it
+ * does not descend from: throws instead, so a caller can fall back rather than discard something.
+ * Shared by `repairDetachedTaskBranch` (repairing a detached worktree around the exact reviewed HEAD)
+ * and central recovery's adopt-commit re-entry (pointing the branch at a freshly adopted commit that
+ * has never been reviewed at all).
+ */
+export async function pointTaskBranchAtCommit(
+  deps: Readonly<{ readonly run: CommandRunner }>,
+  path: string,
+  branch: string,
+  targetHead: string,
+): Promise<void> {
+  const branchHead = await gitText(deps.run, path, [
+    "rev-parse",
+    "--verify",
+    `refs/heads/${branch}`,
+  ]);
+  if (branchHead !== undefined && branchHead !== targetHead) {
+    const ancestor = await deps.run({
+      argv: ["git", "-C", path, "merge-base", "--is-ancestor", branchHead, targetHead],
+      cwd: path,
+    });
+    if (ancestor.code !== 0) {
+      throw new Error(
+        `task branch ${JSON.stringify(branch)} is not an ancestor of target commit ${targetHead}`,
+      );
+    }
+    await runGitChecked(
+      deps,
+      path,
+      ["branch", "--force", branch, targetHead],
+      "task branch repair",
+    );
+    await runGitChecked(deps, path, ["switch", "--no-guess", branch], "task branch checkout");
+  } else if (branchHead === undefined) {
+    await runGitChecked(
+      deps,
+      path,
+      ["switch", "--no-guess", "--create", branch, targetHead],
+      "task branch creation",
+    );
+  } else {
+    await runGitChecked(deps, path, ["switch", "--no-guess", branch], "task branch checkout");
+  }
+  const repairedBranch = await gitText(deps.run, path, [
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    "HEAD",
+  ]);
+  const repairedHead = await gitText(deps.run, path, ["rev-parse", "HEAD"]);
+  if (repairedBranch !== branch || repairedHead !== targetHead) {
+    throw new Error(
+      `task branch repair ended at ${JSON.stringify(repairedBranch)} and ${String(repairedHead)}`,
+    );
+  }
 }
 
 async function repairDetachedTaskBranch(
@@ -420,50 +481,7 @@ async function repairDetachedTaskBranch(
   const path = inspection.worktree.path;
   if (path === undefined) return undefined;
   const branch = task.worktree.branch;
-  const branchHead = await gitText(deps.run, path, [
-    "rev-parse",
-    "--verify",
-    `refs/heads/${branch}`,
-  ]);
-  if (branchHead !== undefined && branchHead !== task.reviewHead) {
-    const ancestor = await deps.run({
-      argv: ["git", "-C", path, "merge-base", "--is-ancestor", branchHead, task.reviewHead],
-      cwd: path,
-    });
-    if (ancestor.code !== 0) {
-      throw new Error(
-        `task branch ${JSON.stringify(branch)} is not an ancestor of reviewed HEAD ${task.reviewHead}`,
-      );
-    }
-    await runGitChecked(
-      deps,
-      path,
-      ["branch", "--force", branch, task.reviewHead],
-      "task branch repair",
-    );
-    await runGitChecked(deps, path, ["switch", "--no-guess", branch], "task branch checkout");
-  } else if (branchHead === undefined) {
-    await runGitChecked(
-      deps,
-      path,
-      ["switch", "--no-guess", "--create", branch, task.reviewHead],
-      "task branch creation",
-    );
-  } else {
-    await runGitChecked(deps, path, ["switch", "--no-guess", branch], "task branch checkout");
-  }
-  const repairedBranch = await gitText(deps.run, path, [
-    "symbolic-ref",
-    "--quiet",
-    "--short",
-    "HEAD",
-  ]);
-  const repairedHead = await gitText(deps.run, path, ["rev-parse", "HEAD"]);
-  if (repairedBranch !== branch || repairedHead !== task.reviewHead) {
-    throw new Error(
-      `task branch repair ended at ${JSON.stringify(repairedBranch)} and ${String(repairedHead)}`,
-    );
-  }
+  await pointTaskBranchAtCommit(deps, path, branch, task.reviewHead);
   return branch;
 }
 

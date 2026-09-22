@@ -72,23 +72,45 @@ function lease(path: string): WorktreeLease {
 }
 
 /** The worktree git state a fixture's fake `run` reports for `readCheckpoint` and central
- *  recovery's own extra adopt-commit checks (current branch, ancestry). */
-type GitState = Readonly<{
+ *  recovery's own extra adopt-commit checks (current branch, ancestry) and mutates in response to
+ *  `pointTaskBranchAtCommit`'s own branch/switch commands, so a detached-HEAD adoption can be
+ *  observed actually landing on the task branch afterward. `branch: ""` models a detached worktree.
+ *  `existingBranchHead`/`existingBranchIsAncestor` model whether the task's own branch ref already
+ *  exists in this worktree and, if so, whether it descends from the adopted commit. */
+type GitState = {
   head: string;
   dirty: boolean;
   unmergedFiles: boolean;
   branch: string;
   isAncestor: boolean;
-}>;
+  existingBranchHead?: string;
+  existingBranchIsAncestor?: boolean;
+};
 
 function cleanAdoptableGit(): GitState {
   return { head: NEW_HEAD, dirty: false, unmergedFiles: false, branch: BRANCH, isAncestor: true };
+}
+
+function detachedAdoptableGit(overrides: Partial<GitState> = {}): GitState {
+  return {
+    head: NEW_HEAD,
+    dirty: false,
+    unmergedFiles: false,
+    branch: "",
+    isAncestor: true,
+    ...overrides,
+  };
 }
 
 function gitRunFor(git: GitState) {
   return async (request: CommandRequest): Promise<CommandResult> => {
     const argv = request.argv;
     if (argv[0] !== "git") return result();
+    if (argv.includes("rev-parse") && argv.includes("--verify")) {
+      return git.existingBranchHead === undefined
+        ? result("", 1, "unknown revision or path not in the working tree")
+        : result(`${git.existingBranchHead}\n`);
+    }
     if (argv.includes("rev-parse") && argv.at(-1) === "HEAD") return result(`${git.head}\n`);
     if (argv.includes("rev-parse")) return result(`${argv.at(-1)}\n`);
     if (argv.includes("diff") && argv.includes("--name-only")) {
@@ -98,7 +120,27 @@ function gitRunFor(git: GitState) {
     if (argv.includes("status")) return result(git.dirty ? " M file.txt\n" : "");
     if (argv.includes("branch") && argv.includes("--show-current"))
       return result(`${git.branch}\n`);
+    if (argv.includes("branch") && argv.includes("--force")) {
+      const forced = argv.at(-1);
+      if (forced !== undefined) git.existingBranchHead = forced;
+      return result();
+    }
+    if (argv.includes("switch")) {
+      const createIndex = argv.indexOf("--create");
+      if (createIndex !== -1) {
+        git.branch = argv[createIndex + 1] ?? git.branch;
+        git.head = argv.at(-1) ?? git.head;
+        git.existingBranchHead = git.head;
+      } else {
+        git.branch = argv.at(-1) ?? git.branch;
+        git.head = git.existingBranchHead ?? git.head;
+      }
+      return result();
+    }
+    if (argv.includes("symbolic-ref")) return result(`${git.branch}\n`);
     if (argv.includes("merge-base") && argv.includes("--is-ancestor")) {
+      const from = argv.at(-2);
+      if (from === git.existingBranchHead) return result("", git.existingBranchIsAncestor ? 0 : 1);
       return result("", git.isAncestor ? 0 : 1);
     }
     if (argv.includes("ls-files")) return result("untracked.txt\n");
@@ -578,6 +620,90 @@ test("a HEAD not descended from base is never adopted", async () => {
     const outcome = await f.workflow.recoverStuckWorker(task);
     expect(outcome.action).toBe("relaunched");
     expect(f.relaunchCalls).toHaveLength(1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+// --- Gap 2 follow-up: a detached HEAD, exactly the live incident's shape --------------------
+
+test("a detached HEAD with no task branch yet is adopted: the branch is created, reviewHead is set, and the task advances", async () => {
+  const f = await fixture({
+    stage: "implementing",
+    // The task branch does not exist as a ref yet (existingBranchHead undefined): the worker
+    // committed straight onto a detached checkout without ever creating it.
+    git: detachedAdoptableGit(),
+  });
+  try {
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    const outcome = await f.workflow.recoverStuckWorker(task);
+    expect(outcome.action).toBe("adopted");
+    expect(f.relaunchCalls).toHaveLength(0);
+    const after = await f.store.read("task-1");
+    expect(after?.stage).toBe("validating");
+    expect(after?.reviewHead).toBe(NEW_HEAD);
+    expect(
+      after?.notifications.some((entry) => entry.message.includes("sending that commit to checks")),
+    ).toBe(true);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a detached HEAD whose task branch already exists and is an ancestor is adopted: the branch is fast-forwarded", async () => {
+  const f = await fixture({
+    stage: "implementing",
+    git: detachedAdoptableGit({ existingBranchHead: BASE_HEAD, existingBranchIsAncestor: true }),
+  });
+  try {
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    const outcome = await f.workflow.recoverStuckWorker(task);
+    expect(outcome.action).toBe("adopted");
+    expect(f.relaunchCalls).toHaveLength(0);
+    const after = await f.store.read("task-1");
+    expect(after?.stage).toBe("validating");
+    expect(after?.reviewHead).toBe(NEW_HEAD);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("adoption while already on the task's own branch (not detached) still works", async () => {
+  const f = await fixture({ stage: "implementing", git: cleanAdoptableGit() });
+  try {
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    const outcome = await f.workflow.recoverStuckWorker(task);
+    expect(outcome.action).toBe("adopted");
+    const after = await f.store.read("task-1");
+    expect(after?.stage).toBe("validating");
+    expect(after?.reviewHead).toBe(NEW_HEAD);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a detached HEAD whose task branch already exists but diverged is never adopted; falls back to relaunch", async () => {
+  const f = await fixture({
+    stage: "implementing",
+    // The task branch exists but points somewhere the adopted commit does not descend from: forcing
+    // it would discard real work, so adoption must refuse and fall back to the ordinary relaunch.
+    git: detachedAdoptableGit({
+      existingBranchHead: "some-other-commit",
+      existingBranchIsAncestor: false,
+    }),
+  });
+  try {
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    const outcome = await f.workflow.recoverStuckWorker(task);
+    expect(outcome.action).toBe("relaunched");
+    expect(f.relaunchCalls).toHaveLength(1);
+    const after = await f.store.read("task-1");
+    expect(after?.stage).toBe("implementing");
+    expect(after?.reviewHead).toBeUndefined();
   } finally {
     await f.cleanup();
   }
