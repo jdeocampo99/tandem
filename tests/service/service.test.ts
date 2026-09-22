@@ -65,6 +65,7 @@ import {
   requiredReviewLenses,
 } from "../../src/tasks/review-levels.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { userCheckQuestionId } from "../../src/tasks/user-checks.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
 import { WorkerWorkflow } from "../../src/workers/workflow.ts";
@@ -5468,4 +5469,160 @@ test("a member of a request cannot be published on its own without approval to s
       }),
     ).rejects.toThrow(/delivery preflight refused publication/u);
   });
+});
+
+test("answer() confirms a user-check question without bumping communication.revision", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "ready",
+      attachLease: true,
+      taskEdits: { reviewHead: "commit-1" },
+    },
+    async ({ home, task, service }) => {
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const questionId = userCheckQuestionId(task.generation, "commit-1");
+      const evidencePath = join(home, "jobs", task.id, "0", "job-1", "user-checks", "streak.png");
+      await store.update(task.id, task.revision, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        updatedAt: TIMESTAMP,
+        userCheckCriteria: ["Streak bar glows at 5 in a row"],
+        userCheck: {
+          head: "commit-1",
+          generation: current.generation,
+          evidence: [{ criterion: "Streak bar glows at 5 in a row", paths: [evidencePath] }],
+        },
+        communication: {
+          revision: 0,
+          messages: [],
+          question: {
+            id: questionId,
+            text: 'Does "exercise a durable service path" look right? 1 screenshot attached.',
+          },
+        },
+      }));
+
+      await service.answer({ taskId: task.id, questionId, text: "yes" });
+      const confirmed = await service.get(task.id);
+
+      expect(confirmed.stage).toBe("ready");
+      expect(confirmed.communication?.question).toBeUndefined();
+      expect(confirmed.communication?.revision).toBe(0);
+      expect(confirmed.userCheck?.answer?.outcome).toBe("confirmed");
+    },
+  );
+});
+
+test("answer() with a non-yes reply to a user-check question starts a fix round", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "ready",
+      attachLease: true,
+      taskEdits: { reviewHead: "commit-1" },
+      maxWorkers: 3,
+    },
+    async ({ home, task, lease, service }) => {
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const questionId = userCheckQuestionId(task.generation, "commit-1");
+      await store.update(task.id, task.revision, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        updatedAt: TIMESTAMP,
+        userCheckCriteria: ["Streak bar glows at 5 in a row"],
+        userCheck: {
+          head: "commit-1",
+          generation: current.generation,
+          evidence: [{ criterion: "Streak bar glows at 5 in a row", paths: [] }],
+        },
+        communication: {
+          revision: 0,
+          messages: [],
+          question: {
+            id: questionId,
+            text: 'Does "exercise a durable service path" look right? No screenshots were saved.',
+          },
+        },
+      }));
+      // The fix round reuses the durable worktree lease it finds in runtime, exactly as review left
+      // it; without it, beginFixes has nothing to build the fix job's cwd from.
+      const runtimeState = await readRuntimeState(runtimeFile(home));
+      await writeRuntimeState(runtimeFile(home), {
+        ...runtimeState,
+        tasks: runtimeState.tasks.map((entry) =>
+          entry.taskId === task.id ? { ...entry, worktree: lease } : entry,
+        ),
+      });
+
+      await service.answer({ taskId: task.id, questionId, text: "The color is wrong." });
+      const changed = await service.get(task.id);
+
+      // beginFixes admits the round (bumping the generation, moving the task to `implementing`)
+      // before it ever touches a pane; with no implementer/scout endpoint left to reuse, it leaves
+      // the round there unlaunched rather than blocking — the fix round has genuinely started.
+      expect(changed.stage).toBe("implementing");
+      expect(changed.generation).toBe(task.generation + 1);
+      expect(changed.reviewRound).toBe(task.reviewRound + 1);
+      expect(changed.communication?.question).toBeUndefined();
+      expect(changed.userCheck?.answer).toEqual({
+        outcome: "changes-requested",
+        text: "The color is wrong.",
+        answeredAt: TIMESTAMP,
+      });
+      const lastMessage = changed.communication?.messages.at(-1);
+      expect(lastMessage?.kind).toBe("answer");
+      expect(lastMessage?.text).toBe("The color is wrong.");
+      expect(lastMessage?.replyTo).toBe(questionId);
+    },
+  );
+});
+
+test("answer() refuses a user-check question once the task has left ready", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "ready",
+      attachLease: true,
+      taskEdits: { reviewHead: "commit-1" },
+    },
+    async ({ home, task, service }) => {
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const questionId = userCheckQuestionId(task.generation, "commit-1");
+      await store.update(task.id, task.revision, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        updatedAt: TIMESTAMP,
+        userCheckCriteria: ["Streak bar glows at 5 in a row"],
+        userCheck: { head: "commit-1", generation: current.generation, evidence: [] },
+        communication: {
+          revision: 0,
+          messages: [],
+          question: {
+            id: questionId,
+            text: 'Does "exercise a durable service path" look right? No screenshots were saved.',
+          },
+        },
+      }));
+
+      // Pausing leaves the still-current question exactly as it was but moves the task off `ready`,
+      // proving the stage guard on its own rather than relying on whatever else clears the question.
+      await service.pause(task.id, "operator paused the scenario");
+      await expect(service.answer({ taskId: task.id, questionId, text: "yes" })).rejects.toThrow(
+        "no longer waiting on you",
+      );
+    },
+  );
 });
