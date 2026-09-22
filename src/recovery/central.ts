@@ -277,9 +277,15 @@ export class CentralRecoveryWorkflow {
     const state = await readRuntimeState(this.#deps.runtimePath);
     const runtime = taskRuntime(state, task.id);
     if (runtime === undefined) {
-      const reason = "durable runtime metadata is missing; no re-entry is possible";
-      await this.#deps.blockTask(task.id, reason);
-      return { taskId: task.id, action: "blocked", reason };
+      const cause: BlockCause = {
+        group: "safety-stop",
+        kind: "runtime-metadata-missing",
+        summary:
+          "Tandem's durable record of this task's runtime is missing, so it cannot be resumed automatically.",
+        detail: "durable runtime metadata is missing; no re-entry is possible",
+      };
+      await reportBlock(this.#deps.blockTask, task.id, cause);
+      return { taskId: task.id, action: "blocked", reason: cause.summary };
     }
     if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) {
       return {
@@ -337,10 +343,13 @@ export class CentralRecoveryWorkflow {
     const relaunch = await this.#deps.relaunchWorker(task, extraInstructions);
     if (!relaunch.relaunched) {
       const reason = relaunch.reason ?? "relaunch was refused";
-      await this.#deps.blockTask(
-        task.id,
-        `automatic restart could not launch a new worker: ${reason}`,
-      );
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: `Tandem's automatic restart could not launch a new worker: ${reason}.`,
+        detail: `automatic restart could not launch a new worker: ${reason}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
       return { taskId: task.id, action: "blocked", reason };
     }
 
@@ -408,9 +417,15 @@ export class CentralRecoveryWorkflow {
     const state = await readRuntimeState(this.#deps.runtimePath);
     const runtime = taskRuntime(state, task.id);
     if (runtime === undefined) {
-      const reason = "durable runtime metadata is missing; no re-entry is possible";
-      await this.#deps.blockTask(task.id, reason);
-      return { taskId: task.id, action: "blocked", reason };
+      const cause: BlockCause = {
+        group: "safety-stop",
+        kind: "runtime-metadata-missing",
+        summary:
+          "Tandem's durable record of this task's runtime is missing, so it cannot be resumed automatically.",
+        detail: "durable runtime metadata is missing; no re-entry is possible",
+      };
+      await reportBlock(this.#deps.blockTask, task.id, cause);
+      return { taskId: task.id, action: "blocked", reason: cause.summary };
     }
     if (runtime.jobs.some(activeRuntimeJob) || unreleasedReservation(runtime.reservation)) {
       return {
@@ -459,10 +474,13 @@ export class CentralRecoveryWorkflow {
     const revalidated = await this.#deps.revalidate(task);
     if (!revalidated.started) {
       const reason = revalidated.reason ?? "validation could not be restarted";
-      await this.#deps.blockTask(
-        task.id,
-        `automatic validation retry could not restart validation: ${reason}`,
-      );
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: `Tandem's automatic validation retry could not restart validation: ${reason}.`,
+        detail: `automatic validation retry could not restart validation: ${reason}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
       return { taskId: task.id, action: "blocked", reason };
     }
 
@@ -921,10 +939,13 @@ export class CentralRecoveryWorkflow {
     }
     const proof = await this.proveDeath(task, runtime, VALIDATION_PROVE_DEATH_TARGET);
     if (!proof.proven) {
-      await this.#deps.blockTask(
-        task.id,
-        `the approved validation retry could not proceed: ${proof.reasonSummary}`,
-      );
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "safety-stop",
+        kind: "ownership-unprovable",
+        summary: `The approved validation retry could not proceed: ${proof.reasonSummary}.`,
+        detail: `the approved validation retry could not proceed: ${proof.reasonSummary}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
       return { started: false, proven: false, reasonSummary: proof.reasonSummary };
     }
     const recovery = defaultRecovery(runtime);
@@ -932,10 +953,14 @@ export class CentralRecoveryWorkflow {
     await this.snapshotWorktree(task, runtime, retriesUsed + 1);
     const revalidated = await this.#deps.revalidate(task);
     if (!revalidated.started) {
-      await this.#deps.blockTask(
-        task.id,
-        `the approved validation retry could not restart validation: ${revalidated.reason ?? "revalidation was refused"}`,
-      );
+      const reason = revalidated.reason ?? "revalidation was refused";
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: `The approved validation retry could not restart validation: ${reason}.`,
+        detail: `the approved validation retry could not restart validation: ${reason}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
       return { started: false, proven: true, reasonSummary: proof.reasonSummary };
     }
     const now = this.#deps.clock();
@@ -1023,10 +1048,13 @@ export class CentralRecoveryWorkflow {
     }
     const proof = await this.proveDeath(task, runtime);
     if (!proof.proven) {
-      await this.#deps.blockTask(
-        task.id,
-        `the approved restart could not proceed: ${proof.reasonSummary}`,
-      );
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "safety-stop",
+        kind: "ownership-unprovable",
+        summary: `The approved restart could not proceed: ${proof.reasonSummary}.`,
+        detail: `the approved restart could not proceed: ${proof.reasonSummary}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
       return { relaunched: false, proven: false, reasonSummary: proof.reasonSummary };
     }
     const recovery = defaultRecovery(runtime);
@@ -1039,10 +1067,14 @@ export class CentralRecoveryWorkflow {
     ];
     const relaunch = await this.#deps.relaunchWorker(task, extraInstructions);
     if (!relaunch.relaunched) {
-      await this.#deps.blockTask(
-        task.id,
-        `the approved restart could not launch a new worker: ${relaunch.reason ?? "relaunch was refused"}`,
-      );
+      const reason = relaunch.reason ?? "relaunch was refused";
+      await reportBlock(this.#deps.blockTask, task.id, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: `The approved restart could not launch a new worker: ${reason}.`,
+        detail: `the approved restart could not launch a new worker: ${reason}`,
+        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+      });
       return { relaunched: false, proven: true, reasonSummary: proof.reasonSummary };
     }
     const now = this.#deps.clock();
@@ -1265,9 +1297,9 @@ export class CentralRecoveryWorkflow {
     parts: Readonly<{ readonly what: string; readonly risk: string }>,
   ): Promise<CentralRecoveryOutcome> {
     const questionId = `${VALIDATION_RETRY_QUESTION_ID_PREFIX}${incidentIdentity}`;
-    const text = formatRecoveryQuestion({
+    const text = formatDecisionQuestion({
       what: parts.what,
-      want: VALIDATION_RETRY_QUESTION_WANT,
+      recommendation: VALIDATION_RETRY_QUESTION_WANT,
       risk: parts.risk,
     });
     const details = `Details: task ${task.id}${task.requestId === undefined ? "" : `, request ${task.requestId}`}, generation ${task.generation}, dead job ${deadJobId}.`;

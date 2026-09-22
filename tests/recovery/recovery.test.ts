@@ -477,6 +477,20 @@ test("foreign endpoint ownership blocks recovery", async () => {
   }
 });
 
+test("foreign endpoint ownership blocks a not-yet-blocked task with an ownership-unprovable cause", async () => {
+  const f = await fixture({ endpoint: "foreign", stage: "implementing" });
+  try {
+    const value = await f.workflow.reconcile("task-1", true);
+    expect(value.blocked).toBe(true);
+    const blocked = await f.store.read("task-1");
+    expect(blocked?.stage).toBe("blocked");
+    expect(blocked?.blockCause?.kind).toBe("ownership-unprovable");
+    expect(blocked?.blockCause?.group).toBe("safety-stop");
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("reconciliation is idempotent after proven cleanup", async () => {
   const f = await fixture({ endpoint: "missing", job: job("consumed") });
   try {
