@@ -1175,8 +1175,9 @@ test("service resolves task policy from Tandem home and leaves repository-local 
     const localConfig = '{"models":{"coordinator":{"model":"local/should-not-be-read"}}}';
     await writeFile(localConfigPath, localConfig, "utf8");
     await mkdir(dirname(proposal.configPath), { recursive: true });
+    // The legacy config.json envelope is still read for projects saved before settings.toml.
     await writeFile(
-      proposal.configPath,
+      join(dirname(proposal.configPath), "config.json"),
       `${JSON.stringify({
         schemaVersion: 1,
         repoPath: proposal.repoPath,
@@ -5268,11 +5269,7 @@ async function requestFixture(
   await mkdir(dirname(proposal.configPath), { recursive: true });
   await writeFile(
     proposal.configPath,
-    `${JSON.stringify({
-      schemaVersion: 1,
-      repoPath: proposal.repoPath,
-      policy: { requestBudget: { capMicros: 100_000_000, operationEstimateMicros: 500_000 } },
-    })}\n`,
+    `repoPath = ${JSON.stringify(proposal.repoPath)}\n\n[requestBudget]\ncapMicros = 100000000\noperationEstimateMicros = 500000\n`,
     "utf8",
   );
   const drafted = await service.draftRequestBrief({
