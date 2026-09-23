@@ -1247,8 +1247,27 @@ test("a draft pull request is summarized as unfinished visibility, never as acce
     }),
   );
 
-  expect(summary).toContain("Pull request: acme/repo#11 draft");
+  expect(summary).toContain("Pull request: acme/repo#11 (draft)");
   expect(summary).toContain("This is a draft: work in progress, not ready to merge.");
+});
+
+test("a published pull request is summarized with its link", () => {
+  const summary = summarizeTandemActionValue(
+    "publish-now",
+    task({
+      stage: "ready",
+      pullRequest: {
+        repository: "acme/repo",
+        number: 12,
+        state: "open",
+        head: "head-1",
+        base: "main",
+        url: "https://github.com/acme/repo/pull/12",
+      },
+    }),
+  );
+
+  expect(summary).toContain("Pull request: https://github.com/acme/repo/pull/12 (open)");
 });
 
 test("a failed acknowledgement retries on the next tick without waking the coordinator again", async () => {

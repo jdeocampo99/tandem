@@ -1157,6 +1157,8 @@ class TandemController {
     },
   ): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("publish input must be an object");
+    const published = await this.publishedTask(id);
+    if (published !== undefined) return published;
     if (input.approved) {
       const preflight = await this.deliveryPreflight(id, input.base);
       if (!preflight.ready) {
@@ -1182,6 +1184,12 @@ class TandemController {
     return this.recordPullRequest(id, task.revision, metadata);
   }
 
+  /** A task that already has a finished pull request; publishing it again just returns it. */
+  private async publishedTask(id: string): Promise<TaskRecord | undefined> {
+    const task = await this.get(id);
+    return task.pullRequest !== undefined && task.pullRequest.state !== "draft" ? task : undefined;
+  }
+
   /**
    * The user's explicit "publish now": stops any running validator or reviewer, moves the task to
    * `ready` without finishing review, records the skip, and opens the pull request. It is only for
@@ -1199,6 +1207,11 @@ class TandemController {
   ): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("publish-now input must be an object");
     if (!input.approved) throw new ApprovalRequiredError("publish now");
+    const published = await this.publishedTask(id);
+    if (published !== undefined) return published;
+    if ((await this.get(id)).stage === "cancelled") {
+      throw new Error(`Task ${id} was cancelled, so it can't be published`);
+    }
     await this.#control.skipReview(assertTaskId(id));
     return this.publish(id, input);
   }
