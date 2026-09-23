@@ -102,14 +102,13 @@ It preserves task IDs, generations, worktrees, reports, messages, and coordinato
 `--fresh` starts new chats. It may run from a separate terminal or any Herdr pane except the
 coordinator pane it would close.
 
-To find stale resources or old-format state and offer the repair:
+To find stale resources and offer the repair:
 
 ```sh
 tandem fix
 ```
 
-See [Reconciling Tandem resources across sessions](#reconciling-tandem-resources-across-sessions)
-and [Migrating legacy state](#legacy-json-migration-offline-only).
+See [Reconciling Tandem resources across sessions](#reconciling-tandem-resources-across-sessions).
 
 To cancel all in-progress work and reopen coordinators:
 
@@ -122,7 +121,7 @@ and presentation terminals, and reopens every coordinator with a fresh chat, inc
 Recorded coordinator panes that returned to their verified terminal shell are also closed. Unknown,
 foreign, or unsafe ownership refuses before any pane is closed; coordinator source-safety checks
 still apply. It keeps onboarding, settings, task history, worktrees, uncommitted changes, and
-repository files; it is not task recovery or migration. It takes no paths and asks to confirm (or
+repository files; it is not task recovery. It takes no paths and asks to confirm (or
 `--yes`). `--headless` and `--no-attach` remain supported. It may run from a separate terminal or any
 Herdr pane except a coordinator pane.
 
@@ -1197,8 +1196,8 @@ Only scout records may carry one; a continuation on an implementation record is 
 
 Task creation accepts an explicitly supplied disposition; a scout created without one is classified
 before the record is written. Scout records written before the field
-existed load with that same conservative default, so restart, compaction, legacy JSON migration,
-and bounded recovery all keep one disposition per task. Unsupported dispositions, unsupported
+existed load with that same conservative default, so restart, compaction, and bounded recovery all
+keep one disposition per task. Unsupported dispositions, unsupported
 selectors, unknown fields, and malformed provenance fail closed as state corruption instead of
 being downgraded to a default.
 
@@ -1898,83 +1897,19 @@ are Tandem-owned state, not files in target repositories:
 | `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. Launch discovers these across every session directory, so one repository keeps one active coordinator. |
 | `<home>/coordinator-registry/repository-<digest>.lock` | Native `O_EXLOCK` coordination lock for one canonical repository, shared by every session in this home and acquired before the per-session launch lock. |
 | `<home>/coordinator-scripts/*.sh` | Atomically written `0700` launch scripts containing the coordinator command and scoped environment overrides; kept outside project checkouts. |
-| `<home>/state.sqlite` | Canonical SQLite source of truth for task records, policy snapshots, lifecycle/evidence/review/delivery metadata, cleanup notes, runtime reservations, endpoint identities, durable jobs and operations, stop requests, presentations, and migration metadata. |
+| `<home>/state.sqlite` | Canonical SQLite source of truth for task records, policy snapshots, lifecycle/evidence/review/delivery metadata, cleanup notes, runtime reservations, endpoint identities, durable jobs and operations, stop requests, and presentations. |
 | `<home>/communications/<safe-task-id>/inbox.json` | Derived bounded task-message projection; canonical communication remains in the task row in `state.sqlite`. |
-| `<home>/tasks/*.json` (legacy input only) | Pre-migration task snapshots. A successful migration archives the original bytes under `<home>/.tandem-migration/archive/tasks/` and replaces `<home>/tasks` with an old-writer fence file. |
-| `<home>/runtime.json` (legacy input only) | Pre-migration runtime snapshot. A successful migration archives the original bytes under `<home>/.tandem-migration/archive/runtime.json` and replaces `<home>/runtime.json` with an old-writer fence directory. |
 | `<home>/jobs/<task-id>/...` | Worker/validation job inputs, private result files, persisted reports, `job.json.terminal.json` lifecycle/heartbeat state, and short-lived `job.json.terminal.json.command` pause/close requests. |
 | `<home>/sessions/<task-id>/` | Implementer OMP session directories when continuation is needed. Scouts do not receive a session directory. |
 | `<home>/presentations/<presentation-id>/` | Private presentation job, result, artifact, interactive terminal state/control, and `feedback/<event-id>.json` evidence files. |
 | `<home>/pool/` | Default Treehouse pool root unless overridden. |
 
-### Legacy JSON migration (offline only)
-
-`state.sqlite` is the only canonical task/runtime store. `<home>/runtime.json` and
-`<home>/tasks/*.json` are legacy migration inputs, not a second authority. A home that
-contains legacy JSON is refused by normal SQLite startup until migration completes.
-Migration is an explicit offline cutover; do not use it while any Tandem coordinator,
-worker, validation job, presentation, or legacy writer may be running.
-
-Use the same home that the coordinator uses (`--home PATH`, then `TANDEM_HOME`, then the
-remembered setup, otherwise `~/.tandem`) and follow this sequence:
-
-1. Stop all Tandem/Herdr activity for that home. Resolve every live or ambiguous
-   coordinator, active worker or validation job, and unresolved endpoint launch before
-   continuing. Do not treat a missing process observation as proof when native ownership
-   is ambiguous; incomplete reservation intents are reported for quarantine instead.
-2. Review the plan. `tandem fix` shows it and asks before migrating; answer No to leave the
-   home unchanged. For a read-only JSON plan, use the advanced action CLI and omit `--yes`:
-
-   ```sh
-   tandem fix --home /absolute/path/to/tandem-home
-   bun src/cli.ts migrate-state --home /absolute/path/to/tandem-home --json
-   ```
-
-   While old-format state is present, `tandem fix` handles only the migration and skips
-   resource reconciliation, because SQLite state is unusable until migration completes.
-
-   The plan hashes regular legacy source files, reports source/task counts and
-   diagnostics, and lists incomplete reservation intents that will be quarantined
-   without guessing or resuming them. `blocked` means stop and resolve the reported
-   liveness/ownership condition; never bypass it.
-
-3. When the plan is `ready`, confirm the prompt or apply it with the same home:
-
-   ```sh
-   tandem fix --home /absolute/path/to/tandem-home --yes
-   ```
-
-   The apply path rechecks native authority after acquiring the home fence lock and
-   refuses if ownership changed. It validates source hashes, archives any present legacy
-   source at `<home>/.tandem-migration/archive/runtime.json` and
-   `<home>/.tandem-migration/archive/tasks/`, imports them into `state.sqlite`, writes
-   `<home>/.tandem-migration/manifest.json`, and installs
-   `<home>/.tandem-migration/fence.json`. The former `<home>/runtime.json` becomes a
-   read-only fence directory; the former `<home>/tasks` becomes a read-only fence file.
-   The archive and manifest preserve source identity for replay.
-4. If apply is interrupted, rerun `tandem fix` with the same home and confirm again. The manifest/archive
-   phases make the import resumable and idempotent; do not edit, delete, or recreate
-   legacy sources, the archive, or the fences. Re-run the read-only plan and proceed with
-   normal launch only when it reports `complete`.
-
-Planning and apply fail closed on malformed or unknown legacy fields, symlinked or
-non-regular sources, changed source hashes, an invalid migration manifest, a non-empty
-SQLite task/runtime store, or any unproven native ownership. Do not repair around a
-diagnostic by deleting records or replacing a source; preserve the bytes and rerun the
-read-only plan after the prerequisite is resolved.
-
-Import preserves task IDs, generations, fix-round and policy state, saved checkpoints,
-evidence, and operation history. Incomplete legacy reservation intents remain recorded
-and are quarantined by reconciliation; migration never invents an operation or resumes
-an uncertain launch. Migration is not recovery and does not resume tasks, clear
-reservations, release retained capacity/resources, reset a checkpoint, change policy, or
-unblock a maxed fix-round policy.
-
-After cutover, recovery accepts only positive native identity or durable result evidence.
-An unknown external-effect outcome is quarantined and keeps its reservation, capacity,
-and resources. A worker launch is at-most-once: a duplicate claim or a stale
-task/generation/operation/fencing identity is refused. Never clear a reservation,
-invent a job or result, replace a task, or change policy to bypass unknown ownership.
+`state.sqlite` is the only canonical task/runtime store. Recovery accepts only positive
+native identity or durable result evidence. An unknown external-effect outcome is
+quarantined and keeps its reservation, capacity, and resources. A worker launch is
+at-most-once: a duplicate claim or a stale task/generation/operation/fencing identity is
+refused. Never clear a reservation, invent a job or result, replace a task, or change
+policy to bypass unknown ownership.
 
 ### Durable operation and recovery contract
 
@@ -2237,10 +2172,9 @@ classification, recommended action, approval requirement, start and deadline, an
 ### Reconciling Tandem resources across sessions
 
 `tandem fix [--home PATH] [--yes] [--json]` is the front door's home-wide cleanup surface, and
-the supported alternative to deleting coordinator records, panes, or lock files by hand. When the
-home still holds old-format legacy state it offers the [migration](#legacy-json-migration-offline-only)
-instead and reconciles nothing until that is complete. It is distinct from the advanced CLI's
-per-task `bun src/cli.ts reconcile TASK_ID`, which repairs one task's durable runtime.
+the supported alternative to deleting coordinator records, panes, or lock files by hand. It is
+distinct from the advanced CLI's per-task `bun src/cli.ts reconcile TASK_ID`, which repairs one
+task's durable runtime.
 
 It runs in two stages. The scan reads every coordinator record across every session directory under
 the home, asks Herdr whether each recorded coordinator still answers, reads the checkout behind a

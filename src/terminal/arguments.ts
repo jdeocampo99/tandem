@@ -34,7 +34,6 @@ export type TerminalRunResult = Readonly<{
     | "reset"
     | "cancelled"
     | "error";
-  readonly migration?: unknown;
   readonly reconciliation?: unknown;
   readonly projects?: readonly string[];
   readonly sessionId?: string;
@@ -79,7 +78,6 @@ const RENAMED: Readonly<Record<string, string>> = {
   "--continue": "tandem (chats now resume by default; --fresh starts new ones)",
   logs: "tandem status --logs",
   "reconcile-resources": "tandem fix",
-  "migrate-state": "tandem fix",
   inspect: "tandem status TASK_ID",
 };
 

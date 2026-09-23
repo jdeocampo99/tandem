@@ -63,7 +63,6 @@ const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
   "validation-retry": "validation-retry",
   "evidence-repair": "evidence-repair",
   "delivery-preflight": "delivery-preflight",
-  "migrate-state": "migrate-state",
 };
 const PR_COMMANDS: Readonly<Record<string, CliCommand>> = {
   describe: "describe",
@@ -106,7 +105,6 @@ const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
   "validation-retry": 1,
   "evidence-repair": 1,
   "delivery-preflight": 3,
-  "migrate-state": 0,
 };
 
 export type MergeMethod = "merge" | "squash" | "rebase";
@@ -145,8 +143,7 @@ export type CliCommand =
   | "review-existing"
   | "validation-retry"
   | "evidence-repair"
-  | "delivery-preflight"
-  | "migrate-state";
+  | "delivery-preflight";
 
 export type CliOptions = Readonly<{
   readonly help: boolean;

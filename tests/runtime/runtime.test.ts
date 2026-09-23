@@ -4,11 +4,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activeReservations } from "../../src/runtime/activity.ts";
-import {
-  importLegacyState,
-  readMigrationStatus,
-  withStateTransaction,
-} from "../../src/runtime/database.ts";
 import { readRuntimeState, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import {
   type DurableJob,
@@ -139,46 +134,6 @@ test("runtime persistence rejects a missing row after initialization", async () 
     database.query("DELETE FROM runtime_state WHERE id = 1").run();
     database.close();
     await expect(readRuntimeState(path)).rejects.toThrow("missing from authoritative database");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("caught nested migration refusal rolls back its manifest receipt", async () => {
-  const root = await mkdtemp(join(tmpdir(), "tandem-runtime-migration-"));
-  const path = join(root, "runtime.json");
-  try {
-    await writeRuntimeState(path, emptyRuntimeState());
-    await expect(
-      withStateTransaction(root, async () => {
-        try {
-          await importLegacyState(root, {
-            tasks: [],
-            runtime: emptyRuntimeState(),
-            manifest: { id: "migration-1", sourceHash: "source-1" },
-          });
-        } catch {
-          // The initialized runtime makes this import invalid.
-        }
-      }),
-    ).rejects.toThrow("rollback-only");
-    expect(await readMigrationStatus(root)).toBe("absent");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("normal state access fails closed for an invalid migration marker", async () => {
-  const root = await mkdtemp(join(tmpdir(), "tandem-runtime-marker-"));
-  const path = join(root, "runtime.json");
-  try {
-    await writeRuntimeState(path, emptyRuntimeState());
-    const database = new Database(join(root, "state.sqlite"));
-    database
-      .query("INSERT INTO metadata(key, value) VALUES ('migration_status', ?)")
-      .run("unexpected");
-    database.close();
-    await expect(readRuntimeState(path)).rejects.toThrow("invalid migration status");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
