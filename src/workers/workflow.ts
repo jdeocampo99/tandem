@@ -104,6 +104,7 @@ import {
   workerCommand,
   workerRoleForTask,
 } from "../service/records.ts";
+import { decideScoutWorktreeRelease, observeScoutCheckout } from "../service/scout-cleanup.ts";
 import { taskSourcePath } from "../service/source.ts";
 import {
   iterationScopeFor,
@@ -1547,7 +1548,9 @@ export class WorkerWorkflow {
       fencingRevision: operation.fencingRevision,
       claimOwner: operation.claimOwner,
     };
-    if (runtime.worktree === undefined) {
+    const adoption =
+      runtime.worktree === undefined ? await this.adoptableScoutWorktree(task) : undefined;
+    if (runtime.worktree === undefined && adoption === undefined) {
       const poolReady = await this.withOperationEffect(
         task.id,
         claim,
@@ -1571,7 +1574,15 @@ export class WorkerWorkflow {
         runtime.sourceRepoPath !== undefined,
       );
       const expectedHolder = `${this.#deps.sessionId}:${task.id}`;
-      if (lease !== undefined && lease.leaseHolder !== expectedHolder) {
+      // An implementation may run in the worktree it adopted from its first research handoff's
+      // scout, which Treehouse still records under that scout's holder.
+      const adoptedFrom =
+        task.kind === "implementation" ? task.researchHandoffs?.[0]?.scoutTaskId : undefined;
+      const allowedHolders =
+        adoptedFrom === undefined
+          ? [expectedHolder]
+          : [expectedHolder, `${this.#deps.sessionId}:${adoptedFrom}`];
+      if (lease !== undefined && !allowedHolders.includes(lease.leaseHolder)) {
         throw new LeaseSafetyError(
           `runtime worktree lease is held by ${JSON.stringify(lease.leaseHolder)}, expected ${JSON.stringify(expectedHolder)}`,
           lease,
@@ -1599,6 +1610,7 @@ export class WorkerWorkflow {
         }
       }
       if (needsLeasePreparation) {
+        const holder = adoption?.leaseHolder ?? expectedHolder;
         const prepared = await this.withOperationEffect(
           task.id,
           claim,
@@ -1621,7 +1633,7 @@ export class WorkerWorkflow {
                 const restored = JSON.parse(existingEffect.receipt) as NonNullable<
                   RuntimeTaskState["worktree"]
                 >;
-                await this.saveWorktree(task.id, restored, claim);
+                await this.saveWorktree(task.id, restored, claim, adoptedFrom);
                 return restored;
               } catch {
                 await this.quarantineOperation(
@@ -1638,14 +1650,17 @@ export class WorkerWorkflow {
               `worktree:${claim.id}`,
               "worktree",
               "intent",
-              expectedHolder,
+              holder,
             );
             const acquired = await acquireWorktree(this.#deps.run, {
               repo: taskSourcePath(currentTask, currentRuntime),
               root: this.#deps.poolRoot,
-              tandemId: expectedHolder,
+              tandemId: holder,
               taskName: currentRuntime.taskName,
               sourceHead: currentRuntime.sourceCheckpoint.head,
+              ...(adoption === undefined
+                ? {}
+                : { adopt: { branch: adoption.branch, head: adoption.baseHead } }),
             });
             if (
               lease !== undefined &&
@@ -1668,10 +1683,10 @@ export class WorkerWorkflow {
               `worktree:${claim.id}`,
               "worktree",
               "succeeded",
-              expectedHolder,
+              holder,
               JSON.stringify(acquired),
             );
-            await this.saveWorktree(task.id, acquired, claim);
+            await this.saveWorktree(task.id, acquired, claim, adoptedFrom);
             return acquired;
           },
         );
@@ -4074,13 +4089,18 @@ export class WorkerWorkflow {
     );
   }
 
+  /**
+   * Records the task's worktree. When it was adopted from `adoptedFrom`'s scout, the scout's record
+   * of the same lease is dropped in the same write, so scout cleanup can never release it.
+   */
   private async saveWorktree(
     taskId: string,
     worktree: NonNullable<RuntimeTaskState["worktree"]>,
     claim: OperationClaim,
+    adoptedFrom?: string,
   ): Promise<void> {
-    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
-      replaceRuntimeTask(state, taskId, (current) => {
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) => {
+      const saved = replaceRuntimeTask(state, taskId, (current) => {
         this.assertOperationClaim(current, taskId, claim);
         return {
           ...current,
@@ -4089,8 +4109,43 @@ export class WorkerWorkflow {
             ? {}
             : { reservation: { ...current.reservation, phase: "worktree" } }),
         };
-      }),
-    );
+      });
+      const scout = adoptedFrom === undefined ? undefined : taskRuntime(saved, adoptedFrom);
+      if (adoptedFrom === undefined || scout?.worktree?.leaseId !== worktree.leaseId) return saved;
+      return replaceRuntimeTask(saved, adoptedFrom, ({ worktree: _adopted, ...rest }) => rest);
+    });
+  }
+
+  /**
+   * The worktree an implementation can take over from the scout of its first research handoff:
+   * the scout has settled, holds no pane or reservation, and its checkout is still clean on its
+   * own branch at its source commit. Anything else falls back to leasing a fresh worktree.
+   */
+  private async adoptableScoutWorktree(
+    task: TaskRecord,
+  ): Promise<NonNullable<RuntimeTaskState["worktree"]> | undefined> {
+    const scoutId =
+      task.kind === "implementation" ? task.researchHandoffs?.[0]?.scoutTaskId : undefined;
+    if (scoutId === undefined) return undefined;
+    const [scout, runtime] = await Promise.all([
+      this.#deps.getTask(scoutId),
+      this.#deps.runtimeFor(scoutId),
+    ]);
+    const lease = runtime?.worktree;
+    if (
+      scout.stage !== "completed" ||
+      lease === undefined ||
+      lease.leaseHolder !== `${this.#deps.sessionId}:${scoutId}` ||
+      runtime === undefined ||
+      runtime.endpoints.length > 0 ||
+      runtime.endpointLaunch !== undefined ||
+      unreleasedReservation(runtime.reservation)
+    ) {
+      return undefined;
+    }
+    const checkout = await observeScoutCheckout(this.#deps.run, lease.path);
+    if (checkout.status !== "observed") return undefined;
+    return decideScoutWorktreeRelease({ lease, checkout }).kind === "release" ? lease : undefined;
   }
   async saveEndpoint(taskId: string, endpoint: Endpoint, claim?: OperationClaim): Promise<void> {
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>

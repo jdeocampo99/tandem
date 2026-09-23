@@ -4,7 +4,7 @@ import { lstat, readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
-import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
+import { readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
@@ -467,7 +467,6 @@ async function readBoundedResearchReport(
 async function resolveResearchHandoffs(
   ids: readonly string[] | undefined,
   implementationRepoPath: string,
-  implementationCheckpoint: Pick<GitCheckpoint, "head" | "base">,
   home: string,
   runtime: RuntimeState,
   store: Pick<TaskStoreTransaction, "read">,
@@ -502,14 +501,6 @@ async function resolveResearchHandoffs(
       runtimeTask.sourceCheckpoint.unmerged
     ) {
       throw new Error(`research task ${scoutTaskId} has invalid or stale source provenance`);
-    }
-    if (
-      runtimeTask.sourceCheckpoint.head !== implementationCheckpoint.head ||
-      runtimeTask.sourceCheckpoint.base !== implementationCheckpoint.base
-    ) {
-      throw new Error(
-        `research task ${scoutTaskId} is stale for the implementation source checkpoint`,
-      );
     }
     const reportPath = resolve(scout.reportPath);
     const reportRoot = await realpath(taskJobsDirectory(home, scout.id)).catch(() => undefined);
@@ -1046,7 +1037,6 @@ class TandemController {
       const researchHandoffs = await resolveResearchHandoffs(
         researchTaskIds,
         source.repoPath,
-        checkpoint,
         this.#deps.home,
         runtime,
         store,

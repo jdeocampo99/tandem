@@ -11,6 +11,7 @@ import type {
   IdFactory,
   IsoTimestamp,
   RequestBudgetPolicy,
+  ResearchContinuation,
   ResolvedPolicy,
   TaskRecord,
   WorktreeLease,
@@ -781,6 +782,7 @@ export type SeedTaskInput = Readonly<{
   readonly reportPath?: string;
   readonly worktree?: WorktreeLease;
   readonly endpoints?: readonly Endpoint[];
+  readonly researchContinuation?: ResearchContinuation;
 }>;
 
 /** Seeds one durable task in the scenario home, bypassing approval prompts the scenario is not testing. */
@@ -797,6 +799,9 @@ export async function seedScenarioTask(
     surfaces: ["scenario"],
     policy: input.policy ?? SCENARIO_POLICY,
     ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+    ...(input.researchContinuation === undefined
+      ? {}
+      : { researchContinuation: input.researchContinuation }),
   });
   if (
     task.stage === "awaiting-approval" &&

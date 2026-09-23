@@ -1239,8 +1239,9 @@ wake text after compaction, restart, or coordinator replacement:
 The interview stays inside the report and the user's request and never widens scope on its own.
 Only after the user answers may the coordinator create an implementation task citing that scout in
 `researchTaskIds`. That task is created `awaiting-approval` with `scopeApproved` false, still passes
-repository and source-checkpoint handoff validation, and does not launch until the concrete scope is
-explicitly approved. User answers travel through the existing steer/answer communication APIs.
+repository and report-provenance handoff validation, and does not launch until the concrete scope is
+explicitly approved. Research done on an earlier source commit still hands off; the handoff records
+the scout's source HEAD. User answers travel through the existing steer/answer communication APIs.
 
 #### Classifying the disposition
 
@@ -1758,6 +1759,19 @@ read, or that sits on a branch the lease does not name, is quarantined with ever
 Blocked, paused, and decision-waiting scouts keep their pane and worktree, because those are the
 evidence a coordinator needs to answer them; completed scouts with a durable report and safely
 cancelled scouts are released.
+
+A completed scout whose disposition is `ask-intent` or `implementation-interview` closes its pane
+but keeps its clean worktree (status `retained`), with no time limit, so the implementation that
+follows runs in the same checkout instead of leasing another. When that implementation starts, it
+adopts the worktree of the first scout in its `researchTaskIds` if that scout is settled, holds no
+pane or reservation, and its checkout is still clean on its lease branch at its source commit. The
+adapter re-proves that, switches the worktree to the implementation branch at the implementation's
+pinned source commit (fast-forwarding past research done on an older commit), and deletes the
+merged scout branch. The runtime records the lease on the implementation and drops it from the
+scout in one write, so scout cleanup can never return it. Treehouse cannot relabel a lease, so the
+adopted lease keeps the scout's holder, and the implementation's ownership check accepts exactly
+its own holder or that scout's. A scout that fails any adoption check is left alone and the
+implementation leases a fresh worktree.
 
 Cleanup never touches what a scout produced. The report, the source checkpoint, the consumed scout
 job, and the task's notifications and history all live in the Tandem home, so a later

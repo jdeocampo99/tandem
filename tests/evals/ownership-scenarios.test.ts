@@ -85,6 +85,11 @@ test("a lease whose recorded holder no longer matches is retained rather than re
       stage: "scouting",
       worktree: lease,
       endpoints: [endpoint],
+      researchContinuation: {
+        schemaVersion: 1,
+        disposition: "report-only",
+        selectedBy: "explicit",
+      },
     });
     await seedScenarioRuntime(
       world,

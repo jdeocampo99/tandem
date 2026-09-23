@@ -12,6 +12,7 @@ import type {
   CommandRequest,
   CommandResult,
   Endpoint,
+  ResearchContinuationDisposition,
   ResolvedPolicy,
   TaskRecord,
   WorktreeLease,
@@ -289,6 +290,8 @@ type Fixture = Readonly<{
 
 type FixtureOptions = Readonly<{
   readonly stage?: TaskRecord["stage"];
+  /** Defaults to report-only, so the settled scout has no implementation to keep its worktree for. */
+  readonly disposition?: ResearchContinuationDisposition;
   readonly world?: Partial<World>;
 }>;
 
@@ -318,6 +321,11 @@ async function settledScoutFixture(options: FixtureOptions = {}): Promise<Fixtur
     acceptanceCriteria: ["report entry points"],
     surfaces: ["service"],
     policy,
+    researchContinuation: {
+      schemaVersion: 1,
+      disposition: options.disposition ?? "report-only",
+      selectedBy: "explicit",
+    },
   });
   const stage = options.stage ?? "completed";
   const started = await store.update(created.id, created.revision, (task) =>
@@ -528,6 +536,22 @@ test("a completed clean scout is released while its report and history survive",
   });
 });
 
+test("a scout whose research leads to implementation closes its pane and keeps its worktree", async () => {
+  await withFixture(
+    { disposition: "implementation-interview" },
+    async ({ home, world, service, lease }) => {
+      await service.tick();
+
+      const task = await service.get("task-1");
+      expect(task.cleanup?.status).toBe("retained");
+      expect(task.cleanup?.reason).toContain("kept for the implementation");
+      expect(world.closedPanes).toEqual(["pane-1"]);
+      expect(world.returnedLeases).toEqual([]);
+      expect((await readRuntime(home)).tasks[0]?.worktree?.leaseId).toBe(lease.leaseId);
+    },
+  );
+});
+
 test("an untracked file in a scout checkout keeps the worktree with a reported reason", async () => {
   await withFixture({ world: { dirty: true } }, async ({ home, world, service, lease }) => {
     await service.tick();
@@ -703,6 +727,7 @@ test("scout completion releases resources in the same pass that writes the repor
     acceptanceCriteria: ["report entry points"],
     surfaces: ["service"],
     policy,
+    researchContinuation: { schemaVersion: 1, disposition: "report-only", selectedBy: "explicit" },
   });
   const task = await store.update(created.id, created.revision, (current) =>
     transitionTask(
