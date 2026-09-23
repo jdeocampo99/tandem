@@ -1,10 +1,11 @@
 export type TerminalCommand =
   | "launch"
+  | "status"
+  | "update"
+  | "fix"
+  | "reset"
   | "config"
-  | "configure"
-  | "migrate-state"
-  | "logs"
-  | "reconcile-resources";
+  | "configure";
 
 export type TerminalInvocation = Readonly<{
   readonly command: TerminalCommand;
@@ -13,14 +14,12 @@ export type TerminalInvocation = Readonly<{
   readonly home?: string;
   readonly sessionId?: string;
   readonly poolRoot?: string;
-  readonly continueSession: boolean;
+  readonly fresh: boolean;
   readonly headless: boolean;
   readonly noAttach: boolean;
-  readonly reset: boolean;
-  readonly restart: boolean;
-  readonly force: boolean;
+  readonly hard: boolean;
+  readonly logs: boolean;
   readonly yes: boolean;
-  readonly discard: boolean;
   readonly json: boolean;
 }>;
 
@@ -30,9 +29,9 @@ export type TerminalRunResult = Readonly<{
     | "help"
     | "launched"
     | "configured"
-    | "migrated"
-    | "logs"
-    | "reconciled"
+    | "status"
+    | "fixed"
+    | "reset"
     | "cancelled"
     | "error";
   readonly migration?: unknown;
@@ -62,171 +61,129 @@ function optionValue(
   return { value, next: index + 1 };
 }
 
+const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
+  status: "status",
+  update: "update",
+  fix: "fix",
+  reset: "reset",
+  config: "config",
+  configure: "configure",
+};
+
+/** Old spellings name their replacement instead of being mistaken for a project path. */
+const RENAMED: Readonly<Record<string, string>> = {
+  restart: "tandem update",
+  "--restart": "tandem update",
+  "--reset": "tandem reset",
+  "--force": "tandem reset",
+  "--continue": "tandem (chats now resume by default; --fresh starts new ones)",
+  logs: "tandem status --logs",
+  "reconcile-resources": "tandem fix",
+  "migrate-state": "tandem fix",
+  inspect: "tandem status TASK_ID",
+};
+
+const FLAGS = {
+  "-h": "help",
+  "--help": "help",
+  "--yes": "yes",
+  "--json": "json",
+  "--fresh": "fresh",
+  "--hard": "hard",
+  "--logs": "logs",
+  "--headless": "headless",
+  "--no-attach": "noAttach",
+} as const;
+type Flag = (typeof FLAGS)[keyof typeof FLAGS];
+
+/** Which commands accept which flags, and how many positional arguments. */
+const ALLOWED: Readonly<
+  Record<TerminalCommand, Readonly<{ flags: readonly Flag[]; maxPaths: number }>>
+> = {
+  launch: { flags: ["fresh", "headless", "noAttach"], maxPaths: Number.POSITIVE_INFINITY },
+  status: { flags: ["json", "logs"], maxPaths: 1 },
+  update: { flags: ["fresh", "headless", "noAttach"], maxPaths: 0 },
+  fix: { flags: ["yes", "json"], maxPaths: 0 },
+  reset: { flags: ["yes", "hard", "headless", "noAttach"], maxPaths: 0 },
+  config: { flags: [], maxPaths: 1 },
+  configure: { flags: [], maxPaths: 1 },
+};
+
 /** Parses the small user-facing terminal command without executing anything. */
 export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   let command: TerminalCommand | undefined;
-  let help = false;
   let home: string | undefined;
   let sessionId: string | undefined;
   let poolRoot: string | undefined;
-  let continueSession = false;
-  let reset = false;
-  let restart = false;
-  let force = false;
-  let headless = false;
-  let noAttach = false;
-  let yes = false;
-  let discard = false;
-  let json = false;
+  const flags = new Set<Flag>();
   const paths: string[] = [];
-
   let parseOptions = true;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === undefined) continue;
-    if (parseOptions && token === "--") {
+    if (!parseOptions) {
+      paths.push(token);
+      continue;
+    }
+    if (token === "--") {
       parseOptions = false;
       continue;
     }
-    if (parseOptions && (token === "-h" || token === "--help")) {
-      help = true;
+    const flag = FLAGS[token as keyof typeof FLAGS];
+    if (flag !== undefined) {
+      flags.add(flag);
       continue;
     }
-    if (parseOptions && token === "--yes") {
-      yes = true;
-      continue;
-    }
-    if (parseOptions && token === "--discard") {
-      discard = true;
-      continue;
-    }
-
-    if (parseOptions && token === "--json") {
-      json = true;
-      continue;
-    }
-    if (parseOptions && token === "--continue") {
-      continueSession = true;
-      continue;
-    }
-    if (parseOptions && token === "--reset") {
-      reset = true;
-      continue;
-    }
-    if (parseOptions && token === "--restart") {
-      restart = true;
-      continue;
-    }
-    if (parseOptions && command === undefined && token === "restart" && !reset && !restart) {
-      restart = true;
-      continue;
-    }
-    if (parseOptions && token === "--force") {
-      force = true;
-      continue;
-    }
-    if (parseOptions && token === "--headless") {
-      headless = true;
-      continue;
-    }
-    if (parseOptions && token === "--no-attach") {
-      noAttach = true;
-      continue;
-    }
-    if (parseOptions && (token === "--home" || token.startsWith("--home="))) {
-      const parsed = optionValue(argv, index, "--home");
-      home = parsed.value;
+    const name = token.split("=")[0];
+    if (name === "--home" || name === "--session" || name === "--pool-root") {
+      const parsed = optionValue(argv, index, name);
       index = parsed.next;
+      if (name === "--home") home = parsed.value;
+      else if (name === "--session") sessionId = parsed.value;
+      else poolRoot = parsed.value;
       continue;
     }
-    if (parseOptions && (token === "--session" || token.startsWith("--session="))) {
-      const parsed = optionValue(argv, index, "--session");
-      sessionId = parsed.value;
-      index = parsed.next;
+    const renamed =
+      (command === undefined && paths.length === 0) || token.startsWith("-")
+        ? RENAMED[token]
+        : undefined;
+    if (renamed !== undefined) throw new Error(`\`tandem ${token}\` is now \`${renamed}\``);
+    if (token.startsWith("-")) throw new Error(`unknown option ${token}; run tandem --help`);
+    if (command === undefined && paths.length === 0 && COMMANDS[token] !== undefined) {
+      command = COMMANDS[token];
       continue;
     }
-    if (parseOptions && (token === "--pool-root" || token.startsWith("--pool-root="))) {
-      const parsed = optionValue(argv, index, "--pool-root");
-      poolRoot = parsed.value;
-      index = parsed.next;
-      continue;
-    }
-    if (parseOptions && command === undefined && token === "configure") {
-      command = "configure";
-      continue;
-    }
-    if (parseOptions && command === undefined && token === "config") {
-      command = "config";
-      continue;
-    }
-    if (parseOptions && command === undefined && token === "logs") {
-      command = "logs";
-      continue;
-    }
-    if (parseOptions && command === undefined && token === "migrate-state") {
-      command = "migrate-state";
-      continue;
-    }
-    if (parseOptions && command === undefined && token === "reconcile-resources") {
-      command = "reconcile-resources";
-      continue;
-    }
-    if (command === undefined) command = "launch";
     paths.push(token);
   }
 
-  const resolvedCommand = command ?? "launch";
-  if (resolvedCommand === "logs" && paths.length > 0) {
-    throw new Error("tandem logs does not accept project paths");
+  const resolved = command ?? "launch";
+  const allowed = ALLOWED[resolved];
+  const label = resolved === "launch" ? "tandem" : `tandem ${resolved}`;
+  for (const flag of flags) {
+    if (flag !== "help" && !allowed.flags.includes(flag)) {
+      const spelling = Object.entries(FLAGS).find(([, value]) => value === flag)?.[0];
+      throw new Error(`${label} does not accept ${spelling}`);
+    }
   }
-  if (resolvedCommand === "migrate-state" && paths.length > 0) {
-    throw new Error("tandem migrate-state does not accept project paths");
-  }
-  if (resolvedCommand === "reconcile-resources" && paths.length > 0) {
-    throw new Error("tandem reconcile-resources does not accept project paths");
-  }
-  if (discard && resolvedCommand !== "reconcile-resources") {
-    throw new Error("tandem --discard is only valid with reconcile-resources");
-  }
-  if (discard && !yes) {
-    throw new Error("tandem reconcile-resources --discard requires --yes");
-  }
-  if (resolvedCommand === "configure" && paths.length > 1) {
-    throw new Error("tandem configure accepts at most one project path");
-  }
-  if (resolvedCommand === "config" && paths.length > 1) {
-    throw new Error("tandem config accepts at most one project path");
-  }
-  if (resolvedCommand === "config" && (reset || restart)) {
+  if (paths.length > allowed.maxPaths) {
     throw new Error(
-      "tandem --reset/--restart are launch-only; they cannot be combined with config",
-    );
-  }
-  if (force && !reset) {
-    throw new Error("tandem --force requires --reset");
-  }
-  if (reset && restart) {
-    throw new Error("tandem --reset and --restart are mutually exclusive");
-  }
-  if (resolvedCommand === "configure" && (reset || restart)) {
-    throw new Error(
-      "tandem --reset/--restart are launch-only; they cannot be combined with configure",
+      allowed.maxPaths === 0
+        ? `${label} takes no arguments`
+        : `${label} accepts at most ${allowed.maxPaths} argument`,
     );
   }
   return {
-    command: resolvedCommand,
+    command: resolved,
     paths,
-    help,
-    continueSession,
-    headless,
-    noAttach,
-    reset,
-    restart,
-    force,
-    yes,
-    discard,
-    json,
+    help: flags.has("help"),
+    fresh: flags.has("fresh"),
+    headless: flags.has("headless"),
+    noAttach: flags.has("noAttach"),
+    hard: flags.has("hard"),
+    logs: flags.has("logs"),
+    yes: flags.has("yes"),
+    json: flags.has("json"),
     ...(home === undefined ? {} : { home }),
     ...(sessionId === undefined ? {} : { sessionId }),
     ...(poolRoot === undefined ? {} : { poolRoot }),

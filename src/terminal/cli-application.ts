@@ -246,7 +246,7 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
                 model,
                 configPath: files.configPath,
                 extensionPath: files.extensionPath,
-                continueSession: true,
+                continueSession: invocation.options.continueSession,
                 headless: invocation.options.headless,
                 noAttach: invocation.options.noAttach,
                 ...(environment.parentWorkspaceId === undefined

@@ -65,13 +65,18 @@ function optionalBoundaryText(value: string | undefined, field: string): string 
 
 type RememberedSetup = Readonly<{ home: string; sessionId: string }>;
 
-function readRememberedSetup(source: TandemEnvironmentSource): RememberedSetup | undefined {
+/** Where the remembered home and session live; `tandem reset --hard` removes it. */
+export function rememberedSetupPath(source: TandemEnvironmentSource): string {
   const configRoot = readBoundaryPath(
     source.XDG_CONFIG_HOME ?? join(homedir(), ".config"),
     "XDG_CONFIG_HOME",
   );
   if (!isAbsolute(configRoot)) throw new TypeError("XDG_CONFIG_HOME must be an absolute path");
-  const path = join(configRoot, "tandem", "config.json");
+  return join(configRoot, "tandem", "config.json");
+}
+
+function readRememberedSetup(source: TandemEnvironmentSource): RememberedSetup | undefined {
+  const path = rememberedSetupPath(source);
   let text: string;
   try {
     if (!lstatSync(path).isFile()) throw new TypeError(`${path} must be a regular file`);

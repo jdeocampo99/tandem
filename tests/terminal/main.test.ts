@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import { runCommand } from "../../src/adapters/commands.ts";
 import type { OmpModelRecord } from "../../src/adapters/omp.ts";
 import { onboardRepo } from "../../src/config/repositories.ts";
 import type { CommandRequest, CommandResult, ModelSpec, RepoPolicy } from "../../src/contracts.ts";
+import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { runTerminal } from "../../src/main.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import { parseTerminalArgs } from "../../src/terminal/arguments.ts";
@@ -950,7 +952,7 @@ test("cancelling keyboard onboarding before the first selection does not configu
   }
 });
 
-test("reset stops only the selected coordinators before fresh launch and one attach", async () => {
+test("reset cancels work in the current project, then launches fresh chats and attaches once", async () => {
   const projects = await gitProjects(2);
   const first = projects[0];
   const second = projects[1];
@@ -961,9 +963,10 @@ test("reset stops only the selected coordinators before fresh launch and one att
   const invocations: CliInvocation[] = [];
   const events: string[] = [];
   const resetPaths: string[][] = [];
+  const forced: (boolean | undefined)[] = [];
   const output: string[] = [];
-  const result = await runTerminal([first, "--reset", "--home", home], {
-    cwd: second,
+  const result = await runTerminal(["reset", "--yes", "--home", home], {
+    cwd: first,
     processEnvironment: {},
     run: async (request) => {
       if (
@@ -995,6 +998,7 @@ test("reset stops only the selected coordinators before fresh launch and one att
     resetCoordinators: async (_run, input) => {
       events.push("reset");
       resetPaths.push([...input.repoPaths]);
+      forced.push(input.force);
       return [];
     },
     runInteractive: async () => {
@@ -1007,8 +1011,10 @@ test("reset stops only the selected coordinators before fresh launch and one att
   });
   expect(result.status).toBe("launched");
   expect(resetPaths).toEqual([[first]]);
+  expect(forced).toEqual([true]);
   expect(events).toEqual(["reset", `launch:${first}`, "focus", "attach"]);
   expect(invocations).toHaveLength(1);
+  expect(invocations[0]?.options.continueSession).toBe(false);
   await rm(join(first, ".."), { recursive: true, force: true });
 });
 
@@ -1059,7 +1065,7 @@ test("reset prints a notice when a coordinator's workspace is quarantined", asyn
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   const output: string[] = [];
-  const result = await runTerminal([repo, "--reset", "--home", home], {
+  const result = await runTerminal(["reset", "--yes", "--home", home], {
     cwd: repo,
     run: runCommand,
     service: fake.service,
@@ -1106,17 +1112,41 @@ test("reset prints a notice when a coordinator's workspace is quarantined", asyn
   await rm(join(repo, ".."), { recursive: true, force: true });
 });
 
-test("terminal argument boundaries keep force launch-only and -- positional", () => {
-  expect(parseTerminalArgs(["--reset", "--force", "/repo"]).force).toBe(true);
-  expect(parseTerminalArgs(["--force", "--reset", "/repo"]).paths).toEqual(["/repo"]);
-  expect(parseTerminalArgs(["--reset", "--force", "--", "--force", "configure"]).paths).toEqual([
-    "--force",
-    "configure",
-  ]);
-  expect(() => parseTerminalArgs(["--force"])).toThrow();
-  expect(() => parseTerminalArgs(["configure", "--reset", "--force"])).toThrow();
+test("terminal commands are subcommands whose flags and arguments are checked", () => {
+  expect(parseTerminalArgs([])).toMatchObject({ command: "launch", paths: [], fresh: false });
+  expect(parseTerminalArgs(["/repo", "--fresh"])).toMatchObject({ paths: ["/repo"], fresh: true });
+  expect(parseTerminalArgs(["update", "--fresh"])).toMatchObject({
+    command: "update",
+    fresh: true,
+  });
+  expect(parseTerminalArgs(["reset", "--hard", "--yes"])).toMatchObject({
+    command: "reset",
+    hard: true,
+    yes: true,
+  });
+  expect(parseTerminalArgs(["status", "task-1", "--json"])).toMatchObject({
+    command: "status",
+    paths: ["task-1"],
+    json: true,
+  });
+  expect(parseTerminalArgs(["--", "reset", "status"]).paths).toEqual(["reset", "status"]);
+  expect(parseTerminalArgs(["/repo", "status"]).paths).toEqual(["/repo", "status"]);
+  expect(() => parseTerminalArgs(["--hard"])).toThrow("tandem does not accept --hard");
+  expect(() => parseTerminalArgs(["update", "/repo"])).toThrow("tandem update takes no arguments");
+  expect(() => parseTerminalArgs(["status", "a", "b"])).toThrow("at most 1 argument");
+  expect(() => parseTerminalArgs(["--bogus"])).toThrow("unknown option --bogus");
 });
-test("logs prints recent prompt-routing events without launching a project", async () => {
+
+test("old command spellings name their replacement instead of opening a project", () => {
+  expect(() => parseTerminalArgs(["restart"])).toThrow("`tandem restart` is now `tandem update`");
+  expect(() => parseTerminalArgs(["--reset", "--force"])).toThrow("is now `tandem reset`");
+  expect(() => parseTerminalArgs(["reconcile-resources"])).toThrow("is now `tandem fix`");
+  expect(() => parseTerminalArgs(["logs"])).toThrow("is now `tandem status --logs`");
+  expect(() => parseTerminalArgs(["inspect", "task-1"])).toThrow("tandem status TASK_ID");
+  expect(parseTerminalArgs(["--", "restart"]).paths).toEqual(["restart"]);
+});
+
+test("status --logs prints recent prompt-routing events without launching a project", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-logs-test-"));
   const logPath = join(home, "logs", "tandem.jsonl");
   await mkdir(join(home, "logs"), { recursive: true });
@@ -1139,30 +1169,28 @@ test("logs prints recent prompt-routing events without launching a project", asy
     ].join("\n"),
   );
   try {
-    expect(parseTerminalArgs(["logs", "--home", home])).toMatchObject({
-      command: "logs",
+    expect(parseTerminalArgs(["status", "--logs", "--home", home])).toMatchObject({
+      command: "status",
+      logs: true,
       paths: [],
       home,
     });
-    expect(() => parseTerminalArgs(["logs", "/repo"])).toThrow(
-      "tandem logs does not accept project paths",
-    );
     const output: string[] = [];
-    const result = await runTerminal(["logs", "--home", home], {
+    const result = await runTerminal(["status", "--logs", "--home", home], {
       cwd: home,
       processEnvironment: {},
       isTTY: false,
       stdout: (text) => output.push(text),
       stderr: (text) => output.push(text),
     });
-    expect(result).toMatchObject({ exitCode: 0, status: "logs" });
+    expect(result).toMatchObject({ exitCode: 0, status: "status" });
     expect(output.join("")).toContain(`Tandem prompt-routing log: ${logPath}`);
     expect(output.join("")).toContain("prompt-route-evaluated");
     expect(output.join("")).toContain("prompt-route-dispatched");
     expect(output.join("")).not.toContain("worker-event");
 
     const jsonOutput: string[] = [];
-    await runTerminal(["logs", "--home", home, "--json"], {
+    await runTerminal(["status", "--logs", "--home", home, "--json"], {
       cwd: home,
       processEnvironment: {},
       isTTY: false,
@@ -1175,34 +1203,22 @@ test("logs prints recent prompt-routing events without launching a project", asy
   }
 });
 
-test("reconcile-resources inspects Tandem resources and applies nothing without --yes", async () => {
+test("fix inspects Tandem resources and applies nothing when there is nothing to clean", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-reconcile-test-"));
   try {
-    expect(parseTerminalArgs(["reconcile-resources", "--home", home])).toMatchObject({
-      command: "reconcile-resources",
+    expect(parseTerminalArgs(["fix", "--home", home])).toMatchObject({
+      command: "fix",
       paths: [],
       home,
       yes: false,
     });
-    expect(parseTerminalArgs(["reconcile-resources", "--home", home, "--yes"]).yes).toBe(true);
-    expect(
-      parseTerminalArgs(["reconcile-resources", "--home", home, "--yes", "--discard"]),
-    ).toMatchObject({
-      discard: true,
-      yes: true,
-    });
-    expect(() => parseTerminalArgs(["reconcile-resources", "--discard"])).toThrow(
-      "tandem reconcile-resources --discard requires --yes",
-    );
-    expect(() => parseTerminalArgs(["reconcile-resources", "/repo"])).toThrow(
-      "tandem reconcile-resources does not accept project paths",
-    );
+    expect(() => parseTerminalArgs(["fix", "/repo"])).toThrow("tandem fix takes no arguments");
 
     const run = async (request: CommandRequest): Promise<CommandResult> => {
       throw new Error(`an empty Tandem home needs no commands: ${request.argv.join(" ")}`);
     };
     const output: string[] = [];
-    const result = await runTerminal(["reconcile-resources", "--home", home], {
+    const result = await runTerminal(["fix", "--home", home], {
       cwd: home,
       processEnvironment: {},
       isTTY: false,
@@ -1210,12 +1226,11 @@ test("reconcile-resources inspects Tandem resources and applies nothing without 
       stdout: (text) => output.push(text),
       stderr: (text) => output.push(text),
     });
-    expect(result).toMatchObject({ exitCode: 0, status: "reconciled" });
-    expect(output.join("")).toContain("changed nothing; rerun with --yes to apply");
-    expect(output.join("")).toContain("Nothing to reconcile.");
+    expect(result).toMatchObject({ exitCode: 0, status: "fixed" });
+    expect(output.join("")).toContain("nothing needs fixing");
 
     const jsonOutput: string[] = [];
-    await runTerminal(["reconcile-resources", "--home", home, "--json"], {
+    await runTerminal(["fix", "--home", home, "--json"], {
       cwd: home,
       processEnvironment: {},
       isTTY: false,
@@ -1236,17 +1251,6 @@ test("reconcile-resources inspects Tandem resources and applies nothing without 
   }
 });
 
-test("restart is a command alias for the coordinator restart flag", () => {
-  expect(parseTerminalArgs(["restart"])).toMatchObject({
-    command: "launch",
-    paths: [],
-    restart: true,
-  });
-  expect(parseTerminalArgs(["restart", "/repo"]).paths).toEqual(["/repo"]);
-  expect(parseTerminalArgs(["--", "restart"]).paths).toEqual(["restart"]);
-  expect(parseTerminalArgs(["--restart", "restart"]).paths).toEqual(["restart"]);
-});
-
 test("a reset refusal prevents every coordinator launch", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
@@ -1254,7 +1258,7 @@ test("a reset refusal prevents every coordinator launch", async () => {
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   let resetCalls = 0;
-  const result = await runTerminal([repo, "--reset", "--home", home, "--headless"], {
+  const result = await runTerminal(["reset", "--yes", "--home", home, "--headless"], {
     cwd: repo,
     processEnvironment: {},
     run: runCommand,
@@ -1275,70 +1279,132 @@ test("a reset refusal prevents every coordinator launch", async () => {
   await rm(join(repo, ".."), { recursive: true, force: true });
 });
 
-test("configure --reset and reset inside Herdr reject before any mutation", async () => {
+test("update refuses only from the coordinator pane it would close", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const root = join(repo, "..");
+  const home = join(root, "home");
+  const worktreeRoot = join(root, "pool");
+  const worktreePath = join(worktreeRoot, "coordinator");
+  await mkdir(worktreePath, { recursive: true });
+  await saveCoordinatorRecord(home, {
+    schemaVersion: 1,
+    repoPath: repo,
+    endpoint: {
+      sessionId: "tandem",
+      workspaceId: "workspace-coordinator",
+      tabId: "tab-coordinator",
+      paneId: "pane-coordinator",
+      role: "coordinator",
+      generation: 0,
+    },
+    worktree: {
+      root: worktreeRoot,
+      path: worktreePath,
+      name: "coordinator",
+      baseHead: "abc123",
+      branch: "tandem/coordinator",
+      leaseId: "lease-coordinator",
+      leaseHolder: "coordinator",
+      leasedAt: "2030-01-02T03:04:05.000Z",
+    },
+    command: ["omp"],
+  });
+  const fake = onboardingService({ existingConfig: true, configured: true });
+  const invocations: CliInvocation[] = [];
+  const inPane = (paneId: string) =>
+    runTerminal(["update", "--home", home], {
+      cwd: repo,
+      processEnvironment: {
+        HERDR_ENV: "1",
+        HERDR_SESSION: "tandem",
+        HERDR_WORKSPACE_ID: "workspace-coordinator",
+        HERDR_PANE_ID: paneId,
+      },
+      run: async (request) =>
+        request.argv[0] === "herdr" ? { code: 0, stdout: "", stderr: "" } : runCommand(request),
+      service: fake.service,
+      application: fakeApplication(invocations),
+      isTTY: false,
+      stdout: () => undefined,
+      stderr: () => undefined,
+    });
+
+  const refused = await inPane("pane-coordinator");
+  expect(refused.status).toBe("error");
+  expect(refused.error?.message).toContain("would close the coordinator pane");
+  expect(invocations).toHaveLength(0);
+
+  const updated = await inPane("pane-other");
+  expect(updated.status).toBe("launched");
+  expect(invocations).toHaveLength(1);
+  expect(invocations[0]?.options).toMatchObject({ restart: true, continueSession: true });
+  await rm(root, { recursive: true, force: true });
+});
+
+test("reset without a terminal needs --yes and changes nothing", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const home = join(repo, "..", "home");
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
-  const configureResult = await runTerminal(["configure", "--reset", repo, "--home", home], {
+  const result = await runTerminal(["reset", "--home", home], {
     cwd: repo,
     processEnvironment: {},
     run: runCommand,
     service: fake.service,
     application: fakeApplication(invocations),
-    isTTY: false,
-    stdout: () => undefined,
-    stderr: () => undefined,
-  });
-  expect(configureResult.status).toBe("error");
-  expect(configureResult.error?.message).toContain("launch-only");
-  expect(fake.writeCalls).toHaveLength(0);
-  expect(fake.configureCalls).toHaveLength(0);
-  expect(invocations).toHaveLength(0);
-
-  const contextResult = await runTerminal([repo, "--reset", "--home", home], {
-    cwd: repo,
-    processEnvironment: {
-      HERDR_ENV: "1",
-      HERDR_SESSION: "tandem",
-      HERDR_WORKSPACE_ID: "workspace-parent",
-      HERDR_PANE_ID: "pane-parent",
-    },
-    run: runCommand,
-    service: fake.service,
-    application: fakeApplication(invocations),
     resetCoordinators: async () => {
-      throw new Error("reset should not be reached from Herdr");
+      throw new Error("reset should not run without confirmation");
     },
     isTTY: false,
     stdout: () => undefined,
     stderr: () => undefined,
   });
-  expect(contextResult.status).toBe("error");
-  expect(contextResult.error?.message).toContain("separate normal terminal");
-  expect(fake.writeCalls).toHaveLength(0);
-  expect(fake.configureCalls).toHaveLength(0);
-  expect(invocations).toHaveLength(0);
-  const restartResult = await runTerminal([repo, "--restart", "--home", home], {
-    cwd: repo,
-    processEnvironment: {
-      HERDR_ENV: "1",
-      HERDR_SESSION: "tandem",
-      HERDR_WORKSPACE_ID: "workspace-parent",
-      HERDR_PANE_ID: "pane-parent",
-    },
-    run: runCommand,
-    service: fake.service,
-    application: fakeApplication(invocations),
-    isTTY: false,
-    stdout: () => undefined,
-    stderr: () => undefined,
-  });
-  expect(restartResult.status).toBe("error");
-  expect(restartResult.error?.message).toContain("tandem --restart cannot run from inside Herdr");
+  expect(result.status).toBe("error");
+  expect(result.error?.message).toContain("--yes");
   expect(invocations).toHaveLength(0);
   await rm(join(repo, ".."), { recursive: true, force: true });
+});
+
+test("reset --hard stops Tandem, then deletes its home, pool, and remembered setup", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-hard-reset-")));
+  const home = join(root, "home");
+  const pool = join(root, "pool");
+  const config = join(root, "config");
+  await mkdir(join(home, "repositories"), { recursive: true });
+  await mkdir(pool, { recursive: true });
+  await mkdir(join(config, "tandem"), { recursive: true });
+  await writeFile(join(home, "state.sqlite"), "");
+  await writeFile(
+    join(config, "tandem", "config.json"),
+    JSON.stringify({ schemaVersion: 1, home, sessionId: "tandem" }),
+  );
+  const stops: (boolean | undefined)[] = [];
+  const output: string[] = [];
+  try {
+    const result = await runTerminal(["reset", "--hard", "--yes"], {
+      cwd: root,
+      processEnvironment: { XDG_CONFIG_HOME: config, TANDEM_POOL_ROOT: pool },
+      run: runCommand,
+      resetCoordinators: async (_run, input) => {
+        stops.push(input.force);
+        throw new Error("state is too broken to stop cleanly");
+      },
+      isTTY: false,
+      stdout: (text) => output.push(text),
+      stderr: (text) => output.push(text),
+    });
+    expect(result.status).toBe("reset");
+    expect(stops).toEqual([true]);
+    expect(output.join("")).toContain("Close any leftover Tandem panes");
+    expect(existsSync(home)).toBe(false);
+    expect(existsSync(join(config, "tandem", "config.json"))).toBe(false);
+    expect(existsSync(pool)).toBe(false);
+    expect(existsSync(join(config, "tandem"))).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("config opens the project's settings in $EDITOR and re-checks them after", async () => {

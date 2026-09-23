@@ -168,8 +168,9 @@ export async function launchProjects(
         environment.sessionId,
         "--headless",
         "--no-attach",
-        ...(invocation.restart ? ["--restart"] : []),
-        ...(invocation.continueSession ? ["--continue"] : []),
+        ...(invocation.command === "update" ? ["--restart"] : []),
+        // A reset always starts fresh chats; otherwise chats resume unless --fresh.
+        ...(invocation.fresh || invocation.command === "reset" ? [] : ["--continue"]),
       ];
       const result = await application.invoke(parseCliArgs(args));
       launches.push(result.value);

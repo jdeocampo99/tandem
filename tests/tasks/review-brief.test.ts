@@ -497,7 +497,7 @@ test("an oversized brief compacts suggestions and long text but keeps every bloc
     REVIEW_BRIEF_LIMITS.maxBriefBytes,
   );
   for (const entry of brief.blockers) expect(rendered).toContain(`behavior/${entry.id}`);
-  expect(rendered).toContain("suggestion(s) recorded; read them with tandem inspect");
+  expect(rendered).toContain("suggestion(s) recorded; read them with tandem status TASK_ID");
   expect(rendered).not.toContain("y".repeat(REVIEW_BRIEF_LIMITS.maxCompactDescriptionBytes + 1));
 });
 

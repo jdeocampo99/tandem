@@ -190,7 +190,7 @@ export type ReconcileReportEntry = Readonly<{
   readonly path?: string;
 }>;
 
-/** The stable, versioned shape `tandem reconcile-resources --json` prints for automation. */
+/** The stable, versioned shape `tandem fix --json` prints for automation. */
 export type ReconcileReport = Readonly<{
   readonly schemaVersion: 1;
   readonly mode: "dry-run" | "applied";

@@ -2,7 +2,7 @@
  * The one short shape every question Tandem asks a person uses: a single plain-English question,
  * optionally followed by one short sentence. Recovery questions, routing pauses, spending pauses,
  * and approval prompts all render through this, so no prompt grows into a report. Task, decision,
- * request, and generation identifiers never appear in it; `tandem inspect` has them.
+ * request, and generation identifiers never appear in it; `tandem status TASK_ID` has them.
  */
 
 /**

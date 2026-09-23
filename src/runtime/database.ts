@@ -209,7 +209,7 @@ async function openDatabase(home: string, allowMigrationState = false): Promise<
     const taskCount = await legacyTaskCount(root);
     if ((hasLegacyRuntime || taskCount > 0) && !allowMigrationState) {
       throw new Error(
-        `legacy JSON state found under ${root}; run 'tandem migrate-state --yes' before using SQLite state`,
+        `legacy JSON state found under ${root}; run 'tandem fix' to migrate it before using SQLite state`,
       );
     }
   }

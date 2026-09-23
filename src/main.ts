@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runCommand } from "./adapters/commands.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
@@ -7,6 +9,7 @@ import {
   type ReconcileReportEntry,
   reconcileTandemResources,
 } from "./coordinator/reconcile.ts";
+import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
 import { migrateState, planMigration } from "./runtime/migration.ts";
@@ -19,6 +22,7 @@ import {
 import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
+import { applyHardReset, planHardReset, renderHardResetPlan } from "./terminal/hard-reset.ts";
 import {
   hasActiveHerdrContext,
   launchProjects,
@@ -43,8 +47,30 @@ import {
   readRegisteredProjects,
   selectProjects,
 } from "./terminal/projects.ts";
+import { readTandemStatus, renderTandemStatus, tandemCodeVersion } from "./terminal/status.ts";
 
-const HELP_TEXT = `Tandem\n\nUsage:\n  tandem [PATH ...]              Open or reconnect project coordinators\n  tandem logs [--home PATH] [--json]\n                                 Show recent prompt-routing events\n  tandem migrate-state [--home PATH] [--yes] [--json]\n                                 Inspect legacy JSON or apply offline SQLite migration\n  tandem reconcile-resources [--home PATH] [--yes] [--discard] [--json]\n                                 Inspect stale resources; apply with --yes; discard cancelled implementation worktrees with --discard\n  tandem restart [PATH ...]      Replace owned coordinators without cancelling work\n  tandem --restart [PATH ...]    Compatibility spelling for restart\n  tandem --reset [PATH ...]      Stop idle Tandem coordinators, then reopen them\n  tandem --reset --force [PATH ...]\n                                 Explicitly discard selected idle coordinator resources\n  tandem configure [PATH]        Inspect or save repository settings\n  tandem config [PATH]           Open the project's settings file in $VISUAL/$EDITOR\n  tandem --help                  Show this help\n`;
+/** The checkout the `tandem` command runs from; coordinators load their extension from it. */
+const TANDEM_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+const HELP_TEXT = `Tandem
+
+Usage:
+  tandem [PATH ...]        Open your projects; resumes coordinator chats (--fresh starts new ones)
+  tandem status [TASK_ID]  What's running and what needs you; --logs shows prompt routing
+  tandem update            Load your latest local Tandem code into every coordinator
+                           Keeps chats and tasks; --fresh starts new chats
+  tandem fix               Find stale Tandem resources or old-format state and offer the repair
+  tandem reset             Cancel all in-progress tasks and reopen fresh coordinators
+                           Keeps onboarding, settings, task history, and your files
+  tandem reset --hard      Delete all Tandem state and worktrees; next run onboards from scratch
+  tandem configure [PATH]  Inspect or save repository settings
+  tandem config [PATH]     Open the project's settings file in $VISUAL/$EDITOR
+
+Options:
+  --yes                    Skip the confirmation (fix, reset)
+  --json                   Machine-readable output (status, fix)
+  --home PATH              Use a different Tandem home
+`;
 
 export type TerminalMainDependencies = Readonly<{
   readonly cwd?: string;
@@ -86,12 +112,6 @@ type ProjectFlowInputs = Readonly<{
   readonly stdout: (text: string) => void;
   readonly closeInteraction: () => void;
 }>;
-type MigrationInputs = Readonly<{
-  readonly invocation: TerminalInvocation;
-  readonly home: string;
-  readonly run: CommandRunner;
-  readonly stdout: (text: string) => void;
-}>;
 
 function createTerminalOutput(dependencies: TerminalMainDependencies): TerminalOutput {
   const outputStream = dependencies.output ?? process.stdout;
@@ -130,51 +150,88 @@ function createTerminalInteraction(
   };
 }
 
-function assertSafeTerminalCommand(
+/**
+ * Update and reset close coordinator panes, so they must not run inside one: the command
+ * would close the pane it is running in. Any other Herdr pane is fine.
+ */
+async function assertNotInCoordinatorPane(
   invocation: TerminalInvocation,
-  source: TandemEnvironmentSource,
-): void {
-  if (!(invocation.reset || invocation.restart) || !hasActiveHerdrContext(source)) return;
-  const command = invocation.restart ? "--restart" : "--reset";
-  throw new Error(
-    `tandem ${command} cannot run from inside Herdr; rerun it from a separate normal terminal`,
-  );
+  environment: TerminalEnvironment,
+): Promise<void> {
+  if (invocation.command !== "update" && invocation.command !== "reset") return;
+  if (!hasActiveHerdrContext(environment.source)) return;
+  const paneId = environment.source.HERDR_PANE_ID;
+  const records = await listCoordinatorRecords(environment.home, environment.sessionId);
+  if (records.some((record) => record.endpoint.paneId === paneId)) {
+    throw new Error(
+      `tandem ${invocation.command} would close the coordinator pane it is running in; run it from another pane or terminal`,
+    );
+  }
 }
 
-async function handleMigration({
-  invocation,
-  home,
-  run,
-  stdout,
-}: MigrationInputs): Promise<TerminalRunResult | undefined> {
-  if (invocation.command !== "migrate-state") return undefined;
-  const migration = invocation.yes
-    ? await migrateState(home, { run })
-    : await planMigration(home, { run });
-  const rendered = invocation.json
-    ? JSON.stringify(migration)
-    : `${JSON.stringify(migration, null, 2)}\n`;
-  stdout(rendered.endsWith("\n") ? rendered : `${rendered}\n`);
-  return { exitCode: 0, status: "migrated", migration };
+async function confirm(
+  question: string,
+  invocation: TerminalInvocation,
+  interaction: TerminalInteraction,
+): Promise<boolean> {
+  if (invocation.yes) return true;
+  if (!interaction.interactive || interaction.prompter === undefined) {
+    throw new Error(`${question} Rerun with --yes to confirm without a terminal prompt.`);
+  }
+  const answer = await interaction.prompter.ask(question, {
+    choices: [
+      { name: "No", value: "no" },
+      { name: "Yes", value: "yes" },
+    ],
+    default: "no",
+  });
+  return answer.trim().toLowerCase() === "yes";
 }
-async function handlePromptRoutingLogs({
+
+async function handleStatus({
   invocation,
-  home,
+  environment,
+  dependencies,
+  run,
   stdout,
 }: Readonly<{
   readonly invocation: TerminalInvocation;
-  readonly home: string;
+  readonly environment: TerminalEnvironment;
+  readonly dependencies: TerminalMainDependencies;
+  readonly run: CommandRunner;
   readonly stdout: (text: string) => void;
-}>): Promise<TerminalRunResult | undefined> {
-  if (invocation.command !== "logs") return undefined;
-  const lines = await readPromptRoutingLog(home);
-  if (invocation.json) {
-    stdout(`${JSON.stringify(lines.map((line) => JSON.parse(line)))}\n`);
-  } else {
-    stdout(`Tandem prompt-routing log: ${diagnosticsPath(home)}\n`);
-    stdout(lines.length === 0 ? "No prompt-routing events recorded.\n" : `${lines.join("\n")}\n`);
+}>): Promise<TerminalRunResult> {
+  const result: TerminalRunResult = { exitCode: 0, status: "status" };
+  if (invocation.logs) {
+    const lines = await readPromptRoutingLog(environment.home);
+    if (invocation.json) {
+      stdout(`${JSON.stringify(lines.map((line) => JSON.parse(line)))}\n`);
+    } else {
+      stdout(`Tandem prompt-routing log: ${diagnosticsPath(environment.home)}\n`);
+      stdout(lines.length === 0 ? "No prompt-routing events recorded.\n" : `${lines.join("\n")}\n`);
+    }
+    return result;
   }
-  return { exitCode: 0, status: "logs" };
+  const service = createServiceFor(environment, run, dependencies);
+  try {
+    const [taskId] = invocation.paths;
+    if (taskId !== undefined) {
+      const details = await service.inspect(taskId);
+      stdout(`${invocation.json ? JSON.stringify(details) : JSON.stringify(details, null, 2)}\n`);
+      return result;
+    }
+    const status = await readTandemStatus({
+      run,
+      tandemRoot: TANDEM_ROOT,
+      home: environment.home,
+      sessionId: environment.sessionId,
+      service,
+    });
+    stdout(invocation.json ? `${JSON.stringify(status)}\n` : renderTandemStatus(status));
+    return result;
+  } finally {
+    await service.shutdown();
+  }
 }
 
 function reconcileSection(
@@ -195,48 +252,104 @@ function renderReconcileReport(report: ReconcileReport): string {
   const dryRun = report.mode === "dry-run";
   const lines = [
     dryRun
-      ? `Tandem reconcile inspected ${report.home} and changed nothing; rerun with --yes to apply.`
-      : `Tandem reconcile applied its plan for ${report.home}.`,
+      ? `Tandem checked ${report.home} and changed nothing yet.`
+      : `Tandem cleaned up ${report.home}.`,
     ...reconcileSection(dryRun ? "Would clean" : "Cleaned", report.cleaned),
     ...reconcileSection("Retained", report.retained),
     ...reconcileSection("Quarantined", report.quarantined),
     ...reconcileSection("Failed", report.failed),
   ];
-  if (lines.length === 1) lines.push("Nothing to reconcile.");
+  if (lines.length === 1) return `Tandem checked ${report.home}; nothing needs fixing.\n`;
   return `${lines.join("\n")}\n`;
 }
 
 /**
- * Inspects every Tandem resource under the home, and settles them only when `--yes` says so.
- * A resource Tandem deliberately retained or quarantined is a reported outcome, not a failure,
- * so only a scan or apply that could not finish makes the command exit non-zero.
+ * One place to go when something is wrong: offers the legacy-state migration when old-format
+ * state exists, then reconciles stale resources. Each step shows its plan and changes nothing
+ * until confirmed. A resource Tandem deliberately retained or quarantined is a reported outcome,
+ * not a failure, so only a scan or apply that could not finish exits non-zero.
  */
-async function handleReconcile({
+async function handleFix({
   invocation,
   environment,
   run,
+  interaction,
   stdout,
 }: Readonly<{
   readonly invocation: TerminalInvocation;
   readonly environment: TerminalEnvironment;
   readonly run: CommandRunner;
+  readonly interaction: TerminalInteraction;
   readonly stdout: (text: string) => void;
-}>): Promise<TerminalRunResult | undefined> {
-  if (invocation.command !== "reconcile-resources") return undefined;
-  const report = await reconcileTandemResources({
-    run,
-    home: environment.home,
-    poolRoot: environment.poolRoot,
-    repoPaths: await readRegisteredProjects(environment.home),
-    apply: invocation.yes,
-    discard: invocation.discard,
-  });
-  stdout(invocation.json ? `${JSON.stringify(report)}\n` : renderReconcileReport(report));
+}>): Promise<TerminalRunResult> {
+  let migration: unknown;
+  const plan = await planMigration(environment.home, { run });
+  if (plan.status === "ready" || plan.status === "pending") {
+    stdout(
+      `Tandem found old-format state in ${environment.home} (${plan.taskCount} task${plan.taskCount === 1 ? "" : "s"}) that must move to SQLite before Tandem can use it. Stop every Tandem pane first.\n`,
+    );
+    migration = (await confirm("Migrate it now?", invocation, interaction))
+      ? await migrateState(environment.home, { run })
+      : plan;
+  } else if (plan.status === "blocked") {
+    stdout(`Tandem cannot migrate old-format state yet:\n  ${plan.diagnostics.join("\n  ")}\n`);
+    migration = plan;
+  }
+  if (plan.status !== "empty" && plan.status !== "complete") {
+    // SQLite state is unusable until migration finishes, so reconciling now would fail.
+    if (invocation.json) stdout(`${JSON.stringify({ migration })}\n`);
+    return { exitCode: 0, status: "fixed", migration };
+  }
+  const reconcile = (apply: boolean) =>
+    readRegisteredProjects(environment.home).then((repoPaths) =>
+      reconcileTandemResources({
+        run,
+        home: environment.home,
+        poolRoot: environment.poolRoot,
+        repoPaths,
+        apply,
+        discard: false,
+      }),
+    );
+  let report = await reconcile(invocation.yes);
+  if (!invocation.json) stdout(renderReconcileReport(report));
+  if (report.mode === "dry-run" && report.cleaned.length > 0) {
+    if (await confirm("Clean these up?", invocation, interaction)) {
+      report = await reconcile(true);
+      if (!invocation.json) stdout(renderReconcileReport(report));
+    }
+  }
+  if (invocation.json) stdout(`${JSON.stringify(report)}\n`);
   return {
     exitCode: report.failed.length === 0 ? 0 : 1,
-    status: "reconciled",
+    status: "fixed",
     reconciliation: report,
   };
+}
+
+async function handleHardReset({
+  invocation,
+  environment,
+  dependencies,
+  run,
+  interaction,
+  stdout,
+}: Readonly<{
+  readonly invocation: TerminalInvocation;
+  readonly environment: TerminalEnvironment;
+  readonly dependencies: TerminalMainDependencies;
+  readonly run: CommandRunner;
+  readonly interaction: TerminalInteraction;
+  readonly stdout: (text: string) => void;
+}>): Promise<TerminalRunResult> {
+  const plan = await planHardReset(environment);
+  stdout(renderHardResetPlan(plan));
+  if (!(await confirm("Delete all of it?", invocation, interaction))) {
+    stdout("Tandem reset cancelled; nothing was deleted.\n");
+    return { exitCode: 0, status: "cancelled" };
+  }
+  await applyHardReset(plan, environment, run, stdout, dependencies.resetCoordinators);
+  return { exitCode: 0, status: "reset" };
 }
 
 async function runProjectFlow({
@@ -293,17 +406,15 @@ async function runProjectFlow({
     };
   }
   closeInteraction();
-  if (invocation.reset) {
+  if (invocation.command === "reset") {
     const stopped = await (dependencies.resetCoordinators ?? resetCoordinators)(run, {
       home: environment.home,
       sessionId: environment.sessionId,
       repoPaths: roots,
-      force: invocation.force,
+      force: true,
     });
     stdout(
-      invocation.force
-        ? `Tandem force reset stopped ${stopped.length} coordinator${stopped.length === 1 ? "" : "s"}; selected active work was cancelled where present.\n`
-        : `Tandem reset stopped ${stopped.length} coordinator${stopped.length === 1 ? "" : "s"}.\n`,
+      `Tandem reset stopped ${stopped.length} coordinator${stopped.length === 1 ? "" : "s"} and cancelled in-progress tasks.\n`,
     );
     for (const record of stopped) {
       const notice = workspaceRetirementNotice(record.repoPath, record.workspaceRetirement);
@@ -314,6 +425,9 @@ async function runProjectFlow({
   stdout(
     `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared Herdr session ${environment.sessionId}.\n`,
   );
+  if (invocation.command === "update") {
+    stdout(`Coordinators now run ${await tandemCodeVersion(run, TANDEM_ROOT)}.\n`);
+  }
   for (const [index, launch] of launches.entries()) {
     const repoPath = roots[index];
     if (repoPath === undefined) continue;
@@ -349,25 +463,37 @@ export async function runTerminal(
       return { exitCode: 0, status: "help" };
     }
     const environment = resolveTerminalEnvironment(invocation, dependencies);
-    assertSafeTerminalCommand(invocation, environment.source);
     const run = dependencies.run ?? runCommand;
-    const migration = await handleMigration({
-      invocation,
-      home: environment.home,
-      run,
-      stdout,
-    });
-    if (migration !== undefined) return migration;
-    const promptRoutingLogs = await handlePromptRoutingLogs({
-      invocation,
-      home: environment.home,
-      stdout,
-    });
-    if (promptRoutingLogs !== undefined) return promptRoutingLogs;
-    const reconciliation = await handleReconcile({ invocation, environment, run, stdout });
-    if (reconciliation !== undefined) return reconciliation;
+    if (invocation.command === "status") {
+      return await handleStatus({ invocation, environment, dependencies, run, stdout });
+    }
+    await assertNotInCoordinatorPane(invocation, environment);
     const interaction = createTerminalInteraction(dependencies, stdout);
     try {
+      if (invocation.command === "fix") {
+        return await handleFix({ invocation, environment, run, interaction, stdout });
+      }
+      if (invocation.command === "reset" && invocation.hard) {
+        return await handleHardReset({
+          invocation,
+          environment,
+          dependencies,
+          run,
+          interaction,
+          stdout,
+        });
+      }
+      if (
+        invocation.command === "reset" &&
+        !(await confirm(
+          "Cancel every in-progress task and reopen fresh coordinators?",
+          invocation,
+          interaction,
+        ))
+      ) {
+        stdout("Tandem reset cancelled; nothing was changed.\n");
+        return { exitCode: 0, status: "cancelled" };
+      }
       return await runProjectFlow({
         invocation,
         environment,

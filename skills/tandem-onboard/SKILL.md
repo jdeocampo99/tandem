@@ -22,18 +22,17 @@ paths override the registry and open only the supplied subset or add/open projec
 empty, current-Git first-run onboarding and the outside-Git interactive project-path fallback remain.
 Multiple paths share one Herdr session but keep separate project coordinators and child-worker groups.
 
-For a deliberate clean reopen, use `tandem --reset` from a separate normal terminal. No paths
-select all valid saved projects; explicit paths select only that subset. Reset stops only idle
-Tandem-owned coordinators after a fail-closed preflight, then normal-launches them and attaches once.
-Busy or unsafe work refuses before any pane closes. It preserves settings, history, task records,
-worktrees, and files; it is not migration, task recovery, or data wiping. Add `--continue` only to
-resume saved conversations, and never invoke reset from inside Herdr.
+Coordinator chats resume by default; `--fresh` starts new ones. `tandem update` loads the latest
+local Tandem code into every coordinator while keeping chats and tasks.
+For deliberate cancellation, `tandem reset` cancels all in-progress tasks across saved projects,
+stops their owned terminals, and reopens coordinators with fresh chats after confirmation (or
+`--yes`). It takes no paths, preserves onboarding, settings, task history, worktrees, and files, and
+does not bypass ownership or coordinator source-safety checks; it is not migration or task recovery.
 Reset also closes recorded coordinator shells after verifying native identity and worktree. Empty
 workspaces disappear when their last pane closes; extra panes and custom labels remain. Generated
 old coordinator labels are retired so retained terminals do not look like current coordinators.
-For deliberate cancellation during testing, add `--force`: `tandem --reset --force [PATH ...]`.
-This stops selected active owned work and cancels its tasks before reopening coordinators, while
-preserving files and worktrees. It does not bypass ownership or coordinator source-safety checks.
+`tandem reset --hard` deletes the whole Tandem home, including onboarding and every pool worktree,
+so the next `tandem` onboards from scratch; never suggest it as part of onboarding.
 
 This conversational skill is optional. For exact structured discovery or automation, resolve a
 validated `TANDEM_ROOT` independently of every target repository and use the advanced
@@ -62,7 +61,8 @@ project ambiguity. For the project-setting step, after any required first-time m
 
 `<home>/state.sqlite` is the canonical task/runtime authority. Never edit, resume, or retry from
 legacy `runtime.json` or `tasks/*.json`. If a legacy home must be migrated, stop Tandem and use this
-explicit offline two-step flow from a separate normal terminal, after showing the read-only plan:
+explicit offline two-step flow with every Tandem pane stopped, after showing the read-only plan
+(`tandem fix --home "<home>"` offers the same migration interactively):
 
 ```sh
 bun "<tandem-root>/src/cli.ts" migrate-state --home "<home>" --json
@@ -74,7 +74,7 @@ plan/status read is non-applying; migration archives and fences the original byt
 IDs, generations, fix-round/policy, and checkpoints/history, and refuses live or ambiguous ownership
 and unsettled work. Unknown owned operations remain quarantined with capacity/resources retained:
 never clear a reservation, replace a task, or change policy to bypass unknown ownership. Reset is not
-migration or recovery; `tandem --reset --force [PATH ...]` cancels selected active tasks.
+migration or recovery; `tandem reset` cancels all in-progress tasks across saved projects.
 
 Keep default worker/fix limits, script identifiers, hash paths, raw commands, and JSON in structured
 details; share them only on request or when the user must choose meaningful custom settings. Capture
@@ -151,8 +151,8 @@ explicit project.
 
 An explicit `tandem <canonical-repo>` opens or reconnects only that project after ownership checks.
 When saved records exist, a bare `tandem` instead opens or reconnects every valid saved project under
-the selected home; it does not use arbitrary disk discovery or auto-registration. Add `--continue`
-only when starting a stopped coordinator and resuming its saved conversation. An active coordinator
+the selected home; it does not use arbitrary disk discovery or auto-registration. A stopped coordinator
+resumes its saved conversation unless `--fresh` is given. An active coordinator
 remains pinned to its clean source even when the original HEAD advances; stop and relaunch to refresh.
 Stop any old pre-registry coordinator once before relaunching; Tandem never adopts it and never
 migrates existing tasks automatically. Changing the main conversation model takes effect on the next
