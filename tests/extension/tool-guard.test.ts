@@ -4,7 +4,9 @@ import {
   coordinatorToolRefusal,
 } from "../../src/extension/tool-guard.ts";
 
-test("coordinator is refused browser, web, and non-Linear MCP calls", () => {
+const allowLinear = async (): Promise<readonly string[]> => ["linear", "react-grab-mcp"];
+
+test("coordinator is refused browser, web, and unlisted MCP calls", async () => {
   const refused: [string, Record<string, unknown>][] = [
     ["write", { path: "xd://mcp__playwright_browser_navigate", content: "{}" }],
     ["mcp__playwright_browser_evaluate", {}],
@@ -14,13 +16,14 @@ test("coordinator is refused browser, web, and non-Linear MCP calls", () => {
     ["grep", { pattern: "x", path: ["src", "http://localhost:5173/"] }],
   ];
   for (const [tool, input] of refused) {
-    expect(coordinatorToolRefusal(tool, input)).toBe(COORDINATOR_TOOL_REFUSAL);
+    expect(await coordinatorToolRefusal(tool, input, allowLinear)).toBe(COORDINATOR_TOOL_REFUSAL);
   }
 });
 
-test("coordinator keeps Linear, repository reads, and tool docs", () => {
+test("coordinator keeps listed MCP servers, repository reads, and tool docs", async () => {
   const allowed: [string, Record<string, unknown>][] = [
     ["write", { path: "xd://mcp__linear_get_issue", content: "{}" }],
+    ["mcp__react_grab_mcp_get_element", {}],
     ["read", { path: "xd://mcp__playwright_browser_navigate" }],
     ["read", { path: "src/main.ts" }],
     ["read", { path: "pr://tagalog-learning-app/42" }],
@@ -28,6 +31,12 @@ test("coordinator keeps Linear, repository reads, and tool docs", () => {
     ["tandem", { request: { action: "list" } }],
   ];
   for (const [tool, input] of allowed) {
-    expect(coordinatorToolRefusal(tool, input)).toBeUndefined();
+    expect(await coordinatorToolRefusal(tool, input, allowLinear)).toBeUndefined();
   }
+});
+
+test("coordinator with no listed servers is refused every MCP call", async () => {
+  expect(
+    await coordinatorToolRefusal("write", { path: "xd://mcp__linear_get_issue" }, async () => []),
+  ).toBe(COORDINATOR_TOOL_REFUSAL);
 });

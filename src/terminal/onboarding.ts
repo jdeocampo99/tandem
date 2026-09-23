@@ -530,6 +530,35 @@ export async function askProjectSettingsApproval(
   return answer === "save settings";
 }
 
+/**
+ * Asks, one server at a time, which MCP servers the coordinator may use itself. Tasks keep every
+ * server either way. Returns undefined only on cancellation.
+ */
+export async function askCoordinatorMcpServers(
+  prompter: TerminalPrompter,
+  servers: readonly string[],
+): Promise<readonly string[] | undefined> {
+  if (servers.length === 0) return [];
+  prompter.write(
+    "\nThe coordinator plans and hands work to tasks, and tasks can use all of this project's MCP servers. Let the coordinator use a server itself only for looking things up, like reading tickets.\n",
+  );
+  const allowed: string[] = [];
+  for (const server of servers) {
+    const answer = normalized(
+      await prompter.ask(`Let the coordinator use ${server}?`, {
+        choices: [
+          { name: "Skip", value: "skip" },
+          { name: "Allow", value: "allow" },
+        ],
+        default: "skip",
+      }),
+    );
+    if (answer.length === 0 || isCancellation(answer)) return undefined;
+    if (answer === "allow") allowed.push(server);
+  }
+  return allowed;
+}
+
 /** Selects one or more registered projects, or returns a path explicitly entered by the user. */
 export async function askProjectSelection(
   prompter: TerminalPrompter,

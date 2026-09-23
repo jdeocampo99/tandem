@@ -548,6 +548,15 @@ The native terminal presents these as selectable options, with **Save settings**
 Enter accepts the highlighted choice; selecting **Not now** or pressing Ctrl+C pauses setup without
 creating the project record. Previously saved model preferences are retained.
 
+After **Save settings**, the native terminal lists the project's MCP servers (project `.mcp.json`
+and user config, as OMP discovers them) and asks for each one whether the coordinator may use it,
+defaulting to **Skip**. The answers are saved as `coordinatorMcpServers` in `settings.toml`, beside
+`repoPath` and outside task policy; `tandem config` edits the list later, and a running coordinator reads
+it on its next MCP call. The coordinator's extension refuses every MCP call to a server not on
+the list, and every `read` or `grep` of an `http(s)://` URL, telling the coordinator to hand the work to
+a task instead. `--tools` cannot do this because OMP loads MCP servers outside it. Tasks keep every
+server.
+
 Keep default worker/fix limits, script identifiers, hash paths, raw commands, and JSON in structured
 details; share them only on request or when the user must choose meaningful custom settings. If valid
 settings already exist, say they will be kept rather than overwritten. A read-only proposal is not a

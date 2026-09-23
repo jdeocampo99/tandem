@@ -2,6 +2,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "./adapters/commands.ts";
+import { listOmpMcpServers } from "./adapters/omp.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
 import {
@@ -88,6 +89,8 @@ export type TerminalMainDependencies = Readonly<{
   readonly stdout?: (text: string) => void;
   readonly stderr?: (text: string) => void;
   readonly resetCoordinators?: typeof resetCoordinators;
+  /** Lists a project's MCP servers for onboarding; tests inject one so they never read real config. */
+  readonly listMcpServers?: (repoPath: string) => Promise<readonly string[]>;
 }>;
 
 type TerminalOutput = Readonly<{
@@ -375,7 +378,14 @@ async function runProjectFlow({
     return await runConfigure(roots, environment, service, prompter, stdout);
   }
   const states = await readProjectStates(roots, service);
-  const prepared = await prepareProjects(states, environment, service, prompter, interactive);
+  const prepared = await prepareProjects(
+    states,
+    environment,
+    service,
+    prompter,
+    interactive,
+    dependencies.listMcpServers ?? listOmpMcpServers,
+  );
   if (prepared === undefined) {
     stdout("Tandem cancelled; no coordinator was launched.\n");
     return {
