@@ -203,6 +203,9 @@ export function describeTaskPr(task: TaskRecord, summary: PrSummary): string {
       `final acceptance manifest at HEAD ${shape.head}: ${manifest.requirements.length} required checks, ${manifest.lenses.length} review lenses, ${manifest.criteria.length} acceptance criteria`,
       ...evidence.map(evidenceBullet),
     ],
+    ...(task.manualVerification === undefined
+      ? {}
+      : { manualVerification: task.manualVerification }),
   });
 }
 

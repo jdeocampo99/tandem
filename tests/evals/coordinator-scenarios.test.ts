@@ -362,6 +362,7 @@ const BRIEF: RequestBriefContent = {
   constraints: ["SQLite stays authoritative"],
   nonGoals: ["no second ledger"],
   acceptanceCriteria: ["dispatch is blocked while the brief is superseded"],
+  manualVerification: [],
   recommendedApproach: "One record with monotonic draft revisions",
   keyDecisions: ["the pane is a projection the coordinator owns"],
   openQuestions: [],

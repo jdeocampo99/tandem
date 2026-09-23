@@ -1029,6 +1029,7 @@ test("a scout under a request takes its post-research disposition from the brief
         constraints: ["No database changes."],
         nonGoals: ["Do not change SRS scheduling."],
         acceptanceCriteria: ["Streaks escalate and reset correctly."],
+        manualVerification: [],
         recommendedApproach: "Own the streak in the card session and render it in the bar",
         keyDecisions: [],
         openQuestions: [],

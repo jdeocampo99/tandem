@@ -775,6 +775,7 @@ export type SeedTaskInput = Readonly<{
   readonly worktree?: WorktreeLease;
   readonly endpoints?: readonly Endpoint[];
   readonly researchContinuation?: ResearchContinuation;
+  readonly manualVerification?: readonly string[];
 }>;
 
 /** Seeds one durable task in the scenario home, bypassing approval prompts the scenario is not testing. */
@@ -788,6 +789,9 @@ export async function seedScenarioTask(
     kind: input.kind,
     objective: "exercise one durable scenario path",
     acceptanceCriteria: ["the durable outcome is observable"],
+    ...(input.manualVerification === undefined
+      ? {}
+      : { manualVerification: input.manualVerification }),
     surfaces: ["scenario"],
     policy: input.policy ?? SCENARIO_POLICY,
     ...(input.requestId === undefined ? {} : { requestId: input.requestId }),

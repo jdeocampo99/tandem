@@ -16,6 +16,7 @@ const BRIEF: RequestBriefContent = {
   constraints: ["a premium tier always needs a decision"],
   nonGoals: ["no per-turn model optimization"],
   acceptanceCriteria: ["rerouting never resolves a spending decision"],
+  manualVerification: [],
   recommendedApproach: "Resolve routing only after the spending checkpoint admits the operation",
   keyDecisions: ["unmeasured usage is unknown, not small"],
   openQuestions: [],

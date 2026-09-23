@@ -257,6 +257,26 @@ test("loads a record written before the block cause existed with no cause", asyn
   });
 });
 
+test("persists manual verification and reloads it; a task created without it has none", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const manual = await store.create({
+      ...input,
+      id: "manual-verification",
+      manualVerification: ["the learner sees the lesson in the browser"],
+    });
+    const plain = await store.create({ ...input, id: "no-manual-verification" });
+
+    const reloaded = makeStore(directory, "reload");
+    expect((await reloaded.read(manual.id))?.manualVerification).toEqual([
+      "the learner sees the lesson in the browser",
+    ]);
+    const reloadedPlain = await reloaded.read(plain.id);
+    if (reloadedPlain === undefined) throw new Error("task did not reload");
+    expect("manualVerification" in reloadedPlain).toBe(false);
+  });
+});
+
 test("reloads a recorded finding ledger unchanged", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);

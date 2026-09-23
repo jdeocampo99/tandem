@@ -857,9 +857,20 @@ authoritative `<home>/state.sqlite` and is written under the same compare-and-sw
 task record. A request id can never collide with a task id, so related tasks refer to one approved
 request through their own `requestId` field instead of becoming a second identity owner.
 
-A brief holds the goal, scope, constraints, non-goals, acceptance criteria, recommended approach,
-key decisions, unresolved questions, and research links. The first seven carry the agreement; the
-unresolved questions and research links are annotations. Every edit creates a new draft revision and
+A brief holds the goal, scope, constraints, non-goals, automated checks (`acceptanceCriteria`),
+manual verification (`manualVerification`), recommended approach, key decisions, unresolved
+questions, and research links. The first eight carry the agreement; the unresolved questions and
+research links are annotations.
+
+Automated checks are what a validation command or code review can prove: tests, types, lint, build,
+code behavior. Manual verification is what only a person can check by hand: browser smoke tests,
+"looks right", device checks. The coordinator drafts the split and shows both lists; the user moves
+an item by replying, which is an ordinary agreement revision. A task carries its own
+`manualVerification` list from the brief. The reviewer never judges these items, the implementer
+may try them and report what it saw without blocking, and delivery renders them as an unticked
+checklist in the PR description. A brief saved before manual verification existed loads with an
+empty list and keeps its digests and approval, because the list joins the agreement digest only when
+it is non-empty. Every edit creates a new draft revision and
 pushes the previous one into the preserved history, so revisions only ever move forward.
 
 ```sh
@@ -1104,7 +1115,12 @@ covers together what used to be separate passes:
 
 - observable semantics, ordering, mutation timing, errors, and boundaries;
 - function-review principles, honest dependencies, empathic signatures, abstraction levels, comments, and declaration order;
-- changed behavior, affected callers, relevant tests/reports, and acceptance criteria.
+- changed behavior, affected callers, relevant tests/reports, and the task's automated checks.
+
+The reviewer's prompt and brief list the task's manual verification items separately, telling it a
+person checks them by hand. It must not ask for proof that they work (smoke tests, screenshots, or
+runner evidence), so a hands-on check can never loop a task through its fix rounds, but it still
+reviews the code behind them and reports bugs found there.
 
 A round past the first (a fix round) points the reviewer at the diff since the last reviewed HEAD
 and the open findings on the ledger rather than re-reviewing the whole change from scratch; see
@@ -1148,7 +1164,8 @@ function of durable task state plus injected git observations, so the same task,
 always produce the same brief. It is reused context, not a second memory, handoff, or provider
 system: every field comes from the records the task already keeps.
 
-The brief carries the approved scope, the acceptance criteria, the seven code standards as
+The brief carries the approved scope, the automated checks, any manual verification items (marked
+as a person's to check), the seven code standards as
 mandatory blocking requirements, and explicit non-goals; the exact source, policy, instruction, and
 configuration identities (HEAD, branch, base, generation, review round, policy digest, review-channel
 instruction provenance, `maxFixRounds`, `maxWorkers`, and the configured command names); references
@@ -1527,7 +1544,7 @@ Supported actions are:
 | `configure-models` | `repoPath`, `models` (complete five-role map) | Save approved global role choices for future work; requires confirmation and does not mutate existing task snapshots. |
 | `onboard` | `repoPath` | Read policy and propose validation; never writes. |
 | `setup` | `repoPath` | Write a missing policy after TUI confirmation. |
-| `create` | `repoPath`, `kind`, `objective`, `acceptanceCriteria`, `surfaces` | Create a scout or implementation task. |
+| `create` | `repoPath`, `kind`, `objective`, `acceptanceCriteria`, `surfaces`, optional `manualVerification` | Create a scout or implementation task. |
 | `list` | none | List durable tasks. |
 | `show` | `taskId`, optional `detail: "summary" \| "full"` | Inspect one task. |
 | `steer` | `taskId`, `text`, optional `supersedes` list | Queue an in-scope direction, preserve approval, and invalidate outdated review evidence when needed. |
@@ -1702,7 +1719,7 @@ bun src/cli.ts pr describe TASK_ID \
   '{"tldr":["Short result"],"what":["The observable change"],"why":["The user-facing reason"]}'
 ```
 
-The summary object has only `tldr`, `what`, and `why` arrays. Each array must contain non-empty single-line entries; `tldr` has at most three entries and entries may not inject Markdown headings. Tandem adds a `# Validation` section from recorded runner evidence.
+The summary object has only `tldr`, `what`, and `why` arrays. Each array must contain non-empty single-line entries; `tldr` has at most three entries and entries may not inject Markdown headings. Tandem adds a `# Validation` section from recorded runner evidence and, when the task has manual verification items, a `# Manual verification` section listing each as an unticked `- [ ]` checklist item for the person merging.
 
 Publish only after reviewing the generated description and the approval details:
 

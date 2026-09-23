@@ -3111,7 +3111,7 @@ export class WorkerWorkflow {
             ? [
                 "Review mode is review_existing_head. Do not treat an empty diff as a substantive review.",
                 `Inspect the full implementation subject at the exact committed HEAD ${task.reviewHead}.`,
-                "Record findings from the complete implementation, repository behavior, and acceptance criteria.",
+                "Record findings from the complete implementation, repository behavior, and automated checks.",
               ]
             : []),
           ...(instructionRevision === 0

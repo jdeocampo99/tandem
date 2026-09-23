@@ -68,6 +68,12 @@ const AGREEMENT_FIELDS = [
   "keyDecisions",
 ] as const;
 
+/**
+ * Also agreement, but added later: it joins the agreement digest only when non-empty, so a brief
+ * saved before it existed keeps its digests and its approval.
+ */
+const MANUAL_VERIFICATION_FIELD = "manualVerification";
+
 const ANNOTATION_FIELDS = ["openQuestions", "researchLinks"] as const;
 
 const TEXT_FIELDS = ["goal", "recommendedApproach"] as const;
@@ -77,6 +83,7 @@ const LIST_FIELDS = [
   "constraints",
   "nonGoals",
   "acceptanceCriteria",
+  "manualVerification",
   "keyDecisions",
   "openQuestions",
   "researchLinks",
@@ -117,7 +124,11 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
     throw new RequestBriefError("invalid-content", "A request brief must be an object");
   }
   const record = value as Record<string, unknown>;
-  const allowed: readonly string[] = [...AGREEMENT_FIELDS, ...ANNOTATION_FIELDS];
+  const allowed: readonly string[] = [
+    ...AGREEMENT_FIELDS,
+    MANUAL_VERIFICATION_FIELD,
+    ...ANNOTATION_FIELDS,
+  ];
   for (const key of Object.keys(record)) {
     if (!allowed.includes(key)) {
       throw new RequestBriefError("invalid-content", `A request brief has no field ${key}`);
@@ -129,6 +140,9 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
     constraints: briefList(record, "constraints"),
     nonGoals: briefList(record, "nonGoals"),
     acceptanceCriteria: briefList(record, "acceptanceCriteria"),
+    // A brief saved before manual verification existed has only automated checks.
+    manualVerification:
+      record.manualVerification === undefined ? [] : briefList(record, "manualVerification"),
     recommendedApproach: briefText(record, "recommendedApproach"),
     keyDecisions: briefList(record, "keyDecisions"),
     openQuestions: briefList(record, "openQuestions"),
@@ -328,7 +342,9 @@ function canonicalContent(content: RequestBriefContent): string {
 }
 
 function canonicalAgreement(content: RequestBriefContent): string {
-  return JSON.stringify(AGREEMENT_FIELDS.map((field) => content[field]));
+  const agreement: unknown[] = AGREEMENT_FIELDS.map((field) => content[field]);
+  if (content.manualVerification.length > 0) agreement.push(content.manualVerification);
+  return JSON.stringify(agreement);
 }
 
 function checkedLine(value: unknown, field: string): string {

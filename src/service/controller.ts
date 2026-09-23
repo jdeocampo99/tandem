@@ -163,6 +163,8 @@ export type CreateTaskRequest = Readonly<{
   readonly kind: "scout" | "implementation";
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
+  /** Hands-on checks a person makes before merging; they become the PR's checklist. */
+  readonly manualVerification?: readonly string[];
   readonly surfaces: readonly string[];
   /** The request brief this task is created under; dispatch stays blocked while it is superseded. */
   readonly requestId?: string;
