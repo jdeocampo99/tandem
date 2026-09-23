@@ -2034,7 +2034,7 @@ The kinds are grouped by how automatically Tandem may ever act on them:
 
 ### Reconciling Tandem resources across sessions
 
-`tandem fix [--home PATH] [--yes] [--json] [--verbose]` is the front door's home-wide cleanup surface, and
+`tandem fix [--home PATH] [--yes] [--free-superseded] [--json] [--verbose]` is the front door's home-wide cleanup surface, and
 the supported alternative to deleting coordinator records, panes, or lock files by hand. A stuck task is
 recovered by central recovery (see above), not by this command.
 
@@ -2057,6 +2057,21 @@ Classification:
   owner, never by pool path;
 - terminal implementation tasks and completed or safely cancelled scout resources are finished
   through the durable task cleanup owner, which keeps the report, provenance, and task history;
+- a cancelled or completed implementation task's worktree returns through ordinary cleanup only
+  when it is clean and its HEAD is already in the main checkout. Otherwise the report says why it
+  stays (`worktreeStays`), unless the worktree is clean, on its task branch, and git proves every
+  commit it has beyond main is carried by other work: each non-merge commit is an ancestor of, or
+  patch-equivalent (`git rev-list --cherry-mark`, like `git cherry`) to a commit in, another task's
+  branch, the head of a draft, open, or merged pull request recorded on any task, or main (the
+  primary checkout's HEAD or `origin`'s default branch); a merge commit is carried when all its
+  parents are. Such a task is listed under `freeable`, with `containedIn` naming that task or PR
+  (marked "(same changes, rebased)" when patch equivalence was needed), or `main` when its only
+  extra commits came from main. It is left completely untouched unless freeing is approved
+  separately: the dry run asks its own question after the cleanup question, and non-interactively
+  `--yes` alone never frees; `--yes --free-superseded` does. Freeing re-proves the checkout, its
+  HEAD, and containment under the state lock, then returns the lease through the approved discard
+  path (`treehouse return --force`), which detaches the worktree and
+  keeps the branch ref and its commits;
 - a record Tandem cannot place or prove, such as one stored under a session directory it does not
   name, is quarantined with a durable note and nothing is closed or released;
 - unreadable record files are listed with their path and reason, and are never deleted;
@@ -2072,8 +2087,8 @@ underneath them; task cleanup runs through its durable state-and-lease owner. A 
 lock and never disturbs a live coordinator. A `clean` plan item is a prediction: applying re-reads
 the resource and hands it back to its owner, which may still retain or quarantine it. Applying
 twice plans nothing to clean the second time, and a quarantine note is written once per lease rather
-than on every run or launch. `--json` prints a versioned report (`schemaVersion`, `mode`, `home`, `cleaned`,
-`retained`, `quarantined`, `failed`) whose entries carry the resource kind, id, repository, session,
+than on every run or launch. `--json` prints a versioned report (`schemaVersion` 2, `mode`, `home`, `cleaned`,
+`retained`, `quarantined`, `failed`, `freeable`) whose entries carry the resource kind, id, repository, session,
 path, and reason. The default human view prints one line per thing: a task line names the task
 (ticket key or short objective), its stage, short id, and the worktree number of the lease it holds,
 so a task-held lease is never listed separately; `--verbose` prints every entry with its full id,

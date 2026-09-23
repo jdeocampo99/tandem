@@ -74,13 +74,14 @@ const note: ReconcileReportEntry = {
 
 function report(overrides: Partial<ReconcileReport>): ReconcileReport {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     mode: "dry-run",
     home: HOME,
     cleaned: [],
     retained: [],
     quarantined: [],
     failed: [],
+    freeable: [],
     ...overrides,
   };
 }
@@ -105,12 +106,70 @@ test("a task and the worktree it holds share one line, and other things get one 
       "  TAG-1036 research · done             dcd45360   worktree 2",
       "  TAG-1036 · ready to publish          e2c0fbb5   worktree 5",
       "",
-      "A task's worktree is returned only if it is clean and its work already merged.",
       "tandem fix --verbose shows paths and reasons",
       "",
     ].join("\n"),
   );
   expect(fixCleanupCount(dryRun, details)).toBe(3);
+});
+
+test("worktrees whose work is elsewhere get their own section, and kept ones say why", () => {
+  const offered = report({
+    cleaned: [
+      {
+        ...implementation("40e690d8-0000"),
+        worktreeStays: "has commits not in main or any other work",
+      },
+      note,
+    ],
+    retained: [coordinator, lease(2), lease(3), lease(4), lease(5)],
+    freeable: [{ ...implementation("36a4f150-0000"), containedIn: "task e2c0fbb5" }],
+  });
+  expect(renderFixReport(offered, details)).toBe(
+    [
+      "Tandem fix · nothing changed yet",
+      "",
+      "Clean up (2)",
+      "  TAG-1036 · cancelled attempt         40e690d8   worktree 3   stays: has commits not in main or any other work",
+      "  Old note about a returned worktree",
+      "",
+      "Can also free (1)",
+      "  TAG-1036 · cancelled attempt         36a4f150   worktree 4   work is in task e2c0fbb5",
+      "",
+      "Keep (3)",
+      "  Coordinator · tagalog-learning-app   running",
+      "  TAG-1036 research · done             dcd45360   worktree 2",
+      "  TAG-1036 · ready to publish          e2c0fbb5   worktree 5",
+      "",
+      "Freeing returns a worktree but keeps its branch, so no commit is lost.",
+      "tandem fix --verbose shows paths and reasons",
+      "",
+    ].join("\n"),
+  );
+  expect(fixCleanupCount(offered, details)).toBe(2);
+
+  const freed = renderFixReport(
+    report({
+      mode: "applied",
+      cleaned: [{ ...implementation("36a4f150-0000"), containedIn: "task e2c0fbb5" }],
+    }),
+    details,
+  );
+  expect(freed).toContain("36a4f150   worktree 4   freed · work is in task e2c0fbb5\n");
+  expect(freed).toContain("Freed worktrees keep their branches, so no commit is lost.");
+
+  const declined = renderFixReport(
+    report({ mode: "applied", freeable: offered.freeable }),
+    details,
+  );
+  expect(declined).toContain("Can also free (1)");
+  expect(declined).toContain("To free them: tandem fix --yes --free-superseded");
+  expect(renderFixReportVerbose(offered)).toContain("(commits are in task e2c0fbb5)");
+  const onlyMain = renderFixReport(
+    report({ freeable: [{ ...implementation("36a4f150-0000"), containedIn: "main" }] }),
+    details,
+  );
+  expect(onlyMain).toContain("36a4f150   worktree 4   only main's commits\n");
 });
 
 test("after applying, a task whose cleanup did not finish is kept and says so", () => {

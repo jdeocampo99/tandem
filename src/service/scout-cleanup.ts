@@ -36,6 +36,12 @@ import {
   replaceRuntimeTask,
 } from "./records.ts";
 import { taskSourcePath } from "./source.ts";
+import {
+  containerRefs,
+  otherTaskWork,
+  recheckSuperseded,
+  type SupersededProof,
+} from "./superseded.ts";
 
 /** What one cleanup attempt settled on, including the attempts that deliberately changed nothing. */
 export type TaskCleanupOutcome = Readonly<{
@@ -56,6 +62,11 @@ export type TaskCleanupDependencies = Readonly<{
 export type TerminalTaskCleanupOptions = Readonly<{
   /** Discard is reserved for explicitly approved cancelled or blocked implementation tasks. */
   readonly discard?: boolean;
+  /**
+   * Explicitly approved: return a cancelled or completed implementation worktree whose commits
+   * the proof shows are already in other work. Re-proved under the state lock; the branch is kept.
+   */
+  readonly free?: SupersededProof;
 }>;
 
 /** The scout checkout as it was observed, without interpreting it. */
@@ -501,6 +512,9 @@ export async function releaseTerminalTaskResources(
         reason: "the task holds no worktree lease",
       });
     }
+    if (options.free !== undefined) {
+      return await freeSupersededWorktree(deps, task, lease, options.free, panes.closedPaneIds);
+    }
     const checkout =
       task.kind === "scout" ? await observeScoutCheckout(deps.run, lease.path) : undefined;
     const decision =
@@ -555,6 +569,64 @@ export async function releaseTerminalTaskResources(
       status: "released",
       reason: decision.reason,
     });
+  });
+}
+
+/**
+ * Returns a worktree whose commits other work already carries. Only a cancelled or completed
+ * implementation task qualifies, and only after its checkout is re-proved clean and contained;
+ * the return then uses the approved discard path, which keeps the branch ref and its commits.
+ */
+async function freeSupersededWorktree(
+  deps: TaskCleanupDependencies,
+  task: TaskRecord,
+  lease: WorktreeLease,
+  proof: SupersededProof,
+  closedPaneIds: readonly string[],
+): Promise<TaskCleanupOutcome> {
+  const refusal =
+    task.kind !== "implementation" || (task.stage !== "cancelled" && task.stage !== "completed")
+      ? "only a cancelled or completed implementation task can be freed"
+      : await recheckSuperseded(
+          deps.run,
+          task.repoPath,
+          lease,
+          proof,
+          containerRefs(
+            task,
+            lease.branch,
+            otherTaskWork(await deps.store.list(), await readRuntimeState(deps.runtimePath)),
+          ),
+        );
+  if (refusal !== undefined) {
+    return recordCleanupAttempt(deps, task, {
+      closedPaneIds,
+      leaseReleased: false,
+      status: "pending",
+      reason: `the worktree was kept: ${refusal}`,
+    });
+  }
+  try {
+    await releaseWorktree(deps.run, {
+      repo: task.repoPath,
+      lease,
+      childWorkerStopped: true,
+      discard: true,
+      destructiveApproval: true,
+    });
+  } catch (error) {
+    return recordCleanupAttempt(deps, task, {
+      closedPaneIds,
+      leaseReleased: false,
+      status: classifyCleanupFailure(error),
+      reason: `the worktree lease was retained: ${describeError(error)}`,
+    });
+  }
+  return recordCleanupAttempt(deps, task, {
+    closedPaneIds,
+    leaseReleased: true,
+    status: "released",
+    reason: `the worktree was returned because its commits are in ${proof.label}; branch ${lease.branch} is kept`,
   });
 }
 
@@ -613,7 +685,13 @@ export async function finishPendingScoutCleanup(
  */
 
 export type PendingImplementationCleanupInput = PendingScoutCleanupInput &
-  Readonly<{ readonly discard?: boolean }>;
+  Readonly<{
+    readonly discard?: boolean;
+    /** When present, only these tasks are attempted, so an apply never exceeds its plan. */
+    readonly taskIds?: ReadonlySet<string>;
+    /** Explicitly approved superseded worktrees to return, by task id. */
+    readonly free?: ReadonlyMap<string, SupersededProof>;
+  }>;
 
 export async function finishPendingImplementationCleanup(
   input: PendingImplementationCleanupInput,
@@ -644,15 +722,18 @@ export async function finishPendingImplementationCleanup(
         input.discard === true && task.kind === "implementation" && task.stage === "blocked";
       if (task.kind !== "implementation" || (!isTerminalTask(task) && !explicitlyDiscardedBlocked))
         continue;
+      if (input.taskIds !== undefined && !input.taskIds.has(task.id)) continue;
       if (task.cleanup?.status === "quarantined") continue;
       const runtime = taskRuntime(state, task.id);
       if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) continue;
+      const free = input.free?.get(task.id);
       outcomes.push(
         await releaseTerminalTaskResources(deps, task, {
           discard:
             input.discard === true &&
             task.kind === "implementation" &&
             (task.stage === "cancelled" || task.stage === "blocked"),
+          ...(free === undefined ? {} : { free }),
         }),
       );
     }
