@@ -983,6 +983,7 @@ unit, and neither rises. A known rise on either axis is a premium move: a model 
 premium even when it is prepaid, bundled, or expected to bill nothing extra, and a model that draws
 more included allowance is premium even when the money is equal or unpublished. Two models nobody
 published an allowance for are not therefore equal; unpublished is unknown consumption, not none.
+A premium or unclear candidate is never taken; the pinned model continues instead.
 
 A comparable reassignment happens automatically only after a known safe failure of the pinned model,
 and only among providers the pinned profile explicitly enabled in `models.json`. Catalogue discovery
@@ -1001,21 +1002,24 @@ A task with no governing request has no ledger at all and continues on the pinne
 The charged total is never read as a measurement anywhere in the comparison: it is a floor on what the
 request cost. Because Tandem's provider surface reports so little, automatic reassignment is rare.
 
-Anything else is a question rather than a move. The task stops on a durable routing decision recorded
-in `routingPause`, the coordinator is notified exactly once, and nothing for that task starts until
-it is answered. A saved pause whose reason routing no longer raises is dropped when state is read,
-so routing re-resolves instead of refusing work. The answer is pinning the model you want through the models configuration, which
-records a new immutable policy snapshot; the recorded question stops speaking once the pinned policy,
-the generation, or the input HEAD moves under it, and routing re-resolves against the new identity.
+A replacement attempt never stops on a question. A task's policy is fixed when it is created, so a
+question about switching could only ever be answered "keep the pinned model"; when nothing justifies
+a switch (unobserved usage, a costlier or unclear alternative, or a pinned model the catalogue does
+not list), the pinned model continues and the attempt's own outcome is the evidence.
+
+The remaining questions stop the task on a durable routing decision recorded in `routingPause`; the
+coordinator is notified exactly once, and nothing for that task starts until the question stops
+speaking. It stops speaking once the pinned policy, the generation, or the input HEAD moves under it,
+and `prior-outcome-uncertain` also stops once that attempt settles as a known failure. A pause saved
+by an older version with a reason routing no longer raises (`premium-tier-requires-approval`,
+`tier-evidence-indeterminate`, `usage-evidence-unmeasured`) still loads but never stands.
 
 | Routing pause reason | What it means |
 | --- | --- |
 | `prior-outcome-uncertain` | The previous attempt's outcome could not be proven, so it stays quarantined rather than being replaced. The question stops speaking by itself once that attempt settles as a known failure. |
-| `pinned-model-absent-from-catalogue` | The catalogue does not list the pinned model, so nothing confirms it can still run. |
+| `pinned-model-absent-from-catalogue` | On a first launch, the catalogue does not list the pinned model, so nothing confirms it can still run. |
 | `pinned-model-ambiguous-in-catalogue` | The pinned selector matches more than one entry, so which model would run is unknown. |
 | `pinned-model-thinking-level-unsupported` | The pinned model no longer supports the thinking level pinned for this role. |
-| `premium-tier-requires-approval` | The only available replacement costs more or draws more included allowance. |
-| `tier-evidence-indeterminate` | Tier evidence for the available replacements is missing or contradictory. |
 
 The worker concurrency limit refuses the reservation before routing is resolved at all, and no
 routing choice can widen it. A catalogue that cannot be read, or that published no models at all,
@@ -1785,6 +1789,14 @@ resources for inspection. Quarantine is not failure cleanup and does not release
 capacity. Only an explicit, evidence-backed transition may consume a result or release
 resources; recovery must not clear records, manufacture receipts, replace a task, or
 change saved policy/checkpoints.
+
+A quarantine is cleared by a fact, never by time or by asking again: proof that nothing Tandem
+owns for the task is still running. Central recovery's stop ladder, a resume or restart (which
+refuses unless every owned pane is proven stopped), and a steer that redirects the task (which
+stops every owned pane first) each settle a quarantined operation as `failed` in the same write
+that releases its reservation. Only cancellation and terminal cleanup release a reservation without
+settling it, and neither relaunches, so a relaunch never pauses on an uncertainty that proof already
+answered. The `prior-outcome-uncertain` routing reason stays for state written before this rule.
 
 These controls do not make external effects transactional or guarantee availability; they
 make uncertain ownership fail closed and preserve evidence for an explicit decision.

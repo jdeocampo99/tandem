@@ -604,3 +604,66 @@ test("restarting a blocked task whose uncertain launch has settled relaunches it
     await service.shutdown();
   });
 }, 20_000);
+
+/**
+ * The same incident one step earlier: the launch is still quarantined and holds its reservation,
+ * and its pane is gone. Restart proves nothing Tandem owns is running, which answers the
+ * uncertainty, so it relaunches instead of pausing on "I can't tell what the last attempt did".
+ */
+test("restarting a blocked task with a still-quarantined launch relaunches once its panes are proven stopped", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const job1 = deadJob(world, lease.path, "job-1");
+    const seeded = await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "blocked",
+      previousStage: "implementing",
+      worktree: lease,
+      endpoints: [],
+    });
+    await world.store.update(seeded.id, seeded.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: SCENARIO_NOW,
+      blockReason: "Tandem couldn't confirm the worker started.",
+      blockCause: {
+        group: "safety-stop",
+        kind: "quarantined-unknown-outcome",
+        summary: "Tandem couldn't confirm the worker started.",
+        detail: "worker launch could not be proven after launch intent",
+        jobId: job1.id,
+      },
+    }));
+    await seedScenarioRuntime(
+      world,
+      scenarioRuntimeTask({
+        worktree: lease,
+        endpoints: [],
+        jobs: [job1],
+        operation: scenarioOperation(job1, { phase: "quarantined" }),
+        reservation: scenarioReservation(),
+      }),
+    );
+    const service = createTandemService({
+      home: world.home,
+      sessionId: world.sessionId,
+      poolRoot: world.poolRoot,
+      run: world.run,
+      clock: world.clock,
+      idFactory: world.idFactory,
+      workerTimeoutMs: 1_500,
+    });
+
+    const restarted = await service.restart(SCENARIO_TASK_ID);
+
+    expect(restarted.stage).toBe("implementing");
+    const replacement = await activeJobAfterRelaunch(world, job1.id);
+    expect(replacement.endpoint).toBeDefined();
+    const runtime = (await world.snapshot()).runtime.tasks[0];
+    expect(runtime?.routingPause).toBeUndefined();
+    expect(runtime?.operationHistory?.find((entry) => entry.id === "operation-1")?.phase).toBe(
+      "failed",
+    );
+    await service.shutdown();
+  });
+}, 20_000);

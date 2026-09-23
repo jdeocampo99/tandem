@@ -633,17 +633,29 @@ export class TaskControlWorkflow {
                       }
                     : job,
               );
+        // Every owned worker was just proven stopped, so a quarantined operation's outcome is no
+        // longer uncertain: nothing it started is still running. Settle it here rather than leave a
+        // stored "uncertain" that would refuse every relaunch.
+        const settlesQuarantine =
+          withoutControl.operation?.phase === "quarantined" &&
+          resources.terminalJobIds.length === 0 &&
+          !jobs.some(activeRuntimeJob);
+        const operation =
+          settlesQuarantine && withoutControl.operation !== undefined
+            ? { operation: { ...withoutControl.operation, phase: "failed" as const } }
+            : {};
         const reservation = withoutControl.reservation;
         if (
-          abandonedJobIds.size === 0 ||
+          (abandonedJobIds.size === 0 && !settlesQuarantine) ||
           jobs.some(activeRuntimeJob) ||
           reservation === undefined ||
           reservation.phase === "released"
         ) {
-          return { ...withoutControl, jobs };
+          return { ...withoutControl, ...operation, jobs };
         }
         return {
           ...withoutControl,
+          ...operation,
           jobs,
           reservation: {
             ...reservation,
@@ -1156,6 +1168,10 @@ export class TaskControlWorkflow {
         } = current;
         return {
           ...withoutTransient,
+          // Every owned worker was proven stopped above, which answers a quarantined outcome.
+          ...(current.operation?.phase === "quarantined"
+            ? { operation: { ...current.operation, phase: "failed" as const } }
+            : {}),
           endpoints: current.endpoints
             .filter((endpoint) => endpoint.role === "scout" || endpoint.role === "implementer")
             .map((endpoint) => ({ ...endpoint, generation: redirected.generation })),

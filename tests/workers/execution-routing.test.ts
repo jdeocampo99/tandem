@@ -278,89 +278,46 @@ test("a candidate from a discovered but unenabled provider never authorizes a mo
   expect(routing.selector).toBe(PINNED.model);
 });
 
-test("a prepaid higher-cost replacement asks instead of moving", () => {
-  const pause = pauseOf(
+test("a replacement that can't be justified keeps the pinned model instead of asking", () => {
+  const pinnedEntry = catalogueEntry(PINNED.model, {
+    cost: { input: 2, output: 2 },
+    includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
+  });
+  const alternatives = {
+    "costs more": catalogueEntry("alpha/deluxe", {
+      cost: { input: 5, output: 5 },
+      includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
+    }),
+    "draws more allowance": catalogueEntry("alpha/heavy", {
+      cost: { input: 2, output: 2 },
+      includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 4 },
+    }),
+    "unpublished cost": catalogueEntry("alpha/quiet", {
+      includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
+    }),
+  };
+  for (const [name, alternative] of Object.entries(alternatives)) {
+    const routing = authorizedRouting(
+      resolveExecutionRouting(
+        routingRequest({
+          boundary: replacementBoundary(),
+          catalogue: snapshot([pinnedEntry, alternative], ["alpha"]),
+        }),
+      ),
+    );
+    expect(routing.basis, name).toBe("pinned-policy");
+    expect(routing.selector, name).toBe(PINNED.model);
+  }
+  // The pinned model missing from the catalogue on a replacement keeps it too.
+  const unlisted = authorizedRouting(
     resolveExecutionRouting(
       routingRequest({
         boundary: replacementBoundary(),
-        catalogue: snapshot(
-          [
-            catalogueEntry(PINNED.model, {
-              cost: { input: 1, output: 1 },
-              includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
-            }),
-            catalogueEntry("alpha/deluxe", {
-              cost: { input: 5, output: 5 },
-              includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
-            }),
-          ],
-          ["alpha"],
-        ),
+        catalogue: snapshot([alternatives["costs more"]], ["alpha"]),
       }),
     ),
   );
-
-  expect(pause.reason).toBe("premium-tier-requires-approval");
-  expect(pause.premiumAxis).toBe("monetary-cost");
-  expect(pause.candidateSelector).toBe("alpha/deluxe");
-  expect(describeExecutionRoutingDecision(pause)).toBe(
-    "Keep this task on alpha/base? The only alternative, alpha/deluxe, costs more.",
-  );
-});
-
-test("a replacement drawing more included allowance asks even at equal cost", () => {
-  const pause = pauseOf(
-    resolveExecutionRouting(
-      routingRequest({
-        boundary: replacementBoundary(),
-        catalogue: snapshot(
-          [
-            catalogueEntry(PINNED.model, {
-              cost: { input: 2, output: 2 },
-              includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
-            }),
-            catalogueEntry("alpha/heavy", {
-              cost: { input: 2, output: 2 },
-              includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 4 },
-            }),
-          ],
-          ["alpha"],
-        ),
-      }),
-    ),
-  );
-
-  expect(pause.reason).toBe("premium-tier-requires-approval");
-  expect(pause.premiumAxis).toBe("quota-consumption");
-});
-
-test("unknown tier evidence pauses rather than classifying the move as comparable", () => {
-  const pause = pauseOf(
-    resolveExecutionRouting(
-      routingRequest({
-        boundary: replacementBoundary(),
-        catalogue: snapshot(
-          [
-            catalogueEntry(PINNED.model, {
-              cost: { input: 2, output: 2 },
-              includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
-            }),
-            catalogueEntry("alpha/quiet", {
-              includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
-            }),
-          ],
-          ["alpha"],
-        ),
-      }),
-    ),
-  );
-
-  expect(pause.reason).toBe("tier-evidence-indeterminate");
-  expect(pause.evidenceGaps).toEqual(["catalogue-cost-unpublished"]);
-  expect(describeExecutionRoutingDecision(pause)).toBe(
-    "Keep this task on alpha/base? I can't get clear pricing for the alternatives.",
-  );
-  expect(describeExecutionRoutingDecision(pause)).not.toContain("catalogue-cost-unpublished");
+  expect(unlisted.selector).toBe(PINNED.model);
 });
 
 test("the rendered routing prompt never names a task, decision, generation, or attempt id", () => {

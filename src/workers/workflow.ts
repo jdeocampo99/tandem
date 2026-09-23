@@ -56,7 +56,6 @@ import {
 import type {
   DurableEndpointLaunch,
   DurableExecutionRouting,
-  DurableExecutionRoutingPause,
   DurableJob,
   DurableJobConsumption,
   DurableOperation,
@@ -161,6 +160,7 @@ import {
   type ModelCatalogueReader,
   type ModelCatalogueSnapshot,
   type PriorExecutionAttempt,
+  type RaisedExecutionRoutingPause,
   resolvedExecutionModel,
   resolveExecutionRouting,
 } from "./execution-routing.ts";
@@ -3761,7 +3761,7 @@ export class WorkerWorkflow {
     store: TaskStoreTransaction,
     task: TaskRecord,
     runtime: RuntimeTaskState,
-    pause: DurableExecutionRoutingPause,
+    pause: RaisedExecutionRoutingPause,
   ): Promise<void> {
     const state = await readRuntimeState(this.#deps.runtimePath);
     await writeRuntimeState(

@@ -3,8 +3,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ResolvedPolicy, WorktreeLease } from "../../src/contracts.ts";
 import { activeRuntimeJob } from "../../src/runtime/activity.ts";
-import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
-import { parseRuntimeState } from "../../src/runtime/schema.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { policyIdentity } from "../../src/tasks/acceptance.ts";
 import { persistWorkerResult } from "../../src/workers/jobs.ts";
@@ -730,7 +728,7 @@ test("an uncertain-outcome routing pause stops blocking once that attempt settle
   }
 });
 
-test("a saved unmeasured-usage routing pause no longer blocks; the pinned model relaunches", async () => {
+test("a saved pause with a reason routing no longer raises doesn't block; the pinned model relaunches", async () => {
   await withScenario({}, async (world) => {
     await seedScenarioTask(world, { kind: "implementation", stage: "queued" });
     const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
@@ -751,38 +749,29 @@ test("a saved unmeasured-usage routing pause no longer blocks; the pinned model 
       scenarioRuntimeTask({
         jobs: [prior],
         operation: scenarioOperation(prior, { phase: "failed", policyDigest }),
+        // Saved by an older Tandem that asked instead of keeping the pinned model.
+        routingPause: {
+          schemaVersion: 1,
+          decisionId: "routing-unmeasured",
+          reason: "usage-evidence-unmeasured",
+          taskId: SCENARIO_TASK_ID,
+          jobId: prior.id,
+          operationId: "operation-1",
+          role: "implementer",
+          generation: 0,
+          attempt: 2,
+          policyDigest,
+          inputHead: SCENARIO_HEAD,
+          pinnedSelector: SCENARIO_POLICY.config.models.implementer.model,
+          pinnedThinking: SCENARIO_POLICY.config.models.implementer.thinking,
+          evidenceGaps: [],
+          enabledProviders: [],
+          usageSource: "no-governing-request",
+          limits: { maxWorkers: SCENARIO_POLICY.config.maxWorkers },
+          observedAt: SCENARIO_NOW,
+        },
       }),
     );
-    // Written by an older Tandem that paused instead of keeping the pinned model.
-    const path = runtimeFile(world.home);
-    const state = await readRuntimeState(path);
-    const raw = JSON.parse(JSON.stringify(state)) as { tasks: Record<string, unknown>[] };
-    const task = raw.tasks[0];
-    if (task === undefined) throw new Error("scenario runtime task is missing");
-    task.routingPause = {
-      schemaVersion: 1,
-      decisionId: "routing-unmeasured",
-      reason: "usage-evidence-unmeasured",
-      taskId: SCENARIO_TASK_ID,
-      jobId: prior.id,
-      operationId: "operation-1",
-      role: "implementer",
-      generation: 0,
-      attempt: 2,
-      policyDigest,
-      inputHead: SCENARIO_HEAD,
-      pinnedSelector: SCENARIO_POLICY.config.models.implementer.model,
-      pinnedThinking: SCENARIO_POLICY.config.models.implementer.thinking,
-      evidenceGaps: [],
-      enabledProviders: [],
-      usageSource: "no-governing-request",
-      limits: { maxWorkers: SCENARIO_POLICY.config.maxWorkers },
-      observedAt: SCENARIO_NOW,
-    };
-    // Loading those saved bytes is what every read does; the stale question is dropped there.
-    const loaded = parseRuntimeState(raw);
-    expect(loaded.tasks[0]?.routingPause).toBeUndefined();
-    await writeRuntimeState(path, loaded);
     const service = serviceFor(world);
 
     await service.tick();
@@ -790,6 +779,119 @@ test("a saved unmeasured-usage routing pause no longer blocks; the pinned model 
     const runtime = (await world.snapshot()).runtime.tasks[0];
     expect(runtime?.routingPause).toBeUndefined();
     expect(runtime?.jobs.some(activeRuntimeJob)).toBe(true);
+    await service.shutdown();
+  });
+});
+
+test("steering a task whose review launch was quarantined settles that launch instead of leaving it uncertain", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const implementer = {
+      ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
+      role: "implementer" as const,
+    };
+    const reviewer = {
+      ...world.openPane({ paneId: "pane-2", cwd: lease.path }),
+      role: "reviewer" as const,
+    };
+    const prior = scenarioJob({
+      home: world.home,
+      role: "reviewer",
+      cwd: lease.path,
+      endpoint: reviewer,
+      phase: "failed",
+    });
+    await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "reviewing",
+      reviewHead: SCENARIO_HEAD,
+      worktree: lease,
+      endpoints: [implementer, reviewer],
+    });
+    await seedScenarioRuntime(
+      world,
+      scenarioRuntimeTask({
+        worktree: lease,
+        endpoints: [implementer, reviewer],
+        jobs: [prior],
+        operation: scenarioOperation(prior, { phase: "quarantined" }),
+        reservation: scenarioReservation(),
+      }),
+    );
+    const service = serviceFor(world);
+
+    await service.steer({ taskId: SCENARIO_TASK_ID, text: "Keep the current scope." });
+
+    const task = await service.get(SCENARIO_TASK_ID);
+    expect(task.generation).toBe(1);
+    const runtime = (await world.snapshot()).runtime.tasks[0];
+    // Every owned pane was proven stopped before the redirect, which answers the uncertainty.
+    const settled = [...(runtime?.operationHistory ?? []), runtime?.operation].find(
+      (operation) => operation?.id === "operation-1",
+    );
+    expect(settled?.phase).toBe("failed");
+    await service.shutdown();
+  });
+});
+
+test("a failed attempt with no governing request relaunches on the pinned model even when a cheaper model is listed", async () => {
+  const pinned = SCENARIO_POLICY.config.models.implementer.model;
+  const listed = (selector: string, cost: number) => ({
+    selector,
+    id: selector,
+    provider: "scenario",
+    thinking: ["low"],
+    cost: { input: cost, output: cost },
+  });
+  const ompModels = [
+    ...Object.values(SCENARIO_POLICY.config.models).map((spec) => listed(spec.model, 2)),
+    listed("scenario/cheaper", 1),
+  ];
+  await withScenario({ ompModels }, async (world) => {
+    const service = serviceFor(world);
+    await service.configureModels({
+      repoPath: world.repoPath,
+      models: SCENARIO_POLICY.config.models,
+      enabledProviders: ["scenario"],
+    });
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const endpoint = {
+      ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
+      role: "implementer" as const,
+    };
+    const prior = scenarioJob({
+      home: world.home,
+      role: "implementer",
+      cwd: lease.path,
+      endpoint,
+      phase: "failed",
+    });
+    await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "implementing",
+      worktree: lease,
+      endpoints: [endpoint],
+    });
+    await seedScenarioRuntime(
+      world,
+      scenarioRuntimeTask({
+        worktree: lease,
+        endpoints: [endpoint],
+        jobs: [prior],
+        operation: scenarioOperation(prior, {
+          phase: "failed",
+          policyDigest: policyIdentity(SCENARIO_POLICY),
+        }),
+      }),
+    );
+
+    await service.tick();
+
+    const runtime = (await world.snapshot()).runtime.tasks[0];
+    expect(runtime?.routingPause).toBeUndefined();
+    expect(runtime?.jobs.some(activeRuntimeJob)).toBe(true);
+    expect(runtime?.operation?.routing?.basis).toBe("pinned-policy");
+    expect(runtime?.operation?.routing?.selector).toBe(pinned);
     await service.shutdown();
   });
 });
