@@ -87,6 +87,18 @@ const DEFAULT_MODELS: Readonly<Record<AgentRole, ModelSpec>> = {
 
 type PolicyBase = RepoPolicy;
 
+/** Ten minutes: the timeout for a command written as a plain string or proposed by onboarding. */
+export const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
+
+/**
+ * A command written as a plain string (e.g. "npm ci") runs through the shell, so `&&` and quoting
+ * work as typed; the string is also its name and it gets the default timeout.
+ */
+function readShorthandCommand(value: string, field: string): SetupCommand {
+  const text = readNonEmptyString(value, field).trim();
+  return { name: text, argv: ["/bin/sh", "-c", text], timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS };
+}
+
 function readModelOverrides(
   value: unknown,
   base: Readonly<Record<AgentRole, ModelSpec>>,
@@ -134,8 +146,19 @@ function readValidationCommands(
   const names = new Set(base.map((command) => command.name));
   for (let index = 0; index < value.length; index += 1) {
     const commandValue = value[index];
+    if (typeof commandValue === "string") {
+      const command = { ...readShorthandCommand(commandValue, `${field}[${index}]`), surfaces: [] };
+      if (names.has(command.name)) {
+        throw new TypeError(
+          `${field} contains duplicate command name ${JSON.stringify(command.name)}`,
+        );
+      }
+      parsed.push(command);
+      names.add(command.name);
+      continue;
+    }
     if (!isRecord(commandValue)) {
-      throw new TypeError(`${field}[${index}] must be an object`);
+      throw new TypeError(`${field}[${index}] must be a command string or object`);
     }
     assertKnownKeys(commandValue, COMMAND_KEYS, `${field}[${index}]`);
 
@@ -198,18 +221,26 @@ function readSetupCommands(value: unknown, base: readonly SetupCommand[]): reado
   for (let index = 0; index < value.length; index += 1) {
     const field = `setupCommands[${index}]`;
     const commandValue: unknown = value[index];
-    if (!isRecord(commandValue)) throw new TypeError(`${field} must be an object`);
-    assertKnownKeys(commandValue, SETUP_COMMAND_KEYS, field);
-    const name = readNonEmptyString(commandValue.name, `${field}.name`);
-    if (names.has(name)) {
-      throw new TypeError(`setupCommands contains duplicate command name ${JSON.stringify(name)}`);
+    let command: SetupCommand;
+    if (typeof commandValue === "string") {
+      command = readShorthandCommand(commandValue, field);
+    } else {
+      if (!isRecord(commandValue))
+        throw new TypeError(`${field} must be a command string or object`);
+      assertKnownKeys(commandValue, SETUP_COMMAND_KEYS, field);
+      command = {
+        name: readNonEmptyString(commandValue.name, `${field}.name`),
+        argv: readArgv(commandValue.argv, `${field}.argv`),
+        timeoutMs: readPositiveInteger(commandValue.timeoutMs, `${field}.timeoutMs`),
+      };
     }
-    names.add(name);
-    parsed.push({
-      name,
-      argv: readArgv(commandValue.argv, `${field}.argv`),
-      timeoutMs: readPositiveInteger(commandValue.timeoutMs, `${field}.timeoutMs`),
-    });
+    if (names.has(command.name)) {
+      throw new TypeError(
+        `setupCommands contains duplicate command name ${JSON.stringify(command.name)}`,
+      );
+    }
+    names.add(command.name);
+    parsed.push(command);
   }
   return parsed;
 }
