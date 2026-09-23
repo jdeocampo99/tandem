@@ -285,9 +285,7 @@ export function describeExecutionRoutingDecision(
   const reason =
     pause.reason === "premium-tier-requires-approval" && pause.candidateSelector !== undefined
       ? `The only alternative, ${pause.candidateSelector}, costs more.`
-      : pause.reason === "usage-evidence-unmeasured" && pause.usageSource === "no-governing-request"
-        ? "No request tracks what this task spends."
-        : ROUTING_PAUSE_EXPLANATIONS[pause.reason];
+      : ROUTING_PAUSE_EXPLANATIONS[pause.reason];
   return formatDecisionQuestion({
     ask: `Keep ${subject} on ${pause.pinnedSelector}?`,
     note: reason,
@@ -303,7 +301,6 @@ const ROUTING_PAUSE_EXPLANATIONS: Readonly<Record<ExecutionRoutingPauseReason, s
   "pinned-model-thinking-level-unsupported": "It no longer supports this thinking level.",
   "premium-tier-requires-approval": "The only alternative costs more.",
   "tier-evidence-indeterminate": "I can't get clear pricing for the alternatives.",
-  "usage-evidence-unmeasured": "I can't see enough of what this request has spent.",
 };
 
 type ClassifiedCandidate = Readonly<{
@@ -482,14 +479,11 @@ function resolveReplacementAttempt(
   if (prior.selector !== request.pinned.model) {
     return continueWithPinnedModel(request, readEvidence(catalogue, request.usage));
   }
-  const candidates = eligibleCandidates(catalogue, request.pinned, prior.selector);
-  const preferred = [...candidates].sort(compareCandidatePreference)[0];
-  if (preferred !== undefined && !usageIsFullyObserved(request.usage)) {
-    return routingQuestion(request, "usage-evidence-unmeasured", {
-      candidate: preferred,
-      enabledProviders: catalogue.enabledProviders,
-    });
+  // Unobserved usage can't justify any switch, so the pinned model continues rather than asking.
+  if (!usageIsFullyObserved(request.usage)) {
+    return continueWithPinnedModel(request, readEvidence(catalogue, request.usage));
   }
+  const candidates = eligibleCandidates(catalogue, request.pinned, prior.selector);
   const classified = candidates.map(
     (evidence): ClassifiedCandidate => ({
       evidence,

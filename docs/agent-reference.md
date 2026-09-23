@@ -995,15 +995,16 @@ The request's own usage has to be observed as well. Catalogue figures say what a
 to cost and draw; the accounting ledger says what this request has actually drawn, and a request
 carrying `unaccountedSamples` or `unmeasuredTokenSamples` has drawn an amount nobody reported. That
 is unknown consumption rather than small consumption, so no replacement can be proven to draw no
-more than the pinned model does, and the task stops on a `usage-evidence-unmeasured` decision naming
-the counts instead. A task with no governing request has no ledger at all and stops the same way. The
-charged total is never read as a measurement anywhere in the comparison: it is a floor on what the
-request cost. Because Tandem's provider surface reports so little, the honest consequence is that
-automatic reassignment is rare and the question is the normal outcome.
+more than the pinned model does. Routing then keeps the pinned model rather than asking: nothing
+justifies a switch, and the pinned model is what the user chose. The transition records the counts.
+A task with no governing request has no ledger at all and continues on the pinned model the same way.
+The charged total is never read as a measurement anywhere in the comparison: it is a floor on what the
+request cost. Because Tandem's provider surface reports so little, automatic reassignment is rare.
 
 Anything else is a question rather than a move. The task stops on a durable routing decision recorded
 in `routingPause`, the coordinator is notified exactly once, and nothing for that task starts until
-it is answered. The answer is pinning the model you want through the models configuration, which
+it is answered. A saved pause whose reason routing no longer raises is dropped when state is read,
+so routing re-resolves instead of refusing work. The answer is pinning the model you want through the models configuration, which
 records a new immutable policy snapshot; the recorded question stops speaking once the pinned policy,
 the generation, or the input HEAD moves under it, and routing re-resolves against the new identity.
 
@@ -1015,7 +1016,6 @@ the generation, or the input HEAD moves under it, and routing re-resolves agains
 | `pinned-model-thinking-level-unsupported` | The pinned model no longer supports the thinking level pinned for this role. |
 | `premium-tier-requires-approval` | The only available replacement costs more or draws more included allowance. |
 | `tier-evidence-indeterminate` | Tier evidence for the available replacements is missing or contradictory. |
-| `usage-evidence-unmeasured` | The request's own usage is not fully observed, so no replacement can be proven to draw no more. |
 
 The worker concurrency limit refuses the reservation before routing is resolved at all, and no
 routing choice can widen it. A catalogue that cannot be read, or that published no models at all,

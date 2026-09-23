@@ -151,7 +151,6 @@ export const EXECUTION_ROUTING_PAUSE_REASONS = [
   "pinned-model-thinking-level-unsupported",
   "premium-tier-requires-approval",
   "tier-evidence-indeterminate",
-  "usage-evidence-unmeasured",
 ] as const;
 
 export type ExecutionRoutingPauseReason = (typeof EXECUTION_ROUTING_PAUSE_REASONS)[number];
@@ -540,8 +539,18 @@ function parseExecutionRouting(value: unknown, field: string): DurableExecutionR
   };
 }
 
-function parseRoutingPause(value: unknown, field: string): DurableExecutionRoutingPause {
+/**
+ * A routing pause only caches a decision routing re-derives at the next admission, so one whose
+ * reason routing no longer raises is dropped rather than left refusing work.
+ */
+function parseRoutingPause(
+  value: unknown,
+  field: string,
+): DurableExecutionRoutingPause | undefined {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  if (!(EXECUTION_ROUTING_PAUSE_REASONS as readonly unknown[]).includes(value.reason)) {
+    return undefined;
+  }
   if (!Array.isArray(value.evidenceGaps)) {
     throw new TypeError(`${field}.evidenceGaps must be an array`);
   }
