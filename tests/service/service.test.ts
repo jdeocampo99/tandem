@@ -1050,7 +1050,7 @@ test("creates a bounded immutable scout handoff for a same-source implementation
   });
 });
 
-test("rejects missing, over-limit, and stale scout handoff references", async () => {
+test("rejects missing and over-limit scout handoff references but accepts older research", async () => {
   await withFixture({ kind: "scout" }, async (fixtureValue) => {
     const createInput = {
       repoPath: fixtureValue.task.repoPath,
@@ -1077,15 +1077,13 @@ test("rejects missing, over-limit, and stale scout handoff references", async ()
       head: "old-head",
       base: "old-head",
     });
-    await expect(
-      fixtureValue.service.create({
-        ...createInput,
-        researchTaskIds: [fixtureValue.task.id],
-      }),
-    ).rejects.toThrow("stale for the implementation source checkpoint");
-    expect(
-      (await fixtureValue.service.list()).some((entry) => entry.kind === "implementation"),
-    ).toBe(false);
+    // The implementation fast-forwards to the current source before it starts, so research done
+    // on an earlier commit still hands off.
+    const created = await fixtureValue.service.create({
+      ...createInput,
+      researchTaskIds: [fixtureValue.task.id],
+    });
+    expect(created.researchHandoffs?.[0]?.scoutSourceHead).toBe("old-head");
   });
 });
 

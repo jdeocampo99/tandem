@@ -69,6 +69,12 @@ export type AcquireWorktreeInput = Readonly<{
   tandemId: string;
   taskName: string;
   sourceHead: string;
+  /**
+   * Take over the scout lease `tandemId` already holds instead of leasing a new worktree. The
+   * scout checkout must still be clean on `branch` at `head`; it then moves to the task branch at
+   * `sourceHead`. Treehouse cannot relabel a lease, so the scout's holder stays on it.
+   */
+  adopt?: Readonly<{ branch: string; head: string }>;
 }>;
 
 export type ReleaseWorktreeInput = Readonly<{
@@ -414,7 +420,9 @@ async function prepareWorktreeLease(
       }
       return lease;
     }
-    if (actualBranch !== "") {
+    const adopting =
+      existingLease && input.adopt !== undefined && actualBranch === input.adopt.branch;
+    if (actualBranch !== "" && !adopting) {
       throw new LeaseSafetyError(
         `acquired worktree branch is ${JSON.stringify(actualBranch)}, expected detached checkout or task ${JSON.stringify(branch)}`,
         lease,
@@ -436,7 +444,20 @@ async function prepareWorktreeLease(
     if (status.stdout.trim() !== "" || unmerged.stdout.trim() !== "") {
       throw new LeaseSafetyError("acquired worktree is dirty or has unmerged paths", lease);
     }
+    if (adopting && input.adopt !== undefined) {
+      const scoutHead = await readGitText(run, path, ["rev-parse", "HEAD"], "git scout HEAD");
+      if (scoutHead !== input.adopt.head) {
+        throw new LeaseSafetyError(
+          `scout worktree HEAD ${scoutHead} is not its source commit ${input.adopt.head}`,
+          lease,
+        );
+      }
+    }
     await createTaskBranch(run, path, branch, sourceHead, lease);
+    if (adopting && input.adopt !== undefined) {
+      // ponytail: best effort; `-d` refuses a scout branch holding commits, which then stays put.
+      await run({ argv: ["git", "-C", path, "branch", "-d", input.adopt.branch], cwd: path });
+    }
     const switchedBranch = await readGitText(
       run,
       path,
@@ -549,6 +570,13 @@ export async function acquireWorktree(
   const existing = findOwnedLease(statusRecords, tandemId, statusResult.stdout);
   if (existing !== undefined) {
     return prepareWorktreeLease(run, input, options, existing, true);
+  }
+  if (input.adopt !== undefined) {
+    throw new AdapterProtocolError(
+      "treehouse lease adopt",
+      `no lease is held by ${JSON.stringify(tandemId)} to adopt`,
+      statusResult.stdout,
+    );
   }
 
   const treehouseRequest: CommandRequest = {
