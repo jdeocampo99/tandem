@@ -1009,7 +1009,7 @@ the generation, or the input HEAD moves under it, and routing re-resolves agains
 
 | Routing pause reason | What it means |
 | --- | --- |
-| `prior-outcome-uncertain` | The previous attempt's outcome could not be proven, so it stays quarantined rather than being replaced. |
+| `prior-outcome-uncertain` | The previous attempt's outcome could not be proven, so it stays quarantined rather than being replaced. The question stops speaking by itself once that attempt settles as a known failure. |
 | `pinned-model-absent-from-catalogue` | The catalogue does not list the pinned model, so nothing confirms it can still run. |
 | `pinned-model-ambiguous-in-catalogue` | The pinned selector matches more than one entry, so which model would run is unknown. |
 | `pinned-model-thinking-level-unsupported` | The pinned model no longer supports the thinking level pinned for this role. |

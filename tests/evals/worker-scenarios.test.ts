@@ -668,3 +668,62 @@ test("a worker job with no durable endpoint identity is quarantined with a safet
     await service.shutdown();
   });
 });
+
+test("an uncertain-outcome routing pause stops blocking once that attempt settles as a failure", async () => {
+  for (const settled of [false, true]) {
+    await withScenario({}, async (world) => {
+      await seedScenarioTask(world, { kind: "implementation", stage: "queued" });
+      const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+      const endpoint = {
+        ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
+        role: "implementer" as const,
+      };
+      const prior = scenarioJob({
+        home: world.home,
+        role: "implementer",
+        cwd: lease.path,
+        endpoint,
+        phase: "failed",
+      });
+      const policyDigest = policyIdentity(SCENARIO_POLICY);
+      await seedScenarioRuntime(
+        world,
+        scenarioRuntimeTask({
+          jobs: [prior],
+          operation: scenarioOperation(prior, {
+            phase: settled ? "failed" : "quarantined",
+            policyDigest,
+          }),
+          routingPause: {
+            schemaVersion: 1,
+            decisionId: "routing-uncertain",
+            reason: "prior-outcome-uncertain",
+            taskId: SCENARIO_TASK_ID,
+            jobId: prior.id,
+            operationId: "operation-1",
+            role: "implementer",
+            generation: 0,
+            attempt: 2,
+            policyDigest,
+            inputHead: SCENARIO_HEAD,
+            pinnedSelector: SCENARIO_POLICY.config.models.implementer.model,
+            pinnedThinking: SCENARIO_POLICY.config.models.implementer.thinking,
+            evidenceGaps: [],
+            enabledProviders: [],
+            usageSource: "no-governing-request",
+            limits: { maxWorkers: SCENARIO_POLICY.config.maxWorkers },
+            observedAt: SCENARIO_NOW,
+          },
+        }),
+      );
+      const service = serviceFor(world);
+
+      await service.tick();
+
+      const runtime = (await world.snapshot()).runtime.tasks[0];
+      expect(runtime?.routingPause === undefined).toBe(settled);
+      expect(runtime?.jobs.some(activeRuntimeJob)).toBe(settled);
+      await service.shutdown();
+    });
+  }
+});

@@ -3702,8 +3702,13 @@ export class WorkerWorkflow {
       policyDigest: attempt.policyDigest,
       inputHead: attempt.inputHead,
     };
-    if (executionRoutingPauseStands(runtime.routingPause, identity)) return undefined;
     const prior = priorExecutionAttempt(runtime, attempt.role, task.policy.config.models);
+    // An uncertain-outcome question stops speaking once that attempt settles as a known failure.
+    const settledUncertainty =
+      runtime.routingPause?.reason === "prior-outcome-uncertain" && prior?.outcome !== "uncertain";
+    if (!settledUncertainty && executionRoutingPauseStands(runtime.routingPause, identity)) {
+      return undefined;
+    }
     const decision = resolveExecutionRouting({
       boundary: routingBoundary(prior),
       identity: {
