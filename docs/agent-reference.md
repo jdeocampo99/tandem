@@ -75,49 +75,64 @@ the current working directory, all in one shared Herdr session:
 
 ```sh
 tandem
-tandem --continue
+tandem --fresh
 ```
-To replace owned coordinators without canceling tasks, use the restart command from a separate normal
-terminal:
+Coordinators resume their saved chats by default; `--fresh` starts new ones.
+
+To see what is running and what needs you, or one task's full durable inspection:
 
 ```sh
-tandem restart [PATH ...]
+tandem status
+tandem status TASK_ID --json
+tandem status --logs
 ```
 
-It preserves task IDs, generations, worktrees, reports, messages, and coordinator conversations.
-`tandem --restart [PATH ...]` remains accepted for compatibility. Never invoke restart from inside
-Herdr.
+The overview shows the Tandem code commit, open coordinators, and tasks that need you or are
+working. `--logs` prints recent prompt-routing events and the log path. Add `--home PATH` when
+inspecting a specific Tandem home. Every `status` form is read-only.
 
-To view recent prompt-routing events without locating the durable home:
+To replace every saved project's coordinator with one running the latest local Tandem code (the
+checkout the `tandem` binary runs from) without canceling tasks:
 
 ```sh
-tandem logs
-tandem logs --json
+tandem update
 ```
 
-Add `--home PATH` when inspecting a specific Tandem home. The command is read-only.
+It preserves task IDs, generations, worktrees, reports, messages, and coordinator conversations;
+`--fresh` starts new chats. It may run from a separate terminal or any Herdr pane except the
+coordinator pane it would close.
 
-
-To deliberately cleanly reopen only Tandem-owned coordinators, run the reset launch from a separate
-normal terminal:
+To find stale resources or old-format state and offer the repair:
 
 ```sh
-tandem --reset
+tandem fix
 ```
 
-With no paths this selects every valid saved project; explicit paths select only that subset. Reset
-preflights every selected root and stops only idle coordinators with exact Tandem ownership proof.
-Recorded coordinator panes that returned to their verified terminal shell are also closed.
-Busy, unknown, foreign, or unsafe work refuses before any pane is closed. It preserves settings,
-conversation history, task records, worktrees, and repository files; it is not task recovery, a
-factory reset, or data wiping. Add `--continue` only to resume saved conversations after reopening;
-otherwise launches start fresh conversations. `--headless` and `--no-attach` remain supported.
-Never invoke reset from inside Herdr; use a separate normal terminal.
+See [Reconciling Tandem resources across sessions](#reconciling-tandem-resources-across-sessions)
+and [Migrating legacy state](#legacy-json-migration-offline-only).
 
-For deliberate interruption during testing, use `tandem --reset --force [PATH ...]`. It cancels
-selected active tasks, stops their owned worker, validation, and presentation terminals, and
-reopens busy coordinators. No paths still means every saved project. Files, worktrees, uncommitted
-changes, and task history remain intact; ownership and coordinator source-safety checks still apply.
+To cancel all in-progress work and reopen coordinators:
+
+```sh
+tandem reset
+```
+
+Reset cancels every in-progress task across saved projects, stops their owned worker, validation,
+and presentation terminals, and reopens every coordinator with a fresh chat, including busy ones.
+Recorded coordinator panes that returned to their verified terminal shell are also closed. Unknown,
+foreign, or unsafe ownership refuses before any pane is closed; coordinator source-safety checks
+still apply. It keeps onboarding, settings, task history, worktrees, uncommitted changes, and
+repository files; it is not task recovery or migration. It takes no paths and asks to confirm (or
+`--yes`). `--headless` and `--no-attach` remain supported. It may run from a separate terminal or any
+Herdr pane except a coordinator pane.
+
+`tandem reset --hard` best-effort stops everything like `reset`, then deletes the Tandem home
+(`state.sqlite`, `repositories/` onboarding, `models.json`, the registry, and pool worktrees
+including unpushed or unmerged work), the pool root if it lives outside the home, and the
+remembered setup file `~/.config/tandem/config.json` if it points at that home. It then runs
+`git worktree prune` in each onboarded repository. It lists what it will delete and asks (or
+`--yes`), and refuses to delete `$HOME`, `/`, or any directory containing an onboarded repository.
+The next `tandem` onboards from scratch.
 
 When saved project records exist, this registry-first path uses only that registry; it does not crawl
 arbitrary disk repositories, auto-register projects, or show a project picker or path prompt. It
@@ -138,7 +153,7 @@ onboards and opens the current Git project; outside Git, the existing interactiv
 fallback remains available for entering or adding a project path. The empty-registry fallback keeps
 its existing interactive-terminal requirements.
 
-To choose all six global role models without launching a coordinator:
+To choose all five global role models without launching a coordinator:
 
 ```sh
 tandem configure /absolute/path/to/repo
@@ -253,14 +268,15 @@ With no action, the low-level CLI defaults to `launch`. It uses the same remembe
 normal terminal command and agent integration. Explicit overrides must remain consistent when
 reconnecting or restarting so durable state and the named Herdr context are reused.
 
-`--restart` is the non-destructive coordinator replacement surface. From a separate normal
-terminal, `tandem --restart PATH` verifies exact recorded coordinator ownership, revalidates the
+`tandem update` is the non-destructive coordinator replacement surface; it passes `--restart` to
+the low-level launch for every saved project. From a separate terminal or any Herdr pane except the
+coordinator pane it would close, it verifies exact recorded coordinator ownership, revalidates the
 pane cwd/process immediately before close, confirms close acknowledgement and pane absence, then
-launches a replacement with the same lease/session directory and `--continue`. Child panes, task
-IDs and generations, worktrees, conversation history, pending questions/messages, and reports
-remain intact. Foreign, ambiguous, or missing ownership refuses before any close. This frontdoor
-surface replaces the coordinator only; it is not task cancellation or recovery, and
-`--reset`/`--reset --force` retain their destructive meanings.
+launches a replacement with the same lease/session directory and `--continue` (omitted with
+`--fresh`). Child panes, task IDs and generations, worktrees, conversation history, pending
+questions/messages, and reports remain intact. Foreign, ambiguous, or missing ownership refuses
+before any close. Update replaces coordinators only; it is not task cancellation or recovery, and
+`tandem reset` keeps its destructive meaning.
 
 To restart one managed worker without replacing the coordinator, use `/tandem restart TASK_ID`,
 tool request `{request:{action:"restart",taskId:"TASK_ID"}}`, or
@@ -279,11 +295,11 @@ The installed `tandem` command uses the following terminal options and environme
 | Shared Herdr/OMP session | `--session` → `TANDEM_SESSION` → `HERDR_SESSION` → `HERDR_SESSION_NAME` → remembered setup → `tandem` |
 | Treehouse pool root | `--pool-root` → `TANDEM_POOL_ROOT` → `<home>/pool` |
 | Project selection | Explicit positional `PATH ...` overrides the registry and opens only supplied canonical roots; with no paths, valid saved projects under `<home>/repositories` are used before cwd; if none are saved, current-Git onboarding or the outside-Git interactive fallback remains |
-| Conversation reconnect | Bare `tandem` opens or reconnects all saved projects; explicit `tandem PATH` opens or reconnects only that project; add `--continue` only when starting stopped coordinators and resuming saved conversations |
+| Conversation reconnect | Bare `tandem` opens or reconnects all saved projects; explicit `tandem PATH` opens or reconnects only that project; saved conversations resume by default, and `--fresh` starts new ones |
 | Herdr attachment | `--headless` or `--no-attach`; both prepare without attaching the Herdr terminal client |
-| Coordinator reset | `--reset`; preflight and reopen only selected idle Tandem-owned coordinators; launch-only and rejected inside Herdr |
-| Coordinator restart | `--restart`; replace only the owned coordinator while preserving tasks, generations, conversations, questions/messages, reports, worktrees, leases, and child panes |
-| Forced cancellation | `--reset --force`; cancel selected active work, stop owned terminals, and reopen coordinators while preserving files/worktrees |
+| Coordinator update | `tandem update`; replace every saved project's owned coordinator with one running the latest local Tandem code while preserving tasks, generations, conversations, questions/messages, reports, worktrees, leases, and child panes; refused only from the coordinator pane it would close |
+| Reset | `tandem reset`; cancel all in-progress work across saved projects, stop owned terminals, and reopen coordinators with fresh chats while preserving files/worktrees; takes no paths, confirms (or `--yes`), and is refused only from a coordinator pane |
+| Hard reset | `tandem reset --hard`; stop everything best-effort, then delete the Tandem home, an outside pool root, and a remembered setup that points at the home; confirms (or `--yes`) |
 | Parallel coordinators | `TANDEM_ALLOW_PARALLEL_COORDINATORS=1` (or `true`); off by default, and the only way to run more than one coordinator for one repository in a shared home |
 
 ### Remembered setup
@@ -325,21 +341,18 @@ The terminal command attaches once after all selected coordinators are ready; `-
 The terminal front door releases its setup readline before this attachment, so Herdr is the sole
 terminal input owner while the interactive session is running.
 
-`--reset` runs after onboarding and after setup readline is released, before any normal coordinator
-launch or Herdr attachment. With no paths it applies to every saved project in the launch set; an
-explicit path list narrows the set. The reset operation uses one shared coordination lock and a
-central task-store lock, validates all selected roots before closing anything, rechecks native
-ownership and strictly idle status for running coordinators before each exact pane close, and
-verifies pane disappearance. Recorded coordinator shells are eligible only when native pane identity,
-terminal-shell process identity, and foreground worktree still match the record.
-Busy stages, live jobs or reservations, pending endpoint actions, presentations, or live worker
-endpoints cause a fail-closed refusal with no coordinator launch; unknown, foreign, legacy,
-malformed, or unsafe ownership also refuses. Those refusals happen during the preflight, before any
-pane closes. If a selected coordinator instead changes state or a native close fails after earlier
+`tandem reset` runs after the confirmation and after setup readline is released, before any
+normal coordinator launch or Herdr attachment. It takes no paths and always applies to every saved
+project. The reset operation uses one shared coordination lock and a central task-store lock,
+validates all selected roots before closing anything, rechecks native ownership before each exact
+pane close, and verifies pane disappearance. Recorded coordinator shells are eligible only when
+native pane identity, terminal-shell process identity, and foreground worktree still match the
+record. Unknown, foreign, legacy, malformed, or unsafe ownership causes a fail-closed refusal with
+no coordinator launch. Those refusals happen during the preflight, before any pane closes. If a selected coordinator instead changes state or a native close fails after earlier
 coordinators in the same batch have already closed, reset stops closing further panes and raises an
 error naming the coordinators already closed and the failure that stopped it; it does not force-close
 the affected pane, retry, or roll back the earlier closes. It does not stop a server, clear a registry,
-mutate tasks, recover task work, or wipe settings, history, worktrees, or files.
+recover task work, or wipe settings, history, worktrees, or files.
 Herdr removes a workspace when its last pane closes. Retiring a superseded or stopped coordinator's
 workspace closes its own owned pane by default once exact ownership and a stopped process are
 proven, which removes the workspace when it was the last pane. A workspace is retained instead
@@ -349,16 +362,15 @@ because they share the coordinator workspace, and they are reported alongside th
 A workspace someone gave a custom label is left entirely untouched, pane included. Ownership that
 cannot be proven exactly and as stopped, such as a pane whose foreground directory or process no
 longer matches the record, is quarantined: neither closed nor renamed, and reported so it can be
-inspected, and listed again by `tandem reconcile-resources`. There is no explicit-retention option
+inspected, and listed again by `tandem fix`. There is no explicit-retention option
 yet; nothing asks a user whether to keep a coordinator's workspace. A normal launch without reset also retires the old generated label this
 same way when replacing a stopped coordinator. Launch and reset print a notice for a retained or
-quarantined outcome (silent otherwise); force reset's quarantine outcomes still surface through the
-same reset notice path. Retirement happens before the replacement workspace is created or the
+quarantined outcome (silent otherwise). Retirement happens before the replacement workspace is created or the
 record is overwritten; if it fails, the launch rejects, the old record and terminals stay, and the
 next launch retries it. Workspace labels alone
 never prove ownership or authorize terminal deletion.
-Run it from a separate normal terminal, and add `--continue` only when the fresh launch should
-resume the saved coordinator conversation.
+Run it from a separate terminal or any Herdr pane except a coordinator pane. Reopened coordinators
+always start fresh chats.
 
 Coordinator replacement is transactional, so repeated launches and restarts converge on one
 coordinator worktree lease instead of accumulating them. Once the previous pane retirement above
@@ -427,21 +439,30 @@ both locks so launches stay serialized, and it skips only the cross-session clai
 are never inspected, returned, or renamed by this path, and a workspace label still never proves
 ownership. Launch prints one notice per stopped coordinator it settled for another session.
 
-`--reset --force` is the explicit interruption mode; `--force` alone and `configure --force` are
-invalid. It preflights selected task and presentation endpoints, including retained terminals,
+`tandem reset` is the explicit interruption mode; the old `--reset`, `--force`, and `configure
+--force` spellings are rejected with a pointer to it. It preflights selected task and presentation endpoints, including retained terminals,
 against durable job identities and native process state. Unknown ownership, foreign-session work,
 ambiguous pending launches, or an unsafe coordinator source still refuse before effects.
 Presentation feedback locks are acquired before the task-store lock and the selected set is
 rechecked afterward, so presentation completion cannot race cancellation.
 
-Before closing panes, force reset persists cancellation intent for active tasks. Interactive workers
+Before closing panes, reset persists cancellation intent for active tasks. Interactive workers
 are closed without requiring idle prompts; validation is interrupted through its runner first so
 detached validation commands are terminated and reaped. Stopped jobs and released reservations are
 persisted, affected active tasks become cancelled, and selected presentations are marked failed.
 Completed task history and tasks still awaiting approval are retained. Exact owned coordinator
 panes are then closed and normal launch resumes. A failure reports already-cancelled tasks and
-stopped panes/coordinators; retrying does not resurrect interrupted work. Neither mode discards
-repository files, uncommitted task work, worktrees, settings, or conversation history.
+stopped panes/coordinators; retrying does not resurrect interrupted work. Reset never discards
+repository files, uncommitted task work, worktrees, or settings.
+
+`tandem reset --hard` lists what it will delete and asks (or `--yes`). It refuses to delete `$HOME`,
+`/`, or any directory that contains an onboarded repository, and refuses before deleting anything.
+It then stops coordinators and task work the same way as reset on a best-effort basis, deletes the
+Tandem home (including every pool worktree, even with unpushed or unmerged work), the pool root
+when it lies outside the home, and the remembered setup file when it names that home, and runs
+`git worktree prune` in each onboarded repository so the deleted worktrees are no longer
+registered. Unreadable project records do not stop a hard reset. The next `tandem` onboards from
+scratch.
 
 For each project, fresh launch and non-destructive restart fetch and capture `origin/main`, acquire
 a distinct clean Treehouse source worktree, and start OMP there. Without `origin`, launch explicitly
@@ -454,7 +475,7 @@ The coordinator's pane runs a Tandem launch script under `<home>/coordinator-scr
 coordinator exits there (Ctrl-C, crash), the script stays and says so in plain English: Enter
 starts it again in the same pane with `--continue`, keeping the same record, lease, and pane;
 Ctrl-C leaves the user at the pane's own shell. `--continue` is not part of coordinator identity,
-and that script waiting at its offer counts as a stopped coordinator shell, so restart and reset
+and that script waiting at its offer counts as a stopped coordinator shell, so update and reset
 may close the pane.
 
 A coordinator that exited (Ctrl-C, crash, or closed pane) counts as stopped. When its recorded pane
@@ -465,9 +486,10 @@ kept under a quarantine note. If the coordinator is still running elsewhere, or 
 `--session-dir`, Tandem refuses and names the one step to take. Reset still refuses to close such a
 pane, because it is no longer Tandem's.
 
-An explicit `tandem PATH` opens or reconnects only that project after ownership checks. `--continue`
-resumes a stopped coordinator's saved conversation; `--restart` reloads the extension, prefetches
-fresh source before closing the old coordinator, and preserves child work and conversation history.
+An explicit `tandem PATH` opens or reconnects only that project after ownership checks and resumes a
+stopped coordinator's saved conversation unless `--fresh` is given; `tandem update` reloads the
+extension, prefetches fresh source before closing the old coordinator, and preserves child work and
+conversation history.
 Before each planning turn, the coordinator refreshes only its proven-owned clean checkout. A durable
 refresh intent recovers an interrupted switch only for the same lease at its recorded old or new
 HEAD. Dirty, foreign, or unexpectedly moved source checkouts fail closed.
@@ -502,7 +524,7 @@ onboarding never writes application files.
 For a canonical Git root, Tandem stores the record at:
 
 ```text
-<home>/repositories/<key>/config.json
+<home>/repositories/<key>/settings.toml
 ```
 
 `<key>` is the first 24 hexadecimal characters of the SHA-256 digest of the canonical realpath
@@ -578,8 +600,8 @@ Validation discovery is deterministic:
 Global model preferences are Tandem-home state, not project files. The record is:
 `<home>/models.json`.
 
-The record has exactly `schemaVersion: 1` and a `models` map with exactly the six roles
-`coordinator`, `scout`, `implementer`, `reviewer`, `verifier`, and `presentation`. Each role value is
+The record has exactly `schemaVersion: 1` and a `models` map with exactly the five roles
+`coordinator`, `scout`, `implementer`, `reviewer`, and `presentation`. Each role value is
 `{ model: exact provider/model, thinking: supported ThinkingLevel }`; no other fields are allowed.
 `ModelSettings` is `{ configPath: string, configured: boolean, models?: RepoPolicy['models'] }`;
 `configured: true` always has `models`, while `false` has none.
@@ -599,33 +621,33 @@ Each role prompt explains its responsibilities and the kind of model recommended
 Research recommends a cheap, fast model for read-only investigation. Thinking levels control reasoning
 effort: higher levels can take longer and cost more. The role's usual thinking level is labeled
 **Recommended** only when supported by the selected model; a saved level is labeled separately.
-The complete six-role recap has a separate **Save** / **Not now** menu, defaulting to **Not now**.
+The complete five-role recap has a separate **Save** / **Not now** menu, defaulting to **Not now**.
 Ctrl+C cancels without saving partial choices; saved preferences remain unchanged.
 
-On every onboarding, make model selection explicit for all six role identities and their human
+On every onboarding, make model selection explicit for all five role identities and their human
 labels: **Planning** (`coordinator`), **Research** (`scout`), **Coding** (`implementer`), **Review**
-(`reviewer`), **Final checks** (`verifier`), and **Presentations** (`presentation`). If
+(`reviewer`), and **Presentations** (`presentation`). If
 `modelSettings.configured` is false, run `models` once and use only its catalogue. For each role,
 show the suggested exact catalogue `selector` and the thinking levels that selector supports, then
 collect an explicit selector and supported thinking level. Offer **Not now** as an explicit pause:
 it stops onboarding before `configure-models`, `setup`, or `launch` and never falls through to
-built-in defaults. One response may answer all six roles; never infer omitted roles, combine roles,
+built-in defaults. One response may answer all five roles; never infer omitted roles, combine roles,
 or treat recommendation approval as consent.
 
-When saved choices exist, show all six current exact catalogue selectors and thinking levels on every
+When saved choices exist, show all five current exact catalogue selectors and thinking levels on every
 onboarding and offer **Keep all**, **Change roles**, or **Not now**. **Keep all** reuses the displayed
 choices, requires no new role answers, and is read-only; it may continue the existing project-setting
 approval flow without calling `configure-models`. **Not now** pauses onboarding, leaves choices
 unchanged, and does not run `configure-models`, `setup`, or `launch` or fall through to built-in
 defaults. **Change roles** reruns `models` and requires an explicit choice or explicit keep-current
-answer for each role. Preserve untouched roles and show the complete six-role recap before any save.
+answer for each role. Preserve untouched roles and show the complete five-role recap before any save.
 Recommendations are suggestions only; empty or failed discovery remains visible and never falls back.
 Explain that approved choices apply to future work across projects and do not start work. After
 explicit approval of the complete recap (never **Not now**), run `configure-models` once, then
 continue with normal project setup and separately requested launch. No implicit configure occurs
 during read-only commands.
 
-`configure-models` accepts a temporary JSON object mapping all six roles directly to
+`configure-models` accepts a temporary JSON object mapping all five roles directly to
 `{ "model": "...", "thinking": "..." }`, not the storage envelope, and accepts no model-controlled
 approval field. Stage it outside the target project and remove it after the command. `--yes` is
 required before service or mutation; without consent, refuse without writing. Before any write, strict
@@ -647,9 +669,9 @@ private new directories use `0700`, and no application or project files are writ
 Model resolution precedence is **built-in defaults < saved global role choices < explicitly injected
 `globalPolicy` < per-project policy overrides**. `resolveRepoPolicy` and `onboardRepo` apply the same
 order. Built-in defaults remain available to direct APIs without saved preferences; onboarding must
-offer first-time explicit six-role selection before setup or launch. Choosing **Not now** stops that
+offer first-time explicit five-role selection before setup or launch. Choosing **Not now** stops that
 onboarding before setup/launch and never falls through to built-in defaults. For configured homes, each
-onboarding displays all six saved choices before any reuse; **Keep all** is the explicit, read-only
+onboarding displays all five saved choices before any reuse; **Keep all** is the explicit, read-only
 reuse path. Changing choices affects future resolutions and new tasks only, and never rewrites
 existing task policy snapshots.
 Changing the main conversation model takes effect on the next Tandem launch; it never hot-swaps an
@@ -687,55 +709,41 @@ Existing readers of this log remain compatible with events recorded before usage
 [prompt-routing PRD](jev-prompt-routing-prd.md), [integration overview](jev-prd.md), and
 [evaluation plan](jev-evaluation.md).
 
-### Central config envelope
+### Central settings file
 
-The envelope has exactly these outer fields and no others:
+Each project's settings live in `<home>/repositories/<key>/settings.toml`: the repository-policy keys
+below at the top level, plus `repoPath`, which must equal the canonical repository root:
 
-```json
-{
-  "schemaVersion": 1,
-  "repoPath": "/absolute/canonical/repository",
-  "policy": {
-    "version": 1,
-    "validationCommands": [
-      {
-        "name": "package:ci:local",
-        "argv": ["bun", "run", "ci:local"],
-        "surfaces": [],
-        "timeoutMs": 600000
-      }
-    ],
-    "setupCommands": [
-      {
-        "name": "install:bun.lock",
-        "argv": ["bun", "install", "--frozen-lockfile"],
-        "timeoutMs": 600000
-      }
-    ]
-  }
-}
+```toml
+repoPath = "/absolute/canonical/repository"
+setupCommands = ["npm ci"]
+validationCommands = ["npm run ci:local"]
+# maxWorkers = 3
 ```
 
-The path and command list above are illustrative placeholders. The writer must substitute the observed
-canonical `repoPath` and literal command objects returned by `onboard`. Default setup writes a `policy`
-object with exactly `version: 1` and the `validationCommands` and `setupCommands` arrays returned by discovery; it does not
-add inherited defaults to the file. Every read validates the outer fields, `schemaVersion`, matching
-canonical `repoPath`, and the inner policy.
+Setup writes this file once, exclusively. It fills in the discovered `setupCommands` (the install for
+the first lockfile found) and `validationCommands` (package scripts run with that lockfile's package
+manager, `bun` when there is none). Every other setting is included commented out, with a
+description and an example; a test uncomments them all and checks the result still parses. Proposed
+commands are plain strings, so they cover every surface. Edit the file with `tandem config`.
 
-`policy` is the existing strict repository-policy override object. Its optional top-level keys
-are:
+Projects saved before `settings.toml` keep their `config.json` envelope
+(`{ "schemaVersion": 1, "repoPath", "policy": { ... } }`), which is still read, validated, and never
+rewritten. A project directory holding both files is refused until one is removed.
+
+The repository-policy keys, all optional, are:
 
 | Key | Type and behavior |
 | --- | --- |
 | `version` | Must be `1` when present. |
-| `models` | Partial map of `coordinator`, `scout`, `implementer`, `reviewer`, `verifier`, and `presentation` to `{ "model": "provider/model", "thinking": "..." }`; selectors are exact `provider/model` strings. |
+| `models` | Partial map of `coordinator`, `scout`, `implementer`, `reviewer`, and `presentation` to `{ "model": "provider/model", "thinking": "..." }`; selectors are exact `provider/model` strings. |
 | `instructions` | Appendable arrays for `implementation`, `validation`, and `review`; each entry is non-empty text. |
 | `instructionFiles` | Appendable arrays for the same channels; every path uses relative POSIX syntax and remains physically inside the target repository. |
-| `validationCommands` | Appendable `{ "name", "argv", "surfaces", "timeoutMs" }` objects; `argv` is non-empty, `surfaces` is a string array, `timeoutMs` is positive, and names do not conflict with inherited commands. |
-| `setupCommands` | Appendable `{ "name", "argv", "timeoutMs" }` objects that prepare a fresh worktree, typically a frozen dependency install. Onboarding proposes one from the first lockfile it finds (`bun.lock`/`bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `uv.lock`). An implementer runs them in its own pane before OMP starts, on every launch; a nonzero exit or timeout fails that worker with the command named. The delivery worktree runs them before final validation. Pinned with the task like the rest of the policy, so edits apply to new tasks only. |
+| `validationCommands` | Appendable plain command strings (e.g. `"npm test"`) or `{ "name", "argv", "surfaces", "timeoutMs" }` objects. A string runs through `/bin/sh -c`, is its own name, covers every surface, and gets a 10-minute timeout. For objects, `argv` is non-empty, `surfaces` is a string array, `timeoutMs` is positive, and names do not conflict with inherited commands. |
+| `setupCommands` | Appendable plain command strings (e.g. `"npm ci"`) or `{ "name", "argv", "timeoutMs" }` objects that prepare a fresh worktree, typically a frozen dependency install. Onboarding proposes one from the first lockfile it finds (`bun.lock`/`bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `uv.lock`). An implementer runs them in its own pane before OMP starts, on every launch; a nonzero exit or timeout fails that worker with the command named. The delivery worktree runs them before final validation. Pinned with the task like the rest of the policy, so edits apply to new tasks only. |
 | `maxWorkers` | Positive integer concurrency limit. |
 | `maxFixRounds` | Positive integer review-fix limit. |
-| `reviewLevels` | Optional `{ "reducedRouting", "deepScrutiny", "jevAssistance", "sourceTransmission" }`; the two booleans and `sourceTransmission` default to `false` and `jevAssistance` defaults to `"off"` (the only other value is `"shadow"`). See [Risk-based review levels](#risk-based-review-levels); `reducedRouting` and any move past `shadow` require the documented evaluation first. |
+| `reviewLevels` | Optional `{ "deepScrutiny", "jevAssistance", "sourceTransmission" }`; the two booleans and `sourceTransmission` default to `false` and `jevAssistance` defaults to `"off"` (the only other value is `"shadow"`). See [Risk-based review levels](#risk-based-review-levels); any move past `shadow` requires the documented evaluation first. A stored or configured `reducedRouting` key is a legacy field: it decodes without error but is silently ignored. |
 
 Custom approved policies use the same envelope and preserve every unrelated valid key and value.
 `instructionFiles` and all root guidance reads remain relative to the target repository; the
@@ -907,8 +915,8 @@ Every durable request also has one accounting ledger: append-only facts in the
 `request_usage_events` table of the authoritative `<home>/state.sqlite`, joined to the request
 identity the brief owns. The ledger is the single owner of usage, cost, quota, and timing records
 for a request. It records facts and uncertainty only: nothing in it authorizes, pauses, retries, or
-blocks work, and a standing budget or in-flight admission control is a separate consumer that reads
-these records and enforces its own policy.
+blocks work; economical routing's usage-safety check is a downstream reader that reads these
+records on its own.
 
 ```sh
 # through the coordinator's tandem tool
@@ -988,7 +996,7 @@ content no review covered. An integration that already covers exactly the curren
 reused, so a restart never integrates or verifies the same work twice.
 
 Final acceptance is bound to the integrated commit: the pinned validation commands run there, the
-four review lenses must pass there, the approved brief's acceptance criteria travel with it, and
+merged review lens must pass there, the approved brief's acceptance criteria travel with it, and
 every member must still sit at the commit that was integrated under the same pinned policy. Evidence
 recorded only at a member commit is stale for the integrated commit and is refused.
 
@@ -1010,101 +1018,6 @@ Routine request progress is passive: it is readable on demand and records no not
 decision the user must make and true request completion interrupt the main conversation, each one
 recorded once on the durable record and acknowledged through the request path.
 
-### Standing request budgets and spending decisions
-
-A request spends under a standing cap when one is configured. The cap is configured, never assumed:
-`policy.requestBudget` holds `capMicros` and `operationEstimateMicros`, both in integer USD
-micro-dollars, and both default to `"unset"`. An unset `capMicros` leaves a request **not
-spend-governed**: it is admitted without a pause, a question, a reservation, or any budget state at
-all, exactly as it ran before budgets existed. Tandem cannot measure spending at the provider
-boundary, so a cap counts conservative estimates of operations rather than money, and refusing work
-nobody capped would cost every repository a setup step while protecting nothing. A repository turns
-the whole feature on by naming `capMicros`, and everything below applies from that point on.
-
-Removing a configured cap leaves the request ungoverned again. The cap in force is resolved before
-any recorded decision is read, so a decision raised under a cap the repository has since removed is
-released along with the rest of that request's budget rather than stranding its work.
-
-Precedence for the cap in force is the approved request override, then the pinned policy, which is
-already the repository override layered over the standing default. A lower repository amount
-tightens spending and stays visible in the budget readout.
-
-Every spend-bearing operation is admitted through one check, in the same atomic runtime write that
-records its durable operation and reservation: scout, implementation, fix, validation, review,
-verification, and presentation all go through it. The check adds observed charges from the
-accounting ledger to every outstanding estimated reservation and to the next step's conservative
-estimate, and compares that against the cap. A second concurrent admission therefore sees the first
-one's reservation and is refused when the combined exposure cannot fit.
-
-```sh
-# read the standing budget and any pending decision (passive; starts no work)
-{"request":{"action":"budget-show","requestId":"req-..."}}
-# answer one pending decision by raising the cap (human-confirmed)
-{"request":{"action":"budget-approve","requestId":"req-...","decisionId":"spend-...","capMicros":25000000}}
-```
-
-When the next step cannot fit under a configured cap, or when no conservative estimate is
-configured, the request enters a durable budget pause recorded in `requestBudgets` alongside the
-durable operation, reservation, and stop request. The pause is request-wide: progress on any other
-task under the same request is refused by the same check, so independent work cannot walk past it.
-Running work is never killed because a cap was reached; it finishes or unwinds through the existing
-pause and reconciliation paths, and its reservation is settled afterwards. Budget pressure never
-switches a model tier, drops a check, narrows review, or replans.
-
-| Pause reason | What it means |
-| --- | --- |
-| `estimate-unavailable` | No conservative per-operation estimate is configured, so the next step's exposure is unknown. |
-| `exposure-unaccounted` | Work already done carries neither a published price nor a reserved estimate, so what the request has cost is unknown. |
-| `cap-would-be-exceeded` | Observed charges plus outstanding estimates plus the next step exceed the cap. |
-
-#### A zero charge total is not headroom
-
-Tandem's provider surface reports almost nothing. Child agents run interactive OMP, which publishes
-no tokens, price, or allowance, and coordinator-side prompt routing carries no request identity to
-bind a sample to. In practice `charges.amountMicros` is `0` for most requests while
-`charges.unavailableSamples` and `tokens.unavailableSamples` are not, so the charged total is a
-floor on what a request cost rather than a measurement of it, and admission never reads it as proof
-of remaining budget. Today's fully observed dimension is time: `timing.elapsedMs`, `activeMs`, and
-`waitingMs` are measured end to end.
-
-Admission therefore tracks what is unaccounted for, not just what is charged:
-
-- A settled operation the ledger priced leaves its reservation, because its actual charge is now in
-  the committed total.
-- A settled operation with no published price keeps its conservative estimate standing in for the
-  amount nobody published, so it keeps consuming the cap instead of reading as free.
-- An unpriced sample that no reservation stands for is **unaccounted**: an operation that never went
-  through admission, or a provider sample carrying no operation identity, such as review-level
-  assistance. Nothing in the budget represents its cost, so the request stops on an
-  `exposure-unaccounted` decision rather than spending further against a total it knows is wrong.
-
-Answering that decision accepts exactly the unmeasured work the approver was shown: the approval
-records `acknowledgedUnaccountedSamples`, and unmeasured work beyond that count is unknown again and
-asks again. Tandem never closes the gap by inventing a charge, by pricing an unpriced sample at
-zero, or by converting subscription quota into cash.
-
-The decision identity is derived from the request, pinned policy digest, agreement revision, cap,
-and reason rather than minted, so the question is recorded exactly once and every later refusal
-under it is silent. A restart re-derives the same pending decision; it cannot manufacture an
-authorization, and an unanswered question is still a pause.
-
-A cap increase is an explicit human-confirmed decision that must name the exact pending
-`decisionId`. It records the old and new cap, the pinned policy digest, and the agreement revision
-it was given under. It stops speaking when any of those moves: a changed pinned policy, a revised
-agreement, or a repository cap change makes the approval superseded, and the cap falls back to the
-pinned policy amount rather than to no cap at all. Authorizing an amount lower than the cap that
-stopped the request is refused rather than applied.
-
-Reservations are retained through uncertainty and released only on a positive outcome. Each
-reservation is keyed by the operation it backs, so re-admitting or replaying it counts once. After a
-restart, reconciliation settles them against the durable operations: an operation the ledger has
-priced leaves the record because its actual charge is now committed, an operation that ended without
-any provider-reported charge keeps its conservative estimate standing in for the amount nobody
-published, and an operation whose end is not proven keeps its reservation exactly as it was. The
-readout reports committed charges and reserved estimates separately, alongside the receipt's own
-unavailable-sample counts, the unaccounted count, and included-quota units, so an unmeasured amount
-is never shown as zero or as cash.
-
 ### Economical routing and premium-tier approval
 
 Which exact model an attempt invokes is resolved at two boundaries and nowhere else: before a job is
@@ -1114,8 +1027,8 @@ optimization loop, no mid-turn model switching, and no online learning from outc
 The decision is recorded on the durable operation that admits the attempt, as an execution
 transition carrying the request, task, job, operation, generation, and attempt identity, the exact
 selector and thinking level, the tier evidence and where it came from, the enabled providers, and
-the cap, per-operation estimate, and worker limit it was taken under. Job construction and the
-execution gate both read the attempt's model through that one record, so an attempt whose model is
+the worker concurrency limit it was taken under. Job construction and the execution gate both read
+the attempt's model through that one record, so an attempt whose model is
 not the pinned role assignment runs only when a transition authorizes exactly it. An audit note
 describing a model change is not a transition and admits nothing. A transition is fenced: it speaks
 only for the operation, job, generation, input HEAD, and pinned policy digest it names, and the gate
@@ -1156,7 +1069,6 @@ the generation, or the input HEAD moves under it, and routing re-resolves agains
 
 | Routing pause reason | What it means |
 | --- | --- |
-| `spending-decision-pending` | The request is stopped on a spending decision, which takes precedence over any routing choice. |
 | `prior-outcome-uncertain` | The previous attempt's outcome could not be proven, so it stays quarantined rather than being replaced. |
 | `pinned-model-absent-from-catalogue` | The catalogue does not list the pinned model, so nothing confirms it can still run. |
 | `pinned-model-ambiguous-in-catalogue` | The pinned selector matches more than one entry, so which model would run is unknown. |
@@ -1165,10 +1077,8 @@ the generation, or the input HEAD moves under it, and routing re-resolves agains
 | `tier-evidence-indeterminate` | Tier evidence for the available replacements is missing or contradictory. |
 | `usage-evidence-unmeasured` | The request's own usage is not fully observed, so no replacement can be proven to draw no more. |
 
-The spending checkpoint runs first and wins: a request-wide budget pause, whatever its reason,
-a planned-step cap, or the worker concurrency limit refuses the reservation before routing is
-resolved at all, and no routing choice can widen any of them. An `exposure-unaccounted` pause is
-answered by accepting that unmeasured work through `budget-approve`, never by rerouting. A catalogue that cannot be read, or that published no models at all,
+The worker concurrency limit refuses the reservation before routing is resolved at all, and no
+routing choice can widen it. A catalogue that cannot be read, or that published no models at all,
 supplies no evidence either way: the pinned model continues and the transition records that no
 comparison was made, rather than treating silence as a contradiction or as headroom.
 
@@ -1183,8 +1093,9 @@ Only scout records may carry one; a continuation on an implementation record is 
 | --- | --- |
 | `schemaVersion` | Always `1`; any other value is refused rather than repaired. |
 | `disposition` | `report-only`, `ask-intent`, or `implementation-interview`. |
-| `selectedBy` | `explicit` (supplied with the task request), `deterministic` (rule table), or `jev`. |
-| `classifierVersion` | Required for `jev`, optional for `deterministic`, refused for `explicit`. |
+| `selectedBy` | `explicit` (supplied with the task request), `deterministic` (rule table), `jev`, or `fallback` (an unusable classifier outcome). |
+| `classifierVersion` | Required for `jev`, optional for `deterministic`, refused for `explicit` and `fallback`. |
+| `fallbackReason` | Required for `fallback` (e.g. `jev-low-confidence`, `jev-not-configured`), refused otherwise. |
 
 Task creation accepts an explicitly supplied disposition; a scout created without one is classified
 before the record is written. Scout records written before the field
@@ -1217,8 +1128,9 @@ wake text after compaction, restart, or coordinator replacement:
 The interview stays inside the report and the user's request and never widens scope on its own.
 Only after the user answers may the coordinator create an implementation task citing that scout in
 `researchTaskIds`. That task is created `awaiting-approval` with `scopeApproved` false, still passes
-repository and source-checkpoint handoff validation, and does not launch until the concrete scope is
-explicitly approved. User answers travel through the existing steer/answer communication APIs.
+repository and report-provenance handoff validation, and does not launch until the concrete scope is
+explicitly approved. Research done on an earlier source commit still hands off; the handoff records
+the scout's source HEAD. User answers travel through the existing steer/answer communication APIs.
 
 #### Classifying the disposition
 
@@ -1237,21 +1149,36 @@ disposition for a scout created without an explicit one:
    scout report, credentials, or transcript. The model and the question/schema version are pinned
    and recorded together in `classifierVersion`.
 3. A missing `TYPESAFE_API_KEY`, a timeout, a provider outage, a malformed answer, or a confidence
-   below the classifier threshold records the conservative `ask-intent` with `deterministic`
-   provenance. Research is never blocked or delayed past the bounded `TANDEM_JEV_TIMEOUT_MS`
-   request timeout, and Jev never creates tasks, approves scope, selects implementation details, or
-   relaxes any safety policy.
+   below the classifier threshold now defaults to `implementation-interview` (unclear intent starts
+   the brief interview rather than an extra ask-intent round-trip), recorded with `selectedBy:
+   "fallback"` and the honest `fallbackReason` (e.g. `jev-low-confidence`), never as a rule-table
+   `deterministic` pick. Research is never blocked or delayed past the bounded
+   `TANDEM_JEV_TIMEOUT_MS` request timeout, and Jev never creates tasks, approves scope, selects
+   implementation details, or relaxes any safety policy.
 
 ### Review and validation
 
-Review is independent and sequential. Tandem stops or pauses the implementer, opens one fresh read-only reviewer pane in the same task worktree, and records one current result per lens:
+Review is independent. Tandem stops or pauses the implementer, opens one fresh read-only reviewer
+pane in the same task worktree, and records one current result for the single `review` lens, which
+covers together what used to be separate passes:
 
-- `behavior` — observable semantics, ordering, mutation timing, errors, and boundaries;
-- `design` — function-review principles, honest dependencies, empathic signatures, abstraction levels, comments, and declaration order;
-- `coverage` — changed behavior, affected callers, relevant tests/reports, and acceptance criteria;
-- `verification` — fresh inspection of the exact HEAD and generation using runner evidence.
+- observable semantics, ordering, mutation timing, errors, and boundaries;
+- function-review principles, honest dependencies, empathic signatures, abstraction levels, comments, and declaration order;
+- changed behavior, affected callers, relevant tests/reports, and acceptance criteria.
 
-All four lenses are required. A failed lens sends the task to `awaiting-fixes`; passing all four sends it to `ready`. Reviewers remain read-only and do not invent command output.
+A round past the first (a fix round) points the reviewer at the diff since the last reviewed HEAD
+and the open findings on the ledger rather than re-reviewing the whole change from scratch; see
+[Incremental review briefs and finding status](#incremental-review-briefs-and-finding-status). There
+is no separate independent-verification pass: one reviewer session, from a fresh context with no
+implementer conversation, is the complete review for the round. A failed review sends the task to
+`awaiting-fixes`; a passing one sends it to `ready`. Reviewers remain read-only and do not invent
+command output.
+
+A task record or a durable job/pane from before this merge may still carry one of the old lens names
+(`behavior`, `design`, `coverage`, `verification`) or the retired `verifier` role. These decode
+without error — the stored history stays readable — but no longer count toward the current
+requirement, which is always exactly one passing `review` result at the reviewed HEAD and
+generation.
 
 Validation commands are argv-only and execute in declaration order. A command belongs to the manifest when its `surfaces` is empty, contains `*`, or intersects the task surfaces; a task surface of `*` matches every command. The runner stops after the first non-zero, timeout, or cancellation result. Every evidence record includes the command name, argv, exit code, captured stdout/stderr, exact HEAD, the contract it ran under, the check origin, and the policy digest it was pinned to. No configured command or no matching command is a validation configuration failure, not a pass.
 
@@ -1261,17 +1188,17 @@ Validation runs under one of two named contracts. `src/tasks/acceptance.ts` owns
 
 The **iteration contract** covers targeted reproduction between authorized fix rounds. When a fix round is admitted, Tandem records a durable `iterationScope` on the task naming the checks that reported the failure, the surfaces those checks cover, the findings the round must resolve, and the code and policy identity the scope was derived under. The next validation run then executes only those checks and records evidence stamped `contract: "iteration"`. A contained fix reaches review without rerunning the whole suite, and a targeted pass is useful progress that never satisfies acceptance.
 
-The **final acceptance contract** is the complete command and criterion manifest pinned to the delivered code, the pinned policy digest, and the current HEAD. It lists every required check, the four review lenses, and the recorded acceptance criteria. It runs in full only when the candidate is otherwise ready, meaning every required lens already passes at that HEAD and generation. Review completion with all lenses passing sends the task back to `validating` for that final run instead of straight to `ready`; `ready` is reached only once every manifest item passed under the same code and policy identity. Delivery repeats the check and refuses a branch whose manifest is incomplete, failed, or stale.
+The **final acceptance contract** is the complete command and criterion manifest pinned to the delivered code, the pinned policy digest, and the current HEAD. It lists every required check, the review lens, and the recorded acceptance criteria. It runs in full only when the candidate is otherwise ready, meaning the required review already passes at that HEAD and generation. Review completion with a passing review sends the task back to `validating` for that final run instead of straight to `ready`; `ready` is reached only once every manifest item passed under the same code and policy identity. Delivery repeats the check and refuses a branch whose manifest is incomplete, failed, or stale.
 
-Targeted checks are refused for the complete manifest when the scope was recorded under a different policy identity (`stale-identity`), when a reviewer rejected a candidate whose checks all passed (`disputed-result`), when the scope names a check the manifest does not configure (`unknown-impact`), or when the scope already covers every configured check (`broad-impact`). The escalation reason is durable on the validation job and visible through `tandem inspect`.
+Targeted checks are refused for the complete manifest when the scope was recorded under a different policy identity (`stale-identity`), when a reviewer rejected a candidate whose checks all passed (`disputed-result`), when the scope names a check the manifest does not configure (`unknown-impact`), or when the scope already covers every configured check (`broad-impact`). The escalation reason is durable on the validation job and visible through `tandem status TASK_ID`.
 
 Any relevant change invalidates prior evidence. A fix round increments the generation and clears validation evidence; `invalidate-evidence` additionally clears the recorded scope and the reviews. Evidence carrying a policy digest other than the one the run reported is refused rather than recorded, and final evidence recorded at another HEAD or policy digest reads as stale, never as a pass. After a candidate fails the complete manifest it returns to the authorized fix phase, runs targeted checks between fix rounds, and re-enters the complete manifest from the beginning once it is ready again.
 
 Validation evidence written before contracts existed loads unchanged and is marked legacy. Legacy records stay readable as durable history, including on completed and cancelled tasks, and satisfy neither contract, so a candidate carrying them must run the complete final manifest again before it can be delivered. A record naming only part of its contract identity, or marked legacy while also claiming an origin or policy digest, is a corrupt shape and fails closed. A validation job persisted without its contract identity is refused for the same reason and the task is blocked with that cause, rather than being consumed as if it were pinned.
 
-Local runner checks and GitHub checks stay distinct. Runner evidence is stamped `origin: "local"` and satisfies only local manifest requirements; remote required checks remain the GitHub-observed `RemoteCheck` rollup asserted at merge. A local pass cannot be relabeled as a remote check, and `tandem inspect` reports the iteration/final and local/remote split alongside the passing count.
+Local runner checks and GitHub checks stay distinct. Runner evidence is stamped `origin: "local"` and satisfies only local manifest requirements; remote required checks remain the GitHub-observed `RemoteCheck` rollup asserted at merge. A local pass cannot be relabeled as a remote check, and `tandem status TASK_ID` reports the iteration/final and local/remote split alongside the passing count.
 
-Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Workers submit results with the typed `submit_report` tool: an `outcome` (`implemented|needs-decision|failed` for implementers, `completed|needs-decision|failed` for every other role), a Markdown `report` body (required except for reviewers and verifiers), and role-specific fields. A `needs-decision` submission carries exactly one bounded single-line `question` and an optional bounded single-line `recommendation` (each no more than 1,000 characters). A completed reviewer or verifier submits a structured `review` that must match `ReviewResult` and the job's lens, HEAD, and generation; a completed presentation submits an absolute `artifactPath`. A submission that breaks these rules is returned to the worker as a tool error naming the fix and never settles the job, so formatting slips are corrected in the conversation. The controller renders the report file from the structured fields; durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
+Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Workers submit results with the typed `submit_report` tool: an `outcome` (`implemented|needs-decision|failed` for implementers, `completed|needs-decision|failed` for every other role), a Markdown `report` body (required except for reviewers), and role-specific fields. A `needs-decision` submission carries exactly one bounded single-line `question` and an optional bounded single-line `recommendation` (each no more than 1,000 characters). A completed reviewer submits a structured `review` that must match `ReviewResult` and the job's lens, HEAD, and generation; a completed presentation submits an absolute `artifactPath`. A submission that breaks these rules is returned to the worker as a tool error naming the fix and never settles the job, so formatting slips are corrected in the conversation. The controller renders the report file from the structured fields; durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
 
 ### Incremental review briefs and finding status
 
@@ -1281,7 +1208,7 @@ function of durable task state plus injected git observations, so the same task,
 always produce the same brief. It is reused context, not a second memory, handoff, or provider
 system: every field comes from the records the task already keeps.
 
-The brief carries the approved scope, the acceptance criteria, the five applicable principles as
+The brief carries the approved scope, the acceptance criteria, the seven code standards as
 mandatory blocking requirements, and explicit non-goals; the exact source, policy, instruction, and
 configuration identities (HEAD, branch, base, generation, review round, policy digest, review-channel
 instruction provenance, `maxFixRounds`, `maxWorkers`, and the configured command names); references
@@ -1297,9 +1224,10 @@ Findings keep a stable identity across rounds on the durable `findingLedger`, wh
 is the only writer of. An identity is `lens:id`, and the reviewer is instructed to reuse the exact id
 the brief lists when it reports the same issue again. Each entry carries `unresolved`, `addressed`,
 `regressed`, or `disputed`, together with the round that raised it and the round and HEAD that set
-its current status. A review of the same lens at a later generation that stops reporting an identity
-settles it as `addressed`; only a later review that reports it again reopens it as `regressed`, so a
-settled finding is never reopened without new evidence. Two reviews of one identity that record
+its current status. Since one merged review now covers everything a round reviews, a later review at
+a later generation that stops reporting an identity settles it as `addressed` regardless of which
+lens originally raised it, including a legacy pre-merge lens name; only a later review that reports
+it again reopens it as `regressed`, so a settled finding is never reopened without new evidence. Two reviews of one identity that record
 contradicting verdicts mark it `disputed`. Blockers and suggestions are split by the rule a review
 already enforces: a confirmed P0, P1, or P2, or a plausible P0 or P1, blocks, and everything else is
 an optional suggestion. A violation of a mandatory design rule or applicable principle blocks through
@@ -1380,24 +1308,20 @@ missing its reason, is a corrupt shape and fails closed.
 #### What a level changes, and what must happen first
 
 **With the default policy, classification records the level and its reason and changes nothing else.
-Every task reviews exactly as it did before levels existed: the behavior, design, coverage, and
-verification lenses all run, in that order, at every round.** The `reviewLevels` policy section
-controls the rest, and every field defaults to off:
+Every task reviews the same single merged `review` lens at every round, whatever the level.** The
+level and its fired safety floors still shape what that one review must record — see `deepScrutiny`
+below — but no level changes which or how many lenses run; that stopped being adjustable when the
+lenses were merged. The `reviewLevels` policy section controls the rest, and every field defaults to
+off:
 
 ```json
 { "policy": { "reviewLevels": {
-  "reducedRouting": false,
   "deepScrutiny": false,
   "jevAssistance": "off",
   "sourceTransmission": false
 } } }
 ```
 
-- `reducedRouting` lets a `light` iteration round review one focused lens instead of four. It applies
-  only between authorized fix rounds and only before the final acceptance manifest has run at that
-  HEAD; once the manifest is recorded, the complete lens set is required again. **Do not enable it
-  until the documented end-to-end evaluation in issue #20 has been run and published.** See
-  "Evidence required before enabling reduced routing" below.
 - `deepScrutiny` adds the fired floors to a `deep` round's brief as mandatory scrutiny a reviewer must
   dispose of explicitly. It adds work; it never removes any.
 - `jevAssistance` is `off` or `shadow`. Shadow records a helper's depth recommendation beside the
@@ -1405,9 +1329,12 @@ controls the rest, and every field defaults to off:
 - `sourceTransmission` is the separate, explicit opt-in for sending changed source to an external
   provider. It is distinct from having a `TYPESAFE_API_KEY` present.
 
+A repository config that still sets the retired `reducedRouting` key is not rejected: it loads and is
+silently ignored, since it no longer controls anything.
+
 Issue #17's final acceptance contract is unchanged at every level. The final manifest always requires
-all four lenses and every configured required check for the delivered code at the current HEAD, so no
-level can make a candidate acceptable on less evidence.
+the review lens to pass and every configured required check for the delivered code at the current
+HEAD, so no level can make a candidate acceptable on less evidence.
 
 #### Shadow helper assistance
 
@@ -1451,7 +1378,7 @@ content.
 Answers are cached in memory on an exact match of every identity at once: code, context, question,
 schema, policy, and model. Any difference is a fresh request.
 
-#### Evidence required before enabling reduced routing or helper assistance
+#### Evidence required before enabling helper assistance past shadow
 
 `evals/review-levels/` holds a deterministic, credential-free comparison that runs under `bun test`.
 It covers low-risk, high-risk, Tagalog-language, and adversarial synthetic changes, and reports missed
@@ -1459,8 +1386,7 @@ serious issues, false-safe routing, escalation, and rework, plus latency and cos
 `unavailable` when nothing reported them. False-safe routing is a safety failure counted and reported
 on its own; it is never averaged into an agreement or accuracy rate.
 
-Before anyone sets `reducedRouting` or moves `jevAssistance` past `shadow`, the following must exist
-and be published:
+Before anyone moves `jevAssistance` past `shadow`, the following must exist and be published:
 
 1. The end-to-end benchmark from issue #20, over equivalent snapshots, measuring the whole path to a
    verified result rather than classifier latency alone.
@@ -1476,7 +1402,7 @@ tracking issue are user observations, not a measured baseline.
 
 ### Interactive child terminals
 
-Scouts, implementers, reviewers, verifiers, and presentation workers launch interactive OMP with
+Scouts, implementers, reviewers, and presentation workers launch interactive OMP with
 inherited terminal input and output. They do not use `-p` or `--mode json`. Open the child's Herdr
 subtree to inspect its conversation or send a message directly.
 
@@ -1597,7 +1523,7 @@ output prioritizes the current question and pending/latest entries. Older histor
 in structured JSON/details.
 
 Every approval prompt is one short question plus at most one short line: the task named by its
-objective's first sentence, never a path, hash, branch, criteria list, or id (`tandem inspect` has
+objective's first sentence, never a path, hash, branch, criteria list, or id (`tandem status TASK_ID` has
 those). If directions arrive before initial approval, the `approve` confirmation says how many
 effective, non-superseded directions the worker will also receive.
 
@@ -1658,7 +1584,7 @@ Supported actions are:
 | Action | Required fields | Effect |
 | --- | --- | --- |
 | `models` | `repoPath` | Read global model settings and the actual OMP catalogue; never writes. |
-| `configure-models` | `repoPath`, `models` (complete six-role map) | Save approved global role choices for future work; requires confirmation and does not mutate existing task snapshots. |
+| `configure-models` | `repoPath`, `models` (complete five-role map) | Save approved global role choices for future work; requires confirmation and does not mutate existing task snapshots. |
 | `onboard` | `repoPath` | Read policy and propose validation; never writes. |
 | `setup` | `repoPath` | Write a missing policy after TUI confirmation. |
 | `create` | `repoPath`, `kind`, `objective`, `acceptanceCriteria`, `surfaces` | Create a scout or implementation task. |
@@ -1733,6 +1659,19 @@ read, or that sits on a branch the lease does not name, is quarantined with ever
 Blocked, paused, and decision-waiting scouts keep their pane and worktree, because those are the
 evidence a coordinator needs to answer them; completed scouts with a durable report and safely
 cancelled scouts are released.
+
+A completed scout whose disposition is `ask-intent` or `implementation-interview` closes its pane
+but keeps its clean worktree (status `retained`), with no time limit, so the implementation that
+follows runs in the same checkout instead of leasing another. When that implementation starts, it
+adopts the worktree of the first scout in its `researchTaskIds` if that scout is settled, holds no
+pane or reservation, and its checkout is still clean on its lease branch at its source commit. The
+adapter re-proves that, switches the worktree to the implementation branch at the implementation's
+pinned source commit (fast-forwarding past research done on an older commit), and deletes the
+merged scout branch. The runtime records the lease on the implementation and drops it from the
+scout in one write, so scout cleanup can never return it. Treehouse cannot relabel a lease, so the
+adopted lease keeps the scout's holder, and the implementation's ownership check accepts exactly
+its own holder or that scout's. A scout that fails any adoption check is left alone and the
+implementation leases a fresh worktree.
 
 Cleanup never touches what a scout produced. The report, the source checkpoint, the consumed scout
 job, and the task's notifications and history all live in the Tandem home, so a later
@@ -1833,7 +1772,7 @@ bun src/cli.ts pr publish TASK_ID OWNER/REPO "Title" main \
   --yes
 ```
 
-The publish path verifies the task is ready, the worktree is clean, the branch and repository identity match the task, validation evidence is non-empty and successful, all four current review lenses exist, and the current worktree HEAD is exactly the reviewed HEAD. It pushes that exact reviewed SHA to the task branch. Existing pull requests are re-observed and must match the same repository, base, branch, and SHA; closed or merged duplicates are refused.
+The publish path verifies the task is ready, the worktree is clean, the branch and repository identity match the task, validation evidence is non-empty and successful, the current review lens exists and passes, and the current worktree HEAD is exactly the reviewed HEAD. It pushes that exact reviewed SHA to the task branch. Existing pull requests are re-observed and must match the same repository, base, branch, and SHA; closed or merged duplicates are refused.
 
 Merge is a separate explicit action:
 
@@ -1867,8 +1806,8 @@ are Tandem-owned state, not files in target repositories:
 
 | Path | Contents |
 | --- | --- |
-| `<home>/models.json` | Strict global model preference envelope for all six roles; approved updates atomically replace it with mode `0600`. |
-| `<home>/repositories/<key>/config.json` | Private central policy envelope for the canonical repository root; `<key>` is the first 24 hex characters of its SHA-256 realpath digest. |
+| `<home>/models.json` | Strict global model preference envelope for all five roles; approved updates atomically replace it with mode `0600`. |
+| `<home>/repositories/<key>/settings.toml` | Private central settings for the canonical repository root (legacy projects: `config.json` envelope); `<key>` is the first 24 hex characters of its SHA-256 realpath digest. |
 | `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. Launch discovers these across every session directory, so one repository keeps one active coordinator. |
 | `<home>/coordinator-registry/repository-<digest>.lock` | Native `O_EXLOCK` coordination lock for one canonical repository, shared by every session in this home and acquired before the per-session launch lock. |
 | `<home>/coordinator-scripts/*.sh` | Atomically written `0700` launch scripts containing the coordinator command and scoped environment overrides; kept outside project checkouts. |
@@ -1896,21 +1835,26 @@ remembered setup, otherwise `~/.tandem`) and follow this sequence:
    coordinator, active worker or validation job, and unresolved endpoint launch before
    continuing. Do not treat a missing process observation as proof when native ownership
    is ambiguous; incomplete reservation intents are reported for quarantine instead.
-2. Run the read-only plan. Omitting `--yes` is important:
+2. Review the plan. `tandem fix` shows it and asks before migrating; answer No to leave the
+   home unchanged. For a read-only JSON plan, use the advanced action CLI and omit `--yes`:
 
    ```sh
-   tandem migrate-state --home /absolute/path/to/tandem-home --json
+   tandem fix --home /absolute/path/to/tandem-home
+   bun src/cli.ts migrate-state --home /absolute/path/to/tandem-home --json
    ```
+
+   While old-format state is present, `tandem fix` handles only the migration and skips
+   resource reconciliation, because SQLite state is unusable until migration completes.
 
    The plan hashes regular legacy source files, reports source/task counts and
    diagnostics, and lists incomplete reservation intents that will be quarantined
    without guessing or resuming them. `blocked` means stop and resolve the reported
    liveness/ownership condition; never bypass it.
 
-3. When the plan is `ready`, apply it with the same home:
+3. When the plan is `ready`, confirm the prompt or apply it with the same home:
 
    ```sh
-   tandem migrate-state --home /absolute/path/to/tandem-home --yes --json
+   tandem fix --home /absolute/path/to/tandem-home --yes
    ```
 
    The apply path rechecks native authority after acquiring the home fence lock and
@@ -1921,9 +1865,9 @@ remembered setup, otherwise `~/.tandem`) and follow this sequence:
    `<home>/.tandem-migration/fence.json`. The former `<home>/runtime.json` becomes a
    read-only fence directory; the former `<home>/tasks` becomes a read-only fence file.
    The archive and manifest preserve source identity for replay.
-4. If apply is interrupted, rerun the exact same `--yes` command. The manifest/archive
+4. If apply is interrupted, rerun `tandem fix` with the same home and confirm again. The manifest/archive
    phases make the import resumable and idempotent; do not edit, delete, or recreate
-   legacy sources, the archive, or the fences. Re-run the plan command and proceed with
+   legacy sources, the archive, or the fences. Re-run the read-only plan and proceed with
    normal launch only when it reports `complete`.
 
 Planning and apply fail closed on malformed or unknown legacy fields, symlinked or
@@ -2012,12 +1956,12 @@ from its current stage. It is always the same three moves:
    | `implementing` | Relaunch: new durable operation, a fresh pane only if one is not already owned, a new worker started through the normal launch path | Yes |
    | `scouting` | The identical relaunch path as `implementing` | Yes |
    | `validating` | Rerun validation at the exact reviewed HEAD as a new durable job, within the validation retry budget | Yes |
-   | `reviewing` | Relaunch only the dead reviewer/verifier lens at the exact reviewed HEAD; recorded lenses are kept | Yes |
+   | `reviewing` | Clear the dead review job/pane at the exact reviewed HEAD; the normal launch path then relaunches the current merged review lens, not the dead job's (possibly legacy) lens; recorded reviews are kept | Yes |
    | `awaiting-fixes` | The `implementing` relaunch (see below) | Yes |
 
    Relaunch (`WorkerWorkflow.relaunchWorker`) never mutates the dead job or its result; it admits a
-   brand-new operation through the same reservation and budget gate every launch uses, so a fresh
-   receipt, instruction revision, and prompt are built exactly as for any other launch. The worker is
+   brand-new operation through the same reservation gate every launch uses, so a fresh receipt,
+   instruction revision, and prompt are built exactly as for any other launch. The worker is
    told a prior attempt may have left partial edits and to inspect `git status`/`git diff` before
    continuing.
 
@@ -2104,7 +2048,7 @@ by `recoverBlockedTask` (see above); `reportBlock` itself never triggers recover
 existed load with no cause. Recovery question/decision identity for a caused block is keyed off
 `(taskId, generation, cause.kind, cause.jobId?)` (`blockCauseEvidenceIdentity` in
 `src/recovery/decision.ts`) instead of hashing the summary text, so rewording a summary can never
-orphan an outstanding approval. `tandem inspect TASK_ID --json` includes `blockCause` when one was
+orphan an outstanding approval. `tandem status TASK_ID --json` includes `blockCause` when one was
 recorded. Only a few representative sites are migrated so far; most blocking call sites still pass
 free text only, and are migrated incrementally.
 
@@ -2126,16 +2070,16 @@ model output. Central recovery's re-entry composes with these same entry points 
 fencing, ownership checks, budgets, and quarantine behavior; it does not duplicate them.
 
 ```sh
-tandem inspect TASK_ID --json
-tandem recovery-plan TASK_ID --json
-tandem reconcile TASK_ID --yes --json
-tandem review-existing TASK_ID --head REVIEWED_HEAD --yes --json
-tandem validation-retry TASK_ID --yes --json
-tandem evidence-repair TASK_ID --yes --json
-tandem delivery-preflight TASK_ID OWNER/REPOSITORY BASE --json
+bun src/cli.ts inspect TASK_ID --json
+bun src/cli.ts recovery-plan TASK_ID --json
+bun src/cli.ts reconcile TASK_ID --yes --json
+bun src/cli.ts review-existing TASK_ID --head REVIEWED_HEAD --yes --json
+bun src/cli.ts validation-retry TASK_ID --yes --json
+bun src/cli.ts evidence-repair TASK_ID --yes --json
+bun src/cli.ts delivery-preflight TASK_ID OWNER/REPOSITORY BASE --json
 ```
 
-`inspect` reports stage, generation, review round, separate recovery budgets, exact reviewed and
+`tandem status TASK_ID --json` prints the same inspection as `inspect`. `inspect` reports stage, generation, review round, separate recovery budgets, exact reviewed and
 current HEADs, clean/unmerged state, canonical repository identity, branch, preserved worktree and
 lease, endpoint ownership/liveness, durable jobs and result files, reports/provenance, reservations,
 operations, pull-request metadata, and recommended actions. `recovery-plan` is a read-only dry run;
@@ -2199,16 +2143,17 @@ repeated signal for the same unresolved incident never moves the original deadli
 already overdue when another session reconstructed it asks rather than acting, and a cancelled or
 superseded task is never resumed by an old timer. Routine wakes stay passive: a wake before the
 deadline reads durable state and stops, and only a decision or completion interrupts the main
-conversation. `tandem inspect TASK_ID --json` lists the resulting decision and wait receipts, each
+conversation. `tandem status TASK_ID --json` lists the resulting decision and wait receipts, each
 preserving its request identity, task generation, triggering evidence, ownership and outcome
 classification, recommended action, approval requirement, start and deadline, and disposition.
 
 ### Reconciling Tandem resources across sessions
 
-`tandem reconcile-resources [--home PATH] [--yes] [--discard] [--json]` is the front door's
-home-wide cleanup surface, and the supported alternative to deleting coordinator records, panes,
-or lock files by hand. It is distinct from the advanced CLI's per-task `tandem reconcile TASK_ID`,
-which repairs one task's durable runtime.
+`tandem fix [--home PATH] [--yes] [--json]` is the front door's home-wide cleanup surface, and
+the supported alternative to deleting coordinator records, panes, or lock files by hand. When the
+home still holds old-format legacy state it offers the [migration](#legacy-json-migration-offline-only)
+instead and reconciles nothing until that is complete. It is distinct from the advanced CLI's
+per-task `bun src/cli.ts reconcile TASK_ID`, which repairs one task's durable runtime.
 
 It runs in two stages. The scan reads every coordinator record across every session directory under
 the home, asks Herdr whether each recorded coordinator still answers, reads the checkout behind a
@@ -2229,10 +2174,6 @@ Classification:
   owner, never by pool path;
 - terminal implementation tasks and completed or safely cancelled scout resources are finished
   through the durable task cleanup owner, which keeps the report, provenance, and task history;
-- `--yes --discard` is the explicit destructive path for cancelled or blocked implementation
-  tasks. It stops and closes their owned endpoints, revalidates exact Treehouse lease identity,
-  and force-returns only those task leases; it does not discard scouts, live tasks, or changed
-  ownership;
 - a record Tandem cannot place or prove, such as one stored under a session directory it does not
   name, is quarantined with a durable note and nothing is closed or released;
 - unreadable record files are listed with their path and reason, and are never deleted;
@@ -2240,8 +2181,9 @@ Classification:
   coordinator record names its lease and Treehouse, re-read under the repository lock, no longer
   holds that lease. A note whose lease cannot be read is kept.
 
-Without `--yes` the command changes nothing and reports what it would clean. `--discard` is valid
-only with `--yes`. Applying coordinator and pool-lease items takes the shared repository lock for
+Without `--yes` the command first prints the dry run, which changes nothing, and then asks before
+cleaning when there is something to clean; a non-interactive run without `--yes` refuses rather
+than guessing. `--yes` applies without asking. Applying coordinator and pool-lease items takes the shared repository lock for
 each repository first, then that session's launch lock, so a concurrent launch cannot allocate
 underneath them; task cleanup runs through its durable state-and-lease owner. A dry run takes no
 lock and never disturbs a live coordinator. A `clean` plan item is a prediction: applying re-reads
@@ -2353,7 +2295,7 @@ All parser-supported options are global; use only the ones relevant to the comma
 | `--base BRANCH` | Pull-request base branch. |
 | `--summary JSON` | PR summary object. |
 | `--method merge\|squash\|rebase` | Merge method. |
-| `--input JSON\|FILE` | Create-task object with exactly `repoPath`, `kind`, `objective`, `acceptanceCriteria`, and `surfaces`; configure-models reads a temporary file containing the complete six-role `{ "model", "thinking" }` map. |
+| `--input JSON\|FILE` | Create-task object with exactly `repoPath`, `kind`, `objective`, `acceptanceCriteria`, and `surfaces`; configure-models reads a temporary file containing the complete five-role `{ "model", "thinking" }` map. |
 | `--acceptance TEXT` | Repeatable create acceptance criterion. |
 | `--surface TEXT` | Repeatable create surface. |
 | `--artifact PATH` | Repeatable presentation artifact path. |

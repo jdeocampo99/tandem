@@ -54,63 +54,60 @@ tandem
 ```
 
 A normal launch also starts a stopped Herdr session; saved coordinator pane records do not require
-a reset. Use `tandem --continue` to resume saved coordinator conversations. Task state is retained
-with or without that flag.
+a reset. Coordinators resume their saved chats by default; add `--fresh` to start new ones. Task
+state is retained either way.
 
-To reload the coordinator extension without canceling or resetting work, use the non-destructive
-restart from a separate normal terminal:
+`tandem --help` lists every command:
+
+| Command | What it does |
+| --- | --- |
+| `tandem [PATH ...]` | Open or reconnect projects; resumes coordinator chats (`--fresh` starts new ones) |
+| `tandem status [TASK_ID]` | What is running and what needs you; `--logs` shows prompt routing |
+| `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
+| `tandem fix` | Find stale Tandem resources or old-format state and offer the repair |
+| `tandem reset` | Cancel all in-progress tasks and reopen fresh coordinators |
+| `tandem reset --hard` | Delete all Tandem state and worktrees; the next run onboards from scratch |
+| `tandem configure [PATH]` | Inspect or save repository settings |
+| `tandem config [PATH]` | Open the project's settings file in `$VISUAL`/`$EDITOR` |
+
+`--yes` skips the confirmation for `fix` and `reset`, `--json` prints machine-readable output for
+`status` and `fix`, and `--home PATH` selects a different Tandem home. Old spellings (`restart`,
+`--restart`, `--reset`, `--force`, `--continue`, `logs`, `reconcile-resources`, `migrate-state`,
+`inspect`) exit with an error that names the replacement.
+
+### Check status
 
 ```sh
-tandem restart /absolute/path/to/repo
+tandem status
+tandem status TASK_ID
+tandem status --logs
 ```
 
-`tandem --restart` remains accepted as a compatibility spelling.
+`tandem status` prints the Tandem code commit, the open coordinators, and which tasks need you or
+are still working. `tandem status TASK_ID` prints the full durable inspection for one task. Add
+`--json` to either for machine-readable output. `tandem status --logs` prints the most recent
+prompt-routing events and the resolved log path, even when no routing events exist. All three are
+read-only.
 
-To view the most recent prompt-routing events without locating the durable home manually:
+### Update coordinators to the latest local code
 
 ```sh
-tandem logs
+tandem update
 ```
 
-Use `tandem logs --json` for machine-readable output or add `--home PATH` for an explicit home.
-The command is read-only and prints the resolved log path even when no routing events exist.
+`update` replaces every saved project's coordinator with one running the latest local Tandem code
+(the checkout the `tandem` binary runs from). Chats and tasks are kept; add `--fresh` to start new
+chats. It can run from a separate terminal or from any Herdr pane except the coordinator pane it
+would close.
 
-After a crash, a forced exit, a session change, or a failed launch, reconcile the coordinator
-records, Herdr panes, and Treehouse leases Tandem left behind instead of deleting anything by hand:
-
-```sh
-tandem reconcile-resources
-tandem reconcile-resources --yes
-tandem reconcile-resources --yes --discard
-```
-
-The command scans every Tandem session under the home and classifies each resource before it
-changes anything. Without `--yes` it is a dry run that issues only read-only commands and reports
-what it would clean. Live coordinators are retained; a stopped owned coordinator has its pane
-closed, its exact lease released, and its record removed; an orphaned clean coordinator lease is
-returned by its exact lease identity; and terminal task resources are finished through the durable
-task cleanup owner. Anything dirty, unmerged, unlanded, foreign, or ownership-uncertain is kept
-and reported with its reason.
-
-`--yes --discard` is the explicit destructive path for cancelled or blocked implementation tasks.
-It stops and closes their owned endpoints, revalidates the exact Treehouse lease identity, then
-uses Treehouse's force-return operation. It never deletes a path by name and never discards scouts,
-live tasks, or tasks whose lease ownership changed. Quarantine notes and unreadable record files are
-listed with their path and never deleted. Reports, task history, provenance, and unmerged branches
-survive every safe path, applying is idempotent, and `--json` prints a versioned report for
-automation. The exit code is non-zero only when the scan or an apply actually failed, not because
-something was retained. This home-wide command is separate from the advanced CLI's per-task
-`tandem reconcile TASK_ID` recovery action.
-
-The frontdoor verifies exact Tandem ownership, revalidates the pane cwd/process immediately before
-close, confirms close acknowledgement and pane absence, then launches a replacement with the same
-lease/session directory and `--continue`. Child panes, task IDs and generations, worktrees,
-conversation history, pending questions/messages, and reports are preserved. Foreign, ambiguous,
-or missing ownership refuses before any close. This replaces only the coordinator; `--reset` and
-`--reset --force` retain their destructive meanings.
+Update verifies exact Tandem ownership, revalidates the pane cwd/process immediately before close,
+confirms close acknowledgement and pane absence, then launches a replacement with the same
+lease/session directory. Child panes, task IDs and generations, worktrees, conversation history,
+pending questions/messages, and reports are preserved. Foreign, ambiguous, or missing ownership
+refuses before any close. Update replaces only coordinators; it never cancels work.
 
 To restart one managed worker without replacing the coordinator, use `/tandem restart TASK_ID`,
-the tool request `{request:{action:"restart",taskId:"TASK_ID"}}`, or:
+the tool request `{request:{action:"restart",taskId:"TASK_ID"}}`, or the advanced action CLI:
 
 ```sh
 bun src/cli.ts restart TASK_ID
@@ -120,51 +117,76 @@ The acknowledged pause/stop/resume bridge preserves task identity, generation, w
 context, messages, reports, and questions. Cancelled or completed tasks and paused/blocked tasks
 with an unanswered question are refused. A coordinator cannot restart itself.
 
-To cleanly reopen only Tandem-owned coordinators, use the reset launch from a separate normal
-terminal:
+### Fix stale resources or old-format state
+
+After a crash, a forced exit, a session change, or a failed launch, let Tandem find and clean what
+it left behind instead of deleting anything by hand:
 
 ```sh
-tandem --reset
+tandem fix
+tandem fix --yes
 ```
 
-With no paths, `--reset` selects every valid saved project; pass explicit paths to reset only that
-subset. It preflights all selected roots, stops only idle coordinators that Tandem can prove it owns,
-and then performs the normal launch so each selected coordinator is recreated and attached once.
-Unrelated Herdr terminals are left untouched.
+If the home still holds old-format JSON state, `fix` shows the migration plan and offers the
+offline migration first (see [Migrate legacy state](#migrate-legacy-state-offline-only)). Otherwise
+it scans the coordinator records, Herdr panes, and Treehouse leases of every Tandem session under
+the home, classifies each resource, prints what it would clean, and asks before changing anything.
+`--yes` applies without asking.
+
+Live coordinators are retained; a stopped owned coordinator has its pane closed, its exact lease
+released, and its record removed; an orphaned clean coordinator lease is returned by its exact
+lease identity; and terminal task resources are finished through the durable task cleanup owner.
+Anything dirty, unmerged, unlanded, foreign, or ownership-uncertain is kept and reported with its
+reason. Quarantine notes and unreadable record files are listed with their path and never deleted.
+Reports, task history, provenance, and unmerged branches survive, applying is idempotent, and
+`--json` prints a versioned report for automation. The exit code is non-zero only when the scan or
+an apply actually failed, not because something was retained. This home-wide command is separate
+from the advanced CLI's per-task `bun src/cli.ts reconcile TASK_ID` recovery action.
+
+### Reset
+
+```sh
+tandem reset
+```
+
+`reset` cancels every in-progress task across all saved projects, stops their owned worker,
+validation, and presentation terminals, and reopens each coordinator with a fresh chat, even when
+it is busy. It keeps onboarding, settings, task history, worktrees, uncommitted changes, and your
+files. Completed retained task terminals are closed without erasing completed task history. It
+takes no paths, asks to confirm (or pass `--yes`), and can run from a separate terminal or from any
+Herdr pane except a coordinator pane. Reset does not bypass ownership checks or the clean-source
+requirement for coordinator worktrees, and it is not task recovery or migration.
+
 Reset also closes a recorded coordinator pane that has returned to its shell, provided its native
 identity and worktree still match. Herdr removes a workspace when its last pane closes, so closing
 that owned pane is the default outcome. A workspace is retained (renamed to `Retained terminals`)
 only when another pane still shares the coordinator workspace after the owned pane closes; that
-extra pane is left open, and `tandem`/`--reset` print a notice naming it. Custom labels are
+extra pane is left open, and `tandem`/`tandem reset` print a notice naming it. Custom labels are
 preserved untouched, and a pane that cannot prove it has exactly stopped is quarantined (left alone,
-also with a printed notice) rather than closed. A normal relaunch without reset retires a previous
-stopped coordinator's pane the same way. Labels alone never authorize closing a workspace or pane.
+also with a printed notice) rather than closed. A normal relaunch retires a previous stopped
+coordinator's pane the same way. Labels alone never authorize closing a workspace or pane.
+Unrelated Herdr terminals are left untouched.
 Replacing a coordinator also reuses or releases its exact previous worktree lease, so repeated
-launches and restarts do not accumulate coordinator worktrees. A previous checkout with uncommitted
+launches and updates do not accumulate coordinator worktrees. A previous checkout with uncommitted
 or unmerged work is kept and reported, never released. If a launch fails after acquiring a new
 lease, it rolls that lease and its new pane back; whatever it cannot prove safe to undo is recorded
 under `<home>/coordinator-quarantine/` and named in the error instead of being guessed at.
-Busy, unknown, foreign, or otherwise unsafe work refuses before any pane is closed; if a coordinator
+Unknown, foreign, or otherwise unsafe ownership refuses before any pane is closed; if a coordinator
 changes state or fails to close after earlier ones in the same run already closed, reset stops and
-reports exactly which coordinators it already closed. Reset retains
-settings, conversation history, task records, worktrees, and repository files; it is not task recovery,
-a factory reset or data wiping. Add `--continue` only when you want the reopened coordinators to
-resume their saved conversations; without it they start fresh conversations. Never run `--reset` from
-inside Herdr, because Tandem refuses that unsafe context.
-
-For testing, or when you deliberately want to cancel active work and start fresh:
+reports exactly which coordinators it already closed.
 
 ```sh
-tandem --reset --force
-# Or limit the reset to one project:
-tandem --reset --force /absolute/path/to/repo
+tandem reset --hard
 ```
 
-Force reset cancels selected active tasks, stops their owned worker, validation, and presentation
-terminals, and reopens their coordinators even when busy. Completed retained task terminals are closed
-without erasing completed task history. Files, worktrees, and uncommitted changes are preserved.
-Without paths it still selects **all saved projects**. Force does not bypass ownership checks or
-the clean-source requirement for coordinator worktrees, and must also run outside Herdr.
+`reset --hard` starts over. It stops everything the way `reset` does (best effort), then deletes the
+Tandem home: `state.sqlite`, onboarded project records, `models.json`, the registry, and every pool
+worktree, **including work that was never pushed or merged**. It also deletes the pool root when it
+lives outside the home and the remembered setup file `~/.config/tandem/config.json` when it points
+at that home, then runs `git worktree prune` in each onboarded repository. Your repositories are not
+otherwise touched. It lists everything it will delete and asks first (or pass `--yes`), and it refuses
+to delete `$HOME`, `/`, or any directory that contains an onboarded repository. The next `tandem`
+onboards from scratch.
 
 Bare `tandem` uses only saved project records under `<home>/repositories`; it does not scan arbitrary
 disk repositories, auto-register projects, show a project picker, or request a path. Saved-project
@@ -188,13 +210,13 @@ interactive-terminal requirements.
 Tandem reuses your remembered setup when reconnecting or configuring models:
 
 ```sh
-tandem --continue /absolute/path/to/repo
+tandem /absolute/path/to/repo
 tandem configure /absolute/path/to/repo
 tandem config /absolute/path/to/repo   # open the project's settings file in $EDITOR
 ```
 
-`configure` remains a single-project catalogue-anchor flow: it asks for and saves all six global role
-choices (Planning, Research, Coding, Review, Final checks, and Presentations) without launching a
+`configure` remains a single-project catalogue-anchor flow: it asks for and saves all five global role
+choices (Planning, Research, Coding, Review, and Presentations) without launching a
 coordinator. With no path, it keeps its current-Git or existing interactive one-project anchor
 fallback; it never expands to all saved projects. `--headless` prepares coordinators without
 attaching Herdr, and `--no-attach` also skips the GUI attachment. `--help` shows the terminal
@@ -235,12 +257,12 @@ as blocked, and completed turns as idle (which Herdr may display as done). An id
 also reflects its project's pending work and approval/blocking states. These are display hints,
 not ownership or completion evidence; durable task records remain authoritative.
 
-An explicit `tandem PATH` opens or reconnects only that project after ownership checks. Add
-`--continue` when starting a stopped coordinator and resuming its saved conversation. Before each
+An explicit `tandem PATH` opens or reconnects only that project after ownership checks and resumes
+its saved conversation unless you add `--fresh`. Before each
 planning turn, a managed coordinator refreshes its owned, clean source checkout from `origin/main`.
 New tasks capture that revision; existing tasks and workers keep their original pins and checkouts.
 Fetch or source-safety failures block new task creation rather than silently using stale source.
-Use `--restart` to reload the extension and refresh source without resetting child work.
+Use `tandem update` to reload the extension and refresh source without resetting child work.
 
 ### Migrate legacy state (offline only)
 
@@ -253,17 +275,19 @@ worker, validation job, presentation, or legacy writer may still be active.
 Use the exact home that the coordinator uses:
 
 ```sh
-# Read-only plan; do not add --yes.
-tandem migrate-state --home /absolute/path/to/tandem-home --json
+# Shows the plan and asks before migrating; answer No to leave state unchanged.
+tandem fix --home /absolute/path/to/tandem-home
 
-# Apply only after the plan is ready and all liveness/ownership checks are clear.
-tandem migrate-state --home /absolute/path/to/tandem-home --yes --json
-
-# A completed migration can be inspected without changing state.
-tandem migrate-state --home /absolute/path/to/tandem-home --json
+# Apply without asking, only after the plan is ready and all liveness/ownership checks are clear.
+tandem fix --home /absolute/path/to/tandem-home --yes
 ```
 
-The plan is read-only by default. It hashes and reports the legacy sources, checks for
+When the home holds old-format state, `tandem fix` handles only the migration and skips resource
+cleanup until the migration is complete; run it again afterwards to reconcile. For a read-only
+JSON plan, or to inspect a completed migration, use the advanced action CLI:
+`bun src/cli.ts migrate-state --home /absolute/path/to/tandem-home --json`.
+
+The plan is read-only until you confirm. It hashes and reports the legacy sources, checks for
 live or ambiguous native ownership, and reports incomplete reservation intents that will
 be quarantined rather than guessed or resumed. A live coordinator, active job, unresolved
 endpoint launch, or ambiguous ownership blocks the plan/apply path; stop the relevant
@@ -281,7 +305,7 @@ checkpoints, and operation history. It archives any present legacy source under
 `<home>/.tandem-migration/archive/` (`runtime.json` and `tasks/`), writes
 `<home>/.tandem-migration/manifest.json`, and installs old-writer fences at the former
 `runtime.json` and `tasks` paths plus `<home>/.tandem-migration/fence.json`. Keep the
-archive and fences. If an apply is interrupted, rerun the same `--yes` command; do not
+archive and fences. If an apply is interrupted, rerun `tandem fix` and confirm again; do not
 edit the archive or manifest and do not start normal Tandem use until the migration is
 complete.
 
@@ -297,8 +321,8 @@ coordinator to surface the durable blocker instead.
 These fences do not make external effects transactional or guarantee availability; they
 make uncertain ownership fail closed and keep the evidence for an explicit decision.
 
-The migration command does not accept project paths; `--home` must identify the Tandem
-home, not a repository. See the [agent/operator reference](docs/agent-reference.md) for
+`tandem fix` does not accept project paths; `--home` must identify the Tandem home, not a
+repository. See the [agent/operator reference](docs/agent-reference.md) for
 the storage table and recovery contract.
 
 ## Use Tandem conversationally (optional)
@@ -320,18 +344,18 @@ conversational flows. They do not replace the installed terminal command or star
 because Tandem is mentioned. Low-level `src/cli.ts` commands remain an advanced fallback for
 exact automation and diagnostics.
 
-Onboarding always covers all six role choices: **Planning** (`coordinator`), **Research** (`scout`),
-**Coding** (`implementer`), **Review** (`reviewer`), **Final checks** (`verifier`), and
-**Presentations** (`presentation`). For each role, explicitly choose or accept the exact catalogue
-model `selector` and a supported thinking level; recommendations never fill omitted roles, and a
-complete six-role recap appears before saving. **Not now** pauses first-time onboarding before
-`configure-models`, project setup, or launch, with no fallthrough to built-in defaults. Returning
-onboarding shows all six saved exact selector/thinking pairs and offers **Keep all** (read-only, no
-new role answers; it may continue the existing project-setting flow), **Change roles** (explicitly
-choose or keep each role, with untouched roles preserved in the recap), or **Not now** (pause with
-choices unchanged, without setup or launch). The existing `configure-models` approval is required
-to save changes. Approved choices apply to future work across projects; a main-model change takes
-effect on the next Tandem launch, not in an already-running conversation.
+Onboarding always covers all five role choices: **Planning** (`coordinator`), **Research** (`scout`),
+**Coding** (`implementer`), **Review** (`reviewer`), and **Presentations** (`presentation`). For each
+role, explicitly choose or accept the exact catalogue model `selector` and a supported thinking
+level; recommendations never fill omitted roles, and a complete five-role recap appears before
+saving. **Not now** pauses first-time onboarding before `configure-models`, project setup, or
+launch, with no fallthrough to built-in defaults. Returning onboarding shows all five saved exact
+selector/thinking pairs and offers **Keep all** (read-only, no new role answers; it may continue the
+existing project-setting flow), **Change roles** (explicitly choose or keep each role, with
+untouched roles preserved in the recap), or **Not now** (pause with choices unchanged, without setup
+or launch). The existing `configure-models` approval is required to save changes. Approved choices
+apply to future work across projects; a main-model change takes effect on the next Tandem launch,
+not in an already-running conversation.
 
 For an approved task, a clear follow-up direction can be sent with the coordinator's `steer`
 action without a redundant generic approval prompt; `steer` queues it for the next safe boundary.

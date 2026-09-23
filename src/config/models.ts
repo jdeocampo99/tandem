@@ -13,11 +13,11 @@ import {
   repositoryRoot,
 } from "./storage.ts";
 import {
-  AGENT_ROLE_KEYS,
   assertKnownKeys,
   deduplicateStrings,
   hasKey,
   isRecord,
+  LEGACY_MODEL_ROLE_KEYS,
   MODEL_KEYS,
   parseJson,
   readModelSelector,
@@ -57,7 +57,9 @@ export function parseModelAssignments(input: unknown): RepoPolicy["models"] {
   if (!isRecord(input)) {
     throw new TypeError("models must be an object keyed by all agent roles");
   }
-  assertKnownKeys(input, AGENT_ROLE_KEYS, "models");
+  // ponytail: a saved models.json may still carry a "verifier" entry from before the role was
+  // removed; accept it here so it still loads, but MODEL_ROLE_ORDER's loop below never reads it.
+  assertKnownKeys(input, LEGACY_MODEL_ROLE_KEYS, "models");
 
   for (const role of MODEL_ROLE_ORDER) {
     if (!hasKey(input, role)) {

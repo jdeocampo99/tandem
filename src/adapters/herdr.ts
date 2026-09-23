@@ -6,7 +6,7 @@ import {
   type CommandResult,
   type CommandRunner,
   type Endpoint,
-  isAgentRole,
+  LEGACY_ENDPOINT_ROLES,
 } from "../contracts.ts";
 import { type WorkerTerminalJob, workerDelegationStopped } from "../workers/terminal.ts";
 import { quoteShellCommand } from "./commands.ts";
@@ -198,11 +198,13 @@ export type CloseEndpointResult = Readonly<{
   endpoint: Endpoint;
   closed: true;
 }>;
-function checkedRole(value: unknown): AgentRole {
-  if (typeof value !== "string" || !isAgentRole(value)) {
+// ponytail: accepts legacy "verifier" too (see LEGACY_ENDPOINT_ROLES) so an existing pane opened
+// for that role still passes ownership checks (inspect/pause/interrupt/close) instead of erroring.
+function checkedRole(value: unknown): Endpoint["role"] {
+  if (typeof value !== "string" || !LEGACY_ENDPOINT_ROLES.includes(value as Endpoint["role"])) {
     throw new TypeError(`role ${JSON.stringify(value)} is unsupported`);
   }
-  return value;
+  return value as Endpoint["role"];
 }
 
 function checkedSession(value: string): string {

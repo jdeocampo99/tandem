@@ -164,6 +164,21 @@ export function decideScoutWorktreeRelease(
 }
 
 /**
+ * Whether a completed scout's clean worktree should wait for an implementation to adopt it rather
+ * than return to the pool. Report-only research, and research never classified, releases as usual.
+ */
+export function scoutLeadsToImplementation(
+  task: Pick<TaskRecord, "kind" | "stage" | "researchContinuation">,
+): boolean {
+  const disposition = task.researchContinuation?.disposition;
+  return (
+    task.kind === "scout" &&
+    task.stage === "completed" &&
+    (disposition === "ask-intent" || disposition === "implementation-interview")
+  );
+}
+
+/**
  * Sorts a cleanup failure into one that reconciliation may retry and one that must not be retried.
  *
  * A refused pane identity or changed lease metadata means Tandem no longer knows who owns the
@@ -486,16 +501,27 @@ export async function releaseTerminalTaskResources(
         reason: "the task holds no worktree lease",
       });
     }
+    const checkout =
+      task.kind === "scout" ? await observeScoutCheckout(deps.run, lease.path) : undefined;
     const decision =
-      task.kind === "scout"
-        ? decideScoutWorktreeRelease({
-            lease,
-            checkout: await observeScoutCheckout(deps.run, lease.path),
-          })
-        : ({
+      checkout === undefined
+        ? ({
             kind: "release",
             reason: "the lease release contract proves an implementation worktree landed",
-          } as const);
+          } as const)
+        : decideScoutWorktreeRelease({ lease, checkout });
+    if (
+      decision.kind === "release" &&
+      checkout?.status === "observed" &&
+      scoutLeadsToImplementation(task)
+    ) {
+      return recordCleanupAttempt(deps, task, {
+        closedPaneIds: panes.closedPaneIds,
+        leaseReleased: false,
+        status: "retained",
+        reason: "the scout worktree is kept for the implementation that follows this research",
+      });
+    }
     if (decision.kind !== "release") {
       return recordCleanupAttempt(deps, task, {
         closedPaneIds: panes.closedPaneIds,

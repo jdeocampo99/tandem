@@ -13,6 +13,7 @@ import {
   readGitText,
   requiredRecord,
   requiredString,
+  requireSuccess,
   runChecked,
   type WorktreeAdapterOptions,
 } from "./primitives.ts";
@@ -68,6 +69,12 @@ export type AcquireWorktreeInput = Readonly<{
   tandemId: string;
   taskName: string;
   sourceHead: string;
+  /**
+   * Take over the scout lease `tandemId` already holds instead of leasing a new worktree. The
+   * scout checkout must still be clean on `branch` at `head`; it then moves to the task branch at
+   * `sourceHead`. Treehouse cannot relabel a lease, so the scout's holder stays on it.
+   */
+  adopt?: Readonly<{ branch: string; head: string }>;
 }>;
 
 export type ReleaseWorktreeInput = Readonly<{
@@ -413,7 +420,9 @@ async function prepareWorktreeLease(
       }
       return lease;
     }
-    if (actualBranch !== "") {
+    const adopting =
+      existingLease && input.adopt !== undefined && actualBranch === input.adopt.branch;
+    if (actualBranch !== "" && !adopting) {
       throw new LeaseSafetyError(
         `acquired worktree branch is ${JSON.stringify(actualBranch)}, expected detached checkout or task ${JSON.stringify(branch)}`,
         lease,
@@ -435,11 +444,20 @@ async function prepareWorktreeLease(
     if (status.stdout.trim() !== "" || unmerged.stdout.trim() !== "") {
       throw new LeaseSafetyError("acquired worktree is dirty or has unmerged paths", lease);
     }
-    const switchRequest: CommandRequest = {
-      argv: ["git", "-C", path, "switch", "--no-overwrite-ignore", "-c", branch, sourceHead],
-      cwd: path,
-    };
-    await runChecked(run, switchRequest, "git task branch create");
+    if (adopting && input.adopt !== undefined) {
+      const scoutHead = await readGitText(run, path, ["rev-parse", "HEAD"], "git scout HEAD");
+      if (scoutHead !== input.adopt.head) {
+        throw new LeaseSafetyError(
+          `scout worktree HEAD ${scoutHead} is not its source commit ${input.adopt.head}`,
+          lease,
+        );
+      }
+    }
+    await createTaskBranch(run, path, branch, sourceHead, lease);
+    if (adopting && input.adopt !== undefined) {
+      // ponytail: best effort; `-d` refuses a scout branch holding commits, which then stays put.
+      await run({ argv: ["git", "-C", path, "branch", "-d", input.adopt.branch], cwd: path });
+    }
     const switchedBranch = await readGitText(
       run,
       path,
@@ -483,6 +501,47 @@ function findOwnedLease(
   return readLeaseMetadata(matching, "treehouse lease status", response);
 }
 
+/**
+ * Creates the task branch at the pinned source. Coordinator branch names are derived from the
+ * repository and session, so a recreated Tandem home asks for a branch an earlier home left
+ * behind. That branch is moved to the source only when it holds no commits beyond it; git itself
+ * still refuses when another worktree has it checked out.
+ */
+async function createTaskBranch(
+  run: CommandRunner,
+  path: string,
+  branch: string,
+  sourceHead: string,
+  lease: WorktreeLease,
+): Promise<void> {
+  const create = (flag: "-c" | "-C"): CommandRequest => ({
+    argv: ["git", "-C", path, "switch", "--no-overwrite-ignore", flag, branch, sourceHead],
+    cwd: path,
+  });
+  const request = create("-c");
+  const created = await run(request);
+  if (created.code === 0) return;
+  const leftover = await run({
+    argv: ["git", "-C", path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
+    cwd: path,
+  });
+  if (leftover.code !== 0) {
+    requireSuccess(created, request, "git task branch create");
+    return;
+  }
+  const contained = await run({
+    argv: ["git", "-C", path, "merge-base", "--is-ancestor", leftover.stdout.trim(), sourceHead],
+    cwd: path,
+  });
+  if (contained.code !== 0) {
+    throw new LeaseSafetyError(
+      `branch ${JSON.stringify(branch)} already exists with commits that are not in ${sourceHead}; rename or delete it to continue`,
+      lease,
+    );
+  }
+  await runChecked(run, create("-C"), "git task branch reuse");
+}
+
 export async function acquireWorktree(
   run: CommandRunner,
   input: AcquireWorktreeInput,
@@ -511,6 +570,13 @@ export async function acquireWorktree(
   const existing = findOwnedLease(statusRecords, tandemId, statusResult.stdout);
   if (existing !== undefined) {
     return prepareWorktreeLease(run, input, options, existing, true);
+  }
+  if (input.adopt !== undefined) {
+    throw new AdapterProtocolError(
+      "treehouse lease adopt",
+      `no lease is held by ${JSON.stringify(tandemId)} to adopt`,
+      statusResult.stdout,
+    );
   }
 
   const treehouseRequest: CommandRequest = {

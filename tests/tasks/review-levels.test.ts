@@ -20,7 +20,6 @@ import {
   classifyReviewLevel,
   DEFAULT_REVIEW_LEVEL_POLICY,
   deepScrutinyRequirements,
-  LIGHT_ITERATION_LENSES,
   observeChangedFiles,
   raiseReviewLevel,
   reclassifyReviewLevel,
@@ -41,7 +40,6 @@ function policy(overrides: Partial<ReviewLevelPolicy> = {}): ResolvedPolicy {
         scout: { model: "test/scout", thinking: "low" },
         implementer: { model: "test/implementer", thinking: "low" },
         reviewer: { model: "test/reviewer", thinking: "low" },
-        verifier: { model: "test/verifier", thinking: "low" },
         presentation: { model: "test/presentation", thinking: "low" },
       },
       instructions: { implementation: [], validation: [], review: [] },
@@ -54,7 +52,6 @@ function policy(overrides: Partial<ReviewLevelPolicy> = {}): ResolvedPolicy {
       maxWorkers: 3,
       maxFixRounds: 3,
       reviewLevels: { ...DEFAULT_REVIEW_LEVEL_POLICY, ...overrides },
-      requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
     },
     guidance: { implementation: [], validation: [], review: [] },
   };
@@ -356,40 +353,6 @@ test("the default policy requires today's complete lens set at every round", () 
   }
 });
 
-test("reduced routing narrows only an iteration round before the final manifest runs", () => {
-  const enabled = policy({ reducedRouting: true });
-  const scope = {
-    head: HEAD,
-    generation: 1,
-    policyDigest: policyIdentity(enabled),
-    reproduces: ["check"],
-    surfaces: ["service"],
-    findingIds: ["f-1"],
-  };
-  const light: ReviewLevelRecord = { level: "light", reason: "contained", floors: [] };
-  const iteration = task({ reviewLevel: light, iterationScope: scope }, enabled);
-  expect(requiredReviewLenses(iteration, HEAD)).toEqual(LIGHT_ITERATION_LENSES);
-
-  const afterFinalRun = task(
-    {
-      reviewLevel: light,
-      iterationScope: scope,
-      validationEvidence: [evidence({ contract: "final" }, enabled)],
-    },
-    enabled,
-  );
-  expect(requiredReviewLenses(afterFinalRun, HEAD)).toEqual(FINAL_REVIEW_LENSES);
-
-  const firstRound = task({ reviewLevel: light }, enabled);
-  expect(requiredReviewLenses(firstRound, HEAD)).toEqual(FINAL_REVIEW_LENSES);
-
-  const standard = task(
-    { reviewLevel: { level: "standard", reason: "broad", floors: [] }, iterationScope: scope },
-    enabled,
-  );
-  expect(requiredReviewLenses(standard, HEAD)).toEqual(FINAL_REVIEW_LENSES);
-});
-
 test("a helper recommendation can raise a level but never lower one below a floor", () => {
   const floorRecord = classifyReviewLevel({
     files: [file("src/pool/maintenance.ts", ["+  if (!request.authorization) return deny();"])],
@@ -462,7 +425,7 @@ test("the brief renders the level, its reason, and the floors in force", () => {
     buildReviewBrief({
       task: task({ reviewLevel: record }, enabled),
       head: HEAD,
-      lens: "behavior",
+      lens: "review",
       observations: observations(),
     }),
   );
@@ -476,7 +439,7 @@ test("focus flags render as untrusted leads with provenance and never as blocker
   const brief = buildReviewBrief({
     task: task(),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations(),
     advisoryLeads: [
       {

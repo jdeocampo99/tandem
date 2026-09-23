@@ -51,9 +51,9 @@ function followUpSteps(decision: ResearchFollowUpDecision): readonly string[] {
     case "implementation-interview":
       return [
         "Summarize the report and what it found.",
-        "Propose one initial direction drawn from that evidence, then ask focused questions covering desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility, and approval; offer a default for each.",
+        "Propose one initial direction drawn from that evidence, then ask focused questions covering desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility; offer a default for each.",
         "Stay inside the report and the user's request; do not widen scope on your own.",
-        "Only after the user answers may you create an implementation task, passing this task in researchTaskIds. It waits for the user to approve the concrete scope before starting.",
+        "Only after the user answers may you create an implementation task, passing this task in researchTaskIds. Approval is a separate, later step: give a short summary without asking for approval in it, then call approve (or brief-approve when a brief governs it) so its own confirmation is the single approval ask, not a prose question first.",
       ];
     case "answer-question":
       return [

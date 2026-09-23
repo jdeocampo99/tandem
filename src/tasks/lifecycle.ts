@@ -717,20 +717,20 @@ function describeRequirements(requirements: readonly FinalRequirement[]): string
   return requirements.map((entry) => `${entry.name} (${entry.origin})`).join(", ");
 }
 
-function reviewSummary(task: TaskRecord, required: readonly ReviewLens[]): string {
+function reviewSummary(task: TaskRecord): string {
   const current = activeReviews(task);
-  const failed = current.filter((review) => !review.pass).map((review) => review.lens);
-  return failed.length === 0
-    ? `Task ${task.id} passed ${required.join(", ")} review at the ${recordedReviewLevel(task).level} review level`
-    : `Task ${task.id} requires fixes after ${failed.join(", ")} review`;
+  const failed = current.some((review) => !review.pass);
+  return failed
+    ? `Task ${task.id} requires fixes after review`
+    : `Task ${task.id} passed review at the ${recordedReviewLevel(task).level} review level`;
 }
 
 /**
  * The outcome announced only at true readiness: every required lens passes and the final acceptance
  * manifest is satisfied for the delivered code and policy. It never implies delivery.
  */
-function readySummary(task: TaskRecord, head: string, required: readonly ReviewLens[]): string {
-  return `Ready: task ${task.id} passed ${required.join(", ")} review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}. Ready is not publication, merge, or deploy approval; each remains explicit.`;
+function readySummary(task: TaskRecord, head: string): string {
+  return `Ready: task ${task.id} passed review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}. Ready is not publication, merge, or deploy approval; each remains explicit.`;
 }
 
 function hasSuccessfulCurrentValidation(task: TaskRecord): boolean {
@@ -781,7 +781,6 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
         scout: { ...policy.config.models.scout },
         implementer: { ...policy.config.models.implementer },
         reviewer: { ...policy.config.models.reviewer },
-        verifier: { ...policy.config.models.verifier },
         presentation: { ...policy.config.models.presentation },
       },
       instructions: {
@@ -808,7 +807,6 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
       maxWorkers: policy.config.maxWorkers,
       maxFixRounds: policy.config.maxFixRounds,
       reviewLevels: { ...policy.config.reviewLevels },
-      requestBudget: { ...policy.config.requestBudget },
     },
     guidance: {
       implementation: cloneGuidanceEntries(policy.guidance.implementation),
@@ -1056,7 +1054,7 @@ export function transitionTask(
           task,
           context,
           { stage: "awaiting-fixes" },
-          reviewSummary(task, required),
+          reviewSummary(task),
         );
       }
       const acceptance = finalAcceptanceStatus(task, event.head);
@@ -1065,7 +1063,7 @@ export function transitionTask(
           clearIterationScope(task),
           context,
           { stage: "ready" },
-          readySummary(task, event.head, required),
+          readySummary(task, event.head),
           "coordinator",
         );
       }

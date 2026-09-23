@@ -10,7 +10,7 @@ import type {
   Endpoint,
   IdFactory,
   IsoTimestamp,
-  RequestBudgetPolicy,
+  ResearchContinuation,
   ResolvedPolicy,
   TaskRecord,
   WorktreeLease,
@@ -33,12 +33,6 @@ export const SCENARIO_NEXT_HEAD = "89abcdef0123456789abcdef0123456789abcdef";
 export const SCENARIO_SESSION = "scenario-session";
 export const SCENARIO_TASK_ID = "task-1";
 
-/** A cap wide enough that scenarios exercise admitted work rather than the budget pause. */
-export const SCENARIO_REQUEST_BUDGET: RequestBudgetPolicy = {
-  capMicros: 10_000_000,
-  operationEstimateMicros: 500_000,
-};
-
 export const SCENARIO_POLICY: ResolvedPolicy = {
   config: {
     version: 1,
@@ -47,7 +41,6 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
       scout: { model: "scenario/scout", thinking: "low" },
       implementer: { model: "scenario/implementer", thinking: "low" },
       reviewer: { model: "scenario/reviewer", thinking: "low" },
-      verifier: { model: "scenario/verifier", thinking: "low" },
       presentation: { model: "scenario/presentation", thinking: "low" },
     },
     instructions: { implementation: [], validation: [], review: [] },
@@ -57,12 +50,10 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
     maxWorkers: 2,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: SCENARIO_REQUEST_BUDGET,
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -783,6 +774,7 @@ export type SeedTaskInput = Readonly<{
   readonly reportPath?: string;
   readonly worktree?: WorktreeLease;
   readonly endpoints?: readonly Endpoint[];
+  readonly researchContinuation?: ResearchContinuation;
 }>;
 
 /** Seeds one durable task in the scenario home, bypassing approval prompts the scenario is not testing. */
@@ -799,6 +791,9 @@ export async function seedScenarioTask(
     surfaces: ["scenario"],
     policy: input.policy ?? SCENARIO_POLICY,
     ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+    ...(input.researchContinuation === undefined
+      ? {}
+      : { researchContinuation: input.researchContinuation }),
   });
   if (
     task.stage === "awaiting-approval" &&

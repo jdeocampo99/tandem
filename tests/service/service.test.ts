@@ -20,7 +20,6 @@ import {
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
   MODEL_ROLE_ORDER,
   type ResolvedPolicy,
-  type ReviewLens,
   type TaskRecord,
   type WorkerReceipt,
   type WorktreeLease,
@@ -86,7 +85,6 @@ const policy: ResolvedPolicy = {
       scout: { model: "test/scout", thinking: "low" },
       implementer: { model: "test/implementer", thinking: "low" },
       reviewer: { model: "test/reviewer", thinking: "low" },
-      verifier: { model: "test/verifier", thinking: "low" },
       presentation: { model: "test/presentation", thinking: "low" },
     },
     instructions: { implementation: [], validation: [], review: [] },
@@ -98,12 +96,10 @@ const policy: ResolvedPolicy = {
     maxWorkers: 4,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -147,7 +143,6 @@ const BALANCED_MODELS = {
   scout: { model: "test/balanced", thinking: "medium" },
   implementer: { model: "test/balanced", thinking: "max" },
   reviewer: { model: "test/balanced", thinking: "max" },
-  verifier: { model: "test/balanced", thinking: "high" },
   presentation: { model: "test/balanced", thinking: "low" },
 } as const;
 
@@ -1054,7 +1049,7 @@ test("creates a bounded immutable scout handoff for a same-source implementation
   });
 });
 
-test("rejects missing, over-limit, and stale scout handoff references", async () => {
+test("rejects missing and over-limit scout handoff references but accepts older research", async () => {
   await withFixture({ kind: "scout" }, async (fixtureValue) => {
     const createInput = {
       repoPath: fixtureValue.task.repoPath,
@@ -1081,15 +1076,13 @@ test("rejects missing, over-limit, and stale scout handoff references", async ()
       head: "old-head",
       base: "old-head",
     });
-    await expect(
-      fixtureValue.service.create({
-        ...createInput,
-        researchTaskIds: [fixtureValue.task.id],
-      }),
-    ).rejects.toThrow("stale for the implementation source checkpoint");
-    expect(
-      (await fixtureValue.service.list()).some((entry) => entry.kind === "implementation"),
-    ).toBe(false);
+    // The implementation fast-forwards to the current source before it starts, so research done
+    // on an earlier commit still hands off.
+    const created = await fixtureValue.service.create({
+      ...createInput,
+      researchTaskIds: [fixtureValue.task.id],
+    });
+    expect(created.researchHandoffs?.[0]?.scoutSourceHead).toBe("old-head");
   });
 });
 
@@ -1175,8 +1168,9 @@ test("service resolves task policy from Tandem home and leaves repository-local 
     const localConfig = '{"models":{"coordinator":{"model":"local/should-not-be-read"}}}';
     await writeFile(localConfigPath, localConfig, "utf8");
     await mkdir(dirname(proposal.configPath), { recursive: true });
+    // The legacy config.json envelope is still read for projects saved before settings.toml.
     await writeFile(
-      proposal.configPath,
+      join(dirname(proposal.configPath), "config.json"),
       `${JSON.stringify({
         schemaVersion: 1,
         repoPath: proposal.repoPath,
@@ -1207,12 +1201,12 @@ test("service rejects unavailable model choices before writing settings", async 
       const callsBeforeConfigure = runnerState.calls.length;
       const unavailable = {
         ...policy.config.models,
-        verifier: { model: "missing/verifier", thinking: "low" as const },
+        reviewer: { model: "missing/reviewer", thinking: "low" as const },
       };
 
       await expect(
         service.configureModels({ repoPath: task.repoPath, models: unavailable }),
-      ).rejects.toThrow("missing/verifier");
+      ).rejects.toThrow("missing/reviewer");
 
       expect(runnerState.calls.slice(callsBeforeConfigure)).toHaveLength(1);
       await expect(readFile(options.modelSettings.configPath, "utf8")).rejects.toThrow();
@@ -3823,18 +3817,7 @@ test("a launched review job receives a bounded deterministic review brief", asyn
   );
 });
 
-function passingReview(lens: ReviewLens): TaskRecord["reviews"][number] {
-  return {
-    lens,
-    head: "review-head",
-    generation: 0,
-    pass: true,
-    findings: [],
-    summary: `no ${lens} findings`,
-  };
-}
-
-test("the default policy launches today's four review lenses and never calls the helper", async () => {
+test("the default policy launches one merged review lens and never calls the helper", async () => {
   let evaluatorCalls = 0;
   const assistance = reviewAssistanceRuntime({
     apiKey: "would-be-used-if-opted-in",
@@ -3844,38 +3827,29 @@ test("the default policy launches today's four review lenses and never calls the
       throw new Error("the evaluator must not be called under the default policy");
     },
   });
-  const launchedLenses: string[] = [];
-  for (const recorded of [
-    [],
-    [passingReview("behavior")],
-    [passingReview("behavior"), passingReview("design")],
-    [passingReview("behavior"), passingReview("design"), passingReview("coverage")],
-  ]) {
-    await withFixture(
-      {
-        kind: "implementation",
-        stage: "reviewing",
-        taskEdits: { reviewHead: "review-head", reviews: recorded },
-        runner: { active: false, checkoutHead: "review-head" },
-        reviewAssistance: assistance,
-      },
-      async ({ home, lease, service }) => {
-        await seedTaskResources(home, lease, [endpointFor("implementer")], []);
-        await service.tick();
-        const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
-        if (launched?.reviewLens === undefined) throw new Error("no review job was launched");
-        launchedLenses.push(launched.reviewLens);
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "reviewing",
+      taskEdits: { reviewHead: "review-head", reviews: [] },
+      runner: { active: false, checkoutHead: "review-head" },
+      reviewAssistance: assistance,
+    },
+    async ({ home, lease, service }) => {
+      await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+      await service.tick();
+      const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
+      if (launched?.reviewLens === undefined) throw new Error("no review job was launched");
+      expect(launched.reviewLens).toBe("review");
 
-        const persisted = await service.get("task-1");
-        expect(persisted.reviewLevel?.level).toBe("standard");
-        expect(persisted.reviewLevel?.reason.length).toBeGreaterThan(0);
-        expect(persisted.reviewLevel?.assistance).toBeUndefined();
-        expect(persisted.policy.config.reviewLevels).toEqual(DEFAULT_REVIEW_LEVEL_POLICY);
-        expect(requiredReviewLenses(persisted, "review-head")).toEqual(FINAL_REVIEW_LENSES);
-      },
-    );
-  }
-  expect(launchedLenses).toEqual([...FINAL_REVIEW_LENSES]);
+      const persisted = await service.get("task-1");
+      expect(persisted.reviewLevel?.level).toBe("standard");
+      expect(persisted.reviewLevel?.reason.length).toBeGreaterThan(0);
+      expect(persisted.reviewLevel?.assistance).toBeUndefined();
+      expect(persisted.policy.config.reviewLevels).toEqual(DEFAULT_REVIEW_LEVEL_POLICY);
+      expect(requiredReviewLenses(persisted, "review-head")).toEqual(FINAL_REVIEW_LENSES);
+    },
+  );
   expect(evaluatorCalls).toBe(0);
 });
 
@@ -3916,7 +3890,7 @@ test("review result retains its reviewer pane with durable task revisions", asyn
       const job = {
         ...workerJob(home, endpoint, "reviewer"),
         head: "review-head",
-        reviewLens: "behavior" as const,
+        reviewLens: "review" as const,
       };
       await seedTaskResources(home, lease, [endpoint], [job]);
       await writeJsonAtomically(job.resultPath, {
@@ -3927,12 +3901,12 @@ test("review result retains its reviewer pane with durable task revisions", asyn
         status: "completed",
         text: "Review complete",
         review: {
-          lens: "behavior",
+          lens: "review",
           head: "review-head",
           generation: 0,
           pass: true,
           findings: [],
-          summary: "No behavior findings",
+          summary: "No findings",
         },
         finishedAt: TIMESTAMP,
       });
@@ -5262,19 +5236,9 @@ async function requestFixture(
     idFactory,
   };
   const service = createTandemService(serviceOptions);
-  // Members only dispatch under a configured standing cap, so the request budget is pinned here
-  // rather than left unset; scheduling, not spending, is what these tests exercise.
   const proposal = await service.onboard(repoPath, false);
   await mkdir(dirname(proposal.configPath), { recursive: true });
-  await writeFile(
-    proposal.configPath,
-    `${JSON.stringify({
-      schemaVersion: 1,
-      repoPath: proposal.repoPath,
-      policy: { requestBudget: { capMicros: 100_000_000, operationEstimateMicros: 500_000 } },
-    })}\n`,
-    "utf8",
-  );
+  await writeFile(proposal.configPath, `repoPath = ${JSON.stringify(proposal.repoPath)}\n`, "utf8");
   const drafted = await service.draftRequestBrief({
     repoPath,
     reviewPane: false,

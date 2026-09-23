@@ -112,7 +112,7 @@ export function decideRepositoryCoordinatorClaim(
       .join("; ");
     return {
       kind: "refuse",
-      reason: `Tandem cannot prove which coordinator owns ${repoPath} because a stored coordinator record could not be read: ${paths}. Run tandem reconcile-resources to list what Tandem found. ${ESCAPE_HATCH_GUIDANCE}`,
+      reason: `Tandem cannot prove which coordinator owns ${repoPath} because a stored coordinator record could not be read: ${paths}. Run tandem fix to list what Tandem found. ${ESCAPE_HATCH_GUIDANCE}`,
       quarantine: [],
     };
   }

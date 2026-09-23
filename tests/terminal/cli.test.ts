@@ -526,7 +526,6 @@ test("configure-models reads a direct six-role file and passes it to the approve
       scout: { model: "test/scout", thinking: "low" },
       implementer: { model: "test/implementer", thinking: "max" },
       reviewer: { model: "test/reviewer", thinking: "max" },
-      verifier: { model: "test/verifier", thinking: "high" },
       presentation: { model: "test/presentation", thinking: "low" },
     } as const;
     await writeFile(inputPath, `${JSON.stringify(models)}\n`, "utf8");
@@ -588,19 +587,12 @@ test("CLI preserves trailing-space repository and home paths for central setup",
       readonly configPath: string;
       readonly repoPath: string;
     };
-    const envelope = JSON.parse(await readFile(setup.configPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
+    const settings = Bun.TOML.parse(await readFile(setup.configPath, "utf8"));
 
     expect(result.approved).toBe(true);
     expect(setup.repoPath).toBe(await realpath(requestedRepo));
     expect(setup.configPath).toContain(join("tandem-home ", "repositories"));
-    expect(envelope).toMatchObject({
-      schemaVersion: 1,
-      repoPath: setup.repoPath,
-      policy: { version: 1, validationCommands: [] },
-    });
+    expect(settings).toEqual({ repoPath: setup.repoPath });
     await expect(readFile(join(requestedRepo, ".tandem.json"), "utf8")).rejects.toThrow();
     await expect(readFile(join(ordinaryRepo, ".tandem.json"), "utf8")).rejects.toThrow();
   } finally {
@@ -1396,8 +1388,6 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     mergeRequest: unused,
     approveRequestSplit: unused,
     acknowledgeRequest: unused,
-    requestSpend: unused,
-    authorizeRequestSpend: unused,
     tick: unused,
     pause: unused,
     resume: unused,

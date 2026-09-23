@@ -147,6 +147,8 @@ export function providerSampleEvent(
   };
 }
 
+// ponytail: "verification" stays mapped so a legacy operation still classifies; see
+// DurableOperationKind.
 const OPERATION_WORK_KINDS: Readonly<Record<DurableOperationKind, RequestWorkKind>> = {
   scout: "research",
   implementation: "implementation",

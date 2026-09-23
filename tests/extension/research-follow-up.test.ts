@@ -30,7 +30,6 @@ const models: RepoPolicy["models"] = {
   scout: { model: "openai-codex/gpt-5.6-luna", thinking: "medium" },
   implementer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
   reviewer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
-  verifier: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
   presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
 };
 
@@ -45,12 +44,10 @@ const policy: ResolvedPolicy = {
     maxWorkers: 3,
     maxFixRounds: 3,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -152,11 +149,16 @@ test("each post-research follow-up renders its own coordinator wake content", ()
   expect(interview).toContain("what it found");
   expect(interview).toContain("Propose one initial direction drawn from that evidence");
   expect(interview).toContain(
+    "desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility",
+  );
+  expect(interview).not.toContain(
     "desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility, and approval",
   );
   expect(interview).toContain("do not widen scope on your own");
   expect(interview).toContain("researchTaskIds");
-  expect(interview).toContain("approve the concrete scope before starting");
+  expect(interview).toContain(
+    "its own confirmation is the single approval ask, not a prose question first",
+  );
 
   expect(answerQuestion).toContain("Research follow-up: answer-question");
   expect(answerQuestion).toContain("the task has an open question");
@@ -277,7 +279,7 @@ test("an implementation-interview wake approves no scope and creates no implemen
     expect(after.map((entry) => entry.id)).toEqual(["scout-task"]);
     expect(after.every((entry) => entry.kind === "scout")).toBe(true);
     expect(after[0]?.researchHandoffs).toBeUndefined();
-    expect(sent[1]).toContain("It waits for the user to approve");
+    expect(sent[1]).toContain("its own confirmation is the single approval ask");
   } finally {
     await rm(home, { recursive: true, force: true });
   }

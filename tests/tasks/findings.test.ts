@@ -3,8 +3,8 @@ import type {
   Finding,
   FindingLedgerEntry,
   ResolvedPolicy,
-  ReviewLens,
   ReviewResult,
+  StoredReviewLens,
   TaskRecord,
 } from "../../src/contracts.ts";
 import {
@@ -24,7 +24,6 @@ const policy: ResolvedPolicy = {
       scout: { model: "test/scout", thinking: "low" },
       implementer: { model: "test/implementer", thinking: "low" },
       reviewer: { model: "test/reviewer", thinking: "low" },
-      verifier: { model: "test/verifier", thinking: "low" },
       presentation: { model: "test/presentation", thinking: "low" },
     },
     instructions: { implementation: [], validation: [], review: [] },
@@ -36,12 +35,10 @@ const policy: ResolvedPolicy = {
     maxWorkers: 3,
     maxFixRounds: 2,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -58,14 +55,14 @@ function finding(input: Partial<Finding> & Pick<Finding, "id">): Finding {
 
 function review(
   input: Readonly<{
-    lens?: ReviewLens;
+    lens?: StoredReviewLens;
     head: string;
     generation: number;
     findings: readonly Finding[];
   }>,
 ): ReviewResult {
   return {
-    lens: input.lens ?? "behavior",
+    lens: input.lens ?? "review",
     head: input.head,
     generation: input.generation,
     pass: input.findings.length === 0,
@@ -201,19 +198,26 @@ test("contradicting verdicts for one identity are recorded as disputed", () => {
   expect(ledgerBlockers(disputed).map((entry) => entry.id)).toEqual(["f-1"]);
 });
 
-test("another lens does not settle a finding it never reviewed", () => {
-  const behavior = recordReviewFindings({
+test("a later merged review settles a finding raised under a legacy lens name", () => {
+  // ponytail: "behavior" is a pre-merge lens name; a stored finding under it must still decode
+  // and, since one merged review now covers everything, settle once that review no longer reports it.
+  const legacy = recordReviewFindings({
     ledger: [],
-    review: review({ head: "head-1", generation: 0, findings: [finding({ id: "f-1" })] }),
+    review: review({
+      lens: "behavior",
+      head: "head-1",
+      generation: 0,
+      findings: [finding({ id: "f-1" })],
+    }),
     reviewRound: 0,
   });
-  const design = recordReviewFindings({
-    ledger: behavior,
-    review: review({ lens: "design", head: "head-2", generation: 1, findings: [] }),
+  const merged = recordReviewFindings({
+    ledger: legacy,
+    review: review({ head: "head-2", generation: 1, findings: [] }),
     reviewRound: 1,
   });
 
-  expect(design[0]?.status).toBe("unresolved");
+  expect(merged[0]?.status).toBe("addressed");
 });
 
 test("a P3 finding is carried as a suggestion rather than a blocker", () => {
@@ -247,7 +251,7 @@ test("fix-round exhaustion names the remaining blockers and the available decisi
   expect(reason).toContain("fix round budget spent at 2 of 2");
   expect(reason).toContain("the task is not ready and not accepted");
   expect(reason).toContain("1 evidence-backed blocker(s) remain");
-  expect(reason).toContain("behavior/f-1");
+  expect(reason).toContain("review/f-1");
   expect(reason).not.toContain("behavior/f-2");
   expect(reason).toContain("stop for a human decision, or revise and re-approve the task scope");
   expect(reason).toContain("No blocker is downgraded to a suggestion");

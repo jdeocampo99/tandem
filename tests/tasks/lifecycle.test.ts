@@ -31,7 +31,6 @@ const models: RepoPolicy["models"] = {
   scout: { model: "scout-model", thinking: "medium" },
   implementer: { model: "implementer-model", thinking: "max" },
   reviewer: { model: "reviewer-model", thinking: "max" },
-  verifier: { model: "verifier-model", thinking: "high" },
   presentation: { model: "presentation-model", thinking: "low" },
 };
 
@@ -54,12 +53,10 @@ const policy: ResolvedPolicy = {
     maxWorkers: 3,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: {
     implementation: [],
@@ -462,7 +459,7 @@ test("relaunch refuses a stale generation and any stage other than implementing 
   ).toThrow(TaskTransitionError);
 });
 
-test("requires current-head validation and all four current-generation lenses before ready", () => {
+test("requires current-head validation and the current-generation review before ready", () => {
   let task = implementationToReviewing();
   expect(task.stage).toBe("reviewing");
   expect(() =>
@@ -471,15 +468,17 @@ test("requires current-head validation and all four current-generation lenses be
   expect(() =>
     transitionTask(
       task,
-      { type: "record-review", review: review("behavior", true, "old-head", 0) },
+      { type: "record-review", review: review("review", true, "old-head", 0) },
       context(),
     ),
   ).toThrow(TaskTransitionError);
 
+  // One merged reviewer session per round now covers behavior, design, and coverage together.
+  expect(ALL_REVIEW_LENSES).toEqual(["review"]);
   for (const lens of ALL_REVIEW_LENSES) {
     task = transitionTask(task, { type: "record-review", review: review(lens) }, context());
   }
-  expect(task.revision).toBe(8);
+  expect(task.revision).toBe(5);
   task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
   expect(task.stage).toBe("ready");
   const readyNotification = task.notifications.at(-1);
@@ -491,14 +490,14 @@ test("requires current-head validation and all four current-generation lenses be
   );
   expect(isActiveTask(task)).toBe(true);
   expect(() =>
-    transitionTask(task, { type: "record-review", review: review("behavior") }, context()),
+    transitionTask(task, { type: "record-review", review: review("review") }, context()),
   ).toThrow(TaskTransitionError);
 });
 
 test("rejects duplicate or stale review results and never treats blocking findings as a pass", () => {
   let task = implementationToReviewing();
   const blocking: ReviewResult = {
-    ...review("behavior"),
+    ...review("review"),
     findings: [
       {
         id: "finding-1",
@@ -511,14 +510,14 @@ test("rejects duplicate or stale review results and never treats blocking findin
   expect(() =>
     transitionTask(task, { type: "record-review", review: blocking }, context()),
   ).toThrow(TaskTransitionError);
-  task = transitionTask(task, { type: "record-review", review: review("behavior") }, context());
+  task = transitionTask(task, { type: "record-review", review: review("review") }, context());
   expect(() =>
-    transitionTask(task, { type: "record-review", review: review("behavior") }, context()),
+    transitionTask(task, { type: "record-review", review: review("review") }, context()),
   ).toThrow(TaskTransitionError);
   expect(() =>
     transitionTask(
       task,
-      { type: "record-review", review: review("design", true, "head-1", 99) },
+      { type: "record-review", review: review("review", true, "head-1", 99) },
       context(),
     ),
   ).toThrow(TaskTransitionError);
@@ -568,16 +567,13 @@ test("carries finding identities and their status across review rounds", () => {
   let task = implementationToReviewing();
   task = transitionTask(
     task,
-    { type: "record-review", review: { ...review("behavior", false), findings: [blocker] } },
+    { type: "record-review", review: { ...review("review", false), findings: [blocker] } },
     context(),
   );
   expect(task.findingLedger).toHaveLength(1);
   expect(task.findingLedger?.[0]?.status).toBe("unresolved");
   expect(ledgerBlockers(task.findingLedger ?? []).map((entry) => entry.id)).toEqual(["finding-1"]);
 
-  for (const lens of ["design", "coverage", "verification"] as const) {
-    task = transitionTask(task, { type: "record-review", review: review(lens, false) }, context());
-  }
   task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
   expect(task.stage).toBe("awaiting-fixes");
 
@@ -603,7 +599,7 @@ test("carries finding identities and their status across review rounds", () => {
   );
   task = transitionTask(
     task,
-    { type: "record-review", review: review("behavior", true, "head-2", 1) },
+    { type: "record-review", review: review("review", true, "head-2", 1) },
     context(),
   );
 

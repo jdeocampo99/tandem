@@ -74,7 +74,7 @@ export { LiveJevBudgetExceededError };
 
 const FAKE_API_KEY = "fixture-key";
 const NOW = "2030-01-02T03:04:05.000Z";
-const IMPLEMENTATION_APPROVAL_DISCLAIMER = "approve the concrete scope before starting";
+const IMPLEMENTATION_APPROVAL_DISCLAIMER = "its own confirmation is the single approval ask";
 
 type ClassifyDeps = Readonly<{
   readonly config: ResearchContinuationClassifierConfig;
@@ -195,7 +195,6 @@ const FIXTURE_POLICY: ResolvedPolicy = {
       scout: { model: "openai-codex/gpt-5.6-luna", thinking: "medium" },
       implementer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
       reviewer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
-      verifier: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
       presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
     },
     instructions: { implementation: [], validation: [], review: [] },
@@ -205,12 +204,10 @@ const FIXTURE_POLICY: ResolvedPolicy = {
     maxWorkers: 3,
     maxFixRounds: 3,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };

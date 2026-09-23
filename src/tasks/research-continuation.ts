@@ -51,13 +51,15 @@ const CONTINUATION_KEYS = [
   "disposition",
   "selectedBy",
   "classifierVersion",
+  "fallbackReason",
 ] as const;
 
 function isOneOf<Value extends string>(value: unknown, values: readonly Value[]): value is Value {
   return typeof value === "string" && values.some((candidate) => candidate === value);
 }
 
-function isClassifierVersion(value: unknown): value is string {
+/** Bounded single-line text, shared by `classifierVersion` and `fallbackReason` provenance. */
+function isBoundedProvenanceText(value: unknown): value is string {
   if (typeof value !== "string" || value.trim().length === 0) return false;
   if (value.length > MAX_CLASSIFIER_VERSION_CHARS) return false;
   for (let index = 0; index < value.length; index += 1) {
@@ -108,7 +110,7 @@ export function checkResearchContinuation(value: unknown): ResearchContinuationC
     };
   }
   const hasClassifierVersion = Object.hasOwn(record, "classifierVersion");
-  if (hasClassifierVersion && !isClassifierVersion(record.classifierVersion)) {
+  if (hasClassifierVersion && !isBoundedProvenanceText(record.classifierVersion)) {
     return {
       valid: false,
       defect: `classifierVersion must be single-line text of at most ${MAX_CLASSIFIER_VERSION_CHARS} characters`,
@@ -126,6 +128,25 @@ export function checkResearchContinuation(value: unknown): ResearchContinuationC
       defect: "a jev-selected research continuation requires a classifier version",
     };
   }
+  const hasFallbackReason = Object.hasOwn(record, "fallbackReason");
+  if (hasFallbackReason && !isBoundedProvenanceText(record.fallbackReason)) {
+    return {
+      valid: false,
+      defect: `fallbackReason must be single-line text of at most ${MAX_CLASSIFIER_VERSION_CHARS} characters`,
+    };
+  }
+  if (selectedBy === "fallback" && !hasFallbackReason) {
+    return {
+      valid: false,
+      defect: "a fallback research continuation requires a fallback reason",
+    };
+  }
+  if (selectedBy !== "fallback" && hasFallbackReason) {
+    return {
+      valid: false,
+      defect: "only a fallback research continuation may carry a fallback reason",
+    };
+  }
   return {
     valid: true,
     continuation: {
@@ -133,6 +154,7 @@ export function checkResearchContinuation(value: unknown): ResearchContinuationC
       disposition,
       selectedBy,
       ...(hasClassifierVersion ? { classifierVersion: record.classifierVersion as string } : {}),
+      ...(hasFallbackReason ? { fallbackReason: record.fallbackReason as string } : {}),
     },
   };
 }

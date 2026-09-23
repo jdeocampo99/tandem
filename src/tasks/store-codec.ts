@@ -1,5 +1,6 @@
 import {
   type AgentRole,
+  ALL_REVIEW_LENSES,
   BLOCK_CAUSE_GROUP_BY_KIND,
   BLOCK_CAUSE_GROUPS,
   BLOCK_CAUSE_KINDS,
@@ -15,6 +16,7 @@ import {
   type InstructionChannel,
   type IterationScope,
   isSafeRequestId,
+  LEGACY_ENDPOINT_ROLES,
   LEGACY_EVIDENCE_CONTRACT,
   MAX_RESEARCH_HANDOFF_COUNT,
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
@@ -25,12 +27,10 @@ import {
   type PullRequestMetadata,
   REVIEW_LEVEL_ORDER,
   type RepoPolicy,
-  type RequestBudgetPolicy,
   type ResearchContinuation,
   type ResearchHandoff,
   type ResolvedGuidance,
   type ResolvedPolicy,
-  type ReviewLens,
   type ReviewLevel,
   type ReviewLevelAssistance,
   type ReviewLevelPolicy,
@@ -41,6 +41,7 @@ import {
   type SafetyFloor,
   type SetupCommand,
   type SkillInvocation,
+  type StoredReviewLens,
   type TaskCleanupState,
   type TaskCleanupStatus,
   type TaskKind,
@@ -51,7 +52,6 @@ import {
   type ValidationEvidence,
   type WorktreeLease,
 } from "../contracts.ts";
-import { FINAL_REVIEW_LENSES } from "./acceptance.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
 import { FINDING_STATUSES } from "./findings.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
@@ -93,7 +93,9 @@ const THINKING_LEVELS = [
 ] as const;
 const FINDING_SEVERITIES: readonly FindingSeverity[] = ["P0", "P1", "P2", "P3"];
 const FINDING_VERDICTS: readonly FindingVerdict[] = ["confirmed", "plausible"];
-const REVIEW_LENSES: readonly ReviewLens[] = FINAL_REVIEW_LENSES;
+// ponytail: accepts every legacy lens name too (see ALL_REVIEW_LENSES) so a stored review or
+// finding recorded before the lenses were merged still decodes.
+const REVIEW_LENSES: readonly StoredReviewLens[] = ALL_REVIEW_LENSES;
 const VALIDATION_CONTRACT_NAMES: readonly ValidationContractName[] = ["iteration", "final"];
 const CHECK_ORIGINS: readonly CheckOrigin[] = ["local", "github"];
 const TOP_LEVEL_KEYS = [
@@ -300,6 +302,9 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
   if (!isRecord(value)) {
     failState(source, "policy config must be an object");
   }
+  // ponytail: a policy snapshot pinned before standing request budgets were removed may still
+  // carry "requestBudget"; the key stays accepted here so that snapshot still decodes, but it is
+  // never read into the result below.
   assertExactKeys(
     value,
     [
@@ -324,7 +329,10 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
   if (!isRecord(modelsValue)) {
     failState(`${source}.models`, "models must be an object");
   }
-  assertExactKeys(modelsValue, MODEL_ROLE_ORDER, `${source}.models`);
+  // ponytail: a policy snapshot pinned before the verifier role was removed still carries a
+  // models.verifier entry; the key stays accepted here so that snapshot still decodes, but the
+  // entry itself is never read into the result below.
+  assertExactKeys(modelsValue, [...MODEL_ROLE_ORDER, "verifier"], `${source}.models`);
   const models: Record<AgentRole, ModelSpec> = {
     coordinator: parseModelSpec(
       requiredValue(modelsValue, "coordinator", `${source}.models`),
@@ -341,10 +349,6 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
     reviewer: parseModelSpec(
       requiredValue(modelsValue, "reviewer", `${source}.models`),
       `${source}.models.reviewer`,
-    ),
-    verifier: parseModelSpec(
-      requiredValue(modelsValue, "verifier", `${source}.models`),
-      `${source}.models.verifier`,
     ),
     presentation: parseModelSpec(
       requiredValue(modelsValue, "presentation", `${source}.models`),
@@ -374,7 +378,6 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
     maxWorkers: requiredInteger(value, "maxWorkers", source, 1),
     maxFixRounds: requiredInteger(value, "maxFixRounds", source, 0),
     reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`),
-    requestBudget: parseRequestBudgetPolicy(value, `${source}.requestBudget`),
   };
 }
 
@@ -402,35 +405,6 @@ function parseSetupCommands(record: UnknownRecord, source: string): readonly Set
 }
 
 /**
- * Reads the standing spending amounts from a pinned policy. A record written before budgets
- * existed names no amount, and it loads as unset, which pauses that request for an explicit
- * decision instead of granting it the cap some later repository configuration happens to hold.
- */
-function parseRequestBudgetPolicy(record: UnknownRecord, source: string): RequestBudgetPolicy {
-  if (!Object.hasOwn(record, "requestBudget")) {
-    return { capMicros: "unset", operationEstimateMicros: "unset" };
-  }
-  const value = requiredValue(record, "requestBudget", source);
-  if (!isRecord(value)) {
-    failState(source, "requestBudget must be an object");
-  }
-  assertExactKeys(value, ["capMicros", "operationEstimateMicros"], source);
-  return {
-    capMicros: parseMicroDollars(value, "capMicros", source),
-    operationEstimateMicros: parseMicroDollars(value, "operationEstimateMicros", source),
-  };
-}
-
-function parseMicroDollars(record: UnknownRecord, field: string, source: string): number | "unset" {
-  const value = requiredValue(record, field, source);
-  if (value === "unset") return "unset";
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    failState(source, `${field} must be "unset" or a non-negative integer of USD micro-dollars`);
-  }
-  return value as number;
-}
-
-/**
  * Reads the review-level opt-ins from a pinned policy. A record written before review levels
  * existed carries none, and it loads with every opt-in off, which is exactly the review behavior
  * that record was pinned under. A present but malformed section fails closed.
@@ -441,13 +415,14 @@ function parseReviewLevelPolicy(record: UnknownRecord, source: string): ReviewLe
   if (!isRecord(value)) {
     failState(source, "reviewLevels must be an object");
   }
+  // ponytail: a policy snapshot pinned before reducedRouting was removed may still carry it; the
+  // key stays accepted here so that snapshot still decodes, but it is never read into the result.
   assertExactKeys(
     value,
     ["reducedRouting", "deepScrutiny", "jevAssistance", "sourceTransmission"],
     source,
   );
   return {
-    reducedRouting: requiredBoolean(value, "reducedRouting", source),
     deepScrutiny: requiredBoolean(value, "deepScrutiny", source),
     jevAssistance: requiredEnum(value, "jevAssistance", ["off", "shadow"] as const, source),
     sourceTransmission: requiredBoolean(value, "sourceTransmission", source),
@@ -553,7 +528,8 @@ function parseEndpoint(value: unknown, source: string): Endpoint {
     workspaceId: requiredText(value, "workspaceId", source),
     tabId: requiredText(value, "tabId", source),
     paneId: requiredText(value, "paneId", source),
-    role: requiredEnum(value, "role", MODEL_ROLE_ORDER, source),
+    // ponytail: legacy panes may still carry role "verifier"; see LEGACY_ENDPOINT_ROLES.
+    role: requiredEnum(value, "role", LEGACY_ENDPOINT_ROLES, source),
     generation: requiredInteger(value, "generation", source),
   };
 }

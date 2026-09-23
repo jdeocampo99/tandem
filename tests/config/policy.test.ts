@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { writeModelSettings } from "../../src/config/models.ts";
-import { defaultPolicy, parsePolicy, parsePolicyOverride } from "../../src/config/policy.ts";
+import { defaultPolicy, parsePolicy } from "../../src/config/policy.ts";
 import { onboardRepo, resolveRepoPolicy } from "../../src/config/repositories.ts";
 
 type PolicyFixture = Readonly<{
@@ -55,6 +55,7 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/** Writes the legacy config.json envelope beside settings.toml, which is still read. */
 async function writeCentralEnvelope(
   configPath: string,
   repoPath: string,
@@ -62,7 +63,7 @@ async function writeCentralEnvelope(
 ): Promise<void> {
   await mkdir(dirname(configPath), { recursive: true });
   await writeFile(
-    configPath,
+    join(dirname(configPath), "config.json"),
     `${JSON.stringify({ schemaVersion: 1, repoPath, policy }, null, 2)}\n`,
     "utf8",
   );
@@ -76,7 +77,6 @@ test("defaultPolicy exposes the exact configured role pins", () => {
     scout: { model: "openai-codex/gpt-5.6-luna", thinking: "medium" },
     implementer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
     reviewer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
-    verifier: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
     presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
   });
   expect(policy.maxWorkers).toBe(3);
@@ -141,7 +141,7 @@ test("clean-bound policy reads guidance and onboarding metadata from the checkou
 
     const preview = await onboardRepo({ repoPath: repo, checkoutPath: clean, home });
     expect(preview.validationCommands.map((command) => command.argv)).toEqual([
-      ["bun", "run", "test"],
+      ["/bin/sh", "-c", "bun run test"],
     ]);
     await writeCentralEnvelope(preview.configPath, repo, {
       instructionFiles: { implementation: ["docs/implementation.md"] },
@@ -187,32 +187,6 @@ test("parsePolicy rejects unknown keys, invalid pins, invalid limits, and unsafe
   ).toThrow(TypeError);
 });
 
-test("standing spending amounts default to unset and layer without adopting a default", () => {
-  expect(parsePolicy({}).requestBudget).toEqual({
-    capMicros: "unset",
-    operationEstimateMicros: "unset",
-  });
-
-  const standing = parsePolicy({
-    requestBudget: { capMicros: 10_000_000, operationEstimateMicros: 500_000 },
-  });
-  expect(standing.requestBudget).toEqual({
-    capMicros: 10_000_000,
-    operationEstimateMicros: 500_000,
-  });
-
-  const tightened = parsePolicyOverride({ requestBudget: { capMicros: 2_000_000 } }, standing);
-  expect(tightened.requestBudget).toEqual({
-    capMicros: 2_000_000,
-    operationEstimateMicros: 500_000,
-  });
-
-  expect(() => parsePolicy({ requestBudget: { capMicros: -1 } })).toThrow(TypeError);
-  expect(() => parsePolicy({ requestBudget: { capMicros: 1.5 } })).toThrow(TypeError);
-  expect(() => parsePolicy({ requestBudget: { capMicros: "unlimited" } })).toThrow(TypeError);
-  expect(() => parsePolicy({ requestBudget: { unexpected: 1 } })).toThrow(TypeError);
-});
-
 test("resolveRepoPolicy refuses missing configured guidance files", async () => {
   await withFixture("missing-guidance-repo", async ({ repo, home }) => {
     const preview = await onboardRepo({ repoPath: repo, home });
@@ -240,8 +214,8 @@ test("read-only onboarding leaves the target and absent Tandem home untouched", 
     expect(first.approvalRequired).toBe(true);
     expect(first.modelSettings.configured).toBe(false);
     expect(first.validationCommands.map((command) => command.argv)).toEqual([
-      ["bun", "run", "lint"],
-      ["bun", "run", "test"],
+      ["/bin/sh", "-c", "bun run lint"],
+      ["/bin/sh", "-c", "bun run test"],
     ]);
     expect(await pathExists(home)).toBe(false);
     expect(await pathExists(first.configPath)).toBe(false);
@@ -271,7 +245,7 @@ test("onboardRepo prefers an explicit ci:local proposal when discovered", async 
     expect(proposal.unresolved).toEqual([]);
     expect(proposal.approvalRequired).toBe(true);
     expect(proposal.validationCommands.map((entry) => entry.argv)).toEqual([
-      ["bun", "run", "ci:local"],
+      ["/bin/sh", "-c", "bun run ci:local"],
     ]);
   });
 });
@@ -378,7 +352,6 @@ test("a configured home inside the target repository fails closed without creati
 
 test("every review-level opt-in is off by default", () => {
   expect(defaultPolicy().reviewLevels).toEqual({
-    reducedRouting: false,
     deepScrutiny: false,
     jevAssistance: "off",
     sourceTransmission: false,
@@ -389,20 +362,17 @@ test("every review-level opt-in is off by default", () => {
 test("a repository can opt into each review-level setting explicitly", () => {
   const parsed = parsePolicy({
     reviewLevels: {
-      reducedRouting: true,
       deepScrutiny: true,
       jevAssistance: "shadow",
       sourceTransmission: true,
     },
   });
   expect(parsed.reviewLevels).toEqual({
-    reducedRouting: true,
     deepScrutiny: true,
     jevAssistance: "shadow",
     sourceTransmission: true,
   });
   expect(parsePolicy({ reviewLevels: { deepScrutiny: true } }).reviewLevels).toEqual({
-    reducedRouting: false,
     deepScrutiny: true,
     jevAssistance: "off",
     sourceTransmission: false,
@@ -411,9 +381,27 @@ test("a repository can opt into each review-level setting explicitly", () => {
 
 test("review-level settings reject unknown keys, wrong types, and unsupported modes", () => {
   expect(() => parsePolicy({ reviewLevels: { reduceEverything: true } })).toThrow(TypeError);
-  expect(() => parsePolicy({ reviewLevels: { reducedRouting: "yes" } })).toThrow(TypeError);
+  expect(() => parsePolicy({ reviewLevels: { deepScrutiny: "yes" } })).toThrow(TypeError);
   expect(() => parsePolicy({ reviewLevels: { jevAssistance: "active" } })).toThrow(TypeError);
   expect(() => parsePolicy({ reviewLevels: [] })).toThrow(TypeError);
+});
+
+test("a repository config that still sets reducedRouting still loads, ignoring it", () => {
+  const parsed = parsePolicy({ reviewLevels: { reducedRouting: true, deepScrutiny: true } });
+  expect(parsed.reviewLevels).toEqual({
+    deepScrutiny: true,
+    jevAssistance: "off",
+    sourceTransmission: false,
+  });
+});
+
+test("a repository config that still sets requestBudget still loads, ignoring it", () => {
+  const parsed = parsePolicy({
+    requestBudget: { capMicros: 5_000_000 },
+    maxWorkers: 3,
+  });
+  expect(parsed.maxWorkers).toBe(3);
+  expect(parsed).not.toHaveProperty("requestBudget");
 });
 
 test("saved provider enablement is exposed through onboarding but never becomes part of the resolved policy", async () => {
@@ -463,15 +451,16 @@ test("onboardRepo proposes a frozen install from the lockfile and saves it", asy
 
     const proposal = await onboardRepo({ repoPath: repo, home });
     expect(proposal.approvalRequired).toBe(true);
-    expect(proposal.setupCommands.map((entry) => entry.argv)).toEqual([
-      ["pnpm", "install", "--frozen-lockfile"],
-    ]);
+    const install = ["/bin/sh", "-c", "pnpm install --frozen-lockfile"];
+    expect(proposal.setupCommands.map((entry) => entry.argv)).toEqual([install]);
 
-    await onboardRepo({ repoPath: repo, home, write: true });
+    const written = await onboardRepo({ repoPath: repo, home, write: true });
+    const text = await readFile(written.configPath, "utf8");
+    expect(written.configPath.endsWith("settings.toml")).toBe(true);
+    expect(text).toContain('setupCommands = ["pnpm install --frozen-lockfile"]');
+    expect(text).toContain("# maxWorkers = 3");
     const resolved = await resolveRepoPolicy({ repoPath: repo, home });
-    expect(resolved.config.setupCommands.map((entry) => entry.argv)).toEqual([
-      ["pnpm", "install", "--frozen-lockfile"],
-    ]);
+    expect(resolved.config.setupCommands.map((entry) => entry.argv)).toEqual([install]);
   });
 });
 
@@ -479,5 +468,57 @@ test("onboardRepo proposes no setup without a lockfile", async () => {
   await withFixture("no-lockfile-repo", async ({ repo, home }) => {
     const proposal = await onboardRepo({ repoPath: repo, home });
     expect(proposal.setupCommands).toEqual([]);
+  });
+});
+
+test("commands can be written as plain strings that run through the shell", () => {
+  const policy = parsePolicy({
+    setupCommands: ["npm ci"],
+    validationCommands: ["npm run lint && npm test"],
+  });
+  expect(policy.setupCommands).toEqual([
+    { name: "npm ci", argv: ["/bin/sh", "-c", "npm ci"], timeoutMs: 600_000 },
+  ]);
+  expect(policy.validationCommands).toEqual([
+    {
+      name: "npm run lint && npm test",
+      argv: ["/bin/sh", "-c", "npm run lint && npm test"],
+      surfaces: [],
+      timeoutMs: 600_000,
+    },
+  ]);
+  expect(() => parsePolicy({ setupCommands: ["npm ci", "npm ci"] })).toThrow("duplicate");
+  expect(() => parsePolicy({ setupCommands: ["  "] })).toThrow(TypeError);
+});
+
+test("every commented-out setting in a new settings.toml is valid once uncommented", async () => {
+  await withFixture("template-repo", async ({ repo, home }) => {
+    const written = await onboardRepo({ repoPath: repo, home, write: true });
+    const text = await readFile(written.configPath, "utf8");
+    // Uncomment only setting lines ("# key = ..." and "# [table]"), not prose comments.
+    const enabled = text.replace(/^# (?=[A-Za-z]+ = |\[)/gmu, "");
+    const settings = Bun.TOML.parse(enabled) as Record<string, unknown>;
+    expect(Object.keys(settings).sort()).toEqual([
+      "instructionFiles",
+      "instructions",
+      "maxFixRounds",
+      "maxWorkers",
+      "models",
+      "repoPath",
+      "reviewLevels",
+      "setupCommands",
+      "validationCommands",
+    ]);
+    const { repoPath, ...policy } = settings;
+    expect(repoPath).toBe(repo);
+    expect(() => parsePolicy(policy)).not.toThrow();
+  });
+});
+
+test("a project with both settings.toml and config.json is refused rather than guessed", async () => {
+  await withFixture("both-formats-repo", async ({ repo, home }) => {
+    const written = await onboardRepo({ repoPath: repo, home, write: true });
+    await writeCentralEnvelope(written.configPath, repo, {});
+    await expect(resolveRepoPolicy({ repoPath: repo, home })).rejects.toThrow("keep one");
   });
 });

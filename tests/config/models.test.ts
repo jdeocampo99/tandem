@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readModelSettings, writeModelSettings } from "../../src/config/models.ts";
@@ -9,7 +9,6 @@ const MODELS = {
   scout: { model: "acme/scout", thinking: "medium" },
   implementer: { model: "acme/implementer", thinking: "max" },
   reviewer: { model: "acme/reviewer", thinking: "max" },
-  verifier: { model: "acme/verifier", thinking: "high" },
   presentation: { model: "acme/presentation", thinking: "low" },
 } as const;
 
@@ -82,6 +81,24 @@ test("a models.json written before this feature existed is read with no enabled 
     await writeModelSettings({ repoPath: repo, home, models: MODELS });
     const settings = await readModelSettings({ repoPath: repo, home });
     expect(settings.enabledProviders).toEqual([]);
+    expect(settings.models).toEqual(MODELS);
+  });
+});
+
+test("a models.json saved before the verifier role was removed still loads, ignoring it", async () => {
+  await withFixture(async ({ repo, home }) => {
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "models.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        models: { ...MODELS, verifier: { model: "acme/verifier", thinking: "high" } },
+        enabledProviders: [],
+      })}\n`,
+      "utf8",
+    );
+    const settings = await readModelSettings({ repoPath: repo, home });
+    expect(settings.configured).toBe(true);
     expect(settings.models).toEqual(MODELS);
   });
 });

@@ -40,7 +40,6 @@ const policyConfig: RepoPolicy = {
     scout: { model: "scenario/scout", thinking: "low" },
     implementer: { model: "scenario/implementer", thinking: "low" },
     reviewer: { model: "scenario/reviewer", thinking: "low" },
-    verifier: { model: "scenario/verifier", thinking: "low" },
     presentation: { model: "scenario/presentation", thinking: "low" },
   },
   instructions: { implementation: [], validation: [], review: [] },
@@ -52,12 +51,10 @@ const policyConfig: RepoPolicy = {
   maxWorkers: 2,
   maxFixRounds: 1,
   reviewLevels: {
-    reducedRouting: false,
     deepScrutiny: false,
     jevAssistance: "off",
     sourceTransmission: false,
   },
-  requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
 };
 
 const policy: ResolvedPolicy = {
@@ -81,7 +78,7 @@ function review(lens: ReviewLens, head: string): ReviewResult {
   return { lens, head, generation: 0, pass: true, findings: [], summary: `${lens} passed` };
 }
 
-const LENSES: readonly ReviewLens[] = ["behavior", "design", "coverage", "verification"];
+const LENSES: readonly ReviewLens[] = ["review"];
 
 function result(stdout = "", code = 0, stderr = ""): CommandResult {
   return { code, stdout, stderr };
@@ -448,7 +445,7 @@ test("publication is refused until the integrated commit satisfies the final acc
         summary: { tldr: ["t"], what: ["w"], why: ["y"] },
         approved: true,
       }),
-    ).rejects.toThrow(/no passing behavior review/u);
+    ).rejects.toThrow(/no passing review/u);
     expect(world.remote.pullRequestNumber).toBeUndefined();
   });
 });
@@ -490,7 +487,7 @@ test("a review naming another commit is refused rather than retargeted", async (
     await world.workflow().integrate(world.requestId);
 
     await expect(
-      world.workflow().recordReview(world.requestId, review("behavior", "f".repeat(40))),
+      world.workflow().recordReview(world.requestId, review("review", "f".repeat(40))),
     ).rejects.toThrow(/not the integrated HEAD/u);
   });
 });

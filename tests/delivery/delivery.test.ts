@@ -34,16 +34,12 @@ import {
 import { policyIdentity } from "../../src/tasks/acceptance.ts";
 
 const models: Readonly<
-  Record<
-    "coordinator" | "scout" | "implementer" | "reviewer" | "verifier" | "presentation",
-    ModelSpec
-  >
+  Record<"coordinator" | "scout" | "implementer" | "reviewer" | "presentation", ModelSpec>
 > = {
   coordinator: { model: "openai-codex/gpt-6-astra", thinking: "high" },
   scout: { model: "openai-codex/gpt-5.6-luna", thinking: "medium" },
   implementer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
   reviewer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
-  verifier: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
   presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
 };
 
@@ -59,12 +55,10 @@ const policyConfig: RepoPolicy = {
   maxWorkers: 3,
   maxFixRounds: 3,
   reviewLevels: {
-    reducedRouting: false,
     deepScrutiny: false,
     jevAssistance: "off",
     sourceTransmission: false,
   },
-  requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
 };
 
 const policy: ResolvedPolicy = {
@@ -148,12 +142,7 @@ function task(withPullRequest = false, options: TaskFixtureOptions = {}): TaskRe
     reviewRound: 0,
     reviewHead: reviewedHead,
     validationEvidence: [evidence(reviewedHead)],
-    reviews: [
-      review("behavior", reviewedHead),
-      review("design", reviewedHead),
-      review("coverage", reviewedHead),
-      review("verification", reviewedHead),
-    ],
+    reviews: [review("review", reviewedHead)],
     notifications: [],
     ...(withPullRequest ? { pullRequest } : {}),
   };
@@ -690,16 +679,14 @@ test("a draft body reports review level, activity, blockers, and remaining check
   );
   expect(body).toContain("Review level: standard.");
   expect(body).toContain("no review level is recorded for this task");
-  expect(body).toContain(
-    "the pinned repository policy requires behavior, design, coverage, verification review at final acceptance",
-  );
+  expect(body).toContain("the pinned repository policy requires review at final acceptance");
   expect(body).toContain("at most 3 bounded fix round(s)");
   expect(body).toContain("# Current activity");
   expect(body).toContain("fix round 3 of 3 has been used");
   expect(body).toContain("The bounded fix-round loop is exhausted at 3 of 3");
   expect(body).toContain("F-1/P1: ordering regression on retry");
   expect(body).toContain("uncommitted changes that are not part of this draft");
-  expect(body).toContain("A passing design review by a fresh independent read-only reviewer");
+  expect(body).toContain("A passing review by a fresh independent read-only reviewer");
   expect(body).toContain("Runner-owned required GitHub checks");
   expect(body).toContain("remain separate explicit approvals");
   expect(body).toContain("Final acceptance requirement check (local check)");
@@ -731,7 +718,7 @@ test("a ready task's draft still refuses to claim acceptance", () => {
   const body = describeTaskDraftPr({
     task: draftTask({
       stage: "ready",
-      reviews: [review("behavior"), review("design"), review("coverage"), review("verification")],
+      reviews: [review("review")],
       validationEvidence: [evidence()],
     }),
     publishedHead: "head-1",

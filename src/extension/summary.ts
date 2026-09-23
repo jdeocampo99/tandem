@@ -6,7 +6,7 @@ import {
   MODEL_ROLE_ORDER,
   type TaskRecord,
 } from "../contracts.ts";
-import { describePauseReason, formatDollars, type RequestSpendReadout } from "../runtime/budget.ts";
+import { USD_MICROS_PER_DOLLAR } from "../runtime/usage.ts";
 import type {
   AdditionalCharges,
   ElapsedMillis,
@@ -350,7 +350,7 @@ function summarizeOnboard(value: unknown, action: "onboard" | "setup"): string {
       );
     } else {
       lines.push("No saved model choices yet; no role has a selected, approved, or saved model.");
-      lines.push("Pending role choices (all six roles are unselected until explicit answers):");
+      lines.push("Pending role choices (every role is unselected until explicit answers):");
       lines.push(...summarizeModelAssignments(undefined, true).map((entry) => `- ${entry}`));
       lines.push(
         "Call models to fetch the OMP catalogue and the proposed Balanced profile, then accept it, inspect and override any role or provider enablement, or choose Not now to pause without configure-models, project setup, or launch.",
@@ -360,7 +360,7 @@ function summarizeOnboard(value: unknown, action: "onboard" | "setup"): string {
     lines.push(
       action === "setup"
         ? "Saved model choices remain configured; setup did not change them."
-        : "Saved model choices are configured for future projects (all six roles):",
+        : "Saved model choices are configured for future projects (every role):",
     );
     const current = summarizeModelAssignments(
       modelSettings.models ?? summaryRecord(record.policy)?.models,
@@ -370,7 +370,7 @@ function summarizeOnboard(value: unknown, action: "onboard" | "setup"): string {
     if (action === "onboard") {
       lines.push("Choose one: Keep all (read-only), Change roles, or Not now.");
       lines.push(
-        "Keep all does not write or force re-selection. Change roles asks explicitly for every role, records keep-current answers for untouched roles, preserves those assignments, and recaps all six before configure-models approval. Not now pauses onboarding without configure-models, project setup, launch, or changing saved choices.",
+        "Keep all does not write or force re-selection. Change roles asks explicitly for every role, records keep-current answers for untouched roles, preserves those assignments, and recaps every role before configure-models approval. Not now pauses onboarding without configure-models, project setup, launch, or changing saved choices.",
       );
     }
   }
@@ -921,6 +921,12 @@ function describeDuration(value: ElapsedMillis): string {
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
+/** Plain dollars for a user-facing summary; an unmeasured amount is named, never shown as zero. */
+function formatDollars(value: number | "unavailable"): string {
+  if (value === "unavailable") return "an unknown amount";
+  return `$${(value / USD_MICROS_PER_DOLLAR).toFixed(2)}`;
+}
+
 /** Never presents an unmeasured charge as zero, and never lets one read as a saving. */
 function describeCharges(charges: AdditionalCharges): string {
   const amount = formatDollars(charges.amountMicros);
@@ -988,43 +994,6 @@ function summarizeRequestReceipt(value: unknown): string {
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
-/**
- * The standing budget as one decision-ready block: the cap in force, what has been charged, what
- * is still reserved as an estimate, and the pending question if the request is stopped on one.
- */
-export function summarizeRequestSpend(readout: RequestSpendReadout): string {
-  const { cap, exposure, pause } = readout;
-  const lines = [
-    `${readout.requestId}: cap ${cap.source === "none" ? "none in force" : `${formatDollars(cap.capMicros)} from ${cap.source}`}; approval ${readout.approvalState}`,
-    `Charged so far: ${describeCharges(readout.charges)}`,
-    `Set aside (estimate): ${formatDollars(exposure.reservedMicros)} for ${exposure.inFlightReservations} running and ${exposure.settledEstimateReservations} finished-but-unpriced step(s)`,
-    `Known cost: at least ${formatDollars(exposure.totalMicros)}`,
-    `Unmeasured: ${exposure.unpricedSamples} step(s) have no price and ${exposure.unmeasuredTokenSamples} reported no tokens; ${exposure.unaccountedSamples} have no estimate set aside`,
-    `Included quota: ${describeQuota(readout.quota)}`,
-  ];
-  if (readout.approval !== undefined) {
-    lines.push(
-      `Authorized ${formatDollars(readout.approval.capMicros)} on decision ${readout.approval.decisionId} at ${readout.approval.approvedAt}, replacing ${formatDollars(readout.approval.previousCapMicros)}, accepting ${readout.approval.acknowledgedUnaccountedSamples} unmeasured sample(s).`,
-    );
-  }
-  lines.push(
-    pause === undefined
-      ? "No spending question is waiting."
-      : `Spending question waiting. ${describePauseReason(pause.reason)} The next step is estimated at ${formatDollars(pause.nextStepMicros)}. Answer it with budget-approve.`,
-  );
-  return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
-}
-
-function isRequestSpendReadout(value: unknown): value is RequestSpendReadout {
-  const record = summaryRecord(value);
-  return (
-    record !== undefined &&
-    typeof record.requestId === "string" &&
-    summaryRecord(record.cap) !== undefined &&
-    summaryRecord(record.exposure) !== undefined
-  );
-}
-
 function isNonEmptyEntry(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -1089,11 +1058,6 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     return summarizeRequestBrief(value);
   }
   if (action === "request-receipt") return summarizeRequestReceipt(value);
-  if (action === "budget-show" || action === "budget-approve") {
-    return isRequestSpendReadout(value)
-      ? summarizeRequestSpend(value)
-      : boundedJson(value, ACTION_RESULT_MAX_CHARS);
-  }
   if (action === "presentations" || action === "present" || action === "feedback") {
     return summarizePresentations(action, value);
   }

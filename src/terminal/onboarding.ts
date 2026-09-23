@@ -86,10 +86,6 @@ const ROLE_GUIDANCE: Readonly<
     purpose: "Independently checks changes for bugs, security risks, and design problems.",
     recommendation: "strong reasoning model",
   },
-  verifier: {
-    purpose: "Checks the final changes and recorded validation results against your requirements.",
-    recommendation: "strong reasoning model",
-  },
   presentation: {
     purpose: "Creates visual explanations and presentation artifacts when useful.",
     recommendation: "fast model with good writing and layout skills",
@@ -280,7 +276,6 @@ async function collectAssignments(
       scout: assignmentFor("scout"),
       implementer: assignmentFor("implementer"),
       reviewer: assignmentFor("reviewer"),
-      verifier: assignmentFor("verifier"),
       presentation: assignmentFor("presentation"),
     },
     availableModels,
@@ -369,7 +364,7 @@ function cancelledFirstRun(prompter: TerminalPrompter): ModelOnboardingResult {
 async function firstTimeOnboarding(input: ModelOnboardingInput): Promise<ModelOnboardingResult> {
   const usable = ensureUsableCatalogue(input.availableModels);
   input.prompter.write(
-    "\nTandem needs an explicit model and supported thinking level for all six roles before it can start.\n",
+    "\nTandem needs an explicit model and supported thinking level for every role before it can start.\n",
   );
   const enabledProviders = await askEnabledProviders(
     input.prompter,
@@ -423,7 +418,7 @@ async function firstTimeOnboarding(input: ModelOnboardingInput): Promise<ModelOn
   const models = await collectAssignments(input.prompter, usable, seed);
   if (models === undefined) return cancelledFirstRun(input.prompter);
   writeRecap(input.prompter, models, input.home);
-  const save = await input.prompter.ask("Save these six choices?", {
+  const save = await input.prompter.ask("Save these role choices?", {
     choices: [
       { name: "Save", value: "save" },
       { name: "Not now", value: "not now" },
@@ -488,7 +483,7 @@ async function savedOnboarding(input: ModelOnboardingInput): Promise<ModelOnboar
     return { status: "cancelled", action: "cancel" };
   }
   writeRecap(input.prompter, models, input.home);
-  const save = await input.prompter.ask("Save the changed six-role choices?", {
+  const save = await input.prompter.ask("Save the changed role choices?", {
     choices: [
       { name: "Save", value: "save" },
       { name: "Not now", value: "not now" },
@@ -504,7 +499,7 @@ async function savedOnboarding(input: ModelOnboardingInput): Promise<ModelOnboar
   return { status: "approved", action: "change", models };
 }
 
-/** Collects all six exact catalogue-backed role choices and requires explicit save consent. */
+/** Collects every exact catalogue-backed role choice and requires explicit save consent. */
 export async function runModelOnboarding(
   input: ModelOnboardingInput,
 ): Promise<ModelOnboardingResult> {

@@ -7,7 +7,7 @@ import type {
   TaskRecord,
   ValidationEvidence,
 } from "../contracts.ts";
-import { FUNCTION_REVIEW_PRINCIPLE_NAMES } from "../instructions.ts";
+import { CODE_STANDARD_NAMES } from "../instructions.ts";
 import type { EscalationReason, FinalAcceptanceStatus, FinalRequirement } from "./acceptance.ts";
 import { finalAcceptanceStatus, isPinnedEvidence, planValidation } from "./acceptance.ts";
 import {
@@ -430,7 +430,7 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       scopeApproved: task.scopeApproved,
       surfaces,
       acceptanceCriteria: criteria,
-      principles: FUNCTION_REVIEW_PRINCIPLE_NAMES,
+      principles: CODE_STANDARD_NAMES,
       nonGoals,
     },
     identities: {
@@ -552,7 +552,7 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     ...brief.diffs.flatMap((reference) => describeDiff(reference, compact)),
     `- affected callers observed at HEAD: ${
       compact
-        ? `${brief.affectedCallers.length} file(s); read them with tandem inspect`
+        ? `${brief.affectedCallers.length} file(s); read them with tandem status TASK_ID`
         : brief.affectedCallers.length === 0
           ? "none observed"
           : brief.affectedCallers.join(", ")
@@ -560,6 +560,14 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     ...(compact
       ? [`- ${brief.sourceLinks.length} source link(s); read the patch at the paths above.`]
       : ["- source links:", ...brief.sourceLinks.map((entry) => `  - ${entry}`)]),
+    ...(brief.identities.reviewRound === 0 || brief.impact.assessment !== "contained"
+      ? []
+      : [
+          "",
+          "## Fix-round focus",
+          `- This is fix round ${brief.identities.reviewRound}; review the since-last-review diff above, not the whole change from scratch.`,
+          "- Confirm each evidence-backed blocker below is resolved at this HEAD before passing; do not reopen a settled finding without new evidence.",
+        ]),
     "",
     "## Review breadth",
     `- review level: ${brief.reviewLevel.level}`,
@@ -618,14 +626,16 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     "",
     "## Optional suggestions (not blocking on their own)",
     ...(compact
-      ? [`- ${brief.suggestions.length} suggestion(s) recorded; read them with tandem inspect.`]
+      ? [
+          `- ${brief.suggestions.length} suggestion(s) recorded; read them with tandem status TASK_ID.`,
+        ]
       : brief.suggestions.length === 0
         ? ["- none recorded"]
         : findingLines(brief.suggestions, compact)),
     "",
     "## Settled findings (do not reopen without new evidence at this HEAD)",
     ...(compact
-      ? [`- ${brief.settled.length} settled finding(s); read them with tandem inspect.`]
+      ? [`- ${brief.settled.length} settled finding(s); read them with tandem status TASK_ID.`]
       : brief.settled.length === 0
         ? ["- none recorded"]
         : findingLines(brief.settled, compact)),
@@ -648,7 +658,7 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     lines.push(
       "",
       "## Bounded brief",
-      `- ${elidedTotal} item(s) were elided to keep this brief within its limits; no blocker is elided. The complete record is durable task state, readable with tandem inspect.`,
+      `- ${elidedTotal} item(s) were elided to keep this brief within its limits; no blocker is elided. The complete record is durable task state, readable with tandem status TASK_ID.`,
     );
   }
   return lines.join("\n");

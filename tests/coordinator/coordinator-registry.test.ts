@@ -237,7 +237,6 @@ const resetPolicy: ResolvedPolicy = {
       scout: { model: "scout-model", thinking: "medium" },
       implementer: { model: "implementer-model", thinking: "max" },
       reviewer: { model: "reviewer-model", thinking: "max" },
-      verifier: { model: "verifier-model", thinking: "high" },
       presentation: { model: "presentation-model", thinking: "low" },
     },
     instructions: resetChannels,
@@ -247,12 +246,10 @@ const resetPolicy: ResolvedPolicy = {
     maxWorkers: 3,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };

@@ -18,7 +18,6 @@ const policy: ResolvedPolicy = {
       scout: { model: "provider/scout", thinking: "medium" },
       implementer: { model: "provider/implementer", thinking: "max" },
       reviewer: { model: "provider/reviewer", thinking: "high" },
-      verifier: { model: "provider/verifier", thinking: "high" },
       presentation: { model: "provider/presentation", thinking: "low" },
     },
     instructions: channels,
@@ -28,12 +27,10 @@ const policy: ResolvedPolicy = {
     maxWorkers: 2,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -155,7 +152,7 @@ function reassignmentRouting(
       unaccountedSamples: 0,
       unmeasuredTokenSamples: 0,
     },
-    limits: { capMicros: "unset", operationEstimateMicros: "unset", maxWorkers: 2 },
+    limits: { maxWorkers: 2 },
     resolvedAt: "2030-01-01T00:00:00.000Z",
     ...overrides,
   };

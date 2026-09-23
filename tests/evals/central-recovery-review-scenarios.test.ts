@@ -38,7 +38,6 @@ const REVIEW_POLICY: ResolvedPolicy = {
       scout: { model: "scenario/scout", thinking: "low" },
       implementer: { model: "scenario/implementer", thinking: "low" },
       reviewer: { model: "scenario/reviewer", thinking: "low" },
-      verifier: { model: "scenario/verifier", thinking: "low" },
       presentation: { model: "scenario/presentation", thinking: "low" },
     },
     instructions: { implementation: [], validation: [], review: [] },
@@ -48,12 +47,10 @@ const REVIEW_POLICY: ResolvedPolicy = {
     maxWorkers: 2,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: 10_000_000, operationEstimateMicros: 500_000 },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -170,7 +167,7 @@ async function seedStuckReview(
   return { lease, job };
 }
 
-test("central recovery relaunches only the dead review lens; completed lenses survive and review completes", async () => {
+test("central recovery relaunches a dead legacy review lens as the current merged review, which completes the round", async () => {
   await withScenario({}, async (world) => {
     const { lease, job } = await seedStuckReview(world);
     const service = createTandemService({
@@ -188,24 +185,26 @@ test("central recovery relaunches only the dead review lens; completed lenses su
     let task = await service.get(SCENARIO_TASK_ID);
     expect(task.stage).toBe("reviewing");
     expect(task.notifications.some((entry) => entry.message.includes("Restart 1 of 2"))).toBe(true);
-    // The two already-completed lenses are untouched: still exactly the three recorded before.
+    // The three legacy-lens reviews recorded before the merge are untouched, and no longer required.
     expect(task.reviews).toHaveLength(3);
-    expect(task.reviews.every((review) => review.lens !== "verification")).toBe(true);
+    expect(task.reviews.every((review) => review.lens !== "review")).toBe(true);
 
     const state = await readRuntimeState(runtimeFile(world.home));
     const runtime = state.tasks.find((entry) => entry.taskId === SCENARIO_TASK_ID);
     expect(runtime?.recovery?.restarts).toBe(1);
+    // Recovery clears the dead legacy job and lets the normal launch path relaunch the round; that
+    // path now always requests the single merged "review" lens, not the dead job's legacy lens.
     const replacement = runtime?.jobs.find(
-      (entry) => entry.id !== job.id && entry.reviewLens === "verification",
+      (entry) => entry.id !== job.id && entry.reviewLens === "review",
     );
     if (replacement === undefined)
-      throw new Error("central recovery did not relaunch the dead lens");
+      throw new Error("central recovery did not relaunch the review round");
     expect(activeRuntimeJob(replacement)).toBe(true);
     expect(replacement.head).toBe(SCENARIO_HEAD);
     expect(replacement.endpoint).toBeDefined();
     const endpoint = replacement.endpoint as Endpoint;
 
-    // The relaunched lens now "finishes": its pane goes quiet and a durable, passing result lands.
+    // The relaunched review now "finishes": its pane goes quiet and a durable, passing result lands.
     await interruptEndpoint(world.run, { endpoint, cwd: lease.path });
     await writeWorkerReceipt(workerReceiptPath(replacement.jobPath), {
       schemaVersion: 1,
@@ -222,17 +221,17 @@ test("central recovery relaunches only the dead review lens; completed lenses su
       id: replacement.id,
       taskId: SCENARIO_TASK_ID,
       generation: 0,
-      role: "verifier",
+      role: "reviewer",
       status: "completed",
-      text: "Verification passed.",
+      text: "Review passed.",
       instructionRevision: replacement.instructionRevision ?? 0,
       review: {
-        lens: "verification",
+        lens: "review",
         head: SCENARIO_HEAD,
         generation: 0,
         pass: true,
         findings: [],
-        summary: "verification passed",
+        summary: "review passed",
         mode: "review_existing_head",
       },
       finishedAt: SCENARIO_NOW,
@@ -243,7 +242,7 @@ test("central recovery relaunches only the dead review lens; completed lenses su
 
     task = await service.get(SCENARIO_TASK_ID);
     expect(task.reviews).toHaveLength(4);
-    expect(task.reviews.some((review) => review.lens === "verification")).toBe(true);
+    expect(task.reviews.some((review) => review.lens === "review")).toBe(true);
     expect(task.stage).not.toBe("reviewing");
 
     const snapshot = await world.snapshot();

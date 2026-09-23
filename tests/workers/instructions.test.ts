@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   buildAgentBrief,
+  CODE_STANDARDS,
   type PrDescriptionInput,
   renderPrDescription,
 } from "../../src/instructions.ts";
@@ -110,7 +111,7 @@ test("rejects missing, empty, or overlong TLDR and section input", () => {
   }
 });
 
-test("reviewer and verifier briefs tell the worker a listed user decision settles its question", () => {
+test("the reviewer brief tells the worker a listed user decision settles its question", () => {
   const base = {
     objective: "Ship the streak feature",
     acceptanceCriteria: ["Streak bar glows at 5 in a row"],
@@ -118,11 +119,9 @@ test("reviewer and verifier briefs tell the worker a listed user decision settle
     reportPath: "/tmp/report.txt",
   };
 
-  for (const role of ["reviewer", "verifier"] as const) {
-    const brief = buildAgentBrief({ ...base, role });
-    expect(brief).toContain("A user decision listed in the review brief settles its question");
-    expect(brief).toContain("do not fail the lens for missing runner evidence on it");
-  }
+  const brief = buildAgentBrief({ ...base, role: "reviewer" });
+  expect(brief).toContain("A user decision listed in the review brief settles its question");
+  expect(brief).toContain("do not fail the lens for missing runner evidence on it");
 });
 
 test("rejects multiline entries and Markdown heading injection", () => {
@@ -136,4 +135,23 @@ test("rejects multiline entries and Markdown heading injection", () => {
   for (const input of invalidInputs) {
     expect(() => renderPrDescription(input)).toThrow(TypeError);
   }
+});
+
+test("gives implementers the same code standards the reviewer grades against", () => {
+  const input = {
+    objective: "Change the parser",
+    acceptanceCriteria: ["Keep behavior identical."],
+    instructions: ["Follow the guidance channel."],
+    reportPath: "/tmp/report.txt",
+  };
+
+  expect(buildAgentBrief({ ...input, role: "implementer" })).toContain(CODE_STANDARDS);
+  expect(
+    buildAgentBrief({
+      ...input,
+      role: "reviewer",
+      review: { head: "abc123", generation: 1, pass: "review" },
+    }),
+  ).toContain(CODE_STANDARDS);
+  expect(buildAgentBrief({ ...input, role: "scout" })).not.toContain(CODE_STANDARDS);
 });

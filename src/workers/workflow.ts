@@ -16,7 +16,11 @@ import {
   sendCommand,
   taskWorkspaceLabel,
 } from "../adapters/herdr.ts";
-import { EndpointOwnershipError, LeaseSafetyError } from "../adapters/primitives.ts";
+import {
+  EndpointBusyError,
+  EndpointOwnershipError,
+  LeaseSafetyError,
+} from "../adapters/primitives.ts";
 import { acquireWorktree } from "../adapters/treehouse.ts";
 import type {
   AgentRole,
@@ -40,13 +44,6 @@ import {
   taskRuntime,
   unreleasedReservation,
 } from "../runtime/activity.ts";
-import {
-  describeRequestSpendDecision,
-  type RequestSpendAdmission,
-  withoutRequestBudget,
-  withRequestBudget,
-} from "../runtime/budget.ts";
-import type { RequestSpendGate } from "../runtime/budget-gate.ts";
 import { withStateLock } from "../runtime/database.ts";
 import {
   readRuntimeState,
@@ -65,6 +62,7 @@ import type {
   DurableOperation,
   DurableOperationEffect,
   DurableOperationKind,
+  DurableOperationPhase,
   DurableReservation,
   ExecutionRoutingLimits,
   RuntimeState,
@@ -72,6 +70,7 @@ import type {
 } from "../runtime/schema.ts";
 import type { RequestUsageEvent } from "../runtime/usage.ts";
 import { providerSampleEvent } from "../runtime/usage-events.ts";
+import { type RequestUsageReadout, requestUsageExposure } from "../runtime/usage-receipt.ts";
 import {
   appendTaskJob,
   buildPrompt,
@@ -104,6 +103,7 @@ import {
   workerCommand,
   workerRoleForTask,
 } from "../service/records.ts";
+import { decideScoutWorktreeRelease, observeScoutCheckout } from "../service/scout-cleanup.ts";
 import { taskSourcePath } from "../service/source.ts";
 import {
   iterationScopeFor,
@@ -156,7 +156,7 @@ import {
 import {
   describeExecutionRoutingDecision,
   type ExecutionRoutingBoundary,
-  type ExecutionSpendAdmission,
+  type ExecutionUsageObservation,
   executionRoutingPauseStands,
   type ModelCatalogueReader,
   type ModelCatalogueSnapshot,
@@ -293,8 +293,6 @@ function routingBoundary(prior: PriorExecutionAttempt | undefined): ExecutionRou
 
 function routingLimits(task: TaskRecord): ExecutionRoutingLimits {
   return {
-    capMicros: task.policy.config.requestBudget.capMicros,
-    operationEstimateMicros: task.policy.config.requestBudget.operationEstimateMicros,
     maxWorkers: task.policy.config.maxWorkers,
   };
 }
@@ -335,8 +333,8 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly reviewAssistance: ReviewAssistanceRuntime;
   /** Appends accounting facts. It records only; it never decides whether work may continue. */
   readonly recordRequestUsage: (events: readonly RequestUsageEvent[]) => Promise<void>;
-  /** Decides whether the next operation may spend under its request's standing budget. */
-  readonly requestSpend: RequestSpendGate;
+  /** The accounting ledger's own rows for one request, read for economical routing's usage check. */
+  readonly readRequestUsage: (requestId: string) => Promise<RequestUsageReadout>;
   /** Reads catalogue tier evidence at an execution boundary; it never enables a provider. */
   readonly readModelCatalogue: ModelCatalogueReader;
 }>;
@@ -619,6 +617,8 @@ export class WorkerWorkflow {
   ): Promise<void> {
     const claim = claimOf(runtime.operation);
     if (claim === undefined) return;
+    // ponytail: "verifier" stays matched so a legacy job's failure is still handled as a review
+    // failure; see LegacyWorkerRole.
     const blockReviewFailure = job.role === "reviewer" || job.role === "verifier";
     if (result.status !== "failed") {
       if (
@@ -1545,7 +1545,9 @@ export class WorkerWorkflow {
       fencingRevision: operation.fencingRevision,
       claimOwner: operation.claimOwner,
     };
-    if (runtime.worktree === undefined) {
+    const adoption =
+      runtime.worktree === undefined ? await this.adoptableScoutWorktree(task) : undefined;
+    if (runtime.worktree === undefined && adoption === undefined) {
       const poolReady = await this.withOperationEffect(
         task.id,
         claim,
@@ -1569,7 +1571,15 @@ export class WorkerWorkflow {
         runtime.sourceRepoPath !== undefined,
       );
       const expectedHolder = `${this.#deps.sessionId}:${task.id}`;
-      if (lease !== undefined && lease.leaseHolder !== expectedHolder) {
+      // An implementation may run in the worktree it adopted from its first research handoff's
+      // scout, which Treehouse still records under that scout's holder.
+      const adoptedFrom =
+        task.kind === "implementation" ? task.researchHandoffs?.[0]?.scoutTaskId : undefined;
+      const allowedHolders =
+        adoptedFrom === undefined
+          ? [expectedHolder]
+          : [expectedHolder, `${this.#deps.sessionId}:${adoptedFrom}`];
+      if (lease !== undefined && !allowedHolders.includes(lease.leaseHolder)) {
         throw new LeaseSafetyError(
           `runtime worktree lease is held by ${JSON.stringify(lease.leaseHolder)}, expected ${JSON.stringify(expectedHolder)}`,
           lease,
@@ -1597,6 +1607,7 @@ export class WorkerWorkflow {
         }
       }
       if (needsLeasePreparation) {
+        const holder = adoption?.leaseHolder ?? expectedHolder;
         const prepared = await this.withOperationEffect(
           task.id,
           claim,
@@ -1619,7 +1630,7 @@ export class WorkerWorkflow {
                 const restored = JSON.parse(existingEffect.receipt) as NonNullable<
                   RuntimeTaskState["worktree"]
                 >;
-                await this.saveWorktree(task.id, restored, claim);
+                await this.saveWorktree(task.id, restored, claim, adoptedFrom);
                 return restored;
               } catch {
                 await this.quarantineOperation(
@@ -1636,14 +1647,17 @@ export class WorkerWorkflow {
               `worktree:${claim.id}`,
               "worktree",
               "intent",
-              expectedHolder,
+              holder,
             );
             const acquired = await acquireWorktree(this.#deps.run, {
               repo: taskSourcePath(currentTask, currentRuntime),
               root: this.#deps.poolRoot,
-              tandemId: expectedHolder,
+              tandemId: holder,
               taskName: currentRuntime.taskName,
               sourceHead: currentRuntime.sourceCheckpoint.head,
+              ...(adoption === undefined
+                ? {}
+                : { adopt: { branch: adoption.branch, head: adoption.baseHead } }),
             });
             if (
               lease !== undefined &&
@@ -1666,10 +1680,10 @@ export class WorkerWorkflow {
               `worktree:${claim.id}`,
               "worktree",
               "succeeded",
-              expectedHolder,
+              holder,
               JSON.stringify(acquired),
             );
-            await this.saveWorktree(task.id, acquired, claim);
+            await this.saveWorktree(task.id, acquired, claim, adoptedFrom);
             return acquired;
           },
         );
@@ -1963,11 +1977,11 @@ export class WorkerWorkflow {
   /**
    * Central recovery's re-entry move: gets an `implementing`/`scouting` task whose worker is proven
    * dead back into its core loop, without ever mutating the dead job, its result, or the durable
-   * worktree lease. It admits a brand-new durable operation through the normal reservation and
-   * budget gate (`reserveTask`), launches a fresh owned pane when one is not already recorded, and
-   * starts a new worker through the normal `launchAgent` path so a fresh receipt, instruction
-   * revision, and prompt are built exactly as any other launch. The caller (central recovery) is
-   * responsible for proving death and for snapshotting uncommitted work before calling this.
+   * worktree lease. It admits a brand-new durable operation through the normal reservation gate
+   * (`reserveTask`), launches a fresh owned pane when one is not already recorded, and starts a new
+   * worker through the normal `launchAgent` path so a fresh receipt, instruction revision, and
+   * prompt are built exactly as any other launch. The caller (central recovery) is responsible for
+   * proving death and for snapshotting uncommitted work before calling this.
    */
   async relaunchWorker(
     task: TaskRecord,
@@ -2903,7 +2917,7 @@ export class WorkerWorkflow {
       });
       return;
     }
-    const role: WorkerRole = nextLens === "verification" ? "verifier" : "reviewer";
+    const role: WorkerRole = "reviewer";
     const reservation = reserved ?? (await this.reserveTask(task.id, role));
     if (reservation === undefined) return;
     const reservedRuntime = reservation.runtime;
@@ -3502,6 +3516,7 @@ export class WorkerWorkflow {
           return;
         }
       }
+      let commandSent = false;
       try {
         const previousJob = workerJobForEndpoint(
           launch.runtime.jobs.filter((entry) => entry.id !== jobId),
@@ -3512,9 +3527,14 @@ export class WorkerWorkflow {
           cwd,
           ...(previousJob === undefined ? {} : { job: previousJob }),
         });
+        commandSent = true;
         await sendCommand(this.#deps.run, { endpoint, cwd, command });
         await this.proveWorkerStartup(launch.job, endpoint, cwd);
       } catch (error) {
+        if (!commandSent && error instanceof EndpointBusyError) {
+          await this.deferBusyLaunch(taskId, jobId, claim, launch.runtime.operation?.phase, error);
+          return;
+        }
         const reason = `worker launch could not be proven after launch intent: ${describeError(error)}`;
         await this.#deps.store.exclusive(async () => {
           const state = await readRuntimeState(this.#deps.runtimePath);
@@ -3603,6 +3623,50 @@ export class WorkerWorkflow {
     });
   }
 
+  // The busy pane refused before any command was typed, so the launch provably never
+  // happened: undo the intent and let the next reconcile pass relaunch the reserved job.
+  private async deferBusyLaunch(
+    taskId: string,
+    jobId: string,
+    claim: OperationClaim,
+    priorPhase: DurableOperationPhase | undefined,
+    error: EndpointBusyError,
+  ): Promise<void> {
+    await this.#deps.store.exclusive(async () => {
+      const state = await readRuntimeState(this.#deps.runtimePath);
+      const current = taskRuntime(state, taskId);
+      const operation = current?.operation;
+      const currentJob = current?.jobs.find((entry) => entry.id === jobId);
+      if (
+        current === undefined ||
+        operation === undefined ||
+        priorPhase === undefined ||
+        currentJob?.phase !== "launching" ||
+        operation.id !== claim.id ||
+        operation.claimOwner !== claim.claimOwner ||
+        operation.fencingRevision !== claim.fencingRevision ||
+        operation.jobId !== jobId ||
+        operation.phase !== "launching"
+      ) {
+        return;
+      }
+      const deferred = replaceRuntimeTask(state, taskId, (entry) => ({
+        ...replaceJob(entry, jobId, (candidate) => ({
+          ...candidate,
+          phase: "reserved",
+          launchAttempted: false,
+        })),
+        lastError: `worker launch deferred: ${error.message}`,
+        operation: {
+          ...operation,
+          phase: priorPhase,
+          effects: operation.effects.filter((effect) => effect.id !== jobId),
+        },
+      }));
+      await writeRuntimeState(this.#deps.runtimePath, deferred);
+    });
+  }
+
   private async proveWorkerStartup(
     job: DurableJob,
     endpoint: Endpoint,
@@ -3619,50 +3683,6 @@ export class WorkerWorkflow {
         setTimeout(resolvePromise, 50);
       });
     }
-  }
-
-  /**
-   * Drops a budget no cap governs any more, before routing or any later reader can honour what it
-   * records. A repository that removes its cap leaves the request ungoverned, so a decision raised
-   * under the cap it removed stops binding with that cap instead of stranding the request.
-   */
-  private async releaseRequestSpending(
-    task: TaskRecord,
-    state: RuntimeState,
-  ): Promise<RuntimeState> {
-    const released = withoutRequestBudget(state, task.requestId);
-    if (released === state) return state;
-    await writeRuntimeState(this.#deps.runtimePath, released);
-    return released;
-  }
-
-  /**
-   * Stops the whole request on one durable decision. The pause is persisted before anything else
-   * under that request can be admitted, and the question is recorded only by the admission that
-   * raised it, so every later refusal is silent instead of another paid coordinator round.
-   */
-  private async stopRequestSpending(
-    store: TaskStoreTransaction,
-    task: TaskRecord,
-    state: RuntimeState,
-    spend: Extract<RequestSpendAdmission, { readonly outcome: "paused" }>,
-  ): Promise<void> {
-    await writeRuntimeState(this.#deps.runtimePath, withRequestBudget(state, spend.budget));
-    if (!spend.raised) return;
-    await store.update(task.id, task.revision, (current) => ({
-      ...current,
-      revision: current.revision + 1,
-      updatedAt: this.#deps.clock(),
-      notifications: [
-        ...current.notifications,
-        {
-          id: singleLine(this.#deps.idFactory(), "budget decision notification id"),
-          message: describeRequestSpendDecision(spend.pause, task.objective),
-          acknowledged: false,
-          kind: "coordinator" as const,
-        },
-      ],
-    }));
   }
 
   /**
@@ -3700,7 +3720,7 @@ export class WorkerWorkflow {
       pinned: task.policy.config.models[attempt.role],
       catalogue: await this.readCatalogue(attempt.cwd),
       limits: routingLimits(task),
-      admission: await this.admittedSpend(task),
+      usage: await this.observeRequestUsage(task),
       now: this.#deps.clock(),
     });
     if (decision.outcome === "authorized") return decision.routing;
@@ -3709,21 +3729,14 @@ export class WorkerWorkflow {
   }
 
   /**
-   * The spending checkpoint's own outcome for this task, with what it observed deciding it. Routing
-   * is only ever resolved after admission succeeded, so this reads the exposure that admission was
-   * taken against rather than deciding anything again.
+   * What the request's own accounting ledger shows for this task's request, for economical
+   * routing's usage-safety check. It only reads; it never decides whether work may continue.
    */
-  private async admittedSpend(task: TaskRecord): Promise<ExecutionSpendAdmission> {
+  private async observeRequestUsage(task: TaskRecord): Promise<ExecutionUsageObservation> {
     const requestId = task.requestId;
     if (requestId === undefined) return { status: "no-governing-request" };
-    const readout = await this.#deps.requestSpend.readSpend(requestId);
-    return {
-      status: readout.pause === undefined ? "admitted" : "paused",
-      exposure: {
-        unaccountedSamples: readout.exposure.unaccountedSamples,
-        unmeasuredTokenSamples: readout.exposure.unmeasuredTokenSamples,
-      },
-    };
+    const readout = await this.#deps.readRequestUsage(requestId);
+    return { status: "observed", exposure: requestUsageExposure(readout) };
   }
 
   /** Reads catalogue evidence without letting a boundary failure decide anything by itself. */
@@ -3788,7 +3801,7 @@ export class WorkerWorkflow {
           ? task.stage === "validating"
           : role === "scout"
             ? task.stage === "queued" || task.stage === "scouting"
-            : role === "reviewer" || role === "verifier"
+            : role === "reviewer"
               ? task.stage === "reviewing"
               : task.stage === "queued" || task.stage === "implementing" || isFix;
       if (!stageAllowed) return undefined;
@@ -3800,13 +3813,6 @@ export class WorkerWorkflow {
       if (runtime.jobs.some(activeRuntimeJob)) return undefined;
       if (activeReservations(state) >= task.policy.config.maxWorkers) return undefined;
       const operationId = singleLine(this.#deps.idFactory(), "operation id");
-      const spend = await this.#deps.requestSpend.decideAdmission({ task, state, operationId });
-      if (spend?.outcome === "paused") {
-        await this.stopRequestSpending(store, task, state, spend);
-        return undefined;
-      }
-      const baseState =
-        spend === undefined ? await this.releaseRequestSpending(task, state) : state;
       const inputHead = task.reviewHead ?? runtime.sourceCheckpoint.head;
       const iterationScope = isFix ? iterationScopeFor(task) : undefined;
       const targetTask = isFix
@@ -3842,11 +3848,9 @@ export class WorkerWorkflow {
             ? "scout"
             : role === "reviewer"
               ? "review"
-              : role === "verifier"
-                ? "verification"
-                : isFix
-                  ? "fix"
-                  : "implementation";
+              : isFix
+                ? "fix"
+                : "implementation";
       const contextPath = isFix
         ? join(
             taskJobsDirectory(this.#deps.home, task.id),
@@ -3919,11 +3923,8 @@ export class WorkerWorkflow {
           : {}),
       };
       if (isFix) await store.update(task.id, task.revision, () => targetTask);
-      const admitted = replaceRuntimeTask(baseState, taskId, () => nextRuntime);
-      await writeRuntimeState(
-        this.#deps.runtimePath,
-        spend === undefined ? admitted : withRequestBudget(admitted, spend.budget),
-      );
+      const admitted = replaceRuntimeTask(state, taskId, () => nextRuntime);
+      await writeRuntimeState(this.#deps.runtimePath, admitted);
       return { task: targetTask, runtime: nextRuntime, reservation };
     });
   }
@@ -4074,13 +4075,18 @@ export class WorkerWorkflow {
     );
   }
 
+  /**
+   * Records the task's worktree. When it was adopted from `adoptedFrom`'s scout, the scout's record
+   * of the same lease is dropped in the same write, so scout cleanup can never release it.
+   */
   private async saveWorktree(
     taskId: string,
     worktree: NonNullable<RuntimeTaskState["worktree"]>,
     claim: OperationClaim,
+    adoptedFrom?: string,
   ): Promise<void> {
-    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
-      replaceRuntimeTask(state, taskId, (current) => {
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) => {
+      const saved = replaceRuntimeTask(state, taskId, (current) => {
         this.assertOperationClaim(current, taskId, claim);
         return {
           ...current,
@@ -4089,8 +4095,43 @@ export class WorkerWorkflow {
             ? {}
             : { reservation: { ...current.reservation, phase: "worktree" } }),
         };
-      }),
-    );
+      });
+      const scout = adoptedFrom === undefined ? undefined : taskRuntime(saved, adoptedFrom);
+      if (adoptedFrom === undefined || scout?.worktree?.leaseId !== worktree.leaseId) return saved;
+      return replaceRuntimeTask(saved, adoptedFrom, ({ worktree: _adopted, ...rest }) => rest);
+    });
+  }
+
+  /**
+   * The worktree an implementation can take over from the scout of its first research handoff:
+   * the scout has settled, holds no pane or reservation, and its checkout is still clean on its
+   * own branch at its source commit. Anything else falls back to leasing a fresh worktree.
+   */
+  private async adoptableScoutWorktree(
+    task: TaskRecord,
+  ): Promise<NonNullable<RuntimeTaskState["worktree"]> | undefined> {
+    const scoutId =
+      task.kind === "implementation" ? task.researchHandoffs?.[0]?.scoutTaskId : undefined;
+    if (scoutId === undefined) return undefined;
+    const [scout, runtime] = await Promise.all([
+      this.#deps.getTask(scoutId),
+      this.#deps.runtimeFor(scoutId),
+    ]);
+    const lease = runtime?.worktree;
+    if (
+      scout.stage !== "completed" ||
+      lease === undefined ||
+      lease.leaseHolder !== `${this.#deps.sessionId}:${scoutId}` ||
+      runtime === undefined ||
+      runtime.endpoints.length > 0 ||
+      runtime.endpointLaunch !== undefined ||
+      unreleasedReservation(runtime.reservation)
+    ) {
+      return undefined;
+    }
+    const checkout = await observeScoutCheckout(this.#deps.run, lease.path);
+    if (checkout.status !== "observed") return undefined;
+    return decideScoutWorktreeRelease({ lease, checkout }).kind === "release" ? lease : undefined;
   }
   async saveEndpoint(taskId: string, endpoint: Endpoint, claim?: OperationClaim): Promise<void> {
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>

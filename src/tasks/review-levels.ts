@@ -20,12 +20,8 @@ export const LIGHT_CLASSIFICATION_LIMITS = {
   maxAffectedCallers: 2,
 } as const;
 
-/** The single lens a light iteration round reviews when a repository has opted into reduced routing. */
-export const LIGHT_ITERATION_LENSES: readonly ReviewLens[] = ["behavior"];
-
 /** The review-level settings a repository gets when it configures nothing. */
 export const DEFAULT_REVIEW_LEVEL_POLICY: ReviewLevelPolicy = {
-  reducedRouting: false,
   deepScrutiny: false,
   jevAssistance: "off",
   sourceTransmission: false,
@@ -200,21 +196,12 @@ export function reclassifyReviewLevel(
 }
 
 /**
- * The lenses this round must review. Reduced routing is off unless the repository opted in, so by
- * default every round reviews the complete final lens set exactly as it did before levels existed.
- * A light round can only narrow an iteration round whose final manifest has not run at this HEAD;
- * once the final manifest is recorded the complete set is required again, which keeps issue #17's
- * final acceptance contract intact at every level.
+ * The lenses this round must review: one merged reviewer session, at every review level. The
+ * review level and its safety-floor scrutiny still shape what that session must record (see
+ * `deepScrutinyRequirements`); it no longer narrows which lens runs.
  */
-export function requiredReviewLenses(task: TaskRecord, head: string): readonly ReviewLens[] {
-  const level = recordedReviewLevel(task).level;
-  const policy = task.policy.config.reviewLevels;
-  if (!policy.reducedRouting || level !== "light") return FINAL_REVIEW_LENSES;
-  if (task.iterationScope === undefined) return FINAL_REVIEW_LENSES;
-  const finalRecorded = task.validationEvidence.some(
-    (entry) => entry.contract === "final" && entry.head === head,
-  );
-  return finalRecorded ? FINAL_REVIEW_LENSES : LIGHT_ITERATION_LENSES;
+export function requiredReviewLenses(_task: TaskRecord, _head: string): readonly ReviewLens[] {
+  return FINAL_REVIEW_LENSES;
 }
 
 /**

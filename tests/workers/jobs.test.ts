@@ -102,8 +102,8 @@ function makeJob(root: string, role: WorkerJob["role"] = "implementer"): WorkerJ
     prompt: "Complete the approved worker brief.",
     resultPath: join(root, "result.json"),
   };
-  return role === "reviewer" || role === "verifier"
-    ? { ...base, review: { head: "abc123", lens: "behavior" as const } }
+  return role === "reviewer"
+    ? { ...base, review: { head: "abc123", lens: "review" as const } }
     : base;
 }
 
@@ -140,7 +140,7 @@ const IMPLEMENTED: SubmittedReport = { outcome: "implemented", report: "Committe
 
 function review(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    lens: "behavior",
+    lens: "review",
     head: "abc123",
     generation: 3,
     pass: true,
@@ -267,12 +267,6 @@ test("malformed submissions are rejected back to the worker without settling the
       good: { outcome: "completed", review: review() },
     },
     {
-      role: "verifier",
-      bad: { outcome: "completed" },
-      rejection: "must include review",
-      good: { outcome: "completed", review: review() },
-    },
-    {
       role: "implementer",
       bad: { outcome: "needs-decision", report: "Blocked." },
       rejection: "requires a question",
@@ -328,7 +322,7 @@ test("malformed submissions are rejected back to the worker without settling the
 
 test("every worker role submits a structured needs-decision, and reviews submit a structured result", async () => {
   const previous = process.env.TANDEM_WORKER_JOB_PATH;
-  const roles = ["scout", "implementer", "reviewer", "verifier", "presentation"] as const;
+  const roles = ["scout", "implementer", "reviewer", "presentation"] as const;
   try {
     for (const role of roles) {
       const root = await mkdtemp(join(tmpdir(), "tandem-worker-question-"));
@@ -364,7 +358,7 @@ test("every worker role submits a structured needs-decision, and reviews submit 
       await submitReport(f, { outcome: "completed", review: review() });
       const result = await readWorkerResult(job.resultPath, job);
       expect(result.status).toBe("completed");
-      expect(result.review?.lens).toBe("behavior");
+      expect(result.review?.lens).toBe("review");
       expect(JSON.parse(result.text)).toEqual(review());
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -574,7 +568,7 @@ test("atomically writes private results and rejects stale identities", async () 
 
 test("allows role-scoped session directories for scout and implementer jobs only", () => {
   const root = process.cwd();
-  for (const role of ["reviewer", "verifier", "presentation"] as const) {
+  for (const role of ["reviewer", "presentation"] as const) {
     expect(() =>
       parseWorkerJob({
         ...makeJob(root, role),

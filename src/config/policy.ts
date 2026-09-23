@@ -2,7 +2,6 @@ import type {
   AgentRole,
   ModelSpec,
   RepoPolicy,
-  RequestBudgetPolicy,
   ReviewLevelPolicy,
   SetupCommand,
   ValidationCommand,
@@ -10,13 +9,13 @@ import type {
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import { DEFAULT_REVIEW_LEVEL_POLICY } from "../tasks/review-levels.ts";
 import {
-  AGENT_ROLE_KEYS,
   assertKnownKeys,
   cloneChannels,
   deduplicateStrings,
   hasKey,
   INSTRUCTION_CHANNELS,
   isRecord,
+  LEGACY_MODEL_ROLE_KEYS,
   MODEL_KEYS,
   readChannels,
   readInstructionList,
@@ -27,6 +26,8 @@ import {
   readThinkingLevel,
 } from "./values.ts";
 
+// ponytail: a repository config may still set "requestBudget" from before standing request
+// budgets were removed; accept it here so the config still loads, but its value is never read.
 const POLICY_KEYS: Readonly<Record<string, true>> = {
   version: true,
   models: true,
@@ -53,6 +54,8 @@ const SETUP_COMMAND_KEYS: Readonly<Record<string, true>> = {
   timeoutMs: true,
 };
 
+// ponytail: a repository config may still set "reducedRouting" from before it was removed; accept
+// it here so the config still loads, but its value is never read (see readReviewLevels).
 const REVIEW_LEVEL_KEYS: Readonly<Record<string, true>> = {
   reducedRouting: true,
   deepScrutiny: true,
@@ -60,31 +63,27 @@ const REVIEW_LEVEL_KEYS: Readonly<Record<string, true>> = {
   sourceTransmission: true,
 };
 
-const REQUEST_BUDGET_KEYS: Readonly<Record<string, true>> = {
-  capMicros: true,
-  operationEstimateMicros: true,
-};
-
-/**
- * No standing amount is assumed for anyone. Until a repository configures a cap, its requests are
- * not spend-governed and run as they did before budgets existed, rather than pausing against a cap
- * Tandem invented for them. Configuring `capMicros` turns the whole feature on for that repository.
- */
-export const DEFAULT_REQUEST_BUDGET: RequestBudgetPolicy = {
-  capMicros: "unset",
-  operationEstimateMicros: "unset",
-};
-
 const DEFAULT_MODELS: Readonly<Record<AgentRole, ModelSpec>> = {
   coordinator: { model: "openai-codex/gpt-6-astra", thinking: "high" },
   scout: { model: "openai-codex/gpt-5.6-luna", thinking: "medium" },
   implementer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
   reviewer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
-  verifier: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
   presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
 };
 
 type PolicyBase = RepoPolicy;
+
+/** Ten minutes: the timeout for a command written as a plain string or proposed by onboarding. */
+export const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
+
+/**
+ * A command written as a plain string (e.g. "npm ci") runs through the shell, so `&&` and quoting
+ * work as typed; the string is also its name and it gets the default timeout.
+ */
+function readShorthandCommand(value: string, field: string): SetupCommand {
+  const text = readNonEmptyString(value, field).trim();
+  return { name: text, argv: ["/bin/sh", "-c", text], timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS };
+}
 
 function readModelOverrides(
   value: unknown,
@@ -93,7 +92,7 @@ function readModelOverrides(
   if (!isRecord(value)) {
     throw new TypeError("models must be an object keyed by agent role");
   }
-  assertKnownKeys(value, AGENT_ROLE_KEYS, "models");
+  assertKnownKeys(value, LEGACY_MODEL_ROLE_KEYS, "models");
 
   const models = {} as Record<AgentRole, ModelSpec>;
   for (const role of MODEL_ROLE_ORDER) {
@@ -101,6 +100,7 @@ function readModelOverrides(
   }
 
   for (const key of Object.keys(value)) {
+    if (key === "verifier") continue;
     const role = key as AgentRole;
     const override = value[key];
     if (!isRecord(override)) {
@@ -132,8 +132,19 @@ function readValidationCommands(
   const names = new Set(base.map((command) => command.name));
   for (let index = 0; index < value.length; index += 1) {
     const commandValue = value[index];
+    if (typeof commandValue === "string") {
+      const command = { ...readShorthandCommand(commandValue, `${field}[${index}]`), surfaces: [] };
+      if (names.has(command.name)) {
+        throw new TypeError(
+          `${field} contains duplicate command name ${JSON.stringify(command.name)}`,
+        );
+      }
+      parsed.push(command);
+      names.add(command.name);
+      continue;
+    }
     if (!isRecord(commandValue)) {
-      throw new TypeError(`${field}[${index}] must be an object`);
+      throw new TypeError(`${field}[${index}] must be a command string or object`);
     }
     assertKnownKeys(commandValue, COMMAND_KEYS, `${field}[${index}]`);
 
@@ -196,18 +207,26 @@ function readSetupCommands(value: unknown, base: readonly SetupCommand[]): reado
   for (let index = 0; index < value.length; index += 1) {
     const field = `setupCommands[${index}]`;
     const commandValue: unknown = value[index];
-    if (!isRecord(commandValue)) throw new TypeError(`${field} must be an object`);
-    assertKnownKeys(commandValue, SETUP_COMMAND_KEYS, field);
-    const name = readNonEmptyString(commandValue.name, `${field}.name`);
-    if (names.has(name)) {
-      throw new TypeError(`setupCommands contains duplicate command name ${JSON.stringify(name)}`);
+    let command: SetupCommand;
+    if (typeof commandValue === "string") {
+      command = readShorthandCommand(commandValue, field);
+    } else {
+      if (!isRecord(commandValue))
+        throw new TypeError(`${field} must be a command string or object`);
+      assertKnownKeys(commandValue, SETUP_COMMAND_KEYS, field);
+      command = {
+        name: readNonEmptyString(commandValue.name, `${field}.name`),
+        argv: readArgv(commandValue.argv, `${field}.argv`),
+        timeoutMs: readPositiveInteger(commandValue.timeoutMs, `${field}.timeoutMs`),
+      };
     }
-    names.add(name);
-    parsed.push({
-      name,
-      argv: readArgv(commandValue.argv, `${field}.argv`),
-      timeoutMs: readPositiveInteger(commandValue.timeoutMs, `${field}.timeoutMs`),
-    });
+    if (names.has(command.name)) {
+      throw new TypeError(
+        `setupCommands contains duplicate command name ${JSON.stringify(command.name)}`,
+      );
+    }
+    names.add(command.name);
+    parsed.push(command);
   }
   return parsed;
 }
@@ -234,9 +253,6 @@ function readReviewLevels(value: unknown, base: ReviewLevelPolicy): ReviewLevelP
     throw new TypeError("reviewLevels.jevAssistance must be off or shadow");
   }
   return {
-    reducedRouting: hasKey(value, "reducedRouting")
-      ? readBoolean(value.reducedRouting, "reviewLevels.reducedRouting")
-      : base.reducedRouting,
     deepScrutiny: hasKey(value, "deepScrutiny")
       ? readBoolean(value.deepScrutiny, "reviewLevels.deepScrutiny")
       : base.deepScrutiny,
@@ -245,34 +261,6 @@ function readReviewLevels(value: unknown, base: ReviewLevelPolicy): ReviewLevelP
       ? readBoolean(value.sourceTransmission, "reviewLevels.sourceTransmission")
       : base.sourceTransmission,
   };
-}
-
-/**
- * Reads the standing spending amounts. An amount the repository does not name keeps whatever the
- * layer beneath it configured, so a repository can tighten one amount without silently adopting a
- * default for the other. Zero is a real cap that forbids spending; a negative or fractional amount
- * is refused rather than rounded, because micro-dollars are the smallest unit a receipt sums.
- */
-function readRequestBudget(value: unknown, base: RequestBudgetPolicy): RequestBudgetPolicy {
-  if (!isRecord(value)) {
-    throw new TypeError("requestBudget must be an object");
-  }
-  assertKnownKeys(value, REQUEST_BUDGET_KEYS, "requestBudget");
-  return {
-    capMicros: hasKey(value, "capMicros")
-      ? readMicroDollars(value.capMicros, "requestBudget.capMicros")
-      : base.capMicros,
-    operationEstimateMicros: hasKey(value, "operationEstimateMicros")
-      ? readMicroDollars(value.operationEstimateMicros, "requestBudget.operationEstimateMicros")
-      : base.operationEstimateMicros,
-  };
-}
-
-function readMicroDollars(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new TypeError(`${field} must be a non-negative integer number of USD micro-dollars`);
-  }
-  return value as number;
 }
 
 export function copyPolicy(policy: PolicyBase): RepoPolicy {
@@ -299,7 +287,6 @@ export function copyPolicy(policy: PolicyBase): RepoPolicy {
     maxWorkers: policy.maxWorkers,
     maxFixRounds: policy.maxFixRounds,
     reviewLevels: { ...policy.reviewLevels },
-    requestBudget: { ...policy.requestBudget },
   };
 }
 
@@ -358,9 +345,6 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
   const reviewLevels = hasKey(input, "reviewLevels")
     ? readReviewLevels(input.reviewLevels, base.reviewLevels)
     : { ...base.reviewLevels };
-  const requestBudget = hasKey(input, "requestBudget")
-    ? readRequestBudget(input.requestBudget, base.requestBudget)
-    : { ...base.requestBudget };
 
   return {
     version: 1,
@@ -372,7 +356,6 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     maxWorkers,
     maxFixRounds,
     reviewLevels,
-    requestBudget,
   };
 }
 
@@ -384,7 +367,6 @@ function buildDefaultPolicy(): RepoPolicy {
       scout: { ...DEFAULT_MODELS.scout },
       implementer: { ...DEFAULT_MODELS.implementer },
       reviewer: { ...DEFAULT_MODELS.reviewer },
-      verifier: { ...DEFAULT_MODELS.verifier },
       presentation: { ...DEFAULT_MODELS.presentation },
     },
     instructions: {
@@ -402,7 +384,6 @@ function buildDefaultPolicy(): RepoPolicy {
     maxWorkers: 3,
     maxFixRounds: 3,
     reviewLevels: { ...DEFAULT_REVIEW_LEVEL_POLICY },
-    requestBudget: { ...DEFAULT_REQUEST_BUDGET },
   };
 }
 

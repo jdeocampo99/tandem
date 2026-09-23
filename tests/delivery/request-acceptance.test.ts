@@ -29,7 +29,6 @@ const models: Readonly<Record<string, ModelSpec>> = {
   scout: { model: "openai-codex/gpt-5.6-luna", thinking: "medium" },
   implementer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
   reviewer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
-  verifier: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
   presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
 };
 
@@ -45,12 +44,10 @@ const policyConfig: RepoPolicy = {
   maxWorkers: 3,
   maxFixRounds: 3,
   reviewLevels: {
-    reducedRouting: false,
     deepScrutiny: false,
     jevAssistance: "off",
     sourceTransmission: false,
   },
-  requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
 };
 
 const policy: ResolvedPolicy = {
@@ -114,12 +111,7 @@ function member(overrides: Partial<TaskRecord> = {}): TaskRecord {
     reviewRound: 0,
     reviewHead: MEMBER_HEAD,
     validationEvidence: [evidence(MEMBER_HEAD)],
-    reviews: [
-      review("behavior", MEMBER_HEAD),
-      review("design", MEMBER_HEAD),
-      review("coverage", MEMBER_HEAD),
-      review("verification", MEMBER_HEAD),
-    ],
+    reviews: [review("review", MEMBER_HEAD)],
     notifications: [],
     ...overrides,
   };
@@ -135,12 +127,7 @@ function integration(overrides: Partial<RequestIntegration> = {}): RequestIntegr
     ownerSessionId: "session-1",
     integratedAt: NOW,
     evidence: [evidence(INTEGRATED_HEAD)],
-    reviews: [
-      review("behavior", INTEGRATED_HEAD),
-      review("design", INTEGRATED_HEAD),
-      review("coverage", INTEGRATED_HEAD),
-      review("verification", INTEGRATED_HEAD),
-    ],
+    reviews: [review("review", INTEGRATED_HEAD)],
     ...overrides,
   };
 }
@@ -183,7 +170,7 @@ test("review lenses recorded only at a member commit leave the integrated commit
   });
 
   expect(status.satisfied).toBe(false);
-  expect(status.manifest.pendingLenses).toEqual(["behavior", "design", "coverage", "verification"]);
+  expect(status.manifest.pendingLenses).toEqual(["review"]);
 });
 
 test("a member whose reviewed commit moved after integration refuses the delivery", () => {

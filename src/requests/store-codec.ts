@@ -1,7 +1,7 @@
 import {
   type Endpoint,
   isSafeRequestId,
-  MODEL_ROLE_ORDER,
+  LEGACY_ENDPOINT_ROLES,
   type RequestBriefApproval,
   type RequestBriefChangeKind,
   type RequestBriefContent,
@@ -239,7 +239,8 @@ function parseEndpoint(value: unknown, source: string): Endpoint {
     workspaceId: requiredText(record, "workspaceId", source),
     tabId: requiredText(record, "tabId", source),
     paneId: requiredText(record, "paneId", source),
-    role: requiredEnum(record, "role", MODEL_ROLE_ORDER, source),
+    // ponytail: legacy panes may still carry role "verifier"; see LEGACY_ENDPOINT_ROLES.
+    role: requiredEnum(record, "role", LEGACY_ENDPOINT_ROLES, source),
     generation: requiredInteger(record, "generation", source),
   };
 }

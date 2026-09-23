@@ -28,7 +28,6 @@ const policy: ResolvedPolicy = {
       scout: { model: "test/scout", thinking: "low" },
       implementer: { model: "test/implementer", thinking: "low" },
       reviewer: { model: "test/reviewer", thinking: "low" },
-      verifier: { model: "test/verifier", thinking: "low" },
       presentation: { model: "test/presentation", thinking: "low" },
     },
     instructions: { implementation: [], validation: [], review: [] },
@@ -41,12 +40,10 @@ const policy: ResolvedPolicy = {
     maxWorkers: 3,
     maxFixRounds: 3,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: {
     implementation: [],
@@ -161,7 +158,7 @@ test("the brief carries approved scope, principles, identities, diffs, and sourc
   const brief = buildReviewBrief({
     task: task(),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations(),
   });
 
@@ -171,7 +168,7 @@ test("the brief carries approved scope, principles, identities, diffs, and sourc
     "Cancellation is honoured",
     "Evidence stays pinned",
   ]);
-  expect(brief.scope.principles).toHaveLength(5);
+  expect(brief.scope.principles).toHaveLength(7);
   expect(brief.scope.surfaces).toBe("service");
   expect(brief.scope.nonGoals[0]).toContain("service");
   expect(brief.identities.head).toBe(HEAD);
@@ -191,13 +188,13 @@ test("the brief is a pure function of durable state and the injected observation
   const first = buildReviewBrief({
     task: record,
     head: HEAD,
-    lens: "design",
+    lens: "review",
     observations: observations(),
   });
   const second = buildReviewBrief({
     task: record,
     head: HEAD,
-    lens: "design",
+    lens: "review",
     observations: observations(),
   });
 
@@ -218,7 +215,7 @@ test("blockers, suggestions, and settled findings are separated with their suppo
       ],
     }),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations(),
   });
 
@@ -235,7 +232,7 @@ test("blockers, suggestions, and settled findings are separated with their suppo
 
 test("the brief states that implementer assertions are not proof and reviewers keep source access", () => {
   const rendered = renderReviewBrief(
-    buildReviewBrief({ task: task(), head: HEAD, lens: "coverage", observations: observations() }),
+    buildReviewBrief({ task: task(), head: HEAD, lens: "review", observations: observations() }),
   );
 
   expect(rendered).toContain("is not proof");
@@ -247,7 +244,7 @@ test("a first review round reports contained impact and no incremental diff", ()
   const brief = buildReviewBrief({
     task: task({ reviewRound: 0, generation: 0 }),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations(),
   });
 
@@ -270,7 +267,7 @@ test("a fix that stays inside the authorized surface reports contained impact", 
       },
     }),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations({
       sinceLastReview: {
         range: "since-last-review",
@@ -285,6 +282,12 @@ test("a fix that stays inside the authorized surface reports contained impact", 
 
   expect(brief.impact.assessment).toBe("contained");
   expect(brief.diffs.map((entry) => entry.range)).toEqual(["cumulative", "since-last-review"]);
+
+  const rendered = renderReviewBrief(brief);
+  expect(rendered).toContain("## Fix-round focus");
+  expect(rendered).toContain("This is fix round 1; review the since-last-review diff above");
+  expect(rendered).toContain("Confirm each evidence-backed blocker below is resolved");
+  expect(rendered).toContain("behavior/f-1");
 });
 
 test("a fix reaching outside the authorized surface broadens the review", () => {
@@ -302,7 +305,7 @@ test("a fix reaching outside the authorized surface broadens the review", () => 
       },
     }),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations({
       sinceLastReview: {
         range: "since-last-review",
@@ -336,7 +339,7 @@ test("an unbounded fix surface reports unknown impact and escalates", () => {
       },
     }),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations({
       sinceLastReview: {
         range: "since-last-review",
@@ -357,7 +360,7 @@ test("a truncated incremental patch cannot bound the impact", () => {
   const brief = buildReviewBrief({
     task: task({ reviews: [priorReview()] }),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations({
       sinceLastReview: {
         range: "since-last-review",
@@ -387,7 +390,7 @@ test("an escalated validation contract broadens the review with its recorded rea
       },
     }),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations(),
   });
 
@@ -410,7 +413,7 @@ test("advisory leads are rendered with provenance as untrusted leads", () => {
   const brief = buildReviewBrief({
     task: task(),
     head: HEAD,
-    lens: "design",
+    lens: "review",
     observations: observations(),
     advisoryLeads: [lead],
   });
@@ -434,7 +437,7 @@ test("the brief bounds its lists and stays within the rendered byte limit", () =
   const brief = buildReviewBrief({
     task: task({ findingLedger: ledger }),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations({
       cumulative: {
         range: "cumulative",
@@ -479,7 +482,7 @@ test("an oversized brief compacts suggestions and long text but keeps every bloc
   const brief = buildReviewBrief({
     task: task({ findingLedger: ledger }),
     head: HEAD,
-    lens: "behavior",
+    lens: "review",
     observations: observations({
       cumulative: {
         range: "cumulative",
@@ -497,7 +500,7 @@ test("an oversized brief compacts suggestions and long text but keeps every bloc
     REVIEW_BRIEF_LIMITS.maxBriefBytes,
   );
   for (const entry of brief.blockers) expect(rendered).toContain(`behavior/${entry.id}`);
-  expect(rendered).toContain("suggestion(s) recorded; read them with tandem inspect");
+  expect(rendered).toContain("suggestion(s) recorded; read them with tandem status TASK_ID");
   expect(rendered).not.toContain("y".repeat(REVIEW_BRIEF_LIMITS.maxCompactDescriptionBytes + 1));
 });
 
@@ -547,7 +550,7 @@ test("a settled user decision is rendered with its question and answer, most rec
   const brief = buildReviewBrief({
     task: record,
     head: HEAD,
-    lens: "verification",
+    lens: "review",
     observations: observations(),
   });
 
@@ -571,7 +574,7 @@ test("the user decisions section is omitted when no question was ever answered",
     buildReviewBrief({
       task: task(),
       head: HEAD,
-      lens: "verification",
+      lens: "review",
       observations: observations(),
     }),
   );

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import type { ResearchContinuation } from "../../src/contracts.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { finishPendingScoutCleanup } from "../../src/service/scout-cleanup.ts";
 import { persistWorkerResult } from "../../src/workers/jobs.ts";
@@ -30,8 +31,21 @@ function serviceFor(world: ScenarioWorld) {
   });
 }
 
-async function seedRunningScout(world: ScenarioWorld): Promise<string> {
-  const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+/** Research that ends at its report, so its worktree has no implementation to wait for. */
+const REPORT_ONLY: ResearchContinuation = {
+  schemaVersion: 1,
+  disposition: "report-only",
+  selectedBy: "explicit",
+};
+
+async function seedRunningScout(
+  world: ScenarioWorld,
+  options: Readonly<{ continuation?: ResearchContinuation; holder?: string }> = {},
+): Promise<string> {
+  const lease = await world.grantLease({
+    name: "scenario-task",
+    holder: options.holder ?? "scenario-holder",
+  });
   const endpoint = {
     ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
     role: "scout" as const,
@@ -42,6 +56,7 @@ async function seedRunningScout(world: ScenarioWorld): Promise<string> {
     stage: "scouting",
     worktree: lease,
     endpoints: [endpoint],
+    researchContinuation: options.continuation ?? REPORT_ONLY,
   });
   await seedScenarioRuntime(
     world,
@@ -181,6 +196,47 @@ test("a refusing Treehouse boundary retains the scout lease and never discards i
     expect(
       snapshot.trace.some((event) => event.boundary === "treehouse" && event.outcome === "refused"),
     ).toBe(true);
+    await service.shutdown();
+  });
+});
+
+test("an implementation built on research adopts the scout's worktree instead of leasing another", async () => {
+  await withScenario({}, async (world) => {
+    await seedRunningScout(world, {
+      continuation: {
+        schemaVersion: 1,
+        disposition: "implementation-interview",
+        selectedBy: "explicit",
+      },
+      holder: `${world.sessionId}:${SCENARIO_TASK_ID}`,
+    });
+    const service = serviceFor(world);
+
+    await service.tick();
+    const scout = await service.get(SCENARIO_TASK_ID);
+    expect(scout.cleanup?.status).toBe("retained");
+    expect(scout.cleanup?.reason).toContain("kept for the implementation");
+    expect(world.paneIsPresent("pane-1")).toBe(false);
+
+    const implementation = await service.create({
+      repoPath: world.repoPath,
+      kind: "implementation",
+      objective: "apply the scout findings",
+      acceptanceCriteria: ["the findings are applied"],
+      surfaces: ["scenario"],
+      researchTaskIds: [SCENARIO_TASK_ID],
+    });
+    await service.approve(implementation.id);
+    await service.tick();
+
+    const snapshot = await world.snapshot();
+    const runtime = (taskId: string) =>
+      snapshot.runtime.tasks.find((entry) => entry.taskId === taskId);
+    expect(runtime(implementation.id)?.worktree?.leaseId).toBe("lease-1");
+    expect(runtime(implementation.id)?.worktree?.branch).not.toBe("tandem/scenario-task");
+    expect(runtime(SCENARIO_TASK_ID)?.worktree).toBeUndefined();
+    expect(snapshot.trace.some((event) => event.action === "treehouse get")).toBe(false);
+    expect(snapshot.trace.some((event) => event.action === "treehouse return")).toBe(false);
     await service.shutdown();
   });
 });

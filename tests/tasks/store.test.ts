@@ -38,7 +38,6 @@ const models: RepoPolicy["models"] = {
   scout: { model: "scout-model", thinking: "medium" },
   implementer: { model: "implementer-model", thinking: "max" },
   reviewer: { model: "reviewer-model", thinking: "max" },
-  verifier: { model: "verifier-model", thinking: "high" },
   presentation: { model: "presentation-model", thinking: "low" },
 };
 const channels: InstructionChannels = { implementation: [], validation: [], review: [] };
@@ -55,12 +54,10 @@ const policy: ResolvedPolicy = {
     maxWorkers: 3,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -817,21 +814,21 @@ test("a record written before review levels existed loads at the conservative de
   });
 });
 
-test("a record written before budgets existed loads with no cap rather than an inherited one", async () => {
+test("a record written while standing request budgets still existed loads, ignoring the stored cap", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
     const created = await store.create({ ...input, id: "legacy-request-budget" });
     rewritePayload(directory, created.id, (payload) => {
       const policyValue = payload.policy as Record<string, Record<string, unknown>>;
-      delete policyValue.config?.requestBudget;
+      policyValue.config = {
+        ...policyValue.config,
+        requestBudget: { capMicros: 10_000_000, operationEstimateMicros: 500_000 },
+      };
     });
 
     const reloaded = await store.read(created.id);
     if (reloaded === undefined) throw new Error("the upgraded record did not reload");
-    expect(reloaded.policy.config.requestBudget).toEqual({
-      capMicros: "unset",
-      operationEstimateMicros: "unset",
-    });
+    expect(reloaded.policy.config).not.toHaveProperty("requestBudget");
   });
 });
 
@@ -847,22 +844,6 @@ test("a record written before setup commands existed loads with none", async () 
     const reloaded = await store.read(created.id);
     if (reloaded === undefined) throw new Error("the upgraded record did not reload");
     expect(reloaded.policy.config.setupCommands).toEqual([]);
-  });
-});
-
-test("refuses a pinned budget amount that is neither unset nor whole micro-dollars", async () => {
-  await withTemporaryDirectory(async (directory) => {
-    const store = makeStore(directory);
-    const created = await store.create({ ...input, id: "invalid-request-budget" });
-    rewritePayload(directory, created.id, (payload) => {
-      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
-      policyValue.config = {
-        ...policyValue.config,
-        requestBudget: { capMicros: "unlimited", operationEstimateMicros: 1 },
-      };
-    });
-
-    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
   });
 });
 
@@ -935,12 +916,10 @@ test("refuses a pinned review-level policy with an unsupported assistance mode",
       policyValue.config = {
         ...policyValue.config,
         reviewLevels: {
-          reducedRouting: false,
           deepScrutiny: false,
           jevAssistance: "active",
           sourceTransmission: false,
         },
-        requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
       };
     });
 

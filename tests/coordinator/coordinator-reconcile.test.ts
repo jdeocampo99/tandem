@@ -266,6 +266,7 @@ async function seedPendingScout(
     acceptanceCriteria: ["report entry points"],
     surfaces: ["service"],
     policy: scoutPolicy,
+    researchContinuation: { schemaVersion: 1, disposition: "report-only", selectedBy: "explicit" },
   });
   const started = await store.update(created.id, created.revision, (task) =>
     transitionTask(
