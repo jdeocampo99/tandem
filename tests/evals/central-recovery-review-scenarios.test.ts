@@ -256,9 +256,7 @@ test("reviewing restart budget exhausted asks instead of relaunching again", asy
     const { lease } = await seedStuckReview(world, {
       recovery: {
         schemaVersion: 1,
-        recoveryAttempts: 0,
         validationRetries: 0,
-        evidenceRepairs: 0,
         restarts: 2,
         restartGeneration: 0,
       },

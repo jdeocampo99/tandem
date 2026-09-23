@@ -687,13 +687,8 @@ export class TaskControlWorkflow {
       );
     }
     if (task.stage === "paused" || task.stage === "blocked") {
-      const resumed = await this.resumeTask(taskId);
-      const current = await this.#deps.getTask(taskId);
-      if (["validating", "reviewing", "awaiting-fixes"].includes(current.stage)) {
-        await this.#deps.reconcileTask(current);
-        return this.#deps.getTask(taskId);
-      }
-      return resumed;
+      await this.resumeTask(taskId);
+      return this.continueAfterRestart(taskId);
     }
     if (task.stage === "queued") {
       await this.#deps.reconcileTask(task);
@@ -710,13 +705,24 @@ export class TaskControlWorkflow {
     if (paused.stage !== "paused") {
       throw new Error(`Task ${taskId} could not be safely paused for managed restart`);
     }
-    const resumed = await this.resumeTask(taskId);
+    await this.resumeTask(taskId);
+    return this.continueAfterRestart(taskId);
+  }
+
+  /**
+   * Hands a resumed task to its stage's normal reconcile path, which is central recovery for a
+   * worker stage with no live writer. `resumeTask` already continued a worker that still has one.
+   */
+  private async continueAfterRestart(taskId: string): Promise<TaskRecord> {
     const current = await this.#deps.getTask(taskId);
-    if (["validating", "reviewing", "awaiting-fixes"].includes(current.stage)) {
+    const runtime = await this.#deps.runtimeFor(taskId);
+    const writerless =
+      (current.stage === "scouting" || current.stage === "implementing") &&
+      (runtime === undefined || currentWriter(runtime) === undefined);
+    if (writerless || ["validating", "reviewing", "awaiting-fixes"].includes(current.stage)) {
       await this.#deps.reconcileTask(current);
-      return this.#deps.getTask(taskId);
     }
-    return resumed;
+    return this.#deps.getTask(taskId);
   }
 
   private async probeOwnedEndpoint(

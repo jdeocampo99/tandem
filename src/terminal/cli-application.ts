@@ -179,7 +179,7 @@ function externalError(argv: readonly string[], result: CommandResult): Error {
 function requireYes(invocation: CliInvocation, message: string): void {
   if (!invocation.options.yes) throw new CliConsentError(`${message} requires explicit --yes`);
 }
-const HELP_TEXT = `Tandem coordinator\n\nUsage: bun src/cli.ts [command] [options]\n\nCommands:\n  launch       Launch the OMP coordinator in the owned Herdr context\n  restart      Restart one managed worker task without changing its identity\n  models       List available OMP models and saved global role choices\n  configure-models  Validate and save global role choices (requires --input FILE --yes)\n  doctor       Check model, Herdr, policy, and coordinator files without mutating\n  setup        Propose or write Tandem-owned per-repository policy (requires --yes)\n  onboard      Inspect Tandem-owned policy and validation surfaces\n  create       Create a scout or implementation task\n  list/status   List durable tasks\n  show         Show one durable task\n  inspect     Inspect durable task, jobs, panes, artifacts, leases, and PR state\n  recovery-plan  Explain a dry-run recovery plan and all refusal reasons\n  reconcile   Reconcile only proven stale resources (requires --yes)\n  review-existing  Review an existing clean exact HEAD without an implementer (requires --yes --head)\n  validation-retry  Retry validation without code-fix budget (requires --yes)\n  evidence-repair  Repair durable evidence without a worker pane (requires --yes)\n  delivery-preflight  Check exact reviewed HEAD and publication readiness\n  messages     Inspect steer/answer delivery and blocker questions\n  steer        Queue a concise user direction for a task\n  answer       Answer the task's current needs-decision question\n  approve      Approve implementation scope (requires --yes)\n  tick/watch  Advance bounded scheduler work\n  pause/resume/cancel  Control owned task work\n  present/feedback/presentations  Route and inspect visual work\n  pr describe/publish/merge  Record or publish reviewed PR work\n  cleanup      Release owned resources; --discard requires --yes\n\nSafety options:\n  --yes        Explicit human automation consent for approval-bearing commands\n  --json       Emit one JSON result for automation\n  --head       Exact reviewed HEAD for review-existing\n  --headless   Use a named headless Herdr server\n  --no-attach  Do not launch a GUI; use headless Herdr\n`;
+const HELP_TEXT = `Tandem coordinator\n\nUsage: bun src/cli.ts [command] [options]\n\nCommands:\n  launch       Launch the OMP coordinator in the owned Herdr context\n  restart      Restart one managed worker task without changing its identity\n  models       List available OMP models and saved global role choices\n  configure-models  Validate and save global role choices (requires --input FILE --yes)\n  doctor       Check model, Herdr, policy, and coordinator files without mutating\n  setup        Propose or write Tandem-owned per-repository policy (requires --yes)\n  onboard      Inspect Tandem-owned policy and validation surfaces\n  create       Create a scout or implementation task\n  list/status   List durable tasks\n  show         Show one durable task\n  inspect     Inspect durable task, jobs, panes, artifacts, leases, and PR state\n  delivery-preflight  Check exact reviewed HEAD and publication readiness\n  messages     Inspect steer/answer delivery and blocker questions\n  steer        Queue a concise user direction for a task\n  answer       Answer the task's current needs-decision question\n  approve      Approve implementation scope (requires --yes)\n  tick/watch  Advance bounded scheduler work\n  pause/resume/cancel  Control owned task work\n  present/feedback/presentations  Route and inspect visual work\n  pr describe/publish/merge  Record or publish reviewed PR work\n  cleanup      Release owned resources; --discard requires --yes\n\nSafety options:\n  --yes        Explicit human automation consent for approval-bearing commands\n  --json       Emit one JSON result for automation\n  --headless   Use a named headless Herdr server\n  --no-attach  Do not launch a GUI; use headless Herdr\n`;
 
 export type CliApplication = Readonly<{
   readonly invoke: (invocation: CliInvocation, signal?: AbortSignal) => Promise<CliResult>;
@@ -409,48 +409,6 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
           command: invocation.command,
           value: await getService(environment).inspect(taskIdFor(invocation)),
         };
-      case "recovery-plan":
-        return {
-          command: invocation.command,
-          value: await getService(environment).recoveryPlan(taskIdFor(invocation)),
-        };
-      case "reconcile": {
-        const taskId = taskIdFor(invocation);
-        requireYes(invocation, `reconciling ${taskId}`);
-        return {
-          command: invocation.command,
-          value: await getService(environment).reconcile(taskId, { approved: true }),
-          approved: true,
-        };
-      }
-      case "review-existing": {
-        const taskId = taskIdFor(invocation);
-        const head = text(invocation.options.head, "head");
-        requireYes(invocation, `reviewing existing HEAD for ${taskId}`);
-        return {
-          command: invocation.command,
-          value: await getService(environment).reviewExisting(taskId, { head, approved: true }),
-          approved: true,
-        };
-      }
-      case "validation-retry": {
-        const taskId = taskIdFor(invocation);
-        requireYes(invocation, `retrying validation for ${taskId}`);
-        return {
-          command: invocation.command,
-          value: await getService(environment).validationRetry(taskId, { approved: true }),
-          approved: true,
-        };
-      }
-      case "evidence-repair": {
-        const taskId = taskIdFor(invocation);
-        requireYes(invocation, `repairing evidence for ${taskId}`);
-        return {
-          command: invocation.command,
-          value: await getService(environment).repairEvidence(taskId, { approved: true }),
-          approved: true,
-        };
-      }
       case "delivery-preflight": {
         const taskId = taskIdFor(invocation);
         const repository = requiredPositionOrOption(

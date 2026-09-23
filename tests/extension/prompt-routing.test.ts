@@ -34,7 +34,7 @@ function choiceAnswer({ choice, confidence = 0.95 }: Choice): JevChoiceAnswer {
     choice,
     confidence,
     probabilities: Object.fromEntries(
-      [choice, "list", "presentations", "show", "messages", "inspect", "recovery-plan", "none"]
+      [choice, "list", "presentations", "show", "messages", "inspect", "none"]
         .filter((candidate, index, values) => values.indexOf(candidate) === index)
         .map((candidate) => [candidate, candidate === choice ? confidence : (1 - confidence) / 7]),
     ),

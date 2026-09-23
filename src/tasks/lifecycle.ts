@@ -100,18 +100,6 @@ type ValidationFailedEvent = ValidationEvent &
   Readonly<{
     readonly type: "validation-failed";
   }>;
-type RetryValidationEvent = Readonly<{
-  readonly type: "retry-validation";
-  readonly head: string;
-  readonly generation: number;
-}>;
-
-type BeginExistingReviewEvent = Readonly<{
-  readonly type: "begin-existing-review";
-  readonly head: string;
-  readonly generation: number;
-}>;
-
 type RecordReviewEvent = Readonly<{
   readonly type: "record-review";
   readonly review: ReviewResult;
@@ -182,8 +170,6 @@ export type TaskEvent =
   | StartEvent
   | RelaunchEvent
   | ImplementationCompleteEvent
-  | RetryValidationEvent
-  | BeginExistingReviewEvent
   | ValidationSucceededEvent
   | ValidationFailedEvent
   | RecordReviewEvent
@@ -896,33 +882,6 @@ export function transitionTask(
         reviewHead: event.head,
         validationEvidence: [],
         ...(event.reportPath === undefined ? {} : { reportPath: event.reportPath }),
-      });
-    }
-    case "retry-validation":
-    case "begin-existing-review": {
-      if (task.kind !== "implementation") {
-        invalidStage(task, event.type, ["blocked", "validating", "ready", "reviewing"]);
-      }
-      const allowedStages: readonly TaskStage[] =
-        event.type === "retry-validation"
-          ? ["blocked", "validating"]
-          : ["blocked", "ready", "reviewing"];
-      if (!allowedStages.includes(task.stage)) {
-        invalidStage(task, event.type, allowedStages);
-      }
-      if (task.reviewHead === undefined || task.reviewHead !== event.head) {
-        staleResult(
-          task,
-          `${event.type} HEAD ${event.head} does not match durable reviewed HEAD ${String(task.reviewHead)}`,
-        );
-      }
-      assertCurrentGeneration(task, event.generation, `${event.type} generation`);
-      const withoutBlock = clearIterationScope(clearPreviousAndBlock(task));
-      return commitTask(withoutBlock, context.now, {
-        stage: "validating",
-        reviewHead: event.head,
-        validationEvidence: [],
-        reviews: [],
       });
     }
     case "validation-succeeded": {

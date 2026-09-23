@@ -21,14 +21,14 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
 | Models, environment, policy | [config/](src/config/) |
 | Request briefs, approval revisions, review pane | [requests/](src/requests/): `brief.ts`, `store.ts`, `store-codec.ts`, `markdown.ts`, `review-pane.ts`, `workflow.ts` |
-| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts` |
-| Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `workflow.ts`, `conversation.ts`, `decision.ts`, `wait.ts`, `central.ts` (stop/save/re-enter) |
+| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts`, `inspection.ts` (`tandem status TASK_ID`) |
+| Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `central.ts` (stop/save/re-enter), `central-review.ts` |
 | Request usage, cost, quota, elapsed-time receipts | [runtime/](src/runtime/): `usage.ts`, `usage-events.ts`, `usage-ledger.ts`, `usage-codec.ts`, `usage-receipt.ts` |
 | Model tier evidence and economical routing | [config/model-tier.ts](src/config/model-tier.ts), [workers/execution-routing.ts](src/workers/execution-routing.ts) |
 | Worker execution, results, control, validation | [workers/](src/workers/); entry points: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [validation-worker.ts](src/validation-worker.ts) |
 | OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
 | Worktree capacity and maintenance | [pool/](src/pool/) |
-| Evidence, PR publication, merge | [delivery/](src/delivery/) |
+| Evidence, PR publication, merge | [delivery/](src/delivery/): `preflight.ts` checks a ready task before publishing |
 | Artifacts, feedback, Lavish | [presentations/](src/presentations/) |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |
 
@@ -51,7 +51,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
   `tandem reset --hard` deletes the whole Tandem home.
 - Child agents run interactive OMP. Fresh reviewers are read-only; stop implementer mutation during
   validation/review. Validation runs separately without a model. No remote fleets or alternate harnesses.
-- When a session is bad or blocked, inspect durable state first with `tandem status TASK_ID --json`, then run the read-only `bun src/cli.ts recovery-plan TASK_ID --json`. Apply only the recommended approved action; never manually edit SQLite/runtime state, reuse the worktree for a new task, or override unknown ownership.
+- When a session is bad or blocked, inspect durable state first with `tandem status TASK_ID --json`, then `restart` the task, which goes through central recovery; never manually edit SQLite/runtime state, reuse the worktree for a new task, or override unknown ownership.
 
 ## Change and verify
 
@@ -94,8 +94,6 @@ Before changing behavior, read its contract:
 - PRs/artifacts: [Pull-request delivery](docs/agent-reference.md#pull-request-delivery), [Presentations and Lavish](docs/agent-reference.md#presentations-and-lavish).
 - Persistence/restart/locking: [Recovery and durable state](docs/agent-reference.md#recovery-durable-state-and-compaction), [Local limits](docs/agent-reference.md#local-limits-and-source-of-truth).
 - Central recovery (stop/save/re-enter, stage re-entry table, restart budget): [Central recovery: stop, save, re-enter](docs/agent-reference.md#central-recovery-stop-save-re-enter).
-- Recovery/rescue workflow: [First-class bounded recovery actions](docs/agent-reference.md#first-class-bounded-recovery-actions).
-- Recovery decisions/availability waits: [Conversational recovery and bounded availability waits](docs/agent-reference.md#conversational-recovery-and-bounded-availability-waits).
 - Stale records/panes/leases: [Reconciling Tandem resources across sessions](docs/agent-reference.md#reconciling-tandem-resources-across-sessions).
 
 Keep this file a routing map and cross-cutting rules. Update links when code moves; put detailed

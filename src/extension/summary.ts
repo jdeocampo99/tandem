@@ -64,7 +64,7 @@ export function boundedJson(value: unknown, limit: number): string {
   }
 }
 
-function summarizeRecoveryAction(action: TandemAction["action"], value: unknown): string {
+function summarizeTaskCheck(action: "inspect" | "delivery-preflight", value: unknown): string {
   const record = summaryRecord(value);
   if (record === undefined) return boundedJson(value, ACTION_RESULT_MAX_CHARS);
   const taskId = recordText(record, "taskId") ?? "unknown task";
@@ -78,39 +78,16 @@ function summarizeRecoveryAction(action: TandemAction["action"], value: unknown)
       ACTION_RESULT_MAX_CHARS,
     );
   }
-  if (action === "recovery-plan") {
-    const operation = summaryRecord(record.operation);
-    const budget = summaryRecord(record.budget);
-    const name = recordText(operation ?? {}, "name") ?? "none";
-    const refusals = Array.isArray(record.refusals)
-      ? record.refusals.filter((entry): entry is string => typeof entry === "string")
-      : [];
-    const recoveryRemaining =
-      typeof budget?.recoveryRemaining === "number" ? budget.recoveryRemaining : undefined;
-    return boundedOutput(
-      `${taskId}: recommended ${name}; ${String(recoveryRemaining ?? "unknown")} recovery attempt(s) left${refusals.length === 0 ? "" : `; refused: ${compactList(refusals)}`}`,
-      ACTION_RESULT_MAX_CHARS,
-    );
-  }
-  if (action === "delivery-preflight") {
-    const checks = Array.isArray(record.checks)
-      ? record.checks.filter(
-          (entry): entry is Record<string, unknown> => summaryRecord(entry) !== undefined,
-        )
-      : [];
-    const failed = checks
-      .filter((entry) => entry.passed !== true)
-      .map((entry) => (typeof entry.name === "string" ? entry.name : "unnamed check"));
-    return boundedOutput(
-      `${taskId}: ${record.ready === true ? "ready to deliver" : "not ready to deliver"}${failed.length === 0 ? "" : `; failed: ${failed.join(", ")}`}`,
-      ACTION_RESULT_MAX_CHARS,
-    );
-  }
-  const status =
-    recordText(record, "status") ?? (record.changed === true ? "changed" : "unchanged");
-  const reason = recordText(record, "reason");
+  const checks = Array.isArray(record.checks)
+    ? record.checks.filter(
+        (entry): entry is Record<string, unknown> => summaryRecord(entry) !== undefined,
+      )
+    : [];
+  const failed = checks
+    .filter((entry) => entry.passed !== true)
+    .map((entry) => (typeof entry.name === "string" ? entry.name : "unnamed check"));
   return boundedOutput(
-    `${taskId}: ${status}${reason === undefined ? "" : `; ${reason}`}`,
+    `${taskId}: ${record.ready === true ? "ready to deliver" : "not ready to deliver"}${failed.length === 0 ? "" : `; failed: ${failed.join(", ")}`}`,
     ACTION_RESULT_MAX_CHARS,
   );
 }
@@ -972,17 +949,8 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     return summarizeCommunication(value, "latest");
   }
   if (action === "messages") return summarizeCommunication(value, "overview");
-  if (
-    action === "inspect" ||
-    action === "recovery-plan" ||
-    action === "recovery-decide" ||
-    action === "reconcile" ||
-    action === "review-existing" ||
-    action === "validation-retry" ||
-    action === "evidence-repair" ||
-    action === "delivery-preflight"
-  ) {
-    return summarizeRecoveryAction(action, value);
+  if (action === "inspect" || action === "delivery-preflight") {
+    return summarizeTaskCheck(action, value);
   }
   if (
     action === "create" ||

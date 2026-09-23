@@ -481,9 +481,7 @@ test("a repeated same-class failure inside the startup grace window asks instead
     job: deadJob({ error: "provider rate limit exceeded", createdAt: NOW, consumedAt: NOW }),
     recovery: {
       schemaVersion: 1,
-      recoveryAttempts: 0,
       validationRetries: 0,
-      evidenceRepairs: 0,
       restarts: 1,
       restartGeneration: 0,
       lastRestartFailureClass: "provider-unavailable",
@@ -548,13 +546,6 @@ test('answering "stop" records a decision without bumping communication.revision
     const declined = await f.store.read("task-1");
     expect(declined?.communication?.question).toBeUndefined();
     expect(declined?.communication?.revision ?? 0).toBe(beforeRevision);
-    const state = await readRuntimeState(f.runtimePath);
-    const decisions = state.tasks[0]?.recoveryDecisions ?? [];
-    const decision = decisions.findLast((entry) => entry.questionId === questionId);
-    expect(decision?.disposition).toBe("refused");
-    // Nothing was re-proven for "stop"; the receipt must not claim ownership/outcome were proven.
-    expect(decision?.ownership).toBe("unknown");
-    expect(decision?.priorOutcome).toBe("uncertain");
     expect(f.relaunchCalls).toHaveLength(0);
   } finally {
     await f.cleanup();
@@ -571,9 +562,7 @@ test('answering "restart" re-proves death and records what was actually proven, 
         ...entry,
         recovery: {
           schemaVersion: 1 as const,
-          recoveryAttempts: 0,
           validationRetries: 0,
-          evidenceRepairs: 0,
           restarts: MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
           restartGeneration: 0,
         },
@@ -595,12 +584,6 @@ test('answering "restart" re-proves death and records what was actually proven, 
     expect(approved?.communication?.revision ?? 0).toBe(beforeRevision);
     const after = await readRuntimeState(f.runtimePath);
     expect(after.tasks[0]?.recovery?.restarts).toBe(MAX_AUTOMATIC_RESTARTS_PER_GENERATION + 1);
-    const decisions = after.tasks[0]?.recoveryDecisions ?? [];
-    const decision = decisions.findLast((entry) => entry.questionId === questionId);
-    // These reflect forceOneMoreRestart's own re-proof of death, not the fact that the user said yes.
-    expect(decision?.disposition).toBe("applied");
-    expect(decision?.ownership).toBe("proven-owned");
-    expect(decision?.priorOutcome).toBe("known");
   } finally {
     await f.cleanup();
   }
@@ -616,9 +599,7 @@ test('answering "restart" that cannot re-prove death is refused, not applied on 
         ...entry,
         recovery: {
           schemaVersion: 1 as const,
-          recoveryAttempts: 0,
           validationRetries: 0,
-          evidenceRepairs: 0,
           restarts: MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
           restartGeneration: 0,
         },
@@ -635,12 +616,6 @@ test('answering "restart" that cannot re-prove death is refused, not applied on 
 
     // The stale pane still cannot be proven stopped, so the approval never reaches relaunch.
     expect(f.relaunchCalls).toHaveLength(0);
-    const after = await readRuntimeState(f.runtimePath);
-    const decisions = after.tasks[0]?.recoveryDecisions ?? [];
-    const decision = decisions.findLast((entry) => entry.questionId === questionId);
-    expect(decision?.disposition).toBe("refused");
-    expect(decision?.ownership).toBe("unknown");
-    expect(decision?.priorOutcome).toBe("uncertain");
     expect(f.blockedCauses.at(-1)?.kind).toBe("ownership-unprovable");
     expect(f.blockedCauses.at(-1)?.group).toBe("safety-stop");
   } finally {

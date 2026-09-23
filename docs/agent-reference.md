@@ -689,7 +689,7 @@ prompt, an explicit task identifier when present, and the supported lookup list.
 typed action, target, effect, scope, and composition facts. Tandem code validates identity,
 ownership, state, approvals, and policy before any action.
 
-Only `list`, `presentations`, `show`, `messages`, `inspect`, and `recovery-plan` may dispatch
+Only `list`, `presentations`, `show`, `messages`, and `inspect` may dispatch
 directly. The first two are repository lookups; task-specific lookups require an explicit
 `task-...` identifier or UUID. The direct path is read-only and uses the existing service.
 Low confidence (<0.80), incomplete or malformed output, mixed or unclear requests, state-changing
@@ -1859,9 +1859,9 @@ Tandem asks instead, since retrying blindly would likely repeat the same failure
 restart writes one plain-English coordinator notification naming what happened, that the edits are
 kept, and which restart it is out of the budget. The third-restart question, and any question raised
 because death could not be proven, use the same short shape as every other question Tandem asks
-(one plain-English question plus at most one short sentence; see below) and are answered
-through the existing question-id-bound answer API. Every recovery answer, this one included, is
-stored as a decision, never as a worker instruction: answering it never bumps
+(one plain-English question plus at most one short sentence) and are answered through the
+existing question-id-bound answer API. Central recovery handles every recovery answer itself, never
+as a worker instruction: answering it never bumps
 `task.communication.revision`, so it can never be mistaken for a new canonical instruction a worker
 must apply.
 
@@ -1871,9 +1871,8 @@ Validating's re-entry shares the same stop/save/proof machinery against a review
 `WorkerWorkflow.reconcileMissingEndpoint` and the validation branch of `reconcileJob`) settles as
 failed without blocking, so the task stays at `validating` with no active job or reservation and a
 terminal failed job behind it; central recovery picks that shape up on the next reconcile tick
-instead of the task sitting blocked for a human. It is bounded by `MAX_VALIDATION_RETRIES` (3), the
-exact same budget the explicit `validation-retry` recovery action spends from — central recovery
-never adds a second counter for it, and a genuine task-code validation failure (a real result was
+instead of the task sitting blocked for a human. It is bounded by `MAX_VALIDATION_RETRIES` (3), one
+budget shared by automatic retries and answered "retry" questions, and a genuine task-code validation failure (a real result was
 produced, however it came out) never reaches this path at all, since a real result always moves the
 task to `reviewing` or `awaiting-fixes` via the normal lifecycle event. Budget exhaustion or an
 unprovable pane asks a "retry"/"stop" question through the same plain-English shape and answer API,
@@ -1889,7 +1888,7 @@ recoverable — a typed `lost-resource` cause, a typed `unusable-result` cause w
 infrastructure-shaped (`worker-failed`, `stale-review-state`, `no-clean-checkpoint`; never
 `review-lens-failed`, a lens that ran and reported its own failure), or — for a block recorded before
 every site carried a typed cause — free text matching a known worker-death shape
-(`isLegacyWorkerDeathBlockText` in `src/recovery/decision.ts`). A `user-decision` or `safety-stop`
+(`isLegacyWorkerDeathBlockText` in `src/recovery/central.ts`). A `user-decision` or `safety-stop`
 cause is never eligible, nor is a task with an unanswered non-recovery question or a pending stop
 request: only a person resolves those. Eligible or not, `recoverBlockedTask` never mutates an
 ineligible task; it resumes the task to its previous stage (the same `"resume"` lifecycle event
@@ -1897,8 +1896,16 @@ answering a recovery question already uses) and then runs that stage's own re-en
 (`recoverStuckWorker`), so the restart/validation-retry budgets and the stop ladder are exactly the
 same ones a task that was never blocked would spend. This is wired at both places a blocked task is
 reconsidered: the scheduler tick (`ServiceController.reconcileTask`, so it happens without anyone
-asking) and `recovery-decide` (`RecoveryConversationWorkflow.decide`, which delegates to it first and
-reports what it did instead of recommending one of the older recovery actions).
+asking) and the coordinator's `restart` action (below).
+
+**The coordinator's `restart` goes through the same path.** `TaskControlWorkflow.restartTask`
+resumes a paused or blocked task (after proving its owned panes stopped) and then hands it to its
+stage's normal reconcile pass. For `implementing`/`scouting` with no live writer pane that pass is
+central recovery's `recoverStuckWorker`, so a restart relaunches the worker in the same task, keeping
+its worktree and edits, instead of resuming into a stage with nothing running. A person's restart
+is the approval for a block cause central recovery would not re-enter on its own, such as
+`quarantined-unknown-outcome`; the stop ladder and reservation gate still decide whether it is safe.
+There is one recovery path.
 
 **`implementing` re-entry adopts an already-finished commit instead of relaunching a worker.** Before
 spending a restart, `recoverStuckWorker` checks whether the dead worker (including a fix-round
@@ -1921,10 +1928,7 @@ cause — it records the cause and blocks exactly like today's free-text block. 
 block is later re-entered automatically is decided separately, the next time the task is reconsidered,
 by `recoverBlockedTask` (see above); `reportBlock` itself never triggers recovery synchronously.
 `blockCause` is optional and additive on `TaskRecord`; records written before it
-existed load with no cause. Recovery question/decision identity for a caused block is keyed off
-`(taskId, generation, cause.kind, cause.jobId?)` (`blockCauseEvidenceIdentity` in
-`src/recovery/decision.ts`) instead of hashing the summary text, so rewording a summary can never
-orphan an outstanding approval. `tandem status TASK_ID --json` includes `blockCause` when one was
+existed load with no cause. `tandem status TASK_ID --json` includes `blockCause` when one was
 recorded. Only a few representative sites are migrated so far; most blocking call sites still pass
 free text only, and are migrated incrementally.
 
@@ -1939,96 +1943,11 @@ The kinds are grouped by how automatically Tandem may ever act on them:
 - **safety-stop** (never automatic): `ownership-unprovable`, `runtime-metadata-missing`,
   `identity-mismatch`, `quarantined-unknown-outcome`.
 
-### First-class bounded recovery actions
-
-The advanced CLI exposes the durable recovery workflow without editing SQLite or inspecting
-model output. Central recovery's re-entry composes with these same entry points and their locks,
-fencing, ownership checks, budgets, and quarantine behavior; it does not duplicate them.
-
-```sh
-bun src/cli.ts inspect TASK_ID --json
-bun src/cli.ts recovery-plan TASK_ID --json
-bun src/cli.ts reconcile TASK_ID --yes --json
-bun src/cli.ts review-existing TASK_ID --head REVIEWED_HEAD --yes --json
-bun src/cli.ts validation-retry TASK_ID --yes --json
-bun src/cli.ts evidence-repair TASK_ID --yes --json
-bun src/cli.ts delivery-preflight TASK_ID OWNER/REPOSITORY BASE --json
-```
-
-`tandem status TASK_ID --json` prints the same inspection as `inspect`. `inspect` reports stage, generation, review round, separate recovery budgets, exact reviewed and
-current HEADs, clean/unmerged state, canonical repository identity, branch, preserved worktree and
-lease, endpoint ownership/liveness, durable jobs and result files, reports/provenance, reservations,
-operations, pull-request metadata, and recommended actions. `recovery-plan` is a read-only dry run;
-it reports checkpoint safety, stale resources, the selected bounded operation, remaining budgets, and
-refusal reasons.
-
-`reconcile` requires `--yes` and is idempotent. It clears only proven missing/stopped owned panes,
-quarantines jobs whose pane disappeared, and releases a reservation only after operation and jobs
-are terminal. It never releases a reservation or closes a foreign/unknown pane, never reuses a
-worktree for a new task, and always reports the worktree as preserved. Repeated reconciliation is a
-no-op after the proven state is recorded.
-
-`review-existing` requires the exact durable reviewed HEAD, a canonical repository identity, and a
-clean unmerged worktree. It records `review_existing_head` provenance, runs validation, and launches
-all required read-only review lenses without an implementer or code-fix budget. An empty diff is
-explicitly a full-implementation review subject, not proof that no implementation exists.
-`validation-retry` is runner-owned, worker-free, bounded separately from code-fix rounds, and
-classifies infrastructure, validation-configuration, and task-code failures. `evidence-repair`
-reconstructs only reports/provenance proven by durable task/generation/HEAD-matching records; stale
-reports are refused.
-
-### Conversational recovery and bounded availability waits
-
-The `recovery-decide` extension action settles one task's current recovery decision from durable
-state alone. It reads the task's recorded blockers, re-reads the dry-run plan, and then does exactly
-one of three things: run a preapproved action, hold a bounded wait, or ask one question. Every
-mutation still goes through `reconcile`, `review-existing`, `validation-retry`, or `evidence-repair`,
-so their locks, fencing, ownership checks, budgets, and quarantine behavior decide the result.
-`recovery-plan` (`RecoveryWorkflow.plan()`) is the single planner: it classifies endpoint ownership
-and the prior worker outcome itself and proposes an action only once that action's own proofs all
-hold, so an unproven action (for example evidence-repair while the prior outcome is still uncertain)
-is never proposed in the first place. `recovery-decide` reads those same classifications back off the
-plan rather than re-deriving them, and adds only the one fact the plan cannot itself prove — whether
-the governing request's approval is still current.
-
-The preapproval policy enumerates both the eligible actions and the proof each one needs; an action
-is never eligible because of its name. `reconcile` and `evidence-repair` are the only unattended
-actions, and each runs only with the task in scope, its scope approved, its request brief approval
-current, canonical repository identity proven, every endpoint proved owned, the prior outcome known,
-no active durable job, no pending stop request, and its own budget remaining; `evidence-repair` also
-requires the exact clean reviewed HEAD. Everything else, including `review-existing` and
-`validation-retry`, produces one bounded question in the same short shape as central recovery's
-own questions: the task's name, the recommended step as a question, and the reason in one clipped
-sentence. IDs, the expected effect, and the remaining budgets go only in the recommendation detail
-and the decision record. It executes
-nothing until it is answered through the existing question-id-bound answer API. Answering it clears
-the question and records the reply as a decision without bumping `task.communication.revision`; a
-plain-text reply does not itself invoke reconcile/review-existing/validation-retry/evidence-repair,
-each of which stays a separate explicit call. Foreign or unknown ownership, an uncertain worker
-outcome, a stale request agreement, or an exhausted budget leaves every resource intact and asks.
-Scope and acceptance changes, cap increases, higher-cost or higher-quota tiers, publication, merge,
-deploy, and destructive work keep their separate explicit approvals.
-
-A confirmed temporary quota or availability block persists a bounded wait tied to the original
-request and task. When durable evidence already names an availability time more than five minutes
-away, Tandem asks immediately instead of waiting. Otherwise the wait wakes at the earlier of the
-known availability time and a five-minute ceiling, re-inspects exactly once, and then continues
-through the same decision rules or asks. Waits live in the authoritative SQLite runtime state, are
-deduplicated by request/task and evidence identity, and are reconstructed after a restart; a
-repeated signal for the same unresolved incident never moves the original deadline, a wait that was
-already overdue when another session reconstructed it asks rather than acting, and a cancelled or
-superseded task is never resumed by an old timer. Routine wakes stay passive: a wake before the
-deadline reads durable state and stops, and only a decision or completion interrupts the main
-conversation. `tandem status TASK_ID --json` lists the resulting decision and wait receipts, each
-preserving its request identity, task generation, triggering evidence, ownership and outcome
-classification, recommended action, approval requirement, start and deadline, and disposition.
-
 ### Reconciling Tandem resources across sessions
 
 `tandem fix [--home PATH] [--yes] [--json]` is the front door's home-wide cleanup surface, and
-the supported alternative to deleting coordinator records, panes, or lock files by hand. It is
-distinct from the advanced CLI's per-task `bun src/cli.ts reconcile TASK_ID`, which repairs one
-task's durable runtime.
+the supported alternative to deleting coordinator records, panes, or lock files by hand. A stuck task is
+recovered by central recovery (see above), not by this command.
 
 It runs in two stages. The scan reads every coordinator record across every session directory under
 the home, asks Herdr whether each recorded coordinator still answers, reads the checkout behind a

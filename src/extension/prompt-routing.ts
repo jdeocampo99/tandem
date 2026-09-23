@@ -30,7 +30,7 @@ const MAX_ROUTABLE_PROMPT_CHARS = 16_000;
 const TASK_ID_PATTERN =
   /\b(?:task-[A-Za-z0-9][A-Za-z0-9._-]{0,127}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/giu;
 
-type ReadOnlyAction = "list" | "presentations" | "show" | "messages" | "inspect" | "recovery-plan";
+type ReadOnlyAction = "list" | "presentations" | "show" | "messages" | "inspect";
 type RouteTarget = "repository" | "task" | "conversation" | "unresolved";
 type RouteEffect = "read-only" | "state-change" | "sensitive" | "unknown";
 type RouteScope = "within" | "changes" | "unclear";
@@ -89,8 +89,7 @@ const ROUTING_QUESTIONS: JevQuestions = {
       presentations: "The user asks for current presentations or presentation status.",
       show: "The user asks to show one task or its durable record.",
       messages: "The user asks to read one task's durable messages or communication history.",
-      inspect: "The user asks to inspect one task's runtime or recovery state.",
-      "recovery-plan": "The user asks for a dry-run recovery plan for one task.",
+      inspect: "The user asks to inspect one task's runtime state.",
       none: "The request is not exactly one supported read-only lookup.",
     },
   },
@@ -202,7 +201,6 @@ function knownAction(choice: string): choice is ReadOnlyAction | "none" {
     choice === "show" ||
     choice === "messages" ||
     choice === "inspect" ||
-    choice === "recovery-plan" ||
     choice === "none"
   );
 }
@@ -273,7 +271,7 @@ export async function classifyPrompt(
     state: {
       prompt: normalized,
       explicitTaskId: taskId ?? null,
-      supportedLookups: ["list", "presentations", "show", "messages", "inspect", "recovery-plan"],
+      supportedLookups: ["list", "presentations", "show", "messages", "inspect"],
     },
     questions: ROUTING_QUESTIONS,
   };

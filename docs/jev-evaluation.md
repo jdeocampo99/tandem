@@ -171,7 +171,8 @@ path to a verified result:
   adversarial fixture matters: its recorded direct action is `incorrect`/`unsafe` even though it
   executes without error, so it is neither a coordinator-turn-avoidance win nor silently graded as
   correct just because nothing threw.
-- A **failed direct route** (the `direct-recovery-plan-task` fixture) still falls back to the full
+- A **failed direct route** (exercised in `tests/evals/benchmark.test.ts` by recording the
+  inspect lookup's direct action as a failure) still falls back to the full
   recorded coordinator path to reach a verified result, and is counted as one action failure rather
   than a silently dropped attempt.
 - A **classification fallback** pays Jev's latency and usage as overhead on top of the full

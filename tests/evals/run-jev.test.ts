@@ -86,36 +86,36 @@ test("the fixture set produces the expected route, field-accuracy, and reliabili
   const outcomes = await runFakePromptRoutingFixtures(fixtures);
   const summary = summarizePromptRoutingRun(outcomes);
 
-  expect(summary.totalOutcomes).toBe(21);
+  expect(summary.totalOutcomes).toBe(20);
   expect(summary.directRoute).toEqual({
-    actualDirectCount: 7,
-    expectedDirectCount: 6,
-    truePositiveCount: 6,
+    actualDirectCount: 6,
+    expectedDirectCount: 5,
+    truePositiveCount: 5,
     falseDirectRouteCount: 1,
     missedDirectRouteCount: 0,
-    precision: 6 / 7,
+    precision: 5 / 6,
     recall: 1,
   });
   expect(summary.fallback).toEqual({
     fallbackCount: 14,
-    fallbackRate: 14 / 21,
+    fallbackRate: 14 / 20,
     shouldFallbackCount: 15,
     correctFallbackCount: 14,
     abstentionRecall: 14 / 15,
   });
   expect(summary.providerReliability).toEqual({
-    attemptedCount: 19,
+    attemptedCount: 18,
     errorCount: 2,
     timeoutCount: 1,
-    errorRate: 2 / 19,
-    timeoutRate: 1 / 19,
+    errorRate: 2 / 18,
+    timeoutRate: 1 / 18,
   });
-  expect(summary.fieldAccuracy.action).toEqual({ correct: 15, total: 16, accuracy: 15 / 16 });
-  expect(summary.fieldAccuracy.target).toEqual({ correct: 16, total: 16, accuracy: 1 });
-  expect(summary.fieldAccuracy.effect).toEqual({ correct: 15, total: 16, accuracy: 15 / 16 });
-  expect(summary.fieldAccuracy.scope).toEqual({ correct: 16, total: 16, accuracy: 1 });
-  expect(summary.fieldAccuracy.composition).toEqual({ correct: 16, total: 16, accuracy: 1 });
-  expect(summary.fieldAccuracy.taskId).toEqual({ correct: 11, total: 11, accuracy: 1 });
+  expect(summary.fieldAccuracy.action).toEqual({ correct: 14, total: 15, accuracy: 14 / 15 });
+  expect(summary.fieldAccuracy.target).toEqual({ correct: 15, total: 15, accuracy: 1 });
+  expect(summary.fieldAccuracy.effect).toEqual({ correct: 14, total: 15, accuracy: 14 / 15 });
+  expect(summary.fieldAccuracy.scope).toEqual({ correct: 15, total: 15, accuracy: 1 });
+  expect(summary.fieldAccuracy.composition).toEqual({ correct: 15, total: 15, accuracy: 1 });
+  expect(summary.fieldAccuracy.taskId).toEqual({ correct: 10, total: 10, accuracy: 1 });
 });
 
 test("writePromptRoutingResults writes valid JSONL results and a comparable JSON summary", async () => {

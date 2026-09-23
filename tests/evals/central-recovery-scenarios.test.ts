@@ -17,6 +17,7 @@ import {
   SCENARIO_TASK_ID,
   type ScenarioWorld,
   scenarioOperation,
+  scenarioReservation,
   scenarioRuntimeTask,
   seedScenarioRuntime,
   seedScenarioTask,
@@ -537,6 +538,69 @@ test("a scheduler tick recovers a blocked quarantine-and-stale-instruction incid
     expect(snapshot.resources.retained).toContain(`worktree:${lease.leaseId}`);
     expect(snapshot.resources.released).not.toContain(`worktree:${lease.leaseId}`);
 
+    await service.shutdown();
+  });
+}, 20_000);
+
+/**
+ * TAG-1036's shape: a launch was left uncertain, recovery later settled it as a known failure, and
+ * the task sits blocked with its pane gone. The coordinator's restart must relaunch in the same
+ * task, never leave it idle or push toward a new task.
+ */
+test("restarting a blocked task whose uncertain launch has settled relaunches it in the same task", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const job1 = deadJob(world, lease.path, "job-1");
+    const seeded = await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "blocked",
+      previousStage: "implementing",
+      worktree: lease,
+      endpoints: [],
+    });
+    await world.store.update(seeded.id, seeded.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: SCENARIO_NOW,
+      blockReason: "Tandem couldn't confirm the last launch, so it paused the task.",
+      blockCause: {
+        group: "safety-stop",
+        kind: "quarantined-unknown-outcome",
+        summary: "Tandem couldn't confirm the last launch, so it paused the task.",
+        detail: "worker launch could not be proven",
+        jobId: job1.id,
+      },
+    }));
+    await seedScenarioRuntime(
+      world,
+      scenarioRuntimeTask({
+        worktree: lease,
+        endpoints: [],
+        jobs: [job1],
+        // Once uncertain, now settled: the operation failed and its reservation was released.
+        operation: scenarioOperation(job1, { phase: "failed" }),
+        reservation: scenarioReservation({ phase: "released", releasedAt: SCENARIO_NOW }),
+      }),
+    );
+    const service = createTandemService({
+      home: world.home,
+      sessionId: world.sessionId,
+      poolRoot: world.poolRoot,
+      run: world.run,
+      clock: world.clock,
+      idFactory: world.idFactory,
+      workerTimeoutMs: 1_500,
+    });
+
+    const restarted = await service.restart(SCENARIO_TASK_ID);
+
+    expect(restarted.id).toBe(SCENARIO_TASK_ID);
+    expect(restarted.stage).toBe("implementing");
+    const replacement = await activeJobAfterRelaunch(world, job1.id);
+    expect(replacement.endpoint).toBeDefined();
+    expect((await service.list()).map((task) => task.id)).toEqual([SCENARIO_TASK_ID]);
+    const snapshot = await world.snapshot();
+    expect(snapshot.resources.retained).toContain(`worktree:${lease.leaseId}`);
     await service.shutdown();
   });
 }, 20_000);

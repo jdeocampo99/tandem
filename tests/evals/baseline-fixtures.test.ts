@@ -52,7 +52,6 @@ test("carries a directAction only on fixtures where fake-mode replay can route d
       "direct-show-task",
       "direct-messages-task",
       "direct-inspect-task",
-      "direct-recovery-plan-task",
       "adversarial-miscalibrated-cancel",
     ]),
   );

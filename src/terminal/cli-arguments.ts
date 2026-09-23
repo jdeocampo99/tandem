@@ -57,11 +57,6 @@ const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
   draft: "draft",
   cleanup: "cleanup",
   inspect: "inspect",
-  "recovery-plan": "recovery-plan",
-  reconcile: "reconcile",
-  "review-existing": "review-existing",
-  "validation-retry": "validation-retry",
-  "evidence-repair": "evidence-repair",
   "delivery-preflight": "delivery-preflight",
 };
 const PR_COMMANDS: Readonly<Record<string, CliCommand>> = {
@@ -99,11 +94,6 @@ const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
   merge: 2,
   cleanup: 1,
   inspect: 1,
-  "recovery-plan": 1,
-  reconcile: 1,
-  "review-existing": 1,
-  "validation-retry": 1,
-  "evidence-repair": 1,
   "delivery-preflight": 3,
 };
 
@@ -138,11 +128,6 @@ export type CliCommand =
   | "merge"
   | "cleanup"
   | "inspect"
-  | "recovery-plan"
-  | "reconcile"
-  | "review-existing"
-  | "validation-retry"
-  | "evidence-repair"
   | "delivery-preflight";
 
 export type CliOptions = Readonly<{
@@ -167,7 +152,6 @@ export type CliOptions = Readonly<{
   readonly intervalMs?: number;
   readonly iterations?: number;
   readonly taskId?: string;
-  readonly head?: string;
   readonly presentationId?: string;
   readonly reason?: string;
   readonly kind?: TaskKind;
@@ -314,7 +298,6 @@ type MutableCliOptions = {
   intervalMs?: number;
   iterations?: number;
   taskId?: string;
-  head?: string;
   presentationId?: string;
   reason?: string;
   kind?: TaskKind;
@@ -455,11 +438,6 @@ function parseOption(options: MutableCliOptions, argv: readonly string[], index:
     case "--objective": {
       const parsed = optionValue(argv, index, name);
       options.objective = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--head": {
-      const parsed = optionValue(argv, index, name);
-      options.head = parsed.value;
       return parsed.nextIndex;
     }
     case "--task":

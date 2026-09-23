@@ -35,16 +35,10 @@ const TANDEM_COMMAND_ARITY: Readonly<
   cleanup: { min: 2, max: 3 },
   messages: { min: 2, max: 2 },
   inspect: { min: 2, max: 2 },
-  "recovery-plan": { min: 2, max: 2 },
-  "recovery-decide": { min: 2, max: 2 },
-  reconcile: { min: 2, max: 2 },
   "brief-show": { min: 2, max: 2 },
   "brief-review": { min: 2, max: 2 },
   "brief-approve": { min: 3, max: 4 },
   "request-receipt": { min: 2, max: 2 },
-  "review-existing": { min: 3, max: 3 },
-  "validation-retry": { min: 2, max: 2 },
-  "evidence-repair": { min: 2, max: 2 },
   "delivery-preflight": { min: 4, max: 4 },
 };
 export type TandemAction =
@@ -90,16 +84,6 @@ export type TandemAction =
     }>
   | Readonly<{ readonly action: "messages"; readonly taskId: string }>
   | Readonly<{ readonly action: "inspect"; readonly taskId: string }>
-  | Readonly<{ readonly action: "recovery-plan"; readonly taskId: string }>
-  | Readonly<{ readonly action: "recovery-decide"; readonly taskId: string }>
-  | Readonly<{ readonly action: "reconcile"; readonly taskId: string }>
-  | Readonly<{
-      readonly action: "review-existing";
-      readonly taskId: string;
-      readonly head: string;
-    }>
-  | Readonly<{ readonly action: "validation-retry"; readonly taskId: string }>
-  | Readonly<{ readonly action: "evidence-repair"; readonly taskId: string }>
   | Readonly<{
       readonly action: "delivery-preflight";
       readonly taskId: string;
@@ -201,12 +185,7 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "cancel" ||
     action.action === "publish" ||
     action.action === "draft" ||
-    action.action === "merge" ||
-    action.action === "reconcile" ||
-    action.action === "recovery-decide" ||
-    action.action === "review-existing" ||
-    action.action === "validation-retry" ||
-    action.action === "evidence-repair"
+    action.action === "merge"
   );
 }
 function capitalize(value: string): string {
@@ -279,19 +258,6 @@ async function approvalPrompt(
             : `Merge PR #${task.pullRequest.number}?`,
         message: `${capitalize(action.method)}, once checks pass.`,
       };
-    case "recovery-decide":
-      return {
-        title: `Fix ${name}?`,
-        message: "I'll use a fix you've already allowed, or ask you. Nothing gets published.",
-      };
-    case "reconcile":
-      return { title: `Clean up leftovers from ${name}?`, message: "Its work is kept." };
-    case "review-existing":
-      return { title: `Review ${name} as it stands?`, message: "" };
-    case "validation-retry":
-      return { title: `Rerun checks for ${name}?`, message: "" };
-    case "evidence-repair":
-      return { title: `Rebuild the reports for ${name}?`, message: "" };
     case "cleanup":
       return { title: `Delete the worktree for ${name}?`, message: "This discards its changes." };
     default:
@@ -378,34 +344,6 @@ export async function executeTandemAction(
       );
     case "inspect":
       return textResult(await service.inspect(action.taskId), action.action);
-    case "recovery-plan":
-      return textResult(await service.recoveryPlan(action.taskId), action.action);
-    case "recovery-decide":
-      return textResult(await service.recoveryDecide(action.taskId), action.action, true);
-    case "reconcile":
-      return textResult(
-        await service.reconcile(action.taskId, { approved: true }),
-        action.action,
-        true,
-      );
-    case "review-existing":
-      return textResult(
-        await service.reviewExisting(action.taskId, { head: action.head, approved: true }),
-        action.action,
-        true,
-      );
-    case "validation-retry":
-      return textResult(
-        await service.validationRetry(action.taskId, { approved: true }),
-        action.action,
-        true,
-      );
-    case "evidence-repair":
-      return textResult(
-        await service.repairEvidence(action.taskId, { approved: true }),
-        action.action,
-        true,
-      );
     case "delivery-preflight":
       return textResult(
         await service.deliveryPreflight(action.taskId, {
@@ -667,22 +605,6 @@ export function parseTandemCommand(input: string): TandemAction {
       return { action: "messages", taskId: value(1, "messages") };
     case "inspect":
       return { action: "inspect", taskId: value(1, "inspect") };
-    case "recovery-plan":
-      return { action: "recovery-plan", taskId: value(1, "recovery-plan") };
-    case "recovery-decide":
-      return { action: "recovery-decide", taskId: value(1, "recovery-decide") };
-    case "reconcile":
-      return { action: "reconcile", taskId: value(1, "reconcile") };
-    case "review-existing":
-      return {
-        action: "review-existing",
-        taskId: value(1, "review-existing"),
-        head: value(2, "review-existing head"),
-      };
-    case "validation-retry":
-      return { action: "validation-retry", taskId: value(1, "validation-retry") };
-    case "evidence-repair":
-      return { action: "evidence-repair", taskId: value(1, "evidence-repair") };
     case "delivery-preflight":
       return {
         action: "delivery-preflight",
