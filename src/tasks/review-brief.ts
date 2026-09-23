@@ -7,7 +7,7 @@ import type {
   TaskRecord,
   ValidationEvidence,
 } from "../contracts.ts";
-import { FUNCTION_REVIEW_PRINCIPLE_NAMES } from "../instructions.ts";
+import { CODE_STANDARD_NAMES } from "../instructions.ts";
 import type { EscalationReason, FinalAcceptanceStatus, FinalRequirement } from "./acceptance.ts";
 import { finalAcceptanceStatus, isPinnedEvidence, planValidation } from "./acceptance.ts";
 import {
@@ -397,7 +397,7 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       scopeApproved: task.scopeApproved,
       surfaces,
       acceptanceCriteria: criteria,
-      principles: FUNCTION_REVIEW_PRINCIPLE_NAMES,
+      principles: CODE_STANDARD_NAMES,
       nonGoals,
     },
     identities: {

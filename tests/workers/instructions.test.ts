@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   buildAgentBrief,
+  CODE_STANDARDS,
   type PrDescriptionInput,
   renderPrDescription,
 } from "../../src/instructions.ts";
@@ -121,4 +122,23 @@ test("rejects multiline entries and Markdown heading injection", () => {
   for (const input of invalidInputs) {
     expect(() => renderPrDescription(input)).toThrow(TypeError);
   }
+});
+
+test("gives implementers the same code standards the design reviewer grades against", () => {
+  const input = {
+    objective: "Change the parser",
+    acceptanceCriteria: ["Keep behavior identical."],
+    instructions: ["Follow the guidance channel."],
+    reportPath: "/tmp/report.txt",
+  };
+
+  expect(buildAgentBrief({ ...input, role: "implementer" })).toContain(CODE_STANDARDS);
+  expect(
+    buildAgentBrief({
+      ...input,
+      role: "reviewer",
+      review: { head: "abc123", generation: 1, pass: "design" },
+    }),
+  ).toContain(CODE_STANDARDS);
+  expect(buildAgentBrief({ ...input, role: "scout" })).not.toContain(CODE_STANDARDS);
 });
