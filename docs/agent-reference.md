@@ -960,65 +960,6 @@ payload, API key, repository content, or full action error can reach a receipt. 
 malformed row is counted as an unreadable row and left visible on the receipt rather than dropped,
 and telemetry being unavailable never fails a receipt or a state transition.
 
-### Whole-request coordination and single-PR delivery
-
-Around the request identity #48 owns, one `request_deliveries` row in `<home>/state.sqlite` records
-which approved implementation tasks belong to the request, how they relate, the one commit their
-outputs were integrated into, and the one pull request that delivers them. It shares the request's
-identity rather than minting a second one, and is written under the same compare-and-swap discipline
-as a task record.
-
-Membership is pinned to the brief revision and agreement digest that admitted it. Admission is
-refused while the approval is not current, and refused rather than re-pinned when it names a
-different agreement. Reconciliation quarantines membership and relations that durable task state has
-outgrown - a cancelled member, a member that stopped naming the request, a member admitted under a
-superseded agreement, a relation whose endpoint is no longer active - and a quarantined record stays
-visible for a decision instead of being cleared or retried.
-
-| Request state | What it means |
-| --- | --- |
-| active | The member is running on its own and needs nothing from the request. |
-| completed component | The member reached `ready`, `completed`, or `merged`. |
-| waiting | A recorded dependency is unfinished, or known overlapping work is serialized ahead of it. |
-| blocker | An ordinary task blocker. Independent members keep running beside it. |
-| decision | A conflict, a quarantined relation, or a superseded brief. Only the user settles these. |
-
-Dependencies are explicit and ordered; an edge that would make the order contradictory is stored
-quarantined rather than silently reordering approved work. Members that share a surface are
-serialized automatically behind the one admitted first, which is ordinary coordination and asks the
-user for nothing. A subset of ready members never completes the request: unresolved members,
-unsatisfied dependencies, conflicts, a stale integration, or a missing pull request each keep it
-incomplete.
-
-Integration merges the reviewed member commits, dependencies first, onto one delivery branch in a
-worktree the request leases. Every merge must apply cleanly: a merge that would need resolution is
-aborted and recorded as a conflict needing a decision, so the integrated commit never contains
-content no review covered. An integration that already covers exactly the current member commits is
-reused, so a restart never integrates or verifies the same work twice.
-
-Final acceptance is bound to the integrated commit: the pinned validation commands run there, the
-merged review lens must pass there, the approved brief's acceptance criteria travel with it, and
-every member must still sit at the commit that was integrated under the same pinned policy. Evidence
-recorded only at a member commit is stale for the integrated commit and is refused.
-
-```sh
-{"request":{"action":"request-show","requestId":"req-..."}}
-{"request":{"action":"request-relate","requestId":"req-...","taskId":"...","dependsOn":"..."}}
-{"request":{"action":"request-integrate","requestId":"req-..."}}
-{"request":{"action":"request-publish","requestId":"req-...","repository":"owner/repo","title":"...","base":"main","summary":{...}}}
-{"request":{"action":"request-merge","requestId":"req-...","method":"squash"}}
-```
-
-With explicit publication approval the request creates or updates one verified pull request for the
-integrated commit, reusing the existing single-PR safeguards. A component task cannot publish or
-merge on its own unless splitting delivery was explicitly approved. Merge is a separate explicit
-approval with verified remote state; nothing merges or deploys automatically, and each member is
-marked merged only with the proof that the merged commit carries its reviewed work.
-
-Routine request progress is passive: it is readable on demand and records no notification. Only a
-decision the user must make and true request completion interrupt the main conversation, each one
-recorded once on the durable record and acknowledged through the request path.
-
 ### Standing request budgets and spending decisions
 
 A request spends under a standing cap when one is configured. The cap is configured, never assumed:

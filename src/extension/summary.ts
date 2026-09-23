@@ -863,45 +863,6 @@ function summarizeRequestBrief(value: unknown): string {
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
-/**
- * Renders the whole-request view: what runs, what waits, what needs a decision, and every reason
- * the request is not finished. It restates durable state and never claims delivery by itself.
- */
-function summarizeRequestDelivery(value: unknown): string {
-  const view = summaryRecord(value);
-  const aggregate = view === undefined ? undefined : summaryRecord(view.aggregate);
-  const record = view === undefined ? undefined : summaryRecord(view.record);
-  if (view === undefined || aggregate === undefined || record === undefined) {
-    return boundedJson(value, ACTION_RESULT_MAX_CHARS);
-  }
-  const reasons = Array.isArray(aggregate.incompleteReasons)
-    ? aggregate.incompleteReasons.filter(isNonEmptyEntry)
-    : [];
-  const lines = [
-    `${recordText(aggregate, "requestId") ?? "unknown request"}: approval ${recordText(aggregate, "approvalState") ?? "unknown"}; integration ${recordText(aggregate, "integrationStatus") ?? "unknown"}; publication ${recordText(aggregate, "publicationStatus") ?? "unknown"}`,
-    `Tasks: ${summaryList(record.members).length} in this request; running ${summaryList(aggregate.activeTaskIds).length}; finished ${summaryList(aggregate.completedTaskIds).length}`,
-    `Waiting: ${describeSummaryEntries(aggregate.waiting, "taskId", "reason")}`,
-    `Decisions needed: ${describeSummaryEntries(aggregate.decisions, "subject", "detail")}`,
-    reasons.length === 0
-      ? "Left to do: nothing."
-      : `Left to do (${reasons.length}): ${compactList(reasons, ACTION_SUMMARY_MAX_ITEMS, 160)}`,
-  ];
-  return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
-}
-
-function summaryList(value: unknown): readonly unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function describeSummaryEntries(value: unknown, subject: string, detail: string): string {
-  const entries = summaryList(value).flatMap((entry) => {
-    const record = summaryRecord(entry);
-    if (record === undefined) return [];
-    return [`${recordText(record, subject) ?? "unknown"}: ${recordText(record, detail) ?? ""}`];
-  });
-  return entries.length === 0 ? "none" : compactList(entries, ACTION_SUMMARY_MAX_ITEMS, 160);
-}
-
 function isRequestUsageReceipt(value: unknown): value is RequestUsageReceipt {
   const record = summaryRecord(value);
   return (
@@ -1067,18 +1028,6 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     action === "merge"
   ) {
     return isTaskRecord(value) ? summarizeTask(value) : boundedJson(value, ACTION_RESULT_MAX_CHARS);
-  }
-  if (
-    action === "request-show" ||
-    action === "request-relate" ||
-    action === "request-conflict" ||
-    action === "request-decide" ||
-    action === "request-integrate" ||
-    action === "request-publish" ||
-    action === "request-merge" ||
-    action === "request-split"
-  ) {
-    return summarizeRequestDelivery(value);
   }
   if (
     action === "brief-draft" ||

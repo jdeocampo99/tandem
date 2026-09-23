@@ -43,14 +43,6 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "brief-review": { min: 2, max: 2 },
   "brief-approve": { min: 3, max: 4 },
   "request-receipt": { min: 2, max: 2 },
-  "request-show": { min: 2, max: 2 },
-  "request-relate": { min: 4, max: 4 },
-  "request-conflict": { min: 4, max: 4 },
-  "request-decide": { min: 4, max: 4 },
-  "request-integrate": { min: 2, max: 2 },
-  "request-publish": { min: 6, max: 6 },
-  "request-merge": { min: 3, max: 3 },
-  "request-split": { min: 2, max: 2 },
   "budget-show": { min: 2, max: 2 },
   "budget-approve": { min: 3, max: 4 },
   "review-existing": { min: 3, max: 3 },
@@ -143,40 +135,6 @@ export type TandemAction =
       readonly briefRevision: number;
       readonly contentDigest: string;
     }>
-  | Readonly<{ readonly action: "request-show"; readonly requestId: string }>
-  | Readonly<{
-      readonly action: "request-relate";
-      readonly requestId: string;
-      readonly taskId: string;
-      readonly dependsOn: string;
-    }>
-  | Readonly<{
-      readonly action: "request-conflict";
-      readonly requestId: string;
-      readonly taskIds: readonly string[];
-      readonly reason: string;
-    }>
-  | Readonly<{
-      readonly action: "request-decide";
-      readonly requestId: string;
-      readonly conflictId: string;
-      readonly instruction: string;
-    }>
-  | Readonly<{ readonly action: "request-integrate"; readonly requestId: string }>
-  | Readonly<{
-      readonly action: "request-publish";
-      readonly requestId: string;
-      readonly repository: string;
-      readonly title: string;
-      readonly base: string;
-      readonly summary: PrSummary;
-    }>
-  | Readonly<{
-      readonly action: "request-merge";
-      readonly requestId: string;
-      readonly method: "merge" | "squash" | "rebase";
-    }>
-  | Readonly<{ readonly action: "request-split"; readonly requestId: string }>
   | Readonly<{ readonly action: "tick" }>
   | Readonly<{
       readonly action: "pause";
@@ -251,9 +209,6 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "configure-models" ||
     action.action === "approve" ||
     action.action === "brief-approve" ||
-    action.action === "request-publish" ||
-    action.action === "request-merge" ||
-    action.action === "request-split" ||
     action.action === "budget-approve" ||
     action.action === "cancel" ||
     action.action === "publish" ||
@@ -266,28 +221,6 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "evidence-repair"
   );
 }
-/** The three whole-request actions that need a human decision, each one separately. */
-function requestApprovalPrompt(
-  action: Extract<TandemAction, { action: "request-publish" | "request-merge" | "request-split" }>,
-): Readonly<{ readonly title: string; readonly message: string }> {
-  if (action.action === "request-publish") {
-    return {
-      title: `Open a PR for "${action.title}"?`,
-      message: `Into ${action.base}. Nothing is merged.`,
-    };
-  }
-  if (action.action === "request-merge") {
-    return {
-      title: "Merge this request's PR?",
-      message: `${capitalize(action.method)}, once checks pass.`,
-    };
-  }
-  return {
-    title: "Split this request into several PRs?",
-    message: "One PR is the default.",
-  };
-}
-
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -313,13 +246,6 @@ async function approvalPrompt(
       title: `Save Tandem settings for ${projectName(onboarded.repoPath)}?`,
       message: "Saved outside the project.",
     };
-  }
-  if (
-    action.action === "request-publish" ||
-    action.action === "request-merge" ||
-    action.action === "request-split"
-  ) {
-    return requestApprovalPrompt(action);
   }
   if (action.action === "brief-approve") {
     const requestId = action.requestId ?? (await service.pendingBriefApprovalId());
@@ -530,58 +456,6 @@ export async function executeTandemAction(
         }),
         action.action,
       );
-    case "request-show":
-      return textResult(await service.requestStatus(action.requestId), action.action);
-    case "request-relate":
-      return textResult(
-        await service.relateRequestTasks(action.requestId, {
-          taskId: action.taskId,
-          dependsOn: action.dependsOn,
-          reason: `${action.taskId} waits for ${action.dependsOn}`,
-        }),
-        action.action,
-      );
-    case "request-conflict":
-      return textResult(
-        await service.recordRequestConflict(action.requestId, {
-          taskIds: action.taskIds,
-          reason: action.reason,
-        }),
-        action.action,
-      );
-    case "request-decide":
-      return textResult(
-        await service.decideRequestConflict(action.requestId, {
-          conflictId: action.conflictId,
-          instruction: action.instruction,
-        }),
-        action.action,
-      );
-    case "request-integrate":
-      return textResult(await service.integrateRequest(action.requestId), action.action);
-    case "request-publish":
-      return textResult(
-        await service.publishRequest(action.requestId, {
-          repository: action.repository,
-          title: action.title,
-          base: action.base,
-          summary: action.summary,
-          approved: true,
-        }),
-        action.action,
-        true,
-      );
-    case "request-merge":
-      return textResult(
-        await service.mergeRequest(action.requestId, {
-          approved: true,
-          method: action.method,
-        }),
-        action.action,
-        true,
-      );
-    case "request-split":
-      return textResult(await service.approveRequestSplit(action.requestId), action.action, true);
     case "brief-review":
       return textResult(await service.reviewRequestBrief(action.requestId), action.action);
     case "brief-show":
@@ -849,53 +723,6 @@ export function parseTandemCommand(input: string): TandemAction {
       };
     case "approve":
       return { action: "approve", taskId: value(1, "approve") };
-    case "request-show":
-      return { action: "request-show", requestId: value(1, "request-show") };
-    case "request-relate":
-      return {
-        action: "request-relate",
-        requestId: value(1, "request-relate"),
-        taskId: value(2, "request-relate task"),
-        dependsOn: value(3, "request-relate dependency"),
-      };
-    case "request-conflict":
-      return {
-        action: "request-conflict",
-        requestId: value(1, "request-conflict"),
-        taskIds: value(2, "request-conflict tasks").split(","),
-        reason: value(3, "request-conflict reason"),
-      };
-    case "request-decide":
-      return {
-        action: "request-decide",
-        requestId: value(1, "request-decide"),
-        conflictId: value(2, "request-decide conflict"),
-        instruction: value(3, "request-decide instruction"),
-      };
-    case "request-integrate":
-      return { action: "request-integrate", requestId: value(1, "request-integrate") };
-    case "request-publish":
-      return {
-        action: "request-publish",
-        requestId: value(1, "request-publish"),
-        repository: value(2, "request-publish repository"),
-        title: value(3, "request-publish title"),
-        base: value(4, "request-publish base"),
-        summary: parseSummaryJson(value(5, "request-publish summary")),
-      };
-    case "request-merge": {
-      const requestMethod = value(2, "request-merge method");
-      if (requestMethod !== "merge" && requestMethod !== "squash" && requestMethod !== "rebase") {
-        throw new TypeError(`unsupported merge method ${requestMethod}`);
-      }
-      return {
-        action: "request-merge",
-        requestId: value(1, "request-merge"),
-        method: requestMethod,
-      };
-    }
-    case "request-split":
-      return { action: "request-split", requestId: value(1, "request-split") };
     case "brief-show":
       return { action: "brief-show", requestId: value(1, "brief-show") };
     case "request-receipt":

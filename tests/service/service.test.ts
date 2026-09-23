@@ -979,8 +979,44 @@ test("new scouts persist a classified continuation and an explicit disposition s
     await rm(root, { recursive: true, force: true });
   }
 });
+/** A service and repo with an approved request brief, so a task can name it as `requestId`. */
+async function approvedBriefFixture(): Promise<
+  Readonly<{
+    readonly repoPath: string;
+    readonly service: TandemService;
+    readonly close: () => Promise<void>;
+  }>
+> {
+  const home = await mkdtemp(join(tmpdir(), "tandem-service-request-"));
+  const repoPath = join(home, "repo");
+  await mkdir(repoPath, { recursive: true });
+  const runner = fakeRunner();
+  const service = createTandemService({
+    home,
+    sessionId: "session-1",
+    poolRoot: join(home, "pool"),
+    run: runner.run,
+    clock: () => TIMESTAMP,
+    idFactory: (() => {
+      let sequence = 0;
+      return (): string => {
+        sequence += 1;
+        return `request-id-${sequence}`;
+      };
+    })(),
+  });
+  return {
+    repoPath,
+    service,
+    close: async () => {
+      await service.shutdown();
+      await rm(home, { recursive: true, force: true });
+    },
+  };
+}
+
 test("a scout under a request takes its post-research disposition from the brief, not its read-only guardrail", async () => {
-  const fixture = await requestFixture([]);
+  const fixture = await approvedBriefFixture();
   try {
     const drafted = await fixture.service.draftRequestBrief({
       repoPath: fixture.repoPath,
@@ -5144,300 +5180,4 @@ test("the scheduler refreshes an approved draft on durable change and records re
       expect(await draftRefreshFailures(home)).toHaveLength(1);
     },
   );
-});
-
-/** One approved implementation task seeded as a member of the whole-request fixture. */
-type RequestMemberSeed = Readonly<{
-  readonly objective: string;
-  readonly surfaces: readonly string[];
-  readonly paneId: string;
-}>;
-
-type RequestFixture = Readonly<{
-  readonly home: string;
-  readonly repoPath: string;
-  readonly requestId: string;
-  readonly memberIds: readonly string[];
-  readonly runnerState: FakeRunnerState;
-  readonly service: TandemService;
-  /** A second controller over the same durable home, as a restart would build. */
-  readonly restart: () => TandemService;
-}>;
-
-function memberLeaseFor(home: string, taskId: string): WorktreeLease {
-  return {
-    root: join(home, "pool"),
-    path: join(home, "pool", taskId),
-    name: `tandem-${taskId}`,
-    baseHead: "source-head",
-    branch: `tandem/${taskId}`,
-    leaseId: `lease-${taskId}`,
-    leaseHolder: `session-1:${taskId}`,
-    leasedAt: TIMESTAMP,
-  };
-}
-
-function memberEndpointFor(paneId: string): Endpoint {
-  return {
-    sessionId: "session-1",
-    workspaceId: "workspace-1",
-    tabId: "tab-1",
-    paneId,
-    role: "implementer",
-    generation: 0,
-  };
-}
-
-/** Gives one seeded member the durable worktree and endpoint a dispatch would otherwise acquire. */
-async function attachMemberResources(home: string, taskId: string, paneId: string): Promise<void> {
-  const state = await readRuntime(home);
-  await writeRuntimeState(runtimeFile(home), {
-    ...state,
-    tasks: state.tasks.map((entry) =>
-      entry.taskId === taskId
-        ? {
-            ...entry,
-            worktree: memberLeaseFor(home, taskId),
-            endpoints: [memberEndpointFor(paneId)],
-          }
-        : entry,
-    ),
-  });
-}
-
-async function runtimeMember(home: string, taskId: string): Promise<RuntimeTaskState> {
-  const state = await readRuntime(home);
-  const entry = state.tasks.find((candidate) => candidate.taskId === taskId);
-  if (entry === undefined) throw new Error(`runtime entry for ${taskId} is missing`);
-  return entry;
-}
-
-/**
- * Seeds one approved request brief and its approved implementation members through the service
- * itself, so membership is recorded by the controller rather than written into durable state.
- */
-async function requestFixture(
-  members: readonly RequestMemberSeed[],
-): Promise<RequestFixture & { readonly close: () => Promise<void> }> {
-  const home = await mkdtemp(join(tmpdir(), "tandem-service-request-"));
-  const repoPath = join(home, "repo");
-  await mkdir(repoPath, { recursive: true });
-  const runner = fakeRunner();
-  let sequence = 0;
-  const idFactory = (): string => {
-    sequence += 1;
-    return `request-id-${sequence}`;
-  };
-  const serviceOptions = {
-    home,
-    sessionId: "session-1",
-    poolRoot: join(home, "pool"),
-    run: runner.run,
-    clock: () => TIMESTAMP,
-    idFactory,
-  };
-  const service = createTandemService(serviceOptions);
-  // Members only dispatch under a configured standing cap, so the request budget is pinned here
-  // rather than left unset; scheduling, not spending, is what these tests exercise.
-  const proposal = await service.onboard(repoPath, false);
-  await mkdir(dirname(proposal.configPath), { recursive: true });
-  await writeFile(
-    proposal.configPath,
-    `repoPath = ${JSON.stringify(proposal.repoPath)}\n\n[requestBudget]\ncapMicros = 100000000\noperationEstimateMicros = 500000\n`,
-    "utf8",
-  );
-  const drafted = await service.draftRequestBrief({
-    repoPath,
-    reviewPane: false,
-    content: {
-      goal: "Deliver two approved tasks as one request",
-      scope: ["src/service"],
-      constraints: ["one verified pull request by default"],
-      nonGoals: ["no automatic merge"],
-      acceptanceCriteria: ["Both members are delivered together."],
-      recommendedApproach: "Coordinate the members around one request identity",
-      keyDecisions: ["dependencies order the members"],
-      openQuestions: [],
-      researchLinks: [],
-    },
-  });
-  await service.approveRequestBrief({
-    requestId: drafted.record.id,
-    briefRevision: drafted.record.draft.revision,
-    contentDigest: drafted.record.draft.contentDigest,
-  });
-  const memberIds: string[] = [];
-  for (const member of members) {
-    const created = await service.create({
-      repoPath,
-      kind: "implementation",
-      objective: member.objective,
-      acceptanceCriteria: ["the member is reviewed"],
-      surfaces: member.surfaces,
-      requestId: drafted.record.id,
-    });
-    await service.approve(created.id);
-    await attachMemberResources(home, created.id, member.paneId);
-    memberIds.push(created.id);
-  }
-  return {
-    home,
-    repoPath,
-    requestId: drafted.record.id,
-    memberIds,
-    runnerState: runner.state,
-    service,
-    restart: () => createTandemService(serviceOptions),
-    close: async () => {
-      await service.shutdown();
-      await rm(home, { recursive: true, force: true });
-    },
-  };
-}
-
-async function withRequestFixture(
-  members: readonly RequestMemberSeed[],
-  action: (fixture: RequestFixture) => Promise<void>,
-): Promise<void> {
-  const created = await requestFixture(members);
-  try {
-    await action(created);
-  } finally {
-    created.runnerState.releasePresentation();
-    await created.close();
-  }
-}
-
-const REQUEST_MEMBERS: readonly RequestMemberSeed[] = [
-  { objective: "add the endpoint", surfaces: ["api"], paneId: "pane-1" },
-  { objective: "add the screen", surfaces: ["ui"], paneId: "pane-2" },
-];
-
-test("scheduling dispatches an independent request member and holds the one that depends on it", async () => {
-  await withRequestFixture(REQUEST_MEMBERS, async (fixture) => {
-    const [first, second] = fixture.memberIds;
-    if (first === undefined || second === undefined) throw new Error("members were not seeded");
-    await fixture.service.relateRequestTasks(fixture.requestId, {
-      taskId: second,
-      dependsOn: first,
-      reason: "the screen needs the endpoint",
-    });
-
-    await fixture.service.tick();
-
-    expect((await runtimeMember(fixture.home, first)).reservation).toBeDefined();
-    expect((await runtimeMember(fixture.home, second)).reservation).toBeUndefined();
-    expect((await runtimeMember(fixture.home, second)).jobs).toHaveLength(0);
-    expect((await fixture.service.get(second)).stage).toBe("queued");
-
-    const status = await fixture.service.requestStatus(fixture.requestId);
-    expect(status.aggregate.waiting).toEqual([
-      { taskId: second, waitingFor: [first], reason: `waiting for ${first} to finish` },
-    ]);
-  });
-});
-
-test("without a recorded dependency both request members are dispatched", async () => {
-  await withRequestFixture(REQUEST_MEMBERS, async (fixture) => {
-    const [first, second] = fixture.memberIds;
-    if (first === undefined || second === undefined) throw new Error("members were not seeded");
-
-    await fixture.service.tick();
-
-    expect((await runtimeMember(fixture.home, first)).reservation).toBeDefined();
-    expect((await runtimeMember(fixture.home, second)).reservation).toBeDefined();
-  });
-}, 20_000);
-
-test("a ready subset of request members never reports the request as delivered", async () => {
-  await withRequestFixture(REQUEST_MEMBERS, async (fixture) => {
-    const [first, second] = fixture.memberIds;
-    if (first === undefined || second === undefined) throw new Error("members were not seeded");
-    const store = createTaskStore({
-      directory: join(fixture.home, "tasks"),
-      clock: () => TIMESTAMP,
-      idFactory: () => "unused",
-    });
-    const finished = await store.read(first);
-    if (finished === undefined) throw new Error("member task is missing");
-    await store.update(finished.id, finished.revision, (task) => ({
-      ...task,
-      revision: task.revision + 1,
-      updatedAt: TIMESTAMP,
-      stage: "ready",
-      reviewHead: "member-head-1",
-    }));
-
-    const status = await fixture.service.requestStatus(fixture.requestId);
-
-    expect(status.aggregate.completedTaskIds).toEqual([first]);
-    expect(status.aggregate.delivered).toBe(false);
-    expect(status.aggregate.readyToIntegrate).toBe(false);
-    expect(status.aggregate.incompleteReasons.join("; ")).toContain(second);
-    await expect(fixture.service.integrateRequest(fixture.requestId)).rejects.toThrow(
-      /cannot be integrated/u,
-    );
-  });
-});
-
-test("a restarted controller restores request relations without duplicating membership or jobs", async () => {
-  await withRequestFixture(REQUEST_MEMBERS, async (fixture) => {
-    const [first, second] = fixture.memberIds;
-    if (first === undefined || second === undefined) throw new Error("members were not seeded");
-    await fixture.service.relateRequestTasks(fixture.requestId, {
-      taskId: second,
-      dependsOn: first,
-      reason: "the screen needs the endpoint",
-    });
-    await fixture.service.tick();
-    const jobsBefore = (await runtimeMember(fixture.home, first)).jobs.length;
-
-    const restarted = fixture.restart();
-    try {
-      await restarted.tick();
-      const status = await restarted.requestStatus(fixture.requestId);
-
-      expect(status.record.members.map((member) => member.taskId)).toEqual([first, second]);
-      expect(status.record.dependencies).toHaveLength(1);
-      expect(status.record.dependencies[0]).toMatchObject({
-        taskId: second,
-        dependsOn: first,
-        status: "active",
-      });
-      expect(status.record.integration).toBeUndefined();
-      expect((await runtimeMember(fixture.home, first)).jobs).toHaveLength(jobsBefore);
-      expect((await runtimeMember(fixture.home, second)).reservation).toBeUndefined();
-      expect(status.aggregate.waiting.map((wait) => wait.taskId)).toEqual([second]);
-    } finally {
-      await restarted.shutdown();
-    }
-  });
-});
-
-test("a member of a request cannot be published on its own without approval to split delivery", async () => {
-  await withRequestFixture(REQUEST_MEMBERS, async (fixture) => {
-    const [first] = fixture.memberIds;
-    if (first === undefined) throw new Error("members were not seeded");
-
-    await expect(
-      fixture.service.publish(first, {
-        repository: "acme/repo",
-        title: "Deliver one member",
-        base: "main",
-        summary: { tldr: ["t"], what: ["w"], why: ["y"] },
-        approved: true,
-      }),
-    ).rejects.toThrow(/needs explicit approval to split delivery/u);
-
-    await fixture.service.approveRequestSplit(fixture.requestId);
-    await expect(
-      fixture.service.publish(first, {
-        repository: "acme/repo",
-        title: "Deliver one member",
-        base: "main",
-        summary: { tldr: ["t"], what: ["w"], why: ["y"] },
-        approved: true,
-      }),
-    ).rejects.toThrow(/delivery preflight refused publication/u);
-  });
 });
