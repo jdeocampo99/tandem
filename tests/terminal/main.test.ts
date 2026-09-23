@@ -1231,12 +1231,13 @@ test("fix inspects Tandem resources and applies nothing when there is nothing to
       stderr: (text) => jsonOutput.push(text),
     });
     expect(JSON.parse(jsonOutput.join(""))).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       mode: "dry-run",
       cleaned: [],
       retained: [],
       quarantined: [],
       failed: [],
+      freeable: [],
     });
   } finally {
     await rm(home, { recursive: true, force: true });

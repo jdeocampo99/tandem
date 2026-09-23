@@ -91,7 +91,7 @@ function shortReason(reason: string): string {
   return flat.length > 72 ? `${flat.slice(0, 71)}…` : flat;
 }
 
-type Outcome = "cleaned" | "retained" | "quarantined" | "failed";
+type Outcome = "cleaned" | "retained" | "quarantined" | "failed" | "freeable";
 type Row = readonly string[];
 
 function taskRow(id: string, task: FixTaskDetail | undefined, fallbackLabel: string): Row {
@@ -107,7 +107,15 @@ function entryRow(entry: ReconcileReportEntry, outcome: Outcome, details: FixDet
   const why = outcome === "quarantined" || outcome === "failed";
   if (isTask(entry)) {
     const row = taskRow(entry.id, details.tasks.get(entry.id), "Task");
-    return why ? [...row, shortReason(entry.reason)] : row;
+    if (why) return [...row, shortReason(entry.reason)];
+    if (entry.containedIn !== undefined) {
+      const work = `work is in ${entry.containedIn}`;
+      return [...row, outcome === "cleaned" ? `freed · ${work}` : work];
+    }
+    if (entry.worktreeStays !== undefined && outcome === "cleaned") {
+      return [...row, `stays: ${entry.worktreeStays}`];
+    }
+    return row;
   }
   if (entry.kind === "worktree-lease") {
     const taskId = details.leaseTasks.get(entry.id);
@@ -163,7 +171,13 @@ export type FixSection = Readonly<{ readonly title: string; readonly rows: reado
 export function fixSections(report: ReconcileReport, details: FixDetails): readonly FixSection[] {
   const dryRun = report.mode === "dry-run";
   const listedTasks = new Set(
-    [...report.cleaned, ...report.retained, ...report.quarantined, ...report.failed]
+    [
+      ...report.cleaned,
+      ...report.retained,
+      ...report.quarantined,
+      ...report.failed,
+      ...report.freeable,
+    ]
       .filter(isTask)
       .map((entry) => entry.id),
   );
@@ -171,6 +185,7 @@ export function fixSections(report: ReconcileReport, details: FixDetails): reado
     sectionRows(entries, outcome, details, listedTasks);
   return [
     { title: dryRun ? "Clean up" : "Cleaned", rows: rows(report.cleaned, "cleaned") },
+    { title: "Can also free", rows: rows(report.freeable, "freeable") },
     { title: dryRun ? "Keep" : "Kept", rows: rows(report.retained, "retained") },
     { title: "Left alone", rows: rows(report.quarantined, "quarantined") },
     { title: "Failed", rows: rows(report.failed, "failed") },
@@ -204,6 +219,7 @@ export function renderFixReport(report: ReconcileReport, details: FixDetails): s
     report.cleaned.length === 0 &&
     report.quarantined.length === 0 &&
     report.failed.length === 0 &&
+    report.freeable.length === 0 &&
     !unfinished
   ) {
     return "Tandem fix · nothing to clean up\n";
@@ -223,13 +239,21 @@ export function renderFixReport(report: ReconcileReport, details: FixDetails): s
     );
   }
   lines.push("");
-  const cleansWorktree = report.cleaned.some(
-    (entry) => isTask(entry) && details.tasks.get(entry.id)?.worktreePath !== undefined,
+  // Implementation lines already say whether their worktree stays; scouts decide at cleanup time.
+  const scoutWorktree = report.cleaned.some(
+    (entry) =>
+      entry.kind === "scout-task" && details.tasks.get(entry.id)?.worktreePath !== undefined,
   );
-  if (dryRun && cleansWorktree) {
-    lines.push("A task's worktree is returned only if it is clean and its work already merged.");
+  if (dryRun && scoutWorktree) {
+    lines.push("A research worktree is returned only if it is clean and still on its source.");
   }
   if (unfinished) lines.push("Some task cleanups did not finish, so their worktrees stay.");
+  if (report.freeable.length > 0) {
+    lines.push("Freeing returns a worktree but keeps its branch, so no commit is lost.");
+    if (!dryRun) lines.push("To free them: tandem fix --yes --free-superseded");
+  } else if (report.cleaned.some((entry) => isTask(entry) && entry.containedIn !== undefined)) {
+    lines.push("Freed worktrees keep their branches, so no commit is lost.");
+  }
   lines.push("tandem fix --verbose shows paths and reasons");
   return `${lines.join("\n")}\n`;
 }
@@ -245,7 +269,12 @@ function verboseSection(
     ...entries.map((entry) => {
       const where = entry.path ?? entry.repoPath;
       const suffix = where === undefined || where === entry.id ? "" : ` (${where})`;
-      return `  - ${entry.kind} ${entry.id}${suffix}: ${entry.reason}`;
+      const extra = [
+        entry.containedIn === undefined ? undefined : `commits are in ${entry.containedIn}`,
+        entry.worktreeStays === undefined ? undefined : `worktree stays: ${entry.worktreeStays}`,
+      ].filter((part) => part !== undefined);
+      const detail = extra.length === 0 ? "" : ` (${extra.join("; ")})`;
+      return `  - ${entry.kind} ${entry.id}${suffix}: ${entry.reason}${detail}`;
     }),
   ];
 }
@@ -261,6 +290,7 @@ export function renderFixReportVerbose(report: ReconcileReport): string {
     ...verboseSection("Retained", report.retained),
     ...verboseSection("Quarantined", report.quarantined),
     ...verboseSection("Failed", report.failed),
+    ...verboseSection("Can also free", report.freeable),
   ];
   if (lines.length === 1) return `Tandem checked ${report.home}; nothing needs fixing.\n`;
   return `${lines.join("\n")}\n`;

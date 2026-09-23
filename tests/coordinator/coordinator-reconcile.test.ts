@@ -27,6 +27,7 @@ import {
   listCoordinatorQuarantineRecords,
   quarantineCoordinatorLease,
 } from "../../src/coordinator/resources.ts";
+import { runTerminal } from "../../src/main.ts";
 import { runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
@@ -45,7 +46,11 @@ type Fixture = Readonly<{
   readonly poolRoot: string;
   readonly pool: Pool;
   readonly launch: (sessionId: string) => Promise<void>;
-  readonly reconcile: (apply: boolean, discard?: boolean) => Promise<ReconcileReport>;
+  readonly reconcile: (
+    apply: boolean,
+    discard?: boolean,
+    freeSuperseded?: boolean,
+  ) => Promise<ReconcileReport>;
 }>;
 
 async function fixture(): Promise<Fixture> {
@@ -97,7 +102,7 @@ async function fixture(): Promise<Fixture> {
     launch: async (sessionId) => {
       await launchCoordinator(request(sessionId), dependencies);
     },
-    reconcile: async (apply, discard = false) =>
+    reconcile: async (apply, discard = false, freeSuperseded = false) =>
       reconcileTandemResources({
         run: pool.run,
         home,
@@ -105,6 +110,7 @@ async function fixture(): Promise<Fixture> {
         repoPaths: [repo],
         apply,
         discard,
+        freeSuperseded,
         clock: () => TIMESTAMP,
         newId: () => {
           quarantineIds += 1;
@@ -304,10 +310,14 @@ async function seedPendingScout(
   return { lease, endpoint };
 }
 
-/** Seeds a dirty implementation whose explicit discard requires task approval. */
+/**
+ * Seeds an implementation whose cleanup never settled; dirty unless told otherwise. `otherBranch`
+ * adds a second task holding that branch, so the first task's commits can be contained in it.
+ */
 async function seedPendingImplementation(
   test: Fixture,
   stage: "cancelled" | "blocked" = "cancelled",
+  options: Readonly<{ dirty?: boolean; otherBranch?: string }> = {},
 ): Promise<WorktreeLease> {
   const worktreePath = join(test.poolRoot, "implementation-worktree");
   await mkdir(worktreePath, { recursive: true });
@@ -344,7 +354,7 @@ async function seedPendingImplementation(
   test.pool.worktrees.set(lease.path, {
     head: FIRST_HEAD,
     branch: lease.branch,
-    dirty: true,
+    dirty: options.dirty ?? true,
     unmerged: false,
   });
 
@@ -390,28 +400,80 @@ async function seedPendingImplementation(
     ),
   );
 
+  const checkpoint = {
+    head: FIRST_HEAD,
+    base: FIRST_HEAD,
+    diff: "",
+    dirty: false,
+    unmerged: false,
+  };
+  const other =
+    options.otherBranch === undefined
+      ? []
+      : [
+          {
+            schemaVersion: 1 as const,
+            taskId: (
+              await store.create({
+                id: "e2c0fbb5-other",
+                repoPath: test.repo,
+                kind: "implementation",
+                objective: "the follow-up that carries the same commits",
+                acceptanceCriteria: ["the change is complete"],
+                surfaces: ["service"],
+                policy: scoutPolicy,
+              })
+            ).id,
+            sourceCheckpoint: checkpoint,
+            taskName: "tandem-other",
+            worktree: {
+              ...lease,
+              path: join(test.poolRoot, "other-worktree"),
+              name: "tandem-other",
+              branch: options.otherBranch,
+              leaseId: "lease-other",
+              leaseHolder: "task:other",
+            },
+            endpoints: [],
+            jobs: [],
+          },
+        ];
   await writeRuntimeState(runtimeFile(test.home), {
     schemaVersion: 1,
     tasks: [
       {
         schemaVersion: 1,
         taskId: settled.id,
-        sourceCheckpoint: {
-          head: FIRST_HEAD,
-          base: FIRST_HEAD,
-          diff: "",
-          dirty: false,
-          unmerged: false,
-        },
+        sourceCheckpoint: checkpoint,
         taskName: lease.name,
         worktree: lease,
         endpoints: [endpoint],
         jobs: [],
       },
+      ...other,
     ],
     presentations: [],
   });
   return lease;
+}
+
+/** Whether any command returned this lease, and whether any command touched a branch ref. */
+function returnOf(test: Fixture, lease: WorktreeLease): CommandRequest | undefined {
+  return test.pool.calls.find(
+    (call) =>
+      call.argv[0] === "treehouse" &&
+      call.argv.includes("return") &&
+      call.argv.includes(lease.leaseId),
+  );
+}
+
+function branchChanges(test: Fixture): readonly CommandRequest[] {
+  return test.pool.calls.filter(
+    (call) =>
+      call.argv[0] === "git" &&
+      (call.argv.includes("branch") || call.argv.includes("update-ref")) &&
+      call.argv.some((arg) => arg === "-d" || arg === "-D" || arg === "--delete"),
+  );
 }
 
 test("the plan classifies each observed resource without touching any of them", () => {
@@ -720,6 +782,112 @@ test("blocked implementation cleanup is included only in explicit discard reconc
   });
 });
 
+test("a worktree whose commits are in another task is freed only with its own approval", async () => {
+  await withFixture(async (test) => {
+    const lease = await seedPendingImplementation(test, "cancelled", {
+      dirty: false,
+      otherBranch: "tandem/other",
+    });
+    test.pool.setAncestry((_commit, ref) => ref === "refs/heads/tandem/other");
+
+    const dry = await test.reconcile(false);
+    expect(entries(dry.cleaned, "implementation-task")).toHaveLength(0);
+    expect(dry.freeable).toEqual([
+      expect.objectContaining({ id: "implementation-1", containedIn: "task e2c0fbb5" }),
+    ]);
+
+    const cleanedOnly = await test.reconcile(true);
+    expect(cleanedOnly.freeable.map((entry) => entry.id)).toEqual(["implementation-1"]);
+    expect(test.pool.leases.has(lease.leaseId)).toBe(true);
+    expect(returnOf(test, lease)).toBeUndefined();
+
+    const freed = await test.reconcile(true, false, true);
+    const entry = entries(freed.cleaned, "implementation-task")[0];
+    expect(entry).toMatchObject({ id: "implementation-1", containedIn: "task e2c0fbb5" });
+    expect(entry?.reason).toContain(`branch ${lease.branch} is kept`);
+    expect(freed.freeable).toEqual([]);
+    expect(test.pool.leases.has(lease.leaseId)).toBe(false);
+    expect(returnOf(test, lease)?.argv).toContain("--force");
+    expect(branchChanges(test)).toEqual([]);
+  });
+});
+
+test("a worktree with a commit found nowhere else is never offered or freed", async () => {
+  await withFixture(async (test) => {
+    const lease = await seedPendingImplementation(test, "cancelled", {
+      dirty: false,
+      otherBranch: "tandem/other",
+    });
+    test.pool.setAncestry(() => false);
+
+    const dry = await test.reconcile(false);
+    expect(dry.freeable).toEqual([]);
+    expect(entries(dry.cleaned, "implementation-task")[0]?.worktreeStays).toBe(
+      "has commits not in main or any other work",
+    );
+
+    await test.reconcile(true, false, true);
+    expect(test.pool.leases.has(lease.leaseId)).toBe(true);
+    expect(returnOf(test, lease)).toBeUndefined();
+  });
+});
+
+test("a dirty worktree is never offered or freed, even when its commits are elsewhere", async () => {
+  await withFixture(async (test) => {
+    const lease = await seedPendingImplementation(test, "cancelled", {
+      dirty: true,
+      otherBranch: "tandem/other",
+    });
+    test.pool.setAncestry((_commit, ref) => ref === "refs/heads/tandem/other");
+
+    const dry = await test.reconcile(false);
+    expect(dry.freeable).toEqual([]);
+    expect(entries(dry.cleaned, "implementation-task")[0]?.worktreeStays).toBe(
+      "has uncommitted changes",
+    );
+
+    await test.reconcile(true, false, true);
+    expect(test.pool.leases.has(lease.leaseId)).toBe(true);
+    expect(returnOf(test, lease)).toBeUndefined();
+  });
+});
+
+test("tandem fix --yes alone never frees; --free-superseded with --yes does", async () => {
+  await withFixture(async (test) => {
+    const lease = await seedPendingImplementation(test, "cancelled", {
+      dirty: false,
+      otherBranch: "tandem/other",
+    });
+    test.pool.setAncestry((_commit, ref) => ref === "refs/heads/tandem/other");
+    const fix = async (...flags: string[]) => {
+      const output: string[] = [];
+      const result = await runTerminal(["fix", "--home", test.home, ...flags], {
+        cwd: test.root,
+        processEnvironment: {},
+        isTTY: false,
+        run: test.pool.run,
+        stdout: (text) => output.push(text),
+        stderr: (text) => output.push(text),
+      });
+      return { result, output: output.join("") };
+    };
+
+    const refused = await fix("--free-superseded");
+    expect(refused.result.exitCode).not.toBe(0);
+    expect(refused.output).toContain("Rerun with --yes --free-superseded");
+
+    const yes = await fix("--yes", "--json");
+    const report = JSON.parse(yes.output) as ReconcileReport;
+    expect(report.mode).toBe("applied");
+    expect(report.freeable.map((entry) => entry.id)).toEqual(["implementation-1"]);
+    expect(test.pool.leases.has(lease.leaseId)).toBe(true);
+
+    const freed = await fix("--yes", "--free-superseded");
+    expect(freed.output).toContain("freed · work is in task e2c0fbb5");
+    expect(test.pool.leases.has(lease.leaseId)).toBe(false);
+  });
+});
+
 test("an unreadable coordinator record is reported and left exactly where it is", async () => {
   await withFixture(async (test) => {
     const directory = registrySessionDirectory(test.home, "tandem-elsewhere");
@@ -769,8 +937,9 @@ test("the machine-readable report keeps a stable versioned shape", async () => {
       "retained",
       "quarantined",
       "failed",
+      "freeable",
     ]);
-    expect(report.schemaVersion).toBe(1);
+    expect(report.schemaVersion).toBe(2);
     expect(report.home).toBe(test.home);
     const coordinator = entries(report.cleaned, "coordinator")[0];
     if (coordinator === undefined) throw new Error("the stopped coordinator was not reported");

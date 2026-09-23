@@ -42,6 +42,8 @@ export type Pool = Readonly<{
   readonly returnedPaths: readonly string[];
   setFailure: (failure: StartupFailure | undefined) => void;
   setRepoHead: (head: string) => void;
+  /** Decides `git merge-base --is-ancestor COMMIT REF`; every commit is an ancestor by default. */
+  setAncestry: (isAncestor: (commit: string, ref: string) => boolean) => void;
   stopCoordinator: () => void;
   coordinatorLeases: () => readonly FakeLease[];
 }>;
@@ -92,6 +94,7 @@ export function fakePool(input: PoolInput): Pool {
   const returnedPaths: string[] = [];
   let repoHead = FIRST_HEAD;
   let failure: StartupFailure | undefined;
+  let ancestry = (_commit: string, _ref: string): boolean => true;
   let identities = 0;
 
   leases.set(TASK_LEASE_ID, {
@@ -131,7 +134,9 @@ export function fakePool(input: PoolInput): Pool {
       return rest.includes("--diff-filter=U") && state.unmerged ? ok("conflict.txt\n") : ok("");
     }
     if (rest[0] === "cat-file") return ok("");
-    if (rest[0] === "merge-base") return ok("");
+    if (rest[0] === "merge-base") {
+      return ancestry(rest[2] ?? "", rest[3] ?? "") ? ok("") : { code: 1, stdout: "", stderr: "" };
+    }
     if (rest[0] === "switch") {
       state.branch = rest[3] ?? "";
       state.head = rest[4] ?? state.head;
@@ -349,6 +354,9 @@ export function fakePool(input: PoolInput): Pool {
     },
     setRepoHead: (head) => {
       repoHead = head;
+    },
+    setAncestry: (next) => {
+      ancestry = next;
     },
     stopCoordinator: () => {
       for (const pane of panes.values()) pane.omp = undefined;

@@ -72,6 +72,7 @@ Options:
   --yes                    Skip the confirmation (fix, reset)
   --json                   Machine-readable output (status, fix)
   --verbose                Full paths and reasons (fix)
+  --free-superseded        With --yes, also free worktrees whose work is in other tasks (fix)
   --home PATH              Use a different Tandem home
 `;
 
@@ -172,14 +173,20 @@ async function assertNotInCoordinatorPane(
   }
 }
 
+/**
+ * Asks a yes/no question. `--yes` answers it, unless the question needs its own flag too: then
+ * `--yes` alone answers no, so one consent never stands in for another.
+ */
 async function confirm(
   question: string,
   invocation: TerminalInvocation,
   interaction: TerminalInteraction,
+  extraFlag?: Readonly<{ readonly given: boolean; readonly spelling: string }>,
 ): Promise<boolean> {
-  if (invocation.yes) return true;
+  if (invocation.yes) return extraFlag === undefined || extraFlag.given;
   if (!interaction.interactive || interaction.prompter === undefined) {
-    throw new Error(`${question} Rerun with --yes to confirm without a terminal prompt.`);
+    const flags = extraFlag === undefined ? "--yes" : `--yes ${extraFlag.spelling}`;
+    throw new Error(`${question} Rerun with ${flags} to confirm without a terminal prompt.`);
   }
   const answer = await interaction.prompter.ask(question, {
     choices: [
@@ -255,7 +262,7 @@ async function handleFix({
   readonly interaction: TerminalInteraction;
   readonly stdout: (text: string) => void;
 }>): Promise<TerminalRunResult> {
-  const reconcile = (apply: boolean) =>
+  const reconcile = (apply: boolean, freeSuperseded: boolean) =>
     readRegisteredProjects(environment.home).then((repoPaths) =>
       reconcileTandemResources({
         run,
@@ -264,6 +271,7 @@ async function handleFix({
         repoPaths,
         apply,
         discard: false,
+        freeSuperseded,
       }),
     );
   const details = invocation.json ? NO_FIX_DETAILS : await readFixDetails(environment.home);
@@ -271,14 +279,26 @@ async function handleFix({
     if (invocation.json) return;
     stdout(invocation.verbose ? renderFixReportVerbose(shown) : renderFixReport(shown, details));
   };
-  let report = await reconcile(invocation.yes);
+  let report = await reconcile(invocation.yes, invocation.yes && invocation.freeSuperseded);
   show(report);
-  if (report.mode === "dry-run" && report.cleaned.length > 0) {
+  if (report.mode === "dry-run") {
     const count = fixCleanupCount(report, details);
-    if (
-      await confirm(`Clean up ${count} thing${count === 1 ? "" : "s"}?`, invocation, interaction)
-    ) {
-      report = await reconcile(true);
+    const clean =
+      report.cleaned.length === 0 ||
+      (await confirm(`Clean up ${count} thing${count === 1 ? "" : "s"}?`, invocation, interaction));
+    const freeable = report.freeable.length;
+    // Freeing is its own consent: asked separately, and never implied by approving cleanup.
+    const free =
+      clean &&
+      freeable > 0 &&
+      (await confirm(
+        `Also free ${freeable} worktree${freeable === 1 ? "" : "s"} whose work is in other tasks?`,
+        invocation,
+        interaction,
+        { given: invocation.freeSuperseded, spelling: "--free-superseded" },
+      ));
+    if (clean && (report.cleaned.length > 0 || free)) {
+      report = await reconcile(true, free);
       show(report);
     }
   }

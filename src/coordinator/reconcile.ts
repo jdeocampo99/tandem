@@ -13,6 +13,12 @@ import {
   finishPendingScoutCleanup,
   type TaskCleanupOutcome,
 } from "../service/scout-cleanup.ts";
+import {
+  containerRefs,
+  observeWorktreeContainment,
+  type SupersededProof,
+  type WorktreeContainment,
+} from "../service/superseded.ts";
 
 import { createTaskStore } from "../tasks/store.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
@@ -45,7 +51,7 @@ import {
 import { retireCoordinatorWorkspace } from "./workspace.ts";
 
 /** Version of the machine-readable reconciliation report; bumped when its shape changes. */
-export const RECONCILE_REPORT_SCHEMA_VERSION = 1 as const;
+export const RECONCILE_REPORT_SCHEMA_VERSION = 2 as const;
 
 /** The kinds of resource reconciliation knows how to classify. */
 export type ReconcileResourceKind =
@@ -62,8 +68,11 @@ export type ReconcileResourceKind =
  */
 export type ReconcileAction = "clean" | "retain" | "quarantine";
 
-/** Where one resource ended up, once the plan was applied or reported as a dry run. */
-export type ReconcileOutcome = "cleaned" | "retained" | "quarantined" | "failed";
+/**
+ * Where one resource ended up, once the plan was applied or reported as a dry run. `freeable` is a
+ * task worktree that can be returned only with its own explicit approval.
+ */
+export type ReconcileOutcome = "cleaned" | "retained" | "quarantined" | "failed" | "freeable";
 
 /** One stored coordinator record as the scan observed it, without changing anything. */
 export type ObservedCoordinator = Readonly<{
@@ -97,6 +106,8 @@ export type ObservedPendingImplementation = Readonly<{
   readonly taskId: string;
   readonly repoPath: string;
   readonly reason: string;
+  /** For a cancelled or completed task holding a worktree: what returning it would lose. */
+  readonly containment?: WorktreeContainment;
 }>;
 
 /** One terminal scout whose child resources an earlier coordinator did not finish releasing. */
@@ -151,6 +162,18 @@ export type ReconcilePlanItem =
       readonly reason: string;
       readonly taskId: string;
       readonly repoPath: string;
+      /** Approved: return the worktree because this proof shows its commits are elsewhere. */
+      readonly free?: SupersededProof;
+      /** Why ordinary cleanup will leave this task's worktree in place. */
+      readonly worktreeStays?: string;
+    }>
+  | Readonly<{
+      readonly kind: "superseded-task";
+      readonly action: "offer";
+      readonly reason: string;
+      readonly taskId: string;
+      readonly repoPath: string;
+      readonly proof: SupersededProof;
     }>
   | Readonly<{
       readonly kind: "scout-task";
@@ -176,7 +199,7 @@ export type ReconcilePlanItem =
     }>;
 
 export type ReconcilePlan = Readonly<{
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof RECONCILE_REPORT_SCHEMA_VERSION;
   readonly items: readonly ReconcilePlanItem[];
 }>;
 
@@ -188,17 +211,23 @@ export type ReconcileReportEntry = Readonly<{
   readonly repoPath?: string;
   readonly sessionId?: string;
   readonly path?: string;
+  /** The other task or pull request that already carries a freeable task's commits. */
+  readonly containedIn?: string;
+  /** Why ordinary cleanup leaves this task's worktree in place. */
+  readonly worktreeStays?: string;
 }>;
 
 /** The stable, versioned shape `tandem fix --json` prints for automation. */
 export type ReconcileReport = Readonly<{
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof RECONCILE_REPORT_SCHEMA_VERSION;
   readonly mode: "dry-run" | "applied";
   readonly home: string;
   readonly cleaned: readonly ReconcileReportEntry[];
   readonly retained: readonly ReconcileReportEntry[];
   readonly quarantined: readonly ReconcileReportEntry[];
   readonly failed: readonly ReconcileReportEntry[];
+  /** Worktrees whose commits other work already carries, returned only on separate approval. */
+  readonly freeable: readonly ReconcileReportEntry[];
 }>;
 
 export type ReconcileScanInput = Readonly<{
@@ -232,6 +261,8 @@ export type ReconcileInput = Readonly<{
   readonly apply: boolean;
   /** With apply, force-return only cancelled implementation task worktrees. */
   readonly discard?: boolean;
+  /** With apply, return worktrees whose commits other work already carries; branches are kept. */
+  readonly freeSuperseded?: boolean;
   readonly clock?: Clock;
   readonly newId?: () => string;
 }>;
@@ -433,6 +464,7 @@ async function observePendingScouts(
  * rechecks the task and runtime under the state lock before touching any pane or lease.
  */
 async function observePendingImplementations(
+  run: CommandRunner,
   home: string,
   clock: Clock,
   discard: boolean,
@@ -446,6 +478,10 @@ async function observePendingImplementations(
   const tasks = await store.list();
   const state = await readRuntimeState(runtimeFile(home));
   const pending: ObservedPendingImplementation[] = [];
+  const others = tasks.map((task) => ({
+    task,
+    branch: (taskRuntime(state, task.id)?.worktree ?? task.worktree)?.branch,
+  }));
   for (const task of tasks) {
     const explicitlyDiscardedBlocked =
       discard && task.kind === "implementation" && task.stage === "blocked";
@@ -454,10 +490,21 @@ async function observePendingImplementations(
     if (task.cleanup?.status === "quarantined") continue;
     const runtime = taskRuntime(state, task.id);
     if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) continue;
+    const lease = runtime.worktree;
+    const containment =
+      lease !== undefined && (task.stage === "cancelled" || task.stage === "completed")
+        ? await observeWorktreeContainment(
+            run,
+            task.repoPath,
+            lease,
+            containerRefs(task, lease.branch, others),
+          )
+        : undefined;
     pending.push({
       taskId: task.id,
       repoPath: task.repoPath,
       reason: `the ${task.stage} implementation task still holds child resources its coordinator did not release`,
+      ...(containment === undefined ? {} : { containment }),
     });
   }
   return pending;
@@ -477,6 +524,7 @@ export async function scanTandemResources(
     leases,
     scouts: await observePendingScouts(home, input.clock),
     implementationTasks: await observePendingImplementations(
+      input.run,
       home,
       input.clock,
       input.discard === true,
@@ -633,7 +681,10 @@ function planPoolLease(observed: ObservedPoolLease): ReconcilePlanItem {
  * A `clean` item is a prediction, not a promise: applying it re-reads the resource and hands the
  * decision to its owner, which may still retain or quarantine what changed in between.
  */
-export function planTandemReconciliation(observation: ReconcileObservation): ReconcilePlan {
+export function planTandemReconciliation(
+  observation: ReconcileObservation,
+  options: Readonly<{ readonly freeSuperseded?: boolean }> = {},
+): ReconcilePlan {
   const items: ReconcilePlanItem[] = [];
   for (const observed of observation.coordinators) {
     items.push(planCoordinator(observed, observation.quarantines));
@@ -649,12 +700,26 @@ export function planTandemReconciliation(observation: ReconcileObservation): Rec
     });
   }
   for (const task of observation.implementationTasks ?? []) {
+    const containment = task.containment;
+    if (containment?.kind === "superseded" && options.freeSuperseded !== true) {
+      items.push({
+        kind: "superseded-task",
+        action: "offer",
+        reason: `its worktree is clean and every commit is already in ${containment.proof.label}`,
+        taskId: task.taskId,
+        repoPath: task.repoPath,
+        proof: containment.proof,
+      });
+      continue;
+    }
     items.push({
       kind: "implementation-task",
       action: "clean",
       reason: task.reason,
       taskId: task.taskId,
       repoPath: task.repoPath,
+      ...(containment?.kind === "superseded" ? { free: containment.proof } : {}),
+      ...(containment?.kind === "kept" ? { worktreeStays: containment.reason } : {}),
     });
   }
 
@@ -825,11 +890,15 @@ async function applyImplementationItems(
 ): Promise<void> {
   let settled: readonly TaskCleanupOutcome[];
   try {
+    const free = new Map<string, SupersededProof>();
+    for (const item of items) if (item.free !== undefined) free.set(item.taskId, item.free);
     settled = await finishPendingImplementationCleanup({
       home: input.home,
       run: input.run,
       clock: input.clock,
       discard: input.discard,
+      taskIds: new Set(items.map((item) => item.taskId)),
+      free,
     });
   } catch (error) {
     const reason = describeFailure(error);
@@ -893,7 +962,8 @@ export async function applyTandemReconciliation(
   const results = new Map<ReconcilePlanItem, ReconcileResult>();
   const work = reconcileWork(input.plan);
   for (const item of work.reported) {
-    results.set(item, { item, outcome: "quarantined", reason: item.reason });
+    const outcome = item.kind === "superseded-task" ? "freeable" : "quarantined";
+    results.set(item, { item, outcome, reason: item.reason });
   }
   for (const [repoPath, items] of work.repositories) {
     await withCoordinatorRepositoryLock(input.home, repoPath, async () => {
@@ -943,7 +1013,26 @@ function entryFor(item: ReconcilePlanItem, reason: string): ReconcileReportEntry
       path: item.observed.path,
     };
   }
-  if (item.kind === "implementation-task" || item.kind === "scout-task") {
+  if (item.kind === "superseded-task") {
+    return {
+      kind: "implementation-task",
+      id: item.taskId,
+      reason,
+      repoPath: item.repoPath,
+      containedIn: item.proof.label,
+    };
+  }
+  if (item.kind === "implementation-task") {
+    return {
+      kind: item.kind,
+      id: item.taskId,
+      reason,
+      repoPath: item.repoPath,
+      ...(item.free === undefined ? {} : { containedIn: item.free.label }),
+      ...(item.worktreeStays === undefined ? {} : { worktreeStays: item.worktreeStays }),
+    };
+  }
+  if (item.kind === "scout-task") {
     return { kind: item.kind, id: item.taskId, reason, repoPath: item.repoPath };
   }
   if (item.kind === "unreadable-record") {
@@ -959,7 +1048,8 @@ function entryFor(item: ReconcilePlanItem, reason: string): ReconcileReportEntry
   };
 }
 
-function plannedOutcome(action: ReconcileAction): ReconcileOutcome {
+function plannedOutcome(action: ReconcilePlanItem["action"]): ReconcileOutcome {
+  if (action === "offer") return "freeable";
   if (action === "clean") return "cleaned";
   return action === "retain" ? "retained" : "quarantined";
 }
@@ -977,6 +1067,7 @@ function reportFrom(
     retained: [],
     quarantined: [],
     failed: [],
+    freeable: [],
   };
   for (const result of input.results) {
     buckets[result.outcome].push(entryFor(result.item, result.reason));
@@ -997,6 +1088,7 @@ function reportFrom(
     retained: buckets.retained,
     quarantined: buckets.quarantined,
     failed: buckets.failed,
+    freeable: buckets.freeable,
   };
 }
 
@@ -1018,7 +1110,9 @@ export async function reconcileTandemResources(input: ReconcileInput): Promise<R
     ...(input.discard === undefined ? {} : { discard: input.discard }),
     clock,
   });
-  const plan = planTandemReconciliation(observation);
+  const plan = planTandemReconciliation(observation, {
+    freeSuperseded: input.apply && input.freeSuperseded === true,
+  });
   if (!input.apply) {
     return reportFrom({
       home: observation.home,
