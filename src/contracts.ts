@@ -419,7 +419,12 @@ export const RESEARCH_CONTINUATION_DISPOSITIONS = [
 /** What a completed scout should lead to; routing metadata only, never permission. */
 export type ResearchContinuationDisposition = (typeof RESEARCH_CONTINUATION_DISPOSITIONS)[number];
 
-export const RESEARCH_CONTINUATION_SELECTORS = ["explicit", "deterministic", "jev"] as const;
+export const RESEARCH_CONTINUATION_SELECTORS = [
+  "explicit",
+  "deterministic",
+  "jev",
+  "fallback",
+] as const;
 
 export type ResearchContinuationSelector = (typeof RESEARCH_CONTINUATION_SELECTORS)[number];
 
@@ -436,6 +441,8 @@ export type ResearchContinuation = {
   readonly disposition: ResearchContinuationDisposition;
   readonly selectedBy: ResearchContinuationSelector;
   readonly classifierVersion?: string;
+  /** Why an unusable classifier outcome fell back; carried only when `selectedBy` is `fallback`. */
+  readonly fallbackReason?: string;
 };
 
 /**
