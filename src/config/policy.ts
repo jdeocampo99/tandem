@@ -2,7 +2,6 @@ import type {
   AgentRole,
   ModelSpec,
   RepoPolicy,
-  RequestBudgetPolicy,
   ReviewLevelPolicy,
   SetupCommand,
   ValidationCommand,
@@ -27,6 +26,8 @@ import {
   readThinkingLevel,
 } from "./values.ts";
 
+// ponytail: a repository config may still set "requestBudget" from before standing request
+// budgets were removed; accept it here so the config still loads, but its value is never read.
 const POLICY_KEYS: Readonly<Record<string, true>> = {
   version: true,
   models: true,
@@ -60,21 +61,6 @@ const REVIEW_LEVEL_KEYS: Readonly<Record<string, true>> = {
   deepScrutiny: true,
   jevAssistance: true,
   sourceTransmission: true,
-};
-
-const REQUEST_BUDGET_KEYS: Readonly<Record<string, true>> = {
-  capMicros: true,
-  operationEstimateMicros: true,
-};
-
-/**
- * No standing amount is assumed for anyone. Until a repository configures a cap, its requests are
- * not spend-governed and run as they did before budgets existed, rather than pausing against a cap
- * Tandem invented for them. Configuring `capMicros` turns the whole feature on for that repository.
- */
-export const DEFAULT_REQUEST_BUDGET: RequestBudgetPolicy = {
-  capMicros: "unset",
-  operationEstimateMicros: "unset",
 };
 
 const DEFAULT_MODELS: Readonly<Record<AgentRole, ModelSpec>> = {
@@ -277,34 +263,6 @@ function readReviewLevels(value: unknown, base: ReviewLevelPolicy): ReviewLevelP
   };
 }
 
-/**
- * Reads the standing spending amounts. An amount the repository does not name keeps whatever the
- * layer beneath it configured, so a repository can tighten one amount without silently adopting a
- * default for the other. Zero is a real cap that forbids spending; a negative or fractional amount
- * is refused rather than rounded, because micro-dollars are the smallest unit a receipt sums.
- */
-function readRequestBudget(value: unknown, base: RequestBudgetPolicy): RequestBudgetPolicy {
-  if (!isRecord(value)) {
-    throw new TypeError("requestBudget must be an object");
-  }
-  assertKnownKeys(value, REQUEST_BUDGET_KEYS, "requestBudget");
-  return {
-    capMicros: hasKey(value, "capMicros")
-      ? readMicroDollars(value.capMicros, "requestBudget.capMicros")
-      : base.capMicros,
-    operationEstimateMicros: hasKey(value, "operationEstimateMicros")
-      ? readMicroDollars(value.operationEstimateMicros, "requestBudget.operationEstimateMicros")
-      : base.operationEstimateMicros,
-  };
-}
-
-function readMicroDollars(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new TypeError(`${field} must be a non-negative integer number of USD micro-dollars`);
-  }
-  return value as number;
-}
-
 export function copyPolicy(policy: PolicyBase): RepoPolicy {
   const models = {} as Record<AgentRole, ModelSpec>;
   for (const role of MODEL_ROLE_ORDER) {
@@ -329,7 +287,6 @@ export function copyPolicy(policy: PolicyBase): RepoPolicy {
     maxWorkers: policy.maxWorkers,
     maxFixRounds: policy.maxFixRounds,
     reviewLevels: { ...policy.reviewLevels },
-    requestBudget: { ...policy.requestBudget },
   };
 }
 
@@ -388,9 +345,6 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
   const reviewLevels = hasKey(input, "reviewLevels")
     ? readReviewLevels(input.reviewLevels, base.reviewLevels)
     : { ...base.reviewLevels };
-  const requestBudget = hasKey(input, "requestBudget")
-    ? readRequestBudget(input.requestBudget, base.requestBudget)
-    : { ...base.requestBudget };
 
   return {
     version: 1,
@@ -402,7 +356,6 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     maxWorkers,
     maxFixRounds,
     reviewLevels,
-    requestBudget,
   };
 }
 
@@ -431,7 +384,6 @@ function buildDefaultPolicy(): RepoPolicy {
     maxWorkers: 3,
     maxFixRounds: 3,
     reviewLevels: { ...DEFAULT_REVIEW_LEVEL_POLICY },
-    requestBudget: { ...DEFAULT_REQUEST_BUDGET },
   };
 }
 

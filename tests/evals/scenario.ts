@@ -10,7 +10,6 @@ import type {
   Endpoint,
   IdFactory,
   IsoTimestamp,
-  RequestBudgetPolicy,
   ResearchContinuation,
   ResolvedPolicy,
   TaskRecord,
@@ -34,12 +33,6 @@ export const SCENARIO_NEXT_HEAD = "89abcdef0123456789abcdef0123456789abcdef";
 export const SCENARIO_SESSION = "scenario-session";
 export const SCENARIO_TASK_ID = "task-1";
 
-/** A cap wide enough that scenarios exercise admitted work rather than the budget pause. */
-export const SCENARIO_REQUEST_BUDGET: RequestBudgetPolicy = {
-  capMicros: 10_000_000,
-  operationEstimateMicros: 500_000,
-};
-
 export const SCENARIO_POLICY: ResolvedPolicy = {
   config: {
     version: 1,
@@ -61,7 +54,6 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: SCENARIO_REQUEST_BUDGET,
   },
   guidance: { implementation: [], validation: [], review: [] },
 };

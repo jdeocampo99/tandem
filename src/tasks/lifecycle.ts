@@ -807,7 +807,6 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
       maxWorkers: policy.config.maxWorkers,
       maxFixRounds: policy.config.maxFixRounds,
       reviewLevels: { ...policy.config.reviewLevels },
-      requestBudget: { ...policy.config.requestBudget },
     },
     guidance: {
       implementation: cloneGuidanceEntries(policy.guidance.implementation),

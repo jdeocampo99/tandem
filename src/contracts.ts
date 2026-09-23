@@ -193,17 +193,6 @@ export type ReviewLevelPolicy = {
   readonly sourceTransmission: boolean;
 };
 
-/**
- * The standing amounts a request may spend, in integer USD micro-dollars. A repository tightens or
- * raises the standing default by naming its own amounts; an approved request override is recorded
- * on the request rather than here. `"unset"` is an amount nobody configured, which is unknown: it
- * is neither zero nor unlimited, and a request governed by one pauses instead of spending.
- */
-export type RequestBudgetPolicy = {
-  readonly capMicros: number | "unset";
-  readonly operationEstimateMicros: number | "unset";
-};
-
 export type RepoPolicy = {
   readonly version: 1;
   readonly models: Readonly<Record<AgentRole, ModelSpec>>;
@@ -214,7 +203,6 @@ export type RepoPolicy = {
   readonly maxWorkers: number;
   readonly maxFixRounds: number;
   readonly reviewLevels: ReviewLevelPolicy;
-  readonly requestBudget: RequestBudgetPolicy;
 };
 
 export type GuidanceProvenance = {

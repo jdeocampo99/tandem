@@ -8,7 +8,7 @@ import {
   type ExecutionRoutingBoundary,
   type ExecutionRoutingDecision,
   type ExecutionRoutingRequest,
-  type ExecutionSpendAdmission,
+  type ExecutionUsageObservation,
   executionRoutingPauseStands,
   type ModelCatalogueSnapshot,
   type PriorExecutionAttempt,
@@ -20,14 +20,12 @@ import { expectNoIdentifiers } from "../tasks/question.test.ts";
 
 const PINNED: ModelSpec = { model: "alpha/base", thinking: "high" };
 
-/** A request whose own spending the ledger could fully observe, which is the rare case. */
+/** A request whose own usage the ledger could fully observe, which is the rare case. */
 const MEASURED: RequestUsageExposure = { unaccountedSamples: 0, unmeasuredTokenSamples: 0 };
 
-const OBSERVED: ExecutionSpendAdmission = { status: "admitted", exposure: MEASURED };
+const OBSERVED: ExecutionUsageObservation = { status: "observed", exposure: MEASURED };
 
 const LIMITS: ExecutionRoutingLimits = {
-  capMicros: 2_000_000,
-  operationEstimateMicros: 100_000,
   maxWorkers: 3,
 };
 
@@ -78,7 +76,7 @@ function routingRequest(overrides: Partial<ExecutionRoutingRequest> = {}): Execu
     pinned: PINNED,
     catalogue: snapshot([catalogueEntry(PINNED.model)], ["alpha"]),
     limits: LIMITS,
-    admission: OBSERVED,
+    usage: OBSERVED,
     now: "2030-01-01T00:00:01.000Z",
     ...overrides,
   };
@@ -140,33 +138,12 @@ function reassignableCatalogue(): ModelCatalogueSnapshot {
   );
 }
 
-test("a pending spending decision takes precedence over an otherwise automatic reassignment", () => {
-  const automatic = resolveExecutionRouting(
-    routingRequest({ boundary: replacementBoundary(), catalogue: reassignableCatalogue() }),
-  );
-  expect(authorizedRouting(automatic).basis).toBe("comparable-reassignment");
-
-  for (const exposure of [
-    MEASURED,
-    { unaccountedSamples: 3, unmeasuredTokenSamples: 7 },
-  ] satisfies readonly RequestUsageExposure[]) {
-    const stopped = resolveExecutionRouting(
-      routingRequest({
-        admission: { status: "paused", exposure },
-        boundary: replacementBoundary(),
-        catalogue: reassignableCatalogue(),
-      }),
-    );
-    expect(pauseOf(stopped).reason).toBe("spending-decision-pending");
-  }
-});
-
 test("unmeasured request usage refuses the classification instead of reassigning", () => {
   const pause = pauseOf(
     resolveExecutionRouting(
       routingRequest({
-        admission: {
-          status: "admitted",
+        usage: {
+          status: "observed",
           exposure: { unaccountedSamples: 2, unmeasuredTokenSamples: 5 },
         },
         boundary: replacementBoundary(),
@@ -189,8 +166,8 @@ test("unmeasured tokens alone still refuse the classification", () => {
   const pause = pauseOf(
     resolveExecutionRouting(
       routingRequest({
-        admission: {
-          status: "admitted",
+        usage: {
+          status: "observed",
           exposure: { unaccountedSamples: 0, unmeasuredTokenSamples: 1 },
         },
         boundary: replacementBoundary(),
@@ -205,7 +182,7 @@ test("unmeasured tokens alone still refuse the classification", () => {
 test("a task with no governing request has no ledger to prove a move against", () => {
   const decision = resolveExecutionRouting(
     routingRequest({
-      admission: { status: "no-governing-request" },
+      usage: { status: "no-governing-request" },
       boundary: replacementBoundary(),
       catalogue: reassignableCatalogue(),
     }),
@@ -224,8 +201,8 @@ test("unmeasured usage leaves an unchanged pinned launch alone", () => {
   const routing = authorizedRouting(
     resolveExecutionRouting(
       routingRequest({
-        admission: {
-          status: "admitted",
+        usage: {
+          status: "observed",
           exposure: { unaccountedSamples: 4, unmeasuredTokenSamples: 9 },
         },
       }),
@@ -412,7 +389,7 @@ test("the rendered routing prompt never names a task, decision, generation, or a
   const pause = pauseOf(
     resolveExecutionRouting(
       routingRequest({
-        admission: { status: "paused", exposure: MEASURED },
+        usage: { status: "no-governing-request" },
         boundary: replacementBoundary(),
         catalogue: reassignableCatalogue(),
       }),

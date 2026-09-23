@@ -40,13 +40,6 @@ import {
   taskRuntime,
   unreleasedReservation,
 } from "../runtime/activity.ts";
-import {
-  describeRequestSpendDecision,
-  type RequestSpendAdmission,
-  withoutRequestBudget,
-  withRequestBudget,
-} from "../runtime/budget.ts";
-import type { RequestSpendGate } from "../runtime/budget-gate.ts";
 import { withStateLock } from "../runtime/database.ts";
 import {
   readRuntimeState,
@@ -72,6 +65,7 @@ import type {
 } from "../runtime/schema.ts";
 import type { RequestUsageEvent } from "../runtime/usage.ts";
 import { providerSampleEvent } from "../runtime/usage-events.ts";
+import { type RequestUsageReadout, requestUsageExposure } from "../runtime/usage-receipt.ts";
 import {
   appendTaskJob,
   buildPrompt,
@@ -157,7 +151,7 @@ import {
 import {
   describeExecutionRoutingDecision,
   type ExecutionRoutingBoundary,
-  type ExecutionSpendAdmission,
+  type ExecutionUsageObservation,
   executionRoutingPauseStands,
   type ModelCatalogueReader,
   type ModelCatalogueSnapshot,
@@ -294,8 +288,6 @@ function routingBoundary(prior: PriorExecutionAttempt | undefined): ExecutionRou
 
 function routingLimits(task: TaskRecord): ExecutionRoutingLimits {
   return {
-    capMicros: task.policy.config.requestBudget.capMicros,
-    operationEstimateMicros: task.policy.config.requestBudget.operationEstimateMicros,
     maxWorkers: task.policy.config.maxWorkers,
   };
 }
@@ -336,8 +328,8 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly reviewAssistance: ReviewAssistanceRuntime;
   /** Appends accounting facts. It records only; it never decides whether work may continue. */
   readonly recordRequestUsage: (events: readonly RequestUsageEvent[]) => Promise<void>;
-  /** Decides whether the next operation may spend under its request's standing budget. */
-  readonly requestSpend: RequestSpendGate;
+  /** The accounting ledger's own rows for one request, read for economical routing's usage check. */
+  readonly readRequestUsage: (requestId: string) => Promise<RequestUsageReadout>;
   /** Reads catalogue tier evidence at an execution boundary; it never enables a provider. */
   readonly readModelCatalogue: ModelCatalogueReader;
 }>;
@@ -1980,11 +1972,11 @@ export class WorkerWorkflow {
   /**
    * Central recovery's re-entry move: gets an `implementing`/`scouting` task whose worker is proven
    * dead back into its core loop, without ever mutating the dead job, its result, or the durable
-   * worktree lease. It admits a brand-new durable operation through the normal reservation and
-   * budget gate (`reserveTask`), launches a fresh owned pane when one is not already recorded, and
-   * starts a new worker through the normal `launchAgent` path so a fresh receipt, instruction
-   * revision, and prompt are built exactly as any other launch. The caller (central recovery) is
-   * responsible for proving death and for snapshotting uncommitted work before calling this.
+   * worktree lease. It admits a brand-new durable operation through the normal reservation gate
+   * (`reserveTask`), launches a fresh owned pane when one is not already recorded, and starts a new
+   * worker through the normal `launchAgent` path so a fresh receipt, instruction revision, and
+   * prompt are built exactly as any other launch. The caller (central recovery) is responsible for
+   * proving death and for snapshotting uncommitted work before calling this.
    */
   async relaunchWorker(
     task: TaskRecord,
@@ -3639,50 +3631,6 @@ export class WorkerWorkflow {
   }
 
   /**
-   * Drops a budget no cap governs any more, before routing or any later reader can honour what it
-   * records. A repository that removes its cap leaves the request ungoverned, so a decision raised
-   * under the cap it removed stops binding with that cap instead of stranding the request.
-   */
-  private async releaseRequestSpending(
-    task: TaskRecord,
-    state: RuntimeState,
-  ): Promise<RuntimeState> {
-    const released = withoutRequestBudget(state, task.requestId);
-    if (released === state) return state;
-    await writeRuntimeState(this.#deps.runtimePath, released);
-    return released;
-  }
-
-  /**
-   * Stops the whole request on one durable decision. The pause is persisted before anything else
-   * under that request can be admitted, and the question is recorded only by the admission that
-   * raised it, so every later refusal is silent instead of another paid coordinator round.
-   */
-  private async stopRequestSpending(
-    store: TaskStoreTransaction,
-    task: TaskRecord,
-    state: RuntimeState,
-    spend: Extract<RequestSpendAdmission, { readonly outcome: "paused" }>,
-  ): Promise<void> {
-    await writeRuntimeState(this.#deps.runtimePath, withRequestBudget(state, spend.budget));
-    if (!spend.raised) return;
-    await store.update(task.id, task.revision, (current) => ({
-      ...current,
-      revision: current.revision + 1,
-      updatedAt: this.#deps.clock(),
-      notifications: [
-        ...current.notifications,
-        {
-          id: singleLine(this.#deps.idFactory(), "budget decision notification id"),
-          message: describeRequestSpendDecision(spend.pause, task.objective),
-          acknowledged: false,
-          kind: "coordinator" as const,
-        },
-      ],
-    }));
-  }
-
-  /**
    * Resolves which exact model this attempt may invoke, at the one boundary that decides it.
    * Returns the transition to record on the admitting operation, or nothing when the task stops on
    * a routing question, which it records once and never asks again while it still speaks.
@@ -3717,7 +3665,7 @@ export class WorkerWorkflow {
       pinned: task.policy.config.models[attempt.role],
       catalogue: await this.readCatalogue(attempt.cwd),
       limits: routingLimits(task),
-      admission: await this.admittedSpend(task),
+      usage: await this.observeRequestUsage(task),
       now: this.#deps.clock(),
     });
     if (decision.outcome === "authorized") return decision.routing;
@@ -3726,21 +3674,14 @@ export class WorkerWorkflow {
   }
 
   /**
-   * The spending checkpoint's own outcome for this task, with what it observed deciding it. Routing
-   * is only ever resolved after admission succeeded, so this reads the exposure that admission was
-   * taken against rather than deciding anything again.
+   * What the request's own accounting ledger shows for this task's request, for economical
+   * routing's usage-safety check. It only reads; it never decides whether work may continue.
    */
-  private async admittedSpend(task: TaskRecord): Promise<ExecutionSpendAdmission> {
+  private async observeRequestUsage(task: TaskRecord): Promise<ExecutionUsageObservation> {
     const requestId = task.requestId;
     if (requestId === undefined) return { status: "no-governing-request" };
-    const readout = await this.#deps.requestSpend.readSpend(requestId);
-    return {
-      status: readout.pause === undefined ? "admitted" : "paused",
-      exposure: {
-        unaccountedSamples: readout.exposure.unaccountedSamples,
-        unmeasuredTokenSamples: readout.exposure.unmeasuredTokenSamples,
-      },
-    };
+    const readout = await this.#deps.readRequestUsage(requestId);
+    return { status: "observed", exposure: requestUsageExposure(readout) };
   }
 
   /** Reads catalogue evidence without letting a boundary failure decide anything by itself. */
@@ -3817,13 +3758,6 @@ export class WorkerWorkflow {
       if (runtime.jobs.some(activeRuntimeJob)) return undefined;
       if (activeReservations(state) >= task.policy.config.maxWorkers) return undefined;
       const operationId = singleLine(this.#deps.idFactory(), "operation id");
-      const spend = await this.#deps.requestSpend.decideAdmission({ task, state, operationId });
-      if (spend?.outcome === "paused") {
-        await this.stopRequestSpending(store, task, state, spend);
-        return undefined;
-      }
-      const baseState =
-        spend === undefined ? await this.releaseRequestSpending(task, state) : state;
       const inputHead = task.reviewHead ?? runtime.sourceCheckpoint.head;
       const iterationScope = isFix ? iterationScopeFor(task) : undefined;
       const targetTask = isFix
@@ -3934,11 +3868,8 @@ export class WorkerWorkflow {
           : {}),
       };
       if (isFix) await store.update(task.id, task.revision, () => targetTask);
-      const admitted = replaceRuntimeTask(baseState, taskId, () => nextRuntime);
-      await writeRuntimeState(
-        this.#deps.runtimePath,
-        spend === undefined ? admitted : withRequestBudget(admitted, spend.budget),
-      );
+      const admitted = replaceRuntimeTask(state, taskId, () => nextRuntime);
+      await writeRuntimeState(this.#deps.runtimePath, admitted);
       return { task: targetTask, runtime: nextRuntime, reservation };
     });
   }
