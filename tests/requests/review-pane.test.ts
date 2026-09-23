@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { quoteShellCommand } from "../../src/adapters/commands.ts";
 import type {
   CommandRequest,
   CommandRunner,
@@ -10,6 +11,7 @@ import type {
 } from "../../src/contracts.ts";
 import { createRequestBriefRecord, withRequestReviewPane } from "../../src/requests/brief.ts";
 import {
+  briefViewerCommand,
   closeRequestBriefPane,
   projectRequestBriefPane,
   type RequestReviewPaneDependencies,
@@ -273,5 +275,21 @@ test("a brief record naming the coordinator's own pane is quarantined and never 
     expect(world.paneIsPresent(coordinator.paneId)).toBe(true);
     expect(recorder.herdrCommands("close")).toEqual([]);
     expect(recorder.herdrCommands("run").map((argv) => argv[5])).not.toContain(coordinator.paneId);
+  });
+});
+
+test("the pane shows the brief with glow when it is installed, and plain text otherwise", async () => {
+  await withScenario({}, async (world) => {
+    const recording = recordingRun(world);
+    const opened = await projectRequestBriefPane(
+      dependencies(world, undefined, recording.run),
+      record(world),
+    );
+
+    const [paneRun] = recording.herdrCommands("run");
+    const viewer = briefViewerCommand(opened.renderedPath);
+    expect(viewer.at(0)).toBe(Bun.which("glow") ?? "cat");
+    expect(viewer.at(-1)).toBe(opened.renderedPath);
+    expect(paneRun?.at(-1)).toBe(quoteShellCommand(viewer));
   });
 });
