@@ -91,7 +91,7 @@ Call it with {request: {action: ...}}. Its text is a short summary; details and 
 - create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, skill with the exact name when the user invokes a skill, and manualVerification with the brief's manual verification items that apply to this task.
 - approve: record the user's approval of an implementation scope.
 - steer: pass a user direction to a running task within approved scope. Send short changes, and use supersedes to replace an outdated one. It is delivered at the next safe point.
-- answer: reply to a worker's question by its questionId.
+- answer: reply to a worker's question by its questionId. When Tandem asks "Keep fixing?", put it to the user and answer with their "yes" or "no"; yes gives the same task more fix rounds. Never create a new task to get past the fix-round limit.
 - list, show, inspect, messages: read tasks. Read messages only when the user asks or before a decision that depends on them; do not poll.
 - pause, resume, cancel, restart, tick: control tasks. When a task is stuck, use restart: Tandem stops what is left, keeps the work, and relaunches it in the same task. Never start a new task to get around a stuck one.
 - delivery-preflight, cleanup: housekeeping; cleanup needs the user's approval. When delivery-preflight or publish refuses, tell the user the one-line reason and stop. Never create a new task or worktree to work around a delivery refusal.

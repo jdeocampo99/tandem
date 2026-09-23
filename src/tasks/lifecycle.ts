@@ -28,7 +28,7 @@ import {
   finalAcceptanceStatus,
   isPinnedEvidence,
 } from "./acceptance.ts";
-import { recordReviewFindings } from "./findings.ts";
+import { fixRoundBudget, recordReviewFindings } from "./findings.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
 import { checkSkillInvocation } from "./skill-invocation.ts";
@@ -895,11 +895,23 @@ export function transitionTask(
           "Implementation reportPath must be non-empty when supplied",
         );
       }
+      // A fix round that ends on an already-reviewed HEAD made no new commit, so it hands its
+      // round back; the unchanged review that follows asks "Keep fixing?" instead of looping.
+      const noCommit =
+        task.reviewRound > 0 && task.reviews.some((review) => review.head === event.head);
       return commitTask(task, context.now, {
         stage: "validating",
         reviewHead: event.head,
         validationEvidence: [],
         ...(event.reportPath === undefined ? {} : { reportPath: event.reportPath }),
+        ...(noCommit
+          ? {
+              fixRoundGrants: [
+                ...(task.fixRoundGrants ?? []),
+                { generation: task.generation, rounds: 1, reason: "no-commit" as const },
+              ],
+            }
+          : {}),
       });
     }
     case "validation-succeeded": {
@@ -1072,14 +1084,11 @@ export function transitionTask(
           `Fix attempt expectation ${event.head}/${event.generation} does not match ${String(task.reviewHead)}/${task.generation}`,
         );
       }
-      if (
-        !isInteger(task.policy.config.maxFixRounds) ||
-        task.reviewRound >= task.policy.config.maxFixRounds
-      ) {
+      if (!isInteger(task.policy.config.maxFixRounds) || task.reviewRound >= fixRoundBudget(task)) {
         throw new TaskTransitionError(
           "max-fix-rounds",
           task,
-          `Task ${task.id} has exhausted maxFixRounds=${String(task.policy.config.maxFixRounds)}`,
+          `Task ${task.id} has used all ${String(fixRoundBudget(task))} fix rounds`,
         );
       }
       if (event.iterationScope !== undefined) {

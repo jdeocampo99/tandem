@@ -112,6 +112,7 @@ import {
 import { createRequestUsageLedger, type RequestUsageLedger } from "../runtime/usage-ledger.ts";
 import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import { TaskControlWorkflow } from "../tasks/control.ts";
+import { KEEP_FIXING_QUESTION_ID_PREFIX, keepFixingGrant } from "../tasks/findings.ts";
 import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
@@ -1062,6 +1063,10 @@ class TandemController {
         await this.#recoveryCentral.answerValidationRetryQuestion(taskId, questionId, answer);
         return this.messages(taskId);
       }
+      if (questionId.startsWith(KEEP_FIXING_QUESTION_ID_PREFIX)) {
+        await this.answerKeepFixing(taskId, questionId, answer);
+        return this.messages(taskId);
+      }
       const result = await this.#source.appendAnswer(taskId, questionId, answer);
       if (result.resumed) {
         const resumed = await this.#control.resumeTask(taskId);
@@ -1090,6 +1095,37 @@ class TandemController {
     const result = await this.#source.appendAnswer(taskId, questionId, answer);
     if (result.resumed) await this.#control.resumeTask(taskId);
     return this.messages(taskId);
+  }
+
+  /**
+   * Answers "Keep fixing?". Only an exact "yes" or "no" is accepted. "yes" records a fix-round
+   * grant on this same task and resumes its fix loop in the same worktree; "no" clears the question
+   * and leaves the task blocked. Neither is a worker instruction, so the inbox revision is untouched.
+   */
+  private async answerKeepFixing(taskId: string, questionId: string, text: string): Promise<void> {
+    const choice = text.trim().toLowerCase();
+    if (choice !== "yes" && choice !== "no") {
+      throw new Error(
+        `"Keep fixing?" only accepts "yes" or "no"; received ${JSON.stringify(text.trim())}. The question is still open.`,
+      );
+    }
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      if (current?.communication?.question?.id !== questionId) return;
+      const { question: _question, ...communication } = current.communication;
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: this.#deps.clock(),
+        communication,
+        ...(choice === "yes"
+          ? { fixRoundGrants: [...(entry.fixRoundGrants ?? []), keepFixingGrant(entry)] }
+          : {}),
+      }));
+    });
+    if (choice === "no") return;
+    const resumed = await this.#control.resumeTask(taskId);
+    if (resumed.stage === "awaiting-fixes") await this.reconcileTask(resumed);
   }
 
   async messages(taskId: string): Promise<TaskCommunicationView> {

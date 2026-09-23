@@ -29,7 +29,7 @@ import {
   type TandemServiceOptions,
 } from "./service/controller.ts";
 import { isMissing, isTerminalTask } from "./service/records.ts";
-import { ledgerBlockers } from "./tasks/findings.ts";
+import { fixRoundBudget, ledgerBlockers } from "./tasks/findings.ts";
 import {
   type ResearchContinuationClassifier,
   researchContinuationClassifier,
@@ -105,7 +105,7 @@ export function reviewStatus(task: TaskRecord): string | undefined {
   const parts = [
     task.reviewRound === 0
       ? task.stage
-      : `${task.stage} fix ${task.reviewRound}/${task.policy.config.maxFixRounds}`,
+      : `${task.stage} fix ${task.reviewRound}/${fixRoundBudget(task)}`,
   ];
   if (failed.length > 0) parts.push(`${failed.join(",")} fail`);
   if (blockers > 0) parts.push(`${blockers} blocker${blockers === 1 ? "" : "s"}`);

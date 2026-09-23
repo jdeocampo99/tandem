@@ -12,6 +12,7 @@ import {
   type FindingObservation,
   type FindingSeverity,
   type FindingVerdict,
+  type FixRoundGrant,
   type GuidanceProvenance,
   type InstructionChannel,
   type IterationScope,
@@ -93,6 +94,7 @@ const THINKING_LEVELS = [
 ] as const;
 const FINDING_SEVERITIES: readonly FindingSeverity[] = ["P0", "P1", "P2", "P3"];
 const FINDING_VERDICTS: readonly FindingVerdict[] = ["confirmed", "plausible"];
+const FIX_ROUND_GRANT_REASONS: readonly FixRoundGrant["reason"][] = ["user", "no-commit"];
 // ponytail: accepts every legacy lens name too (see ALL_REVIEW_LENSES) so a stored review or
 // finding recorded before the lenses were merged still decodes.
 const REVIEW_LENSES: readonly StoredReviewLens[] = ALL_REVIEW_LENSES;
@@ -119,6 +121,7 @@ const TOP_LEVEL_KEYS = [
   "endpoints",
   "generation",
   "reviewRound",
+  "fixRoundGrants",
   "reviewHead",
   "reviewSkippedHead",
   "iterationScope",
@@ -650,6 +653,18 @@ function parseFindingObservation(value: unknown, source: string): FindingObserva
   };
 }
 
+function parseFixRoundGrant(value: unknown, source: string): FixRoundGrant {
+  if (!isRecord(value)) {
+    failState(source, "fix round grant must be an object");
+  }
+  assertExactKeys(value, ["generation", "rounds", "reason"], source);
+  return {
+    generation: requiredInteger(value, "generation", source, 0),
+    rounds: requiredInteger(value, "rounds", source, 0),
+    reason: requiredEnum(value, "reason", FIX_ROUND_GRANT_REASONS, source),
+  };
+}
+
 function parseFindingLedgerEntry(value: unknown, source: string): FindingLedgerEntry {
   if (!isRecord(value)) {
     failState(source, "finding ledger entry must be an object");
@@ -1004,6 +1019,14 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     findingLedgerValue === undefined ? [] : findingLedgerValue;
   const reviewHead = optionalText(value, "reviewHead", source);
   const reviewSkippedHead = optionalText(value, "reviewSkippedHead", source);
+  const fixRoundGrantsValue = Object.hasOwn(value, "fixRoundGrants")
+    ? requiredValue(value, "fixRoundGrants", source)
+    : undefined;
+  if (fixRoundGrantsValue !== undefined && !Array.isArray(fixRoundGrantsValue)) {
+    failState(`${source}.fixRoundGrants`, "fixRoundGrants must be an array when present");
+  }
+  const fixRoundGrantEntries: readonly unknown[] =
+    fixRoundGrantsValue === undefined ? [] : fixRoundGrantsValue;
   const iterationScopeValue = Object.hasOwn(value, "iterationScope")
     ? requiredValue(value, "iterationScope", source)
     : undefined;
@@ -1081,6 +1104,13 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
       : {
           endpoints: endpointEntries.map((entry, index) =>
             parseEndpoint(entry, `${source}.endpoints[${index}]`),
+          ),
+        }),
+    ...(fixRoundGrantsValue === undefined
+      ? {}
+      : {
+          fixRoundGrants: fixRoundGrantEntries.map((entry, index) =>
+            parseFixRoundGrant(entry, `${source}.fixRoundGrants[${index}]`),
           ),
         }),
     ...(reviewHead === undefined ? {} : { reviewHead }),

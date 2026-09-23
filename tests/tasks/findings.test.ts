@@ -8,11 +8,16 @@ import type {
   TaskRecord,
 } from "../../src/contracts.ts";
 import {
-  describeFixRoundExhaustion,
+  describeOpenFindings,
+  fixRoundBudget,
   isBlockingFinding,
+  KEEP_FIXING_QUESTION_ID_PREFIX,
+  keepFixingGrant,
+  keepFixingQuestion,
   ledgerBlockers,
   ledgerSuggestions,
   recordReviewFindings,
+  repeatedFindings,
   settledFindings,
 } from "../../src/tasks/findings.ts";
 
@@ -235,7 +240,7 @@ test("a P3 finding is carried as a suggestion rather than a blocker", () => {
   expect(ledgerSuggestions(ledger).map((entry) => entry.id)).toEqual(["f-3"]);
 });
 
-test("fix-round exhaustion names the remaining blockers and the available decision", () => {
+test("the open-findings details name the remaining blockers and forbid a new task", () => {
   const ledger = recordReviewFindings({
     ledger: [],
     review: review({
@@ -245,21 +250,75 @@ test("fix-round exhaustion names the remaining blockers and the available decisi
     }),
     reviewRound: 0,
   });
-  const reason = describeFixRoundExhaustion(taskWith(ledger));
+  const details = describeOpenFindings(taskWith(ledger));
 
-  expect(reason).toContain("Bounded review loop exhausted");
-  expect(reason).toContain("fix round budget spent at 2 of 2");
-  expect(reason).toContain("the task is not ready and not accepted");
-  expect(reason).toContain("1 evidence-backed blocker(s) remain");
-  expect(reason).toContain("review/f-1");
-  expect(reason).not.toContain("behavior/f-2");
-  expect(reason).toContain("stop for a human decision, or revise and re-approve the task scope");
-  expect(reason).toContain("No blocker is downgraded to a suggestion");
+  expect(details).toContain("Fix round 2 of 2");
+  expect(details).toContain("1 open blocker(s)");
+  expect(details).toContain("review/f-1");
+  expect(details).not.toContain("f-2");
+  expect(details).toContain("Never start a new task");
 });
 
-test("fix-round exhaustion with no recorded blocker still refuses a silent retry", () => {
-  const reason = describeFixRoundExhaustion(taskWith([]));
+test("the open-findings details still explain an empty ledger", () => {
+  expect(describeOpenFindings(taskWith([]))).toContain("No open blocker is recorded");
+});
 
-  expect(reason).toContain("no evidence-backed blocker is recorded");
-  expect(reason).toContain("no round is retried automatically");
+test("a spent fix-round budget asks Keep fixing? instead of failing silently", () => {
+  const question = keepFixingQuestion(taskWith([]));
+
+  expect(question?.id).toBe(`${KEEP_FIXING_QUESTION_ID_PREFIX}2`);
+  expect(question?.text).toBe('Keep fixing "Bound the retry loop"? It used all 2 fix rounds.');
+  expect(question?.recommendation).toContain('Reply "yes"');
+  expect(keepFixingQuestion(taskWith([], 1))).toBeUndefined();
+});
+
+test("a yes to a spent budget grants another full budget on the same task", () => {
+  const task = taskWith([]);
+  const granted = { ...task, fixRoundGrants: [keepFixingGrant(task)] };
+
+  expect(fixRoundBudget(granted)).toBe(4);
+  expect(keepFixingQuestion(granted)).toBeUndefined();
+});
+
+test("a finding repeated unchanged after a fix round asks early and names it", () => {
+  const repeated = finding({ id: "f-1" });
+  const task: TaskRecord = {
+    ...taskWith([], 1),
+    reviews: [
+      review({ head: "head-1", generation: 1, findings: [repeated] }),
+      review({ head: "head-2", generation: 2, findings: [{ ...repeated, line: 40 }] }),
+    ],
+  };
+
+  expect(repeatedFindings(task).map((entry) => entry.id)).toEqual(["f-1"]);
+  expect(keepFixingQuestion(task)?.text).toBe(
+    'Keep fixing "Bound the retry loop"? The same finding came back: The retry loop drops the cancellation signal.',
+  );
+  const approved = { ...task, fixRoundGrants: [keepFixingGrant(task)] };
+  expect(approved.fixRoundGrants[0]?.rounds).toBe(0);
+  expect(keepFixingQuestion(approved)).toBeUndefined();
+});
+
+test("a reworded finding is not a repeat, but any blocker at an unchanged HEAD is", () => {
+  const task: TaskRecord = {
+    ...taskWith([], 1),
+    reviews: [
+      review({ head: "head-1", generation: 1, findings: [finding({ id: "f-1" })] }),
+      review({
+        head: "head-2",
+        generation: 2,
+        findings: [finding({ id: "f-1", description: "Cancellation now leaks a timer." })],
+      }),
+    ],
+  };
+  expect(repeatedFindings(task)).toEqual([]);
+
+  const unchanged: TaskRecord = {
+    ...task,
+    reviews: [
+      review({ head: "head-2", generation: 1, findings: [finding({ id: "f-1" })] }),
+      review({ head: "head-2", generation: 2, findings: [finding({ id: "f-9" })] }),
+    ],
+  };
+  expect(repeatedFindings(unchanged).map((entry) => entry.id)).toEqual(["f-9"]);
 });
