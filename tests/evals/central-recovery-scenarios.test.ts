@@ -10,10 +10,12 @@ import { activeRuntimeJob } from "../../src/runtime/activity.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { DurableJob } from "../../src/runtime/schema.ts";
 import { createTandemService } from "../../src/service/controller.ts";
+import { policyIdentity } from "../../src/tasks/acceptance.ts";
 import {
   SCENARIO_HEAD,
   SCENARIO_NEXT_HEAD,
   SCENARIO_NOW,
+  SCENARIO_POLICY,
   SCENARIO_TASK_ID,
   type ScenarioWorld,
   scenarioOperation,
@@ -603,4 +605,153 @@ test("restarting a blocked task whose uncertain launch has settled relaunches it
     expect(snapshot.resources.retained).toContain(`worktree:${lease.leaseId}`);
     await service.shutdown();
   });
+}, 20_000);
+
+/**
+ * The same incident one step earlier: the launch is still quarantined and holds its reservation,
+ * and its pane is gone. Restart proves nothing Tandem owns is running, which answers the
+ * uncertainty, so it relaunches instead of pausing on "I can't tell what the last attempt did".
+ */
+test("restarting a blocked task with a still-quarantined launch relaunches once its panes are proven stopped", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const job1 = deadJob(world, lease.path, "job-1");
+    const seeded = await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "blocked",
+      previousStage: "implementing",
+      worktree: lease,
+      endpoints: [],
+    });
+    await world.store.update(seeded.id, seeded.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: SCENARIO_NOW,
+      blockReason: "Tandem couldn't confirm the worker started.",
+      blockCause: {
+        group: "safety-stop",
+        kind: "quarantined-unknown-outcome",
+        summary: "Tandem couldn't confirm the worker started.",
+        detail: "worker launch could not be proven after launch intent",
+        jobId: job1.id,
+      },
+    }));
+    await seedScenarioRuntime(
+      world,
+      scenarioRuntimeTask({
+        worktree: lease,
+        endpoints: [],
+        jobs: [job1],
+        operation: scenarioOperation(job1, { phase: "quarantined" }),
+        reservation: scenarioReservation(),
+      }),
+    );
+    const service = createTandemService({
+      home: world.home,
+      sessionId: world.sessionId,
+      poolRoot: world.poolRoot,
+      run: world.run,
+      clock: world.clock,
+      idFactory: world.idFactory,
+      workerTimeoutMs: 1_500,
+    });
+
+    const restarted = await service.restart(SCENARIO_TASK_ID);
+
+    expect(restarted.stage).toBe("implementing");
+    const replacement = await activeJobAfterRelaunch(world, job1.id);
+    expect(replacement.endpoint).toBeDefined();
+    const runtime = (await world.snapshot()).runtime.tasks[0];
+    expect(runtime?.routingPause).toBeUndefined();
+    expect(runtime?.operationHistory?.find((entry) => entry.id === "operation-1")?.phase).toBe(
+      "failed",
+    );
+    await service.shutdown();
+  });
+}, 20_000);
+
+test("a refused relaunch says why in plain English instead of a generic refusal", async () => {
+  const cases = [
+    {
+      name: "worker limit",
+      expected: `The worker limit (${SCENARIO_POLICY.config.maxWorkers}) is reached.`,
+    },
+    {
+      name: "routing question",
+      expected: "A routing question is waiting: That model isn't listed right now.",
+    },
+  ] as const;
+  for (const entry of cases) {
+    await withScenario({}, async (world) => {
+      const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+      const job1 = deadJob(world, lease.path, "job-1");
+      await seedScenarioTask(world, {
+        kind: "implementation",
+        stage: "implementing",
+        worktree: lease,
+        endpoints: [],
+      });
+      const task = scenarioRuntimeTask({
+        worktree: lease,
+        endpoints: [],
+        jobs: [job1],
+        ...(entry.name === "routing question"
+          ? {
+              routingPause: {
+                schemaVersion: 1 as const,
+                decisionId: "routing-absent",
+                reason: "pinned-model-absent-from-catalogue" as const,
+                taskId: SCENARIO_TASK_ID,
+                jobId: job1.id,
+                operationId: "operation-0",
+                role: "implementer" as const,
+                generation: 0,
+                attempt: 1,
+                policyDigest: policyIdentity(SCENARIO_POLICY),
+                inputHead: SCENARIO_HEAD,
+                pinnedSelector: SCENARIO_POLICY.config.models.implementer.model,
+                pinnedThinking: SCENARIO_POLICY.config.models.implementer.thinking,
+                evidenceGaps: [],
+                enabledProviders: [],
+                usageSource: "no-governing-request" as const,
+                limits: { maxWorkers: SCENARIO_POLICY.config.maxWorkers },
+                observedAt: SCENARIO_NOW,
+              },
+            }
+          : {}),
+      });
+      // Other work already holds every worker slot.
+      const others = Array.from({ length: SCENARIO_POLICY.config.maxWorkers }, (_, index) =>
+        scenarioRuntimeTask({
+          taskId: `other-${index}`,
+          reservation: scenarioReservation({
+            id: `other-reservation-${index}`,
+            taskId: `other-${index}`,
+          }),
+        }),
+      );
+      await writeRuntimeState(runtimeFile(world.home), {
+        schemaVersion: 1,
+        tasks: entry.name === "worker limit" ? [task, ...others] : [task],
+        presentations: [],
+      });
+      const service = createTandemService({
+        home: world.home,
+        sessionId: world.sessionId,
+        poolRoot: world.poolRoot,
+        run: world.run,
+        clock: world.clock,
+        idFactory: world.idFactory,
+        workerTimeoutMs: 1_500,
+      });
+
+      await service.tick();
+
+      const blocked = await service.get(SCENARIO_TASK_ID);
+      expect(blocked.stage, entry.name).toBe("blocked");
+      expect(blocked.blockReason, entry.name).toBe(entry.expected);
+      expect(blocked.notifications.at(-1)?.message, entry.name).toContain(entry.expected);
+      await service.shutdown();
+    });
+  }
 }, 20_000);
