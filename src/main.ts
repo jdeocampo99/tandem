@@ -2,11 +2,13 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "./adapters/commands.ts";
+import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
 import { listOmpMcpServers } from "./adapters/omp.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
 import { listCoordinatorRecords } from "./coordinator/registry.ts";
+import { type RenestReport, renestWorkspaces } from "./coordinator/renest.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
 import type { TandemService, TandemServiceOptions } from "./service/controller.ts";
@@ -24,6 +26,7 @@ import {
   readFixDetails,
   renderFixReport,
   renderFixReportVerbose,
+  renderRenest,
 } from "./terminal/fix-report.ts";
 import { applyHardReset, planHardReset, renderHardResetPlan } from "./terminal/hard-reset.ts";
 import {
@@ -96,6 +99,8 @@ export type TerminalMainDependencies = Readonly<{
   readonly resetCoordinators?: typeof resetCoordinators;
   /** Lists a project's MCP servers for onboarding; tests inject one so they never read real config. */
   readonly listMcpServers?: (repoPath: string) => Promise<readonly string[]>;
+  /** Sends Herdr's `workspace.move`; tests inject one so they never reach a live socket. */
+  readonly moveWorkspace?: HerdrAdapterOptions["moveWorkspace"];
 }>;
 
 type TerminalOutput = Readonly<{
@@ -252,15 +257,35 @@ async function handleStatus({
  * and changes nothing until confirmed. A resource Tandem deliberately retained or quarantined is
  * a reported outcome, not a failure, so only a scan or apply that could not finish exits non-zero.
  */
+/** Re-nests task workspaces under their coordinators; display-only, so it needs no consent. */
+function renest(
+  run: CommandRunner,
+  environment: TerminalEnvironment,
+  dependencies: TerminalMainDependencies,
+): Promise<RenestReport> {
+  return renestWorkspaces(
+    run,
+    {
+      home: environment.home,
+      sessionId: environment.sessionId,
+      cwd: environment.cwd,
+      apply: true,
+    },
+    dependencies.moveWorkspace === undefined ? {} : { moveWorkspace: dependencies.moveWorkspace },
+  );
+}
+
 async function handleFix({
   invocation,
   environment,
+  dependencies,
   run,
   interaction,
   stdout,
 }: Readonly<{
   readonly invocation: TerminalInvocation;
   readonly environment: TerminalEnvironment;
+  readonly dependencies: TerminalMainDependencies;
   readonly run: CommandRunner;
   readonly interaction: TerminalInteraction;
   readonly stdout: (text: string) => void;
@@ -282,8 +307,11 @@ async function handleFix({
     if (invocation.json) return;
     stdout(invocation.verbose ? renderFixReportVerbose(shown) : renderFixReport(shown, details));
   };
+  // Re-nesting only reorders Tandem's own workspaces in the sidebar, so it runs before any question.
+  const renested = await renest(run, environment, dependencies);
   let report = await reconcile(invocation.yes, invocation.yes && invocation.freeSuperseded);
   show(report);
+  if (!invocation.json) stdout(renderRenest(renested, details));
   if (report.mode === "dry-run") {
     const count = fixCleanupCount(report, details);
     const clean =
@@ -305,7 +333,7 @@ async function handleFix({
       show(report);
     }
   }
-  if (invocation.json) stdout(`${JSON.stringify(report)}\n`);
+  if (invocation.json) stdout(`${JSON.stringify({ ...report, renest: renested })}\n`);
   return {
     exitCode: report.failed.length === 0 ? 0 : 1,
     status: "fixed",
@@ -421,6 +449,10 @@ async function runProjectFlow({
   if (invocation.command === "update") {
     stdout(`Coordinators now run ${await tandemCodeVersion(run, TANDEM_ROOT)}.\n`);
   }
+  // A new coordinator workspace lands at the end of the sidebar; put each project's tasks back under it.
+  for (const warning of (await renest(run, environment, dependencies)).warnings) {
+    stdout(`Tandem left some task workspaces where they were: ${warning}\n`);
+  }
   for (const [index, launch] of launches.entries()) {
     const repoPath = roots[index];
     if (repoPath === undefined) continue;
@@ -464,7 +496,14 @@ export async function runTerminal(
     const interaction = createTerminalInteraction(dependencies, stdout);
     try {
       if (invocation.command === "fix") {
-        return await handleFix({ invocation, environment, run, interaction, stdout });
+        return await handleFix({
+          invocation,
+          environment,
+          dependencies,
+          run,
+          interaction,
+          stdout,
+        });
       }
       if (invocation.command === "reset" && invocation.hard) {
         return await handleHardReset({

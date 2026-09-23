@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { runCommand } from "../../src/adapters/commands.ts";
 import type { OmpModelRecord } from "../../src/adapters/omp.ts";
@@ -15,6 +15,7 @@ import { parseTerminalArgs } from "../../src/terminal/arguments.ts";
 import type { CliApplication } from "../../src/terminal/cli-application.ts";
 import type { CliInvocation } from "../../src/terminal/cli-arguments.ts";
 import { readRegisteredProjects } from "../../src/terminal/projects.ts";
+import { fakeSidebar, saveCoordinator, seedTasks } from "../coordinator/fake-workspace-order.ts";
 
 const roles = ["coordinator", "scout", "implementer", "reviewer", "presentation"] as const;
 
@@ -1454,4 +1455,81 @@ test("saved projects are found from settings.toml as well as legacy config.json"
   await onboardRepo({ repoPath: tomlProject, home, write: true });
   expect(await readRegisteredProjects(home)).toEqual([...projects].sort());
   await rm(join(tomlProject, ".."), { recursive: true, force: true });
+});
+
+test("update puts task workspaces back under the replacement coordinator", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const root = join(repo, "..");
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  await saveCoordinator(home, repo, "w-old");
+  await seedTasks(home, [{ id: "36a4f150-task", repoPath: repo, workspaceId: "w-task" }]);
+  const sidebar = fakeSidebar(["w-old", "w-task"]);
+  const fake = onboardingService({ existingConfig: true, configured: true });
+  const application: CliApplication = {
+    // The replacement coordinator's workspace lands at the end, as Herdr does on create.
+    invoke: async (invocation) => {
+      await saveCoordinator(home, repo, "w-new");
+      sidebar.order.splice(sidebar.order.indexOf("w-old"), 1);
+      sidebar.order.push("w-new");
+      return { command: invocation.command, value: { workspaceId: "w-new" } };
+    },
+    shutdown: async () => undefined,
+  };
+  const result = await runTerminal(["update", "--home", home], {
+    cwd: repo,
+    processEnvironment: {},
+    run: (request) => (request.argv[0] === "herdr" ? sidebar.run(request) : runCommand(request)),
+    moveWorkspace: sidebar.moveWorkspace,
+    service: fake.service,
+    application,
+    isTTY: false,
+    stdout: () => undefined,
+    stderr: () => undefined,
+  });
+  expect(result.status).toBe("launched");
+  expect(sidebar.order).toEqual(["w-new", "w-task"]);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("fix re-nests task workspaces without asking, and says so in text and JSON", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const root = join(repo, "..");
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  await saveCoordinator(home, repo, "w-coordinator");
+  await seedTasks(home, [{ id: "36a4f150-task", repoPath: repo, workspaceId: "w-task" }]);
+  const run = (sidebar: ReturnType<typeof fakeSidebar>) => async (request: CommandRequest) =>
+    request.argv[0] === "herdr" && ["status", "workspace"].includes(request.argv[3] ?? "")
+      ? sidebar.run(request)
+      : { code: 1, stdout: "", stderr: "not available in this test" };
+  const fix = async (sidebar: ReturnType<typeof fakeSidebar>, ...flags: string[]) => {
+    const output: string[] = [];
+    await runTerminal(["fix", "--home", home, ...flags], {
+      cwd: root,
+      processEnvironment: {},
+      isTTY: false,
+      run: run(sidebar),
+      moveWorkspace: sidebar.moveWorkspace,
+      stdout: (text) => output.push(text),
+      stderr: (text) => output.push(text),
+    });
+    return output.join("");
+  };
+
+  const text = fakeSidebar(["w-task", "w-coordinator"]);
+  expect(await fix(text)).toContain(
+    `Re-nested (1) · moved TAG-1036 workers under ${basename(repo)}'s coordinator\n`,
+  );
+  expect(text.order).toEqual(["w-coordinator", "w-task"]);
+
+  const json = fakeSidebar(["w-task", "w-coordinator"]);
+  const report = JSON.parse(await fix(json, "--json"));
+  expect(report.renest).toMatchObject({ moved: 1, warnings: [] });
+  expect(report.renest.planned).toEqual([
+    expect.objectContaining({ taskId: "36a4f150-task", workspaceId: "w-task" }),
+  ]);
+  await rm(root, { recursive: true, force: true });
 });

@@ -1,5 +1,4 @@
 import { runCommand } from "../adapters/commands.ts";
-import { moveWorkspaceAfterParent } from "../adapters/herdr.ts";
 import { validateModel } from "../adapters/omp.ts";
 import {
   resolveTandemEnvironment,
@@ -13,8 +12,8 @@ import {
   coordinatorFiles,
   launchCoordinator,
 } from "../coordinator/launch.ts";
+import { renestWorkspaces } from "../coordinator/renest.ts";
 import { restartCoordinator } from "../coordinator/restart.ts";
-import { readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
 import {
   createTandemService,
   type TandemService,
@@ -139,36 +138,6 @@ function serviceOptions(environment: TandemBoundaryEnvironment): TandemServiceOp
   };
 }
 
-async function rehomeTaskWorkspaces(
-  run: CommandRunner,
-  service: TandemService,
-  input: Readonly<{
-    readonly home: string;
-    readonly cwd: string;
-    readonly sessionId: string;
-    readonly parentWorkspaceId: string;
-  }>,
-): Promise<void> {
-  const scopedTaskIds = new Set((await service.list()).map((task) => task.id));
-  if (scopedTaskIds.size === 0) return;
-  const runtime = await readRuntimeState(runtimeFile(input.home));
-  const workspaceIds = new Set<string>();
-  for (const task of runtime.tasks) {
-    if (!scopedTaskIds.has(task.taskId)) continue;
-    for (const endpoint of task.endpoints) {
-      if (endpoint.sessionId === input.sessionId) workspaceIds.add(endpoint.workspaceId);
-    }
-  }
-  for (const workspaceId of workspaceIds) {
-    await moveWorkspaceAfterParent(run, {
-      sessionId: input.sessionId,
-      cwd: input.cwd,
-      workspaceId,
-      parentWorkspaceId: input.parentWorkspaceId,
-    });
-  }
-}
-
 function externalError(argv: readonly string[], result: CommandResult): Error {
   const details = result.stderr.trim() || result.stdout.trim();
   return new Error(
@@ -222,7 +191,9 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
           runInteractive,
           sleep,
           processEnvironment: dependencies.processEnvironment ?? environmentSource(),
-          rehomeTaskWorkspaces: (input) => rehomeTaskWorkspaces(run, serviceApi, input),
+          rehomeTaskWorkspaces: async (input) => {
+            await renestWorkspaces(run, { ...input, apply: true });
+          },
         };
         const launch = invocation.options.restart
           ? await restartCoordinator(
