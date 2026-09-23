@@ -152,9 +152,9 @@ export const REVIEW_LENSES = [
 
 type PromptRoleInstructions = Readonly<Record<AgentRole, readonly string[]>>;
 
-/** Keeps hands-on checks out of review, so they never become a finding that cannot be resolved. */
+/** Keeps hands-on proof out of review, so it never becomes a finding that cannot be resolved. */
 export const MANUAL_VERIFICATION_REVIEWER =
-  "A person will check these; do not file findings about them or about missing automated evidence for them.";
+  "A person will check these by hand before merging. Do not ask for proof that they work, such as smoke tests, screenshots, or runner evidence. Still review the code behind them and report any bug you find in it.";
 export const MANUAL_VERIFICATION_WORKER =
   "A person will check these before merging. You may try them yourself and say what you saw in your report; they never block the task.";
 

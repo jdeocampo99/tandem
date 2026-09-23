@@ -1118,8 +1118,9 @@ covers together what used to be separate passes:
 - changed behavior, affected callers, relevant tests/reports, and the task's automated checks.
 
 The reviewer's prompt and brief list the task's manual verification items separately, telling it a
-person checks them and it must not file findings about them or about missing automated evidence for
-them, so a hands-on check can never loop a task through its fix rounds.
+person checks them by hand. It must not ask for proof that they work (smoke tests, screenshots, or
+runner evidence), so a hands-on check can never loop a task through its fix rounds, but it still
+reviews the code behind them and reports bugs found there.
 
 A round past the first (a fix round) points the reviewer at the diff since the last reviewed HEAD
 and the open findings on the ledger rather than re-reviewing the whole change from scratch; see
