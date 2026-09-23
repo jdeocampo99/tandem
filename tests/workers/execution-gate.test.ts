@@ -31,7 +31,6 @@ const policy: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -153,7 +152,7 @@ function reassignmentRouting(
       unaccountedSamples: 0,
       unmeasuredTokenSamples: 0,
     },
-    limits: { capMicros: "unset", operationEstimateMicros: "unset", maxWorkers: 2 },
+    limits: { maxWorkers: 2 },
     resolvedAt: "2030-01-01T00:00:00.000Z",
     ...overrides,
   };

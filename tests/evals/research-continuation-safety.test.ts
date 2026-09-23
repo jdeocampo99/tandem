@@ -55,7 +55,6 @@ const POLICY: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -123,7 +122,7 @@ test("an adversarial classifier result cannot approve scope, create, or start an
     });
     const content = buildResearchFollowUpContent(decision);
     expect(decision.followUp).toBe("implementation-interview");
-    expect(content).toContain("approve the concrete scope before starting");
+    expect(content).toContain("its own confirmation is the single approval ask");
     expect(content).not.toContain("scope is approved");
     expect(content).not.toContain("has been approved");
 

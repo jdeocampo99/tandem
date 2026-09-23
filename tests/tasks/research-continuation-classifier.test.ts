@@ -146,7 +146,12 @@ test("ambiguous wording is unresolved by the rules and answered through the clas
     expect(classifyContinuationCues(objective)).toEqual({ resolved: false });
     const offline = researchContinuationClassifier({ timeoutMs: 1_500 });
     const withoutJev = await offline({ objective, taskKind: "scout" });
-    expect(withoutJev.continuation.disposition).toBe("ask-intent");
+    expect(withoutJev.continuation).toEqual({
+      schemaVersion: 1,
+      disposition: "implementation-interview",
+      selectedBy: "fallback",
+      fallbackReason: "jev-not-configured",
+    });
   }
 
   const provider = counting(async () => jevChoice("implementation-interview"));
@@ -208,7 +213,7 @@ test("the Jev request carries only the bounded sanitized objective and task kind
   expect(seenOptions).toEqual({ apiKey: "typesafe-key", timeoutMs: 900 });
 });
 
-test("unusable classifier outcomes all record a durable conservative ask-intent", async () => {
+test("unusable classifier outcomes all fall back to a durable implementation-interview", async () => {
   const malformed: JevEvaluationResponse = {
     model: JEV_MODEL,
     answers: { continuation: { type: "noul", noul: 0.4 } },
@@ -274,14 +279,15 @@ test("unusable classifier outcomes all record a durable conservative ask-intent"
     expect(classification.reason).toBe(testCase.reason);
     expect(classification.continuation).toEqual({
       schemaVersion: 1,
-      disposition: "ask-intent",
-      selectedBy: "deterministic",
+      disposition: "implementation-interview",
+      selectedBy: "fallback",
+      fallbackReason: testCase.reason,
     });
     expect(checkResearchContinuation(classification.continuation).valid).toBe(true);
   }
 });
 
-test("a missing API key answers ask-intent without contacting the provider", async () => {
+test("a missing API key falls back to implementation-interview without contacting the provider", async () => {
   const provider = counting(async () => jevChoice("implementation-interview"));
   const classify = researchContinuationClassifier({ timeoutMs: 1_500 }, provider.evaluate);
   const classification = await classify({ objective: "Research this ticket", taskKind: "scout" });
@@ -289,8 +295,9 @@ test("a missing API key answers ask-intent without contacting the provider", asy
   expect(classification.reason).toBe("jev-not-configured");
   expect(classification.continuation).toEqual({
     schemaVersion: 1,
-    disposition: "ask-intent",
-    selectedBy: "deterministic",
+    disposition: "implementation-interview",
+    selectedBy: "fallback",
+    fallbackReason: "jev-not-configured",
   });
 });
 

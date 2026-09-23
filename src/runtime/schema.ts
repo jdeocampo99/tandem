@@ -90,8 +90,6 @@ export type ExecutionRoutingUsageSource = (typeof EXECUTION_ROUTING_USAGE_SOURCE
 
 /** The configured limits a routing choice was taken under, recorded as they stood. */
 export type ExecutionRoutingLimits = Readonly<{
-  readonly capMicros: number | "unset";
-  readonly operationEstimateMicros: number | "unset";
   readonly maxWorkers: number;
 }>;
 
@@ -147,7 +145,6 @@ export type DurableExecutionRouting = Readonly<{
 }>;
 
 export const EXECUTION_ROUTING_PAUSE_REASONS = [
-  "spending-decision-pending",
   "prior-outcome-uncertain",
   "pinned-model-absent-from-catalogue",
   "pinned-model-ambiguous-in-catalogue",
@@ -349,95 +346,6 @@ export type RuntimeTaskState = Readonly<{
   readonly legacyQuarantine?: RuntimeLegacyQuarantine;
 }>;
 
-/**
- * Why one estimated amount is still counted against a request. `in-flight` is work that may still
- * bill; `settled-estimate` is work that ended without the provider ever reporting a charge, so its
- * conservative estimate keeps standing in for the amount nobody published rather than dropping to
- * zero. A reservation leaves the record only once an actual charge for it is in the ledger.
- */
-export type RequestBudgetReservationBasis = "in-flight" | "settled-estimate";
-
-export type RequestBudgetReservation = Readonly<{
-  readonly operationId: string;
-  readonly taskId: string;
-  readonly basis: RequestBudgetReservationBasis;
-  readonly estimatedMicros: number;
-  readonly reservedAt: IsoTimestamp;
-  readonly settledAt?: IsoTimestamp;
-}>;
-
-/** The cap that actually governed an admission, and the identity it was resolved under. */
-export type RequestSpendCapPin = Readonly<{
-  readonly source: "request-approval" | "pinned-policy";
-  readonly capMicros: number;
-  readonly policyDigest: string;
-  readonly briefRevision: number;
-  readonly pinnedAt: IsoTimestamp;
-}>;
-
-/**
- * One explicit decision to spend more on one request. It names the decision it answers, the cap
- * it replaces, and the pinned-policy and brief identities it was given under, so a later policy
- * change, brief revision, or repository cap change makes it non-current instead of carrying over.
- */
-export type RequestSpendApproval = Readonly<{
-  readonly requestId: string;
-  readonly decisionId: string;
-  readonly capMicros: number;
-  readonly previousCapMicros: number;
-  readonly policyCapMicros: number | "unset";
-  readonly policyDigest: string;
-  readonly briefRevision: number;
-  /**
-   * How much unmeasured work the approver was shown and accepted. Spending nobody can observe is
-   * accepted explicitly and only up to this count; work beyond it is unknown again and asks again.
-   */
-  readonly acknowledgedUnaccountedSamples: number;
-  readonly approvedAt: IsoTimestamp;
-}>;
-
-export const REQUEST_BUDGET_PAUSE_REASONS = [
-  "estimate-unavailable",
-  "exposure-unaccounted",
-  "cap-would-be-exceeded",
-] as const;
-
-export type RequestBudgetPauseReason = (typeof REQUEST_BUDGET_PAUSE_REASONS)[number];
-
-/**
- * The durable question a request is stopped on. It is written once and read by every later
- * admission, so repeating the check costs nothing and never asks again.
- */
-export type RequestBudgetPause = Readonly<{
-  readonly decisionId: string;
-  readonly reason: RequestBudgetPauseReason;
-  readonly taskId: string;
-  /** The cap that stopped the request. A pause is only ever raised under a governing cap. */
-  readonly capMicros: number;
-  readonly policyCapMicros: number | "unset";
-  readonly policyDigest: string;
-  readonly briefRevision: number;
-  readonly committedMicros: number;
-  readonly reservedMicros: number;
-  readonly nextStepMicros: number | "unavailable";
-  readonly unpricedSamples: number;
-  /** Unpriced work no reservation stands for, so nothing in the budget represents its cost. */
-  readonly unaccountedSamples: number;
-  readonly unmeasuredTokenSamples: number;
-  readonly observedAt: IsoTimestamp;
-}>;
-
-/** One request's standing budget: what it has reserved, what governs it, and what stopped it. */
-export type RequestBudgetState = Readonly<{
-  readonly schemaVersion: 1;
-  readonly requestId: string;
-  readonly reservations: readonly RequestBudgetReservation[];
-  readonly cap?: RequestSpendCapPin;
-  readonly approval?: RequestSpendApproval;
-  readonly pause?: RequestBudgetPause;
-  readonly reconciledAt?: IsoTimestamp;
-}>;
-
 export type RuntimeLegacyQuarantine = Readonly<{
   readonly schemaVersion: 1;
   readonly reservationId: string;
@@ -463,8 +371,6 @@ export type RuntimeState = Readonly<{
   readonly schemaVersion: 1;
   readonly tasks: readonly RuntimeTaskState[];
   readonly presentations: readonly RuntimePresentation[];
-  /** One entry per request that has been admitted or stopped; absent before any admission. */
-  readonly requestBudgets?: readonly RequestBudgetState[];
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -528,11 +434,6 @@ const WORKER_ROLES = ["scout", "implementer", "reviewer", "verifier", "presentat
 function parseRoutingLimits(value: unknown, field: string): ExecutionRoutingLimits {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   return {
-    capMicros: optionalMicroDollars(value.capMicros, `${field}.capMicros`),
-    operationEstimateMicros: optionalMicroDollars(
-      value.operationEstimateMicros,
-      `${field}.operationEstimateMicros`,
-    ),
     maxWorkers: positiveInteger(value.maxWorkers, `${field}.maxWorkers`),
   };
 }
@@ -1395,116 +1296,6 @@ function parsePresentation(value: unknown, field: string): RuntimePresentation {
   };
 }
 
-function microDollars(value: unknown, field: string): number {
-  return nonNegativeInteger(value, field);
-}
-
-function optionalMicroDollars(value: unknown, field: string): number | "unset" {
-  return value === "unset" ? "unset" : nonNegativeInteger(value, field);
-}
-
-function parseBudgetReservation(value: unknown, field: string): RequestBudgetReservation {
-  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  const settledAt =
-    value.settledAt === undefined ? undefined : singleLine(value.settledAt, `${field}.settledAt`);
-  return {
-    operationId: singleLine(value.operationId, `${field}.operationId`),
-    taskId: singleLine(value.taskId, `${field}.taskId`),
-    basis: enumValue(value.basis, ["in-flight", "settled-estimate"] as const, `${field}.basis`),
-    estimatedMicros: microDollars(value.estimatedMicros, `${field}.estimatedMicros`),
-    reservedAt: singleLine(value.reservedAt, `${field}.reservedAt`),
-    ...(settledAt === undefined ? {} : { settledAt }),
-  };
-}
-
-function parseSpendCapPin(value: unknown, field: string): RequestSpendCapPin {
-  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  return {
-    source: enumValue(
-      value.source,
-      ["request-approval", "pinned-policy"] as const,
-      `${field}.source`,
-    ),
-    capMicros: microDollars(value.capMicros, `${field}.capMicros`),
-    policyDigest: singleLine(value.policyDigest, `${field}.policyDigest`),
-    briefRevision: nonNegativeInteger(value.briefRevision, `${field}.briefRevision`),
-    pinnedAt: singleLine(value.pinnedAt, `${field}.pinnedAt`),
-  };
-}
-
-function parseSpendApproval(value: unknown, field: string): RequestSpendApproval {
-  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  return {
-    requestId: singleLine(value.requestId, `${field}.requestId`),
-    decisionId: singleLine(value.decisionId, `${field}.decisionId`),
-    capMicros: microDollars(value.capMicros, `${field}.capMicros`),
-    previousCapMicros: microDollars(value.previousCapMicros, `${field}.previousCapMicros`),
-    policyCapMicros: optionalMicroDollars(value.policyCapMicros, `${field}.policyCapMicros`),
-    policyDigest: singleLine(value.policyDigest, `${field}.policyDigest`),
-    briefRevision: nonNegativeInteger(value.briefRevision, `${field}.briefRevision`),
-    acknowledgedUnaccountedSamples: nonNegativeInteger(
-      value.acknowledgedUnaccountedSamples,
-      `${field}.acknowledgedUnaccountedSamples`,
-    ),
-    approvedAt: singleLine(value.approvedAt, `${field}.approvedAt`),
-  };
-}
-
-function parseBudgetPause(value: unknown, field: string): RequestBudgetPause {
-  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  return {
-    decisionId: singleLine(value.decisionId, `${field}.decisionId`),
-    reason: enumValue(value.reason, REQUEST_BUDGET_PAUSE_REASONS, `${field}.reason`),
-    taskId: singleLine(value.taskId, `${field}.taskId`),
-    capMicros: microDollars(value.capMicros, `${field}.capMicros`),
-    policyCapMicros: optionalMicroDollars(value.policyCapMicros, `${field}.policyCapMicros`),
-    policyDigest: singleLine(value.policyDigest, `${field}.policyDigest`),
-    briefRevision: nonNegativeInteger(value.briefRevision, `${field}.briefRevision`),
-    committedMicros: microDollars(value.committedMicros, `${field}.committedMicros`),
-    reservedMicros: microDollars(value.reservedMicros, `${field}.reservedMicros`),
-    nextStepMicros:
-      value.nextStepMicros === "unavailable"
-        ? "unavailable"
-        : microDollars(value.nextStepMicros, `${field}.nextStepMicros`),
-    unpricedSamples: nonNegativeInteger(value.unpricedSamples, `${field}.unpricedSamples`),
-    unaccountedSamples: nonNegativeInteger(value.unaccountedSamples, `${field}.unaccountedSamples`),
-    unmeasuredTokenSamples: nonNegativeInteger(
-      value.unmeasuredTokenSamples,
-      `${field}.unmeasuredTokenSamples`,
-    ),
-    observedAt: singleLine(value.observedAt, `${field}.observedAt`),
-  };
-}
-
-function parseRequestBudget(value: unknown, field: string): RequestBudgetState {
-  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  if (!Array.isArray(value.reservations)) {
-    throw new TypeError(`${field}.reservations must be an array`);
-  }
-  const cap = value.cap === undefined ? undefined : parseSpendCapPin(value.cap, `${field}.cap`);
-  const approval =
-    value.approval === undefined
-      ? undefined
-      : parseSpendApproval(value.approval, `${field}.approval`);
-  const pause =
-    value.pause === undefined ? undefined : parseBudgetPause(value.pause, `${field}.pause`);
-  const reconciledAt =
-    value.reconciledAt === undefined
-      ? undefined
-      : singleLine(value.reconciledAt, `${field}.reconciledAt`);
-  return {
-    schemaVersion: 1,
-    requestId: singleLine(value.requestId, `${field}.requestId`),
-    reservations: value.reservations.map((entry, index) =>
-      parseBudgetReservation(entry, `${field}.reservations[${index}]`),
-    ),
-    ...(cap === undefined ? {} : { cap }),
-    ...(approval === undefined ? {} : { approval }),
-    ...(pause === undefined ? {} : { pause }),
-    ...(reconciledAt === undefined ? {} : { reconciledAt }),
-  };
-}
-
 export function parseRuntimeState(value: unknown, source = "runtime state"): RuntimeState {
   if (!isRecord(value)) throw new TypeError(`${source} must be an object`);
   if (value.schemaVersion !== RUNTIME_SCHEMA_VERSION) {
@@ -1517,7 +1308,6 @@ export function parseRuntimeState(value: unknown, source = "runtime state"): Run
   const presentations = value.presentations.map((entry, index) =>
     parsePresentation(entry, `${source}.presentations[${index}]`),
   );
-  const requestBudgets = parseRequestBudgets(value.requestBudgets, source);
   const taskIds = new Set<string>();
   for (const task of tasks) {
     if (taskIds.has(task.taskId))
@@ -1535,32 +1325,7 @@ export function parseRuntimeState(value: unknown, source = "runtime state"): Run
     schemaVersion: 1,
     tasks,
     presentations,
-    ...(requestBudgets === undefined ? {} : { requestBudgets }),
   };
-}
-
-/**
- * Budgets arrived after the runtime schema version was fixed at 1, so state written before them
- * simply names none. Two entries for one request would make exposure ambiguous, which is refused
- * rather than merged.
- */
-function parseRequestBudgets(
-  value: unknown,
-  source: string,
-): readonly RequestBudgetState[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new TypeError(`${source}.requestBudgets must be an array`);
-  const budgets = value.map((entry, index) =>
-    parseRequestBudget(entry, `${source}.requestBudgets[${index}]`),
-  );
-  const requestIds = new Set<string>();
-  for (const budget of budgets) {
-    if (requestIds.has(budget.requestId)) {
-      throw new TypeError(`${source} contains duplicate request budget ${budget.requestId}`);
-    }
-    requestIds.add(budget.requestId);
-  }
-  return budgets;
 }
 
 export function emptyRuntimeState(): RuntimeState {

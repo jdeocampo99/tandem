@@ -67,6 +67,7 @@ import {
   RESTART_QUESTION_ID_PREFIX,
   reportBlock,
   VALIDATION_RETRY_QUESTION_ID_PREFIX,
+  type ValidationRetryResult,
 } from "../recovery/central.ts";
 import {
   type RecoveryConversationOutcome,
@@ -81,9 +82,7 @@ import {
   type RecoveryPlan,
   RecoveryWorkflow,
   type ReviewExistingResult,
-  type ValidationRetryResult,
 } from "../recovery/workflow.ts";
-import { requestApprovalState } from "../requests/brief.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../requests/store.ts";
 import {
   type ApproveRequestBriefInput,
@@ -98,13 +97,6 @@ import {
   taskRuntime,
   unreleasedReservation,
 } from "../runtime/activity.ts";
-import {
-  type RequestOperationSettlement,
-  type RequestSpendAuthorization,
-  type RequestSpendReadout,
-  requestOperationSettlements,
-} from "../runtime/budget.ts";
-import { createRequestSpendGate, type RequestSpendGate } from "../runtime/budget-gate.ts";
 import { withStateLock } from "../runtime/database.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import {
@@ -276,10 +268,6 @@ export type TandemService = Readonly<{
   readonly pendingBriefApprovalId: () => Promise<string>;
   readonly requestBrief: (requestId: string) => Promise<RequestBriefView>;
   readonly requestReceipt: (requestId: string) => Promise<RequestUsageReceipt>;
-  readonly requestSpend: (requestId: string) => Promise<RequestSpendReadout>;
-  readonly authorizeRequestSpend: (
-    intent: RequestSpendAuthorization,
-  ) => Promise<RequestSpendReadout>;
   readonly tick: () => Promise<readonly TaskRecord[]>;
   readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly steer: (input: SteerTaskInput) => Promise<TaskCommunicationView>;
@@ -563,7 +551,6 @@ class TandemController {
   readonly #recoveryCentral: CentralRecoveryWorkflow;
   readonly #requests: RequestBriefWorkflow;
   readonly #usage: RequestUsageLedger;
-  readonly #spend: RequestSpendGate;
   /** Durable-state digest of the draft body last published per task, to avoid redundant refreshes. */
   readonly #draftDigests = new Map<string, string>();
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
@@ -575,13 +562,6 @@ class TandemController {
   constructor(deps: ServiceDependencies) {
     this.#deps = deps;
     this.#usage = deps.usageLedger;
-    this.#spend = createRequestSpendGate({
-      runtimePath: deps.runtimePath,
-      store: deps.store,
-      clock: deps.clock,
-      readRequestUsage: (requestId) => this.#usage.read(requestId),
-      readAgreementRevision: (requestId) => this.agreementRevision(requestId),
-    });
     this.#sourceReady = deps.refreshSource === undefined;
     this.#source = new SourceInboxWorkflow({
       home: deps.home,
@@ -614,7 +594,6 @@ class TandemController {
       readTask: (taskId) => this.get(taskId),
       taskInScope: (task) => this.#source.taskInScope(task),
       feedback: this.#presentationFeedback,
-      requestSpend: this.#spend,
     });
     this.#worker = new WorkerWorkflow({
       home: deps.home,
@@ -644,7 +623,7 @@ class TandemController {
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
       reviewAssistance: deps.reviewAssistance,
       recordRequestUsage: (events) => this.recordAccounting(events),
-      requestSpend: this.#spend,
+      readRequestUsage: (requestId) => this.#usage.read(requestId),
       readModelCatalogue: (cwd) => this.readModelCatalogue(cwd),
     });
     this.#control = new TaskControlWorkflow({
@@ -759,7 +738,7 @@ class TandemController {
       recoveryDecide: (id) => this.#recoveryConversation.decide(id),
       reconcile: (id, input) => this.#recovery.reconcile(id, input.approved),
       reviewExisting: (id, input) => this.#recovery.reviewExisting(id, input.head, input.approved),
-      validationRetry: (id, input) => this.#recovery.validationRetry(id, input.approved),
+      validationRetry: (id, input) => this.#recoveryCentral.validationRetry(id, input.approved),
       repairEvidence: (id, input) => this.#recovery.repairEvidence(id, input.approved),
       deliveryPreflight: (id, input) =>
         this.#recovery.deliveryPreflight(id, input.repository, input.base),
@@ -778,8 +757,6 @@ class TandemController {
       pendingBriefApprovalId: () => this.#requests.pendingApprovalId(),
       requestBrief: (requestId) => this.#requests.read(requestId),
       requestReceipt: (requestId) => this.#usage.receipt(requestId),
-      requestSpend: (requestId) => this.#spend.readSpend(requestId),
-      authorizeRequestSpend: (intent) => this.#spend.authorizeSpend(intent),
       tick: () => this.tick(),
       acknowledge: (id, notificationId) => this.acknowledge(id, notificationId),
       steer: (input) => this.steer(input),
@@ -1698,44 +1675,6 @@ class TandemController {
     } catch (error) {
       await this.diagnoseAccountingFailure(error);
     }
-    await this.reconcileRequestSpending(governed, await this.readState());
-  }
-
-  /**
-   * Settles each request's outstanding estimates against the operations they back, which is how a
-   * restart gets back to a true exposure without double-counting an operation or dropping the one
-   * whose outcome nobody can prove yet.
-   */
-  private async reconcileRequestSpending(
-    tasks: readonly TaskRecord[],
-    state: RuntimeState,
-  ): Promise<void> {
-    const settlements = new Map<string, RequestOperationSettlement[]>();
-    for (const task of tasks) {
-      const requestId = task.requestId;
-      const runtime = state.tasks.find((entry) => entry.taskId === task.id);
-      if (requestId === undefined || runtime === undefined) continue;
-      const observed = settlements.get(requestId) ?? [];
-      observed.push(
-        ...requestOperationSettlements(runtime),
-        ...state.presentations
-          .filter((presentation) => presentation.taskId === task.id)
-          .flatMap(requestOperationSettlements),
-      );
-      settlements.set(requestId, observed);
-    }
-    for (const [requestId, observed] of settlements) {
-      await this.#spend.reconcileReservations({ requestId, settlements: observed });
-    }
-  }
-
-  /** The brief revision a spending decision is bound to: the approved one while it still stands. */
-  private async agreementRevision(requestId: string): Promise<number> {
-    const record = await this.#deps.requestStore.read(requestId);
-    if (record === undefined) return 0;
-    return requestApprovalState(record) === "current" && record.approval !== undefined
-      ? record.approval.briefRevision
-      : record.draft.revision;
   }
 
   private async requestAccountingEvents(

@@ -4,8 +4,8 @@
  *
  * Routing is resolved before a job is launched and before a bounded replacement attempt, never per
  * provider turn: nothing here switches a model mid-turn, learns from outcomes, promises a saving,
- * enables a provider, or works around a spending decision. It decides and returns records; it
- * reads no catalogue, writes no state, and asks no question itself.
+ * or enables a provider. It decides and returns records; it reads no catalogue, writes no state,
+ * and asks no question itself.
  *
  * The one automatic move is a same-or-lower-tier reassignment after a known safe failure, taken
  * only on evidence the catalogue actually published for both models and only among providers the
@@ -40,6 +40,7 @@ import type {
   ExecutionRoutingLimits,
   ExecutionRoutingPauseReason,
 } from "../runtime/schema.ts";
+import type { RequestUsageExposure } from "../runtime/usage-receipt.ts";
 import { formatDecisionQuestion, taskName } from "../tasks/question.ts";
 import type { WorkerRole } from "./jobs.ts";
 
@@ -100,26 +101,14 @@ export type ExecutionRoutingBoundary =
       readonly prior: PriorExecutionAttempt;
     }>;
 
-/**
- * How much of a request's own spending nobody could observe. `unaccountedSamples` is unpriced work
- * no reservation stands for and `unmeasuredTokenSamples` is work that reported no tokens at all;
- * either one means the request's usage and allowance draw are unknown rather than small, so no
- * tier move can be proven against them.
- */
-export type RequestUsageExposure = Readonly<{
-  readonly unaccountedSamples: number;
-  readonly unmeasuredTokenSamples: number;
-}>;
+export type { RequestUsageExposure };
 
 /**
- * What the request's spending checkpoint already decided about this operation, and what it observed
- * deciding it. Routing consumes this decision; it never re-derives, relaxes, or resolves one.
+ * What the request's own accounting ledger shows for this operation's request, read without
+ * deciding anything. Routing consumes this observation; it never re-derives or resolves one.
  */
-export type ExecutionSpendAdmission =
-  | Readonly<{
-      readonly status: "admitted" | "paused";
-      readonly exposure: RequestUsageExposure;
-    }>
+export type ExecutionUsageObservation =
+  | Readonly<{ readonly status: "observed"; readonly exposure: RequestUsageExposure }>
   | Readonly<{ readonly status: "no-governing-request" }>;
 
 export type ExecutionRoutingRequest = Readonly<{
@@ -129,7 +118,7 @@ export type ExecutionRoutingRequest = Readonly<{
   readonly pinned: ModelSpec;
   readonly catalogue: ModelCatalogueSnapshot;
   readonly limits: ExecutionRoutingLimits;
-  readonly admission: ExecutionSpendAdmission;
+  readonly usage: ExecutionUsageObservation;
   readonly now: IsoTimestamp;
 }>;
 
@@ -174,21 +163,18 @@ export type ExecutionRoutingIdentity = Readonly<{
 export function resolveExecutionRouting(
   request: ExecutionRoutingRequest,
 ): ExecutionRoutingDecision {
-  if (request.admission.status === "paused") {
-    return routingQuestion(request, "spending-decision-pending", {});
-  }
   const boundary = request.boundary;
   if (boundary.kind === "replacement-attempt" && boundary.prior.outcome === "uncertain") {
     return routingQuestion(request, "prior-outcome-uncertain", {});
   }
   const catalogue = publishedCatalogue(request.catalogue);
   if (catalogue === undefined) {
-    return continueWithPinnedModel(request, unreadEvidence(request.admission));
+    return continueWithPinnedModel(request, unreadEvidence(request.usage));
   }
   const pinned = lookupModelTierEvidence(catalogue.models, request.pinned);
   if (boundary.kind === "job-launch") {
     return pinned.status === "known"
-      ? continueWithPinnedModel(request, readEvidence(catalogue, request.admission))
+      ? continueWithPinnedModel(request, readEvidence(catalogue, request.usage))
       : routingQuestion(request, pinnedGapReason(pinned.gap), {
           evidenceGaps: [`incumbent-${pinned.gap}` as const],
           enabledProviders: catalogue.enabledProviders,
@@ -311,7 +297,6 @@ export function describeExecutionRoutingDecision(
 const DECISION_ID_PREFIX = "routing-";
 
 const ROUTING_PAUSE_EXPLANATIONS: Readonly<Record<ExecutionRoutingPauseReason, string>> = {
-  "spending-decision-pending": "A spending decision comes first.",
   "prior-outcome-uncertain": "I can't tell what the last attempt did.",
   "pinned-model-absent-from-catalogue": "That model isn't listed right now.",
   "pinned-model-ambiguous-in-catalogue": "That model name matches more than one model.",
@@ -366,33 +351,31 @@ function publishedCatalogue(
 }
 
 /**
- * Whether the request's own spending is fully observed. A governing request with any unaccounted or
+ * Whether the request's own usage is fully observed. A governing request with any unaccounted or
  * unmeasured sample has usage nobody reported, and a task with no governing request has no ledger
  * to report one at all; neither is a basis for calling a move comparable.
  */
-function usageIsFullyObserved(admission: ExecutionSpendAdmission): boolean {
-  if (admission.status !== "admitted") return false;
-  return (
-    admission.exposure.unaccountedSamples === 0 && admission.exposure.unmeasuredTokenSamples === 0
-  );
+function usageIsFullyObserved(usage: ExecutionUsageObservation): boolean {
+  if (usage.status !== "observed") return false;
+  return usage.exposure.unaccountedSamples === 0 && usage.exposure.unmeasuredTokenSamples === 0;
 }
 
-/** How much of the request's spending the boundary could actually see, recorded as it stood. */
+/** How much of the request's usage the boundary could actually see, recorded as it stood. */
 function observedUsage(
-  admission: ExecutionSpendAdmission,
+  usage: ExecutionUsageObservation,
 ): Pick<ExecutionRoutingEvidence, "usageSource" | "unaccountedSamples" | "unmeasuredTokenSamples"> {
-  if (admission.status === "no-governing-request") {
+  if (usage.status === "no-governing-request") {
     return { usageSource: "no-governing-request" };
   }
   return {
     usageSource: "request-ledger",
-    unaccountedSamples: admission.exposure.unaccountedSamples,
-    unmeasuredTokenSamples: admission.exposure.unmeasuredTokenSamples,
+    unaccountedSamples: usage.exposure.unaccountedSamples,
+    unmeasuredTokenSamples: usage.exposure.unmeasuredTokenSamples,
   };
 }
 
-function unreadEvidence(admission: ExecutionSpendAdmission): ExecutionRoutingEvidence {
-  return { source: "catalogue-unavailable", enabledProviders: [], ...observedUsage(admission) };
+function unreadEvidence(usage: ExecutionUsageObservation): ExecutionRoutingEvidence {
+  return { source: "catalogue-unavailable", enabledProviders: [], ...observedUsage(usage) };
 }
 
 /** The relations a comparison established; an indeterminate one established neither. */
@@ -408,7 +391,7 @@ function axisRelations(
 
 function readEvidence(
   catalogue: Extract<ModelCatalogueSnapshot, { readonly status: "read" }>,
-  admission: ExecutionSpendAdmission,
+  usage: ExecutionUsageObservation,
   chosen?: ClassifiedCandidate,
 ): ExecutionRoutingEvidence {
   const relations = axisRelations(chosen?.comparison);
@@ -420,7 +403,7 @@ function readEvidence(
     ...(relations.cost === undefined ? {} : { costRelation: relations.cost }),
     ...(relations.quota === undefined ? {} : { quotaRelation: relations.quota }),
     ...(plan === undefined ? {} : { includedAllowancePlan: plan }),
-    ...observedUsage(admission),
+    ...observedUsage(usage),
   };
 }
 
@@ -497,11 +480,11 @@ function resolveReplacementAttempt(
     });
   }
   if (prior.selector !== request.pinned.model) {
-    return continueWithPinnedModel(request, readEvidence(catalogue, request.admission));
+    return continueWithPinnedModel(request, readEvidence(catalogue, request.usage));
   }
   const candidates = eligibleCandidates(catalogue, request.pinned, prior.selector);
   const preferred = [...candidates].sort(compareCandidatePreference)[0];
-  if (preferred !== undefined && !usageIsFullyObserved(request.admission)) {
+  if (preferred !== undefined && !usageIsFullyObserved(request.usage)) {
     return routingQuestion(request, "usage-evidence-unmeasured", {
       candidate: preferred,
       enabledProviders: catalogue.enabledProviders,
@@ -533,7 +516,7 @@ function resolveReplacementAttempt(
       enabledProviders: catalogue.enabledProviders,
     });
   }
-  return continueWithPinnedModel(request, readEvidence(catalogue, request.admission));
+  return continueWithPinnedModel(request, readEvidence(catalogue, request.usage));
 }
 
 function continueWithPinnedModel(
@@ -592,7 +575,7 @@ function reassignToComparableModel(
       selector: chosen.evidence.selector,
       thinking: chosen.evidence.thinking,
       replaces: { selector: prior.selector, thinking: request.pinned.thinking },
-      evidence: readEvidence(catalogue, request.admission, chosen),
+      evidence: readEvidence(catalogue, request.usage, chosen),
       limits: request.limits,
       resolvedAt: request.now,
     },
@@ -628,7 +611,7 @@ function routingQuestion(
       ...(detail.premiumAxis === undefined ? {} : { premiumAxis: detail.premiumAxis }),
       evidenceGaps: detail.evidenceGaps ?? [],
       enabledProviders: detail.enabledProviders ?? [],
-      ...observedUsage(request.admission),
+      ...observedUsage(request.usage),
       limits: request.limits,
       observedAt: request.now,
     },

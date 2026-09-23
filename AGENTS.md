@@ -24,7 +24,6 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts` |
 | Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `workflow.ts`, `conversation.ts`, `decision.ts`, `wait.ts`, `central.ts` (stop/save/re-enter) |
 | Request usage, cost, quota, elapsed-time receipts | [runtime/](src/runtime/): `usage.ts`, `usage-events.ts`, `usage-ledger.ts`, `usage-codec.ts`, `usage-receipt.ts` |
-| Standing request budgets and spending decisions | [runtime/](src/runtime/): `budget.ts`, `budget-gate.ts` |
 | Model tier evidence and economical routing | [config/model-tier.ts](src/config/model-tier.ts), [workers/execution-routing.ts](src/workers/execution-routing.ts) |
 | Worker execution, results, control, validation | [workers/](src/workers/); entry points: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [validation-worker.ts](src/validation-worker.ts) |
 | OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
@@ -92,7 +91,6 @@ Before changing behavior, read its contract:
 - Approvals/validation/review/child results: [Task lifecycle](docs/agent-reference.md#task-lifecycle).
 - Request briefs/approval revisions/review pane: [Request briefs and approval revisions](docs/agent-reference.md#request-briefs-and-approval-revisions).
 - Usage/cost/quota/elapsed-time receipts: [Request usage receipts and the accounting ledger](docs/agent-reference.md#request-usage-receipts-and-the-accounting-ledger).
-- Standing budgets/spending decisions: [Standing request budgets and spending decisions](docs/agent-reference.md#standing-request-budgets-and-spending-decisions).
 - Model routing/premium approval: [Economical routing and premium-tier approval](docs/agent-reference.md#economical-routing-and-premium-tier-approval).
 - Messages/control: [Inspecting and controlling work](docs/agent-reference.md#inspecting-and-controlling-work).
 - Tools/notifications/compaction: [OMP extension](docs/agent-reference.md#omp-extension).

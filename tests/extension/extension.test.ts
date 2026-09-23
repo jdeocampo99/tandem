@@ -40,7 +40,6 @@ const policyConfig: RepoPolicy = {
     jevAssistance: "off",
     sourceTransmission: false,
   },
-  requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
 };
 
 const policy: ResolvedPolicy = {

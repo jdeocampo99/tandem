@@ -1,7 +1,6 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { RepoPolicy, RequestBriefContent, SkillInvocation, TaskKind } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
-import { formatDollars } from "../runtime/budget.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
@@ -43,8 +42,6 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "brief-review": { min: 2, max: 2 },
   "brief-approve": { min: 3, max: 4 },
   "request-receipt": { min: 2, max: 2 },
-  "budget-show": { min: 2, max: 2 },
-  "budget-approve": { min: 3, max: 4 },
   "review-existing": { min: 3, max: 3 },
   "validation-retry": { min: 2, max: 2 },
   "evidence-repair": { min: 2, max: 2 },
@@ -120,14 +117,6 @@ export type TandemAction =
   | Readonly<{ readonly action: "brief-review"; readonly requestId: string }>
   | Readonly<{ readonly action: "brief-show"; readonly requestId: string }>
   | Readonly<{ readonly action: "request-receipt"; readonly requestId: string }>
-  | Readonly<{ readonly action: "budget-show"; readonly requestId: string }>
-  | Readonly<{
-      readonly action: "budget-approve";
-      readonly requestId: string;
-      /** The pending decision to answer; omitted resolves to the request's one pending decision. */
-      readonly decisionId?: string | undefined;
-      readonly capMicros: number;
-    }>
   | Readonly<{
       readonly action: "brief-approve";
       /** Omitted resolves to the one request whose brief is awaiting approval. */
@@ -209,7 +198,6 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "configure-models" ||
     action.action === "approve" ||
     action.action === "brief-approve" ||
-    action.action === "budget-approve" ||
     action.action === "cancel" ||
     action.action === "publish" ||
     action.action === "draft" ||
@@ -253,13 +241,6 @@ async function approvalPrompt(
     return {
       title: "Approve this brief?",
       message: taskName(view.record.draft.content.goal),
-    };
-  }
-  if (action.action === "budget-approve") {
-    const readout = await service.requestSpend(action.requestId);
-    return {
-      title: `Raise the cap to ${formatDollars(action.capMicros)}?`,
-      message: `${formatDollars(readout.exposure.committedMicros)} spent so far.`,
     };
   }
   if (!("taskId" in action)) return { title: "Allow this Tandem action?", message: "" };
@@ -462,18 +443,6 @@ export async function executeTandemAction(
       return textResult(await service.requestBrief(action.requestId), action.action);
     case "request-receipt":
       return textResult(await service.requestReceipt(action.requestId), action.action);
-    case "budget-show":
-      return textResult(await service.requestSpend(action.requestId), action.action);
-    case "budget-approve":
-      return textResult(
-        await service.authorizeRequestSpend({
-          requestId: action.requestId,
-          decisionId: action.decisionId,
-          capMicros: action.capMicros,
-        }),
-        action.action,
-        true,
-      );
     case "brief-approve":
       return textResult(
         await service.approveRequestBrief({
@@ -727,25 +696,6 @@ export function parseTandemCommand(input: string): TandemAction {
       return { action: "brief-show", requestId: value(1, "brief-show") };
     case "request-receipt":
       return { action: "request-receipt", requestId: value(1, "request-receipt") };
-    case "budget-show":
-      return { action: "budget-show", requestId: value(1, "budget-show") };
-    case "budget-approve": {
-      // Three words (requestId, cap) resolves to the request's one pending decision; four words
-      // (requestId, decisionId, cap) names it explicitly.
-      const capIndex = words.length === 4 ? 3 : 2;
-      const capMicros = Number(value(capIndex, "budget-approve cap in USD micro-dollars"));
-      if (!Number.isSafeInteger(capMicros) || capMicros < 0) {
-        throw new TypeError(
-          "budget-approve cap must be a non-negative integer number of USD micro-dollars",
-        );
-      }
-      return {
-        action: "budget-approve",
-        requestId: value(1, "budget-approve"),
-        ...(words.length === 4 ? { decisionId: value(2, "budget-approve decision id") } : {}),
-        capMicros,
-      };
-    }
     case "brief-review":
       return { action: "brief-review", requestId: value(1, "brief-review") };
     case "brief-approve": {
