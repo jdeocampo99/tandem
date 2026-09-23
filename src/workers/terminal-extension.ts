@@ -20,6 +20,7 @@ import {
 import {
   assertSelectedModel,
   expectedModelParts,
+  nativeAgentEndAborted,
   nativeAgentEndFailure,
   outcomesFor,
   ReportRejection,
@@ -135,6 +136,15 @@ export function planAbortWithReason(
 }
 
 /**
+ * An abort the extension did not request came from the person at the pane pressing Esc to redirect
+ * the worker. That is a hand-off, not a failure: the worker stays live with its tools and still
+ * delivers its result through submit_report.
+ */
+export function userInterruptedTurn(event: unknown, extensionAborted: boolean): boolean {
+  return !extensionAborted && nativeAgentEndAborted(event);
+}
+
+/**
  * OMP wakes an idle agent with an `async-result` message when a backgrounded command finishes.
  * After the report is submitted that wake would hold the pane busy for nothing, while a person
  * typing or a Tandem inbox update (appended as a synthetic message) is still a real request.
@@ -208,6 +218,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   let resultPublished = false;
   let delegatedSettled = false;
   let timeoutRequested = false;
+  let extensionAborted = false;
   let pauseCommand: WorkerTerminalCommand | undefined;
   let closingCommand: WorkerTerminalCommand | undefined;
   let writeQueue = Promise.resolve();
@@ -217,6 +228,10 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   let settledStatus: HerdrAgentState = "idle";
   let statusMessage: string | undefined;
   const waitingInputs = new Set<string>();
+  const abort = (ctx: ExtensionContext): void => {
+    extensionAborted = true;
+    ctx.abort();
+  };
   const reportStatus = (): Promise<void> | undefined => {
     if (pauseCommand !== undefined) return statusReporter?.report("blocked", "Worker paused");
     if (waitingInputs.size > 0) return statusReporter?.report("blocked", "Waiting for your answer");
@@ -294,6 +309,11 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     }
     if (timeoutRequested) {
       await settle(failureFor(job, `worker timed out after ${job.timeoutMs}ms`), ctx);
+      return;
+    }
+    if (userInterruptedTurn(event, extensionAborted)) {
+      await persistState("idle", false);
+      await reportStatus();
       return;
     }
     let failure: string | undefined;
@@ -414,14 +434,14 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
         // Best effort only; the durable write already failed once for this pane.
       }
     }
-    ctx.abort();
+    abort(ctx);
   };
 
   const timeout = async (ctx: ExtensionContext): Promise<void> => {
     if (delegatedSettled || resultPublished || timeoutRequested) return;
     timeoutRequested = true;
     const wasIdle = ctx.isIdle();
-    ctx.abort();
+    abort(ctx);
     if (!wasIdle) return;
     await settle(failureFor(job, `worker timed out after ${job.timeoutMs}ms`), ctx);
   };
@@ -446,7 +466,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
         ctx.clearTimer(timeoutTimer);
         timeoutTimer = undefined;
       }
-      if (!ctx.isIdle()) ctx.abort();
+      if (!ctx.isIdle()) abort(ctx);
       else {
         await finishPause();
         await reportStatus();
@@ -511,33 +531,33 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     }, TERMINAL_HEARTBEAT_MS);
     if (job.timeoutMs !== undefined) {
       timeoutTimer = ctx.setTimeout(() => {
-        void timeout(ctx).catch(() => ctx.abort());
+        void timeout(ctx).catch(() => abort(ctx));
       }, job.timeoutMs);
     }
   });
   pi.on("agent_start", (_event, ctx) => {
-    void persistState("busy", currentState.completed).catch(() => ctx.abort());
+    void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     void reportStatus();
   });
   pi.on("turn_start", (_event, ctx) => {
-    void persistState("busy", currentState.completed).catch(() => ctx.abort());
+    void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     void reportStatus();
   });
   pi.on("tool_execution_start", (event, ctx) => {
-    void persistState("busy", currentState.completed).catch(() => ctx.abort());
+    void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     if (event.toolName === "ask") waitingInputs.add(event.toolCallId);
     void reportStatus();
   });
   pi.on("tool_execution_end", (event, ctx) => {
-    void persistState("busy", currentState.completed).catch(() => ctx.abort());
+    void persistState("busy", currentState.completed).catch(() => abort(ctx));
     waitingInputs.delete(event.toolCallId);
     void reportStatus();
   });
   pi.on("turn_end", (_event, ctx) => {
-    void persistState("idle", currentState.completed).catch(() => ctx.abort());
+    void persistState("idle", currentState.completed).catch(() => abort(ctx));
   });
   pi.on("context", (event, ctx) => {
     if (resultPublished && isBackgroundResultWake(event.messages)) ctx.abort();
