@@ -440,7 +440,7 @@ test("buildCoordinatorArgv disables discovery and exposes only coordinator read/
   expect(argv).toContain("--config");
   expect(argv).toContain("/tandem/src/worker-config.yml");
   expect(argv).toContain("--tools");
-  expect(argv).toContain("read,grep,glob,ask,tandem");
+  expect(argv).toContain("read,ask,tandem");
   expect(argv).toContain("--continue");
   expect(argv).not.toContain("--no-session");
   expect(argv).not.toContain("write");

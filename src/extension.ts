@@ -85,6 +85,16 @@ function serviceForContext(
   });
 }
 
+/** Whether the task belongs to this already-resolved repository; a missing task checkout does not. */
+async function isTaskInRepository(task: TaskRecord, repo: string): Promise<boolean> {
+  if (task.repoPath === repo) return true;
+  const taskRepo = await realpath(task.repoPath).catch((error: unknown) => {
+    if (isMissing(error)) return undefined;
+    throw error;
+  });
+  return taskRepo === repo;
+}
+
 async function refreshDigest(service: TandemService): Promise<string> {
   return buildDurableDigest(await service.list());
 }
@@ -168,14 +178,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             taskMessage = undefined;
             for (const task of tasks) {
               if (isTerminalTask(task) || task.stage === "ready") continue;
-              const taskRepo =
-                task.repoPath === repo
-                  ? repo
-                  : await realpath(task.repoPath).catch((error: unknown) => {
-                      if (isMissing(error)) return undefined;
-                      throw error;
-                    });
-              if (taskRepo !== repo) continue;
+              if (!(await isTaskInRepository(task, repo))) continue;
               if (
                 task.stage === "blocked" ||
                 task.stage === "paused" ||
@@ -219,6 +222,20 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       promptRouting,
       reconcile,
       postAction,
+      // An unreadable task list counts as research running, so the guard fails closed.
+      researchRunning: async (ctx) => {
+        try {
+          const repo = await realpath(getEnvironment(ctx).repo);
+          for (const task of await getService(ctx).list()) {
+            const researching =
+              task.kind === "scout" && (task.stage === "queued" || task.stage === "scouting");
+            if (researching && (await isTaskInRepository(task, repo))) return true;
+          }
+          return false;
+        } catch {
+          return true;
+        }
+      },
       // An unreadable settings file allows no servers, so the guard fails closed.
       coordinatorMcpServers: (ctx) =>
         readCoordinatorMcpServers({

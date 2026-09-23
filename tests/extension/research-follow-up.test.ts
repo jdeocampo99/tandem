@@ -132,8 +132,12 @@ test("each post-research follow-up renders its own coordinator wake content", ()
   );
 
   expect(reportOnly).toContain("Research follow-up: report-only");
-  expect(reportOnly).toContain("Summarize the report for the user in plain language and stop.");
-  expect(reportOnly).toContain("Do not propose implementation work");
+  for (const followUp of [reportOnly, askIntent, interview]) {
+    expect(followUp).toContain("which one you recommend and why");
+    expect(followUp).toContain("one-or-two-sentence limit does not apply");
+  }
+  expect(reportOnly).toContain("End with the natural next steps");
+  expect(reportOnly).toContain("Do not start the implementation interview");
   expect(reportOnly).not.toContain("acceptance criteria");
 
   expect(askIntent).toContain("Research follow-up: ask-intent");
@@ -141,7 +145,6 @@ test("each post-research follow-up renders its own coordinator wake content", ()
   expect(askIntent).not.toContain("acceptance criteria");
 
   expect(interview).toContain("Research follow-up: implementation-interview");
-  expect(interview).toContain("what it found");
   expect(interview).toContain("Propose one initial direction drawn from that evidence");
   expect(interview).toContain(
     "desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility",
@@ -344,14 +347,16 @@ test("task summaries explain the disposition and its precedence in plain languag
     },
   };
   const summary = summarizeTandemActionValue("show", scout);
-  expect(summary).toContain("After research: summarize the report with its evidence");
+  expect(summary).toContain("After research: summarize the report, propose one direction");
   expect(summary).toContain("interview for implementation scope");
 
   const reportOnly = summarizeTandemActionValue("show", {
     ...scout,
     researchContinuation: { schemaVersion: 1, disposition: "report-only", selectedBy: "explicit" },
   });
-  expect(reportOnly).toContain("After research: summarize the report and stop.");
+  expect(reportOnly).toContain(
+    "After research: summarize the report, recommend, and offer next steps",
+  );
 });
 
 test("the delivered wake matches the pure decision for the same durable record", async () => {

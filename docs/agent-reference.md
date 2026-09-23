@@ -565,9 +565,16 @@ and user config, as OMP discovers them) and asks for each one whether the coordi
 defaulting to **Skip**. The answers are saved as `coordinatorMcpServers` in `settings.toml`, beside
 `repoPath` and outside task policy; `tandem config` edits the list later, and a running coordinator reads
 it on its next MCP call. The coordinator's extension refuses every MCP call to a server not on
-the list, and every `read` or `grep` of an `http(s)://` URL, telling the coordinator to hand the work to
+the list, and every `read` of an `http(s)://` URL, telling the coordinator to hand the work to
 a task instead. `--tools` cannot do this because OMP loads MCP servers outside it. Tasks keep every
 server.
+
+The coordinator delegates research and does judgement itself. Its `--tools` are `read`, `ask`, and
+`tandem`, with no `grep` or `glob`, so it reads only paths a report, brief, or the user names. While a
+scout task for the project is queued or scouting, the extension also refuses every `read` of a file
+outside the Tandem home, and of worker worktrees under its `pool/`, telling the coordinator to steer
+the running research task or create a new one. Reports and briefs stay readable. If the task list
+cannot be read, the refusal applies.
 
 Keep default worker/fix limits, script identifiers, hash paths, raw commands, and JSON in structured
 details; share them only on request or when the user must choose meaningful custom settings. If valid
@@ -1112,13 +1119,15 @@ choice survives context compaction without an ephemeral model-memory flag.
 The existing completed-scout coordinator notification remains the only wake mechanism. The
 notification text carries the follow-up decided from the persisted record, with the delivery path
 first proving the recorded report is still readable, so the same durable record produces the same
-wake text after compaction, restart, or coordinator replacement:
+wake text after compaction, restart, or coordinator replacement. Every research reply is a research
+summary, exempt from the one-or-two-sentence limit: the three to five findings that matter with their
+evidence, the options surfaced, the coordinator's recommendation and why, and what is still uncertain.
 
 | Follow-up | Coordinator behavior |
 | --- | --- |
-| `report-only` | Summarize the report and stop; propose no implementation work. |
-| `ask-intent` | Summarize the report, then ask only whether the user wants implementation work. |
-| `implementation-interview` | Summarize the report with its evidence, propose one initial direction, then ask focused questions about desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility, and approval, with a default for each. |
+| `report-only` | Give the research summary, then offer next steps as a short choice; start no implementation interview or task until the user picks one. |
+| `ask-intent` | Give the research summary, then ask only whether the user wants implementation work. |
+| `implementation-interview` | Give the research summary, propose one initial direction, then ask focused questions about desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility, and approval, with a default for each. |
 | `answer-question` | An open `needs-decision` question outranks the disposition and is resolved first. |
 | `disclose-blocker` | A non-scout, blocked, cancelled, incomplete, stale-generation, or unreadable-report record has its exact blocker disclosed. |
 
