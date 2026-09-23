@@ -718,6 +718,21 @@ function parseWorkspaceMoveResponse(
   return { type: "workspace_list", workspaces: parseWorkspaceList(value, operation, response) };
 }
 
+/** The session's workspaces by id, in sidebar order. Read-only. */
+export async function listWorkspaceOrder(
+  run: CommandRunner,
+  sessionId: string,
+  cwd: string,
+): Promise<readonly string[]> {
+  const request = herdrRequest(sessionId, cwd, ["workspace", "list"]);
+  const result = await runChecked(run, request, "herdr workspace list");
+  return parseWorkspaceList(
+    parseJson(result.stdout, "herdr workspace list"),
+    "herdr workspace list",
+    result.stdout,
+  ).map((workspace) => workspace.workspaceId);
+}
+
 export async function moveWorkspaceAfterParent(
   run: CommandRunner,
   input: HerdrWorkspaceOrderInput,

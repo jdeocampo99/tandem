@@ -2,6 +2,7 @@ import { lstat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { TaskKind, TaskStage } from "../contracts.ts";
 import type { ReconcileReport, ReconcileReportEntry } from "../coordinator/reconcile.ts";
+import type { RenestReport } from "../coordinator/renest.ts";
 import { taskRuntime } from "../runtime/activity.ts";
 import { databasePath } from "../runtime/database.ts";
 import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
@@ -296,4 +297,29 @@ export function renderFixReportVerbose(report: ReconcileReport): string {
   ];
   if (lines.length === 1) return `Tandem checked ${report.home}; nothing needs fixing.\n`;
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * One line for re-nesting task workspaces under their coordinators, plus one per warning. Tandem
+ * applies it without asking, since it only reorders its own workspaces, so the line says it is done.
+ */
+export function renderRenest(renest: RenestReport, details: FixDetails): string {
+  const lines: string[] = [];
+  if (renest.moved > 0) {
+    const byRepo = new Map<string, Set<string>>();
+    for (const move of renest.planned) {
+      const titles = byRepo.get(move.repoPath) ?? new Set<string>();
+      titles.add(details.tasks.get(move.taskId)?.title ?? "task");
+      byRepo.set(move.repoPath, titles);
+    }
+    const what = [...byRepo.entries()]
+      .map(
+        ([repo, titles]) =>
+          `${[...titles].join(", ")} workers under ${basename(repo)}'s coordinator`,
+      )
+      .join("; ");
+    lines.push(`Re-nested (${renest.moved}) · moved ${what}`);
+  }
+  for (const warning of renest.warnings) lines.push(`Re-nest skipped: ${warning}`);
+  return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
 }

@@ -504,6 +504,18 @@ the initial terminal command short; a successful `pane run` response alone is no
 Child-workspace creation and ordering share the central store lock so concurrent project dispatch
 keeps each child group beneath its own coordinator.
 
+A replacement coordinator workspace (from `tandem update`, `tandem reset`, or a relaunch) is created
+at the end of the Herdr sidebar, so each launch and `tandem fix` then re-nest: every live task
+workspace is moved to sit directly after its own repository's live coordinator, oldest task first.
+A task workspace qualifies only when the durable runtime endpoints of exactly one repository's
+tasks name it in this Herdr session, it is not a coordinator's workspace, and it appears once in
+`herdr workspace list`; anything else stays where it is. Moves use `workspace.move`, whose
+`insert_index` is a gap in the list as it was before the move. Re-nesting is display-only: it never
+creates, closes, or renames a workspace, makes no move when everything is already nested, and turns
+an unreadable session or a failed move into a one-line warning that never blocks launch or fix.
+`tandem fix` applies it without asking and reports it as one line, and as `renest` (`planned`,
+`moved`, `warnings`) in `--json`.
+
 `doctor` is available through the advanced low-level CLI to check the checked-in extension and
 config files, central repository policy, pinned OMP model, and named Herdr status without writing
 repository or task state.
