@@ -1663,7 +1663,7 @@ work is still running. It requires its own explicit publishing approval; scope a
 publication approval, and the draft itself never becomes an approval for anything else:
 
 ```sh
-bun src/cli.ts pr draft TASK_ID OWNER/REPO "Draft title" main --yes
+bun src/cli.ts pr draft TASK_ID "Draft title" main --yes
 ```
 
 Draft eligibility is separate from delivery acceptance. A draft needs an implementation task with
@@ -1724,12 +1724,12 @@ The summary object has only `tldr`, `what`, and `why` arrays. Each array must co
 Publish only after reviewing the generated description and the approval details:
 
 ```sh
-bun src/cli.ts pr publish TASK_ID OWNER/REPO "Title" main \
+bun src/cli.ts pr publish TASK_ID "Title" main \
   '{"tldr":["Short result"],"what":["The observable change"],"why":["The user-facing reason"]}' \
   --yes
 ```
 
-The publish path verifies the task is ready, the worktree is clean, the branch and repository identity match the task, validation evidence is non-empty and successful, the current review lens exists and passes, and the current worktree HEAD is exactly the reviewed HEAD. It pushes that exact reviewed SHA to the task branch. Existing pull requests are re-observed and must match the same repository, base, branch, and SHA; closed or merged duplicates are refused.
+The publish path verifies the task is ready, the worktree is clean, the branch matches the task, validation evidence is non-empty and successful, the current review lens exists and passes, and the current worktree HEAD is exactly the reviewed HEAD. It pushes that exact reviewed SHA to the task branch of the GitHub repository named by the worktree's `origin`; there is no repository argument to get wrong. Existing pull requests are re-observed and must match the same repository, base, branch, and SHA; closed or merged duplicates are refused.
 
 Merge is a separate explicit action:
 
@@ -2005,10 +2005,15 @@ than on every run or launch. `--json` prints a versioned report (`schemaVersion`
 path, and reason. The exit code is non-zero only when the scan or an apply failed, never because a
 resource was deliberately retained.
 
-`delivery-preflight` must pass before approved publication. It checks the exact reviewed HEAD,
-clean/unmerged state, generated database types, formatting, lint/pre-push checks, diff whitespace,
-branch and remote identity, and duplicate pull-request metadata. Publication never bypasses a
-failed preflight or publishes an unreviewed changed HEAD; merge and deploy remain human-approved.
+`delivery-preflight` must pass before approved publication. It refuses only what makes publishing
+wrong or impossible: a dirty or unmerged worktree, a HEAD other than the reviewed HEAD, a branch
+other than the task's, an `origin` that is not a GitHub repository (the owner/repository is read
+from `origin`, never supplied), a GitHub lookup that fails, or a pull request already open for the
+branch. It reruns no quality commands: validation already ran the repository's own configured
+commands at the reviewed HEAD. Being behind the base branch is not a refusal. Each refusal is one
+plain-English line; the coordinator reports it to the user and stops, and never creates a new task
+or worktree to work around it. Publication never bypasses a failed preflight or publishes an
+unreviewed changed HEAD; merge and deploy remain human-approved.
 
 Task communication is canonical in the task row in `state.sqlite` and published as a small
 derived inbox under `<home>/communications/<safe-task-id>/inbox.json`. The service persists
@@ -2101,7 +2106,6 @@ All parser-supported options are global; use only the ones relevant to the comma
 | `--supersedes ID` | Repeatable obsolete-message identifier for `steer`; CLI-only convenience. |
 | `--presentation ID`, `--presentation-id ID` | Presentation identifier. |
 | `--reason TEXT` | Pause/cancel reason. |
-| `--repository OWNER/REPO` | GitHub repository for publish. |
 | `--title TEXT` | Pull-request title. |
 | `--base BRANCH` | Pull-request base branch. |
 | `--summary JSON` | PR summary object. |

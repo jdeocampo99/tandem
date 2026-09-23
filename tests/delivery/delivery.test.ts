@@ -267,7 +267,6 @@ test("refuses remote delivery without explicit approval and does not invoke the 
     publishReviewedTask({
       task: task(),
       summary,
-      repository: "acme/repo",
       title: "Reviewed delivery",
       base: "main",
       approved: false,
@@ -330,7 +329,6 @@ test("publishes the exact task branch only after identity checks and avoids dupl
   const published = await publishReviewedTask({
     task: task(),
     summary,
-    repository: "acme/repo",
     title: "Reviewed delivery",
     base: "main",
     approved: true,
@@ -423,7 +421,6 @@ test("publishes only the reviewed SHA when the local task branch advances during
         worktree: { ...lease, path: worktree },
       }),
       summary,
-      repository: "acme/repo",
       title: "Reviewed delivery",
       base: "main",
       approved: true,
@@ -448,7 +445,7 @@ test("publishes only the reviewed SHA when the local task branch advances during
   }
 });
 
-test("rejects a repository identity mismatch before any remote mutation", async () => {
+test("rejects a non-GitHub origin before any remote mutation", async () => {
   const calls: CommandRequest[] = [];
   const run: CommandRunner = async (request) => {
     calls.push(request);
@@ -458,20 +455,19 @@ test("rejects a repository identity mismatch before any remote mutation", async 
     if (argv[0] === "git" && argv.includes("diff")) return result();
     if (argv[0] === "git" && argv.includes("symbolic-ref")) return result("tandem/delivery-task\n");
     if (argv[0] === "git" && argv.includes("remote"))
-      return result("git@github.com:other/repo.git\n");
+      return result("https://gitlab.com/acme/repo.git\n");
     throw new Error(`unexpected command ${JSON.stringify(argv)}`);
   };
   await expect(
     publishReviewedTask({
       task: task(),
       summary,
-      repository: "acme/repo",
       title: "Reviewed delivery",
       base: "main",
       approved: true,
       run,
     }),
-  ).rejects.toThrow("does not match origin");
+  ).rejects.toThrow("is not a GitHub repository URL");
   expect(calls.some((call) => call.argv.includes("push"))).toBe(false);
   expect(calls.some((call) => call.argv.includes("create"))).toBe(false);
 });
@@ -634,7 +630,6 @@ test("a draft refuses publication without explicit publishing approval even when
   await expect(
     publishTaskDraft({
       task: scopeApproved,
-      repository: "acme/repo",
       title: "Draft: deliver the reviewed change",
       base: "main",
       approved: false,
@@ -737,7 +732,6 @@ test("a draft is created marked unfinished at the pushed task HEAD", async () =>
   const runner = draftRunner();
   const publication = await publishTaskDraft({
     task: draftTask(),
-    repository: "acme/repo",
     title: "Draft: deliver the reviewed change",
     base: "main",
     approved: true,
@@ -761,7 +755,6 @@ test("a second draft publication updates the same pull request instead of creati
   const runner = draftRunner({ listResponses: [[draftRemotePullRequest(true)]] });
   const publication = await publishTaskDraft({
     task: draftTask({ stage: "reviewing", pullRequest: draftMetadata }),
-    repository: "acme/repo",
     title: "Draft: deliver the reviewed change",
     base: "main",
     approved: true,
@@ -788,7 +781,6 @@ test("an uncertain create is reconciled to the observed pull request rather than
   });
   const publication = await publishTaskDraft({
     task: draftTask(),
-    repository: "acme/repo",
     title: "Draft: deliver the reviewed change",
     base: "main",
     approved: true,
@@ -805,7 +797,6 @@ test("an uncertain create with no observable pull request fails closed without a
   await expect(
     publishTaskDraft({
       task: draftTask(),
-      repository: "acme/repo",
       title: "Draft: deliver the reviewed change",
       base: "main",
       approved: true,
@@ -822,7 +813,6 @@ test("a retry after an unreconciled create observes the remote first and never c
   });
   const request = {
     task: draftTask(),
-    repository: "acme/repo",
     title: "Draft: deliver the reviewed change",
     base: "main",
     approved: true,
@@ -850,7 +840,6 @@ test("a refused branch push leaves the published commit alone and discloses the 
   });
   const publication = await publishTaskDraft({
     task: draftTask({ pullRequest: draftMetadata }),
-    repository: "acme/repo",
     title: "Draft: deliver the reviewed change",
     base: "main",
     approved: true,
@@ -898,7 +887,6 @@ test("draft eligibility never satisfies delivery acceptance", async () => {
     publishReviewedTask({
       task: unfinished,
       summary,
-      repository: "acme/repo",
       title: "Reviewed delivery",
       base: "main",
       approved: true,

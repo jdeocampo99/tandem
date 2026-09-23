@@ -89,12 +89,12 @@ const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
   presentations: 0,
   feedback: 1,
   describe: 2,
-  publish: 5,
-  draft: 4,
+  publish: 4,
+  draft: 3,
   merge: 2,
   cleanup: 1,
   inspect: 1,
-  "delivery-preflight": 3,
+  "delivery-preflight": 2,
 };
 
 export type MergeMethod = "merge" | "squash" | "rebase";
@@ -159,7 +159,6 @@ export type CliOptions = Readonly<{
   readonly text?: string;
   readonly questionId?: string;
   readonly supersedes: readonly string[];
-  readonly repository?: string;
   readonly title?: string;
   readonly base?: string;
   readonly summary?: string;
@@ -305,7 +304,6 @@ type MutableCliOptions = {
   text?: string;
   questionId?: string;
   supersedes: string[];
-  repository?: string;
   title?: string;
   base?: string;
   summary?: string;
@@ -470,11 +468,6 @@ function parseOption(options: MutableCliOptions, argv: readonly string[], index:
     case "--reason": {
       const parsed = optionValue(argv, index, name);
       options.reason = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--repository": {
-      const parsed = optionValue(argv, index, name);
-      options.repository = parsed.value;
       return parsed.nextIndex;
     }
     case "--title": {

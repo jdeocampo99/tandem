@@ -228,7 +228,7 @@ export type TandemService = Readonly<{
   readonly inspect: (id: string) => Promise<TaskInspection>;
   readonly deliveryPreflight: (
     id: string,
-    input: { readonly repository: string; readonly base: string },
+    input: { readonly base: string },
   ) => Promise<DeliveryPreflightResult>;
   readonly approve: (id: string) => Promise<TaskRecord>;
   readonly draftRequestBrief: (input: DraftRequestBriefInput) => Promise<RequestBriefView>;
@@ -251,7 +251,6 @@ export type TandemService = Readonly<{
   readonly publish: (
     id: string,
     input: {
-      readonly repository: string;
       readonly title: string;
       readonly base: string;
       readonly summary: PrSummary;
@@ -261,7 +260,6 @@ export type TandemService = Readonly<{
   readonly publishDraft: (
     id: string,
     input: {
-      readonly repository: string;
       readonly title: string;
       readonly base: string;
       readonly approved: boolean;
@@ -668,7 +666,7 @@ class TandemController {
     return {
       onboard: (repoPath, write) => this.onboard(repoPath, write),
       inspect: (id) => this.inspect(id),
-      deliveryPreflight: (id, input) => this.deliveryPreflight(id, input.repository, input.base),
+      deliveryPreflight: (id, input) => this.deliveryPreflight(id, input.base),
       models: (repoPath) => this.models(repoPath),
       configureModels: (input) => this.configureModels(input),
       create: (input) => this.create(input),
@@ -973,12 +971,8 @@ class TandemController {
     return inspectTask(this.#deps, task);
   }
 
-  async deliveryPreflight(
-    id: string,
-    repository: string,
-    base: string,
-  ): Promise<DeliveryPreflightResult> {
-    return deliveryPreflight(this.#deps, await this.get(assertTaskId(id)), repository, base);
+  async deliveryPreflight(id: string, base: string): Promise<DeliveryPreflightResult> {
+    return deliveryPreflight(this.#deps, await this.get(assertTaskId(id)), base);
   }
 
   async resume(id: string): Promise<TaskRecord> {
@@ -1105,7 +1099,6 @@ class TandemController {
   async publish(
     id: string,
     input: {
-      readonly repository: string;
       readonly title: string;
       readonly base: string;
       readonly summary: PrSummary;
@@ -1114,9 +1107,9 @@ class TandemController {
   ): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("publish input must be an object");
     if (input.approved) {
-      const preflight = await this.deliveryPreflight(id, input.repository, input.base);
+      const preflight = await this.deliveryPreflight(id, input.base);
       if (!preflight.ready) {
-        throw new Error(`delivery preflight refused publication: ${preflight.refusals.join("; ")}`);
+        throw new Error(`not published: ${preflight.refusals.join("; ")}`);
       }
     }
     const prepared = await this.#deps.store.serialized(async (store) => {
@@ -1127,7 +1120,6 @@ class TandemController {
       const metadata = await publishReviewedTask({
         task,
         summary: input.summary,
-        repository: singleLine(input.repository, "repository"),
         title: singleLine(input.title, "title"),
         base: singleLine(input.base, "base"),
         approved: input.approved,
@@ -1146,7 +1138,6 @@ class TandemController {
   async publishDraft(
     id: string,
     input: {
-      readonly repository: string;
       readonly title: string;
       readonly base: string;
       readonly approved: boolean;
@@ -1160,7 +1151,6 @@ class TandemController {
       }
       const publication = await publishTaskDraft({
         task,
-        repository: singleLine(input.repository, "repository"),
         title: singleLine(input.title, "title"),
         base: singleLine(input.base, "base"),
         approved: input.approved,

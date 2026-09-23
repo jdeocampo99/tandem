@@ -3,6 +3,7 @@ import type { CommandRunner, TaskRecord } from "../contracts.ts";
 import { taskRuntime } from "../runtime/activity.ts";
 import { readRuntimeState } from "../runtime/persistence.ts";
 import { describeError, isRecord } from "../service/records.ts";
+import { repositoryFromRemote } from "./pull-requests.ts";
 
 export type PreflightDependencies = Readonly<{
   readonly run: CommandRunner;
@@ -15,13 +16,10 @@ export type DeliveryPreflightResult = Readonly<{
   readonly reviewedHead?: string;
   readonly currentHead?: string;
   readonly branch?: string;
-  readonly repository: string;
+  /** The GitHub owner/repository read from the worktree's origin. */
+  readonly repository?: string;
   readonly base: string;
-  readonly checks: readonly Readonly<{
-    readonly name: string;
-    readonly passed: boolean;
-    readonly detail: string;
-  }>[];
+  /** One plain-English line per reason publishing would be wrong or impossible. */
   readonly refusals: readonly string[];
   readonly duplicatePullRequest?: TaskRecord["pullRequest"];
   /** The task's own draft, which final publication updates in place rather than duplicating. */
@@ -43,95 +41,77 @@ async function gitText(
   }
 }
 
-function repositoryFromRemote(remote: string): string | undefined {
-  const value = remote.trim().replace(/\.git$/u, "");
-  if (value.startsWith("git@github.com:")) return value.slice("git@github.com:".length);
+function githubRepository(remote: string): string | undefined {
   try {
-    const parsed = new URL(value);
-    if (parsed.hostname.toLowerCase() !== "github.com") return undefined;
-    return parsed.pathname.replace(/^\/+/u, "").replace(/\/+$/u, "");
+    return repositoryFromRemote(remote);
   } catch {
-    return /^[^\s/]+\/[^\s/]+$/u.test(value) ? value : undefined;
+    return undefined;
   }
 }
 
+function firstLine(text: string): string {
+  return text.trim().split("\n")[0] ?? "";
+}
+
 /**
- * Read-only checks that a ready task can be published: a clean worktree at the reviewed HEAD on
- * its own branch, the expected remote, passing quality checks, and no duplicate pull request.
+ * Read-only checks that a ready task can be published. It refuses only what makes publishing wrong
+ * or impossible: a dirty worktree, a HEAD or branch other than the reviewed one, no GitHub origin,
+ * or an open pull request already on the branch. Quality checks are not rerun here; validation
+ * already ran the repository's own configured commands at the reviewed HEAD.
  */
 export async function deliveryPreflight(
   deps: PreflightDependencies,
   task: TaskRecord,
-  repository: string,
   base: string,
 ): Promise<DeliveryPreflightResult> {
   const taskId = task.id;
   const runtime = taskRuntime(await readRuntimeState(deps.runtimePath), taskId);
   const cwd = task.worktree?.path ?? runtime?.worktree?.path;
-  const checks: Array<{
-    readonly name: string;
-    readonly passed: boolean;
-    readonly detail: string;
-  }> = [];
   const refusals: string[] = [];
-  if (task.stage !== "ready") refusals.push(`task stage ${task.stage} is not ready for delivery`);
+  if (task.stage !== "ready") refusals.push(`the task is ${task.stage}, not ready to publish`);
   const worktree = task.worktree;
   if (cwd === undefined || task.reviewHead === undefined || worktree === undefined) {
-    refusals.push("delivery requires a durable worktree and reviewed HEAD");
+    refusals.push("the task has no worktree or reviewed HEAD to publish");
     return {
       taskId,
       ready: false,
       ...(task.reviewHead === undefined ? {} : { reviewedHead: task.reviewHead }),
-      repository,
       base,
-      checks,
       refusals,
     };
   }
   const current = await readCheckpoint(deps.run, { repo: cwd, baseRef: worktree.baseHead }).catch(
     (): Partial<GitCheckpoint> => ({}),
   );
-  const clean = current.dirty === false && current.unmerged === false;
-  checks.push({
-    name: "clean-worktree",
-    passed: clean,
-    detail: clean ? "clean" : "worktree is dirty or unmerged",
-  });
-  checks.push({
-    name: "reviewed-head",
-    passed: current.head === task.reviewHead,
-    detail: `reviewed=${task.reviewHead}; current=${String(current.head)}`,
-  });
+  if (current.dirty !== false || current.unmerged !== false) {
+    refusals.push("the worktree has uncommitted or unmerged changes");
+  }
+  if (current.head !== task.reviewHead) {
+    refusals.push(
+      `the worktree is at ${current.head ?? "an unknown commit"}, not the reviewed commit ${task.reviewHead}`,
+    );
+  }
   const branch = await gitText(deps.run, cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
-  checks.push({
-    name: "branch",
-    passed: branch === worktree.branch,
-    detail: `expected=${worktree.branch}; current=${String(branch)}`,
-  });
+  if (branch !== worktree.branch) {
+    refusals.push(`the worktree is on ${branch ?? "no branch"}, not ${worktree.branch}`);
+  }
   const remote = await gitText(deps.run, cwd, ["remote", "get-url", "origin"]);
-  const remoteMatches = remote !== undefined && repositoryFromRemote(remote) === repository;
-  checks.push({
-    name: "remote",
-    passed: remoteMatches,
-    detail: remote === undefined ? "origin unavailable" : remote,
-  });
-  const qualityChecks = [
-    { name: "generated-database-types", argv: ["bun", "run", "db:types:check"] as const },
-    { name: "format", argv: ["bunx", "biome", "format", "--check", "."] as const },
-    { name: "pre-push", argv: ["bun", "run", "lint"] as const },
-    { name: "git-diff-check", argv: ["git", "-C", cwd, "diff", "--check"] as const },
-  ] as const;
-  for (const check of qualityChecks) {
-    try {
-      const result = await deps.run({ argv: check.argv, cwd });
-      checks.push({
-        name: check.name,
-        passed: result.code === 0,
-        detail: result.code === 0 ? "passed" : result.stderr || result.stdout,
-      });
-    } catch (error) {
-      checks.push({ name: check.name, passed: false, detail: describeError(error) });
-    }
+  const repository = remote === undefined ? undefined : githubRepository(remote);
+  if (repository === undefined) {
+    refusals.push(
+      remote === undefined
+        ? "the worktree has no origin remote"
+        : `origin ${remote} is not a GitHub repository`,
+    );
+    return {
+      taskId,
+      ready: false,
+      reviewedHead: task.reviewHead,
+      ...(current.head === undefined ? {} : { currentHead: current.head }),
+      ...(branch === undefined ? {} : { branch }),
+      base,
+      refusals,
+    };
   }
   let duplicatePullRequest: TaskRecord["pullRequest"];
   let draftPullRequest: TaskRecord["pullRequest"];
@@ -141,9 +121,7 @@ export async function deliveryPreflight(
     task.pullRequest.repository === repository &&
     task.pullRequest.base === base;
   if (task.pullRequest !== undefined && !ownDraft) {
-    refusals.push(
-      `task already has pull request #${task.pullRequest.number}; duplicate publication is refused`,
-    );
+    refusals.push(`the task already has pull request #${task.pullRequest.number}`);
     duplicatePullRequest = task.pullRequest;
   } else {
     if (task.pullRequest !== undefined) draftPullRequest = task.pullRequest;
@@ -165,7 +143,9 @@ export async function deliveryPreflight(
         cwd,
       });
       if (lookup.code !== 0) {
-        refusals.push(`duplicate pull-request lookup failed: ${lookup.stderr || lookup.stdout}`);
+        refusals.push(
+          `could not reach ${repository} on GitHub: ${firstLine(lookup.stderr || lookup.stdout)}`,
+        );
       } else {
         const payload: unknown = JSON.parse(lookup.stdout || "[]");
         if (Array.isArray(payload) && payload.length > 0 && isRecord(payload[0])) {
@@ -188,21 +168,16 @@ export async function deliveryPreflight(
               draftPullRequest = observed;
             } else {
               duplicatePullRequest = observed;
-              refusals.push(
-                `open pull request #${entry.number} already exists for ${worktree.branch}`,
-              );
+              refusals.push(`pull request #${entry.number} is already open for ${worktree.branch}`);
             }
           } else {
-            refusals.push("duplicate pull-request lookup returned malformed metadata");
+            refusals.push("GitHub returned an unreadable pull request for this branch");
           }
         }
       }
     } catch (error) {
-      refusals.push(`duplicate pull-request lookup unavailable: ${describeError(error)}`);
+      refusals.push(`could not reach ${repository} on GitHub: ${firstLine(describeError(error))}`);
     }
-  }
-  for (const check of checks) {
-    if (!check.passed) refusals.push(`${check.name}: ${check.detail}`);
   }
   return {
     taskId,
@@ -212,7 +187,6 @@ export async function deliveryPreflight(
     ...(branch === undefined ? {} : { branch }),
     repository,
     base,
-    checks,
     refusals,
     ...(duplicatePullRequest === undefined ? {} : { duplicatePullRequest }),
     ...(draftPullRequest === undefined ? {} : { draftPullRequest }),

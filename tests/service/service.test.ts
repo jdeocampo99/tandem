@@ -5129,7 +5129,6 @@ test("the scheduler refreshes an approved draft on durable change and records re
     },
     async ({ home, service, runnerState }) => {
       const published = await service.publishDraft("task-1", {
-        repository: "acme/repo",
         title: "Draft: exercise a durable service path",
         base: "main",
         approved: true,

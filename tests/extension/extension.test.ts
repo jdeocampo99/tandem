@@ -442,19 +442,18 @@ test("inspection and delivery slash commands preserve their arguments", () => {
     action: "inspect",
     taskId: "task-1",
   });
-  expect(parseTandemCommand("delivery-preflight task-1 owner/repo main")).toEqual({
+  expect(parseTandemCommand("delivery-preflight task-1 main")).toEqual({
     action: "delivery-preflight",
     taskId: "task-1",
-    repository: "owner/repo",
     base: "main",
   });
   expect(
     summarizeTandemActionValue("delivery-preflight", {
       taskId: "task-1",
       ready: false,
-      checks: [{ name: "branch", passed: false }],
+      refusals: ["the worktree has uncommitted or unmerged changes"],
     }),
-  ).toBe("task-1: not ready to deliver; failed: branch");
+  ).toBe("task-1: not ready to publish: the worktree has uncommitted or unmerged changes");
 });
 
 test("communication slash commands join quoted deltas and reject extra message arguments", () => {
@@ -1059,11 +1058,10 @@ test("draft publication needs interactive human approval and never runs without 
       return unfinished;
     },
   } as unknown as TandemService;
-  const parsed = parseTandemCommand("pr-draft task-1 acme/repo Draft-title main");
+  const parsed = parseTandemCommand("pr-draft task-1 Draft-title main");
   expect(parsed).toEqual({
     action: "draft",
     taskId: "task-1",
-    repository: "acme/repo",
     title: "Draft-title",
     base: "main",
   });
@@ -1100,7 +1098,7 @@ test("draft publication needs interactive human approval and never runs without 
   expect(published).toEqual([
     {
       taskId: "task-1",
-      input: { repository: "acme/repo", title: "Draft-title", base: "main", approved: true },
+      input: { title: "Draft-title", base: "main", approved: true },
     },
   ]);
 });

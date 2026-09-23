@@ -78,16 +78,12 @@ function summarizeTaskCheck(action: "inspect" | "delivery-preflight", value: unk
       ACTION_RESULT_MAX_CHARS,
     );
   }
-  const checks = Array.isArray(record.checks)
-    ? record.checks.filter(
-        (entry): entry is Record<string, unknown> => summaryRecord(entry) !== undefined,
-      )
+  if (record.ready === true) return `${taskId}: ready to publish`;
+  const refusals = Array.isArray(record.refusals)
+    ? record.refusals.filter((entry): entry is string => typeof entry === "string")
     : [];
-  const failed = checks
-    .filter((entry) => entry.passed !== true)
-    .map((entry) => (typeof entry.name === "string" ? entry.name : "unnamed check"));
   return boundedOutput(
-    `${taskId}: ${record.ready === true ? "ready to deliver" : "not ready to deliver"}${failed.length === 0 ? "" : `; failed: ${failed.join(", ")}`}`,
+    `${taskId}: not ready to publish${refusals.length === 0 ? "" : `: ${refusals.join("; ")}`}`,
     ACTION_RESULT_MAX_CHARS,
   );
 }

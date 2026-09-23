@@ -166,7 +166,6 @@ export function registerTandemOmp(
       .object({
         action: z.literal("delivery-preflight"),
         taskId: z.string(),
-        repository: z.string(),
         base: z.string(),
       })
       .strict(),
@@ -225,7 +224,6 @@ export function registerTandemOmp(
       .object({
         action: z.literal("publish"),
         taskId: z.string(),
-        repository: z.string(),
         title: z.string(),
         base: z.string(),
         summary: z
@@ -241,7 +239,6 @@ export function registerTandemOmp(
       .object({
         action: z.literal("draft"),
         taskId: z.string(),
-        repository: z.string(),
         title: z.string(),
         base: z.string(),
       })

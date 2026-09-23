@@ -411,16 +411,10 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
         };
       case "delivery-preflight": {
         const taskId = taskIdFor(invocation);
-        const repository = requiredPositionOrOption(
-          invocation,
-          invocation.options.repository,
-          1,
-          "repository",
-        );
-        const base = requiredPositionOrOption(invocation, invocation.options.base, 2, "base");
+        const base = requiredPositionOrOption(invocation, invocation.options.base, 1, "base");
         return {
           command: invocation.command,
-          value: await getService(environment).deliveryPreflight(taskId, { repository, base }),
+          value: await getService(environment).deliveryPreflight(taskId, { base }),
         };
       }
       case "steer": {
@@ -581,21 +575,14 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
       case "publish": {
         const taskId = taskIdFor(invocation);
         requireYes(invocation, `publishing ${taskId}`);
-        const repository = requiredPositionOrOption(
-          invocation,
-          invocation.options.repository,
-          1,
-          "repository",
-        );
-        const title = requiredPositionOrOption(invocation, invocation.options.title, 2, "title");
-        const base = requiredPositionOrOption(invocation, invocation.options.base, 3, "base");
+        const title = requiredPositionOrOption(invocation, invocation.options.title, 1, "title");
+        const base = requiredPositionOrOption(invocation, invocation.options.base, 2, "base");
         return {
           command: invocation.command,
           value: await getService(environment).publish(taskId, {
-            repository,
             title,
             base,
-            summary: summaryForInvocation(invocation, 4),
+            summary: summaryForInvocation(invocation, 3),
             approved: true,
           }),
           approved: true,
@@ -604,18 +591,11 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
       case "draft": {
         const taskId = taskIdFor(invocation);
         requireYes(invocation, `publishing an unfinished draft for ${taskId}`);
-        const repository = requiredPositionOrOption(
-          invocation,
-          invocation.options.repository,
-          1,
-          "repository",
-        );
-        const title = requiredPositionOrOption(invocation, invocation.options.title, 2, "title");
-        const base = requiredPositionOrOption(invocation, invocation.options.base, 3, "base");
+        const title = requiredPositionOrOption(invocation, invocation.options.title, 1, "title");
+        const base = requiredPositionOrOption(invocation, invocation.options.base, 2, "base");
         return {
           command: invocation.command,
           value: await getService(environment).publishDraft(taskId, {
-            repository,
             title,
             base,
             approved: true,
