@@ -747,11 +747,75 @@ test("a refused relaunch says why in plain English instead of a generic refusal"
 
       await service.tick();
 
-      const blocked = await service.get(SCENARIO_TASK_ID);
-      expect(blocked.stage, entry.name).toBe("blocked");
-      expect(blocked.blockReason, entry.name).toBe(entry.expected);
-      expect(blocked.notifications.at(-1)?.message, entry.name).toContain(entry.expected);
+      // Both clear only when a fact changes, so the task waits at its stage instead of blocking.
+      const waiting = await service.get(SCENARIO_TASK_ID);
+      expect(waiting.stage, entry.name).toBe("implementing");
+      expect(waiting.notifications.at(-1)?.message, entry.name).toContain(entry.expected);
       await service.shutdown();
     });
   }
 }, 20_000);
+
+test("a relaunch held back by the worker limit notifies once, waits, and relaunches once a slot frees", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const job1 = deadJob(world, lease.path, "job-1");
+    await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "implementing",
+      worktree: lease,
+      endpoints: [],
+    });
+    // Other work holds every worker slot.
+    const others = Array.from({ length: SCENARIO_POLICY.config.maxWorkers }, (_, index) =>
+      scenarioRuntimeTask({
+        taskId: `other-${index}`,
+        reservation: scenarioReservation({
+          id: `other-reservation-${index}`,
+          taskId: `other-${index}`,
+        }),
+      }),
+    );
+    await writeRuntimeState(runtimeFile(world.home), {
+      schemaVersion: 1,
+      tasks: [scenarioRuntimeTask({ worktree: lease, endpoints: [], jobs: [job1] }), ...others],
+      presentations: [],
+    });
+    const service = createTandemService({
+      home: world.home,
+      sessionId: world.sessionId,
+      poolRoot: world.poolRoot,
+      run: world.run,
+      clock: world.clock,
+      idFactory: world.idFactory,
+      workerTimeoutMs: 1_500,
+    });
+
+    for (let tick = 0; tick < 3; tick += 1) await service.tick();
+
+    const waiting = await service.get(SCENARIO_TASK_ID);
+    expect(waiting.stage).toBe("implementing");
+    const limitNotices = waiting.notifications.filter((entry) =>
+      entry.message.includes("The worker limit"),
+    );
+    expect(limitNotices).toHaveLength(1);
+    expect(waiting.notifications).toHaveLength(1);
+
+    // A slot frees.
+    const state = await readRuntimeState(runtimeFile(world.home));
+    await writeRuntimeState(runtimeFile(world.home), {
+      ...state,
+      tasks: state.tasks.filter((entry) => entry.taskId !== "other-0"),
+    });
+    await service.tick();
+
+    const replacement = await activeJobAfterRelaunch(world, job1.id);
+    expect(replacement.endpoint).toBeDefined();
+    const relaunched = await service.get(SCENARIO_TASK_ID);
+    expect(relaunched.stage).toBe("implementing");
+    expect(relaunched.notifications.some((entry) => entry.message.includes("Restart 1 of 2"))).toBe(
+      true,
+    );
+    await service.shutdown();
+  });
+}, 30_000);

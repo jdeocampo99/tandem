@@ -237,9 +237,7 @@ async function fixture(options: FixtureOptions = {}) {
   });
 
   const revalidateCalls: TaskRecord[] = [];
-  let revalidateOutcome: Readonly<{ readonly started: boolean; readonly reason?: string }> = {
-    started: true,
-  };
+  let revalidateOutcome: Awaited<ReturnType<RevalidateWorker>> = { started: true };
   const revalidate: RevalidateWorker = async (task) => {
     revalidateCalls.push(task);
     return revalidateOutcome;
@@ -276,9 +274,7 @@ async function fixture(options: FixtureOptions = {}) {
     revalidateCalls,
     blockedReasons,
     blockedCauses,
-    setRevalidateOutcome: (
-      outcome: Readonly<{ readonly started: boolean; readonly reason?: string }>,
-    ) => {
+    setRevalidateOutcome: (outcome: Awaited<ReturnType<RevalidateWorker>>) => {
       revalidateOutcome = outcome;
     },
     cleanup: () => rm(home, { recursive: true, force: true }),
@@ -465,6 +461,32 @@ test("a revalidate refusal blocks the task with the refusal reason", async () =>
     expect(f.blockedCauses.at(-1)?.detail).toContain("validation refused a stale worktree");
     expect(f.blockedCauses.at(-1)?.kind).toBe("allocation-failed");
     expect(f.blockedCauses.at(-1)?.group).toBe("lost-resource");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a revalidate held back by the worker limit waits without blocking, spending, or repeating itself", async () => {
+  const f = await fixture({ job: deadValidationJob() });
+  f.setRevalidateOutcome({
+    started: false,
+    reason: "The worker limit (4) is reached.",
+    refusal: "worker-limit",
+  });
+  try {
+    for (let pass = 0; pass < 3; pass += 1) {
+      const task = await f.store.read("task-1");
+      if (task === undefined) throw new Error("fixture task missing");
+      const outcome = await f.workflow.recoverStuckWorker(task);
+      expect(outcome.action).toBe("waiting");
+    }
+    expect(f.blockedCauses).toHaveLength(0);
+    const state = await readRuntimeState(f.runtimePath);
+    expect(state.tasks[0]?.recovery?.validationRetries ?? 0).toBe(0);
+    const waited = await f.store.read("task-1");
+    expect(
+      waited?.notifications.filter((entry) => entry.message.includes("The worker limit (4)")),
+    ).toHaveLength(1);
   } finally {
     await f.cleanup();
   }

@@ -654,7 +654,10 @@ class TandemController {
         // resolves normally. Re-read the task afterward so a self-block is reported as `started:
         // false` instead of central recovery believing re-entry succeeded.
         try {
-          await this.#worker.startValidation(task);
+          const refused = await this.#worker.startValidation(task);
+          if (refused !== undefined) {
+            return { started: false, reason: refused.summary, refusal: refused.refusal };
+          }
         } catch (error) {
           return { started: false, reason: describeError(error) };
         }
