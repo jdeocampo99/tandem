@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { WorkerJob } from "../../src/workers/jobs.ts";
-import { planAbortWithReason } from "../../src/workers/terminal-extension.ts";
+import { planAbortWithReason, userInterruptedTurn } from "../../src/workers/terminal-extension.ts";
 
 function job(): WorkerJob {
   return {
@@ -60,4 +60,21 @@ test("planAbortWithReason carries the reason through untouched, not a bare 'abor
   );
   expect(plan.result?.error).toBe(reason);
   expect(plan.result?.error).not.toBe("aborted");
+});
+
+function agentEnd(stopReason: string): unknown {
+  return { type: "agent_end", messages: [{ role: "assistant", content: [], stopReason }] };
+}
+
+test("an Esc the extension did not request hands the worker to the person, not a failure", () => {
+  expect(userInterruptedTurn(agentEnd("aborted"), false)).toBe(true);
+});
+
+test("an abort the extension requested still settles as a failure", () => {
+  expect(userInterruptedTurn(agentEnd("aborted"), true)).toBe(false);
+});
+
+test("provider errors and normal turn ends are not user interrupts", () => {
+  expect(userInterruptedTurn(agentEnd("error"), false)).toBe(false);
+  expect(userInterruptedTurn(agentEnd("stop"), false)).toBe(false);
 });

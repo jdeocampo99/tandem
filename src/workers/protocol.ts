@@ -199,6 +199,11 @@ export function assertSelectedModel(expectedModel: ExpectedModel, selectedModel:
   }
 }
 
+/** Whether a settled agent_end stopped because its run was aborted (Esc, or an extension abort). */
+export function nativeAgentEndAborted(value: unknown): boolean {
+  return isJsonObject(value) && stopReasonFrom(value) === "aborted";
+}
+
 export function nativeAgentEndWillContinue(value: unknown): boolean {
   return nativeAgentEnd(value).willContinue === true;
 }
