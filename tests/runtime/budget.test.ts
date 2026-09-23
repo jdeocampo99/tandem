@@ -74,7 +74,6 @@ function resolvedPolicy(requestBudget: RequestBudgetPolicy): ResolvedPolicy {
         scout: { model: "budget/scout", thinking: "low" },
         implementer: { model: "budget/implementer", thinking: "low" },
         reviewer: { model: "budget/reviewer", thinking: "low" },
-        verifier: { model: "budget/verifier", thinking: "low" },
         presentation: { model: "budget/presentation", thinking: "low" },
       },
       instructions: { implementation: [], validation: [], review: [] },
@@ -84,7 +83,6 @@ function resolvedPolicy(requestBudget: RequestBudgetPolicy): ResolvedPolicy {
       maxWorkers: 3,
       maxFixRounds: 1,
       reviewLevels: {
-        reducedRouting: false,
         deepScrutiny: false,
         jevAssistance: "off",
         sourceTransmission: false,

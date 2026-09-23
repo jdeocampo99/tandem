@@ -31,7 +31,6 @@ const policy: ResolvedPolicy = {
       scout: { model: "test/scout", thinking: "low" },
       implementer: { model: "test/implementer", thinking: "low" },
       reviewer: { model: "test/reviewer", thinking: "low" },
-      verifier: { model: "test/verifier", thinking: "low" },
       presentation: { model: "test/presentation", thinking: "low" },
     },
     instructions: { implementation: [], validation: [], review: [] },
@@ -41,7 +40,6 @@ const policy: ResolvedPolicy = {
     maxWorkers: 4,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,

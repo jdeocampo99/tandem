@@ -13,13 +13,8 @@ import type {
 } from "../contracts.ts";
 import { LEGACY_EVIDENCE_CONTRACT } from "../contracts.ts";
 
-/** Review lenses the final acceptance manifest requires, in verification order. */
-export const FINAL_REVIEW_LENSES: readonly ReviewLens[] = [
-  "behavior",
-  "design",
-  "coverage",
-  "verification",
-];
+/** The one reviewer session the final acceptance manifest requires per round. */
+export const FINAL_REVIEW_LENSES: readonly ReviewLens[] = ["review"];
 
 /** One item the final manifest requires, named together with the check runner that owns it. */
 export type FinalRequirement = Readonly<{

@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute } from "node:path";
 import {
   type AgentRole,
+  ALL_REVIEW_LENSES,
   type Finding,
   type FindingSeverity,
   type FindingVerdict,
@@ -12,12 +13,19 @@ import {
   type ReviewMode,
   type ReviewResult,
   type SetupCommand,
+  type StoredReviewLens,
   type ThinkingLevel,
 } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import type { ExecutionIdentity } from "./execution-gate.ts";
 
 export type WorkerRole = Exclude<AgentRole, "coordinator">;
+
+/**
+ * ponytail: a job, result, or durable operation recorded before the verifier role was removed may
+ * still carry it; only for decode of that existing data, never for choosing a role for new work.
+ */
+export type LegacyWorkerRole = WorkerRole | "verifier";
 
 export type WorkerReviewContext = Readonly<{
   readonly head: string;
@@ -57,7 +65,7 @@ export type WorkerResult = Readonly<{
   readonly id: string;
   readonly taskId: string;
   readonly generation: number;
-  readonly role: WorkerRole;
+  readonly role: LegacyWorkerRole;
   readonly status: WorkerStatus;
   readonly text: string;
   readonly review?: ReviewResult;
@@ -72,7 +80,7 @@ export type WorkerResultExpectation = Readonly<{
   readonly id: string;
   readonly generation: number;
   readonly taskId?: string;
-  readonly role?: WorkerRole;
+  readonly role?: LegacyWorkerRole;
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -188,6 +196,12 @@ function isWorkerRole(value: unknown): value is WorkerRole {
   return isAgentRole(value) && value !== "coordinator";
 }
 
+// ponytail: accepts legacy "verifier" too (see LegacyWorkerRole) so a job already in flight when
+// the role was removed still decodes.
+function isLegacyWorkerRole(value: unknown): value is LegacyWorkerRole {
+  return isWorkerRole(value) || value === "verifier";
+}
+
 function isThinkingLevel(value: unknown): value is ThinkingLevel {
   switch (value) {
     case "off":
@@ -205,15 +219,13 @@ function isThinkingLevel(value: unknown): value is ThinkingLevel {
 }
 
 function isReviewLens(value: unknown): value is ReviewLens {
-  switch (value) {
-    case "behavior":
-    case "design":
-    case "coverage":
-    case "verification":
-      return true;
-    default:
-      return false;
-  }
+  return value === "review";
+}
+
+// ponytail: accepts every legacy lens name too (see ALL_REVIEW_LENSES) so a review result already
+// in flight when the lenses were merged still decodes.
+function isStoredReviewLens(value: unknown): value is StoredReviewLens {
+  return (ALL_REVIEW_LENSES as readonly unknown[]).includes(value);
 }
 
 function readModel(value: unknown): ModelSpec {
@@ -300,7 +312,7 @@ export function parseReviewResult(value: unknown): ReviewResult {
   if (!isRecord(value)) {
     throw new TypeError("review result must be an object");
   }
-  if (!isReviewLens(value.lens)) {
+  if (!isStoredReviewLens(value.lens)) {
     throw new TypeError("review.lens must be a valid review lens");
   }
   const head = readSingleLineText(value.head, "review.head");
@@ -397,7 +409,7 @@ export function parseWorkerResult(value: unknown): WorkerResult {
   const id = readSingleLineText(value.id, "id");
   const taskId = readSingleLineText(value.taskId, "taskId");
   const generation = readNonNegativeInteger(value.generation, "generation");
-  if (!isWorkerRole(value.role)) {
+  if (!isLegacyWorkerRole(value.role)) {
     throw new TypeError("role must be a worker role");
   }
   const role = value.role;
@@ -465,7 +477,7 @@ function validateExpectedIdentity(value: WorkerResultExpectation): WorkerResultE
   const taskId =
     value.taskId === undefined ? undefined : readSingleLineText(value.taskId, "expected.taskId");
   const role =
-    value.role === undefined ? undefined : isWorkerRole(value.role) ? value.role : undefined;
+    value.role === undefined ? undefined : isLegacyWorkerRole(value.role) ? value.role : undefined;
   if (value.role !== undefined && role === undefined) {
     throw new TypeError("expected.role must be a worker role");
   }

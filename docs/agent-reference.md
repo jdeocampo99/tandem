@@ -153,7 +153,7 @@ onboards and opens the current Git project; outside Git, the existing interactiv
 fallback remains available for entering or adding a project path. The empty-registry fallback keeps
 its existing interactive-terminal requirements.
 
-To choose all six global role models without launching a coordinator:
+To choose all five global role models without launching a coordinator:
 
 ```sh
 tandem configure /absolute/path/to/repo
@@ -600,8 +600,8 @@ Validation discovery is deterministic:
 Global model preferences are Tandem-home state, not project files. The record is:
 `<home>/models.json`.
 
-The record has exactly `schemaVersion: 1` and a `models` map with exactly the six roles
-`coordinator`, `scout`, `implementer`, `reviewer`, `verifier`, and `presentation`. Each role value is
+The record has exactly `schemaVersion: 1` and a `models` map with exactly the five roles
+`coordinator`, `scout`, `implementer`, `reviewer`, and `presentation`. Each role value is
 `{ model: exact provider/model, thinking: supported ThinkingLevel }`; no other fields are allowed.
 `ModelSettings` is `{ configPath: string, configured: boolean, models?: RepoPolicy['models'] }`;
 `configured: true` always has `models`, while `false` has none.
@@ -621,33 +621,33 @@ Each role prompt explains its responsibilities and the kind of model recommended
 Research recommends a cheap, fast model for read-only investigation. Thinking levels control reasoning
 effort: higher levels can take longer and cost more. The role's usual thinking level is labeled
 **Recommended** only when supported by the selected model; a saved level is labeled separately.
-The complete six-role recap has a separate **Save** / **Not now** menu, defaulting to **Not now**.
+The complete five-role recap has a separate **Save** / **Not now** menu, defaulting to **Not now**.
 Ctrl+C cancels without saving partial choices; saved preferences remain unchanged.
 
-On every onboarding, make model selection explicit for all six role identities and their human
+On every onboarding, make model selection explicit for all five role identities and their human
 labels: **Planning** (`coordinator`), **Research** (`scout`), **Coding** (`implementer`), **Review**
-(`reviewer`), **Final checks** (`verifier`), and **Presentations** (`presentation`). If
+(`reviewer`), and **Presentations** (`presentation`). If
 `modelSettings.configured` is false, run `models` once and use only its catalogue. For each role,
 show the suggested exact catalogue `selector` and the thinking levels that selector supports, then
 collect an explicit selector and supported thinking level. Offer **Not now** as an explicit pause:
 it stops onboarding before `configure-models`, `setup`, or `launch` and never falls through to
-built-in defaults. One response may answer all six roles; never infer omitted roles, combine roles,
+built-in defaults. One response may answer all five roles; never infer omitted roles, combine roles,
 or treat recommendation approval as consent.
 
-When saved choices exist, show all six current exact catalogue selectors and thinking levels on every
+When saved choices exist, show all five current exact catalogue selectors and thinking levels on every
 onboarding and offer **Keep all**, **Change roles**, or **Not now**. **Keep all** reuses the displayed
 choices, requires no new role answers, and is read-only; it may continue the existing project-setting
 approval flow without calling `configure-models`. **Not now** pauses onboarding, leaves choices
 unchanged, and does not run `configure-models`, `setup`, or `launch` or fall through to built-in
 defaults. **Change roles** reruns `models` and requires an explicit choice or explicit keep-current
-answer for each role. Preserve untouched roles and show the complete six-role recap before any save.
+answer for each role. Preserve untouched roles and show the complete five-role recap before any save.
 Recommendations are suggestions only; empty or failed discovery remains visible and never falls back.
 Explain that approved choices apply to future work across projects and do not start work. After
 explicit approval of the complete recap (never **Not now**), run `configure-models` once, then
 continue with normal project setup and separately requested launch. No implicit configure occurs
 during read-only commands.
 
-`configure-models` accepts a temporary JSON object mapping all six roles directly to
+`configure-models` accepts a temporary JSON object mapping all five roles directly to
 `{ "model": "...", "thinking": "..." }`, not the storage envelope, and accepts no model-controlled
 approval field. Stage it outside the target project and remove it after the command. `--yes` is
 required before service or mutation; without consent, refuse without writing. Before any write, strict
@@ -669,9 +669,9 @@ private new directories use `0700`, and no application or project files are writ
 Model resolution precedence is **built-in defaults < saved global role choices < explicitly injected
 `globalPolicy` < per-project policy overrides**. `resolveRepoPolicy` and `onboardRepo` apply the same
 order. Built-in defaults remain available to direct APIs without saved preferences; onboarding must
-offer first-time explicit six-role selection before setup or launch. Choosing **Not now** stops that
+offer first-time explicit five-role selection before setup or launch. Choosing **Not now** stops that
 onboarding before setup/launch and never falls through to built-in defaults. For configured homes, each
-onboarding displays all six saved choices before any reuse; **Keep all** is the explicit, read-only
+onboarding displays all five saved choices before any reuse; **Keep all** is the explicit, read-only
 reuse path. Changing choices affects future resolutions and new tasks only, and never rewrites
 existing task policy snapshots.
 Changing the main conversation model takes effect on the next Tandem launch; it never hot-swaps an
@@ -750,14 +750,14 @@ are:
 | Key | Type and behavior |
 | --- | --- |
 | `version` | Must be `1` when present. |
-| `models` | Partial map of `coordinator`, `scout`, `implementer`, `reviewer`, `verifier`, and `presentation` to `{ "model": "provider/model", "thinking": "..." }`; selectors are exact `provider/model` strings. |
+| `models` | Partial map of `coordinator`, `scout`, `implementer`, `reviewer`, and `presentation` to `{ "model": "provider/model", "thinking": "..." }`; selectors are exact `provider/model` strings. |
 | `instructions` | Appendable arrays for `implementation`, `validation`, and `review`; each entry is non-empty text. |
 | `instructionFiles` | Appendable arrays for the same channels; every path uses relative POSIX syntax and remains physically inside the target repository. |
 | `validationCommands` | Appendable `{ "name", "argv", "surfaces", "timeoutMs" }` objects; `argv` is non-empty, `surfaces` is a string array, `timeoutMs` is positive, and names do not conflict with inherited commands. |
 | `setupCommands` | Appendable `{ "name", "argv", "timeoutMs" }` objects that prepare a fresh worktree, typically a frozen dependency install. Onboarding proposes one from the first lockfile it finds (`bun.lock`/`bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `uv.lock`). An implementer runs them in its own pane before OMP starts, on every launch; a nonzero exit or timeout fails that worker with the command named. The delivery worktree runs them before final validation. Pinned with the task like the rest of the policy, so edits apply to new tasks only. |
 | `maxWorkers` | Positive integer concurrency limit. |
 | `maxFixRounds` | Positive integer review-fix limit. |
-| `reviewLevels` | Optional `{ "reducedRouting", "deepScrutiny", "jevAssistance", "sourceTransmission" }`; the two booleans and `sourceTransmission` default to `false` and `jevAssistance` defaults to `"off"` (the only other value is `"shadow"`). See [Risk-based review levels](#risk-based-review-levels); `reducedRouting` and any move past `shadow` require the documented evaluation first. |
+| `reviewLevels` | Optional `{ "deepScrutiny", "jevAssistance", "sourceTransmission" }`; the two booleans and `sourceTransmission` default to `false` and `jevAssistance` defaults to `"off"` (the only other value is `"shadow"`). See [Risk-based review levels](#risk-based-review-levels); any move past `shadow` requires the documented evaluation first. A stored or configured `reducedRouting` key is a legacy field: it decodes without error but is silently ignored. |
 
 Custom approved policies use the same envelope and preserve every unrelated valid key and value.
 `instructionFiles` and all root guidance reads remain relative to the target repository; the
@@ -1010,7 +1010,7 @@ content no review covered. An integration that already covers exactly the curren
 reused, so a restart never integrates or verifies the same work twice.
 
 Final acceptance is bound to the integrated commit: the pinned validation commands run there, the
-four review lenses must pass there, the approved brief's acceptance criteria travel with it, and
+merged review lens must pass there, the approved brief's acceptance criteria travel with it, and
 every member must still sit at the commit that was integrated under the same pinned policy. Evidence
 recorded only at a member commit is stale for the integrated commit and is refused.
 
@@ -1052,8 +1052,8 @@ already the repository override layered over the standing default. A lower repos
 tightens spending and stays visible in the budget readout.
 
 Every spend-bearing operation is admitted through one check, in the same atomic runtime write that
-records its durable operation and reservation: scout, implementation, fix, validation, review,
-verification, and presentation all go through it. The check adds observed charges from the
+records its durable operation and reservation: scout, implementation, fix, validation, review, and
+presentation all go through it. The check adds observed charges from the
 accounting ledger to every outstanding estimated reservation and to the next step's conservative
 estimate, and compares that against the cap. A second concurrent admission therefore sees the first
 one's reservation and is refused when the combined exposure cannot fit.
@@ -1266,14 +1266,27 @@ disposition for a scout created without an explicit one:
 
 ### Review and validation
 
-Review is independent and sequential. Tandem stops or pauses the implementer, opens one fresh read-only reviewer pane in the same task worktree, and records one current result per lens:
+Review is independent. Tandem stops or pauses the implementer, opens one fresh read-only reviewer
+pane in the same task worktree, and records one current result for the single `review` lens, which
+covers together what used to be separate passes:
 
-- `behavior` — observable semantics, ordering, mutation timing, errors, and boundaries;
-- `design` — function-review principles, honest dependencies, empathic signatures, abstraction levels, comments, and declaration order;
-- `coverage` — changed behavior, affected callers, relevant tests/reports, and acceptance criteria;
-- `verification` — fresh inspection of the exact HEAD and generation using runner evidence.
+- observable semantics, ordering, mutation timing, errors, and boundaries;
+- function-review principles, honest dependencies, empathic signatures, abstraction levels, comments, and declaration order;
+- changed behavior, affected callers, relevant tests/reports, and acceptance criteria.
 
-All four lenses are required. A failed lens sends the task to `awaiting-fixes`; passing all four sends it to `ready`. Reviewers remain read-only and do not invent command output.
+A round past the first (a fix round) points the reviewer at the diff since the last reviewed HEAD
+and the open findings on the ledger rather than re-reviewing the whole change from scratch; see
+[Incremental review briefs and finding status](#incremental-review-briefs-and-finding-status). There
+is no separate independent-verification pass: one reviewer session, from a fresh context with no
+implementer conversation, is the complete review for the round. A failed review sends the task to
+`awaiting-fixes`; a passing one sends it to `ready`. Reviewers remain read-only and do not invent
+command output.
+
+A task record or a durable job/pane from before this merge may still carry one of the old lens names
+(`behavior`, `design`, `coverage`, `verification`) or the retired `verifier` role. These decode
+without error — the stored history stays readable — but no longer count toward the current
+requirement, which is always exactly one passing `review` result at the reviewed HEAD and
+generation.
 
 Validation commands are argv-only and execute in declaration order. A command belongs to the manifest when its `surfaces` is empty, contains `*`, or intersects the task surfaces; a task surface of `*` matches every command. The runner stops after the first non-zero, timeout, or cancellation result. Every evidence record includes the command name, argv, exit code, captured stdout/stderr, exact HEAD, the contract it ran under, the check origin, and the policy digest it was pinned to. No configured command or no matching command is a validation configuration failure, not a pass.
 
@@ -1283,7 +1296,7 @@ Validation runs under one of two named contracts. `src/tasks/acceptance.ts` owns
 
 The **iteration contract** covers targeted reproduction between authorized fix rounds. When a fix round is admitted, Tandem records a durable `iterationScope` on the task naming the checks that reported the failure, the surfaces those checks cover, the findings the round must resolve, and the code and policy identity the scope was derived under. The next validation run then executes only those checks and records evidence stamped `contract: "iteration"`. A contained fix reaches review without rerunning the whole suite, and a targeted pass is useful progress that never satisfies acceptance.
 
-The **final acceptance contract** is the complete command and criterion manifest pinned to the delivered code, the pinned policy digest, and the current HEAD. It lists every required check, the four review lenses, and the recorded acceptance criteria. It runs in full only when the candidate is otherwise ready, meaning every required lens already passes at that HEAD and generation. Review completion with all lenses passing sends the task back to `validating` for that final run instead of straight to `ready`; `ready` is reached only once every manifest item passed under the same code and policy identity. Delivery repeats the check and refuses a branch whose manifest is incomplete, failed, or stale.
+The **final acceptance contract** is the complete command and criterion manifest pinned to the delivered code, the pinned policy digest, and the current HEAD. It lists every required check, the review lens, and the recorded acceptance criteria. It runs in full only when the candidate is otherwise ready, meaning the required review already passes at that HEAD and generation. Review completion with a passing review sends the task back to `validating` for that final run instead of straight to `ready`; `ready` is reached only once every manifest item passed under the same code and policy identity. Delivery repeats the check and refuses a branch whose manifest is incomplete, failed, or stale.
 
 Targeted checks are refused for the complete manifest when the scope was recorded under a different policy identity (`stale-identity`), when a reviewer rejected a candidate whose checks all passed (`disputed-result`), when the scope names a check the manifest does not configure (`unknown-impact`), or when the scope already covers every configured check (`broad-impact`). The escalation reason is durable on the validation job and visible through `tandem status TASK_ID`.
 
@@ -1293,7 +1306,7 @@ Validation evidence written before contracts existed loads unchanged and is mark
 
 Local runner checks and GitHub checks stay distinct. Runner evidence is stamped `origin: "local"` and satisfies only local manifest requirements; remote required checks remain the GitHub-observed `RemoteCheck` rollup asserted at merge. A local pass cannot be relabeled as a remote check, and `tandem status TASK_ID` reports the iteration/final and local/remote split alongside the passing count.
 
-Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Workers submit results with the typed `submit_report` tool: an `outcome` (`implemented|needs-decision|failed` for implementers, `completed|needs-decision|failed` for every other role), a Markdown `report` body (required except for reviewers and verifiers), and role-specific fields. A `needs-decision` submission carries exactly one bounded single-line `question` and an optional bounded single-line `recommendation` (each no more than 1,000 characters). A completed reviewer or verifier submits a structured `review` that must match `ReviewResult` and the job's lens, HEAD, and generation; a completed presentation submits an absolute `artifactPath`. A submission that breaks these rules is returned to the worker as a tool error naming the fix and never settles the job, so formatting slips are corrected in the conversation. The controller renders the report file from the structured fields; durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
+Child workers do not run project-wide tests, builds, formatters, linters, or other gates. The parent validation worker runs the configured commands and records evidence after implementation work is handed back. Workers submit results with the typed `submit_report` tool: an `outcome` (`implemented|needs-decision|failed` for implementers, `completed|needs-decision|failed` for every other role), a Markdown `report` body (required except for reviewers), and role-specific fields. A `needs-decision` submission carries exactly one bounded single-line `question` and an optional bounded single-line `recommendation` (each no more than 1,000 characters). A completed reviewer submits a structured `review` that must match `ReviewResult` and the job's lens, HEAD, and generation; a completed presentation submits an absolute `artifactPath`. A submission that breaks these rules is returned to the worker as a tool error naming the fix and never settles the job, so formatting slips are corrected in the conversation. The controller renders the report file from the structured fields; durable task communication assigns the current question id and preserves report/artifact evidence. Questions wake the coordinator, not the user directly.
 
 ### Incremental review briefs and finding status
 
@@ -1319,9 +1332,10 @@ Findings keep a stable identity across rounds on the durable `findingLedger`, wh
 is the only writer of. An identity is `lens:id`, and the reviewer is instructed to reuse the exact id
 the brief lists when it reports the same issue again. Each entry carries `unresolved`, `addressed`,
 `regressed`, or `disputed`, together with the round that raised it and the round and HEAD that set
-its current status. A review of the same lens at a later generation that stops reporting an identity
-settles it as `addressed`; only a later review that reports it again reopens it as `regressed`, so a
-settled finding is never reopened without new evidence. Two reviews of one identity that record
+its current status. Since one merged review now covers everything a round reviews, a later review at
+a later generation that stops reporting an identity settles it as `addressed` regardless of which
+lens originally raised it, including a legacy pre-merge lens name; only a later review that reports
+it again reopens it as `regressed`, so a settled finding is never reopened without new evidence. Two reviews of one identity that record
 contradicting verdicts mark it `disputed`. Blockers and suggestions are split by the rule a review
 already enforces: a confirmed P0, P1, or P2, or a plausible P0 or P1, blocks, and everything else is
 an optional suggestion. A violation of a mandatory design rule or applicable principle blocks through
@@ -1393,24 +1407,20 @@ missing its reason, is a corrupt shape and fails closed.
 #### What a level changes, and what must happen first
 
 **With the default policy, classification records the level and its reason and changes nothing else.
-Every task reviews exactly as it did before levels existed: the behavior, design, coverage, and
-verification lenses all run, in that order, at every round.** The `reviewLevels` policy section
-controls the rest, and every field defaults to off:
+Every task reviews the same single merged `review` lens at every round, whatever the level.** The
+level and its fired safety floors still shape what that one review must record — see `deepScrutiny`
+below — but no level changes which or how many lenses run; that stopped being adjustable when the
+lenses were merged. The `reviewLevels` policy section controls the rest, and every field defaults to
+off:
 
 ```json
 { "policy": { "reviewLevels": {
-  "reducedRouting": false,
   "deepScrutiny": false,
   "jevAssistance": "off",
   "sourceTransmission": false
 } } }
 ```
 
-- `reducedRouting` lets a `light` iteration round review one focused lens instead of four. It applies
-  only between authorized fix rounds and only before the final acceptance manifest has run at that
-  HEAD; once the manifest is recorded, the complete lens set is required again. **Do not enable it
-  until the documented end-to-end evaluation in issue #20 has been run and published.** See
-  "Evidence required before enabling reduced routing" below.
 - `deepScrutiny` adds the fired floors to a `deep` round's brief as mandatory scrutiny a reviewer must
   dispose of explicitly. It adds work; it never removes any.
 - `jevAssistance` is `off` or `shadow`. Shadow records a helper's depth recommendation beside the
@@ -1418,9 +1428,12 @@ controls the rest, and every field defaults to off:
 - `sourceTransmission` is the separate, explicit opt-in for sending changed source to an external
   provider. It is distinct from having a `TYPESAFE_API_KEY` present.
 
+A repository config that still sets the retired `reducedRouting` key is not rejected: it loads and is
+silently ignored, since it no longer controls anything.
+
 Issue #17's final acceptance contract is unchanged at every level. The final manifest always requires
-all four lenses and every configured required check for the delivered code at the current HEAD, so no
-level can make a candidate acceptable on less evidence.
+the review lens to pass and every configured required check for the delivered code at the current
+HEAD, so no level can make a candidate acceptable on less evidence.
 
 #### Shadow helper assistance
 
@@ -1464,7 +1477,7 @@ content.
 Answers are cached in memory on an exact match of every identity at once: code, context, question,
 schema, policy, and model. Any difference is a fresh request.
 
-#### Evidence required before enabling reduced routing or helper assistance
+#### Evidence required before enabling helper assistance past shadow
 
 `evals/review-levels/` holds a deterministic, credential-free comparison that runs under `bun test`.
 It covers low-risk, high-risk, Tagalog-language, and adversarial synthetic changes, and reports missed
@@ -1472,8 +1485,7 @@ serious issues, false-safe routing, escalation, and rework, plus latency and cos
 `unavailable` when nothing reported them. False-safe routing is a safety failure counted and reported
 on its own; it is never averaged into an agreement or accuracy rate.
 
-Before anyone sets `reducedRouting` or moves `jevAssistance` past `shadow`, the following must exist
-and be published:
+Before anyone moves `jevAssistance` past `shadow`, the following must exist and be published:
 
 1. The end-to-end benchmark from issue #20, over equivalent snapshots, measuring the whole path to a
    verified result rather than classifier latency alone.
@@ -1489,7 +1501,7 @@ tracking issue are user observations, not a measured baseline.
 
 ### Interactive child terminals
 
-Scouts, implementers, reviewers, verifiers, and presentation workers launch interactive OMP with
+Scouts, implementers, reviewers, and presentation workers launch interactive OMP with
 inherited terminal input and output. They do not use `-p` or `--mode json`. Open the child's Herdr
 subtree to inspect its conversation or send a message directly.
 
@@ -1671,7 +1683,7 @@ Supported actions are:
 | Action | Required fields | Effect |
 | --- | --- | --- |
 | `models` | `repoPath` | Read global model settings and the actual OMP catalogue; never writes. |
-| `configure-models` | `repoPath`, `models` (complete six-role map) | Save approved global role choices for future work; requires confirmation and does not mutate existing task snapshots. |
+| `configure-models` | `repoPath`, `models` (complete five-role map) | Save approved global role choices for future work; requires confirmation and does not mutate existing task snapshots. |
 | `onboard` | `repoPath` | Read policy and propose validation; never writes. |
 | `setup` | `repoPath` | Write a missing policy after TUI confirmation. |
 | `create` | `repoPath`, `kind`, `objective`, `acceptanceCriteria`, `surfaces` | Create a scout or implementation task. |
@@ -1846,7 +1858,7 @@ bun src/cli.ts pr publish TASK_ID OWNER/REPO "Title" main \
   --yes
 ```
 
-The publish path verifies the task is ready, the worktree is clean, the branch and repository identity match the task, validation evidence is non-empty and successful, all four current review lenses exist, and the current worktree HEAD is exactly the reviewed HEAD. It pushes that exact reviewed SHA to the task branch. Existing pull requests are re-observed and must match the same repository, base, branch, and SHA; closed or merged duplicates are refused.
+The publish path verifies the task is ready, the worktree is clean, the branch and repository identity match the task, validation evidence is non-empty and successful, the current review lens exists and passes, and the current worktree HEAD is exactly the reviewed HEAD. It pushes that exact reviewed SHA to the task branch. Existing pull requests are re-observed and must match the same repository, base, branch, and SHA; closed or merged duplicates are refused.
 
 Merge is a separate explicit action:
 
@@ -1880,7 +1892,7 @@ are Tandem-owned state, not files in target repositories:
 
 | Path | Contents |
 | --- | --- |
-| `<home>/models.json` | Strict global model preference envelope for all six roles; approved updates atomically replace it with mode `0600`. |
+| `<home>/models.json` | Strict global model preference envelope for all five roles; approved updates atomically replace it with mode `0600`. |
 | `<home>/repositories/<key>/config.json` | Private central policy envelope for the canonical repository root; `<key>` is the first 24 hex characters of its SHA-256 realpath digest. |
 | `<home>/coordinator-registry/<session-digest>/<repo-digest>.json` | Private coordinator ownership record: original project identity, clean source lease, native endpoint, and expected OMP command. Live ownership is rechecked before reconnect. Launch discovers these across every session directory, so one repository keeps one active coordinator. |
 | `<home>/coordinator-registry/repository-<digest>.lock` | Native `O_EXLOCK` coordination lock for one canonical repository, shared by every session in this home and acquired before the per-session launch lock. |
@@ -2030,7 +2042,7 @@ from its current stage. It is always the same three moves:
    | `implementing` | Relaunch: new durable operation, a fresh pane only if one is not already owned, a new worker started through the normal launch path | Yes |
    | `scouting` | The identical relaunch path as `implementing` | Yes |
    | `validating` | Rerun validation at the exact reviewed HEAD as a new durable job, within the validation retry budget | Yes |
-   | `reviewing` | Relaunch only the dead reviewer/verifier lens at the exact reviewed HEAD; recorded lenses are kept | Yes |
+   | `reviewing` | Clear the dead review job/pane at the exact reviewed HEAD; the normal launch path then relaunches the current merged review lens, not the dead job's (possibly legacy) lens; recorded reviews are kept | Yes |
    | `awaiting-fixes` | The `implementing` relaunch (see below) | Yes |
 
    Relaunch (`WorkerWorkflow.relaunchWorker`) never mutates the dead job or its result; it admits a
@@ -2369,7 +2381,7 @@ All parser-supported options are global; use only the ones relevant to the comma
 | `--base BRANCH` | Pull-request base branch. |
 | `--summary JSON` | PR summary object. |
 | `--method merge\|squash\|rebase` | Merge method. |
-| `--input JSON\|FILE` | Create-task object with exactly `repoPath`, `kind`, `objective`, `acceptanceCriteria`, and `surfaces`; configure-models reads a temporary file containing the complete six-role `{ "model", "thinking" }` map. |
+| `--input JSON\|FILE` | Create-task object with exactly `repoPath`, `kind`, `objective`, `acceptanceCriteria`, and `surfaces`; configure-models reads a temporary file containing the complete five-role `{ "model", "thinking" }` map. |
 | `--acceptance TEXT` | Repeatable create acceptance criterion. |
 | `--surface TEXT` | Repeatable create surface. |
 | `--artifact PATH` | Repeatable presentation artifact path. |

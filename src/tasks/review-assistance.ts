@@ -136,7 +136,7 @@ const ASSISTANCE_QUESTIONS: JevQuestions = {
       "Given the changed code below, recommend how much independent review scrutiny it needs. Recommend unclear whenever the excerpt does not settle it.",
     criteria: {
       light: "The change is contained and touches no sensitive or shared surface.",
-      standard: "The change needs the normal behavior, design, coverage, and verification review.",
+      standard: "The change needs the normal behavior, design, and coverage review.",
       deep: "The change is sensitive or broad and needs specialist scrutiny.",
       unclear: "The excerpt does not settle how much scrutiny the change needs.",
     },

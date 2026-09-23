@@ -525,6 +525,14 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     ...(compact
       ? [`- ${brief.sourceLinks.length} source link(s); read the patch at the paths above.`]
       : ["- source links:", ...brief.sourceLinks.map((entry) => `  - ${entry}`)]),
+    ...(brief.identities.reviewRound === 0 || brief.impact.assessment !== "contained"
+      ? []
+      : [
+          "",
+          "## Fix-round focus",
+          `- This is fix round ${brief.identities.reviewRound}; review the since-last-review diff above, not the whole change from scratch.`,
+          "- Confirm each evidence-backed blocker below is resolved at this HEAD before passing; do not reopen a settled finding without new evidence.",
+        ]),
     "",
     "## Review breadth",
     `- review level: ${brief.reviewLevel.level}`,

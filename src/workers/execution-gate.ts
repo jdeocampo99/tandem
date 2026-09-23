@@ -98,6 +98,9 @@ function refusedExecutionModel(
   if (role === "validation") {
     return claimed === undefined ? undefined : "validation execution carries no resolved model";
   }
+  // ponytail: a job admitted before the verifier role was removed carries no pinned model to
+  // authorize against (the role no longer has one); let its already-started execution proceed.
+  if (role === "verifier") return undefined;
   const authorization = authorizeExecutionModel({
     claimed,
     pinned: task.policy.config.models[role],

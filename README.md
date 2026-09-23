@@ -215,8 +215,8 @@ tandem configure /absolute/path/to/repo
 tandem config /absolute/path/to/repo   # open the project's settings file in $EDITOR
 ```
 
-`configure` remains a single-project catalogue-anchor flow: it asks for and saves all six global role
-choices (Planning, Research, Coding, Review, Final checks, and Presentations) without launching a
+`configure` remains a single-project catalogue-anchor flow: it asks for and saves all five global role
+choices (Planning, Research, Coding, Review, and Presentations) without launching a
 coordinator. With no path, it keeps its current-Git or existing interactive one-project anchor
 fallback; it never expands to all saved projects. `--headless` prepares coordinators without
 attaching Herdr, and `--no-attach` also skips the GUI attachment. `--help` shows the terminal
@@ -344,18 +344,18 @@ conversational flows. They do not replace the installed terminal command or star
 because Tandem is mentioned. Low-level `src/cli.ts` commands remain an advanced fallback for
 exact automation and diagnostics.
 
-Onboarding always covers all six role choices: **Planning** (`coordinator`), **Research** (`scout`),
-**Coding** (`implementer`), **Review** (`reviewer`), **Final checks** (`verifier`), and
-**Presentations** (`presentation`). For each role, explicitly choose or accept the exact catalogue
-model `selector` and a supported thinking level; recommendations never fill omitted roles, and a
-complete six-role recap appears before saving. **Not now** pauses first-time onboarding before
-`configure-models`, project setup, or launch, with no fallthrough to built-in defaults. Returning
-onboarding shows all six saved exact selector/thinking pairs and offers **Keep all** (read-only, no
-new role answers; it may continue the existing project-setting flow), **Change roles** (explicitly
-choose or keep each role, with untouched roles preserved in the recap), or **Not now** (pause with
-choices unchanged, without setup or launch). The existing `configure-models` approval is required
-to save changes. Approved choices apply to future work across projects; a main-model change takes
-effect on the next Tandem launch, not in an already-running conversation.
+Onboarding always covers all five role choices: **Planning** (`coordinator`), **Research** (`scout`),
+**Coding** (`implementer`), **Review** (`reviewer`), and **Presentations** (`presentation`). For each
+role, explicitly choose or accept the exact catalogue model `selector` and a supported thinking
+level; recommendations never fill omitted roles, and a complete five-role recap appears before
+saving. **Not now** pauses first-time onboarding before `configure-models`, project setup, or
+launch, with no fallthrough to built-in defaults. Returning onboarding shows all five saved exact
+selector/thinking pairs and offers **Keep all** (read-only, no new role answers; it may continue the
+existing project-setting flow), **Change roles** (explicitly choose or keep each role, with
+untouched roles preserved in the recap), or **Not now** (pause with choices unchanged, without setup
+or launch). The existing `configure-models` approval is required to save changes. Approved choices
+apply to future work across projects; a main-model change takes effect on the next Tandem launch,
+not in an already-running conversation.
 
 For an approved task, a clear follow-up direction can be sent with the coordinator's `steer`
 action without a redundant generic approval prompt; `steer` queues it for the next safe boundary.

@@ -8,8 +8,8 @@ import {
 
 /**
  * Target thinking level per role for the Balanced profile. This mirrors the intent behind the
- * built-in role pins in `policy.ts` (planning/review/verification favor deeper reasoning, research
- * and presentation favor speed) without reusing their fixed provider/model selectors, since Balanced
+ * built-in role pins in `policy.ts` (planning/review favor deeper reasoning, research and
+ * presentation favor speed) without reusing their fixed provider/model selectors, since Balanced
  * must resolve an exact selector dynamically from whichever providers the user has enabled.
  */
 const BALANCED_ROLE_THINKING: Readonly<Record<AgentRole, ThinkingLevel>> = {
@@ -17,7 +17,6 @@ const BALANCED_ROLE_THINKING: Readonly<Record<AgentRole, ThinkingLevel>> = {
   scout: "medium",
   implementer: "max",
   reviewer: "max",
-  verifier: "high",
   presentation: "low",
 };
 
@@ -27,7 +26,6 @@ const BALANCED_ROLE_REQUIRES_REASONING: Readonly<Record<AgentRole, boolean>> = {
   scout: false,
   implementer: true,
   reviewer: true,
-  verifier: true,
   presentation: false,
 };
 
@@ -51,7 +49,7 @@ export type BalancedRoleGap = Readonly<{
 }>;
 
 /**
- * The Balanced profile's resolution of all six roles. `resolved` carries a ready-to-save
+ * The Balanced profile's resolution of every role. `resolved` carries a ready-to-save
  * `assignments` map alongside the per-role evidence and reasons; `unresolved` never carries partial
  * assignments so a caller cannot accidentally save an incomplete configuration.
  */

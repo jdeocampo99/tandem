@@ -295,10 +295,10 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   };
 
   const z = pi.zod;
-  const reviews = job.role === "reviewer" || job.role === "verifier";
+  const reviews = job.role === "reviewer";
   const reviewSchema = z
     .object({
-      lens: z.enum(["behavior", "design", "coverage", "verification"]),
+      lens: z.enum(["review"]),
       head: z.string(),
       generation: z.number().int().nonnegative(),
       pass: z.boolean(),

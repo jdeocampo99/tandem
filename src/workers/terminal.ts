@@ -4,7 +4,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { HerdrPaneInspection } from "../adapters/herdr.ts";
 import { isAgentRole } from "../contracts.ts";
 import { writeJsonAtomically } from "../runtime/persistence.ts";
-import type { WorkerJob, WorkerRole } from "./jobs.ts";
+import type { LegacyWorkerRole, WorkerJob } from "./jobs.ts";
 
 export const WORKER_JOB_PATH_ENV = "TANDEM_WORKER_JOB_PATH";
 /** The only channel a worker uses to deliver its delegated result. */
@@ -17,7 +17,7 @@ export type WorkerTerminalJob = Readonly<{
   id: string;
   taskId: string;
   generation: number;
-  role: WorkerRole | "validation";
+  role: LegacyWorkerRole | "validation";
   cwd: string;
   jobPath: string;
 }>;
@@ -27,7 +27,7 @@ export type WorkerTerminalState = Readonly<{
   jobId: string;
   taskId: string;
   generation: number;
-  role: WorkerRole;
+  role: LegacyWorkerRole;
   cwd: string;
   pid: number;
   phase: "starting" | "busy" | "idle" | "paused" | "closing" | "closed";
@@ -98,8 +98,9 @@ function parseTerminal(value: unknown): WorkerTerminalState {
     !text(value.taskId) ||
     !Number.isSafeInteger(value.generation) ||
     (value.generation as number) < 0 ||
-    !isAgentRole(value.role) ||
-    value.role === "coordinator" ||
+    // ponytail: "verifier" stays accepted so an interactive terminal already open for a job with
+    // the removed role still decodes; see LegacyWorkerRole.
+    ((!isAgentRole(value.role) || value.role === "coordinator") && value.role !== "verifier") ||
     !text(value.cwd) ||
     !isAbsolute(value.cwd) ||
     !Number.isSafeInteger(value.pid) ||

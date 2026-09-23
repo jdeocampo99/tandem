@@ -3,7 +3,6 @@ export const MODEL_ROLE_ORDER = [
   "scout",
   "implementer",
   "reviewer",
-  "verifier",
   "presentation",
 ] as const;
 
@@ -14,7 +13,6 @@ export const MODEL_ROLE_LABELS: Readonly<Record<AgentRole, string>> = {
   scout: "Research",
   implementer: "Coding",
   reviewer: "Review",
-  verifier: "Final checks",
   presentation: "Presentations",
 };
 
@@ -190,7 +188,6 @@ export type ReviewLevelRecord = {
  * existed, so a repository only opts in deliberately.
  */
 export type ReviewLevelPolicy = {
-  readonly reducedRouting: boolean;
   readonly deepScrutiny: boolean;
   readonly jevAssistance: "off" | "shadow";
   readonly sourceTransmission: boolean;
@@ -235,12 +232,18 @@ export type ResolvedPolicy = {
   readonly guidance: Readonly<Record<InstructionChannel, readonly ResolvedGuidance[]>>;
 };
 
+/**
+ * ponytail: legacy panes, jobs, and operations may still carry role "verifier" from before the
+ * verifier role was removed; only for decode allow-lists and `Endpoint.role`, never for new work.
+ */
+export const LEGACY_ENDPOINT_ROLES = [...MODEL_ROLE_ORDER, "verifier"] as const;
+
 export type Endpoint = {
   readonly sessionId: string;
   readonly workspaceId: string;
   readonly tabId: string;
   readonly paneId: string;
-  readonly role: AgentRole;
+  readonly role: (typeof LEGACY_ENDPOINT_ROLES)[number];
   readonly generation: number;
 };
 
@@ -258,7 +261,20 @@ export type WorktreeLease = {
 export type FindingSeverity = "P0" | "P1" | "P2" | "P3";
 
 export type FindingVerdict = "confirmed" | "plausible";
-export type ReviewLens = "behavior" | "design" | "coverage" | "verification";
+/** One reviewer session per round covers behavior, design, and coverage together. */
+export type ReviewLens = "review";
+
+/**
+ * ponytail: legacy stored reviews and findings may still carry these pre-merge lens names; only
+ * for decode allow-lists, since a review under one no longer counts toward the current requirement.
+ */
+export const LEGACY_REVIEW_LENSES = ["behavior", "design", "coverage", "verification"] as const;
+
+/** A lens value a stored review, finding, or durable job may carry: current or legacy. */
+export type StoredReviewLens = ReviewLens | (typeof LEGACY_REVIEW_LENSES)[number];
+
+/** Every lens value old stored reviews may carry, forward and legacy; decode allow-lists only. */
+export const ALL_REVIEW_LENSES: readonly StoredReviewLens[] = ["review", ...LEGACY_REVIEW_LENSES];
 export type ReviewMode = "review_changed_diff" | "review_existing_head";
 
 export type Finding = {
@@ -287,7 +303,7 @@ export type FindingStatus = "addressed" | "unresolved" | "regressed" | "disputed
 /** One finding identity carried across review rounds, with the change supporting its status. */
 export type FindingLedgerEntry = {
   readonly id: string;
-  readonly lens: ReviewLens;
+  readonly lens: StoredReviewLens;
   readonly severity: FindingSeverity;
   readonly verdict: FindingVerdict;
   readonly description: string;
@@ -299,7 +315,7 @@ export type FindingLedgerEntry = {
 };
 
 export type ReviewResult = {
-  readonly lens: ReviewLens;
+  readonly lens: StoredReviewLens;
   readonly head: string;
   readonly generation: number;
   readonly pass: boolean;

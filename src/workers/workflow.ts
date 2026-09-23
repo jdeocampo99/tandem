@@ -619,6 +619,8 @@ export class WorkerWorkflow {
   ): Promise<void> {
     const claim = claimOf(runtime.operation);
     if (claim === undefined) return;
+    // ponytail: "verifier" stays matched so a legacy job's failure is still handled as a review
+    // failure; see LegacyWorkerRole.
     const blockReviewFailure = job.role === "reviewer" || job.role === "verifier";
     if (result.status !== "failed") {
       if (
@@ -2903,7 +2905,7 @@ export class WorkerWorkflow {
       });
       return;
     }
-    const role: WorkerRole = nextLens === "verification" ? "verifier" : "reviewer";
+    const role: WorkerRole = "reviewer";
     const reservation = reserved ?? (await this.reserveTask(task.id, role));
     if (reservation === undefined) return;
     const reservedRuntime = reservation.runtime;
@@ -3788,7 +3790,7 @@ export class WorkerWorkflow {
           ? task.stage === "validating"
           : role === "scout"
             ? task.stage === "queued" || task.stage === "scouting"
-            : role === "reviewer" || role === "verifier"
+            : role === "reviewer"
               ? task.stage === "reviewing"
               : task.stage === "queued" || task.stage === "implementing" || isFix;
       if (!stageAllowed) return undefined;
@@ -3842,11 +3844,9 @@ export class WorkerWorkflow {
             ? "scout"
             : role === "reviewer"
               ? "review"
-              : role === "verifier"
-                ? "verification"
-                : isFix
-                  ? "fix"
-                  : "implementation";
+              : isFix
+                ? "fix"
+                : "implementation";
       const contextPath = isFix
         ? join(
             taskJobsDirectory(this.#deps.home, task.id),

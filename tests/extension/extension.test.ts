@@ -23,16 +23,12 @@ import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
 
 const models: Readonly<
-  Record<
-    "coordinator" | "scout" | "implementer" | "reviewer" | "verifier" | "presentation",
-    ModelSpec
-  >
+  Record<"coordinator" | "scout" | "implementer" | "reviewer" | "presentation", ModelSpec>
 > = {
   coordinator: { model: "openai-codex/gpt-6-astra", thinking: "high" },
   scout: { model: "openai-codex/gpt-5.6-luna", thinking: "medium" },
   implementer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
   reviewer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
-  verifier: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
   presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
 };
 
@@ -46,7 +42,6 @@ const policyConfig: RepoPolicy = {
   maxWorkers: 3,
   maxFixRounds: 3,
   reviewLevels: {
-    reducedRouting: false,
     deepScrutiny: false,
     jevAssistance: "off",
     sourceTransmission: false,
@@ -712,7 +707,6 @@ test("model listing is read-only and model changes require approval", async () =
     "Research (scout)",
     "Coding (implementer)",
     "Review (reviewer)",
-    "Final checks (verifier)",
     "Presentations (presentation)",
   ] as const) {
     expect(listingSummary).toContain(role);
@@ -847,7 +841,6 @@ test("onboard summaries render complete saved and pending role selections", () =
     scout: { model: "provider/research", thinking: "low" },
     implementer: { model: "provider/coding", thinking: "max" },
     reviewer: { model: "provider/review", thinking: "medium" },
-    verifier: { model: "provider/checks", thinking: "xhigh" },
     presentation: { model: "provider/presentations", thinking: "minimal" },
   };
   const roleIdentities = [
@@ -855,7 +848,6 @@ test("onboard summaries render complete saved and pending role selections", () =
     "Research (scout)",
     "Coding (implementer)",
     "Review (reviewer)",
-    "Final checks (verifier)",
     "Presentations (presentation)",
   ] as const;
 
@@ -1154,7 +1146,7 @@ test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct
       {
         id: "ready-1",
         message:
-          "Ready: task task-ready passed behavior, design, coverage, and verification review at HEAD head-1. Ready is not publication, merge, or deploy approval; each remains explicit.",
+          "Ready: task task-ready passed review at the standard review level and the final acceptance manifest at HEAD head-1. Ready is not publication, merge, or deploy approval; each remains explicit.",
         acknowledged: false,
         kind: "coordinator",
       },

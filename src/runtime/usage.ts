@@ -100,6 +100,8 @@ export const REQUEST_WORK_KIND_ORDER = [
   "implementation",
   "review",
   "validation",
+  // ponytail: legacy usage events recorded before the verifier role was removed may still carry
+  // this work kind; no new event is ever recorded with it.
   "verification",
   "presentation",
 ] as const;

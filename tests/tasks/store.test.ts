@@ -38,7 +38,6 @@ const models: RepoPolicy["models"] = {
   scout: { model: "scout-model", thinking: "medium" },
   implementer: { model: "implementer-model", thinking: "max" },
   reviewer: { model: "reviewer-model", thinking: "max" },
-  verifier: { model: "verifier-model", thinking: "high" },
   presentation: { model: "presentation-model", thinking: "low" },
 };
 const channels: InstructionChannels = { implementation: [], validation: [], review: [] };
@@ -55,7 +54,6 @@ const policy: ResolvedPolicy = {
     maxWorkers: 3,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
@@ -935,7 +933,6 @@ test("refuses a pinned review-level policy with an unsupported assistance mode",
       policyValue.config = {
         ...policyValue.config,
         reviewLevels: {
-          reducedRouting: false,
           deepScrutiny: false,
           jevAssistance: "active",
           sourceTransmission: false,

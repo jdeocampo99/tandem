@@ -526,7 +526,6 @@ test("configure-models reads a direct six-role file and passes it to the approve
       scout: { model: "test/scout", thinking: "low" },
       implementer: { model: "test/implementer", thinking: "max" },
       reviewer: { model: "test/reviewer", thinking: "max" },
-      verifier: { model: "test/verifier", thinking: "high" },
       presentation: { model: "test/presentation", thinking: "low" },
     } as const;
     await writeFile(inputPath, `${JSON.stringify(models)}\n`, "utf8");

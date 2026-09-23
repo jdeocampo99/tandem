@@ -15,14 +15,7 @@ import { parseTerminalArgs } from "../../src/terminal/arguments.ts";
 import type { CliApplication } from "../../src/terminal/cli-application.ts";
 import type { CliInvocation } from "../../src/terminal/cli-arguments.ts";
 
-const roles = [
-  "coordinator",
-  "scout",
-  "implementer",
-  "reviewer",
-  "verifier",
-  "presentation",
-] as const;
+const roles = ["coordinator", "scout", "implementer", "reviewer", "presentation"] as const;
 
 function catalogue(): readonly OmpModelRecord[] {
   return [
@@ -70,7 +63,6 @@ function onboardingService(
         scout: { model: "test/model", thinking: "low" },
         implementer: { model: "test/model", thinking: "low" },
         reviewer: { model: "test/model", thinking: "low" },
-        verifier: { model: "test/model", thinking: "low" },
         presentation: { model: "test/model", thinking: "low" },
       }
     : undefined;
@@ -296,7 +288,7 @@ test("explicit role answers are sent to the service only after the complete reca
   });
   expect(result.status).toBe("launched");
   expect(fake.configureCalls).toHaveLength(1);
-  expect(fake.configureCalls[0]).toHaveLength(6);
+  expect(fake.configureCalls[0]).toHaveLength(5);
   expect(
     fake.configureCalls[0]?.every(
       (model) => model.model === "test/model" && model.thinking === "high",
@@ -334,7 +326,6 @@ test("first-run onboarding accepts a resolved Balanced proposal without six sepa
       { model: "acme/balanced", thinking: "medium" },
       { model: "acme/balanced", thinking: "max" },
       { model: "acme/balanced", thinking: "max" },
-      { model: "acme/balanced", thinking: "high" },
       { model: "acme/balanced", thinking: "low" },
     ],
   ]);
@@ -813,19 +804,15 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
     "Coding thinking level",
     "Review model selector",
     "Review thinking level",
-    "Final checks model selector",
-    "Final checks thinking level",
     "Presentations model selector",
     "Presentations thinking level",
-    "Save these six choices?",
+    "Save these role choices?",
     "Save project settings?",
   ] as const;
   const keySequences = [
     // Accept the default "Skip": the fixture catalogue has no reasoning-capability evidence, so
     // Balanced stays unresolved regardless and onboarding falls through to the manual role loop.
     "\r",
-    "\r",
-    "l\r",
     "\r",
     "l\r",
     "\r",
@@ -887,7 +874,7 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
     });
     expect(result.status).toBe("launched");
     expect(fake.configureCalls).toHaveLength(1);
-    expect(fake.configureCalls[0]).toHaveLength(6);
+    expect(fake.configureCalls[0]).toHaveLength(5);
     expect(
       fake.configureCalls[0]?.every(
         (model) => model.model === "test/model" && model.thinking === "low",
