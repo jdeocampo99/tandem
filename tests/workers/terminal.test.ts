@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createReviewerEndpoint, type HerdrPaneInspection } from "../../src/adapters/herdr.ts";
@@ -8,6 +8,7 @@ import type { CommandRunner, Endpoint } from "../../src/contracts.ts";
 import {
   readWorkerTerminalCommand,
   requestWorkerTerminalCommand,
+  traceWorkerTurn,
   type WorkerTerminalJob,
   type WorkerTerminalState,
   workerDelegationStopped,
@@ -219,6 +220,21 @@ test("a fresh pane still starting its shell is awaited before launch", async () 
       ++calls < 3 ? runner(request) : settledRunner(request);
     await prepareWorkerTerminal(run, { endpoint, cwd: root });
     expect(calls).toBeGreaterThan(2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the turn trace appends one line per event and never throws", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-interactive-trace-"));
+  try {
+    const jobPath = join(root, "job.json");
+    traceWorkerTurn(jobPath, "agent_end", { willContinue: true });
+    traceWorkerTurn(jobPath, "agent_end_done", { phase: "busy" });
+    const lines = (await readFile(`${jobPath}.trace.jsonl`, "utf8")).trim().split("\n");
+    expect(lines.map((line) => JSON.parse(line).event)).toEqual(["agent_end", "agent_end_done"]);
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({ willContinue: true });
+    expect(() => traceWorkerTurn(join(root, "missing", "job.json"), "agent_end")).not.toThrow();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

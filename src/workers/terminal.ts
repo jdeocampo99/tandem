@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
 import { link, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import type { HerdrPaneInspection } from "../adapters/herdr.ts";
@@ -57,6 +58,23 @@ function terminalPath(jobPath: string): string {
 
 function commandPath(jobPath: string): string {
   return `${terminalPath(jobPath)}.command`;
+}
+
+/**
+ * Appends one timestamped line to the job's turn trace (`job.json.trace.jsonl`), so a worker that
+ * stays busy after submitting shows which lifecycle step never finished. Never throws.
+ */
+export function traceWorkerTurn(
+  jobPath: string,
+  event: string,
+  detail: Readonly<Record<string, unknown>> = {},
+): void {
+  try {
+    const line = JSON.stringify({ at: new Date().toISOString(), event, ...detail });
+    appendFileSync(`${jobPath}.trace.jsonl`, `${line}\n`, { mode: 0o600 });
+  } catch {
+    // Tracing is diagnostic only; a failed write must not disturb the worker.
+  }
 }
 
 function record(value: unknown): value is Record<string, unknown> {

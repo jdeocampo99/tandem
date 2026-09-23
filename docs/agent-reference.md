@@ -1753,7 +1753,7 @@ are Tandem-owned state, not files in target repositories:
 | `<home>/coordinator-scripts/*.sh` | Atomically written `0700` launch scripts containing the coordinator command and scoped environment overrides; kept outside project checkouts. |
 | `<home>/state.sqlite` | Canonical SQLite source of truth for task records, policy snapshots, lifecycle/evidence/review/delivery metadata, cleanup notes, runtime reservations, endpoint identities, durable jobs and operations, stop requests, and presentations. |
 | `<home>/communications/<safe-task-id>/inbox.json` | Derived bounded task-message projection; canonical communication remains in the task row in `state.sqlite`. |
-| `<home>/jobs/<task-id>/...` | Worker/validation job inputs, private result files, persisted reports, `job.json.terminal.json` lifecycle/heartbeat state, and short-lived `job.json.terminal.json.command` pause/close requests. |
+| `<home>/jobs/<task-id>/...` | Worker/validation job inputs, private result files, persisted reports, `job.json.terminal.json` lifecycle/heartbeat state, short-lived `job.json.terminal.json.command` pause/close requests, and a diagnostic `job.json.trace.jsonl` of the worker's turn events (agent/turn start and end with `willContinue`, tools, context requests, pause/close commands, and a once-a-minute `busy_after_result` line while a submitted worker still reads busy). |
 | `<home>/sessions/<task-id>/` | Implementer OMP session directories when continuation is needed. Scouts do not receive a session directory. |
 | `<home>/presentations/<presentation-id>/` | Private presentation job, result, artifact, interactive terminal state/control, and `feedback/<event-id>.json` evidence files. |
 | `<home>/pool/` | Default Treehouse pool root unless overridden. |
