@@ -109,7 +109,9 @@ function entryRow(entry: ReconcileReportEntry, outcome: Outcome, details: FixDet
     const row = taskRow(entry.id, details.tasks.get(entry.id), "Task");
     if (why) return [...row, shortReason(entry.reason)];
     if (entry.containedIn !== undefined) {
-      const work = `work is in ${entry.containedIn}`;
+      // A task whose extra commits all came from main carries nothing of its own.
+      const work =
+        entry.containedIn === "main" ? "only main's commits" : `work is in ${entry.containedIn}`;
       return [...row, outcome === "cleaned" ? `freed · ${work}` : work];
     }
     if (entry.worktreeStays !== undefined && outcome === "cleaned") {

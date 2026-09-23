@@ -2059,14 +2059,18 @@ Classification:
   through the durable task cleanup owner, which keeps the report, provenance, and task history;
 - a cancelled or completed implementation task's worktree returns through ordinary cleanup only
   when it is clean and its HEAD is already in the main checkout. Otherwise the report says why it
-  stays (`worktreeStays`), unless the worktree is clean, on its task branch, and git
-  (`merge-base --is-ancestor`) proves its HEAD is contained in other work: another task's branch,
-  or the head of a draft, open, or merged pull request recorded on any task. Such a task is listed
-  under `freeable` (with `containedIn` naming that task or PR) and is left completely untouched
-  unless freeing is approved separately: the dry run asks its own question after the cleanup
-  question, and non-interactively `--yes` alone never frees; `--yes --free-superseded` does.
-  Freeing re-proves the checkout and containment under the state lock, then returns the lease
-  through the approved discard path (`treehouse return --force`), which detaches the worktree and
+  stays (`worktreeStays`), unless the worktree is clean, on its task branch, and git proves every
+  commit it has beyond main is carried by other work: each non-merge commit is an ancestor of, or
+  patch-equivalent (`git rev-list --cherry-mark`, like `git cherry`) to a commit in, another task's
+  branch, the head of a draft, open, or merged pull request recorded on any task, or main (the
+  primary checkout's HEAD or `origin`'s default branch); a merge commit is carried when all its
+  parents are. Such a task is listed under `freeable`, with `containedIn` naming that task or PR
+  (marked "(same changes, rebased)" when patch equivalence was needed), or `main` when its only
+  extra commits came from main. It is left completely untouched unless freeing is approved
+  separately: the dry run asks its own question after the cleanup question, and non-interactively
+  `--yes` alone never frees; `--yes --free-superseded` does. Freeing re-proves the checkout, its
+  HEAD, and containment under the state lock, then returns the lease through the approved discard
+  path (`treehouse return --force`), which detaches the worktree and
   keeps the branch ref and its commits;
 - a record Tandem cannot place or prove, such as one stored under a session directory it does not
   name, is quarantined with a durable note and nothing is closed or released;

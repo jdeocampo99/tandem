@@ -42,8 +42,8 @@ export type Pool = Readonly<{
   readonly returnedPaths: readonly string[];
   setFailure: (failure: StartupFailure | undefined) => void;
   setRepoHead: (head: string) => void;
-  /** Decides `git merge-base --is-ancestor COMMIT REF`; every commit is an ancestor by default. */
-  setAncestry: (isAncestor: (commit: string, ref: string) => boolean) => void;
+  /** Answers repository git commands first; `undefined` falls through to the default fake. */
+  setGitScript: (script: (args: readonly string[]) => CommandResult | undefined) => void;
   stopCoordinator: () => void;
   coordinatorLeases: () => readonly FakeLease[];
 }>;
@@ -94,7 +94,7 @@ export function fakePool(input: PoolInput): Pool {
   const returnedPaths: string[] = [];
   let repoHead = FIRST_HEAD;
   let failure: StartupFailure | undefined;
-  let ancestry = (_commit: string, _ref: string): boolean => true;
+  let gitScript = (_args: readonly string[]): CommandResult | undefined => undefined;
   let identities = 0;
 
   leases.set(TASK_LEASE_ID, {
@@ -122,6 +122,8 @@ export function fakePool(input: PoolInput): Pool {
     const rest = argv.slice(argv[1] === "-C" ? 3 : 1);
     if (path === resolve(input.repo)) worktreeState(path).head = repoHead;
     const state = worktreeState(path);
+    const scripted = path === resolve(input.repo) ? gitScript(rest) : undefined;
+    if (scripted !== undefined) return scripted;
     if (rest[0] === "remote") return ok("\n");
     if (rest[0] === "rev-parse") {
       if (rest.includes("--show-toplevel")) return ok(`${path}\n`);
@@ -134,9 +136,7 @@ export function fakePool(input: PoolInput): Pool {
       return rest.includes("--diff-filter=U") && state.unmerged ? ok("conflict.txt\n") : ok("");
     }
     if (rest[0] === "cat-file") return ok("");
-    if (rest[0] === "merge-base") {
-      return ancestry(rest[2] ?? "", rest[3] ?? "") ? ok("") : { code: 1, stdout: "", stderr: "" };
-    }
+    if (rest[0] === "merge-base") return ok("");
     if (rest[0] === "switch") {
       state.branch = rest[3] ?? "";
       state.head = rest[4] ?? state.head;
@@ -355,8 +355,8 @@ export function fakePool(input: PoolInput): Pool {
     setRepoHead: (head) => {
       repoHead = head;
     },
-    setAncestry: (next) => {
-      ancestry = next;
+    setGitScript: (next) => {
+      gitScript = next;
     },
     stopCoordinator: () => {
       for (const pane of panes.values()) pane.omp = undefined;

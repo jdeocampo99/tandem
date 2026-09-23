@@ -36,7 +36,12 @@ import {
   replaceRuntimeTask,
 } from "./records.ts";
 import { taskSourcePath } from "./source.ts";
-import { recheckSuperseded, type SupersededProof } from "./superseded.ts";
+import {
+  containerRefs,
+  otherTaskWork,
+  recheckSuperseded,
+  type SupersededProof,
+} from "./superseded.ts";
 
 /** What one cleanup attempt settled on, including the attempts that deliberately changed nothing. */
 export type TaskCleanupOutcome = Readonly<{
@@ -582,7 +587,17 @@ async function freeSupersededWorktree(
   const refusal =
     task.kind !== "implementation" || (task.stage !== "cancelled" && task.stage !== "completed")
       ? "only a cancelled or completed implementation task can be freed"
-      : await recheckSuperseded(deps.run, task.repoPath, lease, proof);
+      : await recheckSuperseded(
+          deps.run,
+          task.repoPath,
+          lease,
+          proof,
+          containerRefs(
+            task,
+            lease.branch,
+            otherTaskWork(await deps.store.list(), await readRuntimeState(deps.runtimePath)),
+          ),
+        );
   if (refusal !== undefined) {
     return recordCleanupAttempt(deps, task, {
       closedPaneIds,

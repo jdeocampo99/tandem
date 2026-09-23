@@ -457,6 +457,34 @@ async function seedPendingImplementation(
   return lease;
 }
 
+const OTHER_HEAD = "a".repeat(40);
+const MAIN_HEAD = "5".repeat(40);
+
+/**
+ * Scripts the repository's history: main is at MAIN_HEAD, the other task's branch at OTHER_HEAD,
+ * and the cancelled task's one commit (FIRST_HEAD) is carried by that branch only when `carried`.
+ */
+function scriptHistory(test: Fixture, carried: boolean): void {
+  const fail = { code: 1, stdout: "", stderr: "" };
+  const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
+  const refs: Readonly<Record<string, string>> = {
+    "HEAD^{commit}": MAIN_HEAD,
+    "refs/heads/tandem/other^{commit}": OTHER_HEAD,
+  };
+  test.pool.setGitScript((args) => {
+    if (args[0] === "rev-parse" && args.includes("--verify")) {
+      const commit = refs[args.at(-1) ?? ""];
+      return commit === undefined ? fail : ok(`${commit}\n`);
+    }
+    if (args[0] === "merge-base") return fail;
+    if (args[0] === "rev-list" && args.includes("--not")) return ok(`${FIRST_HEAD} ${MAIN_HEAD}\n`);
+    if (args[0] === "rev-list" && args.includes("--cherry-mark")) {
+      return ok(carried && args.at(-1)?.startsWith(OTHER_HEAD) ? "" : `+${FIRST_HEAD}\n`);
+    }
+    return undefined;
+  });
+}
+
 /** Whether any command returned this lease, and whether any command touched a branch ref. */
 function returnOf(test: Fixture, lease: WorktreeLease): CommandRequest | undefined {
   return test.pool.calls.find(
@@ -788,7 +816,7 @@ test("a worktree whose commits are in another task is freed only with its own ap
       dirty: false,
       otherBranch: "tandem/other",
     });
-    test.pool.setAncestry((_commit, ref) => ref === "refs/heads/tandem/other");
+    scriptHistory(test, true);
 
     const dry = await test.reconcile(false);
     expect(entries(dry.cleaned, "implementation-task")).toHaveLength(0);
@@ -818,12 +846,12 @@ test("a worktree with a commit found nowhere else is never offered or freed", as
       dirty: false,
       otherBranch: "tandem/other",
     });
-    test.pool.setAncestry(() => false);
+    scriptHistory(test, false);
 
     const dry = await test.reconcile(false);
     expect(dry.freeable).toEqual([]);
     expect(entries(dry.cleaned, "implementation-task")[0]?.worktreeStays).toBe(
-      "has commits not in main or any other work",
+      "has 1 commit not in main or any other work",
     );
 
     await test.reconcile(true, false, true);
@@ -838,7 +866,7 @@ test("a dirty worktree is never offered or freed, even when its commits are else
       dirty: true,
       otherBranch: "tandem/other",
     });
-    test.pool.setAncestry((_commit, ref) => ref === "refs/heads/tandem/other");
+    scriptHistory(test, true);
 
     const dry = await test.reconcile(false);
     expect(dry.freeable).toEqual([]);
@@ -858,7 +886,7 @@ test("tandem fix --yes alone never frees; --free-superseded with --yes does", as
       dirty: false,
       otherBranch: "tandem/other",
     });
-    test.pool.setAncestry((_commit, ref) => ref === "refs/heads/tandem/other");
+    scriptHistory(test, true);
     const fix = async (...flags: string[]) => {
       const output: string[] = [];
       const result = await runTerminal(["fix", "--home", test.home, ...flags], {

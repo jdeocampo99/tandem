@@ -16,6 +16,7 @@ import {
 import {
   containerRefs,
   observeWorktreeContainment,
+  otherTaskWork,
   type SupersededProof,
   type WorktreeContainment,
 } from "../service/superseded.ts";
@@ -478,10 +479,7 @@ async function observePendingImplementations(
   const tasks = await store.list();
   const state = await readRuntimeState(runtimeFile(home));
   const pending: ObservedPendingImplementation[] = [];
-  const others = tasks.map((task) => ({
-    task,
-    branch: (taskRuntime(state, task.id)?.worktree ?? task.worktree)?.branch,
-  }));
+  const others = otherTaskWork(tasks, state);
   for (const task of tasks) {
     const explicitlyDiscardedBlocked =
       discard && task.kind === "implementation" && task.stage === "blocked";

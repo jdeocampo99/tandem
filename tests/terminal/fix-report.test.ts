@@ -165,6 +165,11 @@ test("worktrees whose work is elsewhere get their own section, and kept ones say
   expect(declined).toContain("Can also free (1)");
   expect(declined).toContain("To free them: tandem fix --yes --free-superseded");
   expect(renderFixReportVerbose(offered)).toContain("(commits are in task e2c0fbb5)");
+  const onlyMain = renderFixReport(
+    report({ freeable: [{ ...implementation("36a4f150-0000"), containedIn: "main" }] }),
+    details,
+  );
+  expect(onlyMain).toContain("36a4f150   worktree 4   only main's commits\n");
 });
 
 test("after applying, a task whose cleanup did not finish is kept and says so", () => {
