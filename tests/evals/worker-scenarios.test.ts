@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { ResolvedPolicy, WorktreeLease } from "../../src/contracts.ts";
 import { activeRuntimeJob } from "../../src/runtime/activity.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
+import { policyIdentity } from "../../src/tasks/acceptance.ts";
 import { persistWorkerResult } from "../../src/workers/jobs.ts";
 import {
   SCENARIO_HEAD,
@@ -101,6 +104,71 @@ test("pause retains every owned worker resource and resume dispatches one contin
     expect(after.resources.retained).toContain("lease:lease-1");
     expect(after.runtime.tasks[0]?.jobs.filter(activeRuntimeJob)).toHaveLength(1);
     expect(after.trace.filter((event) => event.action === "herdr pane run")).toHaveLength(1);
+    await service.shutdown();
+  });
+});
+
+test("a pane still busy with the previous worker defers the launch and retries once it frees", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const endpoint = {
+      ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
+      role: "implementer" as const,
+    };
+    const job = scenarioJob({
+      home: world.home,
+      role: "implementer",
+      cwd: lease.path,
+      endpoint,
+      phase: "reserved",
+    });
+    const previous = { ...job, id: "job-0", phase: "consumed" as const, launchAttempted: true };
+    await mkdir(dirname(job.jobPath), { recursive: true });
+    await writeFile(
+      job.jobPath,
+      JSON.stringify({ id: job.id, taskId: job.taskId, generation: job.generation, execution: {} }),
+    );
+    await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "implementing",
+      worktree: lease,
+      endpoints: [endpoint],
+    });
+    await seedScenarioRuntime(
+      world,
+      scenarioRuntimeTask({
+        worktree: lease,
+        endpoints: [endpoint],
+        jobs: [previous, job],
+        operation: scenarioOperation(job, {
+          phase: "admitted",
+          policyDigest: policyIdentity(SCENARIO_POLICY),
+        }),
+        reservation: scenarioReservation(),
+      }),
+    );
+    // The previous worker woke after submitting and still holds the pane's foreground.
+    world.replaceForeground("pane-1", ["omp"]);
+    const service = serviceFor(world);
+
+    await service.tick();
+    const deferred = await world.snapshot();
+    const runtime = deferred.runtime.tasks[0];
+    expect((await service.get(SCENARIO_TASK_ID)).stage).toBe("implementing");
+    expect(runtime?.operation?.phase).toBe("admitted");
+    expect(runtime?.operation?.effects).toEqual([]);
+    expect(runtime?.jobs.find((entry) => entry.id === job.id)).toMatchObject({
+      phase: "reserved",
+      launchAttempted: false,
+    });
+    expect(deferred.trace.filter((event) => event.action === "herdr pane run")).toHaveLength(0);
+
+    world.replaceForeground("pane-1", ["sh"]);
+    await service.tick();
+    const launched = await world.snapshot();
+    expect((await service.get(SCENARIO_TASK_ID)).stage).toBe("implementing");
+    expect(launched.runtime.tasks[0]?.operation?.phase).toBe("running");
+    expect(launched.trace.filter((event) => event.action === "herdr pane run")).toHaveLength(1);
     await service.shutdown();
   });
 });
