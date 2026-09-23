@@ -21,6 +21,7 @@ export type TerminalInvocation = Readonly<{
   readonly logs: boolean;
   readonly yes: boolean;
   readonly json: boolean;
+  readonly verbose: boolean;
 }>;
 
 export type TerminalRunResult = Readonly<{
@@ -86,6 +87,7 @@ const FLAGS = {
   "--help": "help",
   "--yes": "yes",
   "--json": "json",
+  "--verbose": "verbose",
   "--fresh": "fresh",
   "--hard": "hard",
   "--logs": "logs",
@@ -101,7 +103,7 @@ const ALLOWED: Readonly<
   launch: { flags: ["fresh", "headless", "noAttach"], maxPaths: Number.POSITIVE_INFINITY },
   status: { flags: ["json", "logs"], maxPaths: 1 },
   update: { flags: ["fresh", "headless", "noAttach"], maxPaths: 0 },
-  fix: { flags: ["yes", "json"], maxPaths: 0 },
+  fix: { flags: ["yes", "json", "verbose"], maxPaths: 0 },
   reset: { flags: ["yes", "hard", "headless", "noAttach"], maxPaths: 0 },
   config: { flags: [], maxPaths: 1 },
   configure: { flags: [], maxPaths: 1 },
@@ -182,6 +184,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     logs: flags.has("logs"),
     yes: flags.has("yes"),
     json: flags.has("json"),
+    verbose: flags.has("verbose"),
     ...(home === undefined ? {} : { home }),
     ...(sessionId === undefined ? {} : { sessionId }),
     ...(poolRoot === undefined ? {} : { poolRoot }),

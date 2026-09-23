@@ -1201,6 +1201,10 @@ test("fix inspects Tandem resources and applies nothing when there is nothing to
       yes: false,
     });
     expect(() => parseTerminalArgs(["fix", "/repo"])).toThrow("tandem fix takes no arguments");
+    expect(parseTerminalArgs(["fix", "--verbose"])).toMatchObject({ verbose: true });
+    expect(() => parseTerminalArgs(["status", "--verbose"])).toThrow(
+      "tandem status does not accept --verbose",
+    );
 
     const run = async (request: CommandRequest): Promise<CommandResult> => {
       throw new Error(`an empty Tandem home needs no commands: ${request.argv.join(" ")}`);
@@ -1215,7 +1219,7 @@ test("fix inspects Tandem resources and applies nothing when there is nothing to
       stderr: (text) => output.push(text),
     });
     expect(result).toMatchObject({ exitCode: 0, status: "fixed" });
-    expect(output.join("")).toContain("nothing needs fixing");
+    expect(output.join("")).toBe("Tandem fix · nothing to clean up\n");
 
     const jsonOutput: string[] = [];
     await runTerminal(["fix", "--home", home, "--json"], {
