@@ -4,11 +4,7 @@ import { fileURLToPath } from "node:url";
 import { runCommand } from "./adapters/commands.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
-import {
-  type ReconcileReport,
-  type ReconcileReportEntry,
-  reconcileTandemResources,
-} from "./coordinator/reconcile.ts";
+import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
 import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
@@ -21,6 +17,13 @@ import {
 import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
+import {
+  fixCleanupCount,
+  NO_FIX_DETAILS,
+  readFixDetails,
+  renderFixReport,
+  renderFixReportVerbose,
+} from "./terminal/fix-report.ts";
 import { applyHardReset, planHardReset, renderHardResetPlan } from "./terminal/hard-reset.ts";
 import {
   hasActiveHerdrContext,
@@ -68,6 +71,7 @@ Usage:
 Options:
   --yes                    Skip the confirmation (fix, reset)
   --json                   Machine-readable output (status, fix)
+  --verbose                Full paths and reasons (fix)
   --home PATH              Use a different Tandem home
 `;
 
@@ -233,35 +237,6 @@ async function handleStatus({
   }
 }
 
-function reconcileSection(
-  title: string,
-  entries: readonly ReconcileReportEntry[],
-): readonly string[] {
-  if (entries.length === 0) return [];
-  return [
-    `${title} ${entries.length} resource${entries.length === 1 ? "" : "s"}:`,
-    ...entries.map((entry) => {
-      const where = entry.path ?? entry.repoPath;
-      return `  - ${entry.kind} ${entry.id}${where === undefined ? "" : ` (${where})`}: ${entry.reason}`;
-    }),
-  ];
-}
-
-function renderReconcileReport(report: ReconcileReport): string {
-  const dryRun = report.mode === "dry-run";
-  const lines = [
-    dryRun
-      ? `Tandem checked ${report.home} and changed nothing yet.`
-      : `Tandem cleaned up ${report.home}.`,
-    ...reconcileSection(dryRun ? "Would clean" : "Cleaned", report.cleaned),
-    ...reconcileSection("Retained", report.retained),
-    ...reconcileSection("Quarantined", report.quarantined),
-    ...reconcileSection("Failed", report.failed),
-  ];
-  if (lines.length === 1) return `Tandem checked ${report.home}; nothing needs fixing.\n`;
-  return `${lines.join("\n")}\n`;
-}
-
 /**
  * One place to go when something is wrong: reconciles stale resources. Each step shows its plan
  * and changes nothing until confirmed. A resource Tandem deliberately retained or quarantined is
@@ -291,12 +266,20 @@ async function handleFix({
         discard: false,
       }),
     );
+  const details = invocation.json ? NO_FIX_DETAILS : await readFixDetails(environment.home);
+  const show = (shown: ReconcileReport) => {
+    if (invocation.json) return;
+    stdout(invocation.verbose ? renderFixReportVerbose(shown) : renderFixReport(shown, details));
+  };
   let report = await reconcile(invocation.yes);
-  if (!invocation.json) stdout(renderReconcileReport(report));
+  show(report);
   if (report.mode === "dry-run" && report.cleaned.length > 0) {
-    if (await confirm("Clean these up?", invocation, interaction)) {
+    const count = fixCleanupCount(report, details);
+    if (
+      await confirm(`Clean up ${count} thing${count === 1 ? "" : "s"}?`, invocation, interaction)
+    ) {
       report = await reconcile(true);
-      if (!invocation.json) stdout(renderReconcileReport(report));
+      show(report);
     }
   }
   if (invocation.json) stdout(`${JSON.stringify(report)}\n`);

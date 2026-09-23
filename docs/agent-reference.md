@@ -2034,7 +2034,7 @@ The kinds are grouped by how automatically Tandem may ever act on them:
 
 ### Reconciling Tandem resources across sessions
 
-`tandem fix [--home PATH] [--yes] [--json]` is the front door's home-wide cleanup surface, and
+`tandem fix [--home PATH] [--yes] [--json] [--verbose]` is the front door's home-wide cleanup surface, and
 the supported alternative to deleting coordinator records, panes, or lock files by hand. A stuck task is
 recovered by central recovery (see above), not by this command.
 
@@ -2074,6 +2074,9 @@ the resource and hands it back to its owner, which may still retain or quarantin
 twice plans nothing to clean the second time, and a quarantine note is written once per lease rather
 than on every run or launch. `--json` prints a versioned report (`schemaVersion`, `mode`, `home`, `cleaned`,
 `retained`, `quarantined`, `failed`) whose entries carry the resource kind, id, repository, session,
+path, and reason. The default human view prints one line per thing: a task line names the task
+(ticket key or short objective), its stage, short id, and the worktree number of the lease it holds,
+so a task-held lease is never listed separately; `--verbose` prints every entry with its full id,
 path, and reason. The exit code is non-zero only when the scan or an apply failed, never because a
 resource was deliberately retained.
 
