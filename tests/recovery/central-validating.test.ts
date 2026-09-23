@@ -13,11 +13,11 @@ import type {
 } from "../../src/contracts.ts";
 import {
   CentralRecoveryWorkflow,
+  MAX_VALIDATION_RETRIES,
   type RelaunchWorker,
   type RevalidateWorker,
   VALIDATION_RETRY_QUESTION_ID_PREFIX,
 } from "../../src/recovery/central.ts";
-import { MAX_VALIDATION_RETRIES } from "../../src/recovery/workflow.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { DurableJob, RuntimeState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
@@ -356,9 +356,7 @@ test("the validation retry budget is exhausted at 3 and central recovery asks in
     job: deadValidationJob(),
     recovery: {
       schemaVersion: 1,
-      recoveryAttempts: 0,
       validationRetries: MAX_VALIDATION_RETRIES,
-      evidenceRepairs: 0,
     },
   });
   try {
@@ -420,12 +418,6 @@ test('answering "stop" records a decision without bumping communication.revision
     const declined = await f.store.read("task-1");
     expect(declined?.communication?.question).toBeUndefined();
     expect(declined?.communication?.revision ?? 0).toBe(beforeRevision);
-    const state = await readRuntimeState(f.runtimePath);
-    const decisions = state.tasks[0]?.recoveryDecisions ?? [];
-    const decision = decisions.findLast((entry) => entry.questionId === questionId);
-    expect(decision?.disposition).toBe("refused");
-    expect(decision?.ownership).toBe("unknown");
-    expect(decision?.priorOutcome).toBe("uncertain");
     expect(f.revalidateCalls).toHaveLength(0);
   } finally {
     await f.cleanup();
@@ -437,9 +429,7 @@ test('answering "retry" re-proves death and reruns validation, recording what wa
     job: deadValidationJob(),
     recovery: {
       schemaVersion: 1,
-      recoveryAttempts: 0,
       validationRetries: MAX_VALIDATION_RETRIES,
-      evidenceRepairs: 0,
     },
   });
   try {
@@ -459,11 +449,6 @@ test('answering "retry" re-proves death and reruns validation, recording what wa
     expect(approved?.communication?.revision ?? 0).toBe(beforeRevision);
     const after = await readRuntimeState(f.runtimePath);
     expect(after.tasks[0]?.recovery?.validationRetries).toBe(MAX_VALIDATION_RETRIES + 1);
-    const decisions = after.tasks[0]?.recoveryDecisions ?? [];
-    const decision = decisions.findLast((entry) => entry.questionId === questionId);
-    expect(decision?.disposition).toBe("applied");
-    expect(decision?.ownership).toBe("proven-owned");
-    expect(decision?.priorOutcome).toBe("known");
   } finally {
     await f.cleanup();
   }

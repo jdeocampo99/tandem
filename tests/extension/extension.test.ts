@@ -437,15 +437,10 @@ test("create forwards an explicit skill invocation to task creation untouched", 
   ]);
   expect(result.value).toBe(created);
 });
-test("recovery slash commands preserve exact-head and delivery arguments", () => {
+test("inspection and delivery slash commands preserve their arguments", () => {
   expect(parseTandemCommand("inspect task-1")).toEqual({
     action: "inspect",
     taskId: "task-1",
-  });
-  expect(parseTandemCommand("review-existing task-1 head-1")).toEqual({
-    action: "review-existing",
-    taskId: "task-1",
-    head: "head-1",
   });
   expect(parseTandemCommand("delivery-preflight task-1 owner/repo main")).toEqual({
     action: "delivery-preflight",
@@ -454,13 +449,12 @@ test("recovery slash commands preserve exact-head and delivery arguments", () =>
     base: "main",
   });
   expect(
-    summarizeTandemActionValue("recovery-plan", {
+    summarizeTandemActionValue("delivery-preflight", {
       taskId: "task-1",
-      operation: { name: "review-existing" },
-      budget: { recoveryRemaining: 2 },
-      refusals: [],
+      ready: false,
+      checks: [{ name: "branch", passed: false }],
     }),
-  ).toContain("recommended review-existing");
+  ).toBe("task-1: not ready to deliver; failed: branch");
 });
 
 test("communication slash commands join quoted deltas and reject extra message arguments", () => {
@@ -1946,9 +1940,8 @@ test("a recovery question wakes the coordinator once with its recommendation and
   const context = notificationContext((message) => notices.push(message));
   const question = {
     id: "recovery-3f2a",
-    text: "Task task-1 in request req-1 is blocked: the reviewer never reported a result. Recommended action: review-existing. Remaining budget: 3 recovery attempt(s).",
-    recommendation:
-      "review-existing: runs validation and bounded reviews at the exact reviewed HEAD",
+    text: "Task task-1 in request req-1 is blocked: the reviewer never reported a result. Restart it?",
+    recommendation: "restart: relaunches the reviewer at the exact reviewed HEAD",
   };
   const asked = task({
     id: "task-1",
@@ -1991,8 +1984,8 @@ test("a recovery question wakes the coordinator once with its recommendation and
   expect(sent[0]?.content).toContain("task task-1");
   expect(sent[0]?.content).toContain("question recovery-3f2a");
   expect(sent[1]?.content).not.toContain("Question recovery-3f2a:");
-  expect(sent[1]?.content).toContain("Recommended action: review-existing");
-  expect(sent[1]?.content).toContain("Recommendation: review-existing:");
+  expect(sent[1]?.content).toContain("Restart it?");
+  expect(sent[1]?.content).toContain("Recommendation: restart:");
   expect(sent[1]?.options).toMatchObject({ triggerTurn: true });
   expect(notices).toHaveLength(0);
   expect(acknowledged).toEqual(["task-1:recovery-notification"]);

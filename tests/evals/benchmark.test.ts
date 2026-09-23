@@ -71,21 +71,30 @@ test("replay-mode treatment latency comes entirely from recorded fixture data, n
   expect(directListTasks?.treatment.totalDurationMs).toBe(900);
   const missingTaskIdShow = rows.find((row) => row.fixtureId === "missing-task-id-show");
   expect(missingTaskIdShow?.treatment.totalDurationMs).toBe(60_000);
-  const recoveryPlan = rows.find((row) => row.fixtureId === "direct-recovery-plan-task");
-  expect(recoveryPlan?.treatment.totalDurationMs).toBe(900 + 55_000);
 });
 
 test("a failed direct action falls back to the coordinator path and counts one action failure", async () => {
   const { fixtures, baselines } = await loadInputs();
-  const { rows } = await runBaselineBenchmark(fixtures, baselines);
-  const recoveryPlan = rows.find((row) => row.fixtureId === "direct-recovery-plan-task");
-  expect(recoveryPlan?.treatment.directRouted).toBe(true);
-  expect(recoveryPlan?.treatment.coordinatorTurnAvoided).toBe(false);
-  expect(recoveryPlan?.treatment.actionFailures).toBe(1);
-  expect(recoveryPlan?.treatment.correctness).toBe("correct");
-  expect(recoveryPlan?.treatment.totalDurationMs).toBeGreaterThan(
-    recoveryPlan?.control.totalDurationMs ?? 0,
+  // Synthetic: the inspect lookup's direct action is recorded as failing.
+  const failing = baselines.map((baseline) =>
+    baseline.fixtureId === "direct-inspect-task" && baseline.directAction !== undefined
+      ? {
+          ...baseline,
+          directAction: {
+            ...baseline.directAction,
+            outcome: "failure" as const,
+            correctness: "incorrect" as const,
+          },
+        }
+      : baseline,
   );
+  const { rows } = await runBaselineBenchmark(fixtures, failing);
+  const inspect = rows.find((row) => row.fixtureId === "direct-inspect-task");
+  expect(inspect?.treatment.directRouted).toBe(true);
+  expect(inspect?.treatment.coordinatorTurnAvoided).toBe(false);
+  expect(inspect?.treatment.actionFailures).toBe(1);
+  expect(inspect?.treatment.correctness).toBe("correct");
+  expect(inspect?.treatment.totalDurationMs).toBe(900 + 45_000);
 });
 
 test("a fallback with no documented avoided work costs the full coordinator path plus Jev overhead", async () => {

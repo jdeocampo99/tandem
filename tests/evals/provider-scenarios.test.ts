@@ -12,7 +12,7 @@ import { type ScenarioWorld, withScenario } from "./scenario.ts";
 const CONTEXT = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
 const PROMPT = "list my tandem tasks";
 const ROUTING_CRITERIA: Readonly<Record<string, readonly string[]>> = {
-  action: ["list", "presentations", "show", "messages", "inspect", "recovery-plan", "none"],
+  action: ["list", "presentations", "show", "messages", "inspect", "none"],
   target: ["repository", "task", "conversation", "unresolved"],
   effect: ["read-only", "state-change", "sensitive", "unknown"],
   scope: ["within", "changes", "unclear"],

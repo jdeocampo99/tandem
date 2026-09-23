@@ -87,9 +87,8 @@ Call it with {request: {action: ...}}. Its text is a short summary; details and 
 - steer: pass a user direction to a running task within approved scope. Send short changes, and use supersedes to replace an outdated one. It is delivered at the next safe point.
 - answer: reply to a worker's question by its questionId.
 - list, show, inspect, messages: read tasks. Read messages only when the user asks or before a decision that depends on them; do not poll.
-- pause, resume, cancel, restart, tick: control tasks.
-- recovery-plan, recovery-decide: when a task is stuck, use recovery-decide instead of guessing a fix. It either runs a preapproved fix, waits briefly, or asks one question; answer that question with answer.
-- review-existing, validation-retry, evidence-repair, reconcile, delivery-preflight, cleanup: recovery and housekeeping actions; each needs the user's approval.
+- pause, resume, cancel, restart, tick: control tasks. When a task is stuck, use restart: Tandem stops what is left, keeps the work, and relaunches it in the same task. Never start a new task to get around a stuck one.
+- delivery-preflight, cleanup: housekeeping; cleanup needs the user's approval.
 - brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, acceptance criteria, approach, decisions, open questions). Write acceptance criteria as observable behavior; for how to check it, name the repository's own validation procedure from its AGENTS.md or CLAUDE.md instead of listing manual test scenarios. The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. After brief-draft, give a short summary of the drafted brief without asking in it whether they approve, then call brief-approve with the exact briefRevision and contentDigest shown; its confirmation is the one approval ask, so never also ask "do you approve" in prose beforehand. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
 - draft, publish, merge: pull requests. Each needs the user's explicit approval.
 - request-receipt: time and cost for a finished request. Report elapsed time as stated; never call a missing figure zero.

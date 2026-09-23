@@ -138,8 +138,8 @@ Anything dirty, unmerged, unlanded, foreign, or ownership-uncertain is kept and 
 reason. Quarantine notes and unreadable record files are listed with their path and never deleted.
 Reports, task history, provenance, and unmerged branches survive, applying is idempotent, and
 `--json` prints a versioned report for automation. The exit code is non-zero only when the scan or
-an apply actually failed, not because something was retained. This home-wide command is separate
-from the advanced CLI's per-task `bun src/cli.ts reconcile TASK_ID` recovery action.
+an apply actually failed, not because something was retained. A stuck task is recovered with
+`restart`, not with this command.
 
 ### Reset
 
@@ -322,7 +322,7 @@ The pinned provider model is Jev `1.13.0`.
 Exact slash commands bypass classification. For other prompts, Jev returns five typed facts:
 supported action, target, effect, scope, and composition. Code remains authoritative for task
 identity, ownership, approvals, state, and execution. Only these read-only actions can terminate
-directly: `list`, `presentations`, `show`, `messages`, `inspect`, and `recovery-plan`. Task-specific
+directly: `list`, `presentations`, `show`, `messages`, and `inspect`. Task-specific
 lookups require an explicit `task-...` identifier or UUID in the prompt. The direct path calls the
 existing Tandem service and displays its bounded result.
 

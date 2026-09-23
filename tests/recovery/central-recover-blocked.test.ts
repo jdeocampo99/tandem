@@ -472,9 +472,7 @@ test("the per-generation restart budget is respected when re-entering a blocked 
     blockCause: blockCause("worker-failed", { summary: "the worker died", detail: "d" }),
     recovery: {
       schemaVersion: 1,
-      recoveryAttempts: 0,
       validationRetries: 0,
-      evidenceRepairs: 0,
       restarts: MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
       restartGeneration: 0,
     },

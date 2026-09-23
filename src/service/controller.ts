@@ -42,6 +42,7 @@ import {
 } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { describeTaskPr, draftProgressDigest, type PrSummary } from "../delivery/evidence.ts";
+import { type DeliveryPreflightResult, deliveryPreflight } from "../delivery/preflight.ts";
 import {
   type DraftPublication,
   mergeReviewedTask,
@@ -67,22 +68,7 @@ import {
   RESTART_QUESTION_ID_PREFIX,
   reportBlock,
   VALIDATION_RETRY_QUESTION_ID_PREFIX,
-  type ValidationRetryResult,
 } from "../recovery/central.ts";
-import {
-  type RecoveryConversationOutcome,
-  RecoveryConversationWorkflow,
-} from "../recovery/conversation.ts";
-import { RECOVERY_QUESTION_ID_PREFIX } from "../recovery/decision.ts";
-import {
-  type DeliveryPreflightResult,
-  type EvidenceRepairResult,
-  type ReconciliationResult,
-  type RecoveryInspection,
-  type RecoveryPlan,
-  RecoveryWorkflow,
-  type ReviewExistingResult,
-} from "../recovery/workflow.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../requests/store.ts";
 import {
   type ApproveRequestBriefInput,
@@ -125,6 +111,7 @@ import {
 import { createRequestUsageLedger, type RequestUsageLedger } from "../runtime/usage-ledger.ts";
 import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import { TaskControlWorkflow } from "../tasks/control.ts";
+import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
 import {
@@ -236,26 +223,7 @@ export type TandemService = Readonly<{
   readonly refreshSource?: () => Promise<SourceRefreshResult | undefined>;
   readonly list: () => Promise<readonly TaskRecord[]>;
   readonly get: (id: string) => Promise<TaskRecord>;
-  readonly inspect: (id: string) => Promise<RecoveryInspection>;
-  readonly recoveryPlan: (id: string) => Promise<RecoveryPlan>;
-  /** Settles the current recovery decision for one task: apply, wait, or ask exactly once. */
-  readonly recoveryDecide: (id: string) => Promise<RecoveryConversationOutcome>;
-  readonly reconcile: (
-    id: string,
-    input: { readonly approved: boolean },
-  ) => Promise<ReconciliationResult>;
-  readonly reviewExisting: (
-    id: string,
-    input: { readonly head: string; readonly approved: boolean },
-  ) => Promise<ReviewExistingResult>;
-  readonly validationRetry: (
-    id: string,
-    input: { readonly approved: boolean },
-  ) => Promise<ValidationRetryResult>;
-  readonly repairEvidence: (
-    id: string,
-    input: { readonly approved: boolean },
-  ) => Promise<EvidenceRepairResult>;
+  readonly inspect: (id: string) => Promise<TaskInspection>;
   readonly deliveryPreflight: (
     id: string,
     input: { readonly repository: string; readonly base: string },
@@ -546,8 +514,6 @@ class TandemController {
   readonly #presentationRuntime: PresentationRuntimeWorkflow;
   readonly #worker: WorkerWorkflow;
   readonly #control: TaskControlWorkflow;
-  readonly #recovery: RecoveryWorkflow;
-  readonly #recoveryConversation: RecoveryConversationWorkflow;
   readonly #recoveryCentral: CentralRecoveryWorkflow;
   readonly #requests: RequestBriefWorkflow;
   readonly #usage: RequestUsageLedger;
@@ -646,18 +612,6 @@ class TandemController {
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       saveEndpoint: (taskId, endpoint, claim) => this.#worker.saveEndpoint(taskId, endpoint, claim),
     });
-    this.#recovery = new RecoveryWorkflow({
-      home: deps.home,
-      sessionId: deps.sessionId,
-      run: deps.run,
-      clock: deps.clock,
-      idFactory: deps.idFactory,
-      store: deps.store,
-      runtimePath: deps.runtimePath,
-      getTask: (taskId) => this.get(taskId),
-      taskInScope: (task) => this.#source.taskInScope(task),
-      wake: (task) => this.reconcileTask(task),
-    });
     this.#requests = new RequestBriefWorkflow({
       home: deps.home,
       sessionId: deps.sessionId,
@@ -670,28 +624,6 @@ class TandemController {
       pauseTask: async (taskId, reason) => {
         await this.pause(taskId, reason);
       },
-    });
-    this.#recoveryConversation = new RecoveryConversationWorkflow({
-      sessionId: deps.sessionId,
-      clock: deps.clock,
-      idFactory: deps.idFactory,
-      store: deps.store,
-      runtimePath: deps.runtimePath,
-      recovery: {
-        inspect: (taskId) => this.#recovery.inspect(taskId),
-        plan: (taskId) => this.#recovery.plan(taskId),
-        reconcile: (taskId, approved) => this.#recovery.reconcile(taskId, approved),
-        repairEvidence: (taskId, approved) => this.#recovery.repairEvidence(taskId, approved),
-      },
-      getTask: (taskId) => this.get(taskId),
-      taskInScope: (task) => this.#source.taskInScope(task),
-      requestDispatchHold: async (task) => {
-        const decision = await this.#requests.dispatchDecisionForTask(task);
-        return decision === undefined || decision.allowed ? undefined : decision.reason;
-      },
-      // Closes over `this`, not `#recoveryCentral` directly: `#recoveryCentral` is assigned right
-      // below, after this object is constructed, but before either workflow's methods can ever run.
-      recoverBlockedTask: (task) => this.#recoveryCentral.recoverBlockedTask(task),
     });
     this.#recoveryCentral = new CentralRecoveryWorkflow({
       home: deps.home,
@@ -733,15 +665,8 @@ class TandemController {
   api(): TandemService {
     return {
       onboard: (repoPath, write) => this.onboard(repoPath, write),
-      inspect: (id) => this.#recovery.inspect(id),
-      recoveryPlan: (id) => this.#recovery.plan(id),
-      recoveryDecide: (id) => this.#recoveryConversation.decide(id),
-      reconcile: (id, input) => this.#recovery.reconcile(id, input.approved),
-      reviewExisting: (id, input) => this.#recovery.reviewExisting(id, input.head, input.approved),
-      validationRetry: (id, input) => this.#recoveryCentral.validationRetry(id, input.approved),
-      repairEvidence: (id, input) => this.#recovery.repairEvidence(id, input.approved),
-      deliveryPreflight: (id, input) =>
-        this.#recovery.deliveryPreflight(id, input.repository, input.base),
+      inspect: (id) => this.inspect(id),
+      deliveryPreflight: (id, input) => this.deliveryPreflight(id, input.repository, input.base),
       models: (repoPath) => this.models(repoPath),
       configureModels: (input) => this.configureModels(input),
       create: (input) => this.create(input),
@@ -1038,6 +963,22 @@ class TandemController {
     return this.#control.controlTask(assertTaskId(id), "pause", text(reason, "reason"));
   }
 
+  async inspect(id: string): Promise<TaskInspection> {
+    const task = await this.get(assertTaskId(id));
+    if (!(await this.#source.taskInScope(task))) {
+      throw new Error(`task ${task.id} is outside the repository scope`);
+    }
+    return inspectTask(this.#deps, task);
+  }
+
+  async deliveryPreflight(
+    id: string,
+    repository: string,
+    base: string,
+  ): Promise<DeliveryPreflightResult> {
+    return deliveryPreflight(this.#deps, await this.get(assertTaskId(id)), repository, base);
+  }
+
   async resume(id: string): Promise<TaskRecord> {
     return this.#control.resumeTask(assertTaskId(id));
   }
@@ -1113,16 +1054,6 @@ class TandemController {
         await this.#recoveryCentral.answerValidationRetryQuestion(taskId, questionId, answer);
         return this.messages(taskId);
       }
-      if (questionId.startsWith(RECOVERY_QUESTION_ID_PREFIX)) {
-        const outcome = await this.#recoveryConversation.answerQuestion(taskId, questionId, answer);
-        if (outcome.resumed) {
-          const resumed = await this.#control.resumeTask(taskId);
-          if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage)) {
-            await this.reconcileTask(resumed);
-          }
-        }
-        return this.messages(taskId);
-      }
       const result = await this.#source.appendAnswer(taskId, questionId, answer);
       if (result.resumed) {
         const resumed = await this.#control.resumeTask(taskId);
@@ -1181,7 +1112,7 @@ class TandemController {
   ): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("publish input must be an object");
     if (input.approved) {
-      const preflight = await this.#recovery.deliveryPreflight(id, input.repository, input.base);
+      const preflight = await this.deliveryPreflight(id, input.repository, input.base);
       if (!preflight.ready) {
         throw new Error(`delivery preflight refused publication: ${preflight.refusals.join("; ")}`);
       }
@@ -1477,30 +1408,12 @@ class TandemController {
       }
     }
     const settled = await this.#source.scopedTasks();
-    await this.reconcileRecoveryWaits(settled);
     await this.recordRequestAccounting(settled);
     let draftRecorded = false;
     for (const task of settled) {
       if (await this.refreshDraftPullRequest(task)) draftRecorded = true;
     }
     return draftRecorded ? this.#source.scopedTasks() : settled;
-  }
-
-  /**
-   * Wakes the bounded availability waits whose deadline has passed. A wake that cannot be settled
-   * leaves a bounded diagnostic rather than failing the pass, so one incident never stops the rest
-   * of the scheduler.
-   */
-  private async reconcileRecoveryWaits(tasks: readonly TaskRecord[]): Promise<void> {
-    try {
-      await this.#recoveryConversation.reconcileWaits(tasks);
-    } catch (error) {
-      await appendDiagnosticEvent(
-        this.#deps.home,
-        { event: "recovery-wait-reconcile-failed", details: { errorClass: errorClassName(error) } },
-        this.#deps.clock,
-      );
-    }
   }
 
   private async blockTaskIfReconcileClaim(

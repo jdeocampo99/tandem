@@ -253,9 +253,7 @@ async function fixture(options: FixtureOptions = {}) {
           : {
               recovery: {
                 schemaVersion: 1,
-                recoveryAttempts: 0,
                 validationRetries: 0,
-                evidenceRepairs: 0,
                 restarts: options.restarts,
                 restartGeneration: options.restartGeneration ?? 0,
               },
