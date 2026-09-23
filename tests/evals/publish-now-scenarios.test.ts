@@ -158,3 +158,63 @@ test("publish now refuses a task with nothing committed beyond its base", async 
     await service.shutdown();
   });
 });
+
+test("publishing a task that already has a pull request returns it instead of failing", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const seeded = await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "ready",
+      reviewHead: SCENARIO_NEXT_HEAD,
+      worktree: lease,
+      endpoints: [],
+    });
+    const pullRequest = {
+      repository: "acme/repo",
+      number: 7,
+      state: "open" as const,
+      head: SCENARIO_NEXT_HEAD,
+      base: "main",
+      url: "https://github.com/acme/repo/pull/7",
+    };
+    await world.store.update(seeded.id, seeded.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      pullRequest,
+    }));
+    await seedScenarioRuntime(world, scenarioRuntimeTask({ worktree: lease }));
+    const service = serviceFor(world);
+
+    const viaPublish = await service.publish(SCENARIO_TASK_ID, {
+      ...PUBLISH_INPUT,
+      approved: true,
+    });
+    const viaPublishNow = await service.publishNow(SCENARIO_TASK_ID, {
+      ...PUBLISH_INPUT,
+      approved: true,
+    });
+    expect(viaPublish.pullRequest).toEqual(pullRequest);
+    expect(viaPublishNow.pullRequest).toEqual(pullRequest);
+    await service.shutdown();
+  });
+});
+
+test("publish now refuses a cancelled task in plain words", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "cancelled",
+      reviewHead: SCENARIO_NEXT_HEAD,
+      worktree: lease,
+      endpoints: [],
+    });
+    await seedScenarioRuntime(world, scenarioRuntimeTask({ worktree: lease }));
+    const service = serviceFor(world);
+
+    await expect(
+      service.publishNow(SCENARIO_TASK_ID, { ...PUBLISH_INPUT, approved: true }),
+    ).rejects.toThrow("was cancelled, so it can't be published");
+    await service.shutdown();
+  });
+});

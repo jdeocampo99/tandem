@@ -253,7 +253,7 @@ function summarizeTask(task: TaskRecord): string {
   }
   if (task.pullRequest !== undefined) {
     lines.push(
-      `Pull request: ${task.pullRequest.repository}#${task.pullRequest.number} ${task.pullRequest.state}; head ${task.pullRequest.head}; base ${task.pullRequest.base}`,
+      `Pull request: ${task.pullRequest.url ?? `${task.pullRequest.repository}#${task.pullRequest.number}`} (${task.pullRequest.state}); head ${task.pullRequest.head}; base ${task.pullRequest.base}`,
     );
     if (task.pullRequest.state === "draft") {
       lines.push("This is a draft: work in progress, not ready to merge.");
@@ -957,6 +957,7 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     action === "cancel" ||
     action === "cleanup" ||
     action === "publish" ||
+    action === "publish-now" ||
     action === "draft" ||
     action === "merge"
   ) {
