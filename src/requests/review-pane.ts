@@ -43,6 +43,15 @@ export type RequestReviewPaneDependencies = Readonly<{
   readonly clock: Clock;
 }>;
 
+/**
+ * Styles the Markdown with glow when it is installed, and shows it as plain text otherwise.
+ * ponytail: looks glow up on Tandem's PATH, not the pane's; bundle a renderer if glow proves rare.
+ */
+export function briefViewerCommand(renderedPath: string): readonly string[] {
+  const glow = Bun.which("glow");
+  return glow === null ? ["cat", "--", renderedPath] : [glow, "--", renderedPath];
+}
+
 export function requestBriefMarkdownPath(home: string, requestId: string): string {
   return join(home, REQUEST_BRIEF_DIRECTORY, `${requestId}.md`);
 }
@@ -236,7 +245,7 @@ async function renderInto(
     await sendCommand(deps.run, {
       endpoint,
       cwd: record.repoPath,
-      command: ["cat", "--", renderedPath],
+      command: briefViewerCommand(renderedPath),
     });
   } catch (error) {
     return {
