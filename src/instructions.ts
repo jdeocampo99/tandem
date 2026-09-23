@@ -99,16 +99,19 @@ Call it with {request: {action: ...}}. Its text is a short summary; details and 
 - present, presentations, describe, feedback: make, list, or read feedback on a visual artifact only when a picture helps. Never claim it is ready before its notification says so.
 Questions shown to the user never carry ids; read ids from the hidden identifiers that arrive with them.`;
 
-/** The five applicable principles, named so a review brief can list them as blocking requirements. */
-export const FUNCTION_REVIEW_PRINCIPLE_NAMES: readonly string[] = [
+/** The code standards, named so a review brief can list them as blocking requirements. */
+export const CODE_STANDARD_NAMES: readonly string[] = [
   "Maximize Honesty: every meaningful dependency is visible in the signature and effects are separated from decisions",
   "Empathic Signatures: each signature reads as an API for its caller, with precise names and honest optionality",
   "Uniform Abstraction Layers: each function stays at one level of abstraction",
   "Comment Hygiene: comments carry non-obvious rationale rather than restating the code",
   "Reader-Oriented Declaration Order: public entry points precede private supporting detail",
+  "Reuse Before Adding: existing helpers, types, and modules are extended rather than duplicated",
+  "Plain, Conventional Names: names use full words for domain meaning, without jargon or abbreviations",
 ];
 
-export const FUNCTION_REVIEW_PRINCIPLES = `# Function review principles
+/** Implementers write to these standards and design reviewers grade against the same text. */
+export const CODE_STANDARDS = `# Code standards
 
 ## 1. Maximize Honesty
 Make every meaningful dependency visible in the signature. Separate pure decisions from filesystem, process, network, clock, randomness, logging, mutation, and other effects; pass variable capabilities explicitly and keep effects at the highest practical boundary. Do not hide state in globals, registries, caches, or ambient context.
@@ -125,6 +128,12 @@ Keep comments only for non-obvious invariants, edge-case rationale, algorithmic 
 ## 5. Reader-Oriented Declaration Order
 Order public types, constants, and entry points before private supporting details, then place helpers from low-level conversion toward higher-level orchestration. Keep coupled declarations adjacent, and do not reorder in a way that changes initialization timing, declaration safety, or side-effect order.
 
+## 6. Reuse Before Adding
+Before writing a new helper, type, or module, search the repository for an existing one that does the job and extend it instead of adding a near-copy.
+
+## 7. Plain, Conventional Names
+Name things with full words for what they mean in the domain. Avoid abbreviations, internal jargon, and names that describe mechanics rather than meaning. Follow the language's conventional short names where they are idiomatic, such as i, err, or id.
+
 Review protocol: preserve observable semantics, ordering, mutation timing, boundary behavior, and error behavior. Update every affected caller transitively. For every changed function, method, callback, closure, and affected caller, record an explicit disposition: changed, intentionally unchanged with a rationale, or blocked with the exact reason. Apply the same review to newly introduced functions. Report only evidence-backed findings and keep the change focused; do not broaden the review into unrelated cleanup.`;
 
 /**
@@ -136,7 +145,7 @@ export const REVIEW_LENSES = [
     id: "review",
     title: "Behavior, design, and coverage",
     instructions:
-      "Use a fresh reviewer context with no implementer conversation. Inspect observable behavior, error behavior, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply all five function-review principles to every changed function, method, callback, closure, and affected caller: honest dependencies, empathic signatures, uniform abstraction, useful comments, and reader-oriented declaration order; preserve semantics and caller updates, and record each review disposition. Check the changed behavior, affected callers, relevant tests, reports, and task acceptance criteria, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, bind the report to HEAD and generation, distinguish confirmed from plausible findings, report evidence-backed findings only, never invent findings, avoid broad cleanup, remain read-only, and rely only on targeted validation performed by the runner.",
+      "Use a fresh reviewer context with no implementer conversation. Inspect observable behavior, error behavior, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply all seven code standards to every changed function, method, callback, closure, and affected caller: honest dependencies, empathic signatures, uniform abstraction, useful comments, reader-oriented declaration order, reuse before adding, and plain conventional names; preserve semantics and caller updates, and record each review disposition. Check the changed behavior, affected callers, relevant tests, reports, and task acceptance criteria, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, bind the report to HEAD and generation, distinguish confirmed from plausible findings, report evidence-backed findings only, never invent findings, avoid broad cleanup, remain read-only, and rely only on targeted validation performed by the runner.",
   },
 ] as const satisfies readonly ReviewLens[];
 
@@ -389,6 +398,10 @@ export function buildAgentBrief(input: AgentBriefInput): string {
 
   lines.push("", "## Role requirements", ...formatBullets(ROLE_INSTRUCTIONS[input.role]));
 
+  if (input.role === "implementer") {
+    lines.push("", CODE_STANDARDS);
+  }
+
   if (input.role === "reviewer") {
     lines.push("", "## Review output", REVIEW_RESULT_SCHEMA);
     if (review === undefined) {
@@ -403,7 +416,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
         );
       } else {
         lines.push(`## Selected lens: ${selectedLens.title}`, selectedLens.instructions);
-        lines.push("", FUNCTION_REVIEW_PRINCIPLES);
+        lines.push("", CODE_STANDARDS);
       }
     }
   }

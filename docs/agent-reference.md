@@ -1316,7 +1316,7 @@ function of durable task state plus injected git observations, so the same task,
 always produce the same brief. It is reused context, not a second memory, handoff, or provider
 system: every field comes from the records the task already keeps.
 
-The brief carries the approved scope, the acceptance criteria, the five applicable principles as
+The brief carries the approved scope, the acceptance criteria, the seven code standards as
 mandatory blocking requirements, and explicit non-goals; the exact source, policy, instruction, and
 configuration identities (HEAD, branch, base, generation, review round, policy digest, review-channel
 instruction provenance, `maxFixRounds`, `maxWorkers`, and the configured command names); references

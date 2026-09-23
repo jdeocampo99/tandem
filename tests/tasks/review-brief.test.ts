@@ -169,7 +169,7 @@ test("the brief carries approved scope, principles, identities, diffs, and sourc
     "Cancellation is honoured",
     "Evidence stays pinned",
   ]);
-  expect(brief.scope.principles).toHaveLength(5);
+  expect(brief.scope.principles).toHaveLength(7);
   expect(brief.scope.surfaces).toBe("service");
   expect(brief.scope.nonGoals[0]).toContain("service");
   expect(brief.identities.head).toBe(HEAD);
