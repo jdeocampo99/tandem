@@ -2,12 +2,14 @@ import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type HerdrAdapterOptions,
-  listWorkspaceOrder,
+  type HerdrWorkspace,
+  listWorkspaces,
   moveWorkspaceAfterParent,
 } from "../adapters/herdr.ts";
 import type { CommandRunner, TaskRecord } from "../contracts.ts";
-import { databasePath } from "../runtime/database.ts";
+import { databasePath, withStateLock } from "../runtime/database.ts";
 import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
+import type { RuntimeState } from "../runtime/schema.ts";
 import { createTaskStore } from "../tasks/store.ts";
 import { type CoordinatorRecord, canonicalPath } from "./record.ts";
 import { listCoordinatorRecords } from "./registry.ts";
@@ -30,12 +32,30 @@ export type RenestMove = Readonly<{
   readonly afterWorkspaceId: string;
 }>;
 
+/**
+ * A workspace carrying Tandem's task label that no durable record names any more. Reported only:
+ * a label is never ownership proof, so Tandem does not close it.
+ */
+export type LeftoverWorkspace = Readonly<{ readonly workspaceId: string; readonly label: string }>;
+
 /** What re-nesting planned, what it moved, and why anything was skipped. */
 export type RenestReport = Readonly<{
   readonly planned: readonly RenestMove[];
   readonly moved: number;
   readonly warnings: readonly string[];
+  readonly leftovers: readonly LeftoverWorkspace[];
 }>;
+
+/** The prefix Tandem gives every task and presentation workspace label. */
+const TASK_WORKSPACE_MARKER = "└ ";
+
+/**
+ * How long re-nesting waits for the state lock. A coordinator that has just started runs its first
+ * scheduler pass under that lock, and re-nesting runs right then, so the usual 5 seconds is too short.
+ */
+const STATE_LOCK_WAIT_MS = 30_000;
+
+const EMPTY: RenestReport = { planned: [], moved: 0, warnings: [], leftovers: [] };
 
 /**
  * Herdr's `workspace.move` inserts at a gap in the list as it was before the move: index i means
@@ -75,17 +95,57 @@ export function planRenest(
   return moves;
 }
 
-async function readTasks(home: string): Promise<readonly TaskRecord[]> {
+type Durable = Readonly<{ readonly tasks: readonly TaskRecord[]; readonly state: RuntimeState }>;
+
+/** Reads task records and runtime state together under one state lock, waiting up to `waitMs`. */
+async function readDurable(home: string, waitMs: number): Promise<Durable> {
   try {
-    if (!(await lstat(databasePath(home))).isFile()) return [];
+    if (!(await lstat(databasePath(home))).isFile()) {
+      return { tasks: [], state: await readRuntimeState(runtimeFile(home)) };
+    }
   } catch {
-    return [];
+    return { tasks: [], state: await readRuntimeState(runtimeFile(home)) };
   }
-  return createTaskStore({
+  const store = createTaskStore({
     directory: join(home, "tasks"),
     clock: () => new Date().toISOString(),
     idFactory: defaultIdFactory(),
-  }).list();
+  });
+  return withStateLock(
+    home,
+    async () => ({ tasks: await store.list(), state: await readRuntimeState(runtimeFile(home)) }),
+    waitMs,
+  );
+}
+
+/**
+ * Lists Tandem-labelled workspaces that no durable record names: not a coordinator's, not any
+ * task's or presentation's endpoint, and not a worker launch still in flight under that label.
+ */
+function leftoverWorkspaces(
+  live: readonly HerdrWorkspace[],
+  records: readonly CoordinatorRecord[],
+  durable: Durable,
+): readonly LeftoverWorkspace[] {
+  const named = new Set<string>(records.map((record) => record.endpoint.workspaceId));
+  const launching = new Set<string>();
+  for (const task of durable.tasks) {
+    for (const endpoint of task.endpoints ?? []) named.add(endpoint.workspaceId);
+  }
+  for (const task of durable.state.tasks) {
+    for (const endpoint of task.endpoints) named.add(endpoint.workspaceId);
+    if (task.endpointLaunch !== undefined) launching.add(task.endpointLaunch.workspaceLabel);
+  }
+  for (const presentation of durable.state.presentations) {
+    if (presentation.endpoint !== undefined) named.add(presentation.endpoint.workspaceId);
+    if (presentation.endpointLaunch !== undefined) {
+      launching.add(presentation.endpointLaunch.workspaceLabel);
+    }
+  }
+  return live.flatMap(({ workspaceId, label }) => {
+    if (label === undefined || !label.startsWith(TASK_WORKSPACE_MARKER)) return [];
+    return named.has(workspaceId) || launching.has(label) ? [] : [{ workspaceId, label }];
+  });
 }
 
 /**
@@ -95,7 +155,7 @@ async function readTasks(home: string): Promise<readonly TaskRecord[]> {
  * else is left where it is.
  */
 async function observeGroups(
-  home: string,
+  durable: Durable,
   sessionId: string,
   records: readonly CoordinatorRecord[],
   liveOrder: readonly string[],
@@ -103,8 +163,8 @@ async function observeGroups(
   const live = (id: string) => liveOrder.filter((entry) => entry === id).length === 1;
   const coordinators = records.filter((record) => live(record.endpoint.workspaceId));
   const coordinatorWorkspaces = new Set(coordinators.map((record) => record.endpoint.workspaceId));
-  const state = await readRuntimeState(runtimeFile(home));
-  const tasks = [...(await readTasks(home))].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const { state } = durable;
+  const tasks = [...durable.tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const owners = new Map<string, { repoPath: string; taskId: string }>();
   const contested = new Set<string>();
   for (const task of tasks) {
@@ -144,24 +204,43 @@ export async function renestWorkspaces(
     readonly cwd: string;
     /** Without apply, only the plan is returned and Herdr is only read. */
     readonly apply: boolean;
+    /** How long to wait for the state lock; defaults to 30 seconds. */
+    readonly lockWaitMs?: number;
   }>,
   options: HerdrAdapterOptions = {},
 ): Promise<RenestReport> {
   const warnings: string[] = [];
+  const failed = (what: string, error: unknown): RenestReport => ({
+    ...EMPTY,
+    warnings: [`could not read ${what}: ${error instanceof Error ? error.message : String(error)}`],
+  });
+  let records: readonly CoordinatorRecord[];
+  let durable: Durable;
+  try {
+    records = await listCoordinatorRecords(input.home, input.sessionId);
+    // No recorded coordinator means nothing to nest under, so Herdr is not even asked.
+    if (records.length === 0) return EMPTY;
+    durable = await readDurable(input.home, input.lockWaitMs ?? STATE_LOCK_WAIT_MS);
+  } catch (error) {
+    return failed("Tandem's task records", error);
+  }
+  let live: readonly HerdrWorkspace[];
+  try {
+    live = await listWorkspaces(run, input.sessionId, input.cwd);
+  } catch (error) {
+    return failed("Herdr workspaces", error);
+  }
+  const liveOrder = live.map((workspace) => workspace.workspaceId);
+  const leftovers = leftoverWorkspaces(live, records, durable);
   let planned: readonly RenestMove[];
   try {
-    // No recorded coordinator means nothing to nest under, so Herdr is not even asked.
-    const records = await listCoordinatorRecords(input.home, input.sessionId);
-    if (records.length === 0) return { planned: [], moved: 0, warnings: [] };
-    const liveOrder = await listWorkspaceOrder(run, input.sessionId, input.cwd);
-    const observed = await observeGroups(input.home, input.sessionId, records, liveOrder);
+    const observed = await observeGroups(durable, input.sessionId, records, liveOrder);
     warnings.push(...observed.warnings);
     planned = planRenest(liveOrder, observed.groups);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return { planned: [], moved: 0, warnings: [`could not read Herdr workspaces: ${reason}`] };
+    return failed("Tandem's task records", error);
   }
-  if (!input.apply) return { planned, moved: 0, warnings };
+  if (!input.apply) return { planned, moved: 0, warnings, leftovers };
   let moved = 0;
   for (const move of planned) {
     const failures = await moveWorkspaceAfterParent(
@@ -177,5 +256,5 @@ export async function renestWorkspaces(
     if (failures.length === 0) moved += 1;
     else warnings.push(...failures);
   }
-  return { planned, moved, warnings };
+  return { planned, moved, warnings, leftovers };
 }

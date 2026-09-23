@@ -124,6 +124,16 @@ export function otherSessionReconciliationNotices(
   return notices;
 }
 
+/** Reads the re-nest warnings a coordinator restart reported, if any. */
+export function renestWarningsFromLaunch(value: unknown): readonly string[] {
+  if (!isRecord(value) || !Array.isArray(value.renestWarnings)) return [];
+  return value.renestWarnings.filter((warning): warning is string => typeof warning === "string");
+}
+
+/**
+ * Launches each project's coordinator, then runs `afterLaunches` before attaching: attaching blocks
+ * until the person leaves Herdr, so anything that should change what they see must happen first.
+ */
 export async function launchProjects(
   roots: readonly string[],
   invocation: TerminalInvocation,
@@ -140,6 +150,7 @@ export async function launchProjects(
   }>,
   service: TandemService,
   run: CommandRunner,
+  afterLaunches: (launches: readonly unknown[]) => Promise<void> = async () => undefined,
 ): Promise<readonly unknown[]> {
   const applicationDependencies: CliDependencies = {
     cwd: environment.cwd,
@@ -178,6 +189,7 @@ export async function launchProjects(
   } finally {
     await application.shutdown();
   }
+  await afterLaunches(launches);
 
   const input = dependencies.input ?? process.stdin;
   const output = dependencies.output ?? process.stdout;

@@ -35,6 +35,7 @@ import {
   otherSessionReconciliationNotices,
   previousResourcesFromLaunch,
   previousResourcesNotice,
+  renestWarningsFromLaunch,
   workspaceRetirementFromLaunch,
   workspaceRetirementNotice,
 } from "./terminal/launch.ts";
@@ -442,16 +443,29 @@ async function runProjectFlow({
       if (notice !== undefined) stdout(notice);
     }
   }
-  const launches = await launchProjects(roots, invocation, environment, dependencies, service, run);
+  // A new coordinator workspace lands at the end of the sidebar, so put each project's tasks back
+  // under it, and say why whenever that could not happen. This runs before Herdr is attached.
+  const renestAfterLaunches = async (launched: readonly unknown[]) => {
+    const final = await renest(run, environment, dependencies);
+    const warnings = new Set([...launched.flatMap(renestWarningsFromLaunch), ...final.warnings]);
+    for (const warning of warnings) {
+      stdout(`Tandem left some task workspaces where they were: ${warning}\n`);
+    }
+  };
+  const launches = await launchProjects(
+    roots,
+    invocation,
+    environment,
+    dependencies,
+    service,
+    run,
+    renestAfterLaunches,
+  );
   stdout(
     `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared Herdr session ${environment.sessionId}.\n`,
   );
   if (invocation.command === "update") {
     stdout(`Coordinators now run ${await tandemCodeVersion(run, TANDEM_ROOT)}.\n`);
-  }
-  // A new coordinator workspace lands at the end of the sidebar; put each project's tasks back under it.
-  for (const warning of (await renest(run, environment, dependencies)).warnings) {
-    stdout(`Tandem left some task workspaces where they were: ${warning}\n`);
   }
   for (const [index, launch] of launches.entries()) {
     const repoPath = roots[index];

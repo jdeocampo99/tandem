@@ -513,8 +513,15 @@ tasks name it in this Herdr session, it is not a coordinator's workspace, and it
 `insert_index` is a gap in the list as it was before the move. Re-nesting is display-only: it never
 creates, closes, or renames a workspace, makes no move when everything is already nested, and turns
 an unreadable session or a failed move into a one-line warning that never blocks launch or fix.
-`tandem fix` applies it without asking and reports it as one line, and as `renest` (`planned`,
-`moved`, `warnings`) in `--json`.
+It reads task records under the state lock and waits up to 30 seconds for it, because a restarted
+coordinator runs its first scheduler pass under that lock at the moment the restart re-nests. The
+front door re-nests after every launch and again before attaching to Herdr (attaching blocks until
+the person leaves Herdr), and prints every warning, including those from each restart, one line
+each. `tandem fix` applies it without asking and reports it as one line, and as `renest`
+(`planned`, `moved`, `warnings`, `leftovers`) in `--json`. A workspace carrying Tandem's `└ ` task
+label that no coordinator, task, or presentation record names (and no in-flight worker launch
+claims) is listed as a leftover and kept: a label is never ownership proof, so Tandem does not
+close it.
 
 `doctor` is available through the advanced low-level CLI to check the checked-in extension and
 config files, central repository policy, pinned OMP model, and named Herdr status without writing

@@ -191,9 +191,8 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
           runInteractive,
           sleep,
           processEnvironment: dependencies.processEnvironment ?? environmentSource(),
-          rehomeTaskWorkspaces: async (input) => {
-            await renestWorkspaces(run, { ...input, apply: true });
-          },
+          rehomeTaskWorkspaces: async (input) =>
+            (await renestWorkspaces(run, { ...input, apply: true })).warnings,
         };
         const launch = invocation.options.restart
           ? await restartCoordinator(

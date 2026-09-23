@@ -87,7 +87,7 @@ type HerdrPaneIdentity = Readonly<{
   workspaceId: string;
   foregroundCwd: string | undefined;
 }>;
-type HerdrWorkspace = Readonly<{ workspaceId: string }>;
+export type HerdrWorkspace = Readonly<{ workspaceId: string; label?: string }>;
 export type HerdrSessionStatus = Readonly<{ socketPath: string; running: boolean | undefined }>;
 type HerdrWorkspaceMoveResponse = Readonly<{
   type: "workspace_list";
@@ -464,6 +464,12 @@ function parseWorkspaceList(
   }
   return result.workspaces.map((entry, index) => {
     const workspace = requiredRecord(entry, `result.workspaces[${index}]`, operation, response);
+    const label = optionalString(
+      workspace.label,
+      `result.workspaces[${index}].label`,
+      operation,
+      response,
+    );
     return {
       workspaceId: requiredString(
         workspace.workspace_id,
@@ -471,6 +477,7 @@ function parseWorkspaceList(
         operation,
         response,
       ),
+      ...(label === undefined ? {} : { label }),
     };
   });
 }
@@ -718,19 +725,19 @@ function parseWorkspaceMoveResponse(
   return { type: "workspace_list", workspaces: parseWorkspaceList(value, operation, response) };
 }
 
-/** The session's workspaces by id, in sidebar order. Read-only. */
-export async function listWorkspaceOrder(
+/** The session's workspaces with their labels, in sidebar order. Read-only. */
+export async function listWorkspaces(
   run: CommandRunner,
   sessionId: string,
   cwd: string,
-): Promise<readonly string[]> {
+): Promise<readonly HerdrWorkspace[]> {
   const request = herdrRequest(sessionId, cwd, ["workspace", "list"]);
   const result = await runChecked(run, request, "herdr workspace list");
   return parseWorkspaceList(
     parseJson(result.stdout, "herdr workspace list"),
     "herdr workspace list",
     result.stdout,
-  ).map((workspace) => workspace.workspaceId);
+  );
 }
 
 export async function moveWorkspaceAfterParent(
