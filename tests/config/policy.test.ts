@@ -15,7 +15,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { writeModelSettings } from "../../src/config/models.ts";
 import { defaultPolicy, parsePolicy } from "../../src/config/policy.ts";
-import { onboardRepo, resolveRepoPolicy } from "../../src/config/repositories.ts";
+import {
+  onboardRepo,
+  readCoordinatorMcpServers,
+  resolveRepoPolicy,
+} from "../../src/config/repositories.ts";
 
 type PolicyFixture = Readonly<{
   root: string;
@@ -499,6 +503,7 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
     const enabled = text.replace(/^# (?=[A-Za-z]+ = |\[)/gmu, "");
     const settings = Bun.TOML.parse(enabled) as Record<string, unknown>;
     expect(Object.keys(settings).sort()).toEqual([
+      "coordinatorMcpServers",
       "instructionFiles",
       "instructions",
       "maxFixRounds",
@@ -509,8 +514,9 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
       "setupCommands",
       "validationCommands",
     ]);
-    const { repoPath, ...policy } = settings;
+    const { repoPath, coordinatorMcpServers, ...policy } = settings;
     expect(repoPath).toBe(repo);
+    expect(coordinatorMcpServers).toEqual(["linear"]);
     expect(() => parsePolicy(policy)).not.toThrow();
   });
 });
@@ -520,5 +526,31 @@ test("a project with both settings.toml and config.json is refused rather than g
     const written = await onboardRepo({ repoPath: repo, home, write: true });
     await writeCentralEnvelope(written.configPath, repo, {});
     await expect(resolveRepoPolicy({ repoPath: repo, home })).rejects.toThrow("keep one");
+  });
+});
+
+test("onboarding saves the coordinator's MCP servers outside task policy", async () => {
+  await withFixture("coordinator-mcp", async ({ repo, home }) => {
+    expect(await readCoordinatorMcpServers({ repoPath: repo, home })).toEqual([]);
+
+    const written = await onboardRepo({
+      repoPath: repo,
+      home,
+      write: true,
+      coordinatorMcpServers: ["linear"],
+    });
+
+    expect(await readCoordinatorMcpServers({ repoPath: repo, home })).toEqual(["linear"]);
+    const resolved = await resolveRepoPolicy({ repoPath: repo, home });
+    expect(resolved.config).not.toHaveProperty("coordinatorMcpServers");
+
+    await writeFile(
+      written.configPath,
+      `repoPath = ${JSON.stringify(repo)}\ncoordinatorMcpServers = "linear"\n`,
+      "utf8",
+    );
+    await expect(resolveRepoPolicy({ repoPath: repo, home })).rejects.toThrow(
+      "coordinatorMcpServers must be an array of server names",
+    );
   });
 });

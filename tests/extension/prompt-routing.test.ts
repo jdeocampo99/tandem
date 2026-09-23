@@ -381,6 +381,7 @@ test("registration installs the OMP input hook before command handling", async (
       promptRouting: { timeoutMs: 1_500 },
       reconcile: async () => undefined,
       postAction: async () => undefined,
+      coordinatorMcpServers: async () => [],
     });
     const input = handlers.get("input");
     if (input === undefined) throw new Error("input hook was not registered");

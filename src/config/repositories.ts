@@ -65,6 +65,8 @@ export type OnboardRepoOptions = Readonly<{
   readText?: PolicyTextReader;
   writeText?: PolicyTextWriter;
   write?: boolean;
+  /** MCP servers the user let the coordinator use; written only with write=true. */
+  coordinatorMcpServers?: readonly string[];
 }>;
 
 /** Onboarding proposal and durable-write outcome; unresolved is never represented as a passing check. */
@@ -173,8 +175,26 @@ const CENTRAL_ENVELOPE_KEYS: Readonly<Record<string, true>> = {
   policy: true,
 };
 
-/** settings.toml is the policy itself plus the `repoPath` it belongs to. */
-function parseSettingsToml(text: string, source: string, root: string): unknown {
+/** Names of the MCP servers the coordinator may use itself; tasks can use every server. */
+function readCoordinatorMcpServerList(value: unknown, source: string): readonly string[] {
+  if (value === undefined) return [];
+  const field = `${source} coordinatorMcpServers`;
+  if (!Array.isArray(value)) throw new TypeError(`${field} must be an array of server names`);
+  return deduplicateStrings(
+    value.map((entry: unknown, index) => {
+      if (typeof entry !== "string" || entry.trim().length === 0) {
+        throw new TypeError(`${field}[${index}] must be a non-empty server name`);
+      }
+      return entry.trim();
+    }),
+  );
+}
+
+/**
+ * settings.toml is the policy itself plus the `repoPath` it belongs to and the coordinator's MCP
+ * servers. The server list is a launch setting, not task policy, so it stays out of the policy.
+ */
+function readSettingsToml(text: string, source: string, root: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = Bun.TOML.parse(text);
@@ -184,10 +204,19 @@ function parseSettingsToml(text: string, source: string, root: string): unknown 
     );
   }
   if (!isRecord(parsed)) throw new TypeError(`${source} must be a TOML table`);
-  const { repoPath, ...policy } = parsed;
-  if (repoPath !== root) {
+  if (parsed.repoPath !== root) {
     throw new TypeError(`${source} repoPath must be ${JSON.stringify(root)}`);
   }
+  readCoordinatorMcpServerList(parsed.coordinatorMcpServers, source);
+  return parsed;
+}
+
+function parseSettingsToml(text: string, source: string, root: string): unknown {
+  const {
+    repoPath: _repoPath,
+    coordinatorMcpServers: _servers,
+    ...policy
+  } = readSettingsToml(text, source, root);
   return policy;
 }
 
@@ -327,6 +356,18 @@ async function resolveGuidance(
   }
 
   return guidance;
+}
+
+/** The MCP servers this repository lets its coordinator use; none when unset or not yet onboarded. */
+export async function readCoordinatorMcpServers(
+  options: Readonly<{ repoPath: string; home: string; readText?: PolicyTextReader }>,
+): Promise<readonly string[]> {
+  const root = await repositoryRoot(options.repoPath);
+  const file = await existingCentralFile(centralPaths(root, await configuredHome(options.home)));
+  if (file === undefined || !file.endsWith(".toml")) return [];
+  const text = (await options.readText?.(file)) ?? (await readFile(file, "utf8"));
+  const settings = readSettingsToml(text, file, root);
+  return readCoordinatorMcpServerList(settings.coordinatorMcpServers, file);
 }
 
 /** Resolves central policy by canonical repository identity and pins guidance from the requested checkout. */
@@ -470,6 +511,7 @@ function serializeCentralConfig(
   root: string,
   validationCommands: readonly string[],
   setupCommands: readonly string[],
+  coordinatorMcpServers: readonly string[],
 ): string {
   const defaults = defaultPolicy();
   const setting = (values: readonly string[], key: string, example: string): string =>
@@ -487,6 +529,11 @@ ${setting(setupCommands, "setupCommands", '["npm ci", "npx prisma generate"]')}
 
 # Checks every change must pass before Tandem accepts it. Each one runs in the project folder.
 ${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"]')}
+
+# MCP servers the coordinator may use itself, by name. The coordinator plans and hands work to
+# tasks, and tasks can use every MCP server this project has. List only servers the coordinator
+# needs for looking things up, like reading tickets.
+${setting(coordinatorMcpServers, "coordinatorMcpServers", '["linear"]')}
 
 # How many tasks may run at the same time.
 # maxWorkers = ${defaults.maxWorkers}
@@ -566,7 +613,12 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
   if (options.write === true) {
     await writeCentralConfig(
       paths,
-      serializeCentralConfig(root, proposal.commands, setupCommands),
+      serializeCentralConfig(
+        root,
+        proposal.commands,
+        setupCommands,
+        options.coordinatorMcpServers ?? [],
+      ),
       options.writeText,
     );
     written = true;

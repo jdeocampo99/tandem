@@ -13,6 +13,7 @@ import {
   type TandemBoundaryEnvironment,
   type TandemEnvironmentSource,
 } from "./config/environment.ts";
+import { readCoordinatorMcpServers } from "./config/repositories.ts";
 import type { TaskRecord } from "./contracts.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import {
@@ -218,6 +219,12 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       promptRouting,
       reconcile,
       postAction,
+      // An unreadable settings file allows no servers, so the guard fails closed.
+      coordinatorMcpServers: (ctx) =>
+        readCoordinatorMcpServers({
+          repoPath: getEnvironment(ctx).repo,
+          home: getEnvironment(ctx).home,
+        }).catch(() => []),
     });
     pi.on("before_agent_start", async (event, ctx) => {
       const current = getService(ctx);

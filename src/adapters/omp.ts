@@ -1,3 +1,4 @@
+import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
 import type { CommandRequest, CommandRunner, ModelSpec, ThinkingLevel } from "../contracts.ts";
 import {
   AdapterProtocolError,
@@ -323,4 +324,10 @@ export function buildOmpArgv(input: OmpArgvInput): readonly string[] {
   ];
   if (input.prompt !== undefined) argv.push(input.prompt);
   return argv;
+}
+
+/** Names of the MCP servers OMP would load in this checkout, from project and user config. */
+export async function listOmpMcpServers(cwd: string): Promise<readonly string[]> {
+  const { configs } = await loadAllMCPConfigs(cwd);
+  return Object.keys(configs).sort();
 }

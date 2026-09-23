@@ -213,7 +213,11 @@ export type TandemServiceOptions = Readonly<{
   readonly reviewAssistance?: ReviewAssistanceRuntime;
 }>;
 export type TandemService = Readonly<{
-  readonly onboard: (repoPath: string, write?: boolean) => Promise<OnboardRepoResult>;
+  readonly onboard: (
+    repoPath: string,
+    write?: boolean,
+    coordinatorMcpServers?: readonly string[],
+  ) => Promise<OnboardRepoResult>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
   readonly configureModels: (
     input: Readonly<{
@@ -679,7 +683,8 @@ class TandemController {
 
   api(): TandemService {
     return {
-      onboard: (repoPath, write) => this.onboard(repoPath, write),
+      onboard: (repoPath, write, coordinatorMcpServers) =>
+        this.onboard(repoPath, write, coordinatorMcpServers),
       inspect: (id) => this.inspect(id),
       deliveryPreflight: (id, input) => this.deliveryPreflight(id, input.base),
       models: (repoPath) => this.models(repoPath),
@@ -719,12 +724,17 @@ class TandemController {
     };
   }
 
-  async onboard(repoPath: string, write = false): Promise<OnboardRepoResult> {
+  async onboard(
+    repoPath: string,
+    write = false,
+    coordinatorMcpServers?: readonly string[],
+  ): Promise<OnboardRepoResult> {
     const source = await mapTaskSource(this.#deps.run, repoPath, this.#deps.sourceWorkspace);
     return onboardRepo({
       repoPath: source.repoPath,
       home: this.#deps.home,
       write,
+      ...(coordinatorMcpServers === undefined ? {} : { coordinatorMcpServers }),
       ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
     });
   }
