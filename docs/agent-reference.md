@@ -744,6 +744,7 @@ The repository-policy keys, all optional, are:
 | `maxWorkers` | Positive integer concurrency limit. |
 | `maxFixRounds` | Positive integer review-fix limit. |
 | `reviewLevels` | Optional `{ "deepScrutiny", "jevAssistance", "sourceTransmission" }`; the two booleans and `sourceTransmission` default to `false` and `jevAssistance` defaults to `"off"` (the only other value is `"shadow"`). See [Risk-based review levels](#risk-based-review-levels); any move past `shadow` requires the documented evaluation first. A stored or configured `reducedRouting` key is a legacy field: it decodes without error but is silently ignored. |
+| `requestBudget` | Optional `{ "capMicros", "operationEstimateMicros" }`, both integer USD micro-dollars and both defaulting to `"unset"`. An unset `capMicros` leaves the repository not spend-governed. See [Standing request budgets and spending decisions](#standing-request-budgets-and-spending-decisions). |
 
 Custom approved policies use the same envelope and preserve every unrelated valid key and value.
 `instructionFiles` and all root guidance reads remain relative to the target repository; the

@@ -523,6 +523,7 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
       "models",
       "repoPath",
       "requestBudget",
+      "reviewLevels",
       "setupCommands",
       "validationCommands",
     ]);

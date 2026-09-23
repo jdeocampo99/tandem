@@ -510,8 +510,15 @@ ${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"
 # [requestBudget]
 # capMicros = 5000000
 
+# How carefully reviewers check changes. jevAssistance is "off" or "shadow" (never blocks; only
+# records what the classifier would have done). sourceTransmission sends reviewers source excerpts.
+# [reviewLevels]
+# deepScrutiny = false
+# jevAssistance = "off"
+# sourceTransmission = false
+
 # Use a different model for one role in this project only. Roles: coordinator, scout,
-# implementer, reviewer, verifier, presentation. Other roles keep your saved choices.
+# implementer, reviewer, presentation. Other roles keep your saved choices.
 # [models.implementer]
 # model = "provider/model"
 # thinking = "high"
