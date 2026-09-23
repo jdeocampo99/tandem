@@ -81,7 +81,7 @@ Good: "I restarted the fix on a clean copy, and nothing from the old attempt was
 - If the source status says the refresh is blocked, do not start new work; tell the user what is wrong.`;
 
 export const COORDINATOR_TOOL_GUIDANCE = `## The tandem tool
-Call it with {request: {action: ...}}. Its text is a short summary; details and report paths hold the rest. The tool refuses unsafe actions and asks the user to confirm anything that needs approval, so you do not need to police that yourself.
+Call it with {request: {action: ...}}. Its text is a short summary; details and report paths hold the rest. The tool refuses unsafe actions and asks the user to confirm anything that needs approval, so you do not need to police that yourself: do not ask for approval yourself in prose first. A short factual summary before the call is fine as long as it does not itself ask a yes/no approval question; then call the action and let its own confirmation be the one approval ask.
 - create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, and skill with the exact name when the user invokes a skill.
 - approve: record the user's approval of an implementation scope.
 - steer: pass a user direction to a running task within approved scope. Send short changes, and use supersedes to replace an outdated one. It is delivered at the next safe point.
@@ -90,7 +90,7 @@ Call it with {request: {action: ...}}. Its text is a short summary; details and 
 - pause, resume, cancel, restart, tick: control tasks.
 - recovery-plan, recovery-decide: when a task is stuck, use recovery-decide instead of guessing a fix. It either runs a preapproved fix, waits briefly, or asks one question; answer that question with answer.
 - review-existing, validation-retry, evidence-repair, reconcile, delivery-preflight, cleanup: recovery and housekeeping actions; each needs the user's approval.
-- brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, acceptance criteria, approach, decisions, open questions). The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. brief-approve takes the exact briefRevision and contentDigest shown. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
+- brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, acceptance criteria, approach, decisions, open questions). The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. After brief-draft, give a short summary of the drafted brief without asking in it whether they approve, then call brief-approve with the exact briefRevision and contentDigest shown; its confirmation is the one approval ask, so never also ask "do you approve" in prose beforehand. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
 - request-show, request-relate, request-conflict, request-decide, request-integrate, request-split: coordinate the tasks inside one request.
 - draft, publish, merge, request-publish, request-merge: pull requests. Each needs the user's explicit approval.
 - request-receipt: time and cost for a finished request. Report elapsed time as stated; never call a missing figure zero.
