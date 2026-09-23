@@ -1853,6 +1853,23 @@ from its current stage. It is always the same three moves:
    told a prior attempt may have left partial edits and to inspect `git status`/`git diff` before
    continuing.
 
+   When the gate admits nothing, `reserveTask` returns a typed `ReservationRefusal` instead of
+   nothing, and the task's block cause and coordinator notification carry its one-sentence reason
+   (the specifics go only in the cause's detail):
+
+   | Refusal | Plain reason |
+   | --- | --- |
+   | `slot-held` | Another worker still holds this task's slot. |
+   | `job-running` | A worker is still running for this task. |
+   | `worker-limit` | The worker limit (N) is reached. |
+   | `routing-question` | A routing question is waiting: the routing question's own one-line reason. |
+   | `stop-requested` | A stop was requested for this task. |
+   | `stage` | The task is at a stage where that role can't start. |
+   | `fix-rounds` | The worker has no fix rounds left. |
+
+   Relaunch failures after admission (no terminal could be opened, the working copy is gone, the
+   task moved on) are reported the same way.
+
    `awaiting-fixes` has no branch of its own: `beginFixes` moves the task to `implementing` and
    spends the review round before touching a pane, so a missing pane leaves it unblocked at
    `implementing` for that re-entry. The relaunched fixer keeps the same `fixContextPath` findings,

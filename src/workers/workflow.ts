@@ -163,6 +163,7 @@ import {
   type RaisedExecutionRoutingPause,
   resolvedExecutionModel,
   resolveExecutionRouting,
+  routingPauseExplanation,
 } from "./execution-routing.ts";
 import {
   parseWorkerJob,
@@ -231,6 +232,20 @@ export type ReservationResult = Readonly<{
   readonly task: TaskRecord;
   readonly runtime: RuntimeTaskState;
   readonly reservation: DurableReservation;
+}>;
+
+/** Why `reserveTask` admitted nothing: one plain sentence for people, the specifics in `detail`. */
+export type ReservationRefusal = Readonly<{
+  readonly refusal:
+    | "stage"
+    | "fix-rounds"
+    | "stop-requested"
+    | "slot-held"
+    | "job-running"
+    | "worker-limit"
+    | "routing-question";
+  readonly summary: string;
+  readonly detail: string;
 }>;
 
 function claimOf(operation: DurableOperation | undefined): OperationClaim | undefined {
@@ -1533,7 +1548,7 @@ export class WorkerWorkflow {
   async startQueuedTask(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
     const role = workerRoleForTask(task);
     const reservation = reserved ?? (await this.reserveTask(task.id, role));
-    if (reservation === undefined) return;
+    if ("refusal" in reservation) return;
     const runtime = reservation.runtime;
     const operation = runtime.operation;
     if (operation === undefined) {
@@ -1893,7 +1908,7 @@ export class WorkerWorkflow {
       return;
     }
     const reservation = reserved ?? (await this.reserveTask(task.id, "implementer"));
-    if (reservation === undefined) return;
+    if ("refusal" in reservation) return;
     const operation = reservation.runtime.operation;
     const claim = claimOf(operation);
     const contextPath =
@@ -1990,20 +2005,25 @@ export class WorkerWorkflow {
     Readonly<{
       readonly relaunched: boolean;
       readonly reason?: string;
+      readonly detail?: string;
       readonly sourceDriftNote?: string;
     }>
   > {
     const role = workerRoleForTask(task);
     const allowedStages: readonly TaskRecord["stage"][] = ["implementing", "scouting"];
     const reservation = await this.reserveTask(task.id, role);
-    if (reservation === undefined) {
-      return { relaunched: false, reason: "relaunch admission was refused" };
+    if ("refusal" in reservation) {
+      return { relaunched: false, reason: reservation.summary, detail: reservation.detail };
     }
     const runtime = reservation.runtime;
     const operation = runtime.operation;
     if (operation === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
-      return { relaunched: false, reason: "relaunch admission produced no durable operation" };
+      return {
+        relaunched: false,
+        reason: "Tandem couldn't record the new attempt.",
+        detail: "relaunch admission produced no durable operation",
+      };
     }
     const claim: OperationClaim = {
       id: operation.id,
@@ -2020,7 +2040,11 @@ export class WorkerWorkflow {
         summary: "The task's working copy is missing, so it can't be restarted.",
         detail: reason,
       });
-      return { relaunched: false, reason };
+      return {
+        relaunched: false,
+        reason: "The task's working copy is missing, so it can't be restarted.",
+        detail: reason,
+      };
     }
     // Re-entry never refuses on a moved source repository HEAD (only first launch does, via
     // assertSourceUnchanged); it only records the observation durably and notes it in plain English.
@@ -2036,7 +2060,11 @@ export class WorkerWorkflow {
     );
     if (launch === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      return { relaunched: false, reason: "relaunch could not allocate a worker pane" };
+      return {
+        relaunched: false,
+        reason: "Tandem couldn't open a terminal for the worker.",
+        detail: "relaunch could not allocate a worker pane",
+      };
     }
     try {
       await this.transitionIfOperationClaim(
@@ -2056,7 +2084,7 @@ export class WorkerWorkflow {
         summary: "Tandem couldn't restart this task.",
         detail: reason,
       });
-      return { relaunched: false, reason };
+      return { relaunched: false, reason: "Tandem couldn't restart this task.", detail: reason };
     }
     const currentTask = await this.#deps.getTask(task.id);
     if (currentTask.stage !== task.stage) {
@@ -2065,18 +2093,27 @@ export class WorkerWorkflow {
       }
       return {
         relaunched: false,
-        reason: `task moved to ${currentTask.stage} before relaunch could start a worker`,
+        reason: `The task became ${currentTask.stage} before the worker could start.`,
+        detail: `task moved to ${currentTask.stage} before relaunch could start a worker`,
       };
     }
     const currentRuntime = await this.#deps.runtimeFor(task.id);
     if (currentRuntime === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      return { relaunched: false, reason: "relaunch lost its durable runtime metadata" };
+      return {
+        relaunched: false,
+        reason: "Tandem lost its saved record for this task.",
+        detail: "relaunch lost its durable runtime metadata",
+      };
     }
     const writer = currentWriter(currentRuntime);
     if (writer === undefined) {
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      return { relaunched: false, reason: "relaunch lost its worker endpoint before launch" };
+      return {
+        relaunched: false,
+        reason: "The worker's terminal closed before it could start.",
+        detail: "relaunch lost its worker endpoint before launch",
+      };
     }
     await this.launchAgent(currentTask, currentRuntime, writer, role, { extraInstructions });
     return { relaunched: true, ...(sourceDriftNote === undefined ? {} : { sourceDriftNote }) };
@@ -2357,7 +2394,7 @@ export class WorkerWorkflow {
     }
     const plan = planned.plan;
     const reservation = reserved ?? (await this.reserveTask(task.id, "validation"));
-    if (reservation === undefined) return;
+    if ("refusal" in reservation) return;
     const runtime = reservation.runtime;
     const claim = claimOf(runtime.operation);
     if (claim === undefined) {
@@ -2919,7 +2956,7 @@ export class WorkerWorkflow {
     }
     const role: WorkerRole = "reviewer";
     const reservation = reserved ?? (await this.reserveTask(task.id, role));
-    if (reservation === undefined) return;
+    if ("refusal" in reservation) return;
     const reservedRuntime = reservation.runtime;
     const claim = claimOf(reservedRuntime.operation);
     if (claim === undefined) {
@@ -3687,15 +3724,15 @@ export class WorkerWorkflow {
 
   /**
    * Resolves which exact model this attempt may invoke, at the one boundary that decides it.
-   * Returns the transition to record on the admitting operation, or nothing when the task stops on
-   * a routing question, which it records once and never asks again while it still speaks.
+   * Returns the transition to record on the admitting operation, or the routing question the task
+   * stops on, which it records once and never asks again while it still speaks.
    */
   private async resolveRouting(
     store: TaskStoreTransaction,
     task: TaskRecord,
     runtime: RuntimeTaskState,
     attempt: RoutingAttempt,
-  ): Promise<DurableExecutionRouting | undefined> {
+  ): Promise<DurableExecutionRouting | RaisedExecutionRoutingPause> {
     const identity = {
       role: attempt.role,
       generation: task.generation,
@@ -3707,7 +3744,7 @@ export class WorkerWorkflow {
     const settledUncertainty =
       runtime.routingPause?.reason === "prior-outcome-uncertain" && prior?.outcome !== "uncertain";
     if (!settledUncertainty && executionRoutingPauseStands(runtime.routingPause, identity)) {
-      return undefined;
+      return runtime.routingPause;
     }
     const decision = resolveExecutionRouting({
       boundary: routingBoundary(prior),
@@ -3730,7 +3767,7 @@ export class WorkerWorkflow {
     });
     if (decision.outcome === "authorized") return decision.routing;
     await this.stopTaskRouting(store, task, runtime, decision.pause);
-    return undefined;
+    return decision.pause;
   }
 
   /**
@@ -3788,8 +3825,8 @@ export class WorkerWorkflow {
   async reserveTask(
     taskId: string,
     role: WorkerRole | "validation",
-  ): Promise<ReservationResult | undefined> {
-    return this.#deps.store.exclusive(async (store) => {
+  ): Promise<ReservationResult | ReservationRefusal> {
+    return this.#deps.store.exclusive<ReservationResult | ReservationRefusal>(async (store) => {
       const task = await store.read(taskId);
       if (task === undefined || !(await this.#deps.taskInScope(task))) {
         throw new Error(`task ${taskId} is missing`);
@@ -3799,7 +3836,11 @@ export class WorkerWorkflow {
         isFix &&
         (task.reviewHead === undefined || task.reviewRound >= task.policy.config.maxFixRounds)
       ) {
-        return undefined;
+        return {
+          refusal: "fix-rounds",
+          summary: "The worker has no fix rounds left.",
+          detail: `review round ${task.reviewRound} of ${task.policy.config.maxFixRounds}; reviewed head ${String(task.reviewHead)}`,
+        };
       }
       const stageAllowed =
         role === "validation"
@@ -3809,14 +3850,47 @@ export class WorkerWorkflow {
             : role === "reviewer"
               ? task.stage === "reviewing"
               : task.stage === "queued" || task.stage === "implementing" || isFix;
-      if (!stageAllowed) return undefined;
+      if (!stageAllowed) {
+        return {
+          refusal: "stage",
+          summary: `The task is ${task.stage}, so no ${role} can start.`,
+          detail: `role ${role} cannot start at stage ${task.stage}`,
+        };
+      }
       const state = await readRuntimeState(this.#deps.runtimePath);
       const runtime = taskRuntime(state, taskId);
       if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
-      if (runtime.stopRequest !== undefined) return undefined;
-      if (unreleasedReservation(runtime.reservation)) return undefined;
-      if (runtime.jobs.some(activeRuntimeJob)) return undefined;
-      if (activeReservations(state) >= task.policy.config.maxWorkers) return undefined;
+      if (runtime.stopRequest !== undefined) {
+        return {
+          refusal: "stop-requested",
+          summary: "A stop was requested for this task.",
+          detail: `pending ${runtime.stopRequest.action} request for generation ${runtime.stopRequest.generation}`,
+        };
+      }
+      const held = runtime.reservation;
+      if (unreleasedReservation(held)) {
+        return {
+          refusal: "slot-held",
+          summary: "Another worker still holds this task's slot.",
+          detail: `reservation ${held.id} (${held.phase}) for operation ${String(held.operationId)}`,
+        };
+      }
+      const running = runtime.jobs.find(activeRuntimeJob);
+      if (running !== undefined) {
+        return {
+          refusal: "job-running",
+          summary: "A worker is still running for this task.",
+          detail: `job ${running.id} is ${running.phase}`,
+        };
+      }
+      const maxWorkers = task.policy.config.maxWorkers;
+      if (activeReservations(state) >= maxWorkers) {
+        return {
+          refusal: "worker-limit",
+          summary: `The worker limit (${maxWorkers}) is reached.`,
+          detail: `${activeReservations(state)} active reservations of ${maxWorkers}`,
+        };
+      }
       const operationId = singleLine(this.#deps.idFactory(), "operation id");
       const inputHead = task.reviewHead ?? runtime.sourceCheckpoint.head;
       const iterationScope = isFix ? iterationScopeFor(task) : undefined;
@@ -3874,7 +3948,13 @@ export class WorkerWorkflow {
               policyDigest,
               cwd: runtime.worktree?.path ?? taskSourcePath(targetTask, runtime),
             });
-      if (routing === undefined && role !== "validation") return undefined;
+      if (routing !== undefined && !("basis" in routing)) {
+        return {
+          refusal: "routing-question",
+          summary: `A routing question is waiting: ${routingPauseExplanation(routing)}`,
+          detail: `routing decision ${routing.decisionId} (${routing.reason})`,
+        };
+      }
       const operation = {
         ...durableOperation(
           operationId,

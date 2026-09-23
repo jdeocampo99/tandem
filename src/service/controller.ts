@@ -1882,7 +1882,7 @@ class TandemController {
           return;
         }
         const admission = await this.#worker.reserveTask(task.id, workerRoleForTask(task));
-        if (admission === undefined) return;
+        if ("refusal" in admission) return;
         const admittedWriter = currentWriter(admission.runtime);
         if (admission.runtime.worktree === undefined || admittedWriter === undefined) {
           await this.#worker.releaseUnlaunchedTaskReservation(task.id, admission.reservation.id);
