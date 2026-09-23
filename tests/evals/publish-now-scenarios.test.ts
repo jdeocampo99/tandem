@@ -95,7 +95,7 @@ test("publish now stops the reviewer, makes the task ready, and lists open findi
     // Publication itself needs GitHub, which the scenario does not fake; the task is already ready.
     await expect(
       service.publishNow(SCENARIO_TASK_ID, { ...PUBLISH_INPUT, approved: true }),
-    ).rejects.toThrow("delivery preflight refused publication");
+    ).rejects.toThrow("not published:");
 
     const task = await service.get(SCENARIO_TASK_ID);
     expect(task.stage).toBe("ready");
