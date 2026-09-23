@@ -25,6 +25,8 @@ export type TandemOmpRegistrationDependencies = Readonly<{
   readonly postAction: (ctx: ExtensionContext) => Promise<void>;
   /** The MCP servers this project lets the coordinator use itself. */
   readonly coordinatorMcpServers: (ctx: ExtensionContext) => Promise<readonly string[]>;
+  /** Whether a research task for this project is queued or running. */
+  readonly researchRunning: (ctx: ExtensionContext) => Promise<boolean>;
 }>;
 
 type TandemToolDetails = Readonly<{
@@ -89,9 +91,12 @@ export function registerTandemOmp(
     }),
   );
   pi.on("tool_call", async (event, ctx) => {
-    const reason = await coordinatorToolRefusal(event.toolName, event.input, () =>
-      dependencies.coordinatorMcpServers(ctx),
-    );
+    const reason = await coordinatorToolRefusal(event.toolName, event.input, {
+      allowedServers: () => dependencies.coordinatorMcpServers(ctx),
+      researchRunning: () => dependencies.researchRunning(ctx),
+      home: dependencies.getHome(ctx),
+      cwd: ctx.cwd,
+    });
     return reason === undefined ? undefined : { block: true, reason };
   });
   const modelSpecSchema = z

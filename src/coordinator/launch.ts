@@ -45,7 +45,8 @@ import {
 const DEFAULT_COORDINATOR_CONFIG = "worker-config.yml";
 const HERDR_READY_ATTEMPTS = 40;
 const HERDR_READY_DELAY_MS = 250;
-const COORDINATOR_TOOLS = ["read", "grep", "glob", "ask", "tandem"] as const;
+// No grep or glob: searching the repository is a scout's job, not the coordinator's.
+const COORDINATOR_TOOLS = ["read", "ask", "tandem"] as const;
 
 function defaultClock(): string {
   return new Date().toISOString();

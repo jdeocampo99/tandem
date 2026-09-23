@@ -1037,7 +1037,7 @@ test("scout summaries and the durable digest carry the post-research disposition
     },
   });
   const summary = summarizeTandemActionValue("show", scout);
-  expect(summary).toContain("After research: summarize the report with its evidence");
+  expect(summary).toContain("After research: summarize the report, propose one direction");
 
   const digest = buildDurableDigest([scout]);
   expect(digest).toContain("after research: implementation-interview");

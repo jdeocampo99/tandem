@@ -8,11 +8,11 @@ import type {
 export function describeResearchDisposition(disposition: ResearchContinuationDisposition): string {
   switch (disposition) {
     case "report-only":
-      return "summarize the report and stop";
+      return "summarize the report, recommend, and offer next steps without starting implementation";
     case "ask-intent":
-      return "summarize the report, then ask only whether the user wants implementation work";
+      return "summarize the report, recommend, then ask only whether the user wants implementation work";
     case "implementation-interview":
-      return "summarize the report with its evidence, propose one direction, then interview for implementation scope";
+      return "summarize the report, propose one direction, then interview for implementation scope";
   }
 }
 
@@ -35,22 +35,30 @@ function describeResearchOverride(override: ResearchContinuationOverride): strin
   }
 }
 
+/**
+ * What every finished-research reply carries. The user asked for research to get a judgement, so
+ * this overrides the coordinator's usual one-or-two-sentence limit.
+ */
+const RESEARCH_SUMMARY =
+  "Read the report, then give the user a research summary in plain language; the one-or-two-sentence limit does not apply here. Cover the three to five findings that matter, each with its evidence; the options the research surfaced; which one you recommend and why; and what is still uncertain.";
+
 function followUpSteps(decision: ResearchFollowUpDecision): readonly string[] {
   switch (decision.followUp) {
     case "report-only":
       return [
-        "Summarize the report for the user in plain language and stop.",
-        "Do not propose implementation work, ask implementation questions, or create a task from this report.",
+        RESEARCH_SUMMARY,
+        "End with the natural next steps as a short choice, such as planning the change, researching one open point further, or leaving it here.",
+        "Do not start the implementation interview or create a task until the user picks a next step.",
       ];
     case "ask-intent":
       return [
-        "Summarize the report for the user in plain language.",
+        RESEARCH_SUMMARY,
         "Then ask exactly one question: whether they want implementation work on top of these findings.",
         "Do not start the implementation interview or create a task before that answer.",
       ];
     case "implementation-interview":
       return [
-        "Summarize the report and what it found.",
+        RESEARCH_SUMMARY,
         "Propose one initial direction drawn from that evidence, then ask focused questions covering desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility; offer a default for each.",
         "Stay inside the report and the user's request; do not widen scope on your own.",
         "Only after the user answers may you create an implementation task, passing this task in researchTaskIds. Approval is a separate, later step: give a short summary without asking for approval in it, then call approve (or brief-approve when a brief governs it) so its own confirmation is the single approval ask, not a prose question first.",
