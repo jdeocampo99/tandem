@@ -18,6 +18,7 @@ import {
   toolName,
   type WorkerControlConfig,
 } from "./workers/control-protocol.ts";
+import { traceWorkerTurn, WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
 import { registerWorkerTerminalExtension } from "./workers/terminal-extension.ts";
 
 export const WORKER_CONTROL_ENV = "TANDEM_WORKER_CONTROL";
@@ -89,6 +90,12 @@ async function registerWorkerCommunication(pi: ExtensionAPI): Promise<void> {
   let pollInFlight = false;
   let latestContext: ExtensionContext | undefined;
   let retainedBatch: TaskMessageBatch | undefined;
+  const tracedJobPath = process.env[WORKER_JOB_PATH_ENV];
+  const trace = (event: string, detail?: Readonly<Record<string, unknown>>): void => {
+    if (tracedJobPath !== undefined && tracedJobPath.trim().length > 0) {
+      traceWorkerTurn(tracedJobPath, event, detail);
+    }
+  };
 
   const fail = (ctx: ExtensionContext, error: unknown): void => {
     if (fatalError === undefined) fatalError = error;
@@ -292,6 +299,7 @@ async function registerWorkerCommunication(pi: ExtensionAPI): Promise<void> {
   });
 
   pi.on("session_stop", async (event, ctx) => {
+    trace("session_stop", { aborted: event.signal.aborted, closed });
     if (closed || fatalError !== undefined || event.signal.aborted) return undefined;
     try {
       const inbox = await inboxFor(config);
@@ -313,8 +321,10 @@ async function registerWorkerCommunication(pi: ExtensionAPI): Promise<void> {
           : undefined;
       if (pendingBatch === undefined) {
         await touch(ctx, "finished", undefined, false, true);
+        trace("session_stop_done", { continuing: false });
         return undefined;
       }
+      trace("session_stop_done", { continuing: true, revision: pendingBatch.revision });
       await persist(
         ctx,
         {
@@ -371,6 +381,7 @@ async function registerWorkerCommunication(pi: ExtensionAPI): Promise<void> {
     void touch(ctx, "idle", toolName(event.toolName), true).catch((error) => fail(ctx, error));
   });
   pi.on("agent_end", (event, ctx) => {
+    trace("communication_agent_end", { willContinue: event.willContinue });
     void touch(ctx, event.willContinue === true ? "model" : "idle", undefined, true).catch(
       (error) => fail(ctx, error),
     );

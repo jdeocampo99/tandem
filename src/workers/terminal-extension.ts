@@ -31,6 +31,7 @@ import {
 import {
   readWorkerTerminalCommand,
   SUBMIT_REPORT_TOOL,
+  traceWorkerTurn,
   WORKER_JOB_PATH_ENV,
   type WorkerTerminalCommand,
   type WorkerTerminalJob,
@@ -40,6 +41,7 @@ import {
 
 const TERMINAL_HEARTBEAT_MS = 1_000;
 const TERMINAL_POLL_MS = 250;
+const BUSY_AFTER_RESULT_TRACE_MS = 60_000;
 const READ_ONLY_TOOLS: Readonly<Record<string, true>> = {
   read: true,
   grep: true,
@@ -240,6 +242,18 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       agentActive ? undefined : statusMessage,
     );
   };
+  let lastBusyTraceAt = 0;
+  // While a submitted worker still reads busy, record what OMP itself reports, at most once a minute.
+  const traceBusyAfterResult = (ctx: ExtensionContext): void => {
+    if (!currentState.completed || currentState.phase !== "busy") return;
+    if (Date.now() - lastBusyTraceAt < BUSY_AFTER_RESULT_TRACE_MS) return;
+    lastBusyTraceAt = Date.now();
+    traceWorkerTurn(jobPath, "busy_after_result", {
+      ompIdle: ctx.isIdle(),
+      pendingMessages: ctx.hasPendingMessages(),
+      agentActive,
+    });
+  };
   const persistState = async (
     phase: WorkerTerminalState["phase"],
     completed = currentState.completed,
@@ -271,6 +285,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     }
   };
   const settle = async (result: WorkerResult, ctx: ExtensionContext): Promise<void> => {
+    traceWorkerTurn(jobPath, "result_published", { status: result.status });
     resultPublished = true;
     delegatedSettled = true;
     if (timeoutTimer !== undefined) {
@@ -460,6 +475,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     const command = await readWorkerTerminalCommand(jobPath, identity);
     if (command === undefined) return;
     if (command.id === currentState.commandId || command.id === pauseCommand?.id) return;
+    traceWorkerTurn(jobPath, "control", { action: command.action, phase: currentState.phase });
     if (command.action === "pause") {
       pauseCommand = command;
       if (timeoutTimer !== undefined) {
@@ -504,6 +520,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   pi.on("tool_call", (event) => guardTool(event.toolName));
 
   pi.on("session_start", async (_event, ctx) => {
+    traceWorkerTurn(jobPath, "session_start");
     // Freeze an empty editor before the controller sends the native exit key.
     // ctx.shutdown() alone does not wake OMP's idle interactive input loop.
     ctx.ui.onTerminalInput((data) =>
@@ -521,6 +538,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       });
     }, TERMINAL_POLL_MS);
     ctx.setInterval(() => {
+      traceBusyAfterResult(ctx);
       void persistState(currentState.phase, currentState.completed).catch((error) => {
         void abortWithReason(
           ctx,
@@ -536,47 +554,63 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     }
   });
   pi.on("agent_start", (_event, ctx) => {
+    traceWorkerTurn(jobPath, "agent_start", { resultPublished });
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     void reportStatus();
   });
   pi.on("turn_start", (_event, ctx) => {
+    traceWorkerTurn(jobPath, "turn_start");
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     void reportStatus();
   });
   pi.on("tool_execution_start", (event, ctx) => {
+    traceWorkerTurn(jobPath, "tool_start", { tool: event.toolName });
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     if (event.toolName === "ask") waitingInputs.add(event.toolCallId);
     void reportStatus();
   });
   pi.on("tool_execution_end", (event, ctx) => {
+    traceWorkerTurn(jobPath, "tool_end", { tool: event.toolName });
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     waitingInputs.delete(event.toolCallId);
     void reportStatus();
   });
   pi.on("turn_end", (_event, ctx) => {
+    traceWorkerTurn(jobPath, "turn_end");
     void persistState("idle", currentState.completed).catch(() => abort(ctx));
   });
   pi.on("context", (event, ctx) => {
+    const latest = event.messages.at(-1);
+    traceWorkerTurn(jobPath, "context", {
+      messages: event.messages.length,
+      latest: latest === undefined ? undefined : latest.role,
+    });
     if (resultPublished && isBackgroundResultWake(event.messages)) ctx.abort();
   });
   pi.on("agent_end", async (event, ctx) => {
+    traceWorkerTurn(jobPath, "agent_end", { willContinue: event.willContinue, resultPublished });
     agentActive = event.willContinue === true;
     if (event.willContinue === true) {
       await persistState("busy", currentState.completed);
       await reportStatus();
+      traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
       return;
     }
     if (resultPublished) {
       await persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id);
+      traceWorkerTurn(jobPath, "agent_end_persisted", { phase: currentState.phase });
       await reportStatus();
+      traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
       return;
     }
     await settleTurn(event, ctx);
+    traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
   });
   pi.on("session_shutdown", async () => {
+    traceWorkerTurn(jobPath, "session_shutdown");
     closed = true;
     if (timeoutTimer !== undefined) timeoutTimer = undefined;
     try {
