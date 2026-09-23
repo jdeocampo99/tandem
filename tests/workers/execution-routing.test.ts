@@ -138,63 +138,41 @@ function reassignableCatalogue(): ModelCatalogueSnapshot {
   );
 }
 
-test("unmeasured request usage refuses the classification instead of reassigning", () => {
-  const pause = pauseOf(
+test("unmeasured request usage keeps the pinned model instead of reassigning or asking", () => {
+  for (const exposure of [
+    { unaccountedSamples: 2, unmeasuredTokenSamples: 5 },
+    { unaccountedSamples: 0, unmeasuredTokenSamples: 1 },
+  ]) {
+    const routing = authorizedRouting(
+      resolveExecutionRouting(
+        routingRequest({
+          usage: { status: "observed", exposure },
+          boundary: replacementBoundary(),
+          catalogue: reassignableCatalogue(),
+        }),
+      ),
+    );
+
+    expect(routing.basis).toBe("pinned-policy");
+    expect(routing.selector).toBe("alpha/base");
+    expect(routing.evidence.unaccountedSamples).toBe(exposure.unaccountedSamples);
+    expect(routing.evidence.unmeasuredTokenSamples).toBe(exposure.unmeasuredTokenSamples);
+  }
+});
+
+test("a task with no governing request keeps the pinned model on a replacement attempt", () => {
+  const routing = authorizedRouting(
     resolveExecutionRouting(
       routingRequest({
-        usage: {
-          status: "observed",
-          exposure: { unaccountedSamples: 2, unmeasuredTokenSamples: 5 },
-        },
+        usage: { status: "no-governing-request" },
         boundary: replacementBoundary(),
         catalogue: reassignableCatalogue(),
       }),
     ),
   );
 
-  expect(pause.reason).toBe("usage-evidence-unmeasured");
-  expect(pause.candidateSelector).toBe("alpha/thrifty");
-  expect(pause.unaccountedSamples).toBe(2);
-  expect(pause.unmeasuredTokenSamples).toBe(5);
-  const explanation = describeExecutionRoutingDecision(pause);
-  expect(explanation).toBe(
-    "Keep this task on alpha/base? I can't see enough of what this request has spent.",
-  );
-});
-
-test("unmeasured tokens alone still refuse the classification", () => {
-  const pause = pauseOf(
-    resolveExecutionRouting(
-      routingRequest({
-        usage: {
-          status: "observed",
-          exposure: { unaccountedSamples: 0, unmeasuredTokenSamples: 1 },
-        },
-        boundary: replacementBoundary(),
-        catalogue: reassignableCatalogue(),
-      }),
-    ),
-  );
-
-  expect(pause.reason).toBe("usage-evidence-unmeasured");
-});
-
-test("a task with no governing request has no ledger to prove a move against", () => {
-  const decision = resolveExecutionRouting(
-    routingRequest({
-      usage: { status: "no-governing-request" },
-      boundary: replacementBoundary(),
-      catalogue: reassignableCatalogue(),
-    }),
-  );
-  const pause = pauseOf(decision);
-
-  expect(pause.reason).toBe("usage-evidence-unmeasured");
-  expect(pause.usageSource).toBe("no-governing-request");
-  expect(pause.unaccountedSamples).toBeUndefined();
-  expect(describeExecutionRoutingDecision(pause)).toContain(
-    "No request tracks what this task spends.",
-  );
+  expect(routing.basis).toBe("pinned-policy");
+  expect(routing.evidence.usageSource).toBe("no-governing-request");
 });
 
 test("unmeasured usage leaves an unchanged pinned launch alone", () => {
@@ -389,8 +367,11 @@ test("the rendered routing prompt never names a task, decision, generation, or a
   const pause = pauseOf(
     resolveExecutionRouting(
       routingRequest({
-        usage: { status: "no-governing-request" },
-        boundary: replacementBoundary(),
+        boundary: replacementBoundary({
+          operationId: "operation-0",
+          selector: PINNED.model,
+          outcome: "uncertain",
+        }),
         catalogue: reassignableCatalogue(),
       }),
     ),

@@ -3,6 +3,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ResolvedPolicy, WorktreeLease } from "../../src/contracts.ts";
 import { activeRuntimeJob } from "../../src/runtime/activity.ts";
+import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
+import { parseRuntimeState } from "../../src/runtime/schema.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { policyIdentity } from "../../src/tasks/acceptance.ts";
 import { persistWorkerResult } from "../../src/workers/jobs.ts";
@@ -726,4 +728,68 @@ test("an uncertain-outcome routing pause stops blocking once that attempt settle
       await service.shutdown();
     });
   }
+});
+
+test("a saved unmeasured-usage routing pause no longer blocks; the pinned model relaunches", async () => {
+  await withScenario({}, async (world) => {
+    await seedScenarioTask(world, { kind: "implementation", stage: "queued" });
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const endpoint = {
+      ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
+      role: "implementer" as const,
+    };
+    const prior = scenarioJob({
+      home: world.home,
+      role: "implementer",
+      cwd: lease.path,
+      endpoint,
+      phase: "failed",
+    });
+    const policyDigest = policyIdentity(SCENARIO_POLICY);
+    await seedScenarioRuntime(
+      world,
+      scenarioRuntimeTask({
+        jobs: [prior],
+        operation: scenarioOperation(prior, { phase: "failed", policyDigest }),
+      }),
+    );
+    // Written by an older Tandem that paused instead of keeping the pinned model.
+    const path = runtimeFile(world.home);
+    const state = await readRuntimeState(path);
+    const raw = JSON.parse(JSON.stringify(state)) as { tasks: Record<string, unknown>[] };
+    const task = raw.tasks[0];
+    if (task === undefined) throw new Error("scenario runtime task is missing");
+    task.routingPause = {
+      schemaVersion: 1,
+      decisionId: "routing-unmeasured",
+      reason: "usage-evidence-unmeasured",
+      taskId: SCENARIO_TASK_ID,
+      jobId: prior.id,
+      operationId: "operation-1",
+      role: "implementer",
+      generation: 0,
+      attempt: 2,
+      policyDigest,
+      inputHead: SCENARIO_HEAD,
+      pinnedSelector: SCENARIO_POLICY.config.models.implementer.model,
+      pinnedThinking: SCENARIO_POLICY.config.models.implementer.thinking,
+      evidenceGaps: [],
+      enabledProviders: [],
+      usageSource: "no-governing-request",
+      limits: { maxWorkers: SCENARIO_POLICY.config.maxWorkers },
+      observedAt: SCENARIO_NOW,
+    };
+    // Loading those saved bytes is what every read does; the stale question is dropped there.
+    const loaded = parseRuntimeState(raw);
+    expect(loaded.tasks[0]?.routingPause).toBeUndefined();
+    await writeRuntimeState(path, loaded);
+    const service = serviceFor(world);
+
+    await service.tick();
+
+    const runtime = (await world.snapshot()).runtime.tasks[0];
+    expect(runtime?.routingPause).toBeUndefined();
+    expect(runtime?.jobs.some(activeRuntimeJob)).toBe(true);
+    await service.shutdown();
+  });
 });
