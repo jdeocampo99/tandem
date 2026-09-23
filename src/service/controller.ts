@@ -8,6 +8,7 @@ import { readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
+import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
 import {
   type ModelSettings,
@@ -249,6 +250,16 @@ export type TandemService = Readonly<{
   readonly cancel: (id: string, reason?: string) => Promise<TaskRecord>;
   readonly describePr: (id: string, summary: PrSummary) => Promise<string>;
   readonly publish: (
+    id: string,
+    input: {
+      readonly repository: string;
+      readonly title: string;
+      readonly base: string;
+      readonly summary: PrSummary;
+      readonly approved: boolean;
+    },
+  ) => Promise<TaskRecord>;
+  readonly publishNow: (
     id: string,
     input: {
       readonly repository: string;
@@ -695,6 +706,7 @@ class TandemController {
       cancel: (id, reason) => this.cancel(id, reason),
       describePr: (id, summary) => this.describePr(id, summary),
       publish: (id, input) => this.publish(id, input),
+      publishNow: (id, input) => this.publishNow(id, input),
       publishDraft: (id, input) => this.publishDraft(id, input),
       merge: (id, input) => this.merge(id, input),
       cleanup: (id, input) => this.cleanup(id, input),
@@ -1137,6 +1149,27 @@ class TandemController {
     });
     const { task, metadata } = prepared;
     return this.recordPullRequest(id, task.revision, metadata);
+  }
+
+  /**
+   * The user's explicit "publish now": stops any running validator or reviewer, moves the task to
+   * `ready` without finishing review, records the skip, and opens the pull request. It is only for
+   * an explicit user request, never the coordinator's own call. Merging stays a separate approval.
+   */
+  async publishNow(
+    id: string,
+    input: {
+      readonly repository: string;
+      readonly title: string;
+      readonly base: string;
+      readonly summary: PrSummary;
+      readonly approved: boolean;
+    },
+  ): Promise<TaskRecord> {
+    if (!isRecord(input)) throw new TypeError("publish-now input must be an object");
+    if (!input.approved) throw new ApprovalRequiredError("publish now");
+    await this.#control.skipReview(assertTaskId(id));
+    return this.publish(id, input);
   }
 
   /**

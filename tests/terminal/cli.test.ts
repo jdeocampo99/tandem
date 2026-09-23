@@ -1377,6 +1377,7 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     acknowledge: unused,
     describePr: unused,
     publish: unused,
+    publishNow: unused,
     publishDraft: unused,
     merge: unused,
     cleanup: async (_taskId, input = {}) => {

@@ -120,6 +120,7 @@ const TOP_LEVEL_KEYS = [
   "generation",
   "reviewRound",
   "reviewHead",
+  "reviewSkippedHead",
   "iterationScope",
   "reviewLevel",
   "validationEvidence",
@@ -1002,6 +1003,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   const findingLedgerEntries: readonly unknown[] =
     findingLedgerValue === undefined ? [] : findingLedgerValue;
   const reviewHead = optionalText(value, "reviewHead", source);
+  const reviewSkippedHead = optionalText(value, "reviewSkippedHead", source);
   const iterationScopeValue = Object.hasOwn(value, "iterationScope")
     ? requiredValue(value, "iterationScope", source)
     : undefined;
@@ -1082,6 +1084,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
           ),
         }),
     ...(reviewHead === undefined ? {} : { reviewHead }),
+    ...(reviewSkippedHead === undefined ? {} : { reviewSkippedHead }),
     ...(iterationScopeValue === undefined
       ? {}
       : {

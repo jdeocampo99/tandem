@@ -1105,6 +1105,68 @@ test("draft publication needs interactive human approval and never runs without 
   ]);
 });
 
+test("publish now needs interactive human approval and never runs without it", async () => {
+  const reviewing = task({ stage: "reviewing" });
+  const prompts: string[] = [];
+  const published: unknown[] = [];
+  const service = {
+    get: async () => reviewing,
+    publishNow: async (taskId: string, input: unknown) => {
+      published.push({ taskId, input });
+      return reviewing;
+    },
+  } as unknown as TandemService;
+  const summary = { tldr: ["Adds retries."], what: ["Retry loop."], why: ["Flaky calls."] };
+  const action = {
+    action: "publish-now" as const,
+    taskId: "task-1",
+    repository: "acme/repo",
+    title: "Add retries",
+    base: "main",
+    summary,
+  };
+
+  const refused = await executeTandemAction(action, service, {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      confirm: async (title: string, message: string) => {
+        prompts.push(`${title} ${message}`);
+        return false;
+      },
+    },
+  } as unknown as ExtensionContext);
+  expect(refused.approved).toBe(false);
+  expect(published).toHaveLength(0);
+  expect(prompts[0]).toContain("Skip review and open a PR");
+
+  const headless = await executeTandemAction(action, service, {
+    hasUI: false,
+    mode: "rpc",
+  } as unknown as ExtensionContext);
+  expect(headless.approved).toBe(false);
+  expect(published).toHaveLength(0);
+
+  const accepted = await executeTandemAction(action, service, {
+    hasUI: true,
+    mode: "tui",
+    ui: { confirm: async () => true },
+  } as unknown as ExtensionContext);
+  expect(accepted.approved).toBe(true);
+  expect(published).toEqual([
+    {
+      taskId: "task-1",
+      input: {
+        repository: "acme/repo",
+        title: "Add retries",
+        base: "main",
+        summary,
+        approved: true,
+      },
+    },
+  ]);
+});
+
 test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct messages", async () => {
   const sent: string[] = [];
   const turns: unknown[] = [];

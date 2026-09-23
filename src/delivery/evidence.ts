@@ -1,4 +1,9 @@
-import type { PinnedValidationEvidence, TaskRecord, TaskStage } from "../contracts.ts";
+import type {
+  FindingLedgerEntry,
+  PinnedValidationEvidence,
+  TaskRecord,
+  TaskStage,
+} from "../contracts.ts";
 import { LEGACY_EVIDENCE_CONTRACT } from "../contracts.ts";
 import { renderDraftPrDescription, renderPrDescription } from "../instructions.ts";
 import {
@@ -163,9 +168,12 @@ export function assertTaskShape(task: TaskRecord): DeliveryTaskShape {
   if (!Number.isSafeInteger(task.generation) || task.generation < 0) {
     throw new Error("delivery requires a non-negative task generation");
   }
-  assertEvidence(task, head);
-  assertCurrentReviews(task, head);
-  assertFinalAcceptance(task, head);
+  // The user's explicit "publish now" at this exact HEAD stands in for the review gates.
+  if (task.reviewSkippedHead !== head) {
+    assertEvidence(task, head);
+    assertCurrentReviews(task, head);
+    assertFinalAcceptance(task, head);
+  }
   return { cwd, branch, head };
 }
 
@@ -190,19 +198,38 @@ function validateSummary(summary: PrSummary): PrSummary {
   return { tldr: summary.tldr, what: summary.what, why: summary.why };
 }
 
+function findingBullet(entry: FindingLedgerEntry): string {
+  const where =
+    entry.file === undefined
+      ? ""
+      : ` (${entry.file}${entry.line === undefined ? "" : `:${entry.line}`})`;
+  return `${entry.severity}: ${entry.description}${where}`;
+}
+
+function acceptedValidation(task: TaskRecord, head: string): readonly string[] {
+  const manifest = finalAcceptanceContract(task, head);
+  return [
+    `final acceptance manifest at HEAD ${head}: ${manifest.requirements.length} required checks, ${manifest.lenses.length} review lenses, ${manifest.criteria.length} acceptance criteria`,
+    ...assertEvidence(task, head).map(evidenceBullet),
+  ];
+}
+
 export function describeTaskPr(task: TaskRecord, summary: PrSummary): string {
   const shape = assertTaskShape(task);
-  const evidence = assertEvidence(task, shape.head);
-  const manifest = finalAcceptanceContract(task, shape.head);
   const validatedSummary = validateSummary(summary);
+  const skipped = task.reviewSkippedHead === shape.head;
+  const validation = skipped
+    ? [`Review was skipped: the user asked to publish at HEAD ${shape.head} before it finished.`]
+    : acceptedValidation(task, shape.head);
+  const openFindings = (task.findingLedger ?? []).filter((entry) => entry.status !== "addressed");
   return renderPrDescription({
     tldr: validatedSummary.tldr,
     what: validatedSummary.what,
     why: validatedSummary.why,
-    validation: [
-      `final acceptance manifest at HEAD ${shape.head}: ${manifest.requirements.length} required checks, ${manifest.lenses.length} review lenses, ${manifest.criteria.length} acceptance criteria`,
-      ...evidence.map(evidenceBullet),
-    ],
+    validation,
+    ...(skipped && openFindings.length > 0
+      ? { openFindings: openFindings.map(findingBullet) }
+      : {}),
     ...(task.manualVerification === undefined
       ? {}
       : { manualVerification: task.manualVerification }),

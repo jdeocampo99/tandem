@@ -239,6 +239,22 @@ export function registerTandemOmp(
       .strict(),
     z
       .object({
+        action: z.literal("publish-now"),
+        taskId: z.string(),
+        repository: z.string(),
+        title: z.string(),
+        base: z.string(),
+        summary: z
+          .object({
+            tldr: z.array(z.string()),
+            what: z.array(z.string()),
+            why: z.array(z.string()),
+          })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
         action: z.literal("draft"),
         taskId: z.string(),
         repository: z.string(),
