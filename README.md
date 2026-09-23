@@ -64,7 +64,7 @@ state is retained either way.
 | `tandem [PATH ...]` | Open or reconnect projects; resumes coordinator chats (`--fresh` starts new ones) |
 | `tandem status [TASK_ID]` | What is running and what needs you; `--logs` shows prompt routing |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
-| `tandem fix` | Find stale Tandem resources or old-format state and offer the repair |
+| `tandem fix` | Find stale Tandem resources and offer the repair |
 | `tandem reset` | Cancel all in-progress tasks and reopen fresh coordinators |
 | `tandem reset --hard` | Delete all Tandem state and worktrees; the next run onboards from scratch |
 | `tandem configure [PATH]` | Inspect or save repository settings |
@@ -72,7 +72,7 @@ state is retained either way.
 
 `--yes` skips the confirmation for `fix` and `reset`, `--json` prints machine-readable output for
 `status` and `fix`, and `--home PATH` selects a different Tandem home. Old spellings (`restart`,
-`--restart`, `--reset`, `--force`, `--continue`, `logs`, `reconcile-resources`, `migrate-state`,
+`--restart`, `--reset`, `--force`, `--continue`, `logs`, `reconcile-resources`,
 `inspect`) exit with an error that names the replacement.
 
 ### Check status
@@ -117,7 +117,7 @@ The acknowledged pause/stop/resume bridge preserves task identity, generation, w
 context, messages, reports, and questions. Cancelled or completed tasks and paused/blocked tasks
 with an unanswered question are refused. A coordinator cannot restart itself.
 
-### Fix stale resources or old-format state
+### Fix stale resources
 
 After a crash, a forced exit, a session change, or a failed launch, let Tandem find and clean what
 it left behind instead of deleting anything by hand:
@@ -127,9 +127,7 @@ tandem fix
 tandem fix --yes
 ```
 
-If the home still holds old-format JSON state, `fix` shows the migration plan and offers the
-offline migration first (see [Migrate legacy state](#migrate-legacy-state-offline-only)). Otherwise
-it scans the coordinator records, Herdr panes, and Treehouse leases of every Tandem session under
+It scans the coordinator records, Herdr panes, and Treehouse leases of every Tandem session under
 the home, classifies each resource, prints what it would clean, and asks before changing anything.
 `--yes` applies without asking.
 
@@ -155,7 +153,7 @@ it is busy. It keeps onboarding, settings, task history, worktrees, uncommitted 
 files. Completed retained task terminals are closed without erasing completed task history. It
 takes no paths, asks to confirm (or pass `--yes`), and can run from a separate terminal or from any
 Herdr pane except a coordinator pane. Reset does not bypass ownership checks or the clean-source
-requirement for coordinator worktrees, and it is not task recovery or migration.
+requirement for coordinator worktrees, and it is not task recovery.
 
 Reset also closes a recorded coordinator pane that has returned to its shell, provided its native
 identity and worktree still match. Herdr removes a workspace when its last pane closes, so closing
@@ -263,60 +261,6 @@ planning turn, a managed coordinator refreshes its owned, clean source checkout 
 New tasks capture that revision; existing tasks and workers keep their original pins and checkouts.
 Fetch or source-safety failures block new task creation rather than silently using stale source.
 Use `tandem update` to reload the extension and refresh source without resetting child work.
-
-### Migrate legacy state (offline only)
-
-Current Tandem state is authoritative in `<home>/state.sqlite` (the remembered home, or
-`~/.tandem` without a remembered setup or explicit override). Older homes may instead contain `<home>/runtime.json` and
-`<home>/tasks/*.json`; normal SQLite startup refuses to use that legacy state until it
-has been explicitly migrated. Do not run this procedure while any Tandem coordinator,
-worker, validation job, presentation, or legacy writer may still be active.
-
-Use the exact home that the coordinator uses:
-
-```sh
-# Shows the plan and asks before migrating; answer No to leave state unchanged.
-tandem fix --home /absolute/path/to/tandem-home
-
-# Apply without asking, only after the plan is ready and all liveness/ownership checks are clear.
-tandem fix --home /absolute/path/to/tandem-home --yes
-```
-
-When the home holds old-format state, `tandem fix` handles only the migration and skips resource
-cleanup until the migration is complete; run it again afterwards to reconcile. For a read-only
-JSON plan, or to inspect a completed migration, use the advanced action CLI:
-`bun src/cli.ts migrate-state --home /absolute/path/to/tandem-home --json`.
-
-The plan is read-only until you confirm. It hashes and reports the legacy sources, checks for
-live or ambiguous native ownership, and reports incomplete reservation intents that will
-be quarantined rather than guessed or resumed. A live coordinator, active job, unresolved
-endpoint launch, or ambiguous ownership blocks the plan/apply path; stop the relevant
-Tandem/Herdr activity and plan again. Do not bypass a blocked plan.
-
-Malformed or unknown legacy fields, symlinked/non-regular sources, changed source hashes,
-an invalid migration manifest, or non-empty task/runtime tables in `state.sqlite` also fail
-closed.
-Preserve the source bytes and resolve the diagnostic; do not delete records to force a
-migration.
-
-Applying the plan is an offline, resumable cutover. It imports tasks and runtime state into
-`state.sqlite` while preserving task IDs, generations, fix-round and policy state,
-checkpoints, and operation history. It archives any present legacy source under
-`<home>/.tandem-migration/archive/` (`runtime.json` and `tasks/`), writes
-`<home>/.tandem-migration/manifest.json`, and installs old-writer fences at the former
-`runtime.json` and `tasks` paths plus `<home>/.tandem-migration/fence.json`. Keep the
-archive and fences. If an apply is interrupted, rerun `tandem fix` and confirm again; do not
-edit the archive or manifest and do not start normal Tandem use until the migration is
-complete.
-
-Migration is not task recovery: it does not resume a worker, clear a reservation, release
-capacity, reset a saved checkpoint, change task policy, or unblock a maxed fix policy.
-After migration is complete, normal reconciliation may recover only from positive native
-identity or durable result evidence. An unknown external-effect outcome is quarantined
-and retains its reservation/capacity and resources. A worker launch claim is at-most-once:
-duplicate or stale operation claims are refused. Never clear a reservation, invent a job
-or result, replace a task, or change policy to bypass unknown ownership; ask the
-coordinator to surface the durable blocker instead.
 
 These fences do not make external effects transactional or guarantee availability; they
 make uncertain ownership fail closed and keep the evidence for an explicit decision.

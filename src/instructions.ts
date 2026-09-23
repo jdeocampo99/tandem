@@ -152,8 +152,8 @@ type PromptRoleInstructions = Readonly<Record<AgentRole, readonly string[]>>;
 
 const COMMON_AGENT_INSTRUCTIONS = [
   "Treat this brief as workflow guidance, not as a sandbox or permission boundary; runtime adapters and permissions enforce isolation and authorization.",
-  "Use <home>/state.sqlite as canonical task/runtime state. Never edit, resume, or retry from legacy runtime.json or tasks/*.json; offline migration runs only through tandem fix, which shows the plan and applies only after the user confirms. Status/read-only planning never applies migration; migration preserves IDs, generations, fix-round/policy, checkpoints/history, and archives/fences original bytes.",
-  "Quarantine unknown owned-operation outcomes while retaining capacity/resources; never clear reservations, replace tasks, or change policy to bypass ownership. Reset is not migration or recovery: tandem reset cancels all active tasks, and tandem reset --hard deletes all Tandem state.",
+  "Use <home>/state.sqlite as canonical task/runtime state. Never edit, resume, or retry from it directly.",
+  "Quarantine unknown owned-operation outcomes while retaining capacity/resources; never clear reservations, replace tasks, or change policy to bypass ownership. Reset is not recovery: tandem reset cancels all active tasks, and tandem reset --hard deletes all Tandem state.",
   "Use only the relevant artifact references supplied below; do not reproduce or request the entire conversation.",
   "A needs-decision result is durable task communication that wakes the coordinator; do not prompt the user directly. Include the bounded question, optional recommendation, and report evidence needed for the coordinator to judge it.",
 ] as const;

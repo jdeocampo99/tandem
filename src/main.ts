@@ -12,7 +12,6 @@ import {
 import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
-import { migrateState, planMigration } from "./runtime/migration.ts";
 import type { TandemService, TandemServiceOptions } from "./service/controller.ts";
 import {
   parseTerminalArgs,
@@ -264,10 +263,9 @@ function renderReconcileReport(report: ReconcileReport): string {
 }
 
 /**
- * One place to go when something is wrong: offers the legacy-state migration when old-format
- * state exists, then reconciles stale resources. Each step shows its plan and changes nothing
- * until confirmed. A resource Tandem deliberately retained or quarantined is a reported outcome,
- * not a failure, so only a scan or apply that could not finish exits non-zero.
+ * One place to go when something is wrong: reconciles stale resources. Each step shows its plan
+ * and changes nothing until confirmed. A resource Tandem deliberately retained or quarantined is
+ * a reported outcome, not a failure, so only a scan or apply that could not finish exits non-zero.
  */
 async function handleFix({
   invocation,
@@ -282,24 +280,6 @@ async function handleFix({
   readonly interaction: TerminalInteraction;
   readonly stdout: (text: string) => void;
 }>): Promise<TerminalRunResult> {
-  let migration: unknown;
-  const plan = await planMigration(environment.home, { run });
-  if (plan.status === "ready" || plan.status === "pending") {
-    stdout(
-      `Tandem found old-format state in ${environment.home} (${plan.taskCount} task${plan.taskCount === 1 ? "" : "s"}) that must move to SQLite before Tandem can use it. Stop every Tandem pane first.\n`,
-    );
-    migration = (await confirm("Migrate it now?", invocation, interaction))
-      ? await migrateState(environment.home, { run })
-      : plan;
-  } else if (plan.status === "blocked") {
-    stdout(`Tandem cannot migrate old-format state yet:\n  ${plan.diagnostics.join("\n  ")}\n`);
-    migration = plan;
-  }
-  if (plan.status !== "empty" && plan.status !== "complete") {
-    // SQLite state is unusable until migration finishes, so reconciling now would fail.
-    if (invocation.json) stdout(`${JSON.stringify({ migration })}\n`);
-    return { exitCode: 0, status: "fixed", migration };
-  }
   const reconcile = (apply: boolean) =>
     readRegisteredProjects(environment.home).then((repoPaths) =>
       reconcileTandemResources({

@@ -1561,11 +1561,3 @@ process.exitCode = result.exitCode;
     await rm(root, { recursive: true, force: true });
   }
 });
-
-test("migrate-state is an explicit read-only-by-default CLI command", () => {
-  const invocation = parseCliArgs(["migrate-state", "--home", "/tmp/offline-tandem-state"]);
-  expect(invocation.command).toBe("migrate-state");
-  expect(invocation.options.yes).toBe(false);
-  expect(invocation.options.home).toBe("/tmp/offline-tandem-state");
-  expect(parseCliArgs(["migrate-state", "--yes"]).options.yes).toBe(true);
-});
