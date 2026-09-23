@@ -1,5 +1,6 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
+import { readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
@@ -595,7 +596,66 @@ export class TaskControlWorkflow {
   }
 
   async resumeTask(taskId: string): Promise<TaskRecord> {
-    const outcome = await this.#deps.store.exclusive(async (store) => {
+    const outcome = await this.releaseStoppedTask(taskId, { type: "resume" });
+    if (!outcome.resumed) return outcome.task;
+    const current = await this.#deps.getTask(taskId);
+    const runtime = await this.#deps.runtimeFor(taskId);
+    const shouldContinue =
+      runtime !== undefined &&
+      (runtime.jobs.some(activeRuntimeJob) ||
+        ((current.stage === "scouting" || current.stage === "implementing") &&
+          runtime.worktree !== undefined &&
+          currentWriter(runtime) !== undefined));
+    if (shouldContinue) await this.#deps.reconcileTask(current);
+    return this.#deps.getTask(taskId);
+  }
+
+  /**
+   * The user's explicit "publish now": stops any running validator or reviewer the same way a
+   * pause does, then moves the task to `ready` at its committed HEAD with the skip recorded. Only
+   * an implementation task that is validating, reviewing, awaiting fixes, or blocked qualifies.
+   */
+  async skipReview(taskId: string): Promise<TaskRecord> {
+    const task = await this.#deps.getTask(taskId);
+    if (
+      task.kind !== "implementation" ||
+      !["validating", "reviewing", "awaiting-fixes", "blocked"].includes(task.stage)
+    ) {
+      throw new Error(
+        `Task ${taskId} can skip review only while validating, reviewing, awaiting fixes, or blocked; it is ${task.stage}`,
+      );
+    }
+    const worktree = task.worktree;
+    if (worktree === undefined) throw new Error(`Task ${taskId} has no worktree to publish`);
+    const checkout = await readCheckpoint(this.#deps.run, {
+      repo: worktree.path,
+      baseRef: worktree.baseHead,
+    });
+    if (checkout.dirty || checkout.unmerged || checkout.head === worktree.baseHead) {
+      throw new Error(`Task ${taskId} has no clean commit beyond its base to publish`);
+    }
+    if (task.stage !== "blocked") {
+      const paused = await this.controlTask(taskId, "pause", "the user asked to publish now");
+      if (paused.stage !== "paused") {
+        throw new Error(`Task ${taskId} could not be safely stopped to publish now`);
+      }
+    }
+    const outcome = await this.releaseStoppedTask(taskId, {
+      type: "skip-review",
+      head: checkout.head,
+    });
+    return outcome.task;
+  }
+
+  /**
+   * Proves a paused or blocked task's owned workers are stopped, settles their abandoned jobs,
+   * clears the stop request, and applies `event` in the same step.
+   */
+  private async releaseStoppedTask(
+    taskId: string,
+    event: TaskEvent,
+  ): Promise<Readonly<{ readonly task: TaskRecord; readonly resumed: boolean }>> {
+    return this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
       if (task === undefined || !(await this.#deps.taskInScope(task))) {
         throw new Error(`task ${taskId} is missing`);
@@ -616,7 +676,7 @@ export class TaskControlWorkflow {
         throw new Error(message);
       }
       const abandonedJobIds = new Set(resources.abandonedJobIds);
-      const resumed = transitionTask(task, { type: "resume" }, this.#deps.context());
+      const resumed = transitionTask(task, event, this.#deps.context());
       const clearStopRequest = replaceRuntimeTask(state, taskId, (current) => {
         const { stopRequest: _stopRequest, lastError: _lastError, ...withoutControl } = current;
         const jobs: readonly DurableJob[] =
@@ -656,17 +716,6 @@ export class TaskControlWorkflow {
       await store.update(task.id, task.revision, () => resumed);
       return { task: resumed, resumed: true };
     });
-    if (!outcome.resumed) return outcome.task;
-    const current = await this.#deps.getTask(taskId);
-    const runtime = await this.#deps.runtimeFor(taskId);
-    const shouldContinue =
-      runtime !== undefined &&
-      (runtime.jobs.some(activeRuntimeJob) ||
-        ((current.stage === "scouting" || current.stage === "implementing") &&
-          runtime.worktree !== undefined &&
-          currentWriter(runtime) !== undefined));
-    if (shouldContinue) await this.#deps.reconcileTask(current);
-    return this.#deps.getTask(taskId);
   }
   /**
    * Restart managed worker execution without changing task identity or

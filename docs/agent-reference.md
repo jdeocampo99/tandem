@@ -833,7 +833,7 @@ The durable stages are:
 | `validating` | The runner is executing one named validation contract at that exact HEAD: targeted iteration checks between fix rounds, or the complete final acceptance manifest once the candidate is otherwise ready. |
 | `reviewing` | The contract's checks passed; fresh reviewers are recording the required lenses. |
 | `awaiting-fixes` | Validation or review found a failure; a bounded fix round may be started. |
-| `ready` | The complete final acceptance manifest and all required review lenses pass for the delivered code and policy at the current HEAD. |
+| `ready` | The complete final acceptance manifest and all required review lenses pass for the delivered code and policy at the current HEAD, or the user explicitly chose to [publish now](#publish-now-user-skips-review) at that HEAD. |
 | `paused` | Work is stopped with a resumable previous stage. |
 | `blocked` | Work cannot safely proceed; a reason is durable, requires coordinator judgment, and is surfaced as an actionable blocker. |
 | `cancelled` / `completed` / `merged` | Terminal states. A scout is research-complete only in durable `completed` state with its report; implementation reaches `merged` only after verified delivery. |
@@ -1730,6 +1730,22 @@ bun src/cli.ts pr publish TASK_ID OWNER/REPO "Title" main \
 ```
 
 The publish path verifies the task is ready, the worktree is clean, the branch and repository identity match the task, validation evidence is non-empty and successful, the current review lens exists and passes, and the current worktree HEAD is exactly the reviewed HEAD. It pushes that exact reviewed SHA to the task branch. Existing pull requests are re-observed and must match the same repository, base, branch, and SHA; closed or merged duplicates are refused.
+
+#### Publish now (user skips review)
+
+When the user explicitly asks to skip review or publish now, the coordinator's `publish-now` tool
+action (same fields as `publish`) takes the task straight to publication. The coordinator never
+uses it on its own initiative, and it asks the user to confirm like `publish` does. It is allowed
+for an implementation task that is `validating`, `reviewing`, `awaiting-fixes`, or `blocked`, with
+a clean worktree and a commit beyond its base. Tandem stops any running validator or reviewer
+through the same pause path `restart` uses (a worker it cannot prove stopped blocks the task and
+nothing moves), settles the abandoned job, and applies the `skip-review` lifecycle event: the task
+becomes `ready` at its current HEAD with `reviewSkippedHead` recorded durably. That record stands in
+for the evidence, review, and final-acceptance checks at exactly that HEAD only; any later fix
+round or evidence invalidation clears it. The PR description's `# Validation` says review was
+skipped, and a `# Known open review findings` section lists every finding still open on the ledger,
+next to `# Manual verification` when present. Merging stays a separate explicit action. If
+publication fails after the skip, the task stays `ready` and a normal `publish` can retry.
 
 Merge is a separate explicit action:
 

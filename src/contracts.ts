@@ -685,6 +685,8 @@ export type TaskRecord = {
   readonly generation: number;
   readonly reviewRound: number;
   readonly reviewHead?: string;
+  /** The HEAD the user published without finishing review ("publish now"). Absent otherwise. */
+  readonly reviewSkippedHead?: string;
   readonly iterationScope?: IterationScope;
   readonly reviewLevel?: ReviewLevelRecord;
   readonly reportPath?: string;

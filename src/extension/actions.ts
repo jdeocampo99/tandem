@@ -138,6 +138,14 @@ export type TandemAction =
       readonly summary: PrSummary;
     }>
   | Readonly<{
+      readonly action: "publish-now";
+      readonly taskId: string;
+      readonly repository: string;
+      readonly title: string;
+      readonly base: string;
+      readonly summary: PrSummary;
+    }>
+  | Readonly<{
       readonly action: "draft";
       readonly taskId: string;
       readonly repository: string;
@@ -185,6 +193,7 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "brief-approve" ||
     action.action === "cancel" ||
     action.action === "publish" ||
+    action.action === "publish-now" ||
     action.action === "draft" ||
     action.action === "merge"
   );
@@ -245,6 +254,11 @@ async function approvalPrompt(
       return {
         title: `Open a PR for ${name}?`,
         message: `Into ${action.base}. Nothing is merged.`,
+      };
+    case "publish-now":
+      return {
+        title: `Skip review and open a PR for ${name}?`,
+        message: `Into ${action.base}. Open findings are listed in the PR. Nothing is merged.`,
       };
     case "draft":
       return {
@@ -418,6 +432,18 @@ export async function executeTandemAction(
     case "publish":
       return textResult(
         await service.publish(action.taskId, {
+          repository: action.repository,
+          title: action.title,
+          base: action.base,
+          summary: action.summary,
+          approved: true,
+        }),
+        action.action,
+        true,
+      );
+    case "publish-now":
+      return textResult(
+        await service.publishNow(action.taskId, {
           repository: action.repository,
           title: action.title,
           base: action.base,

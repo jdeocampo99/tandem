@@ -121,6 +121,15 @@ type FollowUpResearchEvent = Readonly<{
   readonly type: "follow-up-research";
 }>;
 
+/**
+ * The user's explicit "publish now": the task goes to `ready` at its committed HEAD without
+ * finishing validation or review, and the skip is recorded against that HEAD.
+ */
+type SkipReviewEvent = Readonly<{
+  readonly type: "skip-review";
+  readonly head: string;
+}>;
+
 type BeginFixesEvent = Readonly<{
   readonly type: "begin-fixes";
   readonly head: string;
@@ -179,6 +188,7 @@ export type TaskEvent =
   | InvalidateEvidenceEvent
   | FollowUpResearchEvent
   | BeginFixesEvent
+  | SkipReviewEvent
   | ScoutReportCompleteEvent
   | PauseEvent
   | ResumeEvent
@@ -704,8 +714,8 @@ function hasSuccessfulCurrentValidation(task: TaskRecord): boolean {
   );
 }
 
-function clearReviewHead(task: TaskRecord): Omit<TaskRecord, "reviewHead"> {
-  const { reviewHead: _reviewHead, ...rest } = task;
+function clearReviewHead(task: TaskRecord): Omit<TaskRecord, "reviewHead" | "reviewSkippedHead"> {
+  const { reviewHead: _reviewHead, reviewSkippedHead: _reviewSkippedHead, ...rest } = task;
   return rest;
 }
 
@@ -1083,6 +1093,44 @@ export function transitionTask(
         validationEvidence: [],
         ...(event.iterationScope === undefined ? {} : { iterationScope: event.iterationScope }),
       });
+    }
+    case "skip-review": {
+      // `paused` only as the stopping step of a publish-now from validating or reviewing.
+      const allowed: readonly TaskStage[] = [
+        "validating",
+        "reviewing",
+        "awaiting-fixes",
+        "blocked",
+      ];
+      const stoppedFrom = task.stage === "paused" ? task.previousStage : task.stage;
+      if (
+        task.kind !== "implementation" ||
+        stoppedFrom === undefined ||
+        !allowed.includes(stoppedFrom) ||
+        (task.stage === "paused" && stoppedFrom === "blocked")
+      ) {
+        invalidStage(task, event.type, allowed);
+      }
+      if (task.worktree === undefined || !isNonEmptyText(event.head)) {
+        throw new TaskTransitionError(
+          "invalid-input",
+          task,
+          "Skipping review requires a task worktree and a committed HEAD",
+        );
+      }
+      if (task.reviewHead !== undefined && task.reviewHead !== event.head) {
+        staleResult(
+          task,
+          `Publish-now HEAD ${event.head} does not match the task HEAD ${task.reviewHead}`,
+        );
+      }
+      return commitWithNotification(
+        clearIterationScope(clearPreviousAndBlock(task)),
+        context,
+        { stage: "ready", reviewHead: event.head, reviewSkippedHead: event.head },
+        `Task ${task.id} is ready without a finished review, at the user's request`,
+        "coordinator",
+      );
     }
     case "scout-report-complete": {
       if (task.stage !== "scouting" || task.kind !== "scout") {

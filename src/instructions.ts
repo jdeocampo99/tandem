@@ -36,6 +36,8 @@ export type PrDescriptionInput = Readonly<{
   readonly validation: readonly string[];
   /** Hands-on checks rendered as an unticked checklist for the person merging. */
   readonly manualVerification?: readonly string[];
+  /** Review findings still open when the user published without finishing review. */
+  readonly openFindings?: readonly string[];
 }>;
 
 export type DraftPrDescriptionInput = Readonly<{
@@ -95,6 +97,7 @@ Call it with {request: {action: ...}}. Its text is a short summary; details and 
 - delivery-preflight, cleanup: housekeeping; cleanup needs the user's approval.
 - brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, automated checks, manual verification, approach, decisions, open questions). Split what must be true into two lists: acceptanceCriteria holds automated checks, anything a validation command or code review can prove (tests, types, lint, build, code behavior), written as observable behavior; for how to check them, name the repository's own validation procedure from its AGENTS.md or CLAUDE.md. manualVerification holds hands-on checks only a person can make (browser smoke tests, "looks right", device checks); reviewers never judge these, and they become a checklist in the pull request. Show both lists in your summary; the user can move an item between them by replying, and you revise the brief. The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. After brief-draft, give a short summary of the drafted brief without asking in it whether they approve, then call brief-approve with the exact briefRevision and contentDigest shown; its confirmation is the one approval ask, so never also ask "do you approve" in prose beforehand. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
 - draft, publish, merge: pull requests. Each needs the user's explicit approval.
+- publish-now: only when the user explicitly asks to skip review or publish now, never on your own. It stops the reviewer, marks the task ready, and opens the PR with open findings listed. Merging stays separate.
 - request-receipt: time and cost for a finished request. Report elapsed time as stated; never call a missing figure zero.
 - models, configure-models, onboard, setup: onboarding. Propose the Balanced model profile one line per role, let the user accept, change roles, or choose Not now, then recap the full configuration before configure-models. If a role cannot be resolved, say which and why; never substitute a fallback. When a routing decision asks for a costlier model, the user picks the model and you pin it with configure-models.
 - present, presentations, describe, feedback: make, list, or read feedback on a visual artifact only when a picture helps. Never claim it is ready before its notification says so.
@@ -470,6 +473,13 @@ export function renderPrDescription(input: PrDescriptionInput): string {
   if (manualVerification.length > 0) {
     lines.push("", "# Manual verification", "Check these by hand before merging.");
     lines.push(...manualVerification.map((entry) => `- [ ] ${entry}`));
+  }
+  const openFindings =
+    input.openFindings === undefined
+      ? []
+      : readDescriptionEntries(input.openFindings, "openFindings", 0);
+  if (openFindings.length > 0) {
+    lines.push("", "# Known open review findings", ...formatBullets(openFindings));
   }
   return lines.join("\n");
 }
