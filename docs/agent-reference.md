@@ -1093,8 +1093,9 @@ Only scout records may carry one; a continuation on an implementation record is 
 | --- | --- |
 | `schemaVersion` | Always `1`; any other value is refused rather than repaired. |
 | `disposition` | `report-only`, `ask-intent`, or `implementation-interview`. |
-| `selectedBy` | `explicit` (supplied with the task request), `deterministic` (rule table), or `jev`. |
-| `classifierVersion` | Required for `jev`, optional for `deterministic`, refused for `explicit`. |
+| `selectedBy` | `explicit` (supplied with the task request), `deterministic` (rule table), `jev`, or `fallback` (an unusable classifier outcome). |
+| `classifierVersion` | Required for `jev`, optional for `deterministic`, refused for `explicit` and `fallback`. |
+| `fallbackReason` | Required for `fallback` (e.g. `jev-low-confidence`, `jev-not-configured`), refused otherwise. |
 
 Task creation accepts an explicitly supplied disposition; a scout created without one is classified
 before the record is written. Scout records written before the field
@@ -1148,10 +1149,12 @@ disposition for a scout created without an explicit one:
    scout report, credentials, or transcript. The model and the question/schema version are pinned
    and recorded together in `classifierVersion`.
 3. A missing `TYPESAFE_API_KEY`, a timeout, a provider outage, a malformed answer, or a confidence
-   below the classifier threshold records the conservative `ask-intent` with `deterministic`
-   provenance. Research is never blocked or delayed past the bounded `TANDEM_JEV_TIMEOUT_MS`
-   request timeout, and Jev never creates tasks, approves scope, selects implementation details, or
-   relaxes any safety policy.
+   below the classifier threshold now defaults to `implementation-interview` (unclear intent starts
+   the brief interview rather than an extra ask-intent round-trip), recorded with `selectedBy:
+   "fallback"` and the honest `fallbackReason` (e.g. `jev-low-confidence`), never as a rule-table
+   `deterministic` pick. Research is never blocked or delayed past the bounded
+   `TANDEM_JEV_TIMEOUT_MS` request timeout, and Jev never creates tasks, approves scope, selects
+   implementation details, or relaxes any safety policy.
 
 ### Review and validation
 

@@ -56,6 +56,24 @@ test("accepts each disposition with well-formed provenance", () => {
     classifierVersion: "jev-continuation-2026-09",
   });
   expect(jev.valid).toBe(true);
+  const fallback = checkResearchContinuation({
+    schemaVersion: 1,
+    disposition: "implementation-interview",
+    selectedBy: "fallback",
+    fallbackReason: "jev-low-confidence",
+  });
+  expect(fallback.valid).toBe(true);
+});
+
+test("an already-stored deterministic record with no fallback reason still loads", () => {
+  const stored: ResearchContinuation = {
+    schemaVersion: 1,
+    disposition: "ask-intent",
+    selectedBy: "deterministic",
+  };
+  const check = checkResearchContinuation(stored);
+  expect(check.valid).toBe(true);
+  if (check.valid) expect(check.continuation).toEqual(stored);
 });
 
 test("fails closed on unsupported values, versions, fields, and provenance", () => {
@@ -85,6 +103,19 @@ test("fails closed on unsupported values, versions, fields, and provenance", () 
       disposition: "ask-intent",
       selectedBy: "deterministic",
       confidence: 0.4,
+    },
+    { schemaVersion: 1, disposition: "implementation-interview", selectedBy: "fallback" },
+    {
+      schemaVersion: 1,
+      disposition: "ask-intent",
+      selectedBy: "deterministic",
+      fallbackReason: "jev-low-confidence",
+    },
+    {
+      schemaVersion: 1,
+      disposition: "implementation-interview",
+      selectedBy: "fallback",
+      fallbackReason: "",
     },
   ];
   for (const candidate of candidates) {
