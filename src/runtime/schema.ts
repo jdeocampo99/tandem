@@ -11,13 +11,13 @@ import type {
   Endpoint,
   Finding,
   IsoTimestamp,
-  ReviewLens,
   ReviewMode,
+  StoredReviewLens,
   ThinkingLevel,
   ValidationContractName,
   WorktreeLease,
 } from "../contracts.ts";
-import { MODEL_ROLE_ORDER, THINKING_LEVELS } from "../contracts.ts";
+import { ALL_REVIEW_LENSES, LEGACY_ENDPOINT_ROLES, THINKING_LEVELS } from "../contracts.ts";
 import {
   RECOVERY_ACTION_NAMES,
   RECOVERY_DISPOSITIONS,
@@ -27,7 +27,7 @@ import {
 } from "../recovery/decision.ts";
 import type { RecoveryAvailabilityWait } from "../recovery/wait.ts";
 import type { EscalationReason } from "../tasks/acceptance.ts";
-import type { WorkerRole } from "../workers/jobs.ts";
+import type { LegacyWorkerRole } from "../workers/jobs.ts";
 
 const RUNTIME_SCHEMA_VERSION = 1;
 
@@ -40,6 +40,8 @@ export type DurableOperationKind =
   | "fix"
   | "validation"
   | "review"
+  // ponytail: an operation admitted before the verifier role was removed may still carry this
+  // kind; no new operation is ever admitted with it (see workers/workflow.ts's reserveTask).
   | "verification"
   | "presentation";
 export type DurableOperationPhase =
@@ -126,7 +128,7 @@ export type DurableExecutionRouting = Readonly<{
   readonly taskId: string;
   readonly jobId: string;
   readonly operationId: string;
-  readonly role: WorkerRole;
+  readonly role: LegacyWorkerRole;
   readonly generation: number;
   readonly attempt: number;
   readonly policyDigest: string;
@@ -169,7 +171,7 @@ export type DurableExecutionRoutingPause = Readonly<{
   readonly taskId: string;
   readonly jobId: string;
   readonly operationId: string;
-  readonly role: WorkerRole;
+  readonly role: LegacyWorkerRole;
   readonly generation: number;
   readonly attempt: number;
   readonly policyDigest: string;
@@ -195,7 +197,7 @@ export type DurableOperation = Readonly<{
   readonly id: string;
   readonly taskId: string;
   readonly kind: DurableOperationKind;
-  readonly role: WorkerRole | "validation";
+  readonly role: LegacyWorkerRole | "validation";
   readonly generation: number;
   readonly inputHead: string;
   readonly policyDigest: string;
@@ -235,7 +237,7 @@ export type DurableJob = Readonly<{
   readonly id: string;
   readonly taskId: string;
   readonly generation: number;
-  readonly role: WorkerRole | "validation";
+  readonly role: LegacyWorkerRole | "validation";
   readonly kind: RuntimeJobKind;
   readonly cwd: string;
   readonly jobPath: string;
@@ -255,7 +257,7 @@ export type DurableJob = Readonly<{
   readonly policyDigest?: string;
   /** Present when targeted iteration checks were refused for the complete manifest. */
   readonly escalation?: EscalationReason;
-  readonly reviewLens?: ReviewLens;
+  readonly reviewLens?: StoredReviewLens;
   readonly receiptPath?: string;
   readonly instructionRevision?: number;
   readonly progressWarningAt?: IsoTimestamp;
@@ -519,6 +521,8 @@ function enumValue<Value extends string>(
   }
   return value as Value;
 }
+// ponytail: keeps "verifier" decodable on routing decisions pinned to a job admitted before the
+// role was removed; see workers/jobs.ts's LegacyWorkerRole.
 const WORKER_ROLES = ["scout", "implementer", "reviewer", "verifier", "presentation"] as const;
 
 function parseRoutingLimits(value: unknown, field: string): ExecutionRoutingLimits {
@@ -743,6 +747,8 @@ function parseOperation(value: unknown, field: string): DurableOperation {
     schemaVersion: 1,
     id: singleLine(value.id, `${field}.id`),
     taskId: singleLine(value.taskId, `${field}.taskId`),
+    // ponytail: "verification"/"verifier" stay accepted so an operation admitted before the role
+    // was removed still decodes; see DurableOperationKind and LegacyWorkerRole.
     kind: enumValue(
       value.kind,
       [
@@ -816,7 +822,8 @@ function parseEndpointLaunch(value: unknown, field: string): DurableEndpointLaun
     taskName: singleLine(value.taskName, `${field}.taskName`),
     workspaceLabel: singleLine(value.workspaceLabel, `${field}.workspaceLabel`),
     cwd: absolutePath(value.cwd, `${field}.cwd`),
-    role: enumValue(value.role, MODEL_ROLE_ORDER, `${field}.role`),
+    // ponytail: legacy panes/launches may still carry role "verifier"; see LEGACY_ENDPOINT_ROLES.
+    role: enumValue(value.role, LEGACY_ENDPOINT_ROLES, `${field}.role`),
     generation: nonNegativeInteger(value.generation, `${field}.generation`),
     createdAt: singleLine(value.createdAt, `${field}.createdAt`),
     ...(parentWorkspaceId === undefined ? {} : { parentWorkspaceId }),
@@ -955,7 +962,8 @@ function parseJobConsumption(value: unknown, field: string): DurableJobConsumpti
 
 function endpoint(value: unknown, field: string): Endpoint {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  const role = enumValue(value.role, MODEL_ROLE_ORDER, `${field}.role`);
+  // ponytail: legacy panes/launches may still carry role "verifier"; see LEGACY_ENDPOINT_ROLES.
+  const role = enumValue(value.role, LEGACY_ENDPOINT_ROLES, `${field}.role`);
   return {
     sessionId: singleLine(value.sessionId, `${field}.sessionId`),
     workspaceId: singleLine(value.workspaceId, `${field}.workspaceId`),
@@ -1023,6 +1031,8 @@ function parseReservation(value: unknown, field: string): DurableReservation {
 
 function parseJob(value: unknown, field: string): DurableJob {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  // ponytail: "verifier" stays accepted so a job admitted before the role was removed still
+  // decodes; see LegacyWorkerRole.
   const role = enumValue(
     value.role,
     ["scout", "implementer", "reviewer", "verifier", "presentation", "validation"] as const,
@@ -1063,14 +1073,12 @@ function parseJob(value: unknown, field: string): DurableJob {
   if ((contract === undefined) !== (policyDigest === undefined)) {
     throw new TypeError(`${field} must name its contract and policy digest together`);
   }
+  // ponytail: a job admitted before the lenses were merged may still name a legacy lens; see
+  // ALL_REVIEW_LENSES.
   const reviewLens =
     value.reviewLens === undefined
       ? undefined
-      : enumValue(
-          value.reviewLens,
-          ["behavior", "design", "coverage", "verification"] as const,
-          `${field}.reviewLens`,
-        );
+      : enumValue(value.reviewLens, ALL_REVIEW_LENSES, `${field}.reviewLens`);
   const receiptPath =
     value.receiptPath === undefined
       ? undefined

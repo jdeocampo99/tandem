@@ -18,7 +18,6 @@ const policy: ResolvedPolicy = {
       scout: { model: "provider/scout", thinking: "medium" },
       implementer: { model: "provider/implementer", thinking: "max" },
       reviewer: { model: "provider/reviewer", thinking: "high" },
-      verifier: { model: "provider/verifier", thinking: "high" },
       presentation: { model: "provider/presentation", thinking: "low" },
     },
     instructions: channels,
@@ -28,7 +27,6 @@ const policy: ResolvedPolicy = {
     maxWorkers: 2,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,

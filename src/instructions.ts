@@ -19,7 +19,7 @@ export type AgentBriefInput = Readonly<{
   readonly skill?: SkillInvocation;
 }>;
 
-export type ReviewLensId = "behavior" | "design" | "coverage" | "verification";
+export type ReviewLensId = "review";
 
 export type ReviewLens = Readonly<{
   readonly id: ReviewLensId;
@@ -46,7 +46,7 @@ export const DRAFT_PR_BANNER =
   "Unfinished: this draft shows work in progress so reviewers can watch it. It is visibility only, and it is not a claim that the work is ready, mergeable, deployable, or accepted.";
 
 export const DRAFT_PR_FINAL_ACCEPTANCE: readonly string[] = [
-  "Final acceptance stays pinned to the delivered code: successful pinned validation evidence bound to the current HEAD, one passing fresh independent read-only review per required lens at that same HEAD, and runner-owned required checks.",
+  "Final acceptance stays pinned to the delivered code: successful pinned validation evidence bound to the current HEAD, one passing fresh independent read-only review at that same HEAD, and runner-owned required checks.",
   "Unknown, stale, or failed evidence does not pass, and a targeted fix-time check never substitutes for the final gate.",
   "Publishing this draft as a finished pull request, merging, and deploying each remain separate explicit approvals. Tandem never merges or deploys automatically.",
 ];
@@ -58,13 +58,13 @@ export const COORDINATOR_INSTRUCTIONS = `You are Tandem's coordinator. You talk 
 ## Talking to the user
 The user does not know how Tandem works inside. Tell them what happened, not how Tandem did it.
 - Answer in one or two sentences: what happened, and whether they need to do anything. Use bullets only when they ask for detail or you are asking several questions.
-- Do not use Tandem's internal words with the user: durable, job, owns, runner, evidence, receipt, queued, enqueue, steer, heartbeat, bridge, child, worker, scout, verifier, baseline, generation, reservation, quarantine, stage names, P0/P1. Say what they mean instead ("the check is still running", "I passed that along").
+- Do not use Tandem's internal words with the user: durable, job, owns, runner, evidence, receipt, queued, enqueue, steer, heartbeat, bridge, child, worker, scout, baseline, generation, reservation, quarantine, stage names, P0/P1. Say what they mean instead ("the check is still running", "I passed that along").
 - Leave out commit hashes and ids unless the user asks for them.
 - Do not mention safety guarantees that held ("nothing was deleted", "I did not start a duplicate") unless the user asked or something went wrong.
 - Do not repeat scope or status the user already knows.
 
 Examples:
-Bad: "Accepted and forwarded. Final verification is now instructed to use the existing Playwright report: [five bullets]. The instruction is queued for the verifier; completion is not yet recorded."
+Bad: "Accepted and forwarded. The final review is now instructed to use the existing Playwright report: [five bullets]. The instruction is queued for the reviewer; completion is not yet recorded."
 Good: "Passed it along. The final check will reuse your existing Playwright results. I'll let you know when it's done."
 Bad: "A manual retry was refused because an active durable job already owns validation. [five bullets]"
 Good: "Review and CI pass. It's waiting on the UI smoke tests to finish, then it's done."
@@ -136,30 +136,16 @@ Name things with full words for what they mean in the domain. Avoid abbreviation
 
 Review protocol: preserve observable semantics, ordering, mutation timing, boundary behavior, and error behavior. Update every affected caller transitively. For every changed function, method, callback, closure, and affected caller, record an explicit disposition: changed, intentionally unchanged with a rationale, or blocked with the exact reason. Apply the same review to newly introduced functions. Report only evidence-backed findings and keep the change focused; do not broaden the review into unrelated cleanup.`;
 
+/**
+ * One reviewer session per round covers behavior, design, and coverage together, from a fresh
+ * context with no implementer conversation; there is no separate independent-verification pass.
+ */
 export const REVIEW_LENSES = [
   {
-    id: "behavior",
-    title: "Behavior and semantics",
+    id: "review",
+    title: "Behavior, design, and coverage",
     instructions:
-      "Inspect observable behavior, error behavior, ordering, mutation timing, and boundary cases. Compare the change and its affected callers with the task contract. Cite the exact evidence, bind the report to HEAD and generation, and do not invent findings. The reviewer is read-only; targeted validation evidence comes from the runner.",
-  },
-  {
-    id: "design",
-    title: "Design and function quality",
-    instructions:
-      "Apply all seven code standards to every changed function, method, callback, closure, and affected caller: honest dependencies, empathic signatures, uniform abstraction, useful comments, reader-oriented declaration order, reuse before adding, and plain conventional names. Preserve semantics and caller updates, record each review disposition, report evidence-backed findings only, never invent findings, avoid broad cleanup, bind the report to HEAD and generation, remain read-only, and rely on targeted validation performed by the runner.",
-  },
-  {
-    id: "coverage",
-    title: "Coverage and affected surface",
-    instructions:
-      "Check the changed behavior, affected callers, relevant tests, reports, and task acceptance criteria. Identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Keep the reviewer read-only, use runner-produced targeted validation, and bind every report to HEAD and generation.",
-  },
-  {
-    id: "verification",
-    title: "Independent verification",
-    instructions:
-      "Use a fresh reviewer or verifier context with no implementer conversation. Inspect the exact HEAD and generation under review, bind the report to HEAD and generation, rely only on targeted validation performed by the runner, and distinguish confirmed from plausible findings. Do not run or claim unobserved commands, do not modify the worktree, and do not invent verification results.",
+      "Use a fresh reviewer context with no implementer conversation. Inspect observable behavior, error behavior, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply all seven code standards to every changed function, method, callback, closure, and affected caller: honest dependencies, empathic signatures, uniform abstraction, useful comments, reader-oriented declaration order, reuse before adding, and plain conventional names; preserve semantics and caller updates, and record each review disposition. Check the changed behavior, affected callers, relevant tests, reports, and task acceptance criteria, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, bind the report to HEAD and generation, distinguish confirmed from plausible findings, report evidence-backed findings only, never invent findings, avoid broad cleanup, remain read-only, and rely only on targeted validation performed by the runner.",
   },
 ] as const satisfies readonly ReviewLens[];
 
@@ -206,19 +192,12 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "For a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; never dump logs or transcript text.",
   ],
   reviewer: [
-    "Act as a fresh reviewer in a separate pane on the same task worktree; pause the implementer and remain read-only.",
+    "Act as a fresh reviewer in a separate pane on the same task worktree, from a fresh context with no implementer conversation; pause the implementer and remain read-only.",
     "Use only read-only tools (read, grep, and glob); do not write report files.",
-    "Review the behavior, security, design, coverage, and verification lenses with evidence-backed findings only.",
+    "Review the behavior, security, design, and coverage of the change with evidence-backed findings only, distinguishing confirmed from plausible findings.",
     "Bind the report to the exact HEAD and generation. The runner performs targeted validation; do not invent or claim its results.",
     SUBMIT_REPORT_INSTRUCTION,
     "On a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; otherwise submit outcome completed with the review field following the ReviewResult schema and selected-lens instructions supplied below.",
-  ],
-  verifier: [
-    "Verify the exact task HEAD and generation from a fresh context without relying on implementer conversation.",
-    "Use only read-only tools (read, grep, and glob) and do not write report files.",
-    SUBMIT_REPORT_INSTRUCTION,
-    "Use only runner-produced targeted validation evidence and report the observed command, result, and scope; never synthesize evidence.",
-    "On a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; otherwise submit outcome completed with the review field following the ReviewResult schema and selected-lens instructions supplied below. Bind lens, HEAD, and generation to the requested review context; pass is the boolean verdict.",
   ],
   presentation: [
     "Presentation alone may write the artifact at the supplied absolute path using only read, grep, glob, write, and edit.",
@@ -229,8 +208,8 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
   ],
 };
 const REVIEW_RESULT_SCHEMA = `Set the submit_report review field to one ReviewResult object with these keys:
-{"lens":"<behavior|design|coverage|verification>","head":"<exact HEAD>","generation":0,"pass":true,"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>"}],"summary":"<evidence-backed summary>"}
-Use the selected lens, exact HEAD, and exact generation supplied by the coordinator. Allowed lens values are behavior, design, coverage, and verification; severity values are P0, P1, P2, and P3; verdict values are confirmed and plausible; pass is boolean. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
+{"lens":"review","head":"<exact HEAD>","generation":0,"pass":true,"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>"}],"summary":"<evidence-backed summary>"}
+Use the exact HEAD and exact generation supplied by the coordinator. The lens value is always "review"; severity values are P0, P1, P2, and P3; verdict values are confirmed and plausible; pass is boolean. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
 
 function readNonEmptyText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -347,7 +326,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
   }
   if (!isAgentRole(input.role)) {
     throw new TypeError(
-      "role must be one of coordinator, scout, implementer, reviewer, verifier, or presentation",
+      "role must be one of coordinator, scout, implementer, reviewer, or presentation",
     );
   }
 
@@ -423,7 +402,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
     lines.push("", CODE_STANDARDS);
   }
 
-  if (input.role === "reviewer" || input.role === "verifier") {
+  if (input.role === "reviewer") {
     lines.push("", "## Review output", REVIEW_RESULT_SCHEMA);
     if (review === undefined) {
       lines.push(
@@ -433,13 +412,11 @@ export function buildAgentBrief(input: AgentBriefInput): string {
       const selectedLens = findReviewLens(review.pass);
       if (selectedLens === undefined) {
         lines.push(
-          `The selected lens label ${review.pass} is not recognized; ask the coordinator for one of behavior, design, coverage, or verification.`,
+          `The selected lens label ${review.pass} is not recognized; ask the coordinator for "review".`,
         );
       } else {
         lines.push(`## Selected lens: ${selectedLens.title}`, selectedLens.instructions);
-        if (selectedLens.id === "design") {
-          lines.push("", CODE_STANDARDS);
-        }
+        lines.push("", CODE_STANDARDS);
       }
     }
   }

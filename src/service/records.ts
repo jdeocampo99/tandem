@@ -271,7 +271,7 @@ export function workerRoleForTask(task: TaskRecord): WorkerRole {
 }
 
 export function roleChannel(role: WorkerRole): "implementation" | "review" {
-  return role === "reviewer" || role === "verifier" ? "review" : "implementation";
+  return role === "reviewer" ? "review" : "implementation";
 }
 
 export function reportPathFor(jobPath: string): string {
@@ -308,7 +308,7 @@ export function reviewFindings(task: TaskRecord): readonly Finding[] {
   return findings;
 }
 
-/** The worker role that actually performs the task's work, as opposed to review or verification. */
+/** The worker role that actually performs the task's work, as opposed to review. */
 function isSkillEligibleRole(role: WorkerRole): boolean {
   return role === "implementer" || role === "scout";
 }

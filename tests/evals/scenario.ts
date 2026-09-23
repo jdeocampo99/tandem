@@ -47,7 +47,6 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
       scout: { model: "scenario/scout", thinking: "low" },
       implementer: { model: "scenario/implementer", thinking: "low" },
       reviewer: { model: "scenario/reviewer", thinking: "low" },
-      verifier: { model: "scenario/verifier", thinking: "low" },
       presentation: { model: "scenario/presentation", thinking: "low" },
     },
     instructions: { implementation: [], validation: [], review: [] },
@@ -57,7 +56,6 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
     maxWorkers: 2,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,

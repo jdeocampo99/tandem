@@ -1082,6 +1082,8 @@ export class TaskControlWorkflow {
         await this.#deps.publishTaskInbox(blocked);
         return blocked;
       }
+      // ponytail: "verifier" stays matched so a legacy pane still gets handled here; see
+      // LEGACY_ENDPOINT_ROLES.
       const reviewers = runtime.endpoints.filter(
         (endpoint) => endpoint.role === "reviewer" || endpoint.role === "verifier",
       );

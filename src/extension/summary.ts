@@ -350,7 +350,7 @@ function summarizeOnboard(value: unknown, action: "onboard" | "setup"): string {
       );
     } else {
       lines.push("No saved model choices yet; no role has a selected, approved, or saved model.");
-      lines.push("Pending role choices (all six roles are unselected until explicit answers):");
+      lines.push("Pending role choices (every role is unselected until explicit answers):");
       lines.push(...summarizeModelAssignments(undefined, true).map((entry) => `- ${entry}`));
       lines.push(
         "Call models to fetch the OMP catalogue and the proposed Balanced profile, then accept it, inspect and override any role or provider enablement, or choose Not now to pause without configure-models, project setup, or launch.",
@@ -360,7 +360,7 @@ function summarizeOnboard(value: unknown, action: "onboard" | "setup"): string {
     lines.push(
       action === "setup"
         ? "Saved model choices remain configured; setup did not change them."
-        : "Saved model choices are configured for future projects (all six roles):",
+        : "Saved model choices are configured for future projects (every role):",
     );
     const current = summarizeModelAssignments(
       modelSettings.models ?? summaryRecord(record.policy)?.models,
@@ -370,7 +370,7 @@ function summarizeOnboard(value: unknown, action: "onboard" | "setup"): string {
     if (action === "onboard") {
       lines.push("Choose one: Keep all (read-only), Change roles, or Not now.");
       lines.push(
-        "Keep all does not write or force re-selection. Change roles asks explicitly for every role, records keep-current answers for untouched roles, preserves those assignments, and recaps all six before configure-models approval. Not now pauses onboarding without configure-models, project setup, launch, or changing saved choices.",
+        "Keep all does not write or force re-selection. Change roles asks explicitly for every role, records keep-current answers for untouched roles, preserves those assignments, and recaps every role before configure-models approval. Not now pauses onboarding without configure-models, project setup, launch, or changing saved choices.",
       );
     }
   }

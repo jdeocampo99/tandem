@@ -76,7 +76,6 @@ test("defaultPolicy exposes the exact configured role pins", () => {
     scout: { model: "openai-codex/gpt-5.6-luna", thinking: "medium" },
     implementer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
     reviewer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
-    verifier: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
     presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
   });
   expect(policy.maxWorkers).toBe(3);
@@ -378,7 +377,6 @@ test("a configured home inside the target repository fails closed without creati
 
 test("every review-level opt-in is off by default", () => {
   expect(defaultPolicy().reviewLevels).toEqual({
-    reducedRouting: false,
     deepScrutiny: false,
     jevAssistance: "off",
     sourceTransmission: false,
@@ -389,20 +387,17 @@ test("every review-level opt-in is off by default", () => {
 test("a repository can opt into each review-level setting explicitly", () => {
   const parsed = parsePolicy({
     reviewLevels: {
-      reducedRouting: true,
       deepScrutiny: true,
       jevAssistance: "shadow",
       sourceTransmission: true,
     },
   });
   expect(parsed.reviewLevels).toEqual({
-    reducedRouting: true,
     deepScrutiny: true,
     jevAssistance: "shadow",
     sourceTransmission: true,
   });
   expect(parsePolicy({ reviewLevels: { deepScrutiny: true } }).reviewLevels).toEqual({
-    reducedRouting: false,
     deepScrutiny: true,
     jevAssistance: "off",
     sourceTransmission: false,
@@ -411,9 +406,18 @@ test("a repository can opt into each review-level setting explicitly", () => {
 
 test("review-level settings reject unknown keys, wrong types, and unsupported modes", () => {
   expect(() => parsePolicy({ reviewLevels: { reduceEverything: true } })).toThrow(TypeError);
-  expect(() => parsePolicy({ reviewLevels: { reducedRouting: "yes" } })).toThrow(TypeError);
+  expect(() => parsePolicy({ reviewLevels: { deepScrutiny: "yes" } })).toThrow(TypeError);
   expect(() => parsePolicy({ reviewLevels: { jevAssistance: "active" } })).toThrow(TypeError);
   expect(() => parsePolicy({ reviewLevels: [] })).toThrow(TypeError);
+});
+
+test("a repository config that still sets reducedRouting still loads, ignoring it", () => {
+  const parsed = parsePolicy({ reviewLevels: { reducedRouting: true, deepScrutiny: true } });
+  expect(parsed.reviewLevels).toEqual({
+    deepScrutiny: true,
+    jevAssistance: "off",
+    sourceTransmission: false,
+  });
 });
 
 test("saved provider enablement is exposed through onboarding but never becomes part of the resolved policy", async () => {

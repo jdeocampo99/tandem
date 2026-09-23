@@ -250,7 +250,7 @@ export function resolveSubmittedReport(
   submission: SubmittedReport,
 ): ResolvedReport {
   const { role } = job;
-  const reviews = role === "reviewer" || role === "verifier";
+  const reviews = role === "reviewer";
   if (!outcomesFor(role).includes(submission.outcome)) {
     throw new ReportRejection(`outcome must be one of ${outcomesFor(role).join(", ")}`);
   }

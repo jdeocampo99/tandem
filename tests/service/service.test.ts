@@ -20,7 +20,6 @@ import {
   MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
   MODEL_ROLE_ORDER,
   type ResolvedPolicy,
-  type ReviewLens,
   type TaskRecord,
   type WorkerReceipt,
   type WorktreeLease,
@@ -86,7 +85,6 @@ const policy: ResolvedPolicy = {
       scout: { model: "test/scout", thinking: "low" },
       implementer: { model: "test/implementer", thinking: "low" },
       reviewer: { model: "test/reviewer", thinking: "low" },
-      verifier: { model: "test/verifier", thinking: "low" },
       presentation: { model: "test/presentation", thinking: "low" },
     },
     instructions: { implementation: [], validation: [], review: [] },
@@ -98,7 +96,6 @@ const policy: ResolvedPolicy = {
     maxWorkers: 4,
     maxFixRounds: 1,
     reviewLevels: {
-      reducedRouting: false,
       deepScrutiny: false,
       jevAssistance: "off",
       sourceTransmission: false,
@@ -147,7 +144,6 @@ const BALANCED_MODELS = {
   scout: { model: "test/balanced", thinking: "medium" },
   implementer: { model: "test/balanced", thinking: "max" },
   reviewer: { model: "test/balanced", thinking: "max" },
-  verifier: { model: "test/balanced", thinking: "high" },
   presentation: { model: "test/balanced", thinking: "low" },
 } as const;
 
@@ -1207,12 +1203,12 @@ test("service rejects unavailable model choices before writing settings", async 
       const callsBeforeConfigure = runnerState.calls.length;
       const unavailable = {
         ...policy.config.models,
-        verifier: { model: "missing/verifier", thinking: "low" as const },
+        reviewer: { model: "missing/reviewer", thinking: "low" as const },
       };
 
       await expect(
         service.configureModels({ repoPath: task.repoPath, models: unavailable }),
-      ).rejects.toThrow("missing/verifier");
+      ).rejects.toThrow("missing/reviewer");
 
       expect(runnerState.calls.slice(callsBeforeConfigure)).toHaveLength(1);
       await expect(readFile(options.modelSettings.configPath, "utf8")).rejects.toThrow();
@@ -3823,18 +3819,7 @@ test("a launched review job receives a bounded deterministic review brief", asyn
   );
 });
 
-function passingReview(lens: ReviewLens): TaskRecord["reviews"][number] {
-  return {
-    lens,
-    head: "review-head",
-    generation: 0,
-    pass: true,
-    findings: [],
-    summary: `no ${lens} findings`,
-  };
-}
-
-test("the default policy launches today's four review lenses and never calls the helper", async () => {
+test("the default policy launches one merged review lens and never calls the helper", async () => {
   let evaluatorCalls = 0;
   const assistance = reviewAssistanceRuntime({
     apiKey: "would-be-used-if-opted-in",
@@ -3844,38 +3829,29 @@ test("the default policy launches today's four review lenses and never calls the
       throw new Error("the evaluator must not be called under the default policy");
     },
   });
-  const launchedLenses: string[] = [];
-  for (const recorded of [
-    [],
-    [passingReview("behavior")],
-    [passingReview("behavior"), passingReview("design")],
-    [passingReview("behavior"), passingReview("design"), passingReview("coverage")],
-  ]) {
-    await withFixture(
-      {
-        kind: "implementation",
-        stage: "reviewing",
-        taskEdits: { reviewHead: "review-head", reviews: recorded },
-        runner: { active: false, checkoutHead: "review-head" },
-        reviewAssistance: assistance,
-      },
-      async ({ home, lease, service }) => {
-        await seedTaskResources(home, lease, [endpointFor("implementer")], []);
-        await service.tick();
-        const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
-        if (launched?.reviewLens === undefined) throw new Error("no review job was launched");
-        launchedLenses.push(launched.reviewLens);
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "reviewing",
+      taskEdits: { reviewHead: "review-head", reviews: [] },
+      runner: { active: false, checkoutHead: "review-head" },
+      reviewAssistance: assistance,
+    },
+    async ({ home, lease, service }) => {
+      await seedTaskResources(home, lease, [endpointFor("implementer")], []);
+      await service.tick();
+      const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
+      if (launched?.reviewLens === undefined) throw new Error("no review job was launched");
+      expect(launched.reviewLens).toBe("review");
 
-        const persisted = await service.get("task-1");
-        expect(persisted.reviewLevel?.level).toBe("standard");
-        expect(persisted.reviewLevel?.reason.length).toBeGreaterThan(0);
-        expect(persisted.reviewLevel?.assistance).toBeUndefined();
-        expect(persisted.policy.config.reviewLevels).toEqual(DEFAULT_REVIEW_LEVEL_POLICY);
-        expect(requiredReviewLenses(persisted, "review-head")).toEqual(FINAL_REVIEW_LENSES);
-      },
-    );
-  }
-  expect(launchedLenses).toEqual([...FINAL_REVIEW_LENSES]);
+      const persisted = await service.get("task-1");
+      expect(persisted.reviewLevel?.level).toBe("standard");
+      expect(persisted.reviewLevel?.reason.length).toBeGreaterThan(0);
+      expect(persisted.reviewLevel?.assistance).toBeUndefined();
+      expect(persisted.policy.config.reviewLevels).toEqual(DEFAULT_REVIEW_LEVEL_POLICY);
+      expect(requiredReviewLenses(persisted, "review-head")).toEqual(FINAL_REVIEW_LENSES);
+    },
+  );
   expect(evaluatorCalls).toBe(0);
 });
 
@@ -3916,7 +3892,7 @@ test("review result retains its reviewer pane with durable task revisions", asyn
       const job = {
         ...workerJob(home, endpoint, "reviewer"),
         head: "review-head",
-        reviewLens: "behavior" as const,
+        reviewLens: "review" as const,
       };
       await seedTaskResources(home, lease, [endpoint], [job]);
       await writeJsonAtomically(job.resultPath, {
@@ -3927,12 +3903,12 @@ test("review result retains its reviewer pane with durable task revisions", asyn
         status: "completed",
         text: "Review complete",
         review: {
-          lens: "behavior",
+          lens: "review",
           head: "review-head",
           generation: 0,
           pass: true,
           findings: [],
-          summary: "No behavior findings",
+          summary: "No findings",
         },
         finishedAt: TIMESTAMP,
       });

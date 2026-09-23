@@ -10,13 +10,13 @@ import type {
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import { DEFAULT_REVIEW_LEVEL_POLICY } from "../tasks/review-levels.ts";
 import {
-  AGENT_ROLE_KEYS,
   assertKnownKeys,
   cloneChannels,
   deduplicateStrings,
   hasKey,
   INSTRUCTION_CHANNELS,
   isRecord,
+  LEGACY_MODEL_ROLE_KEYS,
   MODEL_KEYS,
   readChannels,
   readInstructionList,
@@ -53,6 +53,8 @@ const SETUP_COMMAND_KEYS: Readonly<Record<string, true>> = {
   timeoutMs: true,
 };
 
+// ponytail: a repository config may still set "reducedRouting" from before it was removed; accept
+// it here so the config still loads, but its value is never read (see readReviewLevels).
 const REVIEW_LEVEL_KEYS: Readonly<Record<string, true>> = {
   reducedRouting: true,
   deepScrutiny: true,
@@ -80,7 +82,6 @@ const DEFAULT_MODELS: Readonly<Record<AgentRole, ModelSpec>> = {
   scout: { model: "openai-codex/gpt-5.6-luna", thinking: "medium" },
   implementer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
   reviewer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
-  verifier: { model: "openai-codex/gpt-5.6-sol", thinking: "high" },
   presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
 };
 
@@ -93,7 +94,7 @@ function readModelOverrides(
   if (!isRecord(value)) {
     throw new TypeError("models must be an object keyed by agent role");
   }
-  assertKnownKeys(value, AGENT_ROLE_KEYS, "models");
+  assertKnownKeys(value, LEGACY_MODEL_ROLE_KEYS, "models");
 
   const models = {} as Record<AgentRole, ModelSpec>;
   for (const role of MODEL_ROLE_ORDER) {
@@ -101,6 +102,7 @@ function readModelOverrides(
   }
 
   for (const key of Object.keys(value)) {
+    if (key === "verifier") continue;
     const role = key as AgentRole;
     const override = value[key];
     if (!isRecord(override)) {
@@ -234,9 +236,6 @@ function readReviewLevels(value: unknown, base: ReviewLevelPolicy): ReviewLevelP
     throw new TypeError("reviewLevels.jevAssistance must be off or shadow");
   }
   return {
-    reducedRouting: hasKey(value, "reducedRouting")
-      ? readBoolean(value.reducedRouting, "reviewLevels.reducedRouting")
-      : base.reducedRouting,
     deepScrutiny: hasKey(value, "deepScrutiny")
       ? readBoolean(value.deepScrutiny, "reviewLevels.deepScrutiny")
       : base.deepScrutiny,
@@ -384,7 +383,6 @@ function buildDefaultPolicy(): RepoPolicy {
       scout: { ...DEFAULT_MODELS.scout },
       implementer: { ...DEFAULT_MODELS.implementer },
       reviewer: { ...DEFAULT_MODELS.reviewer },
-      verifier: { ...DEFAULT_MODELS.verifier },
       presentation: { ...DEFAULT_MODELS.presentation },
     },
     instructions: {

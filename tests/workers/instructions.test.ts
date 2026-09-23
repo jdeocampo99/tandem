@@ -124,7 +124,7 @@ test("rejects multiline entries and Markdown heading injection", () => {
   }
 });
 
-test("gives implementers the same code standards the design reviewer grades against", () => {
+test("gives implementers the same code standards the reviewer grades against", () => {
   const input = {
     objective: "Change the parser",
     acceptanceCriteria: ["Keep behavior identical."],
@@ -137,7 +137,7 @@ test("gives implementers the same code standards the design reviewer grades agai
     buildAgentBrief({
       ...input,
       role: "reviewer",
-      review: { head: "abc123", generation: 1, pass: "design" },
+      review: { head: "abc123", generation: 1, pass: "review" },
     }),
   ).toContain(CODE_STANDARDS);
   expect(buildAgentBrief({ ...input, role: "scout" })).not.toContain(CODE_STANDARDS);

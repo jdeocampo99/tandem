@@ -151,7 +151,7 @@ export function assertCurrentReviews(task: TaskRecord, head: string): void {
   for (const lens of REQUIRED_LENSES) {
     const matching = current.filter((review) => review.lens === lens);
     if (matching.length !== 1 || matching[0]?.pass !== true) {
-      throw new Error(`delivery requires a passing current ${lens} review`);
+      throw new Error("delivery requires a passing current review");
     }
   }
 }
@@ -308,9 +308,7 @@ export function assertRequestAcceptance(
       (requirement) =>
         `${requirement.name} (${requirement.origin}) did not pass at the integrated HEAD`,
     ),
-    ...status.manifest.pendingLenses.map(
-      (lens) => `the integrated HEAD has no passing ${lens} review`,
-    ),
+    ...status.manifest.pendingLenses.map(() => "the integrated HEAD has no passing review"),
   ];
   throw new Error(
     `delivery requires a complete final acceptance run at the integrated HEAD ${input.integration.head}; outstanding: ${outstanding.join("; ")}`,
@@ -355,7 +353,7 @@ export function describeRequestDraftPr(input: RequestDraftDescriptionInput): str
       `Members: ${input.members.join(", ")}`,
     ],
     reviewLevel: [
-      `Whatever each member's review level is, the request is delivered only when the ${REQUIRED_LENSES.join(", ")} lenses, the pinned validation commands, and the approved acceptance criteria all pass at the integrated commit.`,
+      "Whatever each member's review level is, the request is delivered only when the review, the pinned validation commands, and the approved acceptance criteria all pass at the integrated commit.",
     ],
     activity: input.activity.map(draftText),
     blockers: input.blockers.map(draftText),
@@ -413,7 +411,7 @@ export function pinnedReviewLevel(task: TaskRecord): ReviewLevelSummary {
   return {
     level: recorded.level,
     reason: `${recorded.reason}${floors}`,
-    finalRequirements: `Whatever the level, the pinned repository policy requires ${REQUIRED_LENSES.join(", ")} review at final acceptance by fresh read-only reviewers, ${config.validationCommands.length} pinned validation command(s), and at most ${config.maxFixRounds} bounded fix round(s).`,
+    finalRequirements: `Whatever the level, the pinned repository policy requires review at final acceptance by a fresh read-only reviewer, ${config.validationCommands.length} pinned validation command(s), and at most ${config.maxFixRounds} bounded fix round(s).`,
   };
 }
 
@@ -470,13 +468,9 @@ function draftActivity(task: TaskRecord): readonly string[] {
       const recorded = currentReviews(task);
       const detail =
         recorded.length === 0
-          ? "no lens has been recorded yet"
-          : recorded
-              .map((review) => `${review.lens}=${review.pass ? "pass" : "findings"}`)
-              .join(", ");
-      return [
-        `Fresh read-only reviewers are recording lenses at ${head}; ${recorded.length} of ${REQUIRED_LENSES.length} recorded (${detail}).`,
-      ];
+          ? "not yet recorded"
+          : recorded.map((review) => (review.pass ? "pass" : "findings")).join(", ");
+      return [`A fresh read-only reviewer is recording the review at ${head}; ${detail}.`];
     }
     case "awaiting-fixes":
       return [
@@ -484,7 +478,7 @@ function draftActivity(task: TaskRecord): readonly string[] {
       ];
     case "ready":
       return [
-        `The final acceptance manifest and all ${REQUIRED_LENSES.length} review lenses pass at ${head}. Delivery acceptance is still a separate explicit step.`,
+        `The final acceptance manifest and the review pass at ${head}. Delivery acceptance is still a separate explicit step.`,
       ];
     case "paused":
       return [
@@ -564,9 +558,9 @@ function draftRemainingChecks(task: TaskRecord, candidateHead: string | undefine
   for (const requirement of status.failed) {
     remaining.push(describeRequirement(requirement, "recorded a failing result"));
   }
-  for (const lens of status.pendingLenses) {
+  for (const _lens of status.pendingLenses) {
     remaining.push(
-      `A passing ${lens} review by a fresh independent read-only reviewer at the candidate commit.`,
+      "A passing review by a fresh independent read-only reviewer at the candidate commit.",
     );
   }
   return remaining;

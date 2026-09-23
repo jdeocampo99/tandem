@@ -107,8 +107,8 @@ export async function runConfigure(
   }
   output(
     decision.action === "keep"
-      ? "Saved six-role choices kept; no coordinator was launched.\n"
-      : `Saved six-role choices in ${environment.home}/models.json; no coordinator was launched.\n`,
+      ? "Saved role choices kept; no coordinator was launched.\n"
+      : `Saved role choices in ${environment.home}/models.json; no coordinator was launched.\n`,
   );
   return {
     exitCode: 0,

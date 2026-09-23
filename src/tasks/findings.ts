@@ -3,8 +3,8 @@ import type {
   FindingLedgerEntry,
   FindingObservation,
   FindingStatus,
-  ReviewLens,
   ReviewResult,
+  StoredReviewLens,
   TaskRecord,
 } from "../contracts.ts";
 
@@ -31,7 +31,7 @@ export function isBlockingFinding(finding: SeverityAndVerdict): boolean {
   return finding.severity === "P0" || finding.severity === "P1";
 }
 
-function identityOf(lens: ReviewLens, id: string): string {
+function identityOf(lens: StoredReviewLens, id: string): string {
   return `${lens}:${id}`;
 }
 
@@ -53,7 +53,7 @@ function nextStatus(previous: FindingLedgerEntry, reported: Finding): FindingSta
 function reportedEntry(
   previous: FindingLedgerEntry | undefined,
   reported: Finding,
-  lens: ReviewLens,
+  lens: StoredReviewLens,
   observation: FindingObservation,
 ): FindingLedgerEntry {
   const status = previous === undefined ? "unresolved" : nextStatus(previous, reported);
@@ -102,8 +102,10 @@ export function recordReviewFindings(
       carried.add(identity);
       continue;
     }
+    // One reviewer session now covers everything a round reviews, including a legacy lens's
+    // ground (behavior, design, coverage, verification); an entry from any of them settles once
+    // the current round's single review no longer reports it.
     const settles =
-      entry.lens === review.lens &&
       entry.status !== "addressed" &&
       !sameObservation(entry.statusAt, observation) &&
       entry.statusAt.generation < review.generation;

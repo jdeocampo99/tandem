@@ -30,7 +30,6 @@ function policyWith(commands: readonly ValidationCommand[]): ResolvedPolicy {
         scout: { model: "test/scout", thinking: "low" },
         implementer: { model: "test/implementer", thinking: "low" },
         reviewer: { model: "test/reviewer", thinking: "low" },
-        verifier: { model: "test/verifier", thinking: "low" },
         presentation: { model: "test/presentation", thinking: "low" },
       },
       instructions: { implementation: [], validation: [], review: [] },
@@ -40,7 +39,6 @@ function policyWith(commands: readonly ValidationCommand[]): ResolvedPolicy {
       maxWorkers: 3,
       maxFixRounds: 3,
       reviewLevels: {
-        reducedRouting: false,
         deepScrutiny: false,
         jevAssistance: "off",
         sourceTransmission: false,
@@ -138,7 +136,7 @@ test("the final manifest selects surface-matching, wildcard, and globally-scoped
     { name: "lint", origin: "local" },
     { name: "wildcard", origin: "local" },
   ]);
-  expect(manifest.lenses).toEqual(["behavior", "design", "coverage", "verification"]);
+  expect(manifest.lenses).toEqual(["review"]);
   expect(manifest.criteria).toEqual(["The change is durable"]);
   expect(manifest.identity).toEqual({
     head: HEAD,
@@ -160,7 +158,7 @@ test("an iteration scope records the checks that reported the failure and the fi
         evidence({ name: "lint", contract: "final", exitCode: 1 }),
         evidence({ name: "test", contract: "final" }),
       ],
-      reviews: [review("behavior", false, ["finding-1"]), review("design")],
+      reviews: [review("review", false, ["finding-1"])],
     }),
   );
 
@@ -281,7 +279,7 @@ test("a candidate whose lenses all pass runs the final manifest rather than targ
         surfaces: ["service"],
         findingIds: [],
       },
-      reviews: [review("behavior"), review("design"), review("coverage"), review("verification")],
+      reviews: [review("review")],
     }),
     HEAD,
   );
@@ -296,7 +294,7 @@ test("passing iteration evidence never satisfies the final manifest", () => {
         evidence({ name: "lint", contract: "iteration" }),
         evidence({ name: "test", contract: "iteration" }),
       ],
-      reviews: [review("behavior"), review("design"), review("coverage"), review("verification")],
+      reviews: [review("review")],
     }),
     HEAD,
   );
@@ -312,7 +310,7 @@ test("final evidence recorded under a superseded policy identity reads as stale,
         evidence({ name: "lint", contract: "final", policyDigest: "superseded" }),
         evidence({ name: "test", contract: "final" }),
       ],
-      reviews: [review("behavior"), review("design"), review("coverage"), review("verification")],
+      reviews: [review("review")],
     }),
     HEAD,
   );
@@ -330,7 +328,7 @@ test("a complete final run at the delivered identity with passing lenses satisfi
         evidence({ name: "lint", contract: "final" }),
         evidence({ name: "test", contract: "final" }),
       ],
-      reviews: [review("behavior"), review("design"), review("coverage"), review("verification")],
+      reviews: [review("review")],
     }),
     HEAD,
   );
@@ -345,7 +343,7 @@ test("a final check recorded at another HEAD leaves the manifest unsatisfied", (
         evidence({ name: "lint", contract: "final", head: "head-0" }),
         evidence({ name: "test", contract: "final" }),
       ],
-      reviews: [review("behavior"), review("design"), review("coverage"), review("verification")],
+      reviews: [review("review")],
     }),
     HEAD,
   );

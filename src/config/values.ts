@@ -27,6 +27,16 @@ export const AGENT_ROLE_KEYS: Readonly<Record<AgentRole, true>> = Object.fromEnt
   MODEL_ROLE_ORDER.map((role) => [role, true] as const),
 ) as Readonly<Record<AgentRole, true>>;
 
+/**
+ * ponytail: a models config (repo policy override or `~/.tandem/models.json`) may still name
+ * "verifier" from before the role was removed; accept it at the parsing boundary so the config
+ * still loads instead of refusing to start, but its value is never read into the result.
+ */
+export const LEGACY_MODEL_ROLE_KEYS: Readonly<Record<string, true>> = {
+  ...AGENT_ROLE_KEYS,
+  verifier: true,
+};
+
 export const THINKING_LEVELS: Readonly<Record<ThinkingLevel, true>> = {
   off: true,
   minimal: true,

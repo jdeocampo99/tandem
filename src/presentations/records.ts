@@ -2,9 +2,8 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { PresentationObservation } from "../adapters/lavish.ts";
 import {
-  type AgentRole,
   type Endpoint,
-  isAgentRole,
+  LEGACY_ENDPOINT_ROLES,
   type NotificationKind,
   type TaskQuestion,
 } from "../contracts.ts";
@@ -376,7 +375,10 @@ export function presentationNotificationForTransition(
 export function parseEndpointValue(value: unknown, field: string): Endpoint {
   if (!isRecord(value)) throw new TypeError(`${field} must be an endpoint object`);
   const role = value.role;
-  if (!isAgentRole(role)) throw new TypeError(`${field}.role is invalid`);
+  // ponytail: legacy panes may still carry role "verifier"; see LEGACY_ENDPOINT_ROLES.
+  if (typeof role !== "string" || !LEGACY_ENDPOINT_ROLES.includes(role as Endpoint["role"])) {
+    throw new TypeError(`${field}.role is invalid`);
+  }
   const generation = value.generation;
   if (!Number.isSafeInteger(generation) || (generation as number) < 0)
     throw new TypeError(`${field}.generation is invalid`);
@@ -385,7 +387,7 @@ export function parseEndpointValue(value: unknown, field: string): Endpoint {
     workspaceId: singleLine(value.workspaceId, `${field}.workspaceId`),
     tabId: singleLine(value.tabId, `${field}.tabId`),
     paneId: singleLine(value.paneId, `${field}.paneId`),
-    role: role as AgentRole,
+    role: role as Endpoint["role"],
     generation: generation as number,
   };
 }
