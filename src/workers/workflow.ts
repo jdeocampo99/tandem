@@ -16,7 +16,11 @@ import {
   sendCommand,
   taskWorkspaceLabel,
 } from "../adapters/herdr.ts";
-import { EndpointOwnershipError, LeaseSafetyError } from "../adapters/primitives.ts";
+import {
+  EndpointBusyError,
+  EndpointOwnershipError,
+  LeaseSafetyError,
+} from "../adapters/primitives.ts";
 import { acquireWorktree } from "../adapters/treehouse.ts";
 import type {
   AgentRole,
@@ -58,6 +62,7 @@ import type {
   DurableOperation,
   DurableOperationEffect,
   DurableOperationKind,
+  DurableOperationPhase,
   DurableReservation,
   ExecutionRoutingLimits,
   RuntimeState,
@@ -3511,6 +3516,7 @@ export class WorkerWorkflow {
           return;
         }
       }
+      let commandSent = false;
       try {
         const previousJob = workerJobForEndpoint(
           launch.runtime.jobs.filter((entry) => entry.id !== jobId),
@@ -3521,9 +3527,14 @@ export class WorkerWorkflow {
           cwd,
           ...(previousJob === undefined ? {} : { job: previousJob }),
         });
+        commandSent = true;
         await sendCommand(this.#deps.run, { endpoint, cwd, command });
         await this.proveWorkerStartup(launch.job, endpoint, cwd);
       } catch (error) {
+        if (!commandSent && error instanceof EndpointBusyError) {
+          await this.deferBusyLaunch(taskId, jobId, claim, launch.runtime.operation?.phase, error);
+          return;
+        }
         const reason = `worker launch could not be proven after launch intent: ${describeError(error)}`;
         await this.#deps.store.exclusive(async () => {
           const state = await readRuntimeState(this.#deps.runtimePath);
@@ -3609,6 +3620,50 @@ export class WorkerWorkflow {
         }));
         await writeRuntimeState(this.#deps.runtimePath, running);
       });
+    });
+  }
+
+  // The busy pane refused before any command was typed, so the launch provably never
+  // happened: undo the intent and let the next reconcile pass relaunch the reserved job.
+  private async deferBusyLaunch(
+    taskId: string,
+    jobId: string,
+    claim: OperationClaim,
+    priorPhase: DurableOperationPhase | undefined,
+    error: EndpointBusyError,
+  ): Promise<void> {
+    await this.#deps.store.exclusive(async () => {
+      const state = await readRuntimeState(this.#deps.runtimePath);
+      const current = taskRuntime(state, taskId);
+      const operation = current?.operation;
+      const currentJob = current?.jobs.find((entry) => entry.id === jobId);
+      if (
+        current === undefined ||
+        operation === undefined ||
+        priorPhase === undefined ||
+        currentJob?.phase !== "launching" ||
+        operation.id !== claim.id ||
+        operation.claimOwner !== claim.claimOwner ||
+        operation.fencingRevision !== claim.fencingRevision ||
+        operation.jobId !== jobId ||
+        operation.phase !== "launching"
+      ) {
+        return;
+      }
+      const deferred = replaceRuntimeTask(state, taskId, (entry) => ({
+        ...replaceJob(entry, jobId, (candidate) => ({
+          ...candidate,
+          phase: "reserved",
+          launchAttempted: false,
+        })),
+        lastError: `worker launch deferred: ${error.message}`,
+        operation: {
+          ...operation,
+          phase: priorPhase,
+          effects: operation.effects.filter((effect) => effect.id !== jobId),
+        },
+      }));
+      await writeRuntimeState(this.#deps.runtimePath, deferred);
     });
   }
 
