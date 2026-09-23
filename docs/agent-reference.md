@@ -838,16 +838,37 @@ The durable stages are:
 | `blocked` | Work cannot safely proceed; a reason is durable, requires coordinator judgment, and is surfaced as an actionable blocker. |
 | `cancelled` / `completed` / `merged` | Terminal states. A scout is research-complete only in durable `completed` state with its report; implementation reaches `merged` only after verified delivery. |
 
-For implementation, each completion and fix cycle is bound to the current generation and HEAD. A fix cycle increments the generation, clears stale review/validation evidence, and returns to `implementing`. The default `maxFixRounds` is three; once exhausted, the task remains unresolved rather than looping indefinitely.
+For implementation, each completion and fix cycle is bound to the current generation and HEAD. A fix cycle increments the generation, clears stale review/validation evidence, and returns to `implementing`. The default `maxFixRounds` is three; once exhausted, the task stops and asks rather than looping indefinitely.
+
+#### Keep fixing?
+
+Before a fix round starts, Tandem asks the user one short question, `Keep fixing "<task>"?`, when either:
+
+- the fix-round budget is spent (`It used all N fix rounds.`), or
+- the latest review repeats a blocker unchanged from the round before: same finding identity
+  (lens and id), same file, and the same description ignoring case and spacing. When the fix round
+  left HEAD where it was, every blocker the review still reports counts as repeated. The note names
+  the repeating finding.
+
+The task blocks with a `fix-rounds-exhausted` cause and a durable question whose hidden details list
+the open blockers. Only an exact `yes` or `no` is accepted. `yes` records a fix-round grant on the
+same task (`fixRoundGrants`, kept beside the pinned policy, which never changes) and resumes the fix
+loop in the same worktree with the same history: another full `maxFixRounds` when the budget was
+spent, or no extra round when the question came early, which only settles the repeat at that
+generation. `no` clears the question and leaves the task blocked. The coordinator never creates a new
+task to get past the limit.
+
+A fix round that ends on an already-reviewed HEAD made no new commit, so it does not spend the
+budget: Tandem records a one-round `no-commit` grant. The review of that unchanged HEAD then asks
+`Keep fixing?` as above, so an unproductive round cannot loop.
 
 Reaching `ready` and exhausting the bounded fix-round loop are both surfaced promptly as distinct
 coordinator notifications through the existing notification path, so neither needs a follow-up
 prompt. The ready message is emitted only at true readiness, after the final acceptance manifest is
 satisfied, and it names the required lenses, the review level, the accepted HEAD, and that ready is
 not publication, merge, or deploy approval. Exhaustion blocks the task with a reason that names the
-spent and configured rounds, states that the task is not ready and not accepted, lists the
-evidence-backed blockers that remain, and names the explicit decision available. Neither message
-claims delivery.
+rounds used, asks `Keep fixing?`, and lists the evidence-backed blockers that remain in the
+question's details. Neither message claims delivery.
 
 ### Request briefs and approval revisions
 
@@ -1211,10 +1232,9 @@ typed slot for advisory review leads. Those render with their provenance under a
 and can never become blockers, drop mandatory context, or authorize acceptance; Tandem produces none
 of them today.
 
-When the configured fix-round budget is spent, the durable block reason names the blockers that
-remain and the decision that is available: stop for a human decision, or revise and re-approve the
-task scope. No round is retried automatically, nothing auto-passes, and no unresolved blocker is
-downgraded to a suggestion. The final review still runs against the delivered code at the current
+When the configured fix-round budget is spent, the task asks `Keep fixing?` (see
+[Task lifecycle](#keep-fixing)) and its details name the blockers that remain. No round is retried
+without a `yes`, nothing auto-passes, and no unresolved blocker is downgraded to a suggestion. The final review still runs against the delivered code at the current
 HEAD and the brief never replaces the final acceptance contract.
 
 Records written before the finding ledger existed load unchanged with no ledger, so no prior status

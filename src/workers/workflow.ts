@@ -36,7 +36,6 @@ import type {
   TaskQuestion,
   TaskRecord,
 } from "../contracts.ts";
-import { reportBlock } from "../recovery/central.ts";
 import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "../recovery/central-review.ts";
 import {
   activeReservations,
@@ -121,7 +120,7 @@ import {
   formatTaskMessages,
   MAX_TASK_MESSAGE_CHARS,
 } from "../tasks/communication-protocol.ts";
-import { describeFixRoundExhaustion } from "../tasks/findings.ts";
+import { fixRoundBudget, keepFixingQuestion } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
 import type {
   ReviewAssistanceOutcome,
@@ -1897,14 +1896,9 @@ export class WorkerWorkflow {
       });
       return;
     }
-    if (!recoveryFix && task.reviewRound >= task.policy.config.maxFixRounds) {
-      const detail = describeFixRoundExhaustion(task);
-      await reportBlock(this.#deps.blockTask, task.id, {
-        group: "user-decision",
-        kind: "fix-rounds-exhausted",
-        summary: `The worker has used all ${String(task.policy.config.maxFixRounds)} tries at fixing review findings.`,
-        detail,
-      });
+    const keepFixing = recoveryFix ? undefined : keepFixingQuestion(task);
+    if (keepFixing !== undefined) {
+      await this.askKeepFixing(task.id, keepFixing);
       return;
     }
     const reservation = reserved ?? (await this.reserveTask(task.id, "implementer"));
@@ -1987,6 +1981,36 @@ export class WorkerWorkflow {
       return;
     }
     await this.launchAgent(nextTask, nextRuntime, writer, "implementer");
+  }
+
+  /**
+   * Blocks a task in `awaiting-fixes` on the "Keep fixing?" question, so the person decides whether
+   * this same task and worktree get more fix rounds. Nothing is launched and no round is spent.
+   */
+  private async askKeepFixing(taskId: string, question: TaskQuestion): Promise<void> {
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      if (current?.stage !== "awaiting-fixes") return;
+      await store.update(current.id, current.revision, (entry) =>
+        taskWithQuestion(
+          transitionTask(
+            entry,
+            {
+              type: "block",
+              reason: question.text,
+              cause: {
+                group: "user-decision",
+                kind: "fix-rounds-exhausted",
+                summary: question.text,
+                detail: question.recommendation ?? question.text,
+              },
+            },
+            this.#deps.context(),
+          ),
+          question,
+        ),
+      );
+    });
   }
 
   /**
@@ -3832,14 +3856,11 @@ export class WorkerWorkflow {
         throw new Error(`task ${taskId} is missing`);
       }
       const isFix = role === "implementer" && task.stage === "awaiting-fixes";
-      if (
-        isFix &&
-        (task.reviewHead === undefined || task.reviewRound >= task.policy.config.maxFixRounds)
-      ) {
+      if (isFix && (task.reviewHead === undefined || task.reviewRound >= fixRoundBudget(task))) {
         return {
           refusal: "fix-rounds",
           summary: "The worker has no fix rounds left.",
-          detail: `review round ${task.reviewRound} of ${task.policy.config.maxFixRounds}; reviewed head ${String(task.reviewHead)}`,
+          detail: `review round ${task.reviewRound} of ${fixRoundBudget(task)}; reviewed head ${String(task.reviewHead)}`,
         };
       }
       const stageAllowed =

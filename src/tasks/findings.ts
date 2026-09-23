@@ -3,10 +3,13 @@ import type {
   FindingLedgerEntry,
   FindingObservation,
   FindingStatus,
+  FixRoundGrant,
   ReviewResult,
   StoredReviewLens,
+  TaskQuestion,
   TaskRecord,
 } from "../contracts.ts";
+import { formatDecisionQuestion, shortNote, taskName } from "./question.ts";
 
 export const FINDING_STATUSES: readonly FindingStatus[] = [
   "addressed",
@@ -15,8 +18,8 @@ export const FINDING_STATUSES: readonly FindingStatus[] = [
   "disputed",
 ];
 
-/** How many blockers the exhaustion reason names before it summarises the remainder as a count. */
-export const MAX_NAMED_EXHAUSTION_BLOCKERS = 5;
+/** How many blockers the "Keep fixing?" details name before summarising the remainder as a count. */
+const MAX_NAMED_OPEN_BLOCKERS = 5;
 
 type SeverityAndVerdict = Pick<Finding, "severity" | "verdict">;
 
@@ -147,22 +150,101 @@ export function describeFindingEntry(entry: FindingLedgerEntry): string {
   return `${entry.lens}/${entry.id} (${entry.verdict} ${entry.severity}, ${entry.status}${where}) since round ${entry.raisedAt.reviewRound}, status set at round ${entry.statusAt.reviewRound} HEAD ${entry.statusAt.head}`;
 }
 
+/** The fix rounds a task may spend: the pinned `maxFixRounds` plus every recorded grant. */
+export function fixRoundBudget(task: TaskRecord): number {
+  return (task.fixRoundGrants ?? []).reduce(
+    (total, grant) => total + grant.rounds,
+    task.policy.config.maxFixRounds,
+  );
+}
+
+function sameText(left: string, right: string): boolean {
+  const normalize = (text: string) => text.trim().replace(/\s+/gu, " ").toLowerCase();
+  return normalize(left) === normalize(right);
+}
+
 /**
- * The durable reason recorded when the configured fix-round budget is spent. It names the exhausted
- * bounded loop, states that the task is neither ready nor accepted, and names the blockers that
- * remain and the decision that is available, so no round is retried silently and no unresolved
- * blocker is quietly downgraded to a suggestion.
+ * Blocking findings the current review reports unchanged from the round before: the same identity
+ * at the same file with the same description. When the fix round left HEAD where it was, every
+ * blocker the review still reports counts, since the code it describes did not change.
  */
-export function describeFixRoundExhaustion(task: TaskRecord): string {
+export function repeatedFindings(task: TaskRecord): readonly Finding[] {
+  const current = task.reviews.filter(
+    (review) => review.generation === task.generation && review.head === task.reviewHead,
+  );
+  const earlier = task.reviews.filter((review) => review.generation < task.generation);
+  const priorGeneration = Math.max(-1, ...earlier.map((review) => review.generation));
+  const prior = earlier.filter((review) => review.generation === priorGeneration);
+  if (prior.some((review) => review.head === task.reviewHead)) {
+    return current.flatMap((review) => review.findings.filter(isBlockingFinding));
+  }
+  const before = new Map<string, Finding>();
+  for (const review of prior) {
+    for (const finding of review.findings) before.set(identityOf(review.lens, finding.id), finding);
+  }
+  return current.flatMap((review) =>
+    review.findings.filter((finding) => {
+      const previous = before.get(identityOf(review.lens, finding.id));
+      return (
+        isBlockingFinding(finding) &&
+        previous !== undefined &&
+        previous.file === finding.file &&
+        sameText(previous.description, finding.description)
+      );
+    }),
+  );
+}
+
+/** Every "Keep fixing?" question id starts with this, so the answer path can route to it. */
+export const KEEP_FIXING_QUESTION_ID_PREFIX = "keep-fixing-";
+
+/**
+ * The "Keep fixing?" question a task in `awaiting-fixes` must ask before another fix round: once
+ * the fix-round budget is spent, or earlier when the review repeats a finding unchanged. A "yes"
+ * already recorded at this generation settles the repeat; nothing is asked otherwise.
+ */
+export function keepFixingQuestion(task: TaskRecord): TaskQuestion | undefined {
+  const budget = fixRoundBudget(task);
+  const approved = (task.fixRoundGrants ?? []).some(
+    (grant) => grant.reason === "user" && grant.generation === task.generation,
+  );
+  const repeated = approved ? undefined : repeatedFindings(task)[0];
+  if (task.reviewRound < budget && repeated === undefined) return undefined;
+  const note =
+    repeated === undefined
+      ? `It used all ${budget} fix rounds`
+      : `The same finding came back: ${repeated.description}`;
+  return {
+    id: `${KEEP_FIXING_QUESTION_ID_PREFIX}${task.generation}`,
+    text: formatDecisionQuestion({
+      ask: `Keep fixing ${taskName(task.objective)}?`,
+      note: shortNote(note),
+    }),
+    recommendation: `Reply "yes" to allow more fix rounds on this same task and worktree, or "no" to leave it blocked. ${describeOpenFindings(task)}`,
+  };
+}
+
+/**
+ * What a "yes" to "Keep fixing?" records: another full pinned budget when the rounds are spent, or
+ * no extra round when the question came early, which only settles the repeat at this generation.
+ */
+export function keepFixingGrant(task: TaskRecord): FixRoundGrant {
+  return {
+    generation: task.generation,
+    rounds:
+      task.reviewRound >= fixRoundBudget(task) ? Math.max(1, task.policy.config.maxFixRounds) : 0,
+    reason: "user",
+  };
+}
+
+/** The open blockers a "Keep fixing?" question carries in its details. */
+export function describeOpenFindings(task: TaskRecord): string {
   const blockers = ledgerBlockers(task.findingLedger ?? []);
-  const named = blockers
-    .slice(0, MAX_NAMED_EXHAUSTION_BLOCKERS)
-    .map(describeFindingEntry)
-    .join("; ");
-  const remainder = blockers.length - Math.min(blockers.length, MAX_NAMED_EXHAUSTION_BLOCKERS);
-  const remaining =
+  const named = blockers.slice(0, MAX_NAMED_OPEN_BLOCKERS).map(describeFindingEntry).join("; ");
+  const remainder = blockers.length - Math.min(blockers.length, MAX_NAMED_OPEN_BLOCKERS);
+  const open =
     blockers.length === 0
-      ? "no evidence-backed blocker is recorded on the finding ledger, so the remaining work is whatever the last review round refused"
-      : `${blockers.length} evidence-backed blocker(s) remain: ${named}${remainder === 0 ? "" : `; and ${remainder} more on the finding ledger`}`;
-  return `Bounded review loop exhausted: fix round budget spent at ${task.reviewRound} of ${task.policy.config.maxFixRounds}; no new fix operation was admitted and the task is not ready and not accepted. ${remaining}. Decide explicitly: stop for a human decision, or revise and re-approve the task scope. No blocker is downgraded to a suggestion and no round is retried automatically.`;
+      ? "No open blocker is recorded; the last review or validation refused the work."
+      : `${blockers.length} open blocker(s): ${named}${remainder === 0 ? "" : `; and ${remainder} more`}.`;
+  return `Fix round ${task.reviewRound} of ${fixRoundBudget(task)}. ${open} Never start a new task to get more rounds.`;
 }

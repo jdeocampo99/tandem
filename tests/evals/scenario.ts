@@ -771,6 +771,8 @@ export type SeedTaskInput = Readonly<{
   readonly previousStage?: TaskRecord["stage"];
   readonly reviewHead?: string;
   readonly reviewRound?: number;
+  readonly generation?: number;
+  readonly reviews?: TaskRecord["reviews"];
   readonly reportPath?: string;
   readonly worktree?: WorktreeLease;
   readonly endpoints?: readonly Endpoint[];
@@ -820,6 +822,8 @@ export async function seedScenarioTask(
     ...(input.previousStage === undefined ? {} : { previousStage: input.previousStage }),
     ...(input.reviewHead === undefined ? {} : { reviewHead: input.reviewHead }),
     ...(input.reviewRound === undefined ? {} : { reviewRound: input.reviewRound }),
+    ...(input.generation === undefined ? {} : { generation: input.generation }),
+    ...(input.reviews === undefined ? {} : { reviews: input.reviews }),
     ...(input.reportPath === undefined ? {} : { reportPath: input.reportPath }),
     ...(input.worktree === undefined ? {} : { worktree: input.worktree }),
     ...(input.endpoints === undefined ? {} : { endpoints: input.endpoints }),

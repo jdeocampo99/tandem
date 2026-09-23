@@ -13,6 +13,7 @@ import {
   finalAcceptanceStatus,
   ValidationConfigurationError,
 } from "../tasks/acceptance.ts";
+import { fixRoundBudget } from "../tasks/findings.ts";
 import { recordedReviewLevel } from "../tasks/review-levels.ts";
 
 export type PrSummary = Readonly<{
@@ -349,7 +350,7 @@ function draftActivity(task: TaskRecord): readonly string[] {
     }
     case "awaiting-fixes":
       return [
-        `Review recorded findings at ${head}; fix round ${task.reviewRound} of ${task.policy.config.maxFixRounds} has been used.`,
+        `Review recorded findings at ${head}; fix round ${task.reviewRound} of ${fixRoundBudget(task)} has been used.`,
       ];
     case "ready":
       return [
@@ -369,9 +370,9 @@ function draftBlockers(task: TaskRecord): readonly string[] {
   if (task.blockReason !== undefined) {
     blockers.push(`Durable blocker: ${draftText(task.blockReason)}`);
   }
-  if (task.stage === "awaiting-fixes" && task.reviewRound >= task.policy.config.maxFixRounds) {
+  if (task.stage === "awaiting-fixes" && task.reviewRound >= fixRoundBudget(task)) {
     blockers.push(
-      `The bounded fix-round loop is exhausted at ${task.reviewRound} of ${task.policy.config.maxFixRounds}; no further fix round is admitted automatically.`,
+      `The bounded fix-round loop is exhausted at ${task.reviewRound} of ${fixRoundBudget(task)}; no further fix round runs until the user says to keep fixing.`,
     );
   }
   const question = task.communication?.question;
@@ -479,7 +480,7 @@ export function describeTaskDraftPr(input: DraftDescriptionInput): string {
   const worktreeHead = readSingleLine(input.worktreeHead, "worktreeHead");
   const progress = summarizeDraftProgress(input.task, input.task.reviewHead ?? publishedHead);
   const status = [
-    `Task ${input.task.id} is ${input.task.stage} at generation ${shape.generation}, fix round ${input.task.reviewRound} of ${input.task.policy.config.maxFixRounds}.`,
+    `Task ${input.task.id} is ${input.task.stage} at generation ${shape.generation}, fix round ${input.task.reviewRound} of ${fixRoundBudget(input.task)}.`,
     `Draft commit: ${publishedHead} on branch ${shape.branch}.`,
     `Objective: ${draftText(input.task.objective)}`,
   ];

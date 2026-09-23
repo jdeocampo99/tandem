@@ -12,6 +12,7 @@ import type { EscalationReason, FinalAcceptanceStatus, FinalRequirement } from "
 import { finalAcceptanceStatus, isPinnedEvidence, planValidation } from "./acceptance.ts";
 import {
   describeFindingEntry,
+  fixRoundBudget,
   ledgerBlockers,
   ledgerSuggestions,
   settledFindings,
@@ -475,8 +476,8 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
     userDecisions: decisions.kept,
     roundBudget: {
       reviewRound: task.reviewRound,
-      maxFixRounds: task.policy.config.maxFixRounds,
-      remaining: Math.max(0, task.policy.config.maxFixRounds - task.reviewRound),
+      maxFixRounds: fixRoundBudget(task),
+      remaining: Math.max(0, fixRoundBudget(task) - task.reviewRound),
     },
     elided: {
       findings: blockers.elided + suggestions.elided + settled.elided,

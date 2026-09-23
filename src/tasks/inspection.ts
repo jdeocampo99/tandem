@@ -13,6 +13,7 @@ import type {
   RuntimeTaskState,
 } from "../runtime/schema.ts";
 import { describeError, reportPathFor } from "../service/records.ts";
+import { fixRoundBudget } from "./findings.ts";
 
 export type InspectionDependencies = Readonly<{
   readonly run: CommandRunner;
@@ -335,7 +336,7 @@ export async function inspectTask(
       exists: await exists(entry.path),
     })),
   );
-  const maxFixRounds = task.policy.config.maxFixRounds;
+  const maxFixRounds = fixRoundBudget(task);
   const safetyReasons: string[] = [];
   if (identity === "ambiguous")
     safetyReasons.push("recorded repository and source repository identities differ");
