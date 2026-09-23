@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { RequestDeliveryRecord, TaskRecord } from "../contracts.ts";
+import type { TaskRecord } from "../contracts.ts";
 import type { TandemService } from "../service/controller.ts";
 import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
 import { buildResearchFollowUpContent } from "./research-follow-up.ts";
@@ -14,8 +14,6 @@ const TANDEM_NOTIFICATION_ENTRY = "tandem-notification";
 export type ResearchReportProbe = (reportPath: string) => Promise<boolean>;
 
 type NotificationRef = Readonly<{
-  /** Whether the coordinator acknowledges this through the task path or the request path. */
-  readonly scope: "task" | "request";
   readonly taskId: string;
   readonly notificationId: string;
   readonly message: string;
@@ -76,7 +74,6 @@ async function allPendingNotifications(
       const question = judgmentNeeded ? task.communication?.question : undefined;
       if (judgmentNeeded) followUp ??= await researchFollowUpContent(task, reportReadable);
       result.push({
-        scope: "task",
         taskId: task.id,
         notificationId: notification.id,
         message: notification.message,
@@ -97,26 +94,6 @@ async function allPendingNotifications(
   }
   return result;
 }
-/**
- * Request notifications exist only for decisions and true completion, so every one of them needs
- * the coordinator's judgment; routine whole-request progress records nothing to deliver.
- */
-function requestNotifications(
-  requests: readonly RequestDeliveryRecord[],
-): readonly NotificationRef[] {
-  return requests.flatMap((request) =>
-    request.notifications
-      .filter((notification) => !notification.acknowledged)
-      .map((notification) => ({
-        scope: "request" as const,
-        taskId: request.id,
-        notificationId: notification.id,
-        message: notification.message,
-        judgmentNeeded: true,
-      })),
-  );
-}
-
 /** Identifies one notification across ticks, so a delivered wake is never repeated. */
 function deliveryKey(notification: NotificationRef): string {
   return `${notification.taskId}:${notification.notificationId}`;
@@ -178,7 +155,7 @@ function judgmentDisplayContent(notifications: readonly NotificationRef[]): stri
  */
 function judgmentIdentifiers(notifications: readonly NotificationRef[]): string {
   const lines = notifications.map((notification) => {
-    const ref = `${notification.scope} ${notification.taskId}, notification ${notification.notificationId}`;
+    const ref = `task ${notification.taskId}, notification ${notification.notificationId}`;
     return notification.questionId === undefined
       ? ref
       : `${ref}, question ${notification.questionId}`;
@@ -194,10 +171,8 @@ type NotificationUi = Readonly<{ readonly ui: Pick<ExtensionContext["ui"], "noti
 
 export type PendingNotificationDelivery = Readonly<{
   readonly pi: NotificationMessageSink;
-  readonly service: Pick<TandemService, "acknowledge" | "acknowledgeRequest">;
+  readonly service: Pick<TandemService, "acknowledge">;
   readonly tasks: readonly TaskRecord[];
-  /** Whole-request records whose decisions and completion may interrupt the conversation. */
-  readonly requests: readonly RequestDeliveryRecord[];
   /** Task/notification pairs already sent in this process, so one wake is not repeated. */
   readonly delivered: Set<string>;
   /**
@@ -214,10 +189,7 @@ export async function deliverPendingNotifications(
   delivery: PendingNotificationDelivery,
 ): Promise<void> {
   const { pi, tasks, delivered, unacknowledged, ctx } = delivery;
-  const pending = [
-    ...(await allPendingNotifications(tasks, delivery.reportReadable)),
-    ...requestNotifications(delivery.requests),
-  ];
+  const pending = await allPendingNotifications(tasks, delivery.reportReadable);
   if (pending.length === 0) return;
   const batch = pending
     .filter((notification) => !delivered.has(deliveryKey(notification)))
@@ -282,11 +254,7 @@ async function acknowledgeDelivered(
     const key = deliveryKey(notification);
     if (!unacknowledged.has(key)) continue;
     try {
-      if (notification.scope === "request") {
-        await service.acknowledgeRequest(notification.taskId, notification.notificationId);
-      } else {
-        await service.acknowledge(notification.taskId, notification.notificationId);
-      }
+      await service.acknowledge(notification.taskId, notification.notificationId);
       unacknowledged.delete(key);
     } catch {
       // ponytail: one contended state lock fails the rest of the pass too, so stop here and retry

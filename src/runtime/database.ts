@@ -67,11 +67,6 @@ function ensureRequestTables(db: StateDatabase): void {
       revision INTEGER NOT NULL,
       payload TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS request_deliveries (
-      id TEXT PRIMARY KEY NOT NULL,
-      revision INTEGER NOT NULL,
-      payload TEXT NOT NULL
-    );
   `);
 }
 
@@ -303,36 +298,6 @@ export function writeRequestBriefPayload(
 ): void {
   db.query(
     "INSERT INTO request_briefs(id, revision, payload) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, payload = excluded.payload",
-  ).run(id, revision, JSON.stringify(payload));
-}
-
-export function readRequestDeliveryPayload(db: StateDatabase, id: string): unknown | undefined {
-  const row = db.query("SELECT payload FROM request_deliveries WHERE id = ?").get(id) as
-    | { payload?: unknown }
-    | null
-    | undefined;
-  if (row === null || row === undefined || typeof row.payload !== "string") return undefined;
-  return JSON.parse(row.payload) as unknown;
-}
-
-export function readAllRequestDeliveryPayloads(db: StateDatabase): readonly unknown[] {
-  const rows = db.query("SELECT payload FROM request_deliveries ORDER BY id").all() as readonly {
-    payload?: unknown;
-  }[];
-  return rows.map((row) => {
-    if (typeof row.payload !== "string") throw new Error("request delivery payload is not text");
-    return JSON.parse(row.payload) as unknown;
-  });
-}
-
-export function writeRequestDeliveryPayload(
-  db: StateDatabase,
-  id: string,
-  revision: number,
-  payload: unknown,
-): void {
-  db.query(
-    "INSERT INTO request_deliveries(id, revision, payload) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, payload = excluded.payload",
   ).run(id, revision, JSON.stringify(payload));
 }
 

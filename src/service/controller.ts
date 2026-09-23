@@ -21,7 +21,7 @@ import {
   resolveBalancedProfile,
 } from "../config/operating-profile.ts";
 import { type OnboardRepoResult, onboardRepo, resolveRepoPolicy } from "../config/repositories.ts";
-import type { RequestBriefRecord, RequestDeliveryRecord, ReviewResult } from "../contracts.ts";
+import type { RequestBriefRecord } from "../contracts.ts";
 import {
   type AnswerTaskInput,
   type BlockCause,
@@ -83,16 +83,6 @@ import {
   RecoveryWorkflow,
   type ReviewExistingResult,
 } from "../recovery/workflow.ts";
-import {
-  type MergeRequestInput,
-  type PublishRequestInput,
-  type RequestDeliveryView,
-  RequestDeliveryWorkflow,
-} from "../requests/delivery.ts";
-import {
-  createRequestDeliveryStore,
-  type RequestDeliveryStore,
-} from "../requests/delivery-store.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../requests/store.ts";
 import {
   type ApproveRequestBriefInput,
@@ -278,42 +268,6 @@ export type TandemService = Readonly<{
   readonly pendingBriefApprovalId: () => Promise<string>;
   readonly requestBrief: (requestId: string) => Promise<RequestBriefView>;
   readonly requestReceipt: (requestId: string) => Promise<RequestUsageReceipt>;
-  readonly listRequests: () => Promise<readonly RequestDeliveryRecord[]>;
-  readonly requestStatus: (requestId: string) => Promise<RequestDeliveryView>;
-  readonly relateRequestTasks: (
-    requestId: string,
-    input: {
-      readonly taskId: string;
-      readonly dependsOn: string;
-      readonly reason: string;
-    },
-  ) => Promise<RequestDeliveryView>;
-  readonly recordRequestConflict: (
-    requestId: string,
-    input: { readonly taskIds: readonly string[]; readonly reason: string },
-  ) => Promise<RequestDeliveryView>;
-  readonly decideRequestConflict: (
-    requestId: string,
-    input: { readonly conflictId: string; readonly instruction: string },
-  ) => Promise<RequestDeliveryView>;
-  readonly recordRequestReview: (
-    requestId: string,
-    review: ReviewResult,
-  ) => Promise<RequestDeliveryView>;
-  readonly integrateRequest: (requestId: string) => Promise<RequestDeliveryView>;
-  readonly publishRequest: (
-    requestId: string,
-    input: PublishRequestInput,
-  ) => Promise<RequestDeliveryView>;
-  readonly mergeRequest: (
-    requestId: string,
-    input: MergeRequestInput,
-  ) => Promise<RequestDeliveryView>;
-  readonly approveRequestSplit: (requestId: string) => Promise<RequestDeliveryView>;
-  readonly acknowledgeRequest: (
-    requestId: string,
-    notificationId: string,
-  ) => Promise<RequestDeliveryView>;
   readonly tick: () => Promise<readonly TaskRecord[]>;
   readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly steer: (input: SteerTaskInput) => Promise<TaskCommunicationView>;
@@ -380,7 +334,6 @@ type ServiceDependencies = Readonly<{
   classifyResearchContinuation: ResearchContinuationClassifier;
   store: TaskStore;
   requestStore: RequestBriefStore;
-  requestDeliveryStore: RequestDeliveryStore;
   usageLedger: RequestUsageLedger;
   runtimePath: string;
   workerPath: string;
@@ -597,7 +550,6 @@ class TandemController {
   readonly #recoveryConversation: RecoveryConversationWorkflow;
   readonly #recoveryCentral: CentralRecoveryWorkflow;
   readonly #requests: RequestBriefWorkflow;
-  readonly #requestDelivery: RequestDeliveryWorkflow;
   readonly #usage: RequestUsageLedger;
   /** Durable-state digest of the draft body last published per task, to avoid redundant refreshes. */
   readonly #draftDigests = new Map<string, string>();
@@ -719,17 +671,6 @@ class TandemController {
         await this.pause(taskId, reason);
       },
     });
-    this.#requestDelivery = new RequestDeliveryWorkflow({
-      sessionId: deps.sessionId,
-      poolRoot: deps.poolRoot,
-      run: deps.run,
-      clock: deps.clock,
-      idFactory: deps.idFactory,
-      store: deps.requestDeliveryStore,
-      readBrief: (requestId) => this.#requests.requireRequest(requestId),
-      listTasks: () => this.list(),
-      transitionTask: (taskId, event) => this.transition(taskId, event),
-    });
     this.#recoveryConversation = new RecoveryConversationWorkflow({
       sessionId: deps.sessionId,
       clock: deps.clock,
@@ -816,19 +757,6 @@ class TandemController {
       pendingBriefApprovalId: () => this.#requests.pendingApprovalId(),
       requestBrief: (requestId) => this.#requests.read(requestId),
       requestReceipt: (requestId) => this.#usage.receipt(requestId),
-      listRequests: () => this.#deps.requestDeliveryStore.list(),
-      requestStatus: (requestId) => this.#requestDelivery.status(requestId),
-      relateRequestTasks: (requestId, input) => this.#requestDelivery.relate(requestId, input),
-      recordRequestConflict: (requestId, input) => this.#requestDelivery.conflict(requestId, input),
-      decideRequestConflict: (requestId, input) => this.#requestDelivery.decide(requestId, input),
-      recordRequestReview: (requestId, review) =>
-        this.#requestDelivery.recordReview(requestId, review),
-      integrateRequest: (requestId) => this.#requestDelivery.integrate(requestId),
-      publishRequest: (requestId, input) => this.#requestDelivery.publish(requestId, input),
-      mergeRequest: (requestId, input) => this.#requestDelivery.merge(requestId, input),
-      approveRequestSplit: (requestId) => this.#requestDelivery.approveSplit(requestId),
-      acknowledgeRequest: (requestId, notificationId) =>
-        this.#requestDelivery.acknowledge(requestId, notificationId),
       tick: () => this.tick(),
       acknowledge: (id, notificationId) => this.acknowledge(id, notificationId),
       steer: (input) => this.steer(input),
@@ -1040,7 +968,6 @@ class TandemController {
         );
       }
       const created = await store.create({ ...taskInput, id });
-      await this.#requestDelivery.admit(created);
       const current = await readRuntimeState(this.#deps.runtimePath);
       const runtimeTask: RuntimeTaskState = {
         schemaVersion: 1,
@@ -1253,10 +1180,6 @@ class TandemController {
     },
   ): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("publish input must be an object");
-    await this.#requestDelivery.assertSeparateDeliveryApproved(
-      await this.get(id),
-      "publishing a reviewed pull request",
-    );
     if (input.approved) {
       const preflight = await this.#recovery.deliveryPreflight(id, input.repository, input.base);
       if (!preflight.ready) {
@@ -1327,7 +1250,6 @@ class TandemController {
   ): Promise<TaskRecord> {
     if (!isRecord(input)) throw new TypeError("merge input must be an object");
     const task = await this.get(id);
-    await this.#requestDelivery.assertSeparateDeliveryApproved(task, "merging");
     const method = input.method ?? "merge";
     const metadata = await mergeReviewedTask({
       task,
@@ -1557,7 +1479,6 @@ class TandemController {
     const settled = await this.#source.scopedTasks();
     await this.reconcileRecoveryWaits(settled);
     await this.recordRequestAccounting(settled);
-    await this.reconcileRequests(settled);
     let draftRecorded = false;
     for (const task of settled) {
       if (await this.refreshDraftPullRequest(task)) draftRecorded = true;
@@ -1579,33 +1500,6 @@ class TandemController {
         { event: "recovery-wait-reconcile-failed", details: { errorClass: errorClassName(error) } },
         this.#deps.clock,
       );
-    }
-  }
-
-  /**
-   * Brings every request that owns scoped members back in line with durable task state. A request
-   * that cannot be reconciled leaves a bounded diagnostic instead of failing the whole pass, so one
-   * request never stops independent work elsewhere.
-   */
-  private async reconcileRequests(tasks: readonly TaskRecord[]): Promise<void> {
-    const requestIds = new Set(
-      tasks.flatMap((task) =>
-        task.requestId === undefined || task.kind !== "implementation" ? [] : [task.requestId],
-      ),
-    );
-    for (const requestId of requestIds) {
-      try {
-        await this.#requestDelivery.reconcile(requestId);
-      } catch (error) {
-        await appendDiagnosticEvent(
-          this.#deps.home,
-          {
-            event: "request-reconcile-failed",
-            details: { requestId, errorClass: errorClassName(error) },
-          },
-          this.#deps.clock,
-        );
-      }
     }
   }
 
@@ -2022,8 +1916,6 @@ class TandemController {
     }
     switch (task.stage) {
       case "queued": {
-        const hold = await this.#requestDelivery.dispatchHold(task);
-        if (hold !== undefined) return;
         await this.#worker.startQueuedTask(task);
         return;
       }
@@ -2430,7 +2322,6 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     classifyResearchContinuation,
     store: createTaskStore({ directory: join(home, "tasks"), clock, idFactory }),
     requestStore: createRequestBriefStore({ home, clock, idFactory }),
-    requestDeliveryStore: createRequestDeliveryStore({ home, clock }),
     usageLedger: createRequestUsageLedger({ home, clock }),
     runtimePath: runtimeFile(home),
     workerPath: fileURLToPath(new URL("../worker.ts", import.meta.url)),

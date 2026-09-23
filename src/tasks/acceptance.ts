@@ -6,7 +6,6 @@ import type {
   PinnedValidationEvidence,
   ResolvedPolicy,
   ReviewLens,
-  ReviewResult,
   TaskRecord,
   ValidationCommand,
   ValidationEvidence,
@@ -134,118 +133,6 @@ export function finalAcceptanceContract(task: TaskRecord, head: string): FinalAc
     requirements: commands.map((command) => ({ name: command.name, origin: "local" as const })),
     lenses: FINAL_REVIEW_LENSES,
     criteria: [...task.acceptanceCriteria],
-  };
-}
-
-/**
- * The complete manifest one integrated delivery commit must satisfy. It carries no task generation
- * because it describes a commit several tasks were merged into, not one task's attempt.
- */
-export type IntegratedAcceptanceContract = Readonly<{
-  readonly contract: "final";
-  readonly head: string;
-  readonly policyDigest: string;
-  readonly surfaces: readonly string[];
-  readonly commands: readonly ValidationCommand[];
-  readonly requirements: readonly FinalRequirement[];
-  readonly lenses: readonly ReviewLens[];
-  readonly criteria: readonly string[];
-}>;
-
-/** What an integrated delivery commit still needs before it can be accepted. */
-export type IntegratedAcceptanceStatus = Readonly<{
-  readonly satisfied: boolean;
-  readonly missing: readonly FinalRequirement[];
-  readonly failed: readonly FinalRequirement[];
-  readonly stale: readonly FinalRequirement[];
-  readonly pendingLenses: readonly ReviewLens[];
-}>;
-
-/** Builds the command, lens, and criterion manifest for one integrated commit and pinned policy. */
-export function integratedAcceptanceContract(
-  input: Readonly<{
-    readonly policy: ResolvedPolicy;
-    readonly surfaces: readonly string[];
-    readonly head: string;
-    readonly criteria: readonly string[];
-  }>,
-): IntegratedAcceptanceContract {
-  const surfaces = deduplicate(input.surfaces);
-  const commands = input.policy.config.validationCommands.filter((command) =>
-    commandCoversSurfaces(command, surfaces),
-  );
-  if (commands.length === 0) {
-    throw new ValidationConfigurationError(
-      surfaces.length === 0
-        ? "no validation commands are configured"
-        : `no validation commands match surfaces: ${surfaces.join(", ")}`,
-    );
-  }
-  if (input.criteria.length === 0) {
-    throw new ValidationConfigurationError(
-      "an integrated delivery must carry the approved acceptance criteria it satisfies",
-    );
-  }
-  return {
-    contract: "final",
-    head: readHead(input.head),
-    policyDigest: policyIdentity(input.policy),
-    surfaces,
-    commands: commands.map((command) => ({ ...command, argv: [...command.argv] })),
-    requirements: commands.map((command) => ({ name: command.name, origin: "local" as const })),
-    lenses: FINAL_REVIEW_LENSES,
-    criteria: [...input.criteria],
-  };
-}
-
-/**
- * Reports which manifest items the recorded evidence and reviews still leave open for an integrated
- * commit. Evidence recorded at another commit or under another policy counts as stale, never as a
- * pass, so component-only evidence can never accept an integrated delivery.
- */
-export function integratedAcceptanceStatus(
-  input: Readonly<{
-    readonly contract: IntegratedAcceptanceContract;
-    readonly evidence: readonly ValidationEvidence[];
-    readonly reviews: readonly ReviewResult[];
-  }>,
-): IntegratedAcceptanceStatus {
-  const { contract } = input;
-  const missing: FinalRequirement[] = [];
-  const failed: FinalRequirement[] = [];
-  const stale: FinalRequirement[] = [];
-  const pinned = input.evidence
-    .filter(isPinnedEvidence)
-    .filter((entry) => entry.contract === "final");
-  for (const requirement of contract.requirements) {
-    const recorded = pinned.filter(
-      (entry) => entry.name === requirement.name && entry.origin === requirement.origin,
-    );
-    const current = recorded.filter(
-      (entry) => entry.head === contract.head && entry.policyDigest === contract.policyDigest,
-    );
-    if (current.length === 0) {
-      (recorded.length === 0 ? missing : stale).push(requirement);
-      continue;
-    }
-    if (current.some((entry) => entry.exitCode !== 0)) failed.push(requirement);
-  }
-  const pendingLenses = contract.lenses.filter(
-    (lens) =>
-      !input.reviews.some(
-        (review) => review.lens === lens && review.head === contract.head && review.pass,
-      ),
-  );
-  return {
-    satisfied:
-      missing.length === 0 &&
-      failed.length === 0 &&
-      stale.length === 0 &&
-      pendingLenses.length === 0,
-    missing,
-    failed,
-    stale,
-    pendingLenses,
   };
 }
 

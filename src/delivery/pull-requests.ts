@@ -23,7 +23,6 @@ import {
   describeTaskDraftPr,
   describeTaskPr,
   readSingleLine,
-  readText,
 } from "./evidence.ts";
 
 type RemoteCheck = Readonly<{
@@ -542,31 +541,6 @@ export async function publishReviewedTask(input: {
   });
 }
 
-/**
- * Publishes the one pull request a whole request delivers through, from the checkout holding its
- * integrated commit. The caller proves acceptance before calling; this step only performs the
- * approved publication and never merges or deploys.
- */
-export async function publishIntegratedRequest(input: {
-  readonly checkout: DeliveryCheckout;
-  readonly repository: string;
-  readonly title: string;
-  readonly base: string;
-  readonly body: string;
-  readonly approved: boolean;
-  readonly run: CommandRunner;
-}): Promise<PullRequestMetadata> {
-  if (!input.approved) throw new ApprovalRequiredError("request pull request publish");
-  const run = readRunner(input.run);
-  const target = checkedPublicationTarget(input);
-  assertRepositoryIdentity(input.checkout.remote, target.repository);
-  return publishCheckout(run, {
-    ready: input.checkout,
-    ...target,
-    body: readText(input.body, "body"),
-  });
-}
-
 type DraftCheckout = Readonly<{
   readonly cwd: string;
   readonly branch: string;
@@ -1019,23 +993,5 @@ export async function mergeReviewedTask(input: {
     pullRequest,
     method,
     headMismatch: "pull request head does not match the reviewed task HEAD",
-  });
-}
-
-/** Merges the one request pull request after its own explicit approval, never as a publish effect. */
-export async function mergeIntegratedRequest(input: {
-  readonly checkout: DeliveryCheckout;
-  readonly pullRequest: PullRequestMetadata;
-  readonly approved: boolean;
-  readonly method: "merge" | "squash" | "rebase";
-  readonly run: CommandRunner;
-}): Promise<PullRequestMetadata> {
-  if (!input.approved) throw new ApprovalRequiredError("request pull request merge");
-  const run = readRunner(input.run);
-  return mergeObservedPullRequest(run, {
-    ready: input.checkout,
-    pullRequest: input.pullRequest,
-    method: checkedMergeMethod(input.method),
-    headMismatch: "pull request head does not match the integrated request HEAD",
   });
 }

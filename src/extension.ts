@@ -193,7 +193,6 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             pi,
             service: current,
             tasks,
-            requests: await current.listRequests(),
             delivered: deliveredNotifications,
             unacknowledged: unacknowledgedNotifications,
             ctx,

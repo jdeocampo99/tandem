@@ -1,10 +1,4 @@
-import type {
-  PinnedValidationEvidence,
-  RequestIntegration,
-  ReviewResult,
-  TaskRecord,
-  TaskStage,
-} from "../contracts.ts";
+import type { PinnedValidationEvidence, TaskRecord, TaskStage } from "../contracts.ts";
 import { LEGACY_EVIDENCE_CONTRACT } from "../contracts.ts";
 import { renderDraftPrDescription, renderPrDescription } from "../instructions.ts";
 import {
@@ -12,11 +6,6 @@ import {
   type FinalRequirement,
   finalAcceptanceContract,
   finalAcceptanceStatus,
-  type IntegratedAcceptanceContract,
-  type IntegratedAcceptanceStatus,
-  integratedAcceptanceContract,
-  integratedAcceptanceStatus,
-  policyIdentity,
   ValidationConfigurationError,
 } from "../tasks/acceptance.ts";
 import { recordedReviewLevel } from "../tasks/review-levels.ts";
@@ -214,150 +203,6 @@ export function describeTaskPr(task: TaskRecord, summary: PrSummary): string {
       `final acceptance manifest at HEAD ${shape.head}: ${manifest.requirements.length} required checks, ${manifest.lenses.length} review lenses, ${manifest.criteria.length} acceptance criteria`,
       ...evidence.map(evidenceBullet),
     ],
-  });
-}
-
-export type RequestAcceptanceInput = Readonly<{
-  readonly integration: RequestIntegration;
-  /** Every active member of the request, each of which must have finished on its own terms. */
-  readonly members: readonly TaskRecord[];
-  /** The acceptance criteria of the approved brief revision the members were admitted under. */
-  readonly criteria: readonly string[];
-}>;
-
-/** What the integrated request delivery satisfies, and every reason it is not acceptable yet. */
-export type RequestAcceptanceStatus = Readonly<{
-  readonly satisfied: boolean;
-  readonly contract: IntegratedAcceptanceContract;
-  readonly manifest: IntegratedAcceptanceStatus;
-  readonly refusals: readonly string[];
-}>;
-
-function memberRefusals(input: RequestAcceptanceInput): readonly string[] {
-  const { integration } = input;
-  const refusals: string[] = [];
-  for (const integrated of integration.members) {
-    const member = input.members.find((task) => task.id === integrated.taskId);
-    if (member === undefined) {
-      refusals.push(`integrated member ${integrated.taskId} is no longer a member of the request`);
-      continue;
-    }
-    if (member.stage !== "ready" && member.stage !== "merged") {
-      refusals.push(`member ${member.id} is ${member.stage}, not a finished component`);
-    }
-    if (member.reviewHead !== integrated.head) {
-      refusals.push(
-        `member ${member.id} moved to HEAD ${String(member.reviewHead)} after ${integrated.head} was integrated`,
-      );
-    }
-    if (policyIdentity(member.policy) !== integration.policyDigest) {
-      refusals.push(`member ${member.id} is pinned to a different repository policy`);
-    }
-  }
-  for (const member of input.members) {
-    if (integration.members.some((integrated) => integrated.taskId === member.id)) continue;
-    refusals.push(`member ${member.id} is not contained in the integrated commit`);
-  }
-  return refusals;
-}
-
-/** Reviews that speak for the integrated commit: the request's own, plus any member reviewed there. */
-function reviewsAtIntegratedHead(input: RequestAcceptanceInput): readonly ReviewResult[] {
-  return [
-    ...input.integration.reviews,
-    ...input.members.flatMap((member) =>
-      member.reviews.filter((review) => review.head === input.integration.head),
-    ),
-  ];
-}
-
-/**
- * Reports whether the pinned checks, review lenses, and approved acceptance criteria are all
- * satisfied at the integrated commit. Only evidence recorded against that commit and the pinned
- * policy counts; component evidence from a member commit is never enough.
- */
-export function requestAcceptanceStatus(input: RequestAcceptanceInput): RequestAcceptanceStatus {
-  const first = input.members[0];
-  if (first === undefined) {
-    throw new Error("a request delivery requires at least one member task");
-  }
-  const contract = integratedAcceptanceContract({
-    policy: first.policy,
-    surfaces: input.members.flatMap((member) => member.surfaces),
-    head: input.integration.head,
-    criteria: input.criteria,
-  });
-  const manifest = integratedAcceptanceStatus({
-    contract,
-    evidence: input.integration.evidence,
-    reviews: reviewsAtIntegratedHead(input),
-  });
-  const refusals = memberRefusals(input);
-  return { satisfied: manifest.satisfied && refusals.length === 0, contract, manifest, refusals };
-}
-
-/** Refuses delivery unless the complete manifest passed for the integrated commit and policy. */
-export function assertRequestAcceptance(
-  input: RequestAcceptanceInput,
-): IntegratedAcceptanceContract {
-  const status = requestAcceptanceStatus(input);
-  if (status.satisfied) return status.contract;
-  const outstanding = [
-    ...status.refusals,
-    ...[...status.manifest.missing, ...status.manifest.failed, ...status.manifest.stale].map(
-      (requirement) =>
-        `${requirement.name} (${requirement.origin}) did not pass at the integrated HEAD`,
-    ),
-    ...status.manifest.pendingLenses.map(() => "the integrated HEAD has no passing review"),
-  ];
-  throw new Error(
-    `delivery requires a complete final acceptance run at the integrated HEAD ${input.integration.head}; outstanding: ${outstanding.join("; ")}`,
-  );
-}
-
-export function describeRequestPr(input: RequestAcceptanceInput, summary: PrSummary): string {
-  const contract = assertRequestAcceptance(input);
-  const validatedSummary = validateSummary(summary);
-  return renderPrDescription({
-    tldr: validatedSummary.tldr,
-    what: validatedSummary.what,
-    why: validatedSummary.why,
-    validation: [
-      `The checks ran on the latest version of the combined work: ${contract.requirements.length} required check(s), ${contract.lenses.length} review(s), and ${contract.criteria.length} accepted acceptance criteria.`,
-      `Combined from: ${input.integration.members.map((member) => member.taskId).join(", ")}`,
-      ...input.integration.evidence.map(evidenceBullet),
-    ],
-  });
-}
-
-export type RequestDraftDescriptionInput = Readonly<{
-  readonly requestId: string;
-  readonly objective: string;
-  readonly integratedHead: string;
-  readonly members: readonly string[];
-  readonly activity: readonly string[];
-  readonly blockers: readonly string[];
-  readonly remainingChecks: readonly string[];
-}>;
-
-/**
- * Renders the body of a request draft. It exists to show unfinished progress: every reason the
- * request is not finished is listed, and nothing here can stand in for final acceptance.
- */
-export function describeRequestDraftPr(input: RequestDraftDescriptionInput): string {
-  return renderDraftPrDescription({
-    status: [
-      `Request ${readSingleLine(input.requestId, "requestId")} is not finished.`,
-      "This draft reflects the latest version of the combined work.",
-      `Objective: ${draftText(input.objective)}`,
-      `Members: ${input.members.join(", ")}`,
-    ],
-    reviewLevel: [
-      "Whatever each member's review level is, the request is delivered only when the review, the pinned validation commands, and the approved acceptance criteria all pass at the integrated commit.",
-    ],
-    activity: input.activity.map(draftText),
-    blockers: input.blockers.map(draftText),
-    remainingChecks: input.remainingChecks.map(draftText),
   });
 }
 
