@@ -15,6 +15,7 @@ import {
   compactText,
   summarizeTandemActionValue,
 } from "./summary.ts";
+import { coordinatorToolRefusal } from "./tool-guard.ts";
 
 export type TandemOmpRegistrationDependencies = Readonly<{
   readonly getService: (ctx: ExtensionContext) => TandemService;
@@ -85,6 +86,10 @@ export function registerTandemOmp(
       sendMessage: pi.sendMessage.bind(pi),
     }),
   );
+  pi.on("tool_call", (event) => {
+    const reason = coordinatorToolRefusal(event.toolName, event.input);
+    return reason === undefined ? undefined : { block: true, reason };
+  });
   const modelSpecSchema = z
     .object({
       model: z.string(),
