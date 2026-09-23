@@ -1786,6 +1786,14 @@ capacity. Only an explicit, evidence-backed transition may consume a result or r
 resources; recovery must not clear records, manufacture receipts, replace a task, or
 change saved policy/checkpoints.
 
+A quarantine is cleared by a fact, never by time or by asking again: proof that nothing Tandem
+owns for the task is still running. Central recovery's stop ladder, a resume or restart (which
+refuses unless every owned pane is proven stopped), and a steer that redirects the task (which
+stops every owned pane first) each settle a quarantined operation as `failed` in the same write
+that releases its reservation. Only cancellation and terminal cleanup release a reservation without
+settling it, and neither relaunches, so a relaunch never pauses on an uncertainty that proof already
+answered. The `prior-outcome-uncertain` routing reason stays for state written before this rule.
+
 These controls do not make external effects transactional or guarantee availability; they
 make uncertain ownership fail closed and preserve evidence for an explicit decision.
 

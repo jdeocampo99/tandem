@@ -793,3 +793,54 @@ test("a saved unmeasured-usage routing pause no longer blocks; the pinned model 
     await service.shutdown();
   });
 });
+
+test("steering a task whose review launch was quarantined settles that launch instead of leaving it uncertain", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const implementer = {
+      ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
+      role: "implementer" as const,
+    };
+    const reviewer = {
+      ...world.openPane({ paneId: "pane-2", cwd: lease.path }),
+      role: "reviewer" as const,
+    };
+    const prior = scenarioJob({
+      home: world.home,
+      role: "reviewer",
+      cwd: lease.path,
+      endpoint: reviewer,
+      phase: "failed",
+    });
+    await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "reviewing",
+      reviewHead: SCENARIO_HEAD,
+      worktree: lease,
+      endpoints: [implementer, reviewer],
+    });
+    await seedScenarioRuntime(
+      world,
+      scenarioRuntimeTask({
+        worktree: lease,
+        endpoints: [implementer, reviewer],
+        jobs: [prior],
+        operation: scenarioOperation(prior, { phase: "quarantined" }),
+        reservation: scenarioReservation(),
+      }),
+    );
+    const service = serviceFor(world);
+
+    await service.steer({ taskId: SCENARIO_TASK_ID, text: "Keep the current scope." });
+
+    const task = await service.get(SCENARIO_TASK_ID);
+    expect(task.generation).toBe(1);
+    const runtime = (await world.snapshot()).runtime.tasks[0];
+    // Every owned pane was proven stopped before the redirect, which answers the uncertainty.
+    const settled = [...(runtime?.operationHistory ?? []), runtime?.operation].find(
+      (operation) => operation?.id === "operation-1",
+    );
+    expect(settled?.phase).toBe("failed");
+    await service.shutdown();
+  });
+});
