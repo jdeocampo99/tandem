@@ -26,10 +26,10 @@ const TANDEM_COMMAND_ARITY: Readonly<
   present: { min: 4, max: 4 },
   describe: { min: 3, max: 3 },
   "pr-describe": { min: 3, max: 3 },
-  publish: { min: 6, max: 6 },
-  "pr-publish": { min: 6, max: 6 },
-  draft: { min: 5, max: 5 },
-  "pr-draft": { min: 5, max: 5 },
+  publish: { min: 5, max: 5 },
+  "pr-publish": { min: 5, max: 5 },
+  draft: { min: 4, max: 4 },
+  "pr-draft": { min: 4, max: 4 },
   merge: { min: 3, max: 3 },
   "pr-merge": { min: 3, max: 3 },
   cleanup: { min: 2, max: 3 },
@@ -39,7 +39,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "brief-review": { min: 2, max: 2 },
   "brief-approve": { min: 3, max: 4 },
   "request-receipt": { min: 2, max: 2 },
-  "delivery-preflight": { min: 4, max: 4 },
+  "delivery-preflight": { min: 3, max: 3 },
 };
 export type TandemAction =
   | Readonly<{ readonly action: "restart"; readonly taskId: string }>
@@ -88,7 +88,6 @@ export type TandemAction =
   | Readonly<{
       readonly action: "delivery-preflight";
       readonly taskId: string;
-      readonly repository: string;
       readonly base: string;
     }>
   | Readonly<{ readonly action: "approve"; readonly taskId: string }>
@@ -132,7 +131,6 @@ export type TandemAction =
   | Readonly<{
       readonly action: "publish";
       readonly taskId: string;
-      readonly repository: string;
       readonly title: string;
       readonly base: string;
       readonly summary: PrSummary;
@@ -148,7 +146,6 @@ export type TandemAction =
   | Readonly<{
       readonly action: "draft";
       readonly taskId: string;
-      readonly repository: string;
       readonly title: string;
       readonly base: string;
     }>
@@ -364,10 +361,7 @@ export async function executeTandemAction(
       return textResult(await service.inspect(action.taskId), action.action);
     case "delivery-preflight":
       return textResult(
-        await service.deliveryPreflight(action.taskId, {
-          repository: action.repository,
-          base: action.base,
-        }),
+        await service.deliveryPreflight(action.taskId, { base: action.base }),
         action.action,
       );
     case "answer":
@@ -432,7 +426,6 @@ export async function executeTandemAction(
     case "publish":
       return textResult(
         await service.publish(action.taskId, {
-          repository: action.repository,
           title: action.title,
           base: action.base,
           summary: action.summary,
@@ -456,7 +449,6 @@ export async function executeTandemAction(
     case "draft":
       return textResult(
         await service.publishDraft(action.taskId, {
-          repository: action.repository,
           title: action.title,
           base: action.base,
           approved: true,
@@ -639,8 +631,7 @@ export function parseTandemCommand(input: string): TandemAction {
       return {
         action: "delivery-preflight",
         taskId: value(1, "delivery-preflight"),
-        repository: value(2, "delivery-preflight repository"),
-        base: value(3, "delivery-preflight base"),
+        base: value(2, "delivery-preflight base"),
       };
     case "approve":
       return { action: "approve", taskId: value(1, "approve") };
@@ -717,19 +708,17 @@ export function parseTandemCommand(input: string): TandemAction {
       return {
         action: "publish",
         taskId: value(1, "publish"),
-        repository: value(2, "publish repository"),
-        title: value(3, "publish title"),
-        base: value(4, "publish base"),
-        summary: parseSummaryJson(value(5, "publish summary")),
+        title: value(2, "publish title"),
+        base: value(3, "publish base"),
+        summary: parseSummaryJson(value(4, "publish summary")),
       };
     case "draft":
     case "pr-draft":
       return {
         action: "draft",
         taskId: value(1, "draft"),
-        repository: value(2, "draft repository"),
-        title: value(3, "draft title"),
-        base: value(4, "draft base"),
+        title: value(2, "draft title"),
+        base: value(3, "draft base"),
       };
     case "merge":
     case "pr-merge": {

@@ -329,7 +329,6 @@ test("parseCliArgs keeps PR commands explicit and records consent separately", (
     "pr",
     "publish",
     "task-1",
-    "org/repo",
     "Reviewed change",
     "main",
     '{"tldr":["safe"],"what":["changed"],"why":["needed"]}',
@@ -340,7 +339,6 @@ test("parseCliArgs keeps PR commands explicit and records consent separately", (
   expect(invocation.command).toBe("publish");
   expect(invocation.positionals).toEqual([
     "task-1",
-    "org/repo",
     "Reviewed change",
     "main",
     '{"tldr":["safe"],"what":["changed"],"why":["needed"]}',
@@ -348,22 +346,20 @@ test("parseCliArgs keeps PR commands explicit and records consent separately", (
   expect(invocation.options.yes).toBe(true);
   expect(invocation.options.json).toBe(true);
 
-  const draft = parseCliArgs(["pr", "draft", "task-1", "org/repo", "Draft title", "main", "--yes"]);
+  const draft = parseCliArgs(["pr", "draft", "task-1", "Draft title", "main", "--yes"]);
   expect(draft.command).toBe("draft");
-  expect(draft.positionals).toEqual(["task-1", "org/repo", "Draft title", "main"]);
+  expect(draft.positionals).toEqual(["task-1", "Draft title", "main"]);
   expect(draft.options.yes).toBe(true);
-  expect(
-    parseCliArgs(["pr", "draft", "task-1", "org/repo", "Draft title", "main"]).options.yes,
-  ).toBe(false);
+  expect(parseCliArgs(["pr", "draft", "task-1", "Draft title", "main"]).options.yes).toBe(false);
 });
 test("inspection and delivery CLI commands keep their inputs", () => {
   const inspection = parseCliArgs(["inspect", "task-1", "--json"]);
   expect(inspection.command).toBe("inspect");
   expect(inspection.options.yes).toBe(false);
 
-  const preflight = parseCliArgs(["delivery-preflight", "task-1", "org/repo", "main"]);
+  const preflight = parseCliArgs(["delivery-preflight", "task-1", "main"]);
   expect(preflight.command).toBe("delivery-preflight");
-  expect(preflight.positionals).toEqual(["task-1", "org/repo", "main"]);
+  expect(preflight.positionals).toEqual(["task-1", "main"]);
 });
 
 test("restart CLI preserves the explicit managed-worker command contract", () => {

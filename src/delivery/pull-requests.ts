@@ -139,7 +139,8 @@ async function readCleanCheckpoint(run: CommandRunner, cwd: string): Promise<str
   return checkpoint.head;
 }
 
-function repositoryFromRemote(value: string): string {
+/** The GitHub owner/repository an origin URL names; throws when origin is not a GitHub repository. */
+export function repositoryFromRemote(value: string): string {
   const remote = value.trim().replace(/[\r\n]+/gu, "");
   if (remote.length === 0) {
     throw new AdapterProtocolError("delivery remote identity", "origin URL was empty", value);
@@ -448,24 +449,6 @@ async function pushExactBranch(
   await runChecked(run, request, "delivery branch push");
 }
 
-function checkedPublicationTarget(
-  input: Readonly<{
-    readonly repository: string;
-    readonly title: string;
-    readonly base: string;
-  }>,
-): Readonly<{ readonly repository: string; readonly title: string; readonly base: string }> {
-  const repository = readSingleLine(input.repository, "repository");
-  if (!/^[^\s/]+\/[^\s/]+$/u.test(repository)) {
-    throw new TypeError("repository must be an owner/repository name");
-  }
-  return {
-    repository,
-    title: readSingleLine(input.title, "title"),
-    base: readSingleLine(input.base, "base"),
-  };
-}
-
 /**
  * Creates or advances the one pull request for a reviewed branch. An existing pull request on that
  * branch is reused, and an uncertain create is reconciled by re-observing rather than retried, so a
@@ -520,10 +503,10 @@ async function publishCheckout(
   return assertPublishedMetadata(created, repository, base, ready.head);
 }
 
+/** Publishes to the GitHub repository the worktree's origin names. */
 export async function publishReviewedTask(input: {
   readonly task: TaskRecord;
   readonly summary: PrSummary;
-  readonly repository: string;
   readonly title: string;
   readonly base: string;
   readonly approved: boolean;
@@ -531,12 +514,14 @@ export async function publishReviewedTask(input: {
 }): Promise<PullRequestMetadata> {
   if (!input.approved) throw new ApprovalRequiredError("pull request publish");
   const run = readRunner(input.run);
-  const target = checkedPublicationTarget(input);
+  const title = readSingleLine(input.title, "title");
+  const base = readSingleLine(input.base, "base");
   const ready = await assertReadyCheckout(run, input.task);
-  assertRepositoryIdentity(ready.remote, target.repository);
   return publishCheckout(run, {
     ready,
-    ...target,
+    repository: repositoryFromRemote(ready.remote),
+    title,
+    base,
     body: describeTaskPr(input.task, input.summary),
   });
 }
@@ -662,7 +647,6 @@ async function updateDraftBody(input: {
  */
 export async function publishTaskDraft(input: {
   readonly task: TaskRecord;
-  readonly repository: string;
   readonly title: string;
   readonly base: string;
   readonly approved: boolean;
@@ -670,15 +654,11 @@ export async function publishTaskDraft(input: {
 }): Promise<DraftPublication> {
   if (!input.approved) throw new ApprovalRequiredError("draft pull request publish");
   const run = readRunner(input.run);
-  const repository = readSingleLine(input.repository, "repository");
   const title = readSingleLine(input.title, "title");
   const base = readSingleLine(input.base, "base");
-  if (!/^[^\s/]+\/[^\s/]+$/u.test(repository)) {
-    throw new TypeError("repository must be an owner/repository name");
-  }
 
   const checkout = await assertDraftCheckout(run, input.task);
-  assertRepositoryIdentity(checkout.remote, repository);
+  const repository = repositoryFromRemote(checkout.remote);
   const existing = await observeExistingPullRequest(
     run,
     checkout.cwd,

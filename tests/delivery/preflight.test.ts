@@ -43,14 +43,19 @@ const policy: ResolvedPolicy = {
 type FixtureOptions = Readonly<{
   readonly currentHead?: string;
   readonly pullRequest?: TaskRecord["pullRequest"];
-  readonly checkFailure?: boolean;
+  readonly dirty?: boolean;
+  readonly origin?: string;
+  readonly openPullRequests?: readonly unknown[];
 }>;
 
 function result(stdout = "", code = 0, stderr = ""): CommandResult {
   return { stdout, code, stderr };
 }
 
-/** A ready task at its reviewed HEAD, with a git/gh fake that answers the preflight's reads. */
+/**
+ * A ready task at its reviewed HEAD in an npm repository: the git/gh fake answers the preflight's
+ * reads and fails any other command, as bun and biome scripts would in that repository.
+ */
 async function fixture(options: FixtureOptions = {}) {
   const home = await mkdtemp(join(tmpdir(), "tandem-preflight-"));
   const repo = join(home, "repo");
@@ -106,42 +111,93 @@ async function fixture(options: FixtureOptions = {}) {
       },
     ],
   });
+  const commands: string[] = [];
   const run = async (request: CommandRequest): Promise<CommandResult> => {
+    commands.push(request.argv.join(" "));
     if (request.argv[0] === "git") {
       if (request.argv.includes("symbolic-ref")) return result("task/task-1\n");
-      if (request.argv.includes("remote")) return result("git@github.com:owner/repo.git\n");
+      if (request.argv.includes("remote")) {
+        return result(
+          `${options.origin ?? "https://github.com/tagalog-learning-app/Tagalingo-App.git"}\n`,
+        );
+      }
       if (request.argv.includes("rev-parse")) return result(`${options.currentHead ?? HEAD}\n`);
+      if (request.argv.includes("status") && options.dirty) return result(" M src/app.ts\n");
       return result();
     }
-    if (request.argv.join(" ") === "bun run db:types:check" && options.checkFailure) {
-      return result("", 1, "generated database types are stale");
-    }
-    return result();
+    if (request.argv[0] === "gh") return result(JSON.stringify(options.openPullRequests ?? []));
+    return result("", 1, `unexpected command ${request.argv.join(" ")}`);
   };
   return {
-    preflight: (repository: string, base: string) =>
-      deliveryPreflight({ run, runtimePath: runtimeFile(home) }, task, repository, base),
+    commands,
+    preflight: (base: string) =>
+      deliveryPreflight({ run, runtimePath: runtimeFile(home) }, task, base),
     cleanup: () => rm(home, { recursive: true, force: true }),
   };
 }
 
-test("delivery preflight rejects generated-type drift", async () => {
-  const f = await fixture({ checkFailure: true });
+test("delivery preflight passes a ready npm task and reads the repository from origin", async () => {
+  const f = await fixture();
   try {
-    const value = await f.preflight("owner/repo", "main");
-    expect(value.ready).toBe(false);
-    expect(value.refusals.join("\n")).toContain("generated database types are stale");
+    const value = await f.preflight("main");
+    expect(value.refusals).toEqual([]);
+    expect(value.ready).toBe(true);
+    expect(value.repository).toBe("tagalog-learning-app/Tagalingo-App");
+    expect(f.commands.filter((command) => !/^(git|gh) /u.test(command))).toEqual([]);
+    expect(f.commands).toContain(
+      "gh pr list --repo tagalog-learning-app/Tagalingo-App --head task/task-1 --state open --json number,headRefOid,baseRefName,url,title,isDraft",
+    );
   } finally {
     await f.cleanup();
   }
 });
 
-test("delivery preflight rejects reviewed HEAD mismatch", async () => {
+test("delivery preflight refuses a dirty worktree in one plain line", async () => {
+  const f = await fixture({ dirty: true });
+  try {
+    const value = await f.preflight("main");
+    expect(value.ready).toBe(false);
+    expect(value.refusals).toEqual(["the worktree has uncommitted or unmerged changes"]);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("delivery preflight refuses a HEAD other than the reviewed one", async () => {
   const f = await fixture({ currentHead: "different-head" });
   try {
-    const value = await f.preflight("owner/repo", "main");
+    const value = await f.preflight("main");
     expect(value.ready).toBe(false);
-    expect(value.refusals.join("\n")).toContain("reviewed-head");
+    expect(value.refusals).toEqual([
+      "the worktree is at different-head, not the reviewed commit head-1",
+    ]);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("delivery preflight refuses an origin that is not on GitHub", async () => {
+  const f = await fixture({ origin: "https://gitlab.com/owner/repo.git" });
+  try {
+    const value = await f.preflight("main");
+    expect(value.ready).toBe(false);
+    expect(value.refusals).toEqual([
+      "origin https://gitlab.com/owner/repo.git is not a GitHub repository",
+    ]);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("delivery preflight refuses when a pull request is already open for the branch", async () => {
+  const f = await fixture({
+    openPullRequests: [{ number: 9, headRefOid: HEAD, baseRefName: "main", isDraft: false }],
+  });
+  try {
+    const value = await f.preflight("main");
+    expect(value.ready).toBe(false);
+    expect(value.refusals).toEqual(["pull request #9 is already open for task/task-1"]);
+    expect(value.duplicatePullRequest?.number).toBe(9);
   } finally {
     await f.cleanup();
   }
@@ -149,7 +205,7 @@ test("delivery preflight rejects reviewed HEAD mismatch", async () => {
 
 test("delivery preflight treats the task's own draft as the PR to update, not a duplicate", async () => {
   const draft = {
-    repository: "owner/repo",
+    repository: "tagalog-learning-app/Tagalingo-App",
     number: 11,
     state: "draft" as const,
     head: HEAD,
@@ -157,37 +213,32 @@ test("delivery preflight treats the task's own draft as the PR to update, not a 
   };
   const f = await fixture({ pullRequest: draft });
   try {
-    const value = await f.preflight("owner/repo", "main");
-    expect(value.refusals.join("\n")).not.toContain("duplicate publication");
+    const value = await f.preflight("main");
+    expect(value.refusals).toEqual([]);
     expect(value.draftPullRequest).toEqual(draft);
     expect(value.duplicatePullRequest).toBeUndefined();
 
-    const other = await f.preflight("owner/other", "main");
-    expect(other.refusals.join("\n")).toContain("duplicate publication");
+    const otherBase = await f.preflight("release");
+    expect(otherBase.refusals).toEqual(["the task already has pull request #11"]);
   } finally {
     await f.cleanup();
   }
 });
 
-test("delivery preflight rejects duplicate PR metadata", async () => {
+test("delivery preflight refuses a task that already has a published pull request", async () => {
   const f = await fixture({
-    pullRequest: { repository: "owner/repo", number: 7, state: "open", head: HEAD, base: "main" },
+    pullRequest: {
+      repository: "tagalog-learning-app/Tagalingo-App",
+      number: 7,
+      state: "open",
+      head: HEAD,
+      base: "main",
+    },
   });
   try {
-    const value = await f.preflight("owner/repo", "main");
+    const value = await f.preflight("main");
     expect(value.ready).toBe(false);
-    expect(value.refusals.join("\n")).toContain("duplicate publication");
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("delivery preflight passes a clean ready task at its reviewed HEAD", async () => {
-  const f = await fixture();
-  try {
-    const value = await f.preflight("owner/repo", "main");
-    expect(value.refusals).toEqual([]);
-    expect(value.ready).toBe(true);
+    expect(value.refusals).toEqual(["the task already has pull request #7"]);
   } finally {
     await f.cleanup();
   }
