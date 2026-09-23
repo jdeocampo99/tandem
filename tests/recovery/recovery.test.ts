@@ -10,6 +10,7 @@ import type {
   TaskRecord,
   WorktreeLease,
 } from "../../src/contracts.ts";
+import { CentralRecoveryWorkflow } from "../../src/recovery/central.ts";
 import { RecoveryConversationWorkflow } from "../../src/recovery/conversation.ts";
 import { AVAILABILITY_WAIT_CEILING_MS } from "../../src/recovery/wait.ts";
 import { RecoveryWorkflow } from "../../src/recovery/workflow.ts";
@@ -42,7 +43,6 @@ const policy: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -238,7 +238,7 @@ async function fixture(options: FixtureOptions = {}) {
     if (current === undefined) throw new Error(`task ${taskId} is missing`);
     return current;
   };
-  const workflow = new RecoveryWorkflow({
+  const coreDeps = {
     home,
     sessionId: "session-1",
     run: runner,
@@ -247,7 +247,21 @@ async function fixture(options: FixtureOptions = {}) {
     store,
     runtimePath: runtimeFile(home),
     getTask,
+  };
+  const workflow = new RecoveryWorkflow({
+    ...coreDeps,
     taskInScope: async () => options.outOfScope !== true,
+  });
+  // Only `validationRetry` is exercised through this instance: central recovery's automatic
+  // re-entry (relaunchWorker/revalidate/etc.) is covered separately in
+  // tests/recovery/central-validating.test.ts, so those dependencies are never-called stubs here.
+  const central = new CentralRecoveryWorkflow({
+    ...coreDeps,
+    relaunchWorker: async () => ({ relaunched: false, reason: "not exercised here" }),
+    revalidate: async () => ({ started: false, reason: "not exercised here" }),
+    blockTask: async () => {},
+    removeEndpoint: async () => {},
+    relaunchReviewer: async () => {},
   });
   const conversationFor = (sessionId: string): RecoveryConversationWorkflow =>
     new RecoveryConversationWorkflow({
@@ -281,6 +295,7 @@ async function fixture(options: FixtureOptions = {}) {
     task,
     runtimePath: runtimeFile(home),
     workflow,
+    central,
     conversation: conversationFor("session-1"),
     conversationFor,
     setNow: (value: string) => {
@@ -512,7 +527,7 @@ test("validation retry writes a durable result when result artifact is missing",
   const validation = job("failed", "validation");
   const f = await fixture({ job: validation });
   try {
-    const value = await f.workflow.validationRetry("task-1", true);
+    const value = await f.central.validationRetry("task-1", true);
     expect(value.status).toBe("completed");
     expect(value.resultPath).toBeDefined();
     expect(await readFile(value.resultPath as string, "utf8")).toContain('"status":"completed"');

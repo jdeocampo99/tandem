@@ -38,13 +38,15 @@ import {
   readRuntimeState,
   taskJobsDirectory,
   updateRuntimeState,
+  writeRuntimeState,
   writeTextAtomically,
 } from "../runtime/persistence.ts";
-import type { DurableJob, RuntimeRecoveryState, RuntimeTaskState } from "../runtime/schema.ts";
+import type { DurableJob, RuntimeTaskState } from "../runtime/schema.ts";
 import { isTerminalTask, replaceRuntimeTask, workerRoleForTask } from "../service/records.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
 import { formatDecisionQuestion } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
+import type { ValidationResult } from "../validation-worker.ts";
 import { readWorkerTerminal, type WorkerTerminalJob } from "../workers/terminal.ts";
 import { pauseWorkerTerminal } from "../workers/terminal-control.ts";
 import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "./central-review.ts";
@@ -60,7 +62,14 @@ import {
   type RecoveryEvidence,
   restartIncidentIdentity,
 } from "./decision.ts";
-import { MAX_VALIDATION_RETRIES, pointTaskBranchAtCommit } from "./workflow.ts";
+import {
+  checkpoint,
+  defaultRecovery,
+  MAX_VALIDATION_RETRIES,
+  pointTaskBranchAtCommit,
+  runValidationFor,
+  withBoundedLock,
+} from "./workflow.ts";
 
 export type { CentralRecoveryAction, CentralRecoveryOutcome };
 
@@ -98,6 +107,19 @@ export type RelaunchWorker = (
 export type RevalidateWorker = (
   task: TaskRecord,
 ) => Promise<Readonly<{ readonly started: boolean; readonly reason?: string }>>;
+
+/** Return type of both the automatic and the explicitly-approved validation retry. */
+export type ValidationRetryResult = Readonly<{
+  readonly taskId: string;
+  readonly changed: boolean;
+  readonly status: ValidationResult["status"] | "refused";
+  readonly failureClass?: "infrastructure" | "validation" | "task-code";
+  readonly resultPath?: string;
+  readonly head?: string;
+  readonly retriesUsed: number;
+  readonly retriesRemaining: number;
+  readonly reason?: string;
+}>;
 
 export type CentralRecoveryDependencies = Readonly<{
   readonly home: string;
@@ -193,17 +215,6 @@ export function canCentralRecoverBlockedTask(
   if (question !== undefined && !question.id.startsWith(RECOVERY_QUESTION_ID_PREFIX)) return false;
   if (runtime?.stopRequest !== undefined) return false;
   return true;
-}
-
-function defaultRecovery(runtime: RuntimeTaskState | undefined): RuntimeRecoveryState {
-  return (
-    runtime?.recovery ?? {
-      schemaVersion: 1,
-      recoveryAttempts: 0,
-      validationRetries: 0,
-      evidenceRepairs: 0,
-    }
-  );
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -535,6 +546,117 @@ export class CentralRecoveryWorkflow {
   }
 
   /**
+   * The manual, explicitly-approved sibling of `recoverStuckValidation`: the CLI's
+   * `validation-retry --yes` action. Explicit approval substitutes for proof the prior job is dead, so
+   * this skips the stop ladder and only requires the exact clean, reviewed HEAD before spending from
+   * the same `MAX_VALIDATION_RETRIES` budget, running validation through the same `runValidationFor`
+   * core `reviewExisting` uses for its own synchronous, immediate result.
+   */
+  public async validationRetry(taskId: string, approved: boolean): Promise<ValidationRetryResult> {
+    if (!approved) throw new Error("validation retry requires explicit approval");
+    const task = await this.#deps.getTask(taskId);
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    const runtime = taskRuntime(state, taskId);
+    const recovery = defaultRecovery(runtime);
+    const remaining = Math.max(0, MAX_VALIDATION_RETRIES - recovery.validationRetries);
+    if (remaining === 0)
+      return {
+        taskId,
+        changed: false,
+        status: "refused",
+        retriesUsed: recovery.validationRetries,
+        retriesRemaining: 0,
+        reason: "validation retry budget is exhausted",
+      };
+    if (runtime === undefined || task.reviewHead === undefined)
+      return {
+        taskId,
+        changed: false,
+        status: "refused",
+        retriesUsed: recovery.validationRetries,
+        retriesRemaining: remaining,
+        reason: "validation retry requires a durable worktree and reviewed HEAD",
+      };
+    const path = runtime.worktree?.path ?? task.worktree?.path;
+    const current = await checkpoint(
+      this.#deps,
+      path,
+      runtime.worktree?.baseHead ?? task.worktree?.baseHead,
+    );
+    if (
+      path === undefined ||
+      current.head !== task.reviewHead ||
+      current.dirty !== false ||
+      current.unmerged !== false
+    )
+      return {
+        taskId,
+        changed: false,
+        status: "refused",
+        retriesUsed: recovery.validationRetries,
+        retriesRemaining: remaining,
+        reason: "validation retry requires the exact clean reviewed HEAD",
+      };
+    const began = await withBoundedLock(this.#deps, async () =>
+      this.#deps.store.exclusive(async (store) => {
+        const currentTask = await store.read(taskId);
+        if (currentTask === undefined) throw new Error(`task ${taskId} is missing`);
+        const currentState = await readRuntimeState(this.#deps.runtimePath);
+        const currentRuntime = taskRuntime(currentState, taskId);
+        if (currentRuntime === undefined) throw new Error(`runtime task ${taskId} is missing`);
+        if (currentRuntime.jobs.some(activeRuntimeJob))
+          return { task: currentTask, runtime: currentRuntime, changed: false };
+        const transitioned = transitionTask(
+          currentTask,
+          {
+            type: "retry-validation",
+            head: task.reviewHead as string,
+            generation: currentTask.generation,
+          },
+          { now: this.#deps.clock(), notificationId: this.#deps.idFactory() },
+        );
+        const updatedRuntime = replaceRuntimeTask(currentState, taskId, (entry) => ({
+          ...entry,
+          recovery: {
+            ...defaultRecovery(entry),
+            validationRetries: defaultRecovery(entry).validationRetries + 1,
+            lastOperation: "validation-retry",
+            lastAt: this.#deps.clock(),
+          },
+        }));
+        await writeRuntimeState(this.#deps.runtimePath, updatedRuntime);
+        const saved = await store.update(currentTask.id, currentTask.revision, () => transitioned);
+        return { task: saved, runtime: taskRuntime(updatedRuntime, taskId), changed: true };
+      }),
+    );
+    if (!began.changed)
+      return {
+        taskId,
+        changed: false,
+        status: "refused",
+        retriesUsed: recovery.validationRetries,
+        retriesRemaining: remaining,
+        reason: "an active durable job already owns validation",
+      };
+    const result = await runValidationFor(
+      this.#deps,
+      began.task,
+      began.runtime as RuntimeTaskState,
+      "validation-retry",
+    );
+    return {
+      taskId,
+      changed: true,
+      status: result.result.status,
+      ...(result.failureClass === undefined ? {} : { failureClass: result.failureClass }),
+      resultPath: result.resultPath,
+      head: task.reviewHead,
+      retriesUsed: recovery.validationRetries + 1,
+      retriesRemaining: Math.max(0, remaining - 1),
+    };
+  }
+
+  /**
    * Central recovery's `validating` re-entry. A validation job that dies for an infrastructure
    * reason (its pane disappears, or it stops without writing durable evidence) is settled as failed
    * without blocking the task (see `WorkerWorkflow.reconcileJob`'s validation branches), so the task
@@ -601,23 +723,63 @@ export class CentralRecoveryWorkflow {
       });
     }
 
-    // --- Move 2: save. Snapshot uncommitted work before the next validation run can touch it. ---
-    await this.snapshotWorktree(task, runtime, retriesUsed + 1);
+    // --- Moves 2 & 3: save then re-enter, through the shared save/revalidate/notify tail. ---
+    const notice = `Validation stopped (${proof.reasonSummary}). I reran it at the same reviewed commit. (Retry ${retriesUsed + 1} of ${MAX_VALIDATION_RETRIES}.)`;
+    const revalidated = await this.snapshotAndRevalidate(task, runtime, retriesUsed, notice, {
+      summary: "Tandem tried to rerun the checks automatically, but they couldn't start.",
+      detail: "automatic validation retry could not restart validation",
+      deadJobId: proof.deadJobId,
+    });
+    if (!revalidated.started) {
+      return { taskId: task.id, action: "blocked", reason: revalidated.reason as string };
+    }
+    await this.saveDecision(task.id, {
+      taskId: task.id,
+      generation: task.generation,
+      ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+      evidence: this.evidenceFor(incidentIdentity, proof.reasonSummary, now),
+      ownership: "proven-owned",
+      priorOutcome: "known",
+      approval: "preapproved",
+      unmetProofs: [],
+      consequences: notice,
+      disposition: "applied",
+      dispositionReason: notice,
+    });
+    return { taskId: task.id, action: "relaunched", reason: notice };
+  }
 
-    // --- Move 3: re-enter. ---
+  /**
+   * The shared save/re-enter tail for `recoverStuckValidation` and `forceOneMoreValidationRetry`
+   * (never `validationRetry`, which runs synchronously through `runValidationFor` instead of a
+   * pane-based job): snapshot the worktree, relaunch validation through the stage's normal entry
+   * point, and — only on success — bump the shared `validationRetries` counter and notify.
+   */
+  private async snapshotAndRevalidate(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    retriesUsed: number,
+    notice: string,
+    refusal: Readonly<{
+      readonly summary: string;
+      readonly detail: string;
+      readonly deadJobId: string;
+    }>,
+  ): Promise<Readonly<{ readonly started: boolean; readonly reason?: string }>> {
+    await this.snapshotWorktree(task, runtime, retriesUsed + 1);
     const revalidated = await this.#deps.revalidate(task);
     if (!revalidated.started) {
       const reason = revalidated.reason ?? "validation could not be restarted";
       await reportBlock(this.#deps.blockTask, task.id, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: `Tandem tried to rerun the checks automatically, but they couldn't start.`,
-        detail: `automatic validation retry could not restart validation: ${reason}`,
-        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
+        summary: refusal.summary,
+        detail: `${refusal.detail}: ${reason}`,
+        ...(refusal.deadJobId === "none" ? {} : { jobId: refusal.deadJobId }),
       });
-      return { taskId: task.id, action: "blocked", reason };
+      return { started: false, reason };
     }
-
+    const now = this.#deps.clock();
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
       replaceRuntimeTask(current, task.id, (entry) => ({
         ...entry,
@@ -629,7 +791,6 @@ export class CentralRecoveryWorkflow {
         },
       })),
     );
-    const notice = `Validation stopped (${proof.reasonSummary}). I reran it at the same reviewed commit. (Retry ${retriesUsed + 1} of ${MAX_VALIDATION_RETRIES}.)`;
     await this.#deps.store.exclusive(async (store) => {
       const current = await store.read(task.id);
       if (current === undefined) return;
@@ -646,20 +807,7 @@ export class CentralRecoveryWorkflow {
         notifications: [...entry.notifications, notification],
       }));
     });
-    await this.saveDecision(task.id, {
-      taskId: task.id,
-      generation: task.generation,
-      ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
-      evidence: this.evidenceFor(incidentIdentity, proof.reasonSummary, now),
-      ownership: "proven-owned",
-      priorOutcome: "known",
-      approval: "preapproved",
-      unmetProofs: [],
-      consequences: notice,
-      disposition: "applied",
-      dispositionReason: notice,
-    });
-    return { taskId: task.id, action: "relaunched", reason: notice };
+    return { started: true };
   }
 
   /**
@@ -1081,49 +1229,13 @@ export class CentralRecoveryWorkflow {
     }
     const recovery = defaultRecovery(runtime);
     const retriesUsed = recovery.validationRetries;
-    await this.snapshotWorktree(task, runtime, retriesUsed + 1);
-    const revalidated = await this.#deps.revalidate(task);
-    if (!revalidated.started) {
-      const reason = revalidated.reason ?? "revalidation was refused";
-      await reportBlock(this.#deps.blockTask, task.id, {
-        group: "lost-resource",
-        kind: "allocation-failed",
-        summary: `You approved rerunning the checks, but they couldn't start.`,
-        detail: `the approved validation retry could not restart validation: ${reason}`,
-        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
-      });
-      return { started: false, proven: true, reasonSummary: proof.reasonSummary };
-    }
-    const now = this.#deps.clock();
-    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
-      replaceRuntimeTask(current, task.id, (entry) => ({
-        ...entry,
-        recovery: {
-          ...defaultRecovery(entry),
-          validationRetries: retriesUsed + 1,
-          lastOperation: "validation-retry",
-          lastAt: now,
-        },
-      })),
-    );
     const notice = `Validation stopped (${proof.reasonSummary}). You approved another retry; I reran it at the same reviewed commit.`;
-    await this.#deps.store.exclusive(async (store) => {
-      const current = await store.read(task.id);
-      if (current === undefined) return;
-      const notification: Notification = {
-        id: this.#deps.idFactory(),
-        message: notice,
-        acknowledged: false,
-        kind: "coordinator",
-      };
-      await store.update(current.id, current.revision, (entry) => ({
-        ...entry,
-        revision: entry.revision + 1,
-        updatedAt: now,
-        notifications: [...entry.notifications, notification],
-      }));
+    const revalidated = await this.snapshotAndRevalidate(task, runtime, retriesUsed, notice, {
+      summary: "You approved rerunning the checks, but they couldn't start.",
+      detail: "the approved validation retry could not restart validation",
+      deadJobId: proof.deadJobId,
     });
-    return { started: true, proven: true, reasonSummary: proof.reasonSummary };
+    return { started: revalidated.started, proven: true, reasonSummary: proof.reasonSummary };
   }
 
   /** Undoes the block that asking the restart question applied, so relaunch can proceed. */

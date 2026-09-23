@@ -310,8 +310,8 @@ The harness asserts against, and never overrides, the constants already pinned i
 `src/tasks/research-continuation-classifier.ts`:
 
 - `RESEARCH_CONTINUATION_CONFIDENCE_THRESHOLD` — a Jev choice below this confidence is discarded
-  for the conservative `ask-intent` default; the `jev-low-confidence` fixture is built specifically
-  below this threshold.
+  for the `implementation-interview` fallback (`selectedBy: "fallback"`); the `jev-low-confidence`
+  fixture is built specifically below this threshold.
 - `RESEARCH_CONTINUATION_CLASSIFIER_VERSION` (built from `RESEARCH_CONTINUATION_QUESTION_VERSION`
   and the pinned `JEV_MODEL`) — recorded as `classifierVersion` on every Jev-selected disposition;
   the harness never fabricates or bumps this version.
@@ -353,8 +353,8 @@ Jev-assisted continuation classification broadly, review at least:
   no trustworthy report to support.
 - `jev-low-confidence-ambiguous` / `jev-malformed-answer-shape` / `jev-invalid-response-ambiguous` /
   `jev-timeout-ambiguous` / `jev-unavailable-ambiguous` / `jev-not-configured-ambiguous` — six ways
-  a provider response can be unusable; every one must fall back to the conservative `ask-intent`
-  disposition with `selectedBy: "deterministic"`, never a fabricated confident answer.
+  a provider response can be unusable; every one must fall back to `implementation-interview` with
+  `selectedBy: "fallback"` and an honest `fallbackReason`, never a fabricated confident answer.
 
 ## Decision rules
 

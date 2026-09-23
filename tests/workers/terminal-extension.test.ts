@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { WorkerJob } from "../../src/workers/jobs.ts";
-import { planAbortWithReason } from "../../src/workers/terminal-extension.ts";
+import {
+  isBackgroundResultWake,
+  planAbortWithReason,
+} from "../../src/workers/terminal-extension.ts";
 
 function job(): WorkerJob {
   return {
@@ -60,4 +64,24 @@ test("planAbortWithReason carries the reason through untouched, not a bare 'abor
   );
   expect(plan.result?.error).toBe(reason);
   expect(plan.result?.error).not.toBe("aborted");
+});
+
+test("only a finished background command's wake-up counts as a background wake", () => {
+  const assistant = { role: "assistant", content: [], timestamp: 1 } as unknown as AgentMessage;
+  const backgroundResult = {
+    role: "custom",
+    customType: "async-result",
+    content: "bg_1 finished",
+    display: true,
+    timestamp: 2,
+  } as unknown as AgentMessage;
+  const typed = { role: "user", content: "one more thing", timestamp: 3 } as AgentMessage;
+  const inbox = { ...typed, synthetic: true } as AgentMessage;
+
+  expect(isBackgroundResultWake([assistant, backgroundResult])).toBe(true);
+  // Tandem's inbox rendering is appended as a synthetic message and is not a new request.
+  expect(isBackgroundResultWake([assistant, backgroundResult, inbox])).toBe(true);
+  expect(isBackgroundResultWake([assistant, backgroundResult, typed])).toBe(false);
+  expect(isBackgroundResultWake([assistant, inbox])).toBe(false);
+  expect(isBackgroundResultWake([])).toBe(false);
 });

@@ -74,7 +74,7 @@ export { LiveJevBudgetExceededError };
 
 const FAKE_API_KEY = "fixture-key";
 const NOW = "2030-01-02T03:04:05.000Z";
-const IMPLEMENTATION_APPROVAL_DISCLAIMER = "approve the concrete scope before starting";
+const IMPLEMENTATION_APPROVAL_DISCLAIMER = "its own confirmation is the single approval ask";
 
 type ClassifyDeps = Readonly<{
   readonly config: ResearchContinuationClassifierConfig;
@@ -208,7 +208,6 @@ const FIXTURE_POLICY: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };

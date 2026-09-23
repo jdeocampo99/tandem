@@ -193,17 +193,6 @@ export type ReviewLevelPolicy = {
   readonly sourceTransmission: boolean;
 };
 
-/**
- * The standing amounts a request may spend, in integer USD micro-dollars. A repository tightens or
- * raises the standing default by naming its own amounts; an approved request override is recorded
- * on the request rather than here. `"unset"` is an amount nobody configured, which is unknown: it
- * is neither zero nor unlimited, and a request governed by one pauses instead of spending.
- */
-export type RequestBudgetPolicy = {
-  readonly capMicros: number | "unset";
-  readonly operationEstimateMicros: number | "unset";
-};
-
 export type RepoPolicy = {
   readonly version: 1;
   readonly models: Readonly<Record<AgentRole, ModelSpec>>;
@@ -214,7 +203,6 @@ export type RepoPolicy = {
   readonly maxWorkers: number;
   readonly maxFixRounds: number;
   readonly reviewLevels: ReviewLevelPolicy;
-  readonly requestBudget: RequestBudgetPolicy;
 };
 
 export type GuidanceProvenance = {
@@ -431,7 +419,12 @@ export const RESEARCH_CONTINUATION_DISPOSITIONS = [
 /** What a completed scout should lead to; routing metadata only, never permission. */
 export type ResearchContinuationDisposition = (typeof RESEARCH_CONTINUATION_DISPOSITIONS)[number];
 
-export const RESEARCH_CONTINUATION_SELECTORS = ["explicit", "deterministic", "jev"] as const;
+export const RESEARCH_CONTINUATION_SELECTORS = [
+  "explicit",
+  "deterministic",
+  "jev",
+  "fallback",
+] as const;
 
 export type ResearchContinuationSelector = (typeof RESEARCH_CONTINUATION_SELECTORS)[number];
 
@@ -448,6 +441,8 @@ export type ResearchContinuation = {
   readonly disposition: ResearchContinuationDisposition;
   readonly selectedBy: ResearchContinuationSelector;
   readonly classifierVersion?: string;
+  /** Why an unusable classifier outcome fell back; carried only when `selectedBy` is `fallback`. */
+  readonly fallbackReason?: string;
 };
 
 /**

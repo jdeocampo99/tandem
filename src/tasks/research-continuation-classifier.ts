@@ -21,7 +21,7 @@ export const RESEARCH_CONTINUATION_QUESTION_VERSION = "research-continuation/1";
 /** Recorded as `classifierVersion` for a Jev-selected disposition; pins question and model. */
 export const RESEARCH_CONTINUATION_CLASSIFIER_VERSION =
   `${RESEARCH_CONTINUATION_QUESTION_VERSION}@${JEV_MODEL}` as const;
-/** A Jev choice below this confidence is discarded for the conservative default. */
+/** A Jev choice below this confidence is discarded for the `implementation-interview` fallback. */
 export const RESEARCH_CONTINUATION_CONFIDENCE_THRESHOLD = 0.8;
 export const DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS = 1_500;
 export const MIN_RESEARCH_CONTINUATION_TIMEOUT_MS = 100;
@@ -213,15 +213,26 @@ function selected(
   };
 }
 
-/** Every unusable classifier outcome records the same durable, conservative disposition. */
-function conservative(
+/**
+ * Every unusable classifier outcome (not configured, low confidence, error, or an invalid answer)
+ * now defaults to the brief interview rather than asking the user's intent first; the honest reason
+ * is kept as `fallbackReason` rather than being reported as a rule-table `deterministic` pick.
+ */
+function fallback(
   reason: ResearchContinuationReason,
   startedAt: number,
   now: ResearchContinuationClock,
   usage?: JevUsage,
 ): ResearchContinuationClassification {
   return {
-    ...selected("ask-intent", reason, startedAt, now),
+    continuation: {
+      schemaVersion: RESEARCH_CONTINUATION_SCHEMA_VERSION,
+      disposition: "implementation-interview",
+      selectedBy: "fallback",
+      fallbackReason: reason,
+    },
+    reason,
+    durationMs: elapsedMs(startedAt, now),
     ...(usage === undefined ? {} : { usage }),
   };
 }
@@ -250,7 +261,8 @@ function classifiedChoice(
 /**
  * Classify what a scout's research should lead to. Deterministic cues decide on their own and
  * make no provider call; only unresolved wording reaches Jev, whose failures, malformed answers,
- * and low-confidence answers all fall back to the conservative `ask-intent` disposition.
+ * and low-confidence answers all fall back to `implementation-interview` so unclear intent defaults
+ * to the brief interview rather than an extra ask-intent round-trip.
  */
 export async function classifyResearchContinuation(
   request: ResearchContinuationRequest,
@@ -264,7 +276,7 @@ export async function classifyResearchContinuation(
   if (deterministic.resolved) {
     return selected(deterministic.disposition, deterministic.reason, startedAt, now);
   }
-  if (config.apiKey === undefined) return conservative("jev-not-configured", startedAt, now);
+  if (config.apiKey === undefined) return fallback("jev-not-configured", startedAt, now);
 
   const input: JevEvaluationInput = {
     model: JEV_MODEL,
@@ -281,7 +293,7 @@ export async function classifyResearchContinuation(
   try {
     response = await evaluate(input, options);
   } catch (error) {
-    return conservative(
+    return fallback(
       error instanceof JevEvaluationError ? `jev-${error.code}` : "jev-error",
       startedAt,
       now,
@@ -290,10 +302,10 @@ export async function classifyResearchContinuation(
 
   const choice = classifiedChoice(response);
   if (choice === undefined) {
-    return conservative("jev-invalid-classification", startedAt, now, response.usage);
+    return fallback("jev-invalid-classification", startedAt, now, response.usage);
   }
   if (choice.confidence < RESEARCH_CONTINUATION_CONFIDENCE_THRESHOLD) {
-    return conservative("jev-low-confidence", startedAt, now, response.usage);
+    return fallback("jev-low-confidence", startedAt, now, response.usage);
   }
   return {
     continuation: {

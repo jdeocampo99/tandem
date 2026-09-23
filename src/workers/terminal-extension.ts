@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -131,6 +132,21 @@ export function planAbortWithReason(
 ): AbortWithReasonPlan {
   if (state.resultPublished || state.delegatedSettled) return { shouldPersistResult: false };
   return { shouldPersistResult: true, result: failureFor(job, reason) };
+}
+
+/**
+ * OMP wakes an idle agent with an `async-result` message when a backgrounded command finishes.
+ * After the report is submitted that wake would hold the pane busy for nothing, while a person
+ * typing or a Tandem inbox update (appended as a synthetic message) is still a real request.
+ */
+export function isBackgroundResultWake(messages: readonly AgentMessage[]): boolean {
+  const latest = messages.findLast((message) => !("synthetic" in message && message.synthetic));
+  return (
+    latest !== undefined &&
+    latest.role === "custom" &&
+    "customType" in latest &&
+    latest.customType === "async-result"
+  );
 }
 
 async function instructionRevision(job: WorkerJob, required: boolean): Promise<number | undefined> {
@@ -522,6 +538,9 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   });
   pi.on("turn_end", (_event, ctx) => {
     void persistState("idle", currentState.completed).catch(() => ctx.abort());
+  });
+  pi.on("context", (event, ctx) => {
+    if (resultPublished && isBackgroundResultWake(event.messages)) ctx.abort();
   });
   pi.on("agent_end", async (event, ctx) => {
     agentActive = event.willContinue === true;

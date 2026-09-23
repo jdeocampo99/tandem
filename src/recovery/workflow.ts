@@ -234,18 +234,6 @@ export type ReconciliationResult = Readonly<{
   readonly recoveryAttempts: number;
 }>;
 
-export type ValidationRetryResult = Readonly<{
-  readonly taskId: string;
-  readonly changed: boolean;
-  readonly status: ValidationResult["status"] | "refused";
-  readonly failureClass?: "infrastructure" | "validation" | "task-code";
-  readonly resultPath?: string;
-  readonly head?: string;
-  readonly retriesUsed: number;
-  readonly retriesRemaining: number;
-  readonly reason?: string;
-}>;
-
 export type ReviewExistingResult = Readonly<{
   readonly taskId: string;
   readonly changed: boolean;
@@ -310,8 +298,10 @@ function isLockFailure(error: unknown): boolean {
   return /lock|busy|EAGAIN|EWOULDBLOCK/iu.test(`${error.name} ${error.message}`);
 }
 
-async function withBoundedLock<Result>(
-  deps: RecoveryWorkflowDependencies,
+/** Reused by central recovery's explicitly-approved `validationRetry`, which only needs the `home`
+ *  field this actually touches. */
+export async function withBoundedLock<Result>(
+  deps: Pick<RecoveryWorkflowDependencies, "home">,
   operation: () => Promise<Result>,
 ): Promise<Result> {
   let lastError: unknown;
@@ -485,8 +475,10 @@ async function repairDetachedTaskBranch(
   return branch;
 }
 
-async function checkpoint(
-  deps: RecoveryWorkflowDependencies,
+/** Reused by central recovery's explicitly-approved `validationRetry`, which only needs the `run`
+ *  field this actually touches. */
+export async function checkpoint(
+  deps: Pick<RecoveryWorkflowDependencies, "run">,
   path: string | undefined,
   baseRef: string | undefined,
 ): Promise<GitObservation> {
@@ -529,7 +521,8 @@ function repositoryFromRemote(remote: string): string | undefined {
   }
 }
 
-function defaultRecovery(
+/** Shared with central recovery, which had its own byte-for-byte copy; this is the one definition. */
+export function defaultRecovery(
   runtime: RuntimeTaskState | undefined,
 ): NonNullable<RuntimeTaskState["recovery"]> {
   return (
@@ -1364,7 +1357,8 @@ export class RecoveryWorkflow {
         provenancePath,
       };
     }
-    const validation = await this.runValidationFor(
+    const validation = await runValidationFor(
+      this.#deps,
       began.task,
       began.runtime as RuntimeTaskState,
       "review-existing",
@@ -1382,107 +1376,6 @@ export class RecoveryWorkflow {
     };
   }
 
-  public async validationRetry(taskId: string, approved: boolean): Promise<ValidationRetryResult> {
-    if (!approved) throw new Error("validation retry requires explicit approval");
-    const task = await this.#deps.getTask(taskId);
-    const runtime = await this.runtime(taskId);
-    const recovery = defaultRecovery(runtime);
-    const remaining = Math.max(0, MAX_VALIDATION_RETRIES - recovery.validationRetries);
-    if (remaining === 0)
-      return {
-        taskId,
-        changed: false,
-        status: "refused",
-        retriesUsed: recovery.validationRetries,
-        retriesRemaining: 0,
-        reason: "validation retry budget is exhausted",
-      };
-    if (runtime === undefined || task.reviewHead === undefined)
-      return {
-        taskId,
-        changed: false,
-        status: "refused",
-        retriesUsed: recovery.validationRetries,
-        retriesRemaining: remaining,
-        reason: "validation retry requires a durable worktree and reviewed HEAD",
-      };
-    const path = runtime.worktree?.path ?? task.worktree?.path;
-    const current = await checkpoint(
-      this.#deps,
-      path,
-      runtime.worktree?.baseHead ?? task.worktree?.baseHead,
-    );
-    if (
-      path === undefined ||
-      current.head !== task.reviewHead ||
-      current.dirty !== false ||
-      current.unmerged !== false
-    )
-      return {
-        taskId,
-        changed: false,
-        status: "refused",
-        retriesUsed: recovery.validationRetries,
-        retriesRemaining: remaining,
-        reason: "validation retry requires the exact clean reviewed HEAD",
-      };
-    const began = await withBoundedLock(this.#deps, async () =>
-      this.#deps.store.exclusive(async (store) => {
-        const currentTask = await store.read(taskId);
-        if (currentTask === undefined) throw new Error(`task ${taskId} is missing`);
-        const state = await readRuntimeState(this.#deps.runtimePath);
-        const currentRuntime = taskRuntime(state, taskId);
-        if (currentRuntime === undefined) throw new Error(`runtime task ${taskId} is missing`);
-        if (currentRuntime.jobs.some(activeRuntimeJob))
-          return { task: currentTask, runtime: currentRuntime, changed: false };
-        const transitioned = transitionTask(
-          currentTask,
-          {
-            type: "retry-validation",
-            head: task.reviewHead as string,
-            generation: currentTask.generation,
-          },
-          { now: timestamp(this.#deps), notificationId: this.#deps.idFactory() },
-        );
-        const updatedRuntime = replaceRuntimeTask(state, taskId, (entry) => ({
-          ...entry,
-          recovery: {
-            ...defaultRecovery(entry),
-            validationRetries: defaultRecovery(entry).validationRetries + 1,
-            lastOperation: "validation-retry",
-            lastAt: timestamp(this.#deps),
-          },
-        }));
-        await writeRuntimeState(this.#deps.runtimePath, updatedRuntime);
-        const saved = await store.update(currentTask.id, currentTask.revision, () => transitioned);
-        return { task: saved, runtime: taskRuntime(updatedRuntime, taskId), changed: true };
-      }),
-    );
-    if (!began.changed)
-      return {
-        taskId,
-        changed: false,
-        status: "refused",
-        retriesUsed: recovery.validationRetries,
-        retriesRemaining: remaining,
-        reason: "an active durable job already owns validation",
-      };
-    const result = await this.runValidationFor(
-      began.task,
-      began.runtime as RuntimeTaskState,
-      "validation-retry",
-    );
-    return {
-      taskId,
-      changed: true,
-      status: result.result.status,
-      ...(result.failureClass === undefined ? {} : { failureClass: result.failureClass }),
-      resultPath: result.resultPath,
-      head: task.reviewHead,
-      retriesUsed: recovery.validationRetries + 1,
-      retriesRemaining: Math.max(0, remaining - 1),
-    };
-  }
   public async repairEvidence(taskId: string, approved: boolean): Promise<EvidenceRepairResult> {
     if (!approved) throw new Error("evidence repair requires explicit approval");
     const task = await this.#deps.getTask(taskId);
@@ -1784,186 +1677,201 @@ export class RecoveryWorkflow {
       }),
     );
   }
+}
 
-  private async runValidationFor(
-    task: TaskRecord,
-    runtime: RuntimeTaskState,
-    operationName: "review-existing" | "validation-retry",
-  ): Promise<{
-    readonly task: TaskRecord;
-    readonly result: ValidationResult;
-    readonly resultPath: string;
-    readonly changed: boolean;
-    readonly failureClass?: "infrastructure" | "validation" | "task-code";
-  }> {
-    const head = task.reviewHead ?? runtime.worktree?.baseHead;
-    if (head === undefined) throw new Error("validation has no reviewed HEAD");
-    const manifest = finalAcceptanceContract(task, head);
-    const jobId = `${operationName}-${this.#deps.idFactory()}`;
-    const directory = jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId);
-    const paths = jobPaths(directory);
-    const validationJob: ValidationJob = {
+/** The dependencies `runValidationFor` actually touches, so central recovery's explicitly-approved
+ *  `validationRetry` can share this without needing `RecoveryWorkflowDependencies`' full shape
+ *  (in particular, `taskInScope`, which central recovery has no equivalent of). */
+export type ValidationRunDependencies = Pick<
+  RecoveryWorkflowDependencies,
+  "home" | "idFactory" | "run" | "store" | "runtimePath" | "clock"
+>;
+
+/**
+ * Runs validation synchronously, in-process (no pane or job launch), and records the durable job and
+ * result immediately, so the caller gets a definite `completed`/`failed` status in the same call:
+ * `reviewExisting`'s review-existing mode and `CentralRecoveryWorkflow.validationRetry`. The automatic
+ * re-entry path launches a real validation-worker pane instead (`WorkerWorkflow.startValidation`, via
+ * central recovery's `revalidate`), since it never needs to block on the result to report it back.
+ */
+export async function runValidationFor(
+  deps: ValidationRunDependencies,
+  task: TaskRecord,
+  runtime: RuntimeTaskState,
+  operationName: "review-existing" | "validation-retry",
+): Promise<{
+  readonly task: TaskRecord;
+  readonly result: ValidationResult;
+  readonly resultPath: string;
+  readonly changed: boolean;
+  readonly failureClass?: "infrastructure" | "validation" | "task-code";
+}> {
+  const head = task.reviewHead ?? runtime.worktree?.baseHead;
+  if (head === undefined) throw new Error("validation has no reviewed HEAD");
+  const manifest = finalAcceptanceContract(task, head);
+  const jobId = `${operationName}-${deps.idFactory()}`;
+  const directory = jobDirectoryFor(deps.home, task.id, task.generation, jobId);
+  const paths = jobPaths(directory);
+  const validationJob: ValidationJob = {
+    schemaVersion: 1,
+    id: jobId,
+    taskId: task.id,
+    generation: task.generation,
+    repoPath: runtime.worktree?.path ?? task.repoPath,
+    head,
+    contract: manifest.contract,
+    policyDigest: manifest.identity.policyDigest,
+    surfaces: manifest.surfaces,
+    commands: manifest.commands,
+    resultPath: paths.resultPath,
+  };
+  await writeJsonAtomically(paths.jobPath, validationJob);
+  const durableJob: DurableJob = {
+    schemaVersion: 1,
+    id: jobId,
+    taskId: task.id,
+    generation: task.generation,
+    role: "validation",
+    kind: "validation",
+    cwd: validationJob.repoPath,
+    jobPath: paths.jobPath,
+    resultPath: paths.resultPath,
+    attempt: 1,
+    phase: "running",
+    launchAttempted: true,
+    createdAt: deps.clock(),
+    head,
+  };
+  await withBoundedLock(deps, async () =>
+    deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) throw new Error(`task ${task.id} is missing`);
+      const state = await readRuntimeState(deps.runtimePath);
+      const runtimeNow = taskRuntime(state, task.id);
+      if (runtimeNow === undefined) throw new Error(`runtime task ${task.id} is missing`);
+      await writeRuntimeState(
+        deps.runtimePath,
+        replaceRuntimeTask(state, task.id, (entry) => ({
+          ...entry,
+          jobs: [...entry.jobs, durableJob],
+        })),
+      );
+      return undefined;
+    }),
+  );
+  let result: ValidationResult;
+  let failureClass: "infrastructure" | "validation" | "task-code" | undefined;
+  try {
+    const evidence = await runValidation({
+      repoPath: validationJob.repoPath,
+      contract: manifest.contract,
+      identity: manifest.identity,
+      commands: manifest.commands,
+      run: deps.run,
+    });
+    const failed = evidence.some((entry) => entry.exitCode !== 0);
+    result = {
       schemaVersion: 1,
       id: jobId,
       taskId: task.id,
       generation: task.generation,
-      repoPath: runtime.worktree?.path ?? task.repoPath,
       head,
       contract: manifest.contract,
       policyDigest: manifest.identity.policyDigest,
-      surfaces: manifest.surfaces,
-      commands: manifest.commands,
-      resultPath: paths.resultPath,
+      status: failed ? "failed" : "completed",
+      evidence,
+      finishedAt: deps.clock(),
+      ...(failed ? { error: "validation command failed" } : {}),
     };
-    await writeJsonAtomically(paths.jobPath, validationJob);
-    const durableJob: DurableJob = {
+    failureClass = failed ? "task-code" : undefined;
+  } catch (error) {
+    failureClass = error instanceof ValidationConfigurationError ? "validation" : "infrastructure";
+    const evidence: readonly ValidationEvidence[] = [
+      {
+        name: "validation-worker",
+        argv: [],
+        exitCode: 78,
+        stdout: "",
+        stderr: describeError(error),
+        head,
+        contract: manifest.contract,
+        origin: "local",
+        policyDigest: manifest.identity.policyDigest,
+      },
+    ];
+    result = {
       schemaVersion: 1,
       id: jobId,
       taskId: task.id,
       generation: task.generation,
-      role: "validation",
-      kind: "validation",
-      cwd: validationJob.repoPath,
-      jobPath: paths.jobPath,
-      resultPath: paths.resultPath,
-      attempt: 1,
-      phase: "running",
-      launchAttempted: true,
-      createdAt: timestamp(this.#deps),
       head,
-    };
-    await withBoundedLock(this.#deps, async () =>
-      this.#deps.store.exclusive(async (store) => {
-        const current = await store.read(task.id);
-        if (current === undefined) throw new Error(`task ${task.id} is missing`);
-        const state = await readRuntimeState(this.#deps.runtimePath);
-        const runtimeNow = taskRuntime(state, task.id);
-        if (runtimeNow === undefined) throw new Error(`runtime task ${task.id} is missing`);
-        await writeRuntimeState(
-          this.#deps.runtimePath,
-          replaceRuntimeTask(state, task.id, (entry) => ({
-            ...entry,
-            jobs: [...entry.jobs, durableJob],
-          })),
-        );
-        return undefined;
-      }),
-    );
-    let result: ValidationResult;
-    let failureClass: "infrastructure" | "validation" | "task-code" | undefined;
-    try {
-      const evidence = await runValidation({
-        repoPath: validationJob.repoPath,
-        contract: manifest.contract,
-        identity: manifest.identity,
-        commands: manifest.commands,
-        run: this.#deps.run,
-      });
-      const failed = evidence.some((entry) => entry.exitCode !== 0);
-      result = {
-        schemaVersion: 1,
-        id: jobId,
-        taskId: task.id,
-        generation: task.generation,
-        head,
-        contract: manifest.contract,
-        policyDigest: manifest.identity.policyDigest,
-        status: failed ? "failed" : "completed",
-        evidence,
-        finishedAt: timestamp(this.#deps),
-        ...(failed ? { error: "validation command failed" } : {}),
-      };
-      failureClass = failed ? "task-code" : undefined;
-    } catch (error) {
-      failureClass =
-        error instanceof ValidationConfigurationError ? "validation" : "infrastructure";
-      const evidence: readonly ValidationEvidence[] = [
-        {
-          name: "validation-worker",
-          argv: [],
-          exitCode: 78,
-          stdout: "",
-          stderr: describeError(error),
-          head,
-          contract: manifest.contract,
-          origin: "local",
-          policyDigest: manifest.identity.policyDigest,
-        },
-      ];
-      result = {
-        schemaVersion: 1,
-        id: jobId,
-        taskId: task.id,
-        generation: task.generation,
-        head,
-        contract: manifest.contract,
-        policyDigest: manifest.identity.policyDigest,
-        status: "failed",
-        evidence,
-        finishedAt: timestamp(this.#deps),
-        error: describeError(error),
-      };
-    }
-    await writeJsonAtomically(paths.resultPath, result);
-    const saved = await withBoundedLock(this.#deps, async () =>
-      this.#deps.store.exclusive(async (store) => {
-        const current = await store.read(task.id);
-        if (current === undefined) throw new Error(`task ${task.id} is missing`);
-        const state = await readRuntimeState(this.#deps.runtimePath);
-        const runtimeNow = taskRuntime(state, task.id);
-        if (runtimeNow === undefined) throw new Error(`runtime task ${task.id} is missing`);
-        const event: TaskEvent =
-          result.status === "completed"
-            ? {
-                type: "validation-succeeded",
-                head,
-                generation: current.generation,
-                contract: result.contract,
-                policyDigest: result.policyDigest,
-                evidence: result.evidence,
-              }
-            : {
-                type: "validation-failed",
-                head,
-                generation: current.generation,
-                contract: result.contract,
-                policyDigest: result.policyDigest,
-                evidence: result.evidence,
-              };
-        const transitioned =
-          current.stage === "validating"
-            ? transitionTask(current, event, {
-                now: timestamp(this.#deps),
-                notificationId: this.#deps.idFactory(),
-              })
-            : current;
-        const updatedRuntime = replaceRuntimeTask(state, task.id, (entry) => ({
-          ...entry,
-          jobs: entry.jobs.map((job) =>
-            job.id !== jobId
-              ? job
-              : {
-                  ...job,
-                  phase: result.status === "completed" ? "consumed" : "failed",
-                  consumedAt: timestamp(this.#deps),
-                  ...(result.error === undefined ? {} : { error: result.error }),
-                },
-          ),
-        }));
-        await writeRuntimeState(this.#deps.runtimePath, updatedRuntime);
-        const updatedTask =
-          transitioned === current
-            ? current
-            : await store.update(current.id, current.revision, () => transitioned);
-        return { task: updatedTask };
-      }),
-    );
-    return {
-      task: saved.task,
-      result,
-      resultPath: paths.resultPath,
-      changed: true,
-      ...(failureClass === undefined ? {} : { failureClass }),
+      contract: manifest.contract,
+      policyDigest: manifest.identity.policyDigest,
+      status: "failed",
+      evidence,
+      finishedAt: deps.clock(),
+      error: describeError(error),
     };
   }
+  await writeJsonAtomically(paths.resultPath, result);
+  const saved = await withBoundedLock(deps, async () =>
+    deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) throw new Error(`task ${task.id} is missing`);
+      const state = await readRuntimeState(deps.runtimePath);
+      const runtimeNow = taskRuntime(state, task.id);
+      if (runtimeNow === undefined) throw new Error(`runtime task ${task.id} is missing`);
+      const event: TaskEvent =
+        result.status === "completed"
+          ? {
+              type: "validation-succeeded",
+              head,
+              generation: current.generation,
+              contract: result.contract,
+              policyDigest: result.policyDigest,
+              evidence: result.evidence,
+            }
+          : {
+              type: "validation-failed",
+              head,
+              generation: current.generation,
+              contract: result.contract,
+              policyDigest: result.policyDigest,
+              evidence: result.evidence,
+            };
+      const transitioned =
+        current.stage === "validating"
+          ? transitionTask(current, event, {
+              now: deps.clock(),
+              notificationId: deps.idFactory(),
+            })
+          : current;
+      const updatedRuntime = replaceRuntimeTask(state, task.id, (entry) => ({
+        ...entry,
+        jobs: entry.jobs.map((job) =>
+          job.id !== jobId
+            ? job
+            : {
+                ...job,
+                phase: result.status === "completed" ? "consumed" : "failed",
+                consumedAt: deps.clock(),
+                ...(result.error === undefined ? {} : { error: result.error }),
+              },
+        ),
+      }));
+      await writeRuntimeState(deps.runtimePath, updatedRuntime);
+      const updatedTask =
+        transitioned === current
+          ? current
+          : await store.update(current.id, current.revision, () => transitioned);
+      return { task: updatedTask };
+    }),
+  );
+  return {
+    task: saved.task,
+    result,
+    resultPath: paths.resultPath,
+    changed: true,
+    ...(failureClass === undefined ? {} : { failureClass }),
+  };
 }

@@ -743,7 +743,6 @@ The repository-policy keys, all optional, are:
 | `maxWorkers` | Positive integer concurrency limit. |
 | `maxFixRounds` | Positive integer review-fix limit. |
 | `reviewLevels` | Optional `{ "deepScrutiny", "jevAssistance", "sourceTransmission" }`; the two booleans and `sourceTransmission` default to `false` and `jevAssistance` defaults to `"off"` (the only other value is `"shadow"`). See [Risk-based review levels](#risk-based-review-levels); any move past `shadow` requires the documented evaluation first. A stored or configured `reducedRouting` key is a legacy field: it decodes without error but is silently ignored. |
-| `requestBudget` | Optional `{ "capMicros", "operationEstimateMicros" }`, both integer USD micro-dollars and both defaulting to `"unset"`. An unset `capMicros` leaves the repository not spend-governed. See [Standing request budgets and spending decisions](#standing-request-budgets-and-spending-decisions). |
 
 Custom approved policies use the same envelope and preserve every unrelated valid key and value.
 `instructionFiles` and all root guidance reads remain relative to the target repository; the
@@ -915,8 +914,8 @@ Every durable request also has one accounting ledger: append-only facts in the
 `request_usage_events` table of the authoritative `<home>/state.sqlite`, joined to the request
 identity the brief owns. The ledger is the single owner of usage, cost, quota, and timing records
 for a request. It records facts and uncertainty only: nothing in it authorizes, pauses, retries, or
-blocks work, and a standing budget or in-flight admission control is a separate consumer that reads
-these records and enforces its own policy.
+blocks work; economical routing's usage-safety check is a downstream reader that reads these
+records on its own.
 
 ```sh
 # through the coordinator's tandem tool
@@ -1018,101 +1017,6 @@ Routine request progress is passive: it is readable on demand and records no not
 decision the user must make and true request completion interrupt the main conversation, each one
 recorded once on the durable record and acknowledged through the request path.
 
-### Standing request budgets and spending decisions
-
-A request spends under a standing cap when one is configured. The cap is configured, never assumed:
-`policy.requestBudget` holds `capMicros` and `operationEstimateMicros`, both in integer USD
-micro-dollars, and both default to `"unset"`. An unset `capMicros` leaves a request **not
-spend-governed**: it is admitted without a pause, a question, a reservation, or any budget state at
-all, exactly as it ran before budgets existed. Tandem cannot measure spending at the provider
-boundary, so a cap counts conservative estimates of operations rather than money, and refusing work
-nobody capped would cost every repository a setup step while protecting nothing. A repository turns
-the whole feature on by naming `capMicros`, and everything below applies from that point on.
-
-Removing a configured cap leaves the request ungoverned again. The cap in force is resolved before
-any recorded decision is read, so a decision raised under a cap the repository has since removed is
-released along with the rest of that request's budget rather than stranding its work.
-
-Precedence for the cap in force is the approved request override, then the pinned policy, which is
-already the repository override layered over the standing default. A lower repository amount
-tightens spending and stays visible in the budget readout.
-
-Every spend-bearing operation is admitted through one check, in the same atomic runtime write that
-records its durable operation and reservation: scout, implementation, fix, validation, review, and
-presentation all go through it. The check adds observed charges from the
-accounting ledger to every outstanding estimated reservation and to the next step's conservative
-estimate, and compares that against the cap. A second concurrent admission therefore sees the first
-one's reservation and is refused when the combined exposure cannot fit.
-
-```sh
-# read the standing budget and any pending decision (passive; starts no work)
-{"request":{"action":"budget-show","requestId":"req-..."}}
-# answer one pending decision by raising the cap (human-confirmed)
-{"request":{"action":"budget-approve","requestId":"req-...","decisionId":"spend-...","capMicros":25000000}}
-```
-
-When the next step cannot fit under a configured cap, or when no conservative estimate is
-configured, the request enters a durable budget pause recorded in `requestBudgets` alongside the
-durable operation, reservation, and stop request. The pause is request-wide: progress on any other
-task under the same request is refused by the same check, so independent work cannot walk past it.
-Running work is never killed because a cap was reached; it finishes or unwinds through the existing
-pause and reconciliation paths, and its reservation is settled afterwards. Budget pressure never
-switches a model tier, drops a check, narrows review, or replans.
-
-| Pause reason | What it means |
-| --- | --- |
-| `estimate-unavailable` | No conservative per-operation estimate is configured, so the next step's exposure is unknown. |
-| `exposure-unaccounted` | Work already done carries neither a published price nor a reserved estimate, so what the request has cost is unknown. |
-| `cap-would-be-exceeded` | Observed charges plus outstanding estimates plus the next step exceed the cap. |
-
-#### A zero charge total is not headroom
-
-Tandem's provider surface reports almost nothing. Child agents run interactive OMP, which publishes
-no tokens, price, or allowance, and coordinator-side prompt routing carries no request identity to
-bind a sample to. In practice `charges.amountMicros` is `0` for most requests while
-`charges.unavailableSamples` and `tokens.unavailableSamples` are not, so the charged total is a
-floor on what a request cost rather than a measurement of it, and admission never reads it as proof
-of remaining budget. Today's fully observed dimension is time: `timing.elapsedMs`, `activeMs`, and
-`waitingMs` are measured end to end.
-
-Admission therefore tracks what is unaccounted for, not just what is charged:
-
-- A settled operation the ledger priced leaves its reservation, because its actual charge is now in
-  the committed total.
-- A settled operation with no published price keeps its conservative estimate standing in for the
-  amount nobody published, so it keeps consuming the cap instead of reading as free.
-- An unpriced sample that no reservation stands for is **unaccounted**: an operation that never went
-  through admission, or a provider sample carrying no operation identity, such as review-level
-  assistance. Nothing in the budget represents its cost, so the request stops on an
-  `exposure-unaccounted` decision rather than spending further against a total it knows is wrong.
-
-Answering that decision accepts exactly the unmeasured work the approver was shown: the approval
-records `acknowledgedUnaccountedSamples`, and unmeasured work beyond that count is unknown again and
-asks again. Tandem never closes the gap by inventing a charge, by pricing an unpriced sample at
-zero, or by converting subscription quota into cash.
-
-The decision identity is derived from the request, pinned policy digest, agreement revision, cap,
-and reason rather than minted, so the question is recorded exactly once and every later refusal
-under it is silent. A restart re-derives the same pending decision; it cannot manufacture an
-authorization, and an unanswered question is still a pause.
-
-A cap increase is an explicit human-confirmed decision that must name the exact pending
-`decisionId`. It records the old and new cap, the pinned policy digest, and the agreement revision
-it was given under. It stops speaking when any of those moves: a changed pinned policy, a revised
-agreement, or a repository cap change makes the approval superseded, and the cap falls back to the
-pinned policy amount rather than to no cap at all. Authorizing an amount lower than the cap that
-stopped the request is refused rather than applied.
-
-Reservations are retained through uncertainty and released only on a positive outcome. Each
-reservation is keyed by the operation it backs, so re-admitting or replaying it counts once. After a
-restart, reconciliation settles them against the durable operations: an operation the ledger has
-priced leaves the record because its actual charge is now committed, an operation that ended without
-any provider-reported charge keeps its conservative estimate standing in for the amount nobody
-published, and an operation whose end is not proven keeps its reservation exactly as it was. The
-readout reports committed charges and reserved estimates separately, alongside the receipt's own
-unavailable-sample counts, the unaccounted count, and included-quota units, so an unmeasured amount
-is never shown as zero or as cash.
-
 ### Economical routing and premium-tier approval
 
 Which exact model an attempt invokes is resolved at two boundaries and nowhere else: before a job is
@@ -1122,8 +1026,8 @@ optimization loop, no mid-turn model switching, and no online learning from outc
 The decision is recorded on the durable operation that admits the attempt, as an execution
 transition carrying the request, task, job, operation, generation, and attempt identity, the exact
 selector and thinking level, the tier evidence and where it came from, the enabled providers, and
-the cap, per-operation estimate, and worker limit it was taken under. Job construction and the
-execution gate both read the attempt's model through that one record, so an attempt whose model is
+the worker concurrency limit it was taken under. Job construction and the execution gate both read
+the attempt's model through that one record, so an attempt whose model is
 not the pinned role assignment runs only when a transition authorizes exactly it. An audit note
 describing a model change is not a transition and admits nothing. A transition is fenced: it speaks
 only for the operation, job, generation, input HEAD, and pinned policy digest it names, and the gate
@@ -1164,7 +1068,6 @@ the generation, or the input HEAD moves under it, and routing re-resolves agains
 
 | Routing pause reason | What it means |
 | --- | --- |
-| `spending-decision-pending` | The request is stopped on a spending decision, which takes precedence over any routing choice. |
 | `prior-outcome-uncertain` | The previous attempt's outcome could not be proven, so it stays quarantined rather than being replaced. |
 | `pinned-model-absent-from-catalogue` | The catalogue does not list the pinned model, so nothing confirms it can still run. |
 | `pinned-model-ambiguous-in-catalogue` | The pinned selector matches more than one entry, so which model would run is unknown. |
@@ -1173,10 +1076,8 @@ the generation, or the input HEAD moves under it, and routing re-resolves agains
 | `tier-evidence-indeterminate` | Tier evidence for the available replacements is missing or contradictory. |
 | `usage-evidence-unmeasured` | The request's own usage is not fully observed, so no replacement can be proven to draw no more. |
 
-The spending checkpoint runs first and wins: a request-wide budget pause, whatever its reason,
-a planned-step cap, or the worker concurrency limit refuses the reservation before routing is
-resolved at all, and no routing choice can widen any of them. An `exposure-unaccounted` pause is
-answered by accepting that unmeasured work through `budget-approve`, never by rerouting. A catalogue that cannot be read, or that published no models at all,
+The worker concurrency limit refuses the reservation before routing is resolved at all, and no
+routing choice can widen it. A catalogue that cannot be read, or that published no models at all,
 supplies no evidence either way: the pinned model continues and the transition records that no
 comparison was made, rather than treating silence as a contradiction or as headroom.
 
@@ -1191,8 +1092,9 @@ Only scout records may carry one; a continuation on an implementation record is 
 | --- | --- |
 | `schemaVersion` | Always `1`; any other value is refused rather than repaired. |
 | `disposition` | `report-only`, `ask-intent`, or `implementation-interview`. |
-| `selectedBy` | `explicit` (supplied with the task request), `deterministic` (rule table), or `jev`. |
-| `classifierVersion` | Required for `jev`, optional for `deterministic`, refused for `explicit`. |
+| `selectedBy` | `explicit` (supplied with the task request), `deterministic` (rule table), `jev`, or `fallback` (an unusable classifier outcome). |
+| `classifierVersion` | Required for `jev`, optional for `deterministic`, refused for `explicit` and `fallback`. |
+| `fallbackReason` | Required for `fallback` (e.g. `jev-low-confidence`, `jev-not-configured`), refused otherwise. |
 
 Task creation accepts an explicitly supplied disposition; a scout created without one is classified
 before the record is written. Scout records written before the field
@@ -1246,10 +1148,12 @@ disposition for a scout created without an explicit one:
    scout report, credentials, or transcript. The model and the question/schema version are pinned
    and recorded together in `classifierVersion`.
 3. A missing `TYPESAFE_API_KEY`, a timeout, a provider outage, a malformed answer, or a confidence
-   below the classifier threshold records the conservative `ask-intent` with `deterministic`
-   provenance. Research is never blocked or delayed past the bounded `TANDEM_JEV_TIMEOUT_MS`
-   request timeout, and Jev never creates tasks, approves scope, selects implementation details, or
-   relaxes any safety policy.
+   below the classifier threshold now defaults to `implementation-interview` (unclear intent starts
+   the brief interview rather than an extra ask-intent round-trip), recorded with `selectedBy:
+   "fallback"` and the honest `fallbackReason` (e.g. `jev-low-confidence`), never as a rule-table
+   `deterministic` pick. Research is never blocked or delayed past the bounded
+   `TANDEM_JEV_TIMEOUT_MS` request timeout, and Jev never creates tasks, approves scope, selects
+   implementation details, or relaxes any safety policy.
 
 ### Review and validation
 
@@ -1982,8 +1886,8 @@ from its current stage. It is always the same three moves:
    | `awaiting-fixes` | The `implementing` relaunch (see below) | Yes |
 
    Relaunch (`WorkerWorkflow.relaunchWorker`) never mutates the dead job or its result; it admits a
-   brand-new operation through the same reservation and budget gate every launch uses, so a fresh
-   receipt, instruction revision, and prompt are built exactly as for any other launch. The worker is
+   brand-new operation through the same reservation gate every launch uses, so a fresh receipt,
+   instruction revision, and prompt are built exactly as for any other launch. The worker is
    told a prior attempt may have left partial edits and to inspect `git status`/`git diff` before
    continuing.
 

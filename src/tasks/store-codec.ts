@@ -27,7 +27,6 @@ import {
   type PullRequestMetadata,
   REVIEW_LEVEL_ORDER,
   type RepoPolicy,
-  type RequestBudgetPolicy,
   type ResearchContinuation,
   type ResearchHandoff,
   type ResolvedGuidance,
@@ -303,6 +302,9 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
   if (!isRecord(value)) {
     failState(source, "policy config must be an object");
   }
+  // ponytail: a policy snapshot pinned before standing request budgets were removed may still
+  // carry "requestBudget"; the key stays accepted here so that snapshot still decodes, but it is
+  // never read into the result below.
   assertExactKeys(
     value,
     [
@@ -376,7 +378,6 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
     maxWorkers: requiredInteger(value, "maxWorkers", source, 1),
     maxFixRounds: requiredInteger(value, "maxFixRounds", source, 0),
     reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`),
-    requestBudget: parseRequestBudgetPolicy(value, `${source}.requestBudget`),
   };
 }
 
@@ -401,35 +402,6 @@ function parseSetupCommands(record: UnknownRecord, source: string): readonly Set
       timeoutMs: requiredInteger(entry, "timeoutMs", entrySource, 1),
     };
   });
-}
-
-/**
- * Reads the standing spending amounts from a pinned policy. A record written before budgets
- * existed names no amount, and it loads as unset, which pauses that request for an explicit
- * decision instead of granting it the cap some later repository configuration happens to hold.
- */
-function parseRequestBudgetPolicy(record: UnknownRecord, source: string): RequestBudgetPolicy {
-  if (!Object.hasOwn(record, "requestBudget")) {
-    return { capMicros: "unset", operationEstimateMicros: "unset" };
-  }
-  const value = requiredValue(record, "requestBudget", source);
-  if (!isRecord(value)) {
-    failState(source, "requestBudget must be an object");
-  }
-  assertExactKeys(value, ["capMicros", "operationEstimateMicros"], source);
-  return {
-    capMicros: parseMicroDollars(value, "capMicros", source),
-    operationEstimateMicros: parseMicroDollars(value, "operationEstimateMicros", source),
-  };
-}
-
-function parseMicroDollars(record: UnknownRecord, field: string, source: string): number | "unset" {
-  const value = requiredValue(record, field, source);
-  if (value === "unset") return "unset";
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    failState(source, `${field} must be "unset" or a non-negative integer of USD micro-dollars`);
-  }
-  return value as number;
 }
 
 /**
