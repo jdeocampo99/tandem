@@ -33,12 +33,13 @@ import {
   modelTierEvidence,
 } from "../config/model-tier.ts";
 import type { IsoTimestamp, ModelSpec } from "../contracts.ts";
-import type {
-  DurableExecutionRouting,
-  DurableExecutionRoutingPause,
-  ExecutionRoutingEvidence,
-  ExecutionRoutingLimits,
-  ExecutionRoutingPauseReason,
+import {
+  type DurableExecutionRouting,
+  type DurableExecutionRoutingPause,
+  EXECUTION_ROUTING_PAUSE_REASONS,
+  type ExecutionRoutingEvidence,
+  type ExecutionRoutingLimits,
+  type ExecutionRoutingPauseReason,
 } from "../runtime/schema.ts";
 import type { RequestUsageExposure } from "../runtime/usage-receipt.ts";
 import { formatDecisionQuestion, taskName } from "../tasks/question.ts";
@@ -124,7 +125,11 @@ export type ExecutionRoutingRequest = Readonly<{
 
 export type ExecutionRoutingDecision =
   | Readonly<{ readonly outcome: "authorized"; readonly routing: DurableExecutionRouting }>
-  | Readonly<{ readonly outcome: "paused"; readonly pause: DurableExecutionRoutingPause }>;
+  | Readonly<{ readonly outcome: "paused"; readonly pause: RaisedExecutionRoutingPause }>;
+
+/** A pause routing raises now, as opposed to a saved one with a reason it no longer raises. */
+export type RaisedExecutionRoutingPause = DurableExecutionRoutingPause &
+  Readonly<{ readonly reason: ExecutionRoutingPauseReason }>;
 
 /** The operation identity a recorded transition has to still speak for. */
 export type ExecutionRoutingFence = Readonly<{
@@ -257,13 +262,13 @@ export function executionRoutingFence(
 /**
  * Whether a recorded question still speaks for the identity now asking to run. It stops speaking
  * when the pinned policy, the generation, or the input HEAD moves, because none of those is the
- * situation the question was raised about.
+ * situation the question was raised about. A saved reason routing no longer raises never speaks.
  */
 export function executionRoutingPauseStands(
   pause: DurableExecutionRoutingPause | undefined,
   identity: ExecutionRoutingIdentity,
-): boolean {
-  if (pause === undefined) return false;
+): pause is RaisedExecutionRoutingPause {
+  if (pause === undefined || !isRaisedReason(pause.reason)) return false;
   return (
     pause.role === identity.role &&
     pause.generation === identity.generation &&
@@ -278,18 +283,18 @@ export function executionRoutingPauseStands(
  * needs those reads them off `pause` directly. `taskObjective`, when given, names the task.
  */
 export function describeExecutionRoutingDecision(
-  pause: DurableExecutionRoutingPause,
+  pause: RaisedExecutionRoutingPause,
   taskObjective?: string,
 ): string {
   const subject = taskObjective === undefined ? "this task" : taskName(taskObjective);
-  const reason =
-    pause.reason === "premium-tier-requires-approval" && pause.candidateSelector !== undefined
-      ? `The only alternative, ${pause.candidateSelector}, costs more.`
-      : ROUTING_PAUSE_EXPLANATIONS[pause.reason];
   return formatDecisionQuestion({
     ask: `Keep ${subject} on ${pause.pinnedSelector}?`,
-    note: reason,
+    note: ROUTING_PAUSE_EXPLANATIONS[pause.reason],
   });
+}
+
+function isRaisedReason(reason: string): reason is ExecutionRoutingPauseReason {
+  return (EXECUTION_ROUTING_PAUSE_REASONS as readonly string[]).includes(reason);
 }
 
 const DECISION_ID_PREFIX = "routing-";
@@ -299,8 +304,6 @@ const ROUTING_PAUSE_EXPLANATIONS: Readonly<Record<ExecutionRoutingPauseReason, s
   "pinned-model-absent-from-catalogue": "That model isn't listed right now.",
   "pinned-model-ambiguous-in-catalogue": "That model name matches more than one model.",
   "pinned-model-thinking-level-unsupported": "It no longer supports this thinking level.",
-  "premium-tier-requires-approval": "The only alternative costs more.",
-  "tier-evidence-indeterminate": "I can't get clear pricing for the alternatives.",
 };
 
 type ClassifiedCandidate = Readonly<{
@@ -309,8 +312,6 @@ type ClassifiedCandidate = Readonly<{
 }>;
 
 type RoutingQuestionDetail = Readonly<{
-  readonly candidate?: ModelTierEvidence;
-  readonly premiumAxis?: DurableExecutionRoutingPause["premiumAxis"];
   readonly evidenceGaps?: readonly ModelTierEvidenceGap[];
   readonly enabledProviders?: readonly string[];
 }>;
@@ -441,28 +442,11 @@ function compareCandidatePreference(a: ModelTierEvidence, b: ModelTierEvidence):
   return a.selector < b.selector ? -1 : a.selector > b.selector ? 1 : 0;
 }
 
-function cheapestPremiumCandidate(
-  classified: readonly ClassifiedCandidate[],
-): ClassifiedCandidate | undefined {
-  const premium = classified.filter((entry) => entry.comparison.status === "premium");
-  return [...premium].sort((a, b) => compareCandidatePreference(a.evidence, b.evidence))[0];
-}
-
-function indeterminateGaps(
-  classified: readonly ClassifiedCandidate[],
-): readonly ModelTierEvidenceGap[] {
-  const gaps = new Set<ModelTierEvidenceGap>();
-  for (const entry of classified) {
-    if (entry.comparison.status !== "indeterminate") continue;
-    for (const gap of entry.comparison.gaps) gaps.add(gap);
-  }
-  return [...gaps];
-}
-
 /**
- * The bounded replacement attempt. A comparable candidate may be taken automatically only when the
- * model that just failed is the pinned one, because returning to the pinned assignment after a
- * reassignment failed is not a routing move that needs evidence.
+ * The bounded replacement attempt. Only a comparable move is taken automatically, and only when the
+ * model that just failed is the pinned one. Anything that cannot justify a switch (unobserved usage,
+ * an unlisted pinned model, a costlier or unclear alternative) keeps the pinned model: a running
+ * task's policy is fixed, so a question here could only ever be answered "keep it".
  */
 function resolveReplacementAttempt(
   request: ExecutionRoutingRequest,
@@ -470,47 +454,28 @@ function resolveReplacementAttempt(
   catalogue: Extract<ModelCatalogueSnapshot, { readonly status: "read" }>,
   pinned: ModelTierEvidenceLookup,
 ): ExecutionRoutingDecision {
-  if (pinned.status === "unknown") {
-    return routingQuestion(request, "tier-evidence-indeterminate", {
-      evidenceGaps: [`incumbent-${pinned.gap}` as const],
-      enabledProviders: catalogue.enabledProviders,
-    });
+  const keepPinned = continueWithPinnedModel(request, readEvidence(catalogue, request.usage));
+  if (
+    pinned.status === "unknown" ||
+    prior.selector !== request.pinned.model ||
+    !usageIsFullyObserved(request.usage)
+  ) {
+    return keepPinned;
   }
-  if (prior.selector !== request.pinned.model) {
-    return continueWithPinnedModel(request, readEvidence(catalogue, request.usage));
-  }
-  // Unobserved usage can't justify any switch, so the pinned model continues rather than asking.
-  if (!usageIsFullyObserved(request.usage)) {
-    return continueWithPinnedModel(request, readEvidence(catalogue, request.usage));
-  }
-  const candidates = eligibleCandidates(catalogue, request.pinned, prior.selector);
-  const classified = candidates.map(
-    (evidence): ClassifiedCandidate => ({
-      evidence,
-      comparison: compareModelTier(pinned.evidence, evidence),
-    }),
-  );
-  const comparable = classified.filter((entry) => entry.comparison.status === "comparable");
+  const comparable = eligibleCandidates(catalogue, request.pinned, prior.selector)
+    .map(
+      (evidence): ClassifiedCandidate => ({
+        evidence,
+        comparison: compareModelTier(pinned.evidence, evidence),
+      }),
+    )
+    .filter((entry) => entry.comparison.status === "comparable");
   const chosen = [...comparable].sort((a, b) =>
     compareCandidatePreference(a.evidence, b.evidence),
   )[0];
-  if (chosen !== undefined) return reassignToComparableModel(request, catalogue, prior, chosen);
-  const premium = cheapestPremiumCandidate(classified);
-  if (premium !== undefined) {
-    return routingQuestion(request, "premium-tier-requires-approval", {
-      candidate: premium.evidence,
-      ...(premium.comparison.status === "premium" ? { premiumAxis: premium.comparison.axis } : {}),
-      enabledProviders: catalogue.enabledProviders,
-    });
-  }
-  const gaps = indeterminateGaps(classified);
-  if (gaps.length > 0) {
-    return routingQuestion(request, "tier-evidence-indeterminate", {
-      evidenceGaps: gaps,
-      enabledProviders: catalogue.enabledProviders,
-    });
-  }
-  return continueWithPinnedModel(request, readEvidence(catalogue, request.usage));
+  return chosen === undefined
+    ? keepPinned
+    : reassignToComparableModel(request, catalogue, prior, chosen);
 }
 
 function continueWithPinnedModel(
@@ -582,12 +547,11 @@ function routingQuestion(
   detail: RoutingQuestionDetail,
 ): ExecutionRoutingDecision {
   const identity = request.identity;
-  const candidate = detail.candidate;
   return {
     outcome: "paused",
     pause: {
       schemaVersion: 1,
-      decisionId: routingDecisionId(request, reason, candidate?.selector ?? request.pinned.model),
+      decisionId: routingDecisionId(request, reason, request.pinned.model),
       reason,
       taskId: identity.taskId,
       jobId: identity.jobId,
@@ -599,10 +563,6 @@ function routingQuestion(
       inputHead: identity.inputHead,
       pinnedSelector: request.pinned.model,
       pinnedThinking: request.pinned.thinking,
-      ...(candidate === undefined
-        ? {}
-        : { candidateSelector: candidate.selector, candidateProvider: candidate.provider }),
-      ...(detail.premiumAxis === undefined ? {} : { premiumAxis: detail.premiumAxis }),
       evidenceGaps: detail.evidenceGaps ?? [],
       enabledProviders: detail.enabledProviders ?? [],
       ...observedUsage(request.usage),

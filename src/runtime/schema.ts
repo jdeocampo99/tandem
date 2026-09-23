@@ -2,10 +2,8 @@ import { isAbsolute, resolve } from "node:path";
 import type { GitCheckpoint } from "../adapters/git.ts";
 import {
   MODEL_TIER_EVIDENCE_GAPS,
-  MODEL_TIER_PREMIUM_AXES,
   type ModelTierAxisRelation,
   type ModelTierEvidenceGap,
-  type ModelTierPremiumAxis,
 } from "../config/model-tier.ts";
 import type {
   Endpoint,
@@ -141,11 +139,20 @@ export const EXECUTION_ROUTING_PAUSE_REASONS = [
   "pinned-model-absent-from-catalogue",
   "pinned-model-ambiguous-in-catalogue",
   "pinned-model-thinking-level-unsupported",
-  "premium-tier-requires-approval",
-  "tier-evidence-indeterminate",
 ] as const;
 
 export type ExecutionRoutingPauseReason = (typeof EXECUTION_ROUTING_PAUSE_REASONS)[number];
+
+/**
+ * Reasons older versions saved that routing no longer raises: each could only be answered "keep
+ * the pinned model", so routing now does that. Still decoded so saved state loads; a saved pause
+ * with one of these never stands (see `executionRoutingPauseStands`).
+ */
+export const RETIRED_ROUTING_PAUSE_REASONS = [
+  "premium-tier-requires-approval",
+  "tier-evidence-indeterminate",
+  "usage-evidence-unmeasured",
+] as const;
 
 /**
  * The durable question one task's routing is stopped on. It is written once and read by every
@@ -155,7 +162,7 @@ export type ExecutionRoutingPauseReason = (typeof EXECUTION_ROUTING_PAUSE_REASON
 export type DurableExecutionRoutingPause = Readonly<{
   readonly schemaVersion: 1;
   readonly decisionId: string;
-  readonly reason: ExecutionRoutingPauseReason;
+  readonly reason: ExecutionRoutingPauseReason | (typeof RETIRED_ROUTING_PAUSE_REASONS)[number];
   readonly taskId: string;
   readonly jobId: string;
   readonly operationId: string;
@@ -166,10 +173,6 @@ export type DurableExecutionRoutingPause = Readonly<{
   readonly inputHead: string;
   readonly pinnedSelector: string;
   readonly pinnedThinking: ThinkingLevel;
-  /** The candidate the question is about, when the boundary identified one. */
-  readonly candidateSelector?: string;
-  readonly candidateProvider?: string;
-  readonly premiumAxis?: ModelTierPremiumAxis;
   readonly evidenceGaps: readonly ModelTierEvidenceGap[];
   readonly enabledProviders: readonly string[];
   readonly usageSource: ExecutionRoutingUsageSource;
@@ -518,37 +521,19 @@ function parseExecutionRouting(value: unknown, field: string): DurableExecutionR
   };
 }
 
-/**
- * A routing pause only caches a decision routing re-derives at the next admission, so one whose
- * reason routing no longer raises is dropped rather than left refusing work.
- */
-function parseRoutingPause(
-  value: unknown,
-  field: string,
-): DurableExecutionRoutingPause | undefined {
+function parseRoutingPause(value: unknown, field: string): DurableExecutionRoutingPause {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  if (!(EXECUTION_ROUTING_PAUSE_REASONS as readonly unknown[]).includes(value.reason)) {
-    return undefined;
-  }
   if (!Array.isArray(value.evidenceGaps)) {
     throw new TypeError(`${field}.evidenceGaps must be an array`);
   }
-  const candidateSelector =
-    value.candidateSelector === undefined
-      ? undefined
-      : singleLine(value.candidateSelector, `${field}.candidateSelector`);
-  const candidateProvider =
-    value.candidateProvider === undefined
-      ? undefined
-      : singleLine(value.candidateProvider, `${field}.candidateProvider`);
-  const premiumAxis =
-    value.premiumAxis === undefined
-      ? undefined
-      : enumValue(value.premiumAxis, MODEL_TIER_PREMIUM_AXES, `${field}.premiumAxis`);
   return {
     schemaVersion: 1,
     decisionId: singleLine(value.decisionId, `${field}.decisionId`),
-    reason: enumValue(value.reason, EXECUTION_ROUTING_PAUSE_REASONS, `${field}.reason`),
+    reason: enumValue(
+      value.reason,
+      [...EXECUTION_ROUTING_PAUSE_REASONS, ...RETIRED_ROUTING_PAUSE_REASONS],
+      `${field}.reason`,
+    ),
     taskId: singleLine(value.taskId, `${field}.taskId`),
     jobId: singleLine(value.jobId, `${field}.jobId`),
     operationId: singleLine(value.operationId, `${field}.operationId`),
@@ -559,9 +544,6 @@ function parseRoutingPause(
     inputHead: singleLine(value.inputHead, `${field}.inputHead`),
     pinnedSelector: singleLine(value.pinnedSelector, `${field}.pinnedSelector`),
     pinnedThinking: enumValue(value.pinnedThinking, THINKING_LEVELS, `${field}.pinnedThinking`),
-    ...(candidateSelector === undefined ? {} : { candidateSelector }),
-    ...(candidateProvider === undefined ? {} : { candidateProvider }),
-    ...(premiumAxis === undefined ? {} : { premiumAxis }),
     evidenceGaps: value.evidenceGaps.map(
       (entry, index): ModelTierEvidenceGap =>
         enumValue(entry, MODEL_TIER_EVIDENCE_GAPS, `${field}.evidenceGaps[${index}]`),
