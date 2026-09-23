@@ -67,6 +67,7 @@ import {
   RESTART_QUESTION_ID_PREFIX,
   reportBlock,
   VALIDATION_RETRY_QUESTION_ID_PREFIX,
+  type ValidationRetryResult,
 } from "../recovery/central.ts";
 import {
   type RecoveryConversationOutcome,
@@ -81,7 +82,6 @@ import {
   type RecoveryPlan,
   RecoveryWorkflow,
   type ReviewExistingResult,
-  type ValidationRetryResult,
 } from "../recovery/workflow.ts";
 import { requestApprovalState } from "../requests/brief.ts";
 import {
@@ -818,7 +818,7 @@ class TandemController {
       recoveryDecide: (id) => this.#recoveryConversation.decide(id),
       reconcile: (id, input) => this.#recovery.reconcile(id, input.approved),
       reviewExisting: (id, input) => this.#recovery.reviewExisting(id, input.head, input.approved),
-      validationRetry: (id, input) => this.#recovery.validationRetry(id, input.approved),
+      validationRetry: (id, input) => this.#recoveryCentral.validationRetry(id, input.approved),
       repairEvidence: (id, input) => this.#recovery.repairEvidence(id, input.approved),
       deliveryPreflight: (id, input) =>
         this.#recovery.deliveryPreflight(id, input.repository, input.base),
