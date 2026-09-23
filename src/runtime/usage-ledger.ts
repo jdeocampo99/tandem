@@ -3,8 +3,8 @@
  *
  * This is the one owner of usage, cost, quota, and timing records for a request, and the only
  * place they are written. It records what happened and how certain it is; it never authorizes,
- * pauses, retries, or blocks work. A downstream budget or admission consumer reads {@link
- * RequestUsageLedger.read} or {@link RequestUsageLedger.receipt} and enforces its own policy.
+ * pauses, retries, or blocks work. A downstream reader such as economical routing's usage-safety
+ * check reads {@link RequestUsageLedger.read} or {@link RequestUsageLedger.receipt} on its own.
  */
 
 import { resolve } from "node:path";

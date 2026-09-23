@@ -100,7 +100,6 @@ const policy: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: "unset", operationEstimateMicros: "unset" },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -5237,13 +5236,11 @@ async function requestFixture(
     idFactory,
   };
   const service = createTandemService(serviceOptions);
-  // Members only dispatch under a configured standing cap, so the request budget is pinned here
-  // rather than left unset; scheduling, not spending, is what these tests exercise.
   const proposal = await service.onboard(repoPath, false);
   await mkdir(dirname(proposal.configPath), { recursive: true });
   await writeFile(
     proposal.configPath,
-    `repoPath = ${JSON.stringify(proposal.repoPath)}\n\n[requestBudget]\ncapMicros = 100000000\noperationEstimateMicros = 500000\n`,
+    `repoPath = ${JSON.stringify(proposal.repoPath)}\n`,
     "utf8",
   );
   const drafted = await service.draftRequestBrief({

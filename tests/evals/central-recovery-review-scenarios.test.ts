@@ -51,7 +51,6 @@ const REVIEW_POLICY: ResolvedPolicy = {
       jevAssistance: "off",
       sourceTransmission: false,
     },
-    requestBudget: { capMicros: 10_000_000, operationEstimateMicros: 500_000 },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
