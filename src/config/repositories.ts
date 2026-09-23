@@ -506,10 +506,6 @@ ${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"
 # validation = []
 # review = []
 
-# A spending cap per request, in millionths of a US dollar (5000000 = $5.00).
-# [requestBudget]
-# capMicros = 5000000
-
 # How carefully reviewers check changes. jevAssistance is "off" or "shadow" (never blocks; only
 # records what the classifier would have done). sourceTransmission sends reviewers source excerpts.
 # [reviewLevels]

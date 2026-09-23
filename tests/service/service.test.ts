@@ -5238,11 +5238,7 @@ async function requestFixture(
   const service = createTandemService(serviceOptions);
   const proposal = await service.onboard(repoPath, false);
   await mkdir(dirname(proposal.configPath), { recursive: true });
-  await writeFile(
-    proposal.configPath,
-    `repoPath = ${JSON.stringify(proposal.repoPath)}\n`,
-    "utf8",
-  );
+  await writeFile(proposal.configPath, `repoPath = ${JSON.stringify(proposal.repoPath)}\n`, "utf8");
   const drafted = await service.draftRequestBrief({
     repoPath,
     reviewPane: false,

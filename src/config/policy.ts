@@ -26,6 +26,8 @@ import {
   readThinkingLevel,
 } from "./values.ts";
 
+// ponytail: a repository config may still set "requestBudget" from before standing request
+// budgets were removed; accept it here so the config still loads, but its value is never read.
 const POLICY_KEYS: Readonly<Record<string, true>> = {
   version: true,
   models: true,
@@ -36,6 +38,7 @@ const POLICY_KEYS: Readonly<Record<string, true>> = {
   maxWorkers: true,
   maxFixRounds: true,
   reviewLevels: true,
+  requestBudget: true,
 };
 
 const COMMAND_KEYS: Readonly<Record<string, true>> = {

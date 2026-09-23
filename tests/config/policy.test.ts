@@ -395,6 +395,15 @@ test("a repository config that still sets reducedRouting still loads, ignoring i
   });
 });
 
+test("a repository config that still sets requestBudget still loads, ignoring it", () => {
+  const parsed = parsePolicy({
+    requestBudget: { capMicros: 5_000_000 },
+    maxWorkers: 3,
+  });
+  expect(parsed.maxWorkers).toBe(3);
+  expect(parsed).not.toHaveProperty("requestBudget");
+});
+
 test("saved provider enablement is exposed through onboarding but never becomes part of the resolved policy", async () => {
   await withFixture("provider-enablement-repo", async ({ repo, home }) => {
     await writeModelSettings({
@@ -496,7 +505,6 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
       "maxWorkers",
       "models",
       "repoPath",
-      "requestBudget",
       "reviewLevels",
       "setupCommands",
       "validationCommands",
