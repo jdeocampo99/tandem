@@ -289,8 +289,13 @@ export function describeExecutionRoutingDecision(
   const subject = taskObjective === undefined ? "this task" : taskName(taskObjective);
   return formatDecisionQuestion({
     ask: `Keep ${subject} on ${pause.pinnedSelector}?`,
-    note: ROUTING_PAUSE_EXPLANATIONS[pause.reason],
+    note: routingPauseExplanation(pause),
   });
+}
+
+/** Why routing stopped, as one plain sentence with no ids. */
+export function routingPauseExplanation(pause: RaisedExecutionRoutingPause): string {
+  return ROUTING_PAUSE_EXPLANATIONS[pause.reason];
 }
 
 function isRaisedReason(reason: string): reason is ExecutionRoutingPauseReason {

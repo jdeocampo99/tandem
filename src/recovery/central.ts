@@ -306,7 +306,9 @@ export type RelaunchWorker = (
 ) => Promise<
   Readonly<{
     readonly relaunched: boolean;
+    /** One plain sentence saying why nothing started; the specifics go in `detail`. */
     readonly reason?: string;
+    readonly detail?: string;
     /** Plain-English note when the source repository moved since the task started; never a refusal. */
     readonly sourceDriftNote?: string;
   }>
@@ -342,6 +344,22 @@ export type CentralRecoveryDependencies = Readonly<{
    *  this is what actually relaunches it, exactly as it would for any other next-lens advancement. */
   readonly relaunchReviewer: (task: TaskRecord) => Promise<void>;
 }>;
+
+/** The block cause for a relaunch that started nothing: its own plain reason, never a generic one. */
+function refusedRelaunchCause(
+  relaunch: Awaited<ReturnType<RelaunchWorker>>,
+  deadJobId: string,
+  attempt: string,
+): BlockCause {
+  const summary = relaunch.reason ?? "The worker couldn't start.";
+  return {
+    group: "lost-resource",
+    kind: "allocation-failed",
+    summary,
+    detail: `${attempt} could not launch a new worker: ${relaunch.detail ?? summary}`,
+    ...(deadJobId === "none" ? {} : { jobId: deadJobId }),
+  };
+}
 
 /** The shared shape every `blockTask` dependency across the codebase already has, widened only to
  *  accept the optional typed cause `reportBlock` forwards through it. */
@@ -608,15 +626,9 @@ export class CentralRecoveryWorkflow {
     ];
     const relaunch = await this.#deps.relaunchWorker(task, extraInstructions);
     if (!relaunch.relaunched) {
-      const reason = relaunch.reason ?? "relaunch was refused";
-      await reportBlock(this.#deps.blockTask, task.id, {
-        group: "lost-resource",
-        kind: "allocation-failed",
-        summary: `Tandem tried to restart the worker automatically, but it couldn't start.`,
-        detail: `automatic restart could not launch a new worker: ${reason}`,
-        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
-      });
-      return { taskId: task.id, action: "blocked", reason };
+      const cause = refusedRelaunchCause(relaunch, proof.deadJobId, "automatic restart");
+      await reportBlock(this.#deps.blockTask, task.id, cause);
+      return { taskId: task.id, action: "blocked", reason: cause.summary };
     }
 
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
@@ -1213,14 +1225,11 @@ export class CentralRecoveryWorkflow {
     ];
     const relaunch = await this.#deps.relaunchWorker(task, extraInstructions);
     if (!relaunch.relaunched) {
-      const reason = relaunch.reason ?? "relaunch was refused";
-      await reportBlock(this.#deps.blockTask, task.id, {
-        group: "lost-resource",
-        kind: "allocation-failed",
-        summary: `You approved a restart, but the new worker couldn't start.`,
-        detail: `the approved restart could not launch a new worker: ${reason}`,
-        ...(proof.deadJobId === "none" ? {} : { jobId: proof.deadJobId }),
-      });
+      await reportBlock(
+        this.#deps.blockTask,
+        task.id,
+        refusedRelaunchCause(relaunch, proof.deadJobId, "approved restart"),
+      );
       return;
     }
     const now = this.#deps.clock();
