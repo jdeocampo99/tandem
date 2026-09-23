@@ -107,6 +107,7 @@ const TOP_LEVEL_KEYS = [
   "kind",
   "objective",
   "acceptanceCriteria",
+  "manualVerification",
   "surfaces",
   "stage",
   "previousStage",
@@ -1030,6 +1031,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     kind,
     objective: requiredText(value, "objective", source),
     acceptanceCriteria: requiredTextArray(value, "acceptanceCriteria", source),
+    ...(Object.hasOwn(value, "manualVerification")
+      ? { manualVerification: requiredTextArray(value, "manualVerification", source) }
+      : {}),
     surfaces: requiredTextArray(value, "surfaces", source),
     stage: requiredEnum(value, "stage", TASK_STAGES, source),
     scopeApproved: requiredBoolean(value, "scopeApproved", source),

@@ -476,8 +476,10 @@ export const MAX_REQUEST_BRIEF_ENTRIES = 24;
 export const MAX_REQUEST_BRIEF_BYTES = 32 * 1024;
 
 /**
- * What one brief revision says. The first seven fields carry the agreement itself; `openQuestions`
+ * What one brief revision says. The first eight fields carry the agreement itself; `openQuestions`
  * and `researchLinks` are annotations the coordinator keeps current without reopening approval.
+ * `acceptanceCriteria` are the automated checks a validation command or code review can prove;
+ * `manualVerification` are hands-on checks a person makes before merging.
  */
 export type RequestBriefContent = Readonly<{
   readonly goal: string;
@@ -485,6 +487,7 @@ export type RequestBriefContent = Readonly<{
   readonly constraints: readonly string[];
   readonly nonGoals: readonly string[];
   readonly acceptanceCriteria: readonly string[];
+  readonly manualVerification: readonly string[];
   readonly recommendedApproach: string;
   readonly keyDecisions: readonly string[];
   readonly openQuestions: readonly string[];
@@ -666,7 +669,10 @@ export type TaskRecord = {
   readonly requestId?: string;
   readonly kind: TaskKind;
   readonly objective: string;
+  /** Automated checks: what validation or code review can prove. */
   readonly acceptanceCriteria: readonly string[];
+  /** Hands-on checks a person makes before merging; reviewers never judge these. Absent when none. */
+  readonly manualVerification?: readonly string[];
   readonly surfaces: readonly string[];
   readonly stage: TaskStage;
   readonly previousStage?: TaskStage;

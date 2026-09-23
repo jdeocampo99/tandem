@@ -58,6 +58,7 @@ export type TandemAction =
       readonly kind: TaskKind;
       readonly objective: string;
       readonly acceptanceCriteria: readonly string[];
+      readonly manualVerification?: readonly string[] | undefined;
       readonly surfaces: readonly string[];
       readonly researchTaskIds?: readonly string[] | undefined;
       /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
@@ -284,6 +285,9 @@ function serviceCreateInput(
     kind: action.kind,
     objective: action.objective,
     acceptanceCriteria: action.acceptanceCriteria,
+    ...(action.manualVerification === undefined
+      ? {}
+      : { manualVerification: action.manualVerification }),
     surfaces: action.surfaces,
     ...(action.researchTaskIds === undefined ? {} : { researchTaskIds: action.researchTaskIds }),
     ...(action.skill === undefined ? {} : { skill: action.skill }),

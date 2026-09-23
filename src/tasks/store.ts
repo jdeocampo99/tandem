@@ -177,6 +177,9 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
       kind: input.kind,
       objective: input.objective,
       acceptanceCriteria: input.acceptanceCriteria,
+      ...(input.manualVerification === undefined
+        ? {}
+        : { manualVerification: input.manualVerification }),
       surfaces: input.surfaces,
       policy: input.policy,
       ...(input.requestId === undefined ? {} : { requestId: input.requestId }),

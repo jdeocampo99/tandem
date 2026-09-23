@@ -25,6 +25,7 @@ function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefCont
     constraints: ["never close a pane Tandem does not own"],
     nonGoals: ["no editing path in the pane"],
     acceptanceCriteria: ["the pane shows the current draft revision"],
+    manualVerification: [],
     recommendedApproach: "Render Markdown from the durable record",
     keyDecisions: ["the coordinator owns the pane"],
     openQuestions: [],

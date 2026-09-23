@@ -21,6 +21,7 @@ const BRIEF: RequestBriefContent = {
   constraints: ["accounting never authorizes or blocks work"],
   nonGoals: ["no second ledger"],
   acceptanceCriteria: ["a completed request produces one wall-clock receipt"],
+  manualVerification: [],
   recommendedApproach: "Append durable facts keyed by a stable event identity",
   keyDecisions: ["unavailable is never summed as zero"],
   openQuestions: [],

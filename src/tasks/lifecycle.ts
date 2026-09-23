@@ -39,6 +39,8 @@ export type TaskInput = Readonly<{
   readonly kind: TaskKind;
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
+  /** Hands-on checks a person makes before merging; never judged by review. */
+  readonly manualVerification?: readonly string[];
   readonly surfaces: readonly string[];
   readonly policy: TaskRecord["policy"];
   /** The approved request brief this task is created under, when one governs it. */
@@ -277,6 +279,9 @@ function assertTaskInput(input: TaskInput): void {
     throw new TypeError("Task objective must be a non-empty string");
   }
   assertTextList(input.acceptanceCriteria, "acceptanceCriteria");
+  if (input.manualVerification !== undefined) {
+    assertTextList(input.manualVerification, "manualVerification");
+  }
   assertTextList(input.surfaces, "surfaces");
   if (input.requestId !== undefined && !isSafeRequestId(input.requestId)) {
     throw new TypeError(`Unsafe request id: ${String(input.requestId)}`);
@@ -786,6 +791,9 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     kind: input.kind,
     objective: input.objective,
     acceptanceCriteria: [...input.acceptanceCriteria],
+    ...(input.manualVerification === undefined || input.manualVerification.length === 0
+      ? {}
+      : { manualVerification: [...input.manualVerification] }),
     surfaces: [...input.surfaces],
     stage: scopeApproved ? "queued" : "awaiting-approval",
     scopeApproved,

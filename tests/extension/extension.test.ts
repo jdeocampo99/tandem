@@ -2021,6 +2021,7 @@ function briefRecordFor(goal: string) {
         constraints: [],
         nonGoals: [],
         acceptanceCriteria: ["it works"],
+        manualVerification: [],
         recommendedApproach: "do it",
         keyDecisions: [],
         openQuestions: [],

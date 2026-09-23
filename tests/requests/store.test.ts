@@ -17,6 +17,7 @@ function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefCont
     constraints: ["fail closed on unreadable state"],
     nonGoals: ["no second ledger"],
     acceptanceCriteria: ["survives restart"],
+    manualVerification: [],
     recommendedApproach: "One SQLite row per request",
     keyDecisions: ["compare-and-swap on the record revision"],
     openQuestions: [],

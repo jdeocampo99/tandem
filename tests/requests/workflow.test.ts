@@ -17,6 +17,7 @@ function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefCont
     constraints: ["no request id in user-facing text"],
     nonGoals: [],
     acceptanceCriteria: ["a person never has to look up an id"],
+    manualVerification: [],
     recommendedApproach: "name the request by its goal",
     keyDecisions: [],
     openQuestions: [],

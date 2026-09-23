@@ -11,6 +11,8 @@ export type AgentBriefInput = Readonly<{
   readonly role: AgentRole;
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
+  /** Hands-on checks a person makes before merging; never judged by review. */
+  readonly manualVerification?: readonly string[];
   readonly instructions: readonly string[];
   readonly reportPath: string;
   readonly review?: AgentBriefReview;
@@ -32,6 +34,8 @@ export type PrDescriptionInput = Readonly<{
   readonly what: readonly string[];
   readonly why: readonly string[];
   readonly validation: readonly string[];
+  /** Hands-on checks rendered as an unticked checklist for the person merging. */
+  readonly manualVerification?: readonly string[];
 }>;
 
 export type DraftPrDescriptionInput = Readonly<{
@@ -82,14 +86,14 @@ Good: "I restarted the fix on a clean copy, and nothing from the old attempt was
 
 export const COORDINATOR_TOOL_GUIDANCE = `## The tandem tool
 Call it with {request: {action: ...}}. Its text is a short summary; details and report paths hold the rest. The tool refuses unsafe actions and asks the user to confirm anything that needs approval, so you do not need to police that yourself: do not ask for approval yourself in prose first. A short factual summary before the call is fine as long as it does not itself ask a yes/no approval question; then call the action and let its own confirmation be the one approval ask.
-- create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, and skill with the exact name when the user invokes a skill.
+- create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, skill with the exact name when the user invokes a skill, and manualVerification with the brief's manual verification items that apply to this task.
 - approve: record the user's approval of an implementation scope.
 - steer: pass a user direction to a running task within approved scope. Send short changes, and use supersedes to replace an outdated one. It is delivered at the next safe point.
 - answer: reply to a worker's question by its questionId.
 - list, show, inspect, messages: read tasks. Read messages only when the user asks or before a decision that depends on them; do not poll.
 - pause, resume, cancel, restart, tick: control tasks. When a task is stuck, use restart: Tandem stops what is left, keeps the work, and relaunches it in the same task. Never start a new task to get around a stuck one.
 - delivery-preflight, cleanup: housekeeping; cleanup needs the user's approval.
-- brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, acceptance criteria, approach, decisions, open questions). Write acceptance criteria as observable behavior; for how to check it, name the repository's own validation procedure from its AGENTS.md or CLAUDE.md instead of listing manual test scenarios. The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. After brief-draft, give a short summary of the drafted brief without asking in it whether they approve, then call brief-approve with the exact briefRevision and contentDigest shown; its confirmation is the one approval ask, so never also ask "do you approve" in prose beforehand. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
+- brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, automated checks, manual verification, approach, decisions, open questions). Split what must be true into two lists: acceptanceCriteria holds automated checks, anything a validation command or code review can prove (tests, types, lint, build, code behavior), written as observable behavior; for how to check them, name the repository's own validation procedure from its AGENTS.md or CLAUDE.md. manualVerification holds hands-on checks only a person can make (browser smoke tests, "looks right", device checks); reviewers never judge these, and they become a checklist in the pull request. Show both lists in your summary; the user can move an item between them by replying, and you revise the brief. The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. After brief-draft, give a short summary of the drafted brief without asking in it whether they approve, then call brief-approve with the exact briefRevision and contentDigest shown; its confirmation is the one approval ask, so never also ask "do you approve" in prose beforehand. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
 - draft, publish, merge: pull requests. Each needs the user's explicit approval.
 - request-receipt: time and cost for a finished request. Report elapsed time as stated; never call a missing figure zero.
 - models, configure-models, onboard, setup: onboarding. Propose the Balanced model profile one line per role, let the user accept, change roles, or choose Not now, then recap the full configuration before configure-models. If a role cannot be resolved, say which and why; never substitute a fallback. When a routing decision asks for a costlier model, the user picks the model and you pin it with configure-models.
@@ -142,11 +146,17 @@ export const REVIEW_LENSES = [
     id: "review",
     title: "Behavior, design, and coverage",
     instructions:
-      "Use a fresh reviewer context with no implementer conversation. Inspect observable behavior, error behavior, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply all seven code standards to every changed function, method, callback, closure, and affected caller: honest dependencies, empathic signatures, uniform abstraction, useful comments, reader-oriented declaration order, reuse before adding, and plain conventional names; preserve semantics and caller updates, and record each review disposition. Check the changed behavior, affected callers, relevant tests, reports, and task acceptance criteria, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, bind the report to HEAD and generation, distinguish confirmed from plausible findings, report evidence-backed findings only, never invent findings, avoid broad cleanup, remain read-only, and rely only on targeted validation performed by the runner.",
+      "Use a fresh reviewer context with no implementer conversation. Inspect observable behavior, error behavior, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply all seven code standards to every changed function, method, callback, closure, and affected caller: honest dependencies, empathic signatures, uniform abstraction, useful comments, reader-oriented declaration order, reuse before adding, and plain conventional names; preserve semantics and caller updates, and record each review disposition. Check the changed behavior, affected callers, relevant tests, reports, and the task's automated checks, never its manual verification items, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, bind the report to HEAD and generation, distinguish confirmed from plausible findings, report evidence-backed findings only, never invent findings, avoid broad cleanup, remain read-only, and rely only on targeted validation performed by the runner.",
   },
 ] as const satisfies readonly ReviewLens[];
 
 type PromptRoleInstructions = Readonly<Record<AgentRole, readonly string[]>>;
+
+/** Keeps hands-on checks out of review, so they never become a finding that cannot be resolved. */
+export const MANUAL_VERIFICATION_REVIEWER =
+  "A person will check these; do not file findings about them or about missing automated evidence for them.";
+export const MANUAL_VERIFICATION_WORKER =
+  "A person will check these before merging. You may try them yourself and say what you saw in your report; they never block the task.";
 
 const COMMON_AGENT_INSTRUCTIONS = [
   "Treat this brief as workflow guidance, not as a sandbox or permission boundary; runtime adapters and permissions enforce isolation and authorization.",
@@ -330,6 +340,10 @@ export function buildAgentBrief(input: AgentBriefInput): string {
 
   const objective = readNonEmptyText(input.objective, "objective");
   const acceptanceCriteria = readPromptList(input.acceptanceCriteria, "acceptanceCriteria");
+  const manualVerification =
+    input.manualVerification === undefined
+      ? []
+      : readPromptList(input.manualVerification, "manualVerification");
   const instructions = readPromptList(input.instructions, "instructions");
   const reportPath = readSingleLineText(input.reportPath, "reportPath");
   const review = input.review === undefined ? undefined : readReviewContext(input.review);
@@ -353,9 +367,17 @@ export function buildAgentBrief(input: AgentBriefInput): string {
     "## Objective",
     objective,
     "",
-    "## Acceptance criteria",
+    "## Automated checks",
     ...formatBullets(acceptanceCriteria),
     "",
+    ...(manualVerification.length === 0
+      ? []
+      : [
+          "## Manual verification",
+          input.role === "reviewer" ? MANUAL_VERIFICATION_REVIEWER : MANUAL_VERIFICATION_WORKER,
+          ...formatBullets(manualVerification),
+          "",
+        ]),
     "## Instructions",
     ...formatBullets(instructions),
     "",
@@ -436,11 +458,19 @@ export function renderPrDescription(input: PrDescriptionInput): string {
   const what = readDescriptionEntries(input.what, "what", 1);
   const why = readDescriptionEntries(input.why, "why", 1);
   const validation = readDescriptionEntries(input.validation, "validation", 1);
+  const manualVerification =
+    input.manualVerification === undefined
+      ? []
+      : readDescriptionEntries(input.manualVerification, "manualVerification", 0);
 
   const lines: string[] = [`TL;DR: ${tldr.join(" ")}`, "", "# What"];
   lines.push(...formatBullets(what), "", "# Why");
   lines.push(...formatBullets(why), "", "# Validation");
   lines.push(...formatBullets(validation));
+  if (manualVerification.length > 0) {
+    lines.push("", "# Manual verification", "Check these by hand before merging.");
+    lines.push(...manualVerification.map((entry) => `- [ ] ${entry}`));
+  }
   return lines.join("\n");
 }
 

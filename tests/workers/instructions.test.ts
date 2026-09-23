@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import {
   buildAgentBrief,
   CODE_STANDARDS,
+  MANUAL_VERIFICATION_REVIEWER,
+  MANUAL_VERIFICATION_WORKER,
   type PrDescriptionInput,
   renderPrDescription,
 } from "../../src/instructions.ts";
@@ -154,4 +156,52 @@ test("gives implementers the same code standards the reviewer grades against", (
     }),
   ).toContain(CODE_STANDARDS);
   expect(buildAgentBrief({ ...input, role: "scout" })).not.toContain(CODE_STANDARDS);
+});
+
+test("manual verification becomes an unticked checklist after validation", () => {
+  const rendered = renderPrDescription({
+    ...validDescription,
+    manualVerification: ["The streak bar glows at 5 in a row", "Both flashcard modes show the bar"],
+  });
+
+  expect(
+    rendered.endsWith(
+      [
+        "# Validation",
+        "- Targeted formatter scenarios are covered by this test.",
+        "",
+        "# Manual verification",
+        "Check these by hand before merging.",
+        "- [ ] The streak bar glows at 5 in a row",
+        "- [ ] Both flashcard modes show the bar",
+      ].join("\n"),
+    ),
+  ).toBe(true);
+  expect(renderPrDescription({ ...validDescription, manualVerification: [] })).toBe(
+    renderPrDescription(validDescription),
+  );
+});
+
+test("reviewers are told to leave manual verification alone; implementers may try it", () => {
+  const input = {
+    objective: "Show a streak bar.",
+    acceptanceCriteria: ["Streak logic has unit tests"],
+    manualVerification: ["The streak bar glows at 5 in a row"],
+    instructions: [],
+    reportPath: "/tmp/report.md",
+  };
+
+  const reviewer = buildAgentBrief({ ...input, role: "reviewer" });
+  const implementer = buildAgentBrief({ ...input, role: "implementer" });
+
+  expect(reviewer).toContain("## Automated checks\n- Streak logic has unit tests\n");
+  expect(reviewer).toContain(
+    `## Manual verification\n${MANUAL_VERIFICATION_REVIEWER}\n- The streak bar glows at 5 in a row\n`,
+  );
+  expect(implementer).toContain(
+    `## Manual verification\n${MANUAL_VERIFICATION_WORKER}\n- The streak bar glows at 5 in a row\n`,
+  );
+  expect(buildAgentBrief({ ...input, manualVerification: [], role: "reviewer" })).not.toContain(
+    "## Manual verification",
+  );
 });

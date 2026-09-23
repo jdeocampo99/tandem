@@ -7,9 +7,11 @@ import {
   decideRequestDispatch,
   RequestBriefError,
   requestApprovalState,
+  requestBriefDigests,
   reviseRequestBriefRecord,
   tasksAwaitingReapproval,
 } from "../../src/requests/brief.ts";
+import { renderRequestBriefMarkdown } from "../../src/requests/markdown.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
 const LATER = "2030-01-01T01:00:00.000Z";
@@ -21,6 +23,7 @@ function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefCont
     constraints: ["SQLite stays authoritative"],
     nonGoals: ["no desktop GUI"],
     acceptanceCriteria: ["one stable request id"],
+    manualVerification: [],
     recommendedApproach: "One record with monotonic draft revisions",
     keyDecisions: ["Markdown is a projection only"],
     openQuestions: [],
@@ -185,4 +188,49 @@ test("brief content is validated at the boundary rather than stored as given", (
   expect(() => checkedRequestBriefContent(content({ keyDecisions: ["x".repeat(40_000)] }))).toThrow(
     /UTF-8 bytes/u,
   );
+});
+
+test("a brief saved before manual verification existed loads with none and keeps its digests", () => {
+  const { manualVerification: _omitted, ...legacy } = content();
+  const loaded = checkedRequestBriefContent(legacy);
+
+  expect(loaded.manualVerification).toEqual([]);
+  // Digests recorded by the release before manual verification, for this exact content.
+  expect(requestBriefDigests(loaded)).toEqual({
+    contentDigest: "777275e9c0fa047b1b96b0c7346d31163c8d3b3bba5daec125eb24c838465531",
+    agreementDigest: "74a95430904cba395789ce0926801dc88fbf7e9f3332a81faa7f1552a6c9219c",
+  });
+});
+
+test("moving an item into manual verification changes what was agreed and needs reapproval", () => {
+  const approved = approveRequestBriefRecord(
+    seeded(),
+    { requestId: "req-1", briefRevision: 1, contentDigest: seeded().draft.contentDigest },
+    NOW,
+  );
+  const moved = reviseRequestBriefRecord(
+    approved,
+    content({ manualVerification: ["the learner sees the lesson in the browser"] }),
+    LATER,
+  );
+
+  expect(moved.draft.changeKind).toBe("agreement");
+  expect(requestApprovalState(moved)).toBe("superseded");
+});
+
+test("the brief shows automated checks and manual verification as two lists", () => {
+  const record = createRequestBriefRecord(
+    {
+      id: "req-1",
+      repoPath: "/repo",
+      content: content({ manualVerification: ["the streak bar glows at 5 in a row"] }),
+    },
+    NOW,
+  );
+
+  const markdown = renderRequestBriefMarkdown(record);
+
+  expect(markdown).toContain("## Automated checks\n- one stable request id\n");
+  expect(markdown).toContain("## Manual verification\n- the streak bar glows at 5 in a row\n");
+  expect(markdown).not.toContain("Acceptance criteria");
 });

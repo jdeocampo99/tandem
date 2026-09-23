@@ -35,6 +35,7 @@ export type TaskCreationRequest = Readonly<{
   readonly kind: "scout" | "implementation";
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
+  readonly manualVerification?: readonly string[];
   readonly surfaces: readonly string[];
   /** The request brief this task is created under, when one governs it. */
   readonly requestId?: string;
@@ -327,6 +328,9 @@ export function buildPrompt(
     role,
     objective: task.objective,
     acceptanceCriteria: task.acceptanceCriteria,
+    ...(task.manualVerification === undefined
+      ? {}
+      : { manualVerification: task.manualVerification }),
     instructions: [...guidance, ...extraInstructions],
     reportPath,
     ...(review === undefined ? {} : { review }),
@@ -524,6 +528,11 @@ export function taskInputFor(
     kind: request.kind,
     objective: text(request.objective, "objective"),
     acceptanceCriteria: readTextList(request.acceptanceCriteria, "acceptanceCriteria"),
+    ...(request.manualVerification === undefined
+      ? {}
+      : {
+          manualVerification: readTextList(request.manualVerification, "manualVerification"),
+        }),
     surfaces: readTextList(request.surfaces, "surfaces"),
     policy,
     ...(request.requestId === undefined ? {} : { requestId: request.requestId }),

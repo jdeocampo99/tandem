@@ -7,7 +7,7 @@ import type {
   TaskRecord,
   ValidationEvidence,
 } from "../contracts.ts";
-import { CODE_STANDARD_NAMES } from "../instructions.ts";
+import { CODE_STANDARD_NAMES, MANUAL_VERIFICATION_REVIEWER } from "../instructions.ts";
 import type { EscalationReason, FinalAcceptanceStatus, FinalRequirement } from "./acceptance.ts";
 import { finalAcceptanceStatus, isPinnedEvidence, planValidation } from "./acceptance.ts";
 import {
@@ -98,6 +98,8 @@ export type ReviewBriefScope = Readonly<{
   /** The approved surfaces, joined and bounded for rendering. */
   readonly surfaces: string;
   readonly acceptanceCriteria: readonly string[];
+  /** Hands-on checks a person makes; listed so the reviewer knows to leave them alone. */
+  readonly manualVerification: readonly string[];
   readonly principles: readonly string[];
   readonly nonGoals: readonly string[];
 }>;
@@ -381,6 +383,10 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
     task.acceptanceCriteria,
     REVIEW_BRIEF_LIMITS.maxAcceptanceCriteria,
   ).kept.map((entry) => truncateText(entry, REVIEW_BRIEF_LIMITS.maxDescriptionBytes));
+  const manualVerification = boundedList(
+    task.manualVerification ?? [],
+    REVIEW_BRIEF_LIMITS.maxAcceptanceCriteria,
+  ).kept.map((entry) => truncateText(entry, REVIEW_BRIEF_LIMITS.maxDescriptionBytes));
   const nonGoals = boundedList(
     [`Do not change files outside the approved surfaces: ${surfaces}.`, ...STANDING_NON_GOALS],
     REVIEW_BRIEF_LIMITS.maxNonGoals,
@@ -430,6 +436,7 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       scopeApproved: task.scopeApproved,
       surfaces,
       acceptanceCriteria: criteria,
+      manualVerification,
       principles: CODE_STANDARD_NAMES,
       nonGoals,
     },
@@ -532,8 +539,14 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     `- objective: ${brief.scope.objective}`,
     `- scope approved: ${brief.scope.scopeApproved}`,
     `- surfaces: ${brief.scope.surfaces}`,
-    "- acceptance criteria:",
+    "- automated checks:",
     ...brief.scope.acceptanceCriteria.map((entry) => `  - ${entry}`),
+    ...(brief.scope.manualVerification.length === 0
+      ? []
+      : [
+          `- manual verification (${MANUAL_VERIFICATION_REVIEWER}):`,
+          ...brief.scope.manualVerification.map((entry) => `  - ${entry}`),
+        ]),
     "",
     "## Applicable principles (mandatory; a violation blocks regardless of suggestion status)",
     ...bullets(brief.scope.principles),

@@ -7,6 +7,7 @@ import type {
   TaskRecord,
   WorktreeLease,
 } from "../../src/contracts.ts";
+import { MANUAL_VERIFICATION_REVIEWER } from "../../src/instructions.ts";
 import { policyIdentity } from "../../src/tasks/acceptance.ts";
 import {
   type AdvisoryReviewLead,
@@ -580,4 +581,42 @@ test("the user decisions section is omitted when no question was ever answered",
   );
 
   expect(rendered).not.toContain("User decisions");
+});
+
+test("manual verification is listed apart from automated checks as something a person checks", () => {
+  const brief = buildReviewBrief({
+    task: task({ manualVerification: ["An admin-to-learner smoke run passes in the browser"] }),
+    head: HEAD,
+    lens: "review",
+    observations: observations(),
+  });
+
+  expect(brief.scope.acceptanceCriteria).toEqual([
+    "Cancellation is honoured",
+    "Evidence stays pinned",
+  ]);
+  expect(brief.scope.manualVerification).toEqual([
+    "An admin-to-learner smoke run passes in the browser",
+  ]);
+  expect(renderReviewBrief(brief)).toContain(
+    [
+      "- automated checks:",
+      "  - Cancellation is honoured",
+      "  - Evidence stays pinned",
+      `- manual verification (${MANUAL_VERIFICATION_REVIEWER}):`,
+      "  - An admin-to-learner smoke run passes in the browser",
+    ].join("\n"),
+  );
+});
+
+test("a task with no manual verification renders no manual verification line", () => {
+  const brief = buildReviewBrief({
+    task: task(),
+    head: HEAD,
+    lens: "review",
+    observations: observations(),
+  });
+
+  expect(brief.scope.manualVerification).toEqual([]);
+  expect(renderReviewBrief(brief)).not.toContain("manual verification");
 });
