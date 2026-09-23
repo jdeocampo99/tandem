@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type {
   CommandRunner,
   IdFactory,
+  Notification,
   TaskCommunicationView,
   TaskRecord,
   WorkerReceipt,
@@ -201,7 +202,8 @@ export class SourceInboxWorkflow {
       if (task.stage === "cancelled" || task.stage === "merged") {
         throw new Error(`Task ${taskId} cannot be answered while it is ${task.stage}`);
       }
-      if (task.communication?.question?.id !== questionId) {
+      const question = task.communication?.question;
+      if (question?.id !== questionId) {
         throw new Error(`question ${questionId} is no longer current for task ${taskId}`);
       }
       const communication = appendTaskMessage(task.communication, {
@@ -211,11 +213,21 @@ export class SourceInboxWorkflow {
         createdAt: this.#deps.clock(),
         replyTo: questionId,
       });
+      // Answering clears `communication.question`, so the question's own wording would otherwise
+      // be lost; keep it as an acknowledged, non-surfacing notification keyed by the question id so
+      // a later review brief can pair it back up with this answer via the message's `replyTo`.
+      const decision: Notification = {
+        id: questionId,
+        message: question.text,
+        acknowledged: true,
+        kind: "routine",
+      };
       const answered = await store.update(task.id, task.revision, (current) => ({
         ...current,
         revision: current.revision + 1,
         updatedAt: this.#deps.clock(),
         communication,
+        notifications: [...current.notifications, decision],
       }));
       await this.publishTaskInbox(answered);
       result = {

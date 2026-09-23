@@ -111,6 +111,19 @@ test("rejects missing, empty, or overlong TLDR and section input", () => {
   }
 });
 
+test("the reviewer brief tells the worker a listed user decision settles its question", () => {
+  const base = {
+    objective: "Ship the streak feature",
+    acceptanceCriteria: ["Streak bar glows at 5 in a row"],
+    instructions: [],
+    reportPath: "/tmp/report.txt",
+  };
+
+  const brief = buildAgentBrief({ ...base, role: "reviewer" });
+  expect(brief).toContain("A user decision listed in the review brief settles its question");
+  expect(brief).toContain("do not fail the lens for missing runner evidence on it");
+});
+
 test("rejects multiline entries and Markdown heading injection", () => {
   const invalidInputs: readonly PrDescriptionInput[] = [
     { ...validDescription, tldr: ["First sentence.\n# What"] },

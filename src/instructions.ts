@@ -197,6 +197,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Bind the report to the exact HEAD and generation. The runner performs targeted validation; do not invent or claim its results.",
     SUBMIT_REPORT_INSTRUCTION,
     "On a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; otherwise submit outcome completed with the review field following the ReviewResult schema and selected-lens instructions supplied below.",
+    "A user decision listed in the review brief settles its question; do not ask it again. If the user accepted a criterion no runner evidence can prove, treat it as satisfied by the user and do not fail the lens for missing runner evidence on it.",
   ],
   presentation: [
     "Presentation alone may write the artifact at the supplied absolute path using only read, grep, glob, write, and edit.",
