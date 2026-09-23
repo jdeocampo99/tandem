@@ -49,6 +49,7 @@ import { formatDecisionQuestion } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import { readWorkerTerminal, type WorkerTerminalJob } from "../workers/terminal.ts";
 import { pauseWorkerTerminal } from "../workers/terminal-control.ts";
+import type { ReservationRefusal } from "../workers/workflow.ts";
 import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "./central-review.ts";
 
 /** What one central recovery pass did for a task. */
@@ -58,6 +59,7 @@ export type CentralRecoveryAction =
   | "resumed"
   | "asked"
   | "blocked"
+  | "waiting"
   | "skipped";
 
 export type CentralRecoveryOutcome = Readonly<{
@@ -309,6 +311,8 @@ export type RelaunchWorker = (
     /** One plain sentence saying why nothing started; the specifics go in `detail`. */
     readonly reason?: string;
     readonly detail?: string;
+    /** Why the reservation gate admitted nothing, when that is what stopped it. */
+    readonly refusal?: ReservationRefusal["refusal"];
     /** Plain-English note when the source repository moved since the task started; never a refusal. */
     readonly sourceDriftNote?: string;
   }>
@@ -317,9 +321,13 @@ export type RelaunchWorker = (
 /** Central recovery's re-entry for `validating`: rerun validation at the exact same reviewed HEAD
  *  as a new durable job, through the stage's own normal entry point (`WorkerWorkflow.startValidation`).
  *  Never mutates the dead job or its result. */
-export type RevalidateWorker = (
-  task: TaskRecord,
-) => Promise<Readonly<{ readonly started: boolean; readonly reason?: string }>>;
+export type RevalidateWorker = (task: TaskRecord) => Promise<
+  Readonly<{
+    readonly started: boolean;
+    readonly reason?: string;
+    readonly refusal?: ReservationRefusal["refusal"];
+  }>
+>;
 
 export type CentralRecoveryDependencies = Readonly<{
   readonly home: string;
@@ -344,6 +352,23 @@ export type CentralRecoveryDependencies = Readonly<{
    *  this is what actually relaunches it, exactly as it would for any other next-lens advancement. */
   readonly relaunchReviewer: (task: TaskRecord) => Promise<void>;
 }>;
+
+/**
+ * Refusals only a changing fact clears: a slot or worker freeing, a question being answered, a
+ * stop settling. Blocking on one would only be resumed and refused again on the next pass, so
+ * recovery waits instead and simply tries again then.
+ */
+const WAITING_REFUSALS: ReadonlySet<ReservationRefusal["refusal"]> = new Set([
+  "slot-held",
+  "job-running",
+  "worker-limit",
+  "routing-question",
+  "stop-requested",
+]);
+
+function waitsOnFact(refusal: ReservationRefusal["refusal"] | undefined): boolean {
+  return refusal !== undefined && WAITING_REFUSALS.has(refusal);
+}
 
 /** The block cause for a relaunch that started nothing: its own plain reason, never a generic one. */
 function refusedRelaunchCause(
@@ -626,6 +651,7 @@ export class CentralRecoveryWorkflow {
     ];
     const relaunch = await this.#deps.relaunchWorker(task, extraInstructions);
     if (!relaunch.relaunched) {
+      if (waitsOnFact(relaunch.refusal)) return this.waitToRetry(task.id, relaunch.reason);
       const cause = refusedRelaunchCause(relaunch, proof.deadJobId, "automatic restart");
       await reportBlock(this.#deps.blockTask, task.id, cause);
       return { taskId: task.id, action: "blocked", reason: cause.summary };
@@ -786,6 +812,7 @@ export class CentralRecoveryWorkflow {
       detail: "automatic validation retry could not restart validation",
       deadJobId: proof.deadJobId,
     });
+    if (revalidated.waiting) return this.waitToRetry(task.id, revalidated.reason);
     if (!revalidated.started) {
       return { taskId: task.id, action: "blocked", reason: revalidated.reason as string };
     }
@@ -807,9 +834,18 @@ export class CentralRecoveryWorkflow {
       readonly detail: string;
       readonly deadJobId: string;
     }>,
-  ): Promise<Readonly<{ readonly started: boolean; readonly reason?: string }>> {
+  ): Promise<
+    Readonly<{ readonly started: boolean; readonly waiting?: boolean; readonly reason?: string }>
+  > {
     await this.snapshotWorktree(task, runtime, retriesUsed + 1);
     const revalidated = await this.#deps.revalidate(task);
+    if (waitsOnFact(revalidated.refusal)) {
+      return {
+        started: false,
+        waiting: true,
+        ...(revalidated.reason === undefined ? {} : { reason: revalidated.reason }),
+      };
+    }
     if (!revalidated.started) {
       const reason = revalidated.reason ?? "validation could not be restarted";
       await reportBlock(this.#deps.blockTask, task.id, {
@@ -993,6 +1029,35 @@ export class CentralRecoveryWorkflow {
     const refreshed = await this.#deps.getTask(task.id);
     await this.#deps.relaunchReviewer(refreshed);
     return { taskId: task.id, action: "relaunched", reason: notice };
+  }
+
+  /**
+   * Leaves the task where it is so the next pass retries, and tells the coordinator once: the
+   * notice is added only when it is not already the task's latest one, so waiting across many
+   * passes never repeats it.
+   */
+  private async waitToRetry(
+    taskId: string,
+    reason: string | undefined,
+  ): Promise<CentralRecoveryOutcome> {
+    const notice = `${reason ?? "Tandem can't start the worker yet."} It will retry on its own once that changes.`;
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      if (current === undefined || current.notifications.at(-1)?.message === notice) return;
+      const notification: Notification = {
+        id: this.#deps.idFactory(),
+        message: notice,
+        acknowledged: false,
+        kind: "coordinator",
+      };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        revision: entry.revision + 1,
+        updatedAt: this.#deps.clock(),
+        notifications: [...entry.notifications, notification],
+      }));
+    });
+    return { taskId, action: "waiting", reason: notice };
   }
 
   /**

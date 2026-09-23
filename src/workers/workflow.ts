@@ -2006,6 +2006,7 @@ export class WorkerWorkflow {
       readonly relaunched: boolean;
       readonly reason?: string;
       readonly detail?: string;
+      readonly refusal?: ReservationRefusal["refusal"];
       readonly sourceDriftNote?: string;
     }>
   > {
@@ -2013,7 +2014,12 @@ export class WorkerWorkflow {
     const allowedStages: readonly TaskRecord["stage"][] = ["implementing", "scouting"];
     const reservation = await this.reserveTask(task.id, role);
     if ("refusal" in reservation) {
-      return { relaunched: false, reason: reservation.summary, detail: reservation.detail };
+      return {
+        relaunched: false,
+        reason: reservation.summary,
+        detail: reservation.detail,
+        refusal: reservation.refusal,
+      };
     }
     const runtime = reservation.runtime;
     const operation = runtime.operation;
@@ -2365,7 +2371,10 @@ export class WorkerWorkflow {
     }
   }
 
-  async startValidation(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
+  async startValidation(
+    task: TaskRecord,
+    reserved?: ReservationResult,
+  ): Promise<ReservationRefusal | undefined> {
     if (task.reviewHead === undefined || task.worktree === undefined) {
       const reason = "validation requires a task worktree and reviewed HEAD";
       await this.#deps.blockTask(task.id, reason, {
@@ -2394,7 +2403,7 @@ export class WorkerWorkflow {
     }
     const plan = planned.plan;
     const reservation = reserved ?? (await this.reserveTask(task.id, "validation"));
-    if ("refusal" in reservation) return;
+    if ("refusal" in reservation) return reservation;
     const runtime = reservation.runtime;
     const claim = claimOf(runtime.operation);
     if (claim === undefined) {
@@ -2506,7 +2515,7 @@ export class WorkerWorkflow {
                 `endpoint effect ${existingEffect.id} is unresolved`,
                 claim,
               );
-              return undefined;
+              return;
             }
             try {
               const restored = JSON.parse(existingEffect.receipt) as Endpoint;
@@ -2518,7 +2527,7 @@ export class WorkerWorkflow {
                 `endpoint effect ${existingEffect.id} has invalid receipt`,
                 claim,
               );
-              return undefined;
+              return;
             }
           }
           const currentWriterEndpoint = currentWriter(currentRuntime);

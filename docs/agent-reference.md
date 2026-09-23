@@ -1870,6 +1870,13 @@ from its current stage. It is always the same three moves:
    Relaunch failures after admission (no terminal could be opened, the working copy is gone, the
    task moved on) are reported the same way.
 
+   The first five refusals are cleared only by a changing fact (a slot or worker frees, the
+   question stops speaking, the stop settles), so a relaunch or validation re-entry refused by one
+   does not block: the task stays at its stage, the coordinator gets one notice naming the reason
+   (added only when it is not already the task's latest notification), no restart or validation
+   retry is spent, and the next scheduler pass simply tries again against current facts. The other
+   refusals and post-admission failures still block with their reason.
+
    `awaiting-fixes` has no branch of its own: `beginFixes` moves the task to `implementing` and
    spends the review round before touching a pane, so a missing pane leaves it unblocked at
    `implementing` for that re-entry. The relaunched fixer keeps the same `fixContextPath` findings,
