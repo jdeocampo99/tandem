@@ -8,10 +8,3 @@ compaction:
   enabled: true
 prewalk:
   enabled: false
-# A command backgrounded past submit_report wakes the worker into a busy turn that blocks
-# reusing its pane, so keep every command in the foreground.
-async:
-  enabled: false
-bash:
-  autoBackground:
-    enabled: false
