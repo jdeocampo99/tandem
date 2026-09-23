@@ -1332,6 +1332,15 @@ Records written before the finding ledger existed load unchanged with no ledger,
 is claimed without evidence. A ledger entry naming an unknown status, or missing the observation that
 supports its status, is a corrupt shape and fails closed.
 
+The brief also carries a bounded "User decisions" section, most recent first, pairing each earlier
+worker question on this task with the user's own answer: `appendAnswer` clears
+`task.communication.question` once it is answered, so the question's wording is kept as an
+acknowledged, non-surfacing notification under the same id the answer's `replyTo` names, and the
+brief joins the two back up. The section is omitted when no question has been answered yet. Reviewer
+and verifier role instructions tell the worker a listed decision settles its question and is never
+asked again, and that a criterion the user accepted with no runner evidence to prove it is satisfied
+by the user, not failed for missing evidence.
+
 ### Risk-based review levels
 
 Every review round classifies the change it is about to review. `src/tasks/review-levels.ts` does it

@@ -514,3 +514,67 @@ test("the last reviewed HEAD comes from the newest review of an earlier generati
   expect(lastReviewedHead(record)).toBe("head-1");
   expect(lastReviewedHead(task())).toBeUndefined();
 });
+
+test("a settled user decision is rendered with its question and answer, most recent first", () => {
+  const record = task({
+    notifications: [
+      { id: "q-1", message: "Was the streak bar proven by Playwright?", acknowledged: true },
+      { id: "q-2", message: "Should the legacy route stay?", acknowledged: true },
+    ],
+    communication: {
+      revision: 2,
+      messages: [
+        {
+          id: "a-1",
+          revision: 1,
+          kind: "answer",
+          text: "Accept it, the ad hoc Playwright run covered it.",
+          createdAt: "2026-09-20T00:00:00.000Z",
+          replyTo: "q-1",
+        },
+        {
+          id: "a-2",
+          revision: 2,
+          kind: "answer",
+          text: "Yes, keep it for now.",
+          createdAt: "2026-09-20T00:01:00.000Z",
+          replyTo: "q-2",
+        },
+      ],
+    },
+  });
+
+  const brief = buildReviewBrief({
+    task: record,
+    head: HEAD,
+    lens: "verification",
+    observations: observations(),
+  });
+
+  expect(brief.userDecisions).toEqual([
+    { question: "Should the legacy route stay?", answer: "Yes, keep it for now." },
+    {
+      question: "Was the streak bar proven by Playwright?",
+      answer: "Accept it, the ad hoc Playwright run covered it.",
+    },
+  ]);
+
+  const rendered = renderReviewBrief(brief);
+  expect(rendered).toContain("User decisions (already settled by the user; do not ask again)");
+  expect(rendered).toContain(
+    "Question: Was the streak bar proven by Playwright? | Answer: Accept it, the ad hoc Playwright run covered it.",
+  );
+});
+
+test("the user decisions section is omitted when no question was ever answered", () => {
+  const rendered = renderReviewBrief(
+    buildReviewBrief({
+      task: task(),
+      head: HEAD,
+      lens: "verification",
+      observations: observations(),
+    }),
+  );
+
+  expect(rendered).not.toContain("User decisions");
+});

@@ -28,6 +28,7 @@ export const REVIEW_BRIEF_LIMITS = {
   maxSourceLinks: 30,
   maxAdvisoryLeads: 8,
   maxEvidenceEntries: 20,
+  maxUserDecisions: 10,
   maxDescriptionBytes: 400,
   maxCompactDescriptionBytes: 120,
   maxDiffPatchBytes: 256 * 1024,
@@ -133,6 +134,13 @@ export type ReviewBriefElision = Readonly<{
   readonly affectedCallers: number;
   readonly sourceLinks: number;
   readonly advisoryLeads: number;
+  readonly userDecisions: number;
+}>;
+
+/** An earlier worker question on this task, paired with the user's own answer to it. */
+export type ReviewBriefDecision = Readonly<{
+  readonly question: string;
+  readonly answer: string;
 }>;
 
 export type ReviewBrief = Readonly<{
@@ -151,6 +159,8 @@ export type ReviewBrief = Readonly<{
   readonly suggestions: readonly FindingLedgerEntry[];
   readonly settled: readonly FindingLedgerEntry[];
   readonly advisoryLeads: readonly AdvisoryReviewLead[];
+  /** Earlier worker questions the user already answered, most recent first; empty when none. */
+  readonly userDecisions: readonly ReviewBriefDecision[];
   readonly roundBudget: Readonly<{
     readonly reviewRound: number;
     readonly maxFixRounds: number;
@@ -332,6 +342,28 @@ function boundedEntries(
 }
 
 /**
+ * Earlier worker questions on this task the user already answered, most recent first. An answer
+ * message's `replyTo` names the question id; the question's own wording survives only as the
+ * acknowledged notification `appendAnswer` records under that same id, since answering clears the
+ * live `communication.question`. A question whose notification is missing (a legacy record from
+ * before this pairing existed) is skipped rather than shown without its wording.
+ */
+function pastDecisions(task: TaskRecord): readonly ReviewBriefDecision[] {
+  const messages = task.communication?.messages ?? [];
+  const decisions: ReviewBriefDecision[] = [];
+  for (const message of messages) {
+    if (message.kind !== "answer" || message.replyTo === undefined) continue;
+    const record = task.notifications.find((entry) => entry.id === message.replyTo);
+    if (record === undefined) continue;
+    decisions.push({
+      question: truncateText(record.message, REVIEW_BRIEF_LIMITS.maxDescriptionBytes),
+      answer: truncateText(message.text, REVIEW_BRIEF_LIMITS.maxDescriptionBytes),
+    });
+  }
+  return decisions.reverse();
+}
+
+/**
  * Builds the round's review brief from durable task state and the injected git observations. The
  * result is a pure function of those inputs, so the same task and HEAD always produce the same
  * brief. Blockers are never elided; suggestions, settled findings, and leads are bounded first.
@@ -373,6 +405,7 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
     REVIEW_BRIEF_LIMITS.maxSourceLinks,
   );
   const leads = boundedList(input.advisoryLeads ?? [], REVIEW_BRIEF_LIMITS.maxAdvisoryLeads);
+  const decisions = boundedList(pastDecisions(task), REVIEW_BRIEF_LIMITS.maxUserDecisions);
   const evidence = boundedList(task.validationEvidence, REVIEW_BRIEF_LIMITS.maxEvidenceEntries);
   const changedFiles = boundedList(
     observations.cumulative.changedFiles,
@@ -432,6 +465,7 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
     suggestions: suggestions.kept,
     settled: settled.kept,
     advisoryLeads: leads.kept,
+    userDecisions: decisions.kept,
     roundBudget: {
       reviewRound: task.reviewRound,
       maxFixRounds: task.policy.config.maxFixRounds,
@@ -443,6 +477,7 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       affectedCallers: callers.elided,
       sourceLinks: links.elided,
       advisoryLeads: leads.elided,
+      userDecisions: decisions.elided,
     },
   };
 }
@@ -569,6 +604,15 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     "- recorded checks:",
     ...brief.evidence.recorded.map((entry) => `  - ${entry}`),
     "",
+    ...(brief.userDecisions.length === 0
+      ? []
+      : [
+          "## User decisions (already settled by the user; do not ask again)",
+          ...brief.userDecisions.map(
+            (entry) => `- Question: ${entry.question} | Answer: ${entry.answer}`,
+          ),
+          "",
+        ]),
     "## Evidence-backed blockers (must be resolved; never downgraded to a suggestion)",
     ...(brief.blockers.length === 0 ? ["- none recorded"] : findingLines(brief.blockers, compact)),
     "",
@@ -598,7 +642,8 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     elided.changedFiles +
     elided.affectedCallers +
     elided.sourceLinks +
-    elided.advisoryLeads;
+    elided.advisoryLeads +
+    elided.userDecisions;
   if (elidedTotal > 0) {
     lines.push(
       "",
