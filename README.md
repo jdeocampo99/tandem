@@ -198,7 +198,9 @@ data folder and session name are remembered in `~/.config/tandem/config.json`.
 
 - **Faster answers to simple questions.** With a `TYPESAFE_API_KEY` set, Tandem uses the TypeSafe
   Jev classifier to answer read-only lookups ("list my tasks") instantly without a full model turn.
-  Anything that changes state still goes through the coordinator. See
+  A short reply to one of Tandem's fixed-choice questions ("yeah restart it") is answered the same
+  way; approving a brief this way still asks you to type `y` first. Anything else that changes
+  state goes through the coordinator. See
   [Jev prompt routing](docs/reference/policy.md#jev-prompt-routing).
 - **Visual presentations.** With `lavish-axi` installed, the coordinator can produce an HTML page
   explaining a change and collect your feedback on it.

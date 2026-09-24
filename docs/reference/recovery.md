@@ -3,11 +3,11 @@
 Where Tandem keeps durable state, how uncertain operations fail closed, and how central recovery
 stops, saves, and re-enters a stuck task.
 
-Code: src/recovery/central.ts, src/recovery/central-review.ts, src/runtime/database.ts,
-src/runtime/persistence.ts, src/runtime/schema.ts, src/workers/workflow.ts, src/workers/admission.ts,
-src/workers/job-settlement.ts, src/workers/operation-claim.ts,
+Code: src/recovery/central.ts, src/recovery/central-reentry.ts, src/recovery/central-review.ts,
+src/runtime/database.ts, src/runtime/persistence.ts, src/runtime/schema.ts, src/workers/workflow.ts,
+src/workers/admission.ts, src/workers/job-settlement.ts, src/workers/operation-claim.ts,
 src/workers/terminal-extension.ts, src/service/controller.ts, src/tasks/control.ts,
-src/config/environment.ts
+src/tasks/endpoint-launch.ts, src/config/environment.ts
 
 ## Durable home
 
@@ -77,7 +77,8 @@ These rules decide when a worker is dead, which feeds central recovery
 2. **Save.** Keep the worktree. Write its `git diff` and untracked file list to
    `jobs/<task>/<generation>/recovery-restart-<n>/` (best-effort; never blocks).
 3. **Re-enter.** Each stage owns one action in a typed table, so adding a stage needs no change to
-   stop/save/proof.
+   stop/save/proof. The table and every restart/ask decision are pure (`central-reentry.ts`);
+   `central.ts` gathers facts and performs the effects.
 
 ### Stage re-entry table
 
@@ -154,7 +155,8 @@ When the gate admits nothing, `reserveTask` returns a `ReservationRefusal`; its 
   make a task ineligible, and an ineligible task is never mutated.
 - An eligible task gets the `resume` event, then its stage's `recoverStuckWorker`, spending the same
   budgets and stop ladder as an unblocked task.
-- Both the scheduler tick (`ServiceController.reconcileTask`) and `TaskControlWorkflow.restartTask`
+- Both the scheduler tick (`reconcileTask` in src/service/controller.ts, which acts on the step
+  src/service/reconcile-step.ts picks) and `TaskControlWorkflow.restartTask`
   call it. `restartTask` resumes a paused or blocked task after proving owned panes stopped, then
   runs the stage's reconcile; in `implementing`/`scouting` with no live writer that relaunches in
   the same task and worktree.
