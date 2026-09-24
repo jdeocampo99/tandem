@@ -369,6 +369,11 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
     objective: "show the changed screen",
     artifacts: ["/tmp/a.html", "/tmp/b.png"],
   });
+  expect(parseTandemCommand("request-receipt")).toEqual({ action: "request-receipt" });
+  expect(parseTandemCommand("request-receipt req-1")).toEqual({
+    action: "request-receipt",
+    requestId: "req-1",
+  });
   expect(parseTandemCommand("feedback presentation-1")).toEqual({
     action: "feedback",
     presentationId: "presentation-1",
@@ -891,9 +896,9 @@ test("onboard summaries render complete saved and pending role selections", () =
 });
 
 test("approval-bearing command syntax carries no model-controlled approval field", () => {
-  expect(parseTandemCommand("cleanup task-1 --discard")).toEqual({
+  expect(parseTandemCommand("cleanup task-1 task-2 --discard")).toEqual({
     action: "cleanup",
-    taskId: "task-1",
+    taskIds: ["task-1", "task-2"],
     discard: true,
   });
   expect(() => parseTandemCommand("merge task-1 squash --approved")).toThrow("expects at most");
@@ -1037,7 +1042,7 @@ test("scout summaries and the durable digest carry the post-research disposition
     },
   });
   const summary = summarizeTandemActionValue("show", scout);
-  expect(summary).toContain("After research: summarize the report with its evidence");
+  expect(summary).toContain("After research: summarize the report, propose one direction");
 
   const digest = buildDurableDigest([scout]);
   expect(digest).toContain("after research: implementation-interview");
@@ -1989,9 +1994,9 @@ test("extension cleanup skips confirmation for safe release and shows scope for 
     },
   } as unknown as ExtensionContext;
 
-  await executeTandemAction({ action: "cleanup", taskId: cleanupTask.id }, service, context);
+  await executeTandemAction({ action: "cleanup", taskIds: [cleanupTask.id] }, service, context);
   const refused = await executeTandemAction(
-    { action: "cleanup", taskId: cleanupTask.id, discard: true },
+    { action: "cleanup", taskIds: [cleanupTask.id], discard: true },
     service,
     context,
   );
@@ -2000,6 +2005,56 @@ test("extension cleanup skips confirmation for safe release and shows scope for 
   expect(prompts).toHaveLength(1);
   expect(prompts[0]).toBe("This discards its changes.");
   expect(refused.approved).toBe(false);
+});
+
+test("extension cleanup asks once for a batch and keeps going past a failure", async () => {
+  const cleaned: string[] = [];
+  const prompts: Array<{ readonly title: string; readonly message: string }> = [];
+  const tasks = new Map([
+    ["task-1", task({ id: "task-1", objective: "Research the settings flash" })],
+    ["task-2", task({ id: "task-2", objective: "Build the settings redesign" })],
+    ["task-3", task({ id: "task-3", objective: "Investigate analytics counts" })],
+  ]);
+  const found = (taskId: string) => {
+    const record = tasks.get(taskId);
+    if (record === undefined) throw new Error(`Task ${taskId} was not found`);
+    return record;
+  };
+  const service = {
+    get: async (taskId: string) => found(taskId),
+    cleanup: async (taskId: string) => {
+      if (taskId === "task-2") throw new Error("the worktree lease was retained");
+      cleaned.push(taskId);
+      return found(taskId);
+    },
+  } as unknown as TandemService;
+  const context = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      confirm: async (title: string, message: string) => {
+        prompts.push({ title, message });
+        return true;
+      },
+      notify: () => undefined,
+    },
+  } as unknown as ExtensionContext;
+
+  const result = await executeTandemAction(
+    { action: "cleanup", taskIds: ["task-1", "task-2", "task-3"], discard: true },
+    service,
+    context,
+  );
+
+  expect(prompts).toEqual([
+    {
+      title: "Delete the worktrees for 3 tasks?",
+      message:
+        '- "Research the settings flash"\n- "Build the settings redesign"\n- "Investigate analytics counts"\nThis discards their changes.',
+    },
+  ]);
+  expect(cleaned).toEqual(["task-1", "task-3"]);
+  expect(result.value).toContain("task-2: not cleaned up: the worktree lease was retained");
 });
 
 test("a recovery question wakes the coordinator once with its recommendation and consequences", async () => {

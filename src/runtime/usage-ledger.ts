@@ -7,7 +7,8 @@
  * check reads {@link RequestUsageLedger.read} or {@link RequestUsageLedger.receipt} on its own.
  */
 
-import { resolve } from "node:path";
+import { appendFile, readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { type Clock, isSafeRequestId } from "../contracts.ts";
 import {
   insertRequestUsagePayload,
@@ -18,6 +19,7 @@ import type { RequestUsageEvent } from "./usage.ts";
 import { parseRequestUsageEvent } from "./usage-codec.ts";
 import {
   buildRequestUsageReceipt,
+  type CoordinatorUsageEntry,
   type RequestUsageReadout,
   type RequestUsageReceipt,
 } from "./usage-receipt.ts";
@@ -26,6 +28,8 @@ import {
 export type RequestUsageRecordResult = Readonly<{
   readonly recorded: number;
   readonly duplicates: number;
+  /** The events this call added, so a first-time fact such as a delivery can be acted on once. */
+  readonly added: readonly RequestUsageEvent[];
 }>;
 
 export type RequestUsageLedger = Readonly<{
@@ -57,10 +61,10 @@ export function createRequestUsageLedger(options: RequestUsageLedgerOptions): Re
   return {
     record: async (events) => {
       const checked = events.map(checkedEvent);
-      if (checked.length === 0) return { recorded: 0, duplicates: 0 };
+      if (checked.length === 0) return { recorded: 0, duplicates: 0, added: [] };
       const recordedAt = options.clock();
       return withStateTransaction(home, (db) => {
-        let recorded = 0;
+        const added: RequestUsageEvent[] = [];
         for (const event of checked) {
           const inserted = insertRequestUsagePayload(db, {
             eventKey: event.eventKey,
@@ -68,9 +72,9 @@ export function createRequestUsageLedger(options: RequestUsageLedgerOptions): Re
             recordedAt,
             payload: event,
           });
-          if (inserted) recorded += 1;
+          if (inserted) added.push(event);
         }
-        return { recorded, duplicates: checked.length - recorded };
+        return { recorded: added.length, duplicates: checked.length - added.length, added };
       });
     },
     read,
@@ -114,4 +118,36 @@ function readoutOf(payloads: readonly (unknown | null)[]): RequestUsageReadout {
     }
   }
   return { events, malformedEvents };
+}
+
+/**
+ * The coordinator's own model replies, one line each. The coordinator's conversation serves every
+ * request in its repository at once, so it is kept apart from any one request's ledger and shown
+ * on a receipt only as a shared line.
+ */
+export async function appendCoordinatorUsage(
+  home: string,
+  entry: CoordinatorUsageEntry,
+): Promise<void> {
+  await appendFile(join(home, "coordinator-usage.jsonl"), `${JSON.stringify(entry)}\n`, {
+    mode: 0o600,
+  });
+}
+
+/** Every readable coordinator usage line; a missing file is no usage, and a bad line is skipped. */
+export async function readCoordinatorUsage(home: string): Promise<readonly unknown[]> {
+  let text: string;
+  try {
+    text = await readFile(join(home, "coordinator-usage.jsonl"), "utf8");
+  } catch {
+    return [];
+  }
+  return text.split("\n").flatMap((line) => {
+    if (line.trim().length === 0) return [];
+    try {
+      return [JSON.parse(line) as unknown];
+    } catch {
+      return [];
+    }
+  });
 }

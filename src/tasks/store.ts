@@ -188,6 +188,8 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
         ? {}
         : { researchContinuation: input.researchContinuation }),
       ...(input.skill === undefined ? {} : { skill: input.skill }),
+      ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
+      ...(input.target === undefined ? {} : { target: input.target }),
     };
     const task = createTask(taskInput, options.clock());
     writeTaskPayload(db, task.id, task.revision, task);

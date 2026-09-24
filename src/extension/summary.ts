@@ -6,15 +6,11 @@ import {
   MODEL_ROLE_ORDER,
   type TaskRecord,
 } from "../contracts.ts";
-import { USD_MICROS_PER_DOLLAR } from "../runtime/usage.ts";
-import type {
-  AdditionalCharges,
-  ElapsedMillis,
-  IncludedQuota,
-  RequestUsageReceipt,
-  TokenTotals,
+import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
+import {
+  REQUEST_RECEIPT_SCHEMA_VERSION,
+  renderRequestReceiptTable,
 } from "../runtime/usage-receipt.ts";
-import { REQUEST_RECEIPT_SCHEMA_VERSION } from "../runtime/usage-receipt.ts";
 import { isPinnedEvidence } from "../tasks/acceptance.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import {
@@ -30,6 +26,8 @@ export const DIGEST_MAX_CHARS = 8_000;
 export const ACTION_SUMMARY_MAX_TEXT = 220;
 export const ACTION_SUMMARY_MAX_ITEMS = 6;
 export const ACTION_RESULT_MAX_CHARS = 4_000;
+/** A review with many comments runs long; it is still shown in full up to this bound. */
+const PR_REVIEW_RESULT_MAX_CHARS = 24_000;
 export const ACTION_FULL_RESULT_MAX_CHARS = 12_000;
 const TERMINAL_TASK_STAGES: Readonly<Partial<Record<TaskRecord["stage"], true>>> = {
   cancelled: true,
@@ -175,7 +173,9 @@ function summarizeTask(task: TaskRecord): string {
         );
   const lines = [
     `${task.id}: ${task.stage}`,
-    `Repository: ${compactText(task.repoPath, ACTION_SUMMARY_MAX_TEXT)}`,
+    task.target === undefined
+      ? `Repository: ${compactText(task.repoPath, ACTION_SUMMARY_MAX_TEXT)}`
+      : `Repository: ${task.target.repo} at ${compactText(task.target.checkout, ACTION_SUMMARY_MAX_TEXT)}; pull requests target ${task.target.branch}`,
     `Objective: ${compactText(task.objective, ACTION_SUMMARY_MAX_TEXT)}`,
     `Scope: ${task.scopeApproved ? "approved" : "awaiting approval"}; attempt ${task.generation}`,
     ...(task.requestId === undefined
@@ -845,91 +845,35 @@ function isRequestUsageReceipt(value: unknown): value is RequestUsageReceipt {
   );
 }
 
-function describeDuration(value: ElapsedMillis): string {
-  if (value === "unavailable") return "unavailable";
-  const totalSeconds = Math.round(value / 1_000);
-  const hours = Math.floor(totalSeconds / 3_600);
-  const minutes = Math.floor((totalSeconds % 3_600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-}
-
-/** Plain dollars for a user-facing summary; an unmeasured amount is named, never shown as zero. */
-function formatDollars(value: number | "unavailable"): string {
-  if (value === "unavailable") return "an unknown amount";
-  return `$${(value / USD_MICROS_PER_DOLLAR).toFixed(2)}`;
-}
-
-/** Never presents an unmeasured charge as zero, and never lets one read as a saving. */
-function describeCharges(charges: AdditionalCharges): string {
-  const amount = formatDollars(charges.amountMicros);
-  const priced = charges.actualSamples + charges.estimatedSamples;
-  const counted =
-    priced === 0
-      ? `${amount} (no prices available)`
-      : `${amount} (${charges.actualSamples} measured, ${charges.estimatedSamples} estimated)`;
-  return charges.unavailableSamples === 0
-    ? counted
-    : `${counted}; ${charges.unavailableSamples} unmeasured and not counted`;
-}
-
-function describeTokens(tokens: TokenTotals): string {
-  const parts = [`${tokens.actualInputTokens} in / ${tokens.actualOutputTokens} out actual`];
-  if (tokens.estimatedInputTokens > 0 || tokens.estimatedOutputTokens > 0) {
-    parts.push(`${tokens.estimatedInputTokens} in / ${tokens.estimatedOutputTokens} out estimated`);
-  }
-  if (tokens.unavailableSamples > 0) {
-    parts.push(`${tokens.unavailableSamples} sample(s) unavailable`);
-  }
-  return parts.join("; ");
-}
-
-function describeQuota(quota: IncludedQuota): string {
-  const entries = quota.entries.map((entry) => `${entry.plan} ${entry.units} ${entry.unit}`);
-  const unavailable =
-    quota.unavailableSamples === 0
-      ? undefined
-      : `${quota.unavailableSamples} sample(s) unavailable`;
-  if (entries.length === 0) return unavailable ?? "none reported";
-  return unavailable === undefined
-    ? compactList(entries, ACTION_SUMMARY_MAX_ITEMS, 100)
-    : `${compactList(entries, ACTION_SUMMARY_MAX_ITEMS, 100)}; ${unavailable}`;
-}
-
 /**
- * The compact receipt first, then the breakdown the caller can expand. Elapsed time comes only
- * from the recorded intake and terminal facts, so concurrent workers are reported as overlap
- * rather than added to the wall clock.
+ * The receipt as its per-stage table. Elapsed time comes only from the recorded intake and
+ * terminal facts, so concurrent workers are reported as overlap rather than added to the wall clock.
  */
 function summarizeRequestReceipt(value: unknown): string {
   if (!isRequestUsageReceipt(value)) return boundedJson(value, ACTION_RESULT_MAX_CHARS);
-  const { timing, breakdown } = value;
-  const lines = [
-    `${value.requestId}: ${value.status}; elapsed ${describeDuration(timing.elapsedMs)} (${timing.intakeAt} to ${timing.terminalAt})`,
-    `Additional charges: ${describeCharges(value.charges)}`,
-    `Included quota: ${describeQuota(value.quota)}`,
-    `Tokens: ${describeTokens(value.tokens)}`,
-    `Active ${describeDuration(timing.activeMs)}; overlapping ${describeDuration(timing.overlappingMs)}; waiting ${describeDuration(timing.waitingMs)}`,
-  ];
-  for (const total of breakdown.byWorkKind) {
-    lines.push(
-      `- ${total.workKind}: ${total.sampleCount} sample(s); active ${describeDuration(total.activeMs)}; ${total.retries} retry(ies); ${total.failures} failure(s); tokens ${describeTokens(total.tokens)}`,
-    );
-  }
-  for (const provider of breakdown.byProvider) {
-    lines.push(
-      `- ${provider.provider}/${provider.model}: ${provider.sampleCount} sample(s); ${provider.timedOutSamples} timed out; ${describeCharges(provider.charges)}`,
-    );
-  }
-  lines.push(
-    `Samples not listed: ${breakdown.omittedSamples}; duplicate receipts ignored: ${breakdown.duplicateSamples}; unreadable rows: ${breakdown.malformedSamples}`,
-  );
-  return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
+  return boundedOutput(renderRequestReceiptTable(value), ACTION_RESULT_MAX_CHARS);
 }
 
 function isNonEmptyEntry(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * PR review results carry text meant for the user: a one-line message, the review itself, or raw
+ * page notes. The review is shown whole, since it is the point of the action.
+ */
+function summarizePrReview(result: unknown): string {
+  const value = summaryRecord(result);
+  if (value === undefined) return boundedJson(result, ACTION_RESULT_MAX_CHARS);
+  const parts: string[] = [];
+  if (typeof value.taskId === "string") parts.push(`Task ${value.taskId}.`);
+  if (typeof value.message === "string") parts.push(value.message);
+  if (typeof value.pageUrl === "string") parts.push(`Review page: ${value.pageUrl}`);
+  if (typeof value.text === "string") parts.push("", value.text);
+  if (typeof value.feedback === "string") {
+    parts.push(value.feedback.trim().length === 0 ? "No notes on the page yet." : value.feedback);
+  }
+  return boundedOutput(parts.join("\n"), PR_REVIEW_RESULT_MAX_CHARS);
 }
 
 export function summarizeTandemActionValue(action: TandemAction["action"], value: unknown): string {
@@ -955,7 +899,6 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     action === "pause" ||
     action === "resume" ||
     action === "cancel" ||
-    action === "cleanup" ||
     action === "publish" ||
     action === "publish-now" ||
     action === "draft" ||
@@ -972,7 +915,24 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     return summarizeRequestBrief(value);
   }
   if (action === "request-receipt") return summarizeRequestReceipt(value);
-  if (action === "presentations" || action === "present" || action === "feedback") {
+  if (
+    action === "review-pr" ||
+    action === "review-show" ||
+    action === "review-edit" ||
+    action === "review-post" ||
+    action === "review-notes"
+  ) {
+    return summarizePrReview(value);
+  }
+  if (action === "review-again" || action === "review-close") {
+    return isTaskRecord(value) ? summarizeTask(value) : boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  }
+  if (
+    action === "presentations" ||
+    action === "present" ||
+    action === "feedback" ||
+    action === "presentation-open"
+  ) {
     return summarizePresentations(action, value);
   }
   if (typeof value === "string")

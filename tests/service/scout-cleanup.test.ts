@@ -30,9 +30,11 @@ import {
   decideScoutCleanupEligibility,
   decideScoutWorktreeRelease,
   finishPendingScoutCleanup,
+  runCleanupCommands,
 } from "../../src/service/scout-cleanup.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { type WorkerTerminalState, writeWorkerTerminal } from "../../src/workers/terminal.ts";
 
 const TIMESTAMP = "2030-01-01T00:00:00.000Z";
 const SOURCE_HEAD = "source-head";
@@ -73,6 +75,8 @@ const policy: ResolvedPolicy = {
 type World = {
   panePresent: boolean;
   paneActive: boolean;
+  /** A live worker in the pane exits on ctrl+d. */
+  workerAcceptsClose: boolean;
   paneWorkspaceId: string;
   paneCloseCode: number;
   leaseHeld: boolean;
@@ -89,6 +93,7 @@ function newWorld(overrides: Partial<World> = {}): World {
   return {
     panePresent: true,
     paneActive: false,
+    workerAcceptsClose: false,
     paneWorkspaceId: "workspace-1",
     paneCloseCode: 0,
     leaseHeld: true,
@@ -172,6 +177,10 @@ function worldRunner(world: World, lease: WorktreeLease) {
           }),
         );
       }
+      if (argv.includes("send-keys") && argv.at(-1) === "ctrl+d") {
+        if (world.workerAcceptsClose) world.paneActive = false;
+        return ok();
+      }
       if (argv.includes("pane") && argv.includes("close")) {
         if (world.paneCloseCode !== 0) {
           return { code: world.paneCloseCode, stdout: "", stderr: "herdr refused to close" };
@@ -234,6 +243,34 @@ function worldRunner(world: World, lease: WorktreeLease) {
     if (argv[0] === "omp" && argv[1] === "models") return ok(JSON.stringify({ models: [] }));
     throw new Error(`unexpected command ${JSON.stringify(argv)}`);
   };
+}
+
+/** Plays the worker extension's side of a close request: it answers with the closing phase. */
+function answerCloseRequests(job: DurableJob): () => void {
+  const timer = setInterval(async () => {
+    const command = await readFile(`${job.jobPath}.terminal.json.command`, "utf8").catch(() => "");
+    if (command === "") return;
+    const commandId = (JSON.parse(command) as { id: string }).id;
+    await writeScoutTerminal(job, { phase: "closing", completed: true, commandId });
+  }, 10);
+  return () => clearInterval(timer);
+}
+
+async function writeScoutTerminal(
+  job: DurableJob,
+  state: Pick<WorkerTerminalState, "phase" | "completed" | "commandId">,
+): Promise<void> {
+  await writeWorkerTerminal(job.jobPath, {
+    schemaVersion: 1,
+    jobId: job.id,
+    taskId: job.taskId,
+    generation: job.generation,
+    role: "scout",
+    cwd: job.cwd,
+    pid: 100,
+    heartbeatAt: new Date().toISOString(),
+    ...state,
+  });
 }
 
 function scoutJob(home: string, endpoint: Endpoint, phase: DurableJob["phase"]): DurableJob {
@@ -551,6 +588,43 @@ test("a scout whose research leads to implementation closes its pane and keeps i
   );
 });
 
+test("a finished scout whose OMP stays open idle is closed so its worktree can be adopted", async () => {
+  await withFixture(
+    {
+      disposition: "implementation-interview",
+      world: { paneActive: true, workerAcceptsClose: true },
+    },
+    async ({ home, world, service, lease }) => {
+      const job = scoutJob(home, endpointFor(), "consumed");
+      await writeScoutTerminal(job, { phase: "idle", completed: true });
+      const stop = answerCloseRequests(job);
+
+      await service.tick().finally(stop);
+
+      expect(world.closedPanes).toEqual(["pane-1"]);
+      const runtime = (await readRuntime(home)).tasks[0];
+      expect(runtime?.endpoints).toEqual([]);
+      expect(runtime?.worktree?.leaseId).toBe(lease.leaseId);
+    },
+  );
+});
+
+test("a scout whose OMP is still busy keeps its pane until a later tick", async () => {
+  await withFixture({ world: { paneActive: true } }, async ({ home, world, service }) => {
+    await writeScoutTerminal(scoutJob(home, endpointFor(), "consumed"), {
+      phase: "busy",
+      completed: true,
+    });
+
+    await service.tick();
+
+    expect(world.closedPanes).toEqual([]);
+    expect(world.returnedLeases).toEqual([]);
+    expect((await service.get("task-1")).cleanup).toBeUndefined();
+    expect((await readRuntime(home)).tasks[0]?.endpoints).toHaveLength(1);
+  });
+});
+
 test("an untracked file in a scout checkout keeps the worktree with a reported reason", async () => {
   await withFixture({ world: { dirty: true } }, async ({ home, world, service, lease }) => {
     await service.tick();
@@ -789,4 +863,36 @@ test("scout completion releases resources in the same pass that writes the repor
     await service.shutdown();
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test("cleanup commands run in the finished task's worktree and report failures without throwing", async () => {
+  const requests: CommandRequest[] = [];
+  const run = async (request: CommandRequest): Promise<CommandResult> => {
+    requests.push(request);
+    return {
+      code: request.argv.at(-1) === "npm run db:stop:local" ? 0 : 3,
+      stdout: "",
+      stderr: "",
+    };
+  };
+  const deps = {
+    run,
+    cleanupCommands: async () => ["npm run db:stop:local", "docker compose down"],
+  };
+
+  const failure = await runCleanupCommands(deps, "/repo", "/pool/3/app");
+
+  expect(requests.map((request) => [request.argv, request.cwd])).toEqual([
+    [["/bin/sh", "-c", "npm run db:stop:local"], "/pool/3/app"],
+    [["/bin/sh", "-c", "docker compose down"], "/pool/3/app"],
+  ]);
+  expect(failure).toBe("cleanup commands failed: docker compose down exited 3");
+  expect(await runCleanupCommands(deps, "/repo", undefined)).toBeUndefined();
+  expect(
+    await runCleanupCommands(
+      { run, cleanupCommands: async () => ["npm run db:stop:local"] },
+      "/repo",
+      "/w",
+    ),
+  ).toBeUndefined();
 });

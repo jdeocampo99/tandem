@@ -1,6 +1,14 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { RepoPolicy, RequestBriefContent, SkillInvocation, TaskKind } from "../contracts.ts";
+import type {
+  CreatableTaskKind,
+  RepoPolicy,
+  RequestBriefContent,
+  SkillInvocation,
+} from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
+import type { ReviewVerdict } from "../pr-review/post.ts";
+import type { ReviewLens } from "../pr-review/review.ts";
+import type { CommentEdit } from "../pr-review/service.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
@@ -23,6 +31,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   resume: { min: 2, max: 2 },
   cancel: { min: 2, max: Number.POSITIVE_INFINITY },
   feedback: { min: 2, max: 2 },
+  "presentation-open": { min: 2, max: 2 },
   present: { min: 4, max: 4 },
   describe: { min: 3, max: 3 },
   "pr-describe": { min: 3, max: 3 },
@@ -32,13 +41,13 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "pr-draft": { min: 4, max: 4 },
   merge: { min: 3, max: 3 },
   "pr-merge": { min: 3, max: 3 },
-  cleanup: { min: 2, max: 3 },
+  cleanup: { min: 2, max: Number.POSITIVE_INFINITY },
   messages: { min: 2, max: 2 },
   inspect: { min: 2, max: 2 },
   "brief-show": { min: 2, max: 2 },
   "brief-review": { min: 2, max: 2 },
   "brief-approve": { min: 3, max: 4 },
-  "request-receipt": { min: 2, max: 2 },
+  "request-receipt": { min: 1, max: 2 },
   "delivery-preflight": { min: 3, max: 3 },
 };
 export type TandemAction =
@@ -55,7 +64,7 @@ export type TandemAction =
   | Readonly<{
       readonly action: "create";
       readonly repoPath: string;
-      readonly kind: TaskKind;
+      readonly kind: CreatableTaskKind;
       readonly objective: string;
       readonly acceptanceCriteria: readonly string[];
       readonly manualVerification?: readonly string[] | undefined;
@@ -63,6 +72,10 @@ export type TandemAction =
       readonly researchTaskIds?: readonly string[] | undefined;
       /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
       readonly skill?: SkillInvocation | undefined;
+      readonly targetRepo?: string | undefined;
+      readonly targetCheckout?: string | undefined;
+      readonly targetClone?: boolean | undefined;
+      readonly validationCommands?: readonly string[] | undefined;
     }>
   | Readonly<{ readonly action: "list" }>
   | Readonly<{ readonly action: "presentations" }>
@@ -100,7 +113,7 @@ export type TandemAction =
     }>
   | Readonly<{ readonly action: "brief-review"; readonly requestId: string }>
   | Readonly<{ readonly action: "brief-show"; readonly requestId: string }>
-  | Readonly<{ readonly action: "request-receipt"; readonly requestId: string }>
+  | Readonly<{ readonly action: "request-receipt"; readonly requestId?: string | undefined }>
   | Readonly<{
       readonly action: "brief-approve";
       /** Omitted resolves to the one request whose brief is awaiting approval. */
@@ -119,6 +132,7 @@ export type TandemAction =
       readonly action: "cancel";
       readonly taskId: string;
       readonly reason?: string | undefined;
+      readonly discard?: boolean | undefined;
     }>
   | Readonly<{
       readonly action: "present";
@@ -127,6 +141,7 @@ export type TandemAction =
       readonly artifacts: readonly string[];
     }>
   | Readonly<{ readonly action: "feedback"; readonly presentationId: string }>
+  | Readonly<{ readonly action: "presentation-open"; readonly presentationId: string }>
   | Readonly<{ readonly action: "describe"; readonly taskId: string; readonly summary: PrSummary }>
   | Readonly<{
       readonly action: "publish";
@@ -156,9 +171,38 @@ export type TandemAction =
     }>
   | Readonly<{
       readonly action: "cleanup";
-      readonly taskId: string;
+      readonly taskIds: readonly string[];
       readonly discard?: boolean | undefined;
-    }>;
+    }>
+  | Readonly<{
+      readonly action: "review-pr";
+      readonly pullRequest: string;
+      readonly repoPath: string;
+      readonly lens?: "full" | "intent" | "focus" | undefined;
+      /** The user's own words for a focus review, such as "the migration". */
+      readonly focus?: string | undefined;
+      readonly checkout?: string | undefined;
+      readonly clone?: boolean | undefined;
+    }>
+  | Readonly<{
+      readonly action: "review-show";
+      readonly taskId: string;
+      readonly page?: boolean | undefined;
+    }>
+  | Readonly<{ readonly action: "review-notes"; readonly taskId: string }>
+  | Readonly<{
+      readonly action: "review-edit";
+      readonly taskId: string;
+      readonly comments?: readonly CommentEdit[] | undefined;
+      readonly summaryComment?: string | undefined;
+    }>
+  | Readonly<{
+      readonly action: "review-post";
+      readonly taskId: string;
+      readonly verdict: ReviewVerdict;
+    }>
+  | Readonly<{ readonly action: "review-again"; readonly taskId: string }>
+  | Readonly<{ readonly action: "review-close"; readonly taskId: string }>;
 
 export type TandemActionResult = Readonly<{
   readonly action: TandemAction["action"];
@@ -192,7 +236,8 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "publish" ||
     action.action === "publish-now" ||
     action.action === "draft" ||
-    action.action === "merge"
+    action.action === "merge" ||
+    action.action === "review-post"
   );
 }
 function capitalize(value: string): string {
@@ -229,6 +274,18 @@ async function approvalPrompt(
       message: taskName(view.record.draft.content.goal),
     };
   }
+  if (action.action === "cleanup") {
+    const names = await Promise.all(
+      action.taskIds.map(async (taskId) => taskName((await service.get(taskId)).objective)),
+    );
+    const [only] = names;
+    return names.length === 1 && only !== undefined
+      ? { title: `Delete the worktree for ${only}?`, message: "This discards its changes." }
+      : {
+          title: `Delete the worktrees for ${names.length} tasks?`,
+          message: `${names.map((name) => `- ${name}`).join("\n")}\nThis discards their changes.`,
+        };
+  }
   if (!("taskId" in action)) return { title: "Allow this Tandem action?", message: "" };
   const task = await service.get(action.taskId);
   const name = taskName(task.objective);
@@ -246,7 +303,12 @@ async function approvalPrompt(
       };
     }
     case "cancel":
-      return { title: `Stop ${name}?`, message: "Its work and reports are kept." };
+      return action.discard === true
+        ? {
+            title: `Stop ${name} and delete its worktree?`,
+            message: "This discards its changes. Reports are kept.",
+          }
+        : { title: `Stop ${name}?`, message: "Its work and reports are kept." };
     case "publish":
       return {
         title: `Open a PR for ${name}?`,
@@ -270,8 +332,18 @@ async function approvalPrompt(
             : `Merge PR #${task.pullRequest.number}?`,
         message: `${capitalize(action.method)}, once checks pass.`,
       };
-    case "cleanup":
-      return { title: `Delete the worktree for ${name}?`, message: "This discards its changes." };
+    case "review-post": {
+      const round = task.prReview?.rounds.at(-1);
+      const count = round?.review.comments.length ?? 0;
+      const target =
+        task.prReview === undefined
+          ? name
+          : `${task.prReview.ref.repo}#${task.prReview.ref.number}`;
+      return {
+        title: `Post your review on ${target}?`,
+        message: `${VERDICT_LABELS[action.verdict]}, with ${count} inline comment${count === 1 ? "" : "s"}. It goes up under your GitHub name.`,
+      };
+    }
     default:
       return { title: "Allow this Tandem action?", message: "" };
   }
@@ -281,8 +353,9 @@ async function confirmAction(
   action: TandemAction,
   service: TandemService,
   ctx: ExtensionContext,
+  confirmedInConversation: boolean,
 ): Promise<boolean> {
-  if (!requiresHumanApproval(action)) return true;
+  if (!requiresHumanApproval(action) || confirmedInConversation) return true;
   if (!ctx.hasUI || ctx.mode !== "tui") return false;
   const prompt = await approvalPrompt(action, service);
   return ctx.ui.confirm(prompt.title, prompt.message);
@@ -302,16 +375,30 @@ function serviceCreateInput(
     surfaces: action.surfaces,
     ...(action.researchTaskIds === undefined ? {} : { researchTaskIds: action.researchTaskIds }),
     ...(action.skill === undefined ? {} : { skill: action.skill }),
+    ...(action.targetRepo === undefined ? {} : { targetRepo: action.targetRepo }),
+    ...(action.targetCheckout === undefined ? {} : { targetCheckout: action.targetCheckout }),
+    ...(action.targetClone === undefined ? {} : { targetClone: action.targetClone }),
+    ...(action.validationCommands === undefined
+      ? {}
+      : { validationCommands: action.validationCommands }),
   };
 }
 
+/**
+ * `confirmedInConversation` is set only when the person already typed an exact "y" to a code-written
+ * confirmation of this same action, which stands in for the approval dialog.
+ */
 export async function executeTandemAction(
   action: TandemAction,
   service: TandemService,
   ctx: ExtensionContext,
-  signal?: AbortSignal,
+  options: Readonly<{
+    readonly signal?: AbortSignal | undefined;
+    readonly confirmedInConversation?: boolean;
+  }> = {},
 ): Promise<TandemActionResult> {
-  const approved = await confirmAction(action, service, ctx);
+  const { signal, confirmedInConversation = false } = options;
+  const approved = await confirmAction(action, service, ctx, confirmedInConversation);
   if (!approved)
     return textResult(
       "Action refused: interactive human approval is required.",
@@ -410,7 +497,11 @@ export async function executeTandemAction(
     case "resume":
       return textResult(await service.resume(action.taskId), action.action);
     case "cancel":
-      return textResult(await service.cancel(action.taskId, action.reason), action.action, true);
+      return textResult(
+        await service.cancel(action.taskId, action.reason, { discard: action.discard === true }),
+        action.action,
+        true,
+      );
     case "present":
       return textResult(
         await service.present(action.taskId, {
@@ -421,6 +512,8 @@ export async function executeTandemAction(
       );
     case "feedback":
       return textResult(await service.feedback(action.presentationId, signal), action.action);
+    case "presentation-open":
+      return textResult(await service.openPresentation(action.presentationId), action.action);
     case "describe":
       return textResult(await service.describePr(action.taskId, action.summary), action.action);
     case "publish":
@@ -464,13 +557,80 @@ export async function executeTandemAction(
       );
     case "cleanup": {
       const input = action.discard === true ? { discard: true, destructiveApproval: true } : {};
+      // One approval covers the batch; a task that can't be cleaned doesn't stop the rest.
+      const lines: string[] = [];
+      for (const taskId of action.taskIds) {
+        try {
+          const task = await service.cleanup(taskId, input);
+          lines.push(`- ${taskName(task.objective)} (${taskId}): cleaned up`);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          lines.push(`- ${taskId}: not cleaned up: ${reason}`);
+        }
+      }
       return textResult(
-        await service.cleanup(action.taskId, input),
+        lines.join("\n"),
         action.action,
         action.discard === true ? true : undefined,
       );
     }
+    case "review-pr":
+      return textResult(
+        await service.reviewPr({
+          pullRequest: action.pullRequest,
+          repoPath: action.repoPath,
+          ...(action.lens === undefined ? {} : { lens: reviewLens(action.lens, action.focus) }),
+          ...(action.checkout === undefined ? {} : { checkout: action.checkout }),
+          ...(action.clone === undefined ? {} : { clone: action.clone }),
+        }),
+        action.action,
+      );
+    case "review-show":
+      return textResult(
+        await service.reviewShow(
+          action.taskId,
+          action.page === undefined ? {} : { page: action.page },
+        ),
+        action.action,
+      );
+    case "review-notes":
+      return textResult(await service.reviewNotes(action.taskId), action.action);
+    case "review-edit":
+      return textResult(
+        await service.reviewEdit(action.taskId, {
+          ...(action.comments === undefined ? {} : { comments: action.comments }),
+          ...(action.summaryComment === undefined ? {} : { summaryComment: action.summaryComment }),
+        }),
+        action.action,
+      );
+    case "review-post":
+      return textResult(
+        await service.reviewPost(action.taskId, { verdict: action.verdict, approved: true }),
+        action.action,
+        true,
+      );
+    case "review-again":
+      return textResult(await service.reviewAgain(action.taskId), action.action);
+    case "review-close":
+      return textResult(await service.reviewClose(action.taskId), action.action);
   }
+}
+
+const VERDICT_LABELS: Readonly<Record<ReviewVerdict, string>> = {
+  comment: "Comment only",
+  approve: "Approve",
+  "request-changes": "Request changes",
+};
+
+/** A focus lens without the user's words falls back to a full review rather than guessing. */
+export function reviewLens(
+  kind: "full" | "intent" | "focus",
+  focus: string | undefined,
+): ReviewLens {
+  if (kind === "focus" && focus !== undefined && focus.trim().length > 0) {
+    return { kind: "focus", focus: focus.trim() };
+  }
+  return kind === "intent" ? { kind: "intent" } : { kind: "full" };
 }
 
 function parseShellWords(input: string): readonly string[] {
@@ -638,7 +798,10 @@ export function parseTandemCommand(input: string): TandemAction {
     case "brief-show":
       return { action: "brief-show", requestId: value(1, "brief-show") };
     case "request-receipt":
-      return { action: "request-receipt", requestId: value(1, "request-receipt") };
+      // Without an id, the receipt is for the request in progress.
+      return words.length > 1
+        ? { action: "request-receipt", requestId: value(1, "request-receipt") }
+        : { action: "request-receipt" };
     case "brief-review":
       return { action: "brief-review", requestId: value(1, "brief-review") };
     case "brief-approve": {
@@ -686,6 +849,8 @@ export function parseTandemCommand(input: string): TandemAction {
       return { action: "presentations" };
     case "feedback":
       return { action: "feedback", presentationId: value(1, "feedback") };
+    case "presentation-open":
+      return { action: "presentation-open", presentationId: value(1, "presentation-open") };
     case "present":
       return {
         action: "present",
@@ -727,14 +892,13 @@ export function parseTandemCommand(input: string): TandemAction {
         throw new TypeError(`unsupported merge method ${method}`);
       return { action: "merge", taskId: value(1, "merge"), method };
     }
-    case "cleanup":
-      if (words[2] !== undefined && words[2] !== "--discard")
-        throw new TypeError("cleanup accepts only --discard as its optional flag");
-      return {
-        action: "cleanup",
-        taskId: value(1, "cleanup"),
-        ...(words[2] === "--discard" ? { discard: true } : {}),
-      };
+    case "cleanup": {
+      const discard = words.at(-1) === "--discard";
+      const taskIds = words.slice(1, discard ? -1 : undefined);
+      if (taskIds.length === 0 || taskIds.some((taskId) => taskId.startsWith("--")))
+        throw new TypeError("cleanup takes task ids and only --discard as its optional flag");
+      return { action: "cleanup", taskIds, ...(discard ? { discard: true } : {}) };
+    }
     default:
       throw new TypeError(`unknown Tandem command ${command}`);
   }

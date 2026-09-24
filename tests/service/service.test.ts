@@ -3539,6 +3539,106 @@ test("reloads a browser-disconnected presentation as open for an explicit user d
     expect(polls).toHaveLength(1);
   });
 });
+async function seedPresentation(
+  home: string,
+  status: "open" | "ended" | "running",
+  observationStatus?: "user-ended",
+): Promise<string> {
+  const recordPath = join(home, "record.json");
+  const artifactPath = join(home, "artifact.html");
+  await writeJsonAtomically(recordPath, {
+    id: "presentation-3",
+    taskId: "task-1",
+    generation: 0,
+    cwd: home,
+    artifactPath,
+    objective: "Mock up the settings page",
+    jobPath: join(home, "job.json"),
+    resultPath: join(home, "result.json"),
+    status,
+    createdAt: TIMESTAMP,
+    updatedAt: TIMESTAMP,
+    ...(observationStatus === undefined
+      ? {}
+      : {
+          observation: {
+            artifact: artifactPath,
+            status: observationStatus,
+            terminal: true,
+            sessionEnded: true,
+            raw: "ended by user",
+            rawFeedback: "",
+          },
+        }),
+  });
+  const runtime = await readRuntime(home);
+  await writeRuntimeState(runtimeFile(home), {
+    ...runtime,
+    presentations: [
+      {
+        schemaVersion: 1,
+        id: "presentation-3",
+        taskId: "task-1",
+        recordPath,
+        job: {
+          schemaVersion: 1,
+          id: "presentation-job-3",
+          taskId: "task-1",
+          generation: 0,
+          role: "presentation",
+          kind: "worker",
+          cwd: home,
+          jobPath: join(home, "job.json"),
+          resultPath: join(home, "result.json"),
+          attempt: 1,
+          phase: "consumed",
+          launchAttempted: true,
+          createdAt: TIMESTAMP,
+          consumedAt: TIMESTAMP,
+        },
+      },
+    ],
+  });
+  return artifactPath;
+}
+
+test("opening a presentation the user ended reopens it and starts listening again", async () => {
+  await withFixture(
+    {
+      runner: {
+        presentationOpenResponse: commandResult(
+          "session:\n  status: opened\n  session_ended: false\n  url: http://127.0.0.1:4387/session/abc\n",
+        ),
+      },
+    },
+    async ({ home, service, runnerState }) => {
+      const artifactPath = await seedPresentation(home, "ended", "user-ended");
+      const opened = await service.openPresentation("presentation-3");
+      expect(opened.status).toBe("open");
+      expect(opened.sessionUrl).toBe("http://127.0.0.1:4387/session/abc");
+      expect(opened.objective).toBe("Mock up the settings page");
+      const open = runnerState.calls.filter(
+        (request) => request.argv[0] === "lavish-axi" && request.argv[1] !== "poll",
+      );
+      expect(open.map((request) => request.argv)).toEqual([
+        ["lavish-axi", artifactPath, "--reopen"],
+      ]);
+      await runnerState.presentationStarted;
+      runnerState.releasePresentation();
+    },
+  );
+});
+
+test("opening a presentation that is still being made is refused without calling Lavish", async () => {
+  await withFixture({}, async ({ home, service, runnerState }) => {
+    await seedPresentation(home, "running");
+    await expect(service.openPresentation("presentation-3")).rejects.toThrow(
+      "Presentation presentation-3 is running, so there is nothing to open yet",
+    );
+    expect(runnerState.calls.some((request) => request.argv[0] === "lavish-axi")).toBe(false);
+  });
+});
+
 test("scheduler starts open presentation feedback polling without blocking task reconciliation", async () => {
   await withFixture(
     {
@@ -3813,7 +3913,7 @@ test("a launched review job receives a bounded deterministic review brief", asyn
     {
       kind: "implementation",
       stage: "reviewing",
-      taskEdits: { reviewHead: "review-head" },
+      taskEdits: { reviewHead: "review-head", reviewRound: 1 },
       runner: {
         active: false,
         checkoutHead: "review-head",
@@ -3830,7 +3930,10 @@ test("a launched review job receives a bounded deterministic review brief", asyn
       if (launched === undefined) throw new Error("review job was not persisted");
       const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
         readonly prompt: string;
+        readonly review?: { readonly round?: number };
       };
+      // One fix round done, so this is the task's second review.
+      expect(spec.review?.round).toBe(2);
       const briefPath = join(dirname(launched.jobPath), "review-brief.md");
       expect(spec.prompt).toContain(briefPath);
       expect(spec.prompt).toContain("is not proof");
@@ -4782,6 +4885,7 @@ test("admitted fix context recovery materializes findings and launches the same 
                 operation,
                 reservation: { ...reservationFor(task.id), operationId: operation.id },
                 fixContextPath: join(home, "jobs", task.id, "fix-context-missing.json"),
+                sessionDirectory: join(home, "sessions", task.id),
                 endpoints: [endpointFor("implementer")],
                 jobs: [],
               },
@@ -4806,6 +4910,11 @@ test("admitted fix context recovery materializes findings and launches the same 
       expect(runtime?.operation?.jobId).toBe(operation.jobId);
       expect(runtime?.jobs[0]?.id).toBe(operation.jobId);
       expect(runnerState.launches).toBe(1);
+      // The fix round continues the implementer's own OMP conversation instead of starting fresh.
+      const jobPath = runtime?.jobs[0]?.jobPath;
+      if (jobPath === undefined) throw new Error("fix round job was not recorded");
+      const spec = JSON.parse(await readFile(jobPath, "utf8")) as WorkerJob;
+      expect(spec.sessionDirectory).toBe(join(home, "sessions", task.id));
     },
   );
 });

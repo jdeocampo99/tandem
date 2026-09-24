@@ -187,6 +187,35 @@ test("prepares a private directory and worker job from bounded Lavish guidance",
   }
 });
 
+test("briefs a mockup with the style guide instead of Lavish guidance or task checks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-presentation-mockup-"));
+  try {
+    const paths = await freshPresentationPaths(root);
+    const run: CommandRunner = async (request) => {
+      throw new Error(`unexpected command: ${request.argv.join(" ")}`);
+    };
+    const prepared = await preparePresentation({
+      task: task(paths.repository),
+      id: "presentation-1",
+      directory: paths.directory,
+      objective: "Create four phone-screen mockups of the cancellation flow",
+      artifacts: [],
+      now: "2030-01-02T03:04:05.000Z",
+      run,
+    });
+
+    expect(prepared.job.prompt).toContain(
+      "Mockup style guide (follow it exactly):\n# Mockup style",
+    );
+    expect(prepared.job.prompt).toContain("AGENTS.md and CLAUDE.md");
+    expect(prepared.job.prompt).not.toContain("## Automated checks");
+    expect(prepared.job.prompt).not.toContain("The artifact is useful and complete.");
+    expect(prepared.job.prompt).not.toContain("Lavish guidance");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("accepts a fresh child through the /tmp physical alias when it is outside the repository", async () => {
   const root = await mkdtemp("/tmp/tandem-presentation-alias-");
   try {

@@ -179,6 +179,8 @@ export type HerdrCommandResult = Readonly<{
 export type InterruptEndpointInput = Readonly<{
   endpoint: Endpoint;
   cwd: string;
+  /** The key that stops the foreground program; `ctrl+c` unless the program quits another way. */
+  key?: string;
   timeoutMs?: number;
   pollIntervalMs?: number;
 }>;
@@ -192,6 +194,8 @@ export type InterruptEndpointResult = Readonly<{
 export type CloseEndpointInput = Readonly<{
   endpoint: Endpoint;
   cwd: string;
+  /** The user approved discarding the pane's work, so a still-running process closes with it. */
+  force?: boolean;
 }>;
 
 export type CloseEndpointResult = Readonly<{
@@ -408,7 +412,7 @@ function processBasename(value: string): string {
   return withoutPath.replace(/^-/, "").toLowerCase();
 }
 
-function isWorkerProcess(process: HerdrForegroundProcess): boolean {
+export function isWorkerProcess(process: HerdrForegroundProcess): boolean {
   const name = processBasename(process.name);
   const argv0 = process.argv0 === undefined ? undefined : processBasename(process.argv0);
   return (
@@ -1068,7 +1072,7 @@ export async function interruptEndpoint(
     "pane",
     "send-keys",
     input.endpoint.paneId,
-    "ctrl+c",
+    input.key ?? "ctrl+c",
   ]);
   await runChecked(run, request, "herdr pane interrupt");
 
@@ -1136,7 +1140,7 @@ export async function closeEndpoint(
     }
     throw error;
   }
-  if (inspection.activeWorker) throw new EndpointBusyError(input.endpoint);
+  if (inspection.activeWorker && input.force !== true) throw new EndpointBusyError(input.endpoint);
   const request = herdrRequest(input.endpoint.sessionId, input.cwd, [
     "pane",
     "close",

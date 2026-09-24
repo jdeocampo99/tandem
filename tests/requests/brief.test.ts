@@ -2,9 +2,11 @@ import { expect, test } from "bun:test";
 import type { RequestBriefContent, RequestBriefRecord, TaskRecord } from "../../src/contracts.ts";
 import {
   approveRequestBriefRecord,
+  briefSkipsReview,
   checkedRequestBriefContent,
   createRequestBriefRecord,
   decideRequestDispatch,
+  openRequestForNewWork,
   RequestBriefError,
   requestApprovalState,
   requestBriefDigests,
@@ -218,6 +220,33 @@ test("moving an item into manual verification changes what was agreed and needs 
   expect(requestApprovalState(moved)).toBe("superseded");
 });
 
+test("skipping review is part of what was agreed, and only an approved brief skips it", () => {
+  const approve = (record: RequestBriefRecord): RequestBriefRecord =>
+    approveRequestBriefRecord(
+      record,
+      {
+        requestId: "req-1",
+        briefRevision: record.draft.revision,
+        contentDigest: record.draft.contentDigest,
+      },
+      NOW,
+    );
+  const approved = approve(seeded());
+  const skipping = reviseRequestBriefRecord(approved, content({ skipReview: true }), LATER);
+
+  expect(requestBriefDigests(checkedRequestBriefContent(content({ skipReview: false })))).toEqual(
+    requestBriefDigests(content()),
+  );
+  expect(skipping.draft.changeKind).toBe("agreement");
+  expect(briefSkipsReview(approved)).toBe(false);
+  expect(briefSkipsReview(skipping)).toBe(false);
+  expect(briefSkipsReview(approve(skipping))).toBe(true);
+  expect(renderRequestBriefMarkdown(skipping)).toContain("## Code review\nSkipped at your request");
+  expect(() => checkedRequestBriefContent({ ...content(), skipReview: "yes" })).toThrow(
+    RequestBriefError,
+  );
+});
+
 test("the brief shows automated checks and manual verification as two lists", () => {
   const record = createRequestBriefRecord(
     {
@@ -233,4 +262,31 @@ test("the brief shows automated checks and manual verification as two lists", ()
   expect(markdown).toContain("## Automated checks\n- one stable request id\n");
   expect(markdown).toContain("## Manual verification\n- the streak bar glows at 5 in a row\n");
   expect(markdown).not.toContain("Acceptance criteria");
+});
+
+test("new implementation work joins the one open approved request in its repository", () => {
+  const approve = (id: string, repoPath = "/repo"): RequestBriefRecord => {
+    const record = createRequestBriefRecord({ id, repoPath, content: content() }, NOW);
+    return approveRequestBriefRecord(
+      record,
+      { requestId: id, briefRevision: 1, contentDigest: record.draft.contentDigest },
+      NOW,
+    );
+  };
+  const unapproved = createRequestBriefRecord(
+    { id: "req-draft", repoPath: "/repo", content: content() },
+    NOW,
+  );
+  const delivered = approve("req-done");
+  const settings = approve("req-settings");
+  const elsewhere = approve("req-other", "/other-repo");
+  const finishedTask = { requestId: "req-done", stage: "completed" as const };
+
+  expect(
+    openRequestForNewWork([unapproved, delivered, settings, elsewhere], [finishedTask], "/repo"),
+  ).toBe("req-settings");
+  expect(openRequestForNewWork([unapproved, delivered], [finishedTask], "/repo")).toBeUndefined();
+  expect(() =>
+    openRequestForNewWork([settings, approve("req-onboarding")], [finishedTask], "/repo"),
+  ).toThrow(RequestBriefError);
 });

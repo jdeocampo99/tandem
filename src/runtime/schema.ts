@@ -274,6 +274,8 @@ export type DurableStopRequest = Readonly<{
   readonly action: "pause" | "cancel";
   readonly generation: number;
   readonly requestedAt: IsoTimestamp;
+  /** The user approved deleting the worktree with the cancel, so cleanup discards its changes. */
+  readonly discard?: true;
 }>;
 
 export type DurableReservation = Readonly<{
@@ -708,6 +710,7 @@ function parseStopRequest(value: unknown, field: string): DurableStopRequest {
     action: enumValue(value.action, ["pause", "cancel"] as const, `${field}.action`),
     generation: nonNegativeInteger(value.generation, `${field}.generation`),
     requestedAt: singleLine(value.requestedAt, `${field}.requestedAt`),
+    ...(value.discard === true ? { discard: true } : {}),
   };
 }
 

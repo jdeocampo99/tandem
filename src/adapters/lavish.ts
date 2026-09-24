@@ -183,15 +183,17 @@ async function runPresentation(
   return observation;
 }
 
+/** `reopen` also opens a session the user ended in the browser; pass it only when they ask. */
 export async function openPresentation(
   run: CommandRunner,
   artifact: string,
   cwd: string,
+  options: Readonly<{ readonly reopen?: boolean }> = {},
 ): Promise<PresentationObservation> {
   return runPresentation(
     run,
     artifact,
-    ["lavish-axi", checkedPath(artifact, "artifact")],
+    ["lavish-axi", checkedPath(artifact, "artifact"), ...(options.reopen ? ["--reopen"] : [])],
     cwd,
     "lavish presentation open",
   );

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type {
   ExtensionAPI,
@@ -6,7 +7,11 @@ import type {
 import { matchesKey } from "@oh-my-pi/pi-tui";
 import { runCommand } from "../adapters/commands.ts";
 import { createHerdrStatusReporter, type HerdrAgentState } from "../adapters/herdr-status.ts";
+import type { Finding, ReviewResult } from "../contracts.ts";
+import { commentableLines } from "../pr-review/diff.ts";
+import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
+import { findingHeadline, isBlockingFinding } from "../tasks/findings.ts";
 import {
   parseWorkerJob,
   parseWorkerResult,
@@ -29,19 +34,31 @@ import {
   WorkerOutputError,
 } from "./protocol.ts";
 import {
+  addReplyUsage,
+  type ReplyUsage,
   readWorkerTerminalCommand,
+  replyUsage,
   SUBMIT_REPORT_TOOL,
+  taskUsage,
   traceWorkerTurn,
   WORKER_JOB_PATH_ENV,
   type WorkerTerminalCommand,
   type WorkerTerminalJob,
   type WorkerTerminalState,
+  type WorkerTokenTally,
   writeWorkerTerminal,
+  writeWorkerTokenTally,
 } from "./terminal.ts";
 
 const TERMINAL_HEARTBEAT_MS = 1_000;
 const TERMINAL_POLL_MS = 250;
 const BUSY_AFTER_RESULT_TRACE_MS = 60_000;
+const IDLE_AFTER_RESULT_GRACE_MS = 30_000;
+// ponytail: fixed window; healthy workers peaked at 3 minutes without a tool call in recorded traces.
+const STALLED_TURN_MINUTES = 5;
+const STALLED_TURN_MS = STALLED_TURN_MINUTES * 60_000;
+const STALL_REMINDER_ENTRY = "tandem-stall-reminder";
+const STALL_REMINDER = `Tandem stopped your turn: you went ${STALLED_TURN_MINUTES} minutes without calling a tool. Do not wait on a background command; its result can be lost. Check its output directly, run commands in the foreground, or finish and call ${SUBMIT_REPORT_TOOL}.`;
 const READ_ONLY_TOOLS: Readonly<Record<string, true>> = {
   read: true,
   grep: true,
@@ -161,6 +178,85 @@ export function isBackgroundResultWake(messages: readonly AgentMessage[]): boole
   );
 }
 
+export type IdleAfterResultInput = Readonly<{
+  readonly completed: boolean;
+  readonly phase: WorkerTerminalState["phase"];
+  readonly ompIdle: boolean;
+  readonly pendingMessages: boolean;
+  /** When OMP was first seen idle in this stretch, or undefined when it was not. */
+  readonly idleSince: number | undefined;
+  readonly now: number;
+}>;
+
+const SEVERITY_ORDER: Readonly<Record<Finding["severity"], number>> = {
+  P0: 0,
+  P1: 1,
+  P2: 2,
+  P3: 3,
+};
+
+/**
+ * What a reviewer's pane shows once its review is submitted: the round, the verdict, and one line
+ * per finding, most severe first. The full review stays in the durable result.
+ */
+export function reviewSummary(review: ReviewResult, round: number | undefined): string {
+  const title = round === undefined ? "Review" : `Review round ${round}`;
+  const count = review.findings.length;
+  if (count === 0) return `${title}: approved, no findings.`;
+  const verdict = review.findings.some(isBlockingFinding) ? "changes needed" : "approved";
+  const lines = [...review.findings]
+    .sort((left, right) => SEVERITY_ORDER[left.severity] - SEVERITY_ORDER[right.severity])
+    .map((finding) => {
+      const location =
+        finding.file === undefined
+          ? ""
+          : ` (${finding.file}${finding.line === undefined ? "" : `:${finding.line}`})`;
+      const unconfirmed = finding.verdict === "plausible" ? " [unconfirmed]" : "";
+      return `- ${finding.severity} ${findingHeadline(finding.description)}${location}${unconfirmed}`;
+    });
+  return [
+    `${title}: ${verdict}, ${count === 1 ? "1 finding" : `${count} findings`}`,
+    ...lines,
+  ].join("\n");
+}
+
+export type StalledTurnInput = Readonly<{
+  readonly turnActive: boolean;
+  readonly toolsRunning: number;
+  /** When the current turn started, the model last streamed output, or a tool started or finished. */
+  readonly lastActivityAt: number;
+  readonly now: number;
+}>;
+
+/**
+ * A turn that goes the whole window without streaming output or starting or finishing a tool is
+ * stuck, typically waiting on a background command whose result never arrived. A running tool is
+ * progress.
+ */
+export function turnStalled(input: StalledTurnInput): boolean {
+  return (
+    input.turnActive &&
+    input.toolsRunning === 0 &&
+    input.now - input.lastActivityAt >= STALLED_TURN_MS
+  );
+}
+
+/**
+ * After submit_report, OMP ends the turn with willContinue while a background command it started
+ * (such as a dev server) is still running, then waits for that command forever. A submitted worker
+ * that OMP itself reports idle, with nothing queued, for the whole grace period is done.
+ */
+export function idleAfterResult(
+  input: IdleAfterResultInput,
+): Readonly<{ readonly idleSince: number | undefined; readonly settle: boolean }> {
+  if (!input.completed || input.phase !== "busy" || !input.ompIdle || input.pendingMessages) {
+    return { idleSince: undefined, settle: false };
+  }
+  const idleSince = input.idleSince ?? input.now;
+  const settle = input.now - idleSince >= IDLE_AFTER_RESULT_GRACE_MS;
+  return { idleSince: settle ? undefined : idleSince, settle };
+}
+
 async function instructionRevision(job: WorkerJob, required: boolean): Promise<number | undefined> {
   if (job.communication === undefined) return undefined;
   try {
@@ -205,6 +301,15 @@ function terminalState(
   };
 }
 
+/** The lines a PR review's comments may anchor on, read from the diff the run was given. */
+async function reviewAnchors(
+  job: WorkerJob,
+): Promise<ReadonlyMap<string, ReadonlySet<number>> | undefined> {
+  const diffPath = job.prReview?.diffPath;
+  if (diffPath === undefined || job.prReview?.structuredReport !== true) return undefined;
+  return commentableLines(await readFile(diffPath, "utf8"));
+}
+
 export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise<void> {
   const jobPath = process.env[WORKER_JOB_PATH_ENV];
   if (jobPath === undefined || jobPath.trim().length === 0) return;
@@ -230,6 +335,11 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   let settledStatus: HerdrAgentState = "idle";
   let statusMessage: string | undefined;
   const waitingInputs = new Set<string>();
+  const runningTools = new Set<string>();
+  let turnActive = false;
+  let lastActivityAt = Date.now();
+  let stallReminded = false;
+  let stallAbortPending = false;
   const abort = (ctx: ExtensionContext): void => {
     extensionAborted = true;
     ctx.abort();
@@ -241,6 +351,51 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       agentActive ? "working" : settledStatus,
       agentActive ? undefined : statusMessage,
     );
+  };
+  let ompIdleSince: number | undefined;
+  let tokenTally: WorkerTokenTally | undefined;
+  let tallyWrites = Promise.resolve();
+  const settleIdleAfterResult = (ctx: ExtensionContext): void => {
+    const decision = idleAfterResult({
+      completed: currentState.completed,
+      phase: currentState.phase,
+      ompIdle: ctx.isIdle(),
+      pendingMessages: ctx.hasPendingMessages(),
+      idleSince: ompIdleSince,
+      now: Date.now(),
+    });
+    ompIdleSince = decision.idleSince;
+    if (!decision.settle) return;
+    traceWorkerTurn(jobPath, "idle_after_result");
+    agentActive = false;
+    void persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id).catch(
+      () => abort(ctx),
+    );
+  };
+  // The first stall stops the turn and reminds the worker; a second fails the job so central
+  // recovery restarts it or asks the user.
+  const checkStalledTurn = (ctx: ExtensionContext): void => {
+    if (resultPublished || timeoutRequested || pauseCommand !== undefined || stallAbortPending) {
+      return;
+    }
+    const stalled = turnStalled({
+      turnActive,
+      toolsRunning: runningTools.size,
+      lastActivityAt,
+      now: Date.now(),
+    });
+    if (!stalled) return;
+    traceWorkerTurn(jobPath, "stalled_turn", { reminded: stallReminded });
+    if (stallReminded) {
+      void abortWithReason(
+        ctx,
+        `worker stalled: no tool call for ${STALLED_TURN_MINUTES} minutes, again after a reminder`,
+      );
+      return;
+    }
+    stallReminded = true;
+    stallAbortPending = true;
+    abort(ctx);
   };
   let lastBusyTraceAt = 0;
   // While a submitted worker still reads busy, record what OMP itself reports, at most once a minute.
@@ -301,7 +456,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   ): Promise<WorkerResult | ReportRejection> => {
     try {
       assertSelectedModel(expectedModelParts(job.model.model), ctx.model);
-      const report = resolveSubmittedReport(job, submission);
+      const report = resolveSubmittedReport(job, submission, await reviewAnchors(job));
       const revision = await instructionRevision(job, report.status !== "failed");
       return resultFor(job, report.status, report.text, {
         ...(report.error === undefined ? {} : { error: report.error }),
@@ -426,9 +581,11 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       }
       await settle(result, ctx);
       const summary =
-        result.error === undefined
-          ? `Report submitted with status ${result.status}.`
-          : `Report submitted with status ${result.status}: ${result.error}`;
+        result.review !== undefined
+          ? `${reviewSummary(result.review, job.review?.round)}\n\nEnd your turn by replying with exactly this summary and nothing else.`
+          : result.error === undefined
+            ? `Report submitted with status ${result.status}.`
+            : `Report submitted with status ${result.status}: ${result.error}`;
       return { content: [{ type: "text", text: summary }], details: undefined };
     },
   });
@@ -500,6 +657,20 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     await persistState("closing", true, confirmed.id);
   };
 
+  /** A PR reviewer's shell may only read; anything else is refused with the reason. */
+  const guardReviewShell = (
+    event: Readonly<{ toolName: string; input: unknown }>,
+  ): { block: true; reason: string } | undefined => {
+    if (job.prReview === undefined || event.toolName !== "bash") return undefined;
+    const command =
+      typeof event.input === "object" && event.input !== null && "command" in event.input
+        ? event.input.command
+        : undefined;
+    const refusal =
+      typeof command === "string" ? readOnlyCommandRefusal(command) : "bash needs a command";
+    return refusal === undefined ? undefined : { block: true, reason: refusal };
+  };
+
   const guardTool = (toolName: string): { block: true; reason: string } | undefined => {
     if (
       !delegatedSettled &&
@@ -517,7 +688,17 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     };
   };
 
-  pi.on("tool_call", (event) => guardTool(event.toolName));
+  pi.on("tool_call", (event) => guardTool(event.toolName) ?? guardReviewShell(event));
+
+  const recordUsage = (usage: ReplyUsage | undefined): void => {
+    if (usage === undefined) return;
+    tokenTally = addReplyUsage(tokenTally, usage);
+    const tally = tokenTally;
+    tallyWrites = tallyWrites
+      .then(() => writeWorkerTokenTally(jobPath, tally))
+      // Token accounting is informational; a failed write must not disturb the worker.
+      .catch(() => undefined);
+  };
 
   pi.on("session_start", async (_event, ctx) => {
     traceWorkerTurn(jobPath, "session_start");
@@ -539,6 +720,8 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     }, TERMINAL_POLL_MS);
     ctx.setInterval(() => {
       traceBusyAfterResult(ctx);
+      settleIdleAfterResult(ctx);
+      checkStalledTurn(ctx);
       void persistState(currentState.phase, currentState.completed).catch((error) => {
         void abortWithReason(
           ctx,
@@ -561,12 +744,21 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   });
   pi.on("turn_start", (_event, ctx) => {
     traceWorkerTurn(jobPath, "turn_start");
+    turnActive = true;
+    lastActivityAt = Date.now();
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     void reportStatus();
   });
+  // A long reply, such as a whole artifact written in one tool call, streams for minutes before
+  // the tool starts; streaming is progress.
+  pi.on("message_update", () => {
+    lastActivityAt = Date.now();
+  });
   pi.on("tool_execution_start", (event, ctx) => {
     traceWorkerTurn(jobPath, "tool_start", { tool: event.toolName });
+    runningTools.add(event.toolCallId);
+    lastActivityAt = Date.now();
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     if (event.toolName === "ask") waitingInputs.add(event.toolCallId);
@@ -574,12 +766,18 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   });
   pi.on("tool_execution_end", (event, ctx) => {
     traceWorkerTurn(jobPath, "tool_end", { tool: event.toolName });
+    if (event.toolName === "task") recordUsage(taskUsage(event.result, tokenTally));
+    runningTools.delete(event.toolCallId);
+    lastActivityAt = Date.now();
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     waitingInputs.delete(event.toolCallId);
     void reportStatus();
   });
-  pi.on("turn_end", (_event, ctx) => {
+  pi.on("turn_end", (event, ctx) => {
     traceWorkerTurn(jobPath, "turn_end");
+    turnActive = false;
+    runningTools.clear();
+    recordUsage(replyUsage(event.message));
     void persistState("idle", currentState.completed).catch(() => abort(ctx));
   });
   pi.on("context", (event, ctx) => {
@@ -593,6 +791,27 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   pi.on("agent_end", async (event, ctx) => {
     traceWorkerTurn(jobPath, "agent_end", { willContinue: event.willContinue, resultPublished });
     agentActive = event.willContinue === true;
+    if (stallAbortPending) {
+      // The watchdog's own abort: the worker keeps going with the reminder, not a failure.
+      stallAbortPending = false;
+      extensionAborted = false;
+      pi.sendMessage(
+        {
+          customType: STALL_REMINDER_ENTRY,
+          content: STALL_REMINDER,
+          display: true,
+          attribution: "agent",
+        },
+        { deliverAs: "nextTurn", triggerTurn: true },
+      );
+      if (event.willContinue !== true) {
+        agentActive = true;
+        await persistState("busy", currentState.completed);
+        await reportStatus();
+        traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
+        return;
+      }
+    }
     if (event.willContinue === true) {
       await persistState("busy", currentState.completed);
       await reportStatus();

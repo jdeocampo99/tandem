@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { quoteShellCommand } from "../../src/adapters/commands.ts";
 import type {
   CommandRequest,
   CommandRunner,
@@ -10,6 +11,7 @@ import type {
 } from "../../src/contracts.ts";
 import { createRequestBriefRecord, withRequestReviewPane } from "../../src/requests/brief.ts";
 import {
+  briefViewerCommand,
   closeRequestBriefPane,
   projectRequestBriefPane,
   type RequestReviewPaneDependencies,
@@ -135,6 +137,50 @@ test("approval closes only the owned pane and leaves unrelated panes untouched",
     expect(closed?.status).toBe("closed");
     expect(world.paneIsPresent(opened.endpoint.paneId)).toBe(false);
     expect(world.paneIsPresent(bystander.paneId)).toBe(true);
+  });
+});
+
+test("the brief's own pager is quit before the pane is refreshed or closed", async () => {
+  await withScenario({}, async (world) => {
+    const recording = recordingRun(world);
+    const deps = dependencies(world, undefined, recording.run);
+    const first = record(world);
+    const opened = await projectRequestBriefPane(deps, first);
+    const showPager = () =>
+      world.run({
+        argv: [
+          "herdr",
+          "--session",
+          world.sessionId,
+          "pane",
+          "run",
+          opened.endpoint.paneId,
+          quoteShellCommand(["glow", "-p", "--", opened.renderedPath]),
+        ],
+        cwd: world.repoPath,
+      });
+
+    await showPager();
+    const revised = withRequestReviewPane(
+      { ...first, draft: { ...first.draft, revision: 2 } },
+      opened,
+      NOW,
+    );
+    const refreshed = await projectRequestBriefPane(deps, revised);
+    await showPager();
+    const closed = await closeRequestBriefPane(
+      deps,
+      withRequestReviewPane(revised, refreshed, NOW),
+    );
+
+    expect(refreshed.status).toBe("open");
+    expect(refreshed.renderedRevision).toBe(2);
+    expect(closed?.status).toBe("closed");
+    expect(world.paneIsPresent(opened.endpoint.paneId)).toBe(false);
+    expect(recording.herdrCommands("send-keys").map((argv) => argv.slice(5))).toEqual([
+      [opened.endpoint.paneId, "q"],
+      [opened.endpoint.paneId, "q"],
+    ]);
   });
 });
 
@@ -273,5 +319,21 @@ test("a brief record naming the coordinator's own pane is quarantined and never 
     expect(world.paneIsPresent(coordinator.paneId)).toBe(true);
     expect(recorder.herdrCommands("close")).toEqual([]);
     expect(recorder.herdrCommands("run").map((argv) => argv[5])).not.toContain(coordinator.paneId);
+  });
+});
+
+test("the pane shows the brief with glow when it is installed, and plain text otherwise", async () => {
+  await withScenario({}, async (world) => {
+    const recording = recordingRun(world);
+    const opened = await projectRequestBriefPane(
+      dependencies(world, undefined, recording.run),
+      record(world),
+    );
+
+    const [paneRun] = recording.herdrCommands("run");
+    const viewer = briefViewerCommand(opened.renderedPath);
+    expect(viewer).toContain(Bun.which("glow") ?? "cat");
+    expect(viewer.at(-1)).toBe(opened.renderedPath);
+    expect(paneRun?.at(-1)).toBe(quoteShellCommand(viewer));
   });
 });

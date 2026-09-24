@@ -18,17 +18,25 @@ import {
   type TaskKind,
   type TaskRecord,
   type TaskStage,
+  type TaskTarget,
   type ValidationContractName,
   type ValidationEvidence,
   type WorktreeLease,
 } from "../contracts.ts";
+import type { PrReviewRound, PrReviewState } from "../pr-review/state.ts";
 import {
+  canSkipValidation,
   FINAL_REVIEW_LENSES,
   type FinalRequirement,
   finalAcceptanceStatus,
   isPinnedEvidence,
 } from "./acceptance.ts";
-import { fixRoundBudget, recordReviewFindings } from "./findings.ts";
+import {
+  fixRoundBudget,
+  isBlockingFinding,
+  ledgerSuggestions,
+  recordReviewFindings,
+} from "./findings.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
 import { checkSkillInvocation } from "./skill-invocation.ts";
@@ -50,6 +58,9 @@ export type TaskInput = Readonly<{
   readonly researchContinuation?: ResearchContinuation;
   /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
   readonly skill?: SkillInvocation;
+  /** Required for, and only for, a `pr-review` task. */
+  readonly prReview?: PrReviewState;
+  readonly target?: TaskTarget;
 }>;
 
 export type TaskTransitionContext = Readonly<{
@@ -141,6 +152,8 @@ type ScoutReportCompleteEvent = Readonly<{
   readonly type: "scout-report-complete";
   readonly reportPath: string;
   readonly generation: number;
+  /** A finished PR review round; a `pr-review` answer to a question carries none. */
+  readonly prReviewRound?: PrReviewRound;
 }>;
 
 type PauseEvent = Readonly<{
@@ -282,8 +295,14 @@ function assertTaskInput(input: TaskInput): void {
   if (!isNonEmptyText(input.repoPath)) {
     throw new TypeError("Task repoPath must be a non-empty string");
   }
-  if (input.kind !== "scout" && input.kind !== "implementation") {
+  if (input.kind !== "scout" && input.kind !== "implementation" && input.kind !== "pr-review") {
     throw new TypeError(`Unsupported task kind: ${String(input.kind)}`);
+  }
+  if ((input.kind === "pr-review") !== (input.prReview !== undefined)) {
+    throw new TypeError("prReview is required for, and only for, pr-review tasks");
+  }
+  if (input.target !== undefined && input.kind === "pr-review") {
+    throw new TypeError("a pr-review task records its repository in prReview, not target");
   }
   if (!isNonEmptyText(input.objective)) {
     throw new TypeError("Task objective must be a non-empty string");
@@ -643,22 +662,7 @@ function assertReview(review: ReviewResult, task: TaskRecord): void {
       "Review must contain pass, findings, and summary values",
     );
   }
-  for (const finding of review.findings) {
-    assertFinding(finding, task);
-    if (
-      review.pass &&
-      (finding.severity === "P0" || finding.severity === "P1" || finding.severity === "P2") &&
-      (finding.verdict === "confirmed" ||
-        (finding.verdict === "plausible" &&
-          (finding.severity === "P0" || finding.severity === "P1")))
-    ) {
-      throw new TaskTransitionError(
-        "invalid-review",
-        task,
-        `Review lens ${review.lens} cannot pass with a ${finding.verdict} ${finding.severity} finding`,
-      );
-    }
-  }
+  for (const finding of review.findings) assertFinding(finding, task);
 }
 
 /** A merge must land the pull request at exactly the task's own reviewed commit. */
@@ -702,15 +706,20 @@ function reviewSummary(task: TaskRecord): string {
  * manifest is satisfied for the delivered code and policy. It never implies delivery.
  */
 function readySummary(task: TaskRecord, head: string): string {
-  return `Ready: task ${task.id} passed review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}. Ready is not publication, merge, or deploy approval; each remains explicit.`;
+  const ready = `Ready: task ${task.id} passed review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}. Ready is not publication, merge, or deploy approval; each remains explicit.`;
+  const knownIssues = ledgerSuggestions(task.findingLedger ?? []);
+  if (knownIssues.length === 0) return ready;
+  return [
+    ready,
+    `Tell the user about ${knownIssues.length === 1 ? "this known issue" : `these ${knownIssues.length} known issues`} the review did not block on; the pull request lists them too:`,
+    ...knownIssues.map((entry) => `- ${entry.severity}: ${entry.description}`),
+  ].join("\n");
 }
 
-function hasSuccessfulCurrentValidation(task: TaskRecord): boolean {
-  return (
-    task.stage === "reviewing" &&
-    task.reviewHead !== undefined &&
-    task.validationEvidence.length > 0 &&
-    task.validationEvidence.every((entry) => entry.head === task.reviewHead && entry.exitCode === 0)
+/** Review may finish before any check ran at this HEAD; the final manifest runs after it passes. */
+function hasFailedCurrentValidation(task: TaskRecord): boolean {
+  return task.validationEvidence.some(
+    (entry) => entry.head === task.reviewHead && entry.exitCode !== 0,
   );
 }
 
@@ -791,7 +800,8 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
 export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
   assertTimestamp(now);
   assertTaskInput(input);
-  const scopeApproved = input.kind === "scout";
+  // Research and PR review only read, so they start without a scope approval.
+  const scopeApproved = input.kind === "scout" || input.kind === "pr-review";
   return {
     schemaVersion: 1,
     id: input.id,
@@ -819,6 +829,8 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
       ? {}
       : { researchHandoffs: [...input.researchHandoffs] }),
     ...(input.skill === undefined ? {} : { skill: { ...input.skill } }),
+    ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
+    ...(input.target === undefined ? {} : { target: { ...input.target } }),
     ...(input.kind === "scout"
       ? {
           researchContinuation:
@@ -828,6 +840,567 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
         }
       : {}),
   };
+}
+
+/** Records a PR review round, or an answer to a follow-up question, and tells the coordinator. */
+function completePrReviewRun(
+  task: TaskRecord,
+  event: ScoutReportCompleteEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  const state = task.prReview;
+  if (state === undefined) {
+    throw new TaskTransitionError("invalid-input", task, "pr-review task has no pull request");
+  }
+  const round = event.prReviewRound;
+  if ((state.mode === "question") !== (round === undefined)) {
+    throw new TaskTransitionError(
+      "invalid-input",
+      task,
+      `A ${state.mode} run ${round === undefined ? "needs" : "cannot record"} a review round`,
+    );
+  }
+  const prReview: PrReviewState =
+    round === undefined ? state : { ...state, rounds: [...state.rounds, round] };
+  return commitWithNotification(
+    task,
+    context,
+    { stage: "completed", reportPath: event.reportPath, prReview },
+    round === undefined
+      ? `Answer about ${state.ref.repo}#${state.ref.number} is ready for task ${task.id}; read it at ${event.reportPath} and pass it on`
+      : `PR review of ${state.ref.repo}#${state.ref.number} is ready for task ${task.id}; show it with review-show`,
+    "coordinator",
+  );
+}
+
+/** Stages a task can be paused or blocked from: live, not stopped, not finished. */
+const OPEN_STAGES: readonly TaskStage[] = [
+  "awaiting-approval",
+  "queued",
+  "scouting",
+  "implementing",
+  "validating",
+  "reviewing",
+  "awaiting-fixes",
+  "ready",
+];
+const CANCELLABLE_STAGES: readonly TaskStage[] = [...OPEN_STAGES, "paused", "blocked"];
+const EVIDENCE_STAGES: readonly TaskStage[] = [
+  "validating",
+  "reviewing",
+  "awaiting-fixes",
+  "ready",
+];
+/** `paused` only as the stopping step of a publish-now from validating or reviewing. */
+const SKIP_REVIEW_STAGES: readonly TaskStage[] = [
+  "validating",
+  "reviewing",
+  "awaiting-fixes",
+  "blocked",
+];
+
+function assertStageIn(
+  task: TaskRecord,
+  eventType: TaskEvent["type"],
+  allowed: readonly TaskStage[],
+): void {
+  if (!allowed.includes(task.stage)) invalidStage(task, eventType, allowed);
+}
+
+function approveTask(task: TaskRecord, context: TaskTransitionContext): TaskRecord {
+  assertStageIn(task, "approve", ["awaiting-approval"]);
+  return commitTask(task, context.now, { stage: "queued", scopeApproved: true });
+}
+
+function startTask(
+  task: TaskRecord,
+  event: StartEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  assertStageIn(task, event.type, ["queued"]);
+  if (!task.scopeApproved) {
+    throw new TaskTransitionError(
+      "approval-required",
+      task,
+      `Task ${task.id} has not received scope approval`,
+    );
+  }
+  assertWorktree(event.worktree, task);
+  assertEndpoints(event.endpoints, task);
+  return commitTask(task, context.now, {
+    stage: task.kind === "implementation" ? "implementing" : "scouting",
+    worktree: event.worktree,
+    endpoints: [...event.endpoints],
+  });
+}
+
+function relaunchTask(
+  task: TaskRecord,
+  event: RelaunchEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  assertStageIn(task, event.type, ["implementing", "scouting"]);
+  assertCurrentGeneration(task, event.generation, "Relaunch");
+  assertEndpoints(event.endpoints, task);
+  return commitTask(task, context.now, { endpoints: [...event.endpoints] });
+}
+
+function completeImplementation(
+  task: TaskRecord,
+  event: ImplementationCompleteEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  if (task.stage !== "implementing" || task.kind !== "implementation") {
+    invalidStage(task, event.type, ["implementing"]);
+  }
+  assertHeadEvent(task, event.head, event.generation, "Implementation completion");
+  if (event.reportPath !== undefined && !isNonEmptyText(event.reportPath)) {
+    throw new TaskTransitionError(
+      "invalid-input",
+      task,
+      "Implementation reportPath must be non-empty when supplied",
+    );
+  }
+  // A fix round that ends on an already-reviewed HEAD made no new commit, so it hands its
+  // round back; the unchanged review that follows asks "Keep fixing?" instead of looping.
+  const noCommit =
+    task.reviewRound > 0 && task.reviews.some((review) => review.head === event.head);
+  // Passing pinned checks at this exact HEAD still hold; everything else is stale.
+  const validationEvidence = task.validationEvidence.filter(
+    (entry) => isPinnedEvidence(entry) && entry.head === event.head && entry.exitCode === 0,
+  );
+  const skipValidation = canSkipValidation({ ...task, validationEvidence }, event.head);
+  return commitTask(task, context.now, {
+    stage: skipValidation ? "reviewing" : "validating",
+    reviewHead: event.head,
+    validationEvidence,
+    ...(event.reportPath === undefined ? {} : { reportPath: event.reportPath }),
+    ...(noCommit
+      ? {
+          fixRoundGrants: [
+            ...(task.fixRoundGrants ?? []),
+            { generation: task.generation, rounds: 1, reason: "no-commit" as const },
+          ],
+        }
+      : {}),
+  });
+}
+
+function assertCurrentValidation(task: TaskRecord, event: ValidationEvent): void {
+  assertHeadEvent(task, event.head, event.generation, "Validation");
+  assertCurrentHead(task, event.head, "Validation");
+  assertEvidence(task, event);
+}
+
+function recordValidationSuccess(
+  task: TaskRecord,
+  event: ValidationSucceededEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  assertStageIn(task, event.type, ["validating"]);
+  assertCurrentValidation(task, event);
+  if (event.evidence.some((entry) => entry.exitCode !== 0)) {
+    throw new TaskTransitionError(
+      "validation-mismatch",
+      task,
+      "Validation success cannot contain a non-zero exit code",
+    );
+  }
+  return commitTask(task, context.now, {
+    stage: "reviewing",
+    validationEvidence: [...task.validationEvidence, ...event.evidence],
+  });
+}
+
+function recordValidationFailure(
+  task: TaskRecord,
+  event: ValidationFailedEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  assertStageIn(task, event.type, ["validating"]);
+  assertCurrentValidation(task, event);
+  if (event.evidence.every((entry) => entry.exitCode === 0)) {
+    throw new TaskTransitionError(
+      "validation-mismatch",
+      task,
+      "Validation failure requires at least one non-zero exit code",
+    );
+  }
+  return commitWithNotification(
+    task,
+    context,
+    {
+      stage: "awaiting-fixes",
+      validationEvidence: [...task.validationEvidence, ...event.evidence],
+    },
+    `The ${event.contract} contract failed for task ${task.id}; fixes are required`,
+  );
+}
+
+function recordReview(
+  task: TaskRecord,
+  event: RecordReviewEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  assertStageIn(task, event.type, ["reviewing"]);
+  assertReview(event.review, task);
+  assertCurrentHead(task, event.review.head, "Review");
+  assertCurrentGeneration(task, event.review.generation, "Review");
+  const { head, generation, lens } = event.review;
+  if (
+    task.reviews.some(
+      (review) => review.head === head && review.generation === generation && review.lens === lens,
+    )
+  ) {
+    throw new TaskTransitionError(
+      "duplicate-review",
+      task,
+      `Review lens ${lens} already exists for head ${head} generation ${generation}`,
+    );
+  }
+  // The findings decide the outcome, not the reviewer's own pass flag: a review fails exactly
+  // when a P0 or P1 stands.
+  const review = { ...event.review, pass: !event.review.findings.some(isBlockingFinding) };
+  return commitTask(task, context.now, {
+    reviews: [...task.reviews, review],
+    findingLedger: recordReviewFindings({
+      ledger: task.findingLedger ?? [],
+      review,
+      reviewRound: task.reviewRound,
+    }),
+  });
+}
+
+function finishReview(
+  task: TaskRecord,
+  event: FinishReviewEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  assertStageIn(task, event.type, ["reviewing"]);
+  assertHeadEvent(task, event.head, event.generation, "Review completion");
+  assertCurrentHead(task, event.head, "Review completion");
+  if (hasFailedCurrentValidation(task)) {
+    throw new TaskTransitionError(
+      "validation-mismatch",
+      task,
+      "Review completion requires no failed validation for the current head",
+    );
+  }
+  const required = requiredReviewLenses(task, event.head);
+  const current = activeReviews(task);
+  if (required.some((lens) => !current.some((review) => review.lens === lens))) {
+    throw new TaskTransitionError(
+      "review-incomplete",
+      task,
+      `Review completion requires the ${required.join(", ")} lens(es) for this round`,
+    );
+  }
+  if (!allReviewLensesPass(task, required)) {
+    return commitWithNotification(task, context, { stage: "awaiting-fixes" }, reviewSummary(task));
+  }
+  return advanceReviewedTask(task, event.head, context);
+}
+
+/** Every required lens passed: the task is ready, or runs the final acceptance manifest first. */
+function advanceReviewedTask(
+  task: TaskRecord,
+  head: string,
+  context: TaskTransitionContext,
+): TaskRecord {
+  const acceptance = finalAcceptanceStatus(task, head);
+  if (acceptance.satisfied) {
+    return commitWithNotification(
+      clearIterationScope(task),
+      context,
+      { stage: "ready" },
+      readySummary(task, head),
+      "coordinator",
+    );
+  }
+  const outstanding = [...acceptance.missing, ...acceptance.failed, ...acceptance.stale];
+  const finalRunRecorded = task.validationEvidence.some(
+    (entry) =>
+      entry.contract === "final" &&
+      entry.head === acceptance.identity.head &&
+      entry.policyDigest === acceptance.identity.policyDigest,
+  );
+  if (acceptance.failed.length > 0 || acceptance.stale.length > 0 || finalRunRecorded) {
+    throw new TaskTransitionError(
+      "final-acceptance-incomplete",
+      task,
+      `Task ${task.id} cannot be accepted: ${describeRequirements(outstanding)} did not pass under the delivered code and policy`,
+    );
+  }
+  return commitWithNotification(
+    task,
+    context,
+    { stage: "validating" },
+    `Task ${task.id} is otherwise ready; running the final acceptance manifest for ${describeRequirements(outstanding)}`,
+  );
+}
+
+function invalidateEvidence(
+  task: TaskRecord,
+  event: InvalidateEvidenceEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  if (task.kind !== "implementation" || !EVIDENCE_STAGES.includes(task.stage)) {
+    invalidStage(task, event.type, EVIDENCE_STAGES);
+  }
+  assertHeadEvent(task, event.head, event.generation, "Evidence invalidation");
+  return commitTask(clearIterationScope(clearReviewHead(task)), context.now, {
+    stage: "implementing",
+    generation: task.generation + 1,
+    validationEvidence: [],
+    reviews: [],
+  });
+}
+
+function continueResearch(task: TaskRecord, context: TaskTransitionContext): TaskRecord {
+  if (task.kind === "implementation" || task.stage !== "completed") {
+    invalidStage(task, "follow-up-research", ["completed"]);
+  }
+  return commitTask(clearCleanup(task), context.now, {
+    stage: "queued",
+    generation: task.generation + 1,
+  });
+}
+
+function beginFixes(
+  task: TaskRecord,
+  event: BeginFixesEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  assertStageIn(task, event.type, ["awaiting-fixes"]);
+  if (event.head !== task.reviewHead || event.generation !== task.generation) {
+    staleResult(
+      task,
+      `Fix attempt expectation ${event.head}/${event.generation} does not match ${String(task.reviewHead)}/${task.generation}`,
+    );
+  }
+  if (!isInteger(task.policy.config.maxFixRounds) || task.reviewRound >= fixRoundBudget(task)) {
+    throw new TaskTransitionError(
+      "max-fix-rounds",
+      task,
+      `Task ${task.id} has used all ${String(fixRoundBudget(task))} fix rounds`,
+    );
+  }
+  if (event.iterationScope !== undefined) {
+    assertIterationScope(task, event.iterationScope);
+  }
+  return commitTask(clearIterationScope(clearReviewHead(task)), context.now, {
+    stage: "implementing",
+    reviewRound: task.reviewRound + 1,
+    generation: task.generation + 1,
+    ...(event.iterationScope === undefined ? {} : { iterationScope: event.iterationScope }),
+  });
+}
+
+function skipReview(
+  task: TaskRecord,
+  event: SkipReviewEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  const stoppedFrom = task.stage === "paused" ? task.previousStage : task.stage;
+  if (
+    task.kind !== "implementation" ||
+    stoppedFrom === undefined ||
+    !SKIP_REVIEW_STAGES.includes(stoppedFrom) ||
+    (task.stage === "paused" && stoppedFrom === "blocked")
+  ) {
+    invalidStage(task, event.type, SKIP_REVIEW_STAGES);
+  }
+  if (task.worktree === undefined || !isNonEmptyText(event.head)) {
+    throw new TaskTransitionError(
+      "invalid-input",
+      task,
+      "Skipping review requires a task worktree and a committed HEAD",
+    );
+  }
+  if (task.reviewHead !== undefined && task.reviewHead !== event.head) {
+    staleResult(
+      task,
+      `Publish-now HEAD ${event.head} does not match the task HEAD ${task.reviewHead}`,
+    );
+  }
+  return commitWithNotification(
+    clearIterationScope(clearPreviousAndBlock(task)),
+    context,
+    { stage: "ready", reviewHead: event.head, reviewSkippedHead: event.head },
+    `Task ${task.id} is ready without a finished review, at the user's request`,
+    "coordinator",
+  );
+}
+
+function completeScoutReport(
+  task: TaskRecord,
+  event: ScoutReportCompleteEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  if (task.stage !== "scouting" || task.kind === "implementation") {
+    invalidStage(task, event.type, ["scouting"]);
+  }
+  assertCurrentGeneration(task, event.generation, "Scout report");
+  if (!isNonEmptyText(event.reportPath)) {
+    throw new TaskTransitionError("invalid-input", task, "Scout reportPath must be non-empty");
+  }
+  if (task.kind === "pr-review") return completePrReviewRun(task, event, context);
+  if (event.prReviewRound !== undefined) {
+    throw new TaskTransitionError(
+      "invalid-input",
+      task,
+      "Only a pr-review task records a review round",
+    );
+  }
+  return commitWithNotification(
+    task,
+    context,
+    { stage: "completed", reportPath: event.reportPath },
+    `Scout report completed for task ${task.id}`,
+    "coordinator",
+  );
+}
+
+function pauseTask(
+  task: TaskRecord,
+  event: PauseEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  assertStageIn(task, event.type, OPEN_STAGES);
+  if (!isNonEmptyText(event.reason)) {
+    throw new TaskTransitionError("invalid-input", task, "Pause requires a non-empty reason");
+  }
+  return commitWithNotification(
+    task,
+    context,
+    { stage: "paused", previousStage: task.stage },
+    `Task ${task.id} paused: ${event.reason}`,
+  );
+}
+
+function resumeTask(task: TaskRecord, context: TaskTransitionContext): TaskRecord {
+  assertStageIn(task, "resume", ["paused", "blocked"]);
+  const { previousStage } = task;
+  if (previousStage === undefined || !OPEN_STAGES.includes(previousStage)) {
+    throw new TaskTransitionError(
+      "invalid-stage",
+      task,
+      `Task ${task.id} has no resumable previous stage`,
+    );
+  }
+  return commitTask(clearPreviousAndBlock(task), context.now, { stage: previousStage });
+}
+
+function cancelTask(
+  task: TaskRecord,
+  event: CancelEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  assertStageIn(task, event.type, CANCELLABLE_STAGES);
+  if (event.reason !== undefined && !isNonEmptyText(event.reason)) {
+    throw new TaskTransitionError(
+      "invalid-input",
+      task,
+      "Cancel reason must be non-empty when supplied",
+    );
+  }
+  return commitWithNotification(
+    clearPreviousAndBlock(task),
+    context,
+    { stage: "cancelled" },
+    event.reason === undefined
+      ? `Task ${task.id} cancelled`
+      : `Task ${task.id} cancelled: ${event.reason}`,
+  );
+}
+
+function blockTask(
+  task: TaskRecord,
+  event: BlockEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  assertStageIn(task, event.type, OPEN_STAGES);
+  if (!isNonEmptyText(event.reason)) {
+    throw new TaskTransitionError("invalid-input", task, "Block requires a non-empty reason");
+  }
+  // A typed cause always shows its plain-English summary; the technical text stays in its detail.
+  const shown = event.cause?.summary ?? event.reason;
+  return commitWithNotification(
+    task,
+    context,
+    {
+      stage: "blocked",
+      previousStage: task.stage,
+      blockReason: shown,
+      ...(event.cause === undefined ? {} : { blockCause: event.cause }),
+    },
+    `Task ${task.id} blocked: ${shown}`,
+    "coordinator",
+  );
+}
+
+function mergeTask(
+  task: TaskRecord,
+  event: MergeEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  if (task.stage !== "ready" || task.kind !== "implementation") {
+    invalidStage(task, event.type, ["ready"]);
+  }
+  if (!event.approved || !event.verified) {
+    throw new TaskTransitionError(
+      "merge-not-verified",
+      task,
+      "Merge requires explicit approval and verified merge evidence",
+    );
+  }
+  if (event.pullRequest?.state !== "merged" || !isNonEmptyText(event.pullRequest.head)) {
+    throw new TaskTransitionError(
+      "merge-not-verified",
+      task,
+      "Merged pull request must match the reviewed head",
+    );
+  }
+  assertMergedHead(task, event);
+  return commitWithNotification(
+    task,
+    context,
+    { stage: "merged", pullRequest: event.pullRequest },
+    `Task ${task.id} merged after approved and verified merge`,
+  );
+}
+
+function acknowledgeNotification(
+  task: TaskRecord,
+  event: AcknowledgeNotificationEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  if (!isNonEmptyText(event.notificationId)) {
+    throw new TaskTransitionError(
+      "invalid-input",
+      task,
+      "Notification acknowledgement requires an id",
+    );
+  }
+  const index = task.notifications.findIndex((entry) => entry.id === event.notificationId);
+  const current = task.notifications[index];
+  if (current === undefined) {
+    throw new TaskTransitionError(
+      "notification-not-found",
+      task,
+      `Notification ${event.notificationId} does not exist`,
+    );
+  }
+  if (current.acknowledged) {
+    throw new TaskTransitionError(
+      "notification-already-acknowledged",
+      task,
+      `Notification ${event.notificationId} is already acknowledged`,
+    );
+  }
+  const notifications = [...task.notifications];
+  notifications[index] = { ...current, acknowledged: true };
+  return commitTask(task, context.now, { notifications });
 }
 
 export function transitionTask(
@@ -848,489 +1421,44 @@ export function transitionTask(
   }
 
   switch (event.type) {
-    case "approve": {
-      if (task.stage !== "awaiting-approval") {
-        invalidStage(task, event.type, ["awaiting-approval"]);
-      }
-      return commitTask(task, context.now, { stage: "queued", scopeApproved: true });
-    }
-    case "start": {
-      if (task.stage !== "queued") {
-        invalidStage(task, event.type, ["queued"]);
-      }
-      if (!task.scopeApproved) {
-        throw new TaskTransitionError(
-          "approval-required",
-          task,
-          `Task ${task.id} has not received scope approval`,
-        );
-      }
-      assertWorktree(event.worktree, task);
-      assertEndpoints(event.endpoints, task);
-      return commitTask(task, context.now, {
-        stage: task.kind === "scout" ? "scouting" : "implementing",
-        worktree: event.worktree,
-        endpoints: [...event.endpoints],
-      });
-    }
-    case "relaunch": {
-      if (task.stage !== "implementing" && task.stage !== "scouting") {
-        invalidStage(task, event.type, ["implementing", "scouting"]);
-      }
-      assertCurrentGeneration(task, event.generation, "Relaunch");
-      assertEndpoints(event.endpoints, task);
-      return commitTask(task, context.now, {
-        endpoints: [...event.endpoints],
-      });
-    }
-    case "implementation-complete": {
-      if (task.stage !== "implementing" || task.kind !== "implementation") {
-        invalidStage(task, event.type, ["implementing"]);
-      }
-      assertHeadEvent(task, event.head, event.generation, "Implementation completion");
-      if (event.reportPath !== undefined && !isNonEmptyText(event.reportPath)) {
-        throw new TaskTransitionError(
-          "invalid-input",
-          task,
-          "Implementation reportPath must be non-empty when supplied",
-        );
-      }
-      // A fix round that ends on an already-reviewed HEAD made no new commit, so it hands its
-      // round back; the unchanged review that follows asks "Keep fixing?" instead of looping.
-      const noCommit =
-        task.reviewRound > 0 && task.reviews.some((review) => review.head === event.head);
-      return commitTask(task, context.now, {
-        stage: "validating",
-        reviewHead: event.head,
-        validationEvidence: [],
-        ...(event.reportPath === undefined ? {} : { reportPath: event.reportPath }),
-        ...(noCommit
-          ? {
-              fixRoundGrants: [
-                ...(task.fixRoundGrants ?? []),
-                { generation: task.generation, rounds: 1, reason: "no-commit" as const },
-              ],
-            }
-          : {}),
-      });
-    }
-    case "validation-succeeded": {
-      if (task.stage !== "validating") {
-        invalidStage(task, event.type, ["validating"]);
-      }
-      assertHeadEvent(task, event.head, event.generation, "Validation");
-      assertCurrentHead(task, event.head, "Validation");
-      assertEvidence(task, event);
-      if (event.evidence.some((entry) => entry.exitCode !== 0)) {
-        throw new TaskTransitionError(
-          "validation-mismatch",
-          task,
-          "Validation success cannot contain a non-zero exit code",
-        );
-      }
-      return commitTask(task, context.now, {
-        stage: "reviewing",
-        validationEvidence: [...task.validationEvidence, ...event.evidence],
-      });
-    }
-    case "validation-failed": {
-      if (task.stage !== "validating") {
-        invalidStage(task, event.type, ["validating"]);
-      }
-      assertHeadEvent(task, event.head, event.generation, "Validation");
-      assertCurrentHead(task, event.head, "Validation");
-      assertEvidence(task, event);
-      if (event.evidence.every((entry) => entry.exitCode === 0)) {
-        throw new TaskTransitionError(
-          "validation-mismatch",
-          task,
-          "Validation failure requires at least one non-zero exit code",
-        );
-      }
-      return commitWithNotification(
-        task,
-        context,
-        {
-          stage: "awaiting-fixes",
-          validationEvidence: [...task.validationEvidence, ...event.evidence],
-        },
-        `The ${event.contract} contract failed for task ${task.id}; fixes are required`,
-      );
-    }
-    case "record-review": {
-      if (task.stage !== "reviewing") {
-        invalidStage(task, event.type, ["reviewing"]);
-      }
-      assertReview(event.review, task);
-      assertCurrentHead(task, event.review.head, "Review");
-      assertCurrentGeneration(task, event.review.generation, "Review");
-      if (
-        task.reviews.some(
-          (review) =>
-            review.head === event.review.head &&
-            review.generation === event.review.generation &&
-            review.lens === event.review.lens,
-        )
-      ) {
-        throw new TaskTransitionError(
-          "duplicate-review",
-          task,
-          `Review lens ${event.review.lens} already exists for head ${event.review.head} generation ${event.review.generation}`,
-        );
-      }
-      return commitTask(task, context.now, {
-        reviews: [...task.reviews, event.review],
-        findingLedger: recordReviewFindings({
-          ledger: task.findingLedger ?? [],
-          review: event.review,
-          reviewRound: task.reviewRound,
-        }),
-      });
-    }
-    case "finish-review": {
-      if (task.stage !== "reviewing") {
-        invalidStage(task, event.type, ["reviewing"]);
-      }
-      assertHeadEvent(task, event.head, event.generation, "Review completion");
-      assertCurrentHead(task, event.head, "Review completion");
-      if (!hasSuccessfulCurrentValidation(task)) {
-        throw new TaskTransitionError(
-          "validation-mismatch",
-          task,
-          "Review completion requires successful validation for the current head",
-        );
-      }
-      const current = activeReviews(task);
-      const required = requiredReviewLenses(task, event.head);
-      if (required.some((lens) => !current.some((review) => review.lens === lens))) {
-        throw new TaskTransitionError(
-          "review-incomplete",
-          task,
-          `Review completion requires the ${required.join(", ")} lens(es) for this round`,
-        );
-      }
-      if (!allReviewLensesPass(task, required)) {
-        return commitWithNotification(
-          task,
-          context,
-          { stage: "awaiting-fixes" },
-          reviewSummary(task),
-        );
-      }
-      const acceptance = finalAcceptanceStatus(task, event.head);
-      if (acceptance.satisfied) {
-        return commitWithNotification(
-          clearIterationScope(task),
-          context,
-          { stage: "ready" },
-          readySummary(task, event.head),
-          "coordinator",
-        );
-      }
-      const outstanding = [...acceptance.missing, ...acceptance.failed, ...acceptance.stale];
-      const finalRunRecorded = task.validationEvidence.some(
-        (entry) =>
-          entry.contract === "final" &&
-          entry.head === acceptance.identity.head &&
-          entry.policyDigest === acceptance.identity.policyDigest,
-      );
-      if (acceptance.failed.length > 0 || acceptance.stale.length > 0 || finalRunRecorded) {
-        throw new TaskTransitionError(
-          "final-acceptance-incomplete",
-          task,
-          `Task ${task.id} cannot be accepted: ${describeRequirements(outstanding)} did not pass under the delivered code and policy`,
-        );
-      }
-      return commitWithNotification(
-        task,
-        context,
-        { stage: "validating" },
-        `Task ${task.id} is otherwise ready; running the final acceptance manifest for ${describeRequirements(outstanding)}`,
-      );
-    }
-    case "invalidate-evidence": {
-      if (
-        task.kind !== "implementation" ||
-        !["validating", "reviewing", "awaiting-fixes", "ready"].includes(task.stage)
-      ) {
-        invalidStage(task, event.type, ["validating", "reviewing", "awaiting-fixes", "ready"]);
-      }
-      assertHeadEvent(task, event.head, event.generation, "Evidence invalidation");
-      const withoutHead = clearIterationScope(clearReviewHead(task));
-      return commitTask(withoutHead, context.now, {
-        stage: "implementing",
-        generation: task.generation + 1,
-        validationEvidence: [],
-        reviews: [],
-      });
-    }
-    case "follow-up-research": {
-      if (task.kind !== "scout" || task.stage !== "completed") {
-        invalidStage(task, event.type, ["completed"]);
-      }
-      const withoutCleanup = clearCleanup(task);
-      return commitTask(withoutCleanup, context.now, {
-        stage: "queued",
-        generation: task.generation + 1,
-      });
-    }
-    case "begin-fixes": {
-      if (task.stage !== "awaiting-fixes") {
-        invalidStage(task, event.type, ["awaiting-fixes"]);
-      }
-      if (event.head !== task.reviewHead || event.generation !== task.generation) {
-        staleResult(
-          task,
-          `Fix attempt expectation ${event.head}/${event.generation} does not match ${String(task.reviewHead)}/${task.generation}`,
-        );
-      }
-      if (!isInteger(task.policy.config.maxFixRounds) || task.reviewRound >= fixRoundBudget(task)) {
-        throw new TaskTransitionError(
-          "max-fix-rounds",
-          task,
-          `Task ${task.id} has used all ${String(fixRoundBudget(task))} fix rounds`,
-        );
-      }
-      if (event.iterationScope !== undefined) {
-        assertIterationScope(task, event.iterationScope);
-      }
-      const withoutHead = clearIterationScope(clearReviewHead(task));
-      return commitTask(withoutHead, context.now, {
-        stage: "implementing",
-        reviewRound: task.reviewRound + 1,
-        generation: task.generation + 1,
-        validationEvidence: [],
-        ...(event.iterationScope === undefined ? {} : { iterationScope: event.iterationScope }),
-      });
-    }
-    case "skip-review": {
-      // `paused` only as the stopping step of a publish-now from validating or reviewing.
-      const allowed: readonly TaskStage[] = [
-        "validating",
-        "reviewing",
-        "awaiting-fixes",
-        "blocked",
-      ];
-      const stoppedFrom = task.stage === "paused" ? task.previousStage : task.stage;
-      if (
-        task.kind !== "implementation" ||
-        stoppedFrom === undefined ||
-        !allowed.includes(stoppedFrom) ||
-        (task.stage === "paused" && stoppedFrom === "blocked")
-      ) {
-        invalidStage(task, event.type, allowed);
-      }
-      if (task.worktree === undefined || !isNonEmptyText(event.head)) {
-        throw new TaskTransitionError(
-          "invalid-input",
-          task,
-          "Skipping review requires a task worktree and a committed HEAD",
-        );
-      }
-      if (task.reviewHead !== undefined && task.reviewHead !== event.head) {
-        staleResult(
-          task,
-          `Publish-now HEAD ${event.head} does not match the task HEAD ${task.reviewHead}`,
-        );
-      }
-      return commitWithNotification(
-        clearIterationScope(clearPreviousAndBlock(task)),
-        context,
-        { stage: "ready", reviewHead: event.head, reviewSkippedHead: event.head },
-        `Task ${task.id} is ready without a finished review, at the user's request`,
-        "coordinator",
-      );
-    }
-    case "scout-report-complete": {
-      if (task.stage !== "scouting" || task.kind !== "scout") {
-        invalidStage(task, event.type, ["scouting"]);
-      }
-      assertCurrentGeneration(task, event.generation, "Scout report");
-      if (!isNonEmptyText(event.reportPath)) {
-        throw new TaskTransitionError("invalid-input", task, "Scout reportPath must be non-empty");
-      }
-      return commitWithNotification(
-        task,
-        context,
-        { stage: "completed", reportPath: event.reportPath },
-        `Scout report completed for task ${task.id}`,
-        "coordinator",
-      );
-    }
-    case "pause": {
-      if (
-        TERMINAL_STAGES.includes(task.stage) ||
-        task.stage === "paused" ||
-        task.stage === "blocked"
-      ) {
-        invalidStage(task, event.type, [
-          "awaiting-approval",
-          "queued",
-          "scouting",
-          "implementing",
-          "validating",
-          "reviewing",
-          "awaiting-fixes",
-          "ready",
-        ]);
-      }
-      if (!isNonEmptyText(event.reason)) {
-        throw new TaskTransitionError("invalid-input", task, "Pause requires a non-empty reason");
-      }
-      return commitWithNotification(
-        task,
-        context,
-        { stage: "paused", previousStage: task.stage },
-        `Task ${task.id} paused: ${event.reason}`,
-      );
-    }
-    case "resume": {
-      if (task.stage !== "paused" && task.stage !== "blocked") {
-        invalidStage(task, event.type, ["paused", "blocked"]);
-      }
-      if (
-        task.previousStage === undefined ||
-        task.previousStage === "paused" ||
-        task.previousStage === "blocked" ||
-        TERMINAL_STAGES.includes(task.previousStage)
-      ) {
-        throw new TaskTransitionError(
-          "invalid-stage",
-          task,
-          `Task ${task.id} has no resumable previous stage`,
-        );
-      }
-      const resumed = clearPreviousAndBlock(task);
-      return commitTask(resumed, context.now, { stage: task.previousStage });
-    }
-    case "cancel": {
-      if (TERMINAL_STAGES.includes(task.stage)) {
-        invalidStage(task, event.type, [
-          "awaiting-approval",
-          "queued",
-          "scouting",
-          "implementing",
-          "validating",
-          "reviewing",
-          "awaiting-fixes",
-          "ready",
-          "paused",
-          "blocked",
-        ]);
-      }
-      if (event.reason !== undefined && !isNonEmptyText(event.reason)) {
-        throw new TaskTransitionError(
-          "invalid-input",
-          task,
-          "Cancel reason must be non-empty when supplied",
-        );
-      }
-      const withoutPrevious = clearPreviousAndBlock(task);
-      return commitWithNotification(
-        withoutPrevious,
-        context,
-        { stage: "cancelled" },
-        event.reason === undefined
-          ? `Task ${task.id} cancelled`
-          : `Task ${task.id} cancelled: ${event.reason}`,
-      );
-    }
-    case "block": {
-      if (
-        TERMINAL_STAGES.includes(task.stage) ||
-        task.stage === "paused" ||
-        task.stage === "blocked"
-      ) {
-        invalidStage(task, event.type, [
-          "awaiting-approval",
-          "queued",
-          "scouting",
-          "implementing",
-          "validating",
-          "reviewing",
-          "awaiting-fixes",
-          "ready",
-        ]);
-      }
-      if (!isNonEmptyText(event.reason)) {
-        throw new TaskTransitionError("invalid-input", task, "Block requires a non-empty reason");
-      }
-      // A typed cause always shows its plain-English summary; the technical text stays in its detail.
-      const shown = event.cause?.summary ?? event.reason;
-      return commitWithNotification(
-        task,
-        context,
-        {
-          stage: "blocked",
-          previousStage: task.stage,
-          blockReason: shown,
-          ...(event.cause === undefined ? {} : { blockCause: event.cause }),
-        },
-        `Task ${task.id} blocked: ${shown}`,
-        "coordinator",
-      );
-    }
-    case "merge": {
-      if (task.stage !== "ready" || task.kind !== "implementation") {
-        invalidStage(task, event.type, ["ready"]);
-      }
-      if (!event.approved || !event.verified) {
-        throw new TaskTransitionError(
-          "merge-not-verified",
-          task,
-          "Merge requires explicit approval and verified merge evidence",
-        );
-      }
-      if (event.pullRequest?.state !== "merged" || !isNonEmptyText(event.pullRequest.head)) {
-        throw new TaskTransitionError(
-          "merge-not-verified",
-          task,
-          "Merged pull request must match the reviewed head",
-        );
-      }
-      assertMergedHead(task, event);
-      return commitWithNotification(
-        task,
-        context,
-        { stage: "merged", pullRequest: event.pullRequest },
-        `Task ${task.id} merged after approved and verified merge`,
-      );
-    }
-    case "acknowledge-notification": {
-      if (!isNonEmptyText(event.notificationId)) {
-        throw new TaskTransitionError(
-          "invalid-input",
-          task,
-          "Notification acknowledgement requires an id",
-        );
-      }
-      const index = task.notifications.findIndex((entry) => entry.id === event.notificationId);
-      if (index < 0) {
-        throw new TaskTransitionError(
-          "notification-not-found",
-          task,
-          `Notification ${event.notificationId} does not exist`,
-        );
-      }
-      const current = task.notifications[index];
-      if (current === undefined) {
-        throw new TaskTransitionError(
-          "notification-not-found",
-          task,
-          `Notification ${event.notificationId} does not exist`,
-        );
-      }
-      if (current.acknowledged) {
-        throw new TaskTransitionError(
-          "notification-already-acknowledged",
-          task,
-          `Notification ${event.notificationId} is already acknowledged`,
-        );
-      }
-      const notifications = [...task.notifications];
-      notifications[index] = { ...current, acknowledged: true };
-      return commitTask(task, context.now, { notifications });
-    }
+    case "approve":
+      return approveTask(task, context);
+    case "start":
+      return startTask(task, event, context);
+    case "relaunch":
+      return relaunchTask(task, event, context);
+    case "implementation-complete":
+      return completeImplementation(task, event, context);
+    case "validation-succeeded":
+      return recordValidationSuccess(task, event, context);
+    case "validation-failed":
+      return recordValidationFailure(task, event, context);
+    case "record-review":
+      return recordReview(task, event, context);
+    case "finish-review":
+      return finishReview(task, event, context);
+    case "invalidate-evidence":
+      return invalidateEvidence(task, event, context);
+    case "follow-up-research":
+      return continueResearch(task, context);
+    case "begin-fixes":
+      return beginFixes(task, event, context);
+    case "skip-review":
+      return skipReview(task, event, context);
+    case "scout-report-complete":
+      return completeScoutReport(task, event, context);
+    case "pause":
+      return pauseTask(task, event, context);
+    case "resume":
+      return resumeTask(task, context);
+    case "cancel":
+      return cancelTask(task, event, context);
+    case "block":
+      return blockTask(task, event, context);
+    case "merge":
+      return mergeTask(task, event, context);
+    case "acknowledge-notification":
+      return acknowledgeNotification(task, event, context);
     default: {
       const neverEvent: never = event;
       throw new TaskTransitionError(

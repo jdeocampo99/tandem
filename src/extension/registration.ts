@@ -7,7 +7,11 @@ import {
   type TandemAction,
   type TandemActionResult,
 } from "./actions.ts";
-import { handlePromptInput, type PromptRoutingConfig } from "./prompt-routing.ts";
+import {
+  type ChoiceConfirmation,
+  handlePromptInput,
+  type PromptRoutingConfig,
+} from "./prompt-routing.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -20,11 +24,15 @@ import { coordinatorToolRefusal } from "./tool-guard.ts";
 export type TandemOmpRegistrationDependencies = Readonly<{
   readonly getService: (ctx: ExtensionContext) => TandemService;
   readonly getHome: (ctx: ExtensionContext) => string;
+  /** The project a routed PR review runs under; without it, PR links go to the coordinator. */
+  readonly getRepo?: (ctx: ExtensionContext) => string;
   readonly promptRouting: PromptRoutingConfig;
   readonly reconcile: (ctx: ExtensionContext, runTick: boolean) => Promise<void>;
   readonly postAction: (ctx: ExtensionContext) => Promise<void>;
   /** The MCP servers this project lets the coordinator use itself. */
   readonly coordinatorMcpServers: (ctx: ExtensionContext) => Promise<readonly string[]>;
+  /** Whether a research task for this project is queued or running. */
+  readonly researchRunning: (ctx: ExtensionContext) => Promise<boolean>;
 }>;
 
 type TandemToolDetails = Readonly<{
@@ -80,18 +88,24 @@ export function registerTandemOmp(
   dependencies: TandemOmpRegistrationDependencies,
 ): void {
   const z = pi.zod;
+  const confirmation: ChoiceConfirmation = {};
   pi.on("input", (event, ctx) =>
     handlePromptInput(event, ctx, {
+      confirmation,
       config: dependencies.promptRouting,
       getService: dependencies.getService,
       getHome: dependencies.getHome,
+      ...(dependencies.getRepo === undefined ? {} : { getRepo: dependencies.getRepo }),
       sendMessage: pi.sendMessage.bind(pi),
     }),
   );
   pi.on("tool_call", async (event, ctx) => {
-    const reason = await coordinatorToolRefusal(event.toolName, event.input, () =>
-      dependencies.coordinatorMcpServers(ctx),
-    );
+    const reason = await coordinatorToolRefusal(event.toolName, event.input, {
+      allowedServers: () => dependencies.coordinatorMcpServers(ctx),
+      researchRunning: () => dependencies.researchRunning(ctx),
+      home: dependencies.getHome(ctx),
+      cwd: ctx.cwd,
+    });
     return reason === undefined ? undefined : { block: true, reason };
   });
   const modelSpecSchema = z
@@ -116,6 +130,7 @@ export function registerTandemOmp(
       keyDecisions: z.array(z.string()),
       openQuestions: z.array(z.string()),
       researchLinks: z.array(z.string()),
+      skipReview: z.boolean().optional(),
     })
     .strict();
   const actionSchema = z.union([
@@ -142,10 +157,29 @@ export function registerTandemOmp(
         surfaces: z.array(z.string()),
         researchTaskIds: z.array(z.string()).optional(),
         skill: z.object({ name: z.string(), context: z.string() }).strict().optional(),
+        targetRepo: z
+          .string()
+          .optional()
+          .describe("Another repository to work in, as owner/repo. Leave out for this project."),
+        targetCheckout: z
+          .string()
+          .optional()
+          .describe("A path the user gave for the target repository."),
+        targetClone: z
+          .boolean()
+          .optional()
+          .describe("True when the user said to clone the target repository."),
+        validationCommands: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Commands that check work in a target repository with none saved, e.g. bun test.",
+          ),
       })
       .strict(),
     z.object({ action: z.literal("list") }).strict(),
     z.object({ action: z.literal("presentations") }).strict(),
+    z.object({ action: z.literal("presentation-open"), presentationId: z.string() }).strict(),
     z
       .object({
         action: z.literal("show"),
@@ -190,7 +224,7 @@ export function registerTandemOmp(
       .strict(),
     z.object({ action: z.literal("brief-review"), requestId: z.string() }).strict(),
     z.object({ action: z.literal("brief-show"), requestId: z.string() }).strict(),
-    z.object({ action: z.literal("request-receipt"), requestId: z.string() }).strict(),
+    z.object({ action: z.literal("request-receipt"), requestId: z.string().optional() }).strict(),
     z
       .object({
         action: z.literal("brief-approve"),
@@ -206,7 +240,12 @@ export function registerTandemOmp(
       .strict(),
     z.object({ action: z.literal("resume"), taskId: z.string() }).strict(),
     z
-      .object({ action: z.literal("cancel"), taskId: z.string(), reason: z.string().optional() })
+      .object({
+        action: z.literal("cancel"),
+        taskId: z.string(),
+        reason: z.string().optional(),
+        discard: z.boolean().optional(),
+      })
       .strict(),
     z
       .object({
@@ -278,10 +317,60 @@ export function registerTandemOmp(
     z
       .object({
         action: z.literal("cleanup"),
-        taskId: z.string(),
+        taskIds: z.array(z.string()).min(1),
         discard: z.boolean().optional(),
       })
       .strict(),
+    z
+      .object({
+        action: z.literal("review-pr"),
+        pullRequest: z.string().describe("A GitHub PR URL or owner/repo#123."),
+        repoPath: z.string(),
+        lens: z.enum(["full", "intent", "focus"]).optional(),
+        focus: z
+          .string()
+          .optional()
+          .describe("For lens focus: the user's words, e.g. the migration."),
+        checkout: z.string().optional().describe("A path the user gave for the repository."),
+        clone: z.boolean().optional().describe("True when the user said to clone it."),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("review-show"),
+        taskId: z.string(),
+        page: z.boolean().optional(),
+      })
+      .strict(),
+    z.object({ action: z.literal("review-notes"), taskId: z.string() }).strict(),
+    z
+      .object({
+        action: z.literal("review-edit"),
+        taskId: z.string(),
+        comments: z
+          .array(
+            z
+              .object({
+                id: z.string(),
+                body: z.string().optional(),
+                severity: z.enum(["blocking", "question", "suggestion", "nit"]).optional(),
+                drop: z.boolean().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+        summaryComment: z.string().optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("review-post"),
+        taskId: z.string(),
+        verdict: z.enum(["comment", "approve", "request-changes"]),
+      })
+      .strict(),
+    z.object({ action: z.literal("review-again"), taskId: z.string() }).strict(),
+    z.object({ action: z.literal("review-close"), taskId: z.string() }).strict(),
   ]);
 
   const requestSchema = z.object({ request: actionSchema }).strict();
@@ -297,12 +386,9 @@ export function registerTandemOmp(
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const request = params.request;
       try {
-        const result = await executeTandemAction(
-          request,
-          dependencies.getService(ctx),
-          ctx,
+        const result = await executeTandemAction(request, dependencies.getService(ctx), ctx, {
           signal,
-        );
+        });
         if (request.action === "tick") {
           await dependencies.reconcile(ctx, false);
         } else {
@@ -316,7 +402,7 @@ export function registerTandemOmp(
   });
   pi.registerCommand("tandem", {
     description:
-      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, feedback, describe, draft, publish, merge, cleanup.",
+      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
     handler: async (args, ctx) => {
       try {
         const parsedAction = parseTandemCommand(args);

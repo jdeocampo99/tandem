@@ -17,6 +17,11 @@ import { readCoordinatorMcpServers } from "./config/repositories.ts";
 import type { TaskRecord } from "./contracts.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import {
+  atCompactionBoundary,
+  coordinatorCompactTokens,
+  finishedTaskIds,
+} from "./extension/compaction.ts";
+import {
   deliverPendingNotifications,
   isResearchReportReadable,
 } from "./extension/notifications.ts";
@@ -24,6 +29,7 @@ import { promptRoutingConfig } from "./extension/prompt-routing.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { buildDurableDigest } from "./extension/summary.ts";
 import { COORDINATOR_INSTRUCTIONS, COORDINATOR_TOOL_GUIDANCE } from "./instructions.ts";
+import { appendCoordinatorUsage } from "./runtime/usage-ledger.ts";
 import {
   createTandemService,
   type TandemService,
@@ -36,6 +42,7 @@ import {
   researchContinuationClassifier,
   researchContinuationClassifierConfig,
 } from "./tasks/research-continuation-classifier.ts";
+import { replyUsage } from "./workers/terminal.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
 
@@ -83,6 +90,16 @@ function serviceForContext(
             }),
         }),
   });
+}
+
+/** Whether the task belongs to this already-resolved repository; a missing task checkout does not. */
+async function isTaskInRepository(task: TaskRecord, repo: string): Promise<boolean> {
+  if (task.repoPath === repo) return true;
+  const taskRepo = await realpath(task.repoPath).catch((error: unknown) => {
+    if (isMissing(error)) return undefined;
+    throw error;
+  });
+  return taskRepo === repo;
 }
 
 async function refreshDigest(service: TandemService): Promise<string> {
@@ -155,6 +172,35 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       }
       return service;
     };
+    const compactTokens = coordinatorCompactTokens(environmentSnapshot);
+    let knownFinished: Set<string> | undefined;
+    let taskFinished = false;
+    let compacting = false;
+    // Uses every listed task, like the digest and notifications, because this coordinator sees them all.
+    const compactIfAtBoundary = (ctx: ExtensionContext, tasks: readonly TaskRecord[]): void => {
+      if (compactTokens === 0) return;
+      const finished = finishedTaskIds(tasks);
+      const previous = knownFinished;
+      if (previous !== undefined && [...finished].some((id) => !previous.has(id))) {
+        taskFinished = true;
+      }
+      knownFinished = finished;
+      const idle =
+        !agentActive && waitingInputs.size === 0 && unacknowledgedNotifications.size === 0;
+      if (compacting || !atCompactionBoundary(tasks, { taskFinished, idle })) return;
+      // The boundary is used up either way, so a later unrelated idle moment never compacts.
+      taskFinished = false;
+      const usage = ctx.getContextUsage();
+      if (usage === undefined || usage.tokens < compactTokens) return;
+      compacting = true;
+      // Not awaited: the `session_compact` handler reconciles, and this runs inside `reconcile`.
+      void ctx
+        .compact()
+        .catch((error: unknown) => logExtensionError(pi, error))
+        .finally(() => {
+          compacting = false;
+        });
+    };
     const reconcile = async (ctx: ExtensionContext, runTick: boolean): Promise<void> => {
       if (shuttingDown) return;
       if (tickInFlight !== undefined) return tickInFlight;
@@ -168,14 +214,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             taskMessage = undefined;
             for (const task of tasks) {
               if (isTerminalTask(task) || task.stage === "ready") continue;
-              const taskRepo =
-                task.repoPath === repo
-                  ? repo
-                  : await realpath(task.repoPath).catch((error: unknown) => {
-                      if (isMissing(error)) return undefined;
-                      throw error;
-                    });
-              if (taskRepo !== repo) continue;
+              if (!(await isTaskInRepository(task, repo))) continue;
               if (
                 task.stage === "blocked" ||
                 task.stage === "paused" ||
@@ -199,6 +238,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             ctx,
             reportReadable: isResearchReportReadable,
           });
+          compactIfAtBoundary(ctx, tasks);
         } catch (error) {
           taskState = "blocked";
           taskMessage = error instanceof Error ? error.message : String(error);
@@ -216,9 +256,24 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     registerTandemOmp(pi, {
       getService,
       getHome: (ctx) => getEnvironment(ctx).home,
+      getRepo: (ctx) => getEnvironment(ctx).repo,
       promptRouting,
       reconcile,
       postAction,
+      // An unreadable task list counts as research running, so the guard fails closed.
+      researchRunning: async (ctx) => {
+        try {
+          const repo = await realpath(getEnvironment(ctx).repo);
+          for (const task of await getService(ctx).list()) {
+            const researching =
+              task.kind === "scout" && (task.stage === "queued" || task.stage === "scouting");
+            if (researching && (await isTaskInRepository(task, repo))) return true;
+          }
+          return false;
+        } catch {
+          return true;
+        }
+      },
       // An unreadable settings file allows no servers, so the guard fails closed.
       coordinatorMcpServers: (ctx) =>
         readCoordinatorMcpServers({
@@ -303,6 +358,18 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     pi.on("tool_execution_end", (event) => {
       waitingInputs.delete(event.toolCallId);
       reportStatus();
+    });
+    pi.on("turn_end", async (event, ctx) => {
+      const reply = replyUsage(event.message);
+      if (reply === undefined) return;
+      const environment = getEnvironment(ctx);
+      await appendCoordinatorUsage(environment.home, {
+        at: new Date().toISOString(),
+        repoPath: await realpath(environment.repo).catch(() => environment.repo),
+        inputTokens: reply.input + reply.cacheRead + reply.cacheWrite,
+        outputTokens: reply.output,
+        costUsd: reply.costUsd,
+      }).catch(() => undefined);
     });
     pi.on("agent_end", async (event, ctx) => {
       agentActive = event.willContinue === true;

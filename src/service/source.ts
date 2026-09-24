@@ -93,6 +93,11 @@ export function taskSourcePath(task: TaskRecord, runtime?: RuntimeTaskState): st
   return runtime?.sourceRepoPath ?? task.repoPath;
 }
 
+/** The checkout a task's worktree belongs to: its target repository's, else the coordinator's. */
+export function taskCheckoutPath(task: TaskRecord): string {
+  return task.target?.checkout ?? task.repoPath;
+}
+
 type SourceInboxDependencies = Readonly<{
   readonly home: string;
   readonly sourceWorkspace: SourceWorkspace | undefined;

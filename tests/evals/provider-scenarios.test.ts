@@ -12,7 +12,7 @@ import { type ScenarioWorld, withScenario } from "./scenario.ts";
 const CONTEXT = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
 const PROMPT = "list my tandem tasks";
 const ROUTING_CRITERIA: Readonly<Record<string, readonly string[]>> = {
-  action: ["list", "presentations", "show", "messages", "inspect", "none"],
+  action: ["list", "presentations", "show", "messages", "inspect", "receipt", "none"],
   target: ["repository", "task", "conversation", "unresolved"],
   effect: ["read-only", "state-change", "sensitive", "unknown"],
   scope: ["within", "changes", "unclear"],
@@ -44,7 +44,8 @@ function confidentAnswers(
 
 type RoutingProbe = Readonly<{
   readonly handled: boolean;
-  readonly serviceCalls: number;
+  /** Routed actions that ran instead of a coordinator turn. */
+  readonly dispatched: number;
   readonly displayed: readonly string[];
   readonly reasons: readonly string[];
 }>;
@@ -53,7 +54,6 @@ async function routePrompt(
   world: ScenarioWorld,
   config: PromptRoutingConfig,
 ): Promise<RoutingProbe> {
-  let serviceCalls = 0;
   const displayed: string[] = [];
   const result = await handlePromptInput(
     { source: "interactive", text: PROMPT } as InputEvent,
@@ -62,10 +62,7 @@ async function routePrompt(
       config,
       getService: () =>
         ({
-          list: async () => {
-            serviceCalls += 1;
-            return [];
-          },
+          list: async () => [],
         }) as unknown as TandemService,
       getHome: () => world.home,
       sendMessage: ((message: string | { readonly content?: string }) => {
@@ -79,7 +76,7 @@ async function routePrompt(
   );
   return {
     handled: result?.handled === true,
-    serviceCalls,
+    dispatched: events.filter((entry) => entry.event === "prompt-route-dispatched").length,
     displayed,
     reasons: events.flatMap((entry) =>
       entry.details?.reason === undefined ? [] : [entry.details.reason],
@@ -105,7 +102,7 @@ test("a confident provider answer routes exactly one read-only lookup", async ()
     });
 
     expect(probe.handled).toBe(true);
-    expect(probe.serviceCalls).toBe(1);
+    expect(probe.dispatched).toBe(1);
     expect(probe.displayed).toHaveLength(1);
     expect(probe.reasons).toContain("direct-read-only");
     expect(world.trace()).toEqual([
@@ -123,7 +120,7 @@ test("a provider timeout leaves the prompt with the coordinator and records the 
     });
 
     expect(probe.handled).toBe(false);
-    expect(probe.serviceCalls).toBe(0);
+    expect(probe.dispatched).toBe(0);
     expect(probe.displayed).toEqual([]);
     expect(probe.reasons).toContain("jev-timeout");
     expect(world.trace()).toEqual([
@@ -141,7 +138,7 @@ test("a malformed provider response never becomes a routed action", async () => 
     });
 
     expect(probe.handled).toBe(false);
-    expect(probe.serviceCalls).toBe(0);
+    expect(probe.dispatched).toBe(0);
     expect(probe.reasons).toContain("jev-invalid-response");
   });
 });
@@ -162,7 +159,7 @@ test("an answer that omits a required classification is refused as invalid rathe
     });
 
     expect(probe.handled).toBe(false);
-    expect(probe.serviceCalls).toBe(0);
+    expect(probe.dispatched).toBe(0);
     expect(probe.reasons).toContain("jev-invalid-response");
   });
 });
@@ -179,7 +176,7 @@ test("an unavailable provider and an unconfigured provider both fall back withou
 
     const unconfigured = await routePrompt(world, promptRoutingConfig({}));
     expect(unconfigured.handled).toBe(false);
-    expect(unconfigured.serviceCalls).toBe(0);
+    expect(unconfigured.dispatched).toBe(0);
     expect(unconfigured.reasons).toContain("jev-not-configured");
     expect(world.trace().filter((event) => event.boundary === "typesafe")).toHaveLength(1);
   });

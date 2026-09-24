@@ -13,6 +13,7 @@ import {
   finishPendingScoutCleanup,
   type TaskCleanupOutcome,
 } from "../service/scout-cleanup.ts";
+import { taskCheckoutPath } from "../service/source.ts";
 import {
   containerRefs,
   observeWorktreeContainment,
@@ -493,7 +494,7 @@ async function observePendingImplementations(
       lease !== undefined && (task.stage === "cancelled" || task.stage === "completed")
         ? await observeWorktreeContainment(
             run,
-            task.repoPath,
+            taskCheckoutPath(task),
             lease,
             containerRefs(task, lease.branch, others),
           )

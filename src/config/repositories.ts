@@ -190,9 +190,23 @@ function readCoordinatorMcpServerList(value: unknown, source: string): readonly 
   );
 }
 
+/** Shell commands that stop what agents started in a worktree, such as a Docker stack. */
+function readCleanupCommandList(value: unknown, source: string): readonly string[] {
+  if (value === undefined) return [];
+  const field = `${source} cleanupCommands`;
+  if (!Array.isArray(value)) throw new TypeError(`${field} must be an array of commands`);
+  return value.map((entry: unknown, index) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw new TypeError(`${field}[${index}] must be a non-empty command`);
+    }
+    return entry.trim();
+  });
+}
+
 /**
- * settings.toml is the policy itself plus the `repoPath` it belongs to and the coordinator's MCP
- * servers. The server list is a launch setting, not task policy, so it stays out of the policy.
+ * settings.toml is the policy itself plus the `repoPath` it belongs to, the coordinator's MCP
+ * servers, and the cleanup commands. Those two are machine settings read live, not task policy, so
+ * they stay out of the policy.
  */
 function readSettingsToml(text: string, source: string, root: string): Record<string, unknown> {
   let parsed: unknown;
@@ -208,6 +222,7 @@ function readSettingsToml(text: string, source: string, root: string): Record<st
     throw new TypeError(`${source} repoPath must be ${JSON.stringify(root)}`);
   }
   readCoordinatorMcpServerList(parsed.coordinatorMcpServers, source);
+  readCleanupCommandList(parsed.cleanupCommands, source);
   return parsed;
 }
 
@@ -215,6 +230,7 @@ function parseSettingsToml(text: string, source: string, root: string): unknown 
   const {
     repoPath: _repoPath,
     coordinatorMcpServers: _servers,
+    cleanupCommands: _cleanup,
     ...policy
   } = readSettingsToml(text, source, root);
   return policy;
@@ -368,6 +384,18 @@ export async function readCoordinatorMcpServers(
   const text = (await options.readText?.(file)) ?? (await readFile(file, "utf8"));
   const settings = readSettingsToml(text, file, root);
   return readCoordinatorMcpServerList(settings.coordinatorMcpServers, file);
+}
+
+/** The commands that clean up a finished task's worktree; none when unset or not yet onboarded. */
+export async function readCleanupCommands(
+  options: Readonly<{ repoPath: string; home: string; readText?: PolicyTextReader }>,
+): Promise<readonly string[]> {
+  const root = await repositoryRoot(options.repoPath);
+  const file = await existingCentralFile(centralPaths(root, await configuredHome(options.home)));
+  if (file === undefined || !file.endsWith(".toml")) return [];
+  const text = (await options.readText?.(file)) ?? (await readFile(file, "utf8"));
+  const settings = readSettingsToml(text, file, root);
+  return readCleanupCommandList(settings.cleanupCommands, file);
 }
 
 /** Resolves central policy by canonical repository identity and pins guidance from the requested checkout. */
@@ -529,6 +557,10 @@ ${setting(setupCommands, "setupCommands", '["npm ci", "npx prisma generate"]')}
 
 # Checks every change must pass before Tandem accepts it. Each one runs in the project folder.
 ${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"]')}
+
+# Commands that stop what agents started in a working copy, like a Docker or database stack.
+# They run in the task's working copy once the task is finished and its agents are closed.
+# cleanupCommands = ["docker compose down"]
 
 # MCP servers the coordinator may use itself, by name. The coordinator plans and hands work to
 # tasks, and tasks can use every MCP server this project has. List only servers the coordinator

@@ -1,14 +1,15 @@
 # Tandem agent guide
 
-Local, OMP-first orchestration for durable repository work. Bun + strict TypeScript; macOS required
-for the task store's native `O_EXLOCK` locking.
+Tandem runs a coordinator conversation plus child OMP agents that research, implement, validate,
+review, and deliver repository changes, with every task saved to durable local state. Bun + strict
+TypeScript; macOS required for the task store's native `O_EXLOCK` locking.
 
 ## Start here
 
 1. Find the relevant domain below; read its implementation and matching `tests/<domain>/`.
 2. Follow imports and read only the relevant [behavioral contract](#read-on-demand), not the entire reference.
 3. Shared types/roles: [contracts.ts](src/contracts.ts). Service composition/scheduling:
-   [service/controller.ts](src/service/controller.ts). Setup/examples: [README.md](README.md).
+   [service/controller.ts](src/service/controller.ts). What users see and do: [README.md](README.md).
 
 ## Source layout
 
@@ -16,20 +17,22 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 
 | Working on | Start here |
 | --- | --- |
-| Normal `tandem`, onboarding, project selection | [main.ts](src/main.ts) → [terminal/](src/terminal/) |
+| `tandem` terminal command, onboarding, project selection | [main.ts](src/main.ts) → [terminal/](src/terminal/) |
 | Action CLI / JSON automation | [cli.ts](src/cli.ts) → [terminal/cli-application.ts](src/terminal/cli-application.ts) |
-| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
+| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `registry.ts`, `restart.ts` (`tandem update`), `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
 | Models, environment, policy | [config/](src/config/) |
 | Request briefs, approval revisions, review pane | [requests/](src/requests/): `brief.ts`, `store.ts`, `store-codec.ts`, `markdown.ts`, `review-pane.ts`, `workflow.ts` |
-| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts`, `inspection.ts` (`tandem status TASK_ID`) |
-| Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `central.ts` (stop/save/re-enter), `central-review.ts` |
+| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts`, `question.ts`, `communication-protocol.ts`, `inspection.ts` (`tandem status TASK_ID`) |
+| Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `central.ts` (stop/save/re-enter effects), `central-reentry.ts` (pure re-entry table and decisions), `central-review.ts` |
 | Request usage, cost, quota, elapsed-time receipts | [runtime/](src/runtime/): `usage.ts`, `usage-events.ts`, `usage-ledger.ts`, `usage-codec.ts`, `usage-receipt.ts` |
 | Model tier evidence and economical routing | [config/model-tier.ts](src/config/model-tier.ts), [workers/execution-routing.ts](src/workers/execution-routing.ts) |
 | Worker execution, results, control, validation | [workers/](src/workers/); entry points: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [validation-worker.ts](src/validation-worker.ts) |
-| OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
+| OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/) (`tool-guard.ts` limits coordinator tools); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
 | Worktree capacity and maintenance | [pool/](src/pool/) |
 | Evidence, PR publication, merge | [delivery/](src/delivery/): `preflight.ts` checks a ready task before publishing |
 | Artifacts, feedback, Lavish | [presentations/](src/presentations/) |
+| Research and changes in another repository, finding a repository's checkout | [repos/locate.ts](src/repos/locate.ts); `target` on tasks |
+| Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |
 
 ## Safety boundaries
@@ -60,6 +63,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 - Separate decisions from effects; inject runners, clocks, IDs, and policy. Update all affected callers.
   No `any`, stubs, suppressed checks, or compatibility shims.
 - File moves must update imports and `import.meta.url` worker/extension resource paths together.
+- Running coordinators load extension code at launch; `tandem update` reloads them after a change.
 - Test observable behavior. Native process/terminal checks use isolated Herdr sessions and temporary
   Tandem homes, never the user's live state.
 - Cross-subsystem scenario evals live in [tests/evals/](tests/evals/). Reuse
@@ -80,21 +84,23 @@ not the normal `tandem` front door.
 
 ## Read on demand
 
-Before changing behavior, read its contract:
+Before changing behavior, read its contract in [docs/reference/](docs/reference/):
 
-- Launch/reset/ownership: [Launching the coordinator](docs/agent-reference.md#launching-the-coordinator).
-- Policy/instructions: [Repository onboarding and central policy](docs/agent-reference.md#repository-onboarding-and-central-policy).
-- Approvals/validation/review/child results: [Task lifecycle](docs/agent-reference.md#task-lifecycle).
-- Request briefs/approval revisions/review pane: [Request briefs and approval revisions](docs/agent-reference.md#request-briefs-and-approval-revisions).
-- Usage/cost/quota/elapsed-time receipts: [Request usage receipts and the accounting ledger](docs/agent-reference.md#request-usage-receipts-and-the-accounting-ledger).
-- Model routing/premium approval: [Economical routing and premium-tier approval](docs/agent-reference.md#economical-routing-and-premium-tier-approval).
-- Messages/control: [Inspecting and controlling work](docs/agent-reference.md#inspecting-and-controlling-work).
-- Tools/notifications/compaction: [OMP extension](docs/agent-reference.md#omp-extension).
-- Capacity/disk admission: [Safe automatic maintenance](docs/agent-reference.md#safe-automatic-maintenance).
-- PRs/artifacts: [Pull-request delivery](docs/agent-reference.md#pull-request-delivery), [Presentations and Lavish](docs/agent-reference.md#presentations-and-lavish).
-- Persistence/restart/locking: [Recovery and durable state](docs/agent-reference.md#recovery-durable-state-and-compaction), [Local limits](docs/agent-reference.md#local-limits-and-source-of-truth).
-- Central recovery (stop/save/re-enter, stage re-entry table, restart budget): [Central recovery: stop, save, re-enter](docs/agent-reference.md#central-recovery-stop-save-re-enter).
-- Stale records/panes/leases: [Reconciling Tandem resources across sessions](docs/agent-reference.md#reconciling-tandem-resources-across-sessions).
+- Roles, approvals, worker tools, what guards what: [operating-model.md](docs/reference/operating-model.md).
+- Launch, reconnect, `update`, `reset`, coordinator ownership: [coordinator.md](docs/reference/coordinator.md).
+- Onboarding, settings file, model choices, Jev routing, instruction provenance: [policy.md](docs/reference/policy.md).
+- Task stages, fix rounds, research continuation, child terminals: [task-lifecycle.md](docs/reference/task-lifecycle.md).
+- Request briefs, approval revisions, review pane: [request-briefs.md](docs/reference/request-briefs.md).
+- Usage receipts, model routing, premium-tier approval: [usage-and-routing.md](docs/reference/usage-and-routing.md).
+- Validation, review, findings, review levels, child results: [review-and-validation.md](docs/reference/review-and-validation.md).
+- Inspect, steer, answer, messages, CLI consent: [control.md](docs/reference/control.md).
+- Tool actions, notifications, compaction, maintenance, disk admission: [omp-extension.md](docs/reference/omp-extension.md).
+- Draft and final PRs, merge, presentations: [delivery.md](docs/reference/delivery.md).
+- Tasks in another repository (`targetRepo`), finding checkouts: [other-repositories.md](docs/reference/other-repositories.md).
+- Reviewing someone else's PR (`pr-review` tasks): [pr-review.md](docs/reference/pr-review.md).
+- Durable state, locking, restart, central recovery and its re-entry table: [recovery.md](docs/reference/recovery.md).
+- Block causes, stale records, panes, leases, `tandem fix`: [reconciliation.md](docs/reference/reconciliation.md).
 
 Keep this file a routing map and cross-cutting rules. Update links when code moves; put detailed
-behavior in the reference instead of accumulating incident-specific instructions here.
+behavior in docs/reference/ instead of accumulating incident-specific instructions here. The README
+is written for users: describe benefits and everyday use there, and keep contracts in docs/reference/.

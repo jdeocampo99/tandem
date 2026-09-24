@@ -11,6 +11,16 @@ import type {
 } from "../contracts.ts";
 import { formatDecisionQuestion, shortNote, taskName } from "./question.ts";
 
+const FINDING_SUMMARY_MAX_CHARS = 160;
+
+/** The first sentence of a finding, capped so each finding stays one readable line. */
+export function findingHeadline(description: string): string {
+  const sentence = description.trim().split(/(?<=[.!?])\s/, 1)[0] ?? "";
+  return sentence.length <= FINDING_SUMMARY_MAX_CHARS
+    ? sentence
+    : `${sentence.slice(0, FINDING_SUMMARY_MAX_CHARS - 1).trimEnd()}…`;
+}
+
 export const FINDING_STATUSES: readonly FindingStatus[] = [
   "addressed",
   "unresolved",
@@ -21,16 +31,11 @@ export const FINDING_STATUSES: readonly FindingStatus[] = [
 /** How many blockers the "Keep fixing?" details name before summarising the remainder as a count. */
 const MAX_NAMED_OPEN_BLOCKERS = 5;
 
-type SeverityAndVerdict = Pick<Finding, "severity" | "verdict">;
-
 /**
- * The recorded rule a review already enforces: a lens may not pass while a confirmed P0, P1, or P2,
- * or a plausible P0 or P1, stands. Anything else is an optional suggestion.
+ * A review fails only on a P0 or P1, confirmed or plausible. A P2 or P3 is a known issue: it is
+ * reported to the user with the ready task and never costs a fix round on its own.
  */
-export function isBlockingFinding(finding: SeverityAndVerdict): boolean {
-  if (finding.verdict === "confirmed") {
-    return finding.severity === "P0" || finding.severity === "P1" || finding.severity === "P2";
-  }
+export function isBlockingFinding(finding: Pick<Finding, "severity">): boolean {
   return finding.severity === "P0" || finding.severity === "P1";
 }
 

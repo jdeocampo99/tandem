@@ -288,6 +288,30 @@ test("renders validation bullets from recorded evidence rather than supplied cla
   expect(rendered).not.toContain("all tests passed by user claim");
 });
 
+test("lists the known issues review did not block on", () => {
+  const withKnownIssue: TaskRecord = {
+    ...task(),
+    findingLedger: [
+      {
+        id: "f-2",
+        lens: "review",
+        severity: "P2",
+        verdict: "confirmed",
+        description:
+          "Label says Back. The mobile header renders it next to the close icon, so users see two exits.",
+        file: "src/back.tsx",
+        status: "unresolved",
+        raisedAt: { head: "head-1", generation: 0, reviewRound: 0 },
+        statusAt: { head: "head-1", generation: 0, reviewRound: 0 },
+      },
+    ],
+  };
+  expect(describeTaskPr(withKnownIssue, summary)).toContain(
+    "# Known issues\nReview findings still open. Judge them before merging.\n- P2: Label says Back. (src/back.tsx)",
+  );
+  expect(describeTaskPr(task(), summary)).not.toContain("# Known issues");
+});
+
 test("refuses delivery when only targeted iteration checks passed at the reviewed head", () => {
   const iterationOnly: TaskRecord = {
     ...task(),
@@ -322,6 +346,22 @@ test("refuses delivery when final evidence was recorded under a superseded polic
   expect(() => describeTaskPr(superseded, summary)).toThrow(
     /complete final acceptance run at HEAD head-1/u,
   );
+});
+
+test("a task in another repository refuses to publish when its checkout's origin is a fork", async () => {
+  const runner = publishRunner();
+  const target = { repo: "upstream/repo", checkout: "/tmp/upstream", branch: "main" };
+  await expect(
+    publishReviewedTask({
+      task: { ...task(), target },
+      summary,
+      title: "Reviewed delivery",
+      base: "main",
+      approved: true,
+      run: runner.run,
+    }),
+  ).rejects.toThrow("origin is acme/repo, not upstream/repo");
+  expect(runner.calls.some((call) => call.argv.includes("push"))).toBe(false);
 });
 
 test("publishes the exact task branch only after identity checks and avoids duplicate pull requests", async () => {

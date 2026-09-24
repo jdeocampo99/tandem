@@ -2,8 +2,11 @@ import { expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { WorkerJob } from "../../src/workers/jobs.ts";
 import {
+  idleAfterResult,
   isBackgroundResultWake,
   planAbortWithReason,
+  reviewSummary,
+  turnStalled,
   userInterruptedTurn,
 } from "../../src/workers/terminal-extension.ts";
 
@@ -102,4 +105,109 @@ test("only a finished background command's wake-up counts as a background wake",
   expect(isBackgroundResultWake([assistant, backgroundResult, typed])).toBe(false);
   expect(isBackgroundResultWake([assistant, inbox])).toBe(false);
   expect(isBackgroundResultWake([])).toBe(false);
+});
+
+test("a submitted worker OMP keeps idle for the grace period is done despite willContinue", () => {
+  // The settings stall: submit_report, then agent_end with willContinue because a backgrounded
+  // dev server was still running, then OMP idle with nothing queued from then on.
+  const stalled = {
+    completed: true,
+    phase: "busy" as const,
+    ompIdle: true,
+    pendingMessages: false,
+  };
+  const first = idleAfterResult({ ...stalled, idleSince: undefined, now: 0 });
+  expect(first).toEqual({ idleSince: 0, settle: false });
+  expect(idleAfterResult({ ...stalled, idleSince: 0, now: 29_999 }).settle).toBe(false);
+  expect(idleAfterResult({ ...stalled, idleSince: 0, now: 30_000 })).toEqual({
+    idleSince: undefined,
+    settle: true,
+  });
+});
+
+test("idle-after-result never settles an unsubmitted, working, or messaged worker", () => {
+  const base = { completed: true, phase: "busy" as const, ompIdle: true, pendingMessages: false };
+  const later = { idleSince: 0, now: 60_000 };
+  const cases = [
+    { ...base, completed: false },
+    { ...base, phase: "idle" as const },
+    { ...base, ompIdle: false },
+    { ...base, pendingMessages: true },
+  ];
+  for (const input of cases) {
+    expect(idleAfterResult({ ...input, ...later })).toEqual({
+      idleSince: undefined,
+      settle: false,
+    });
+  }
+});
+
+test("a submitted review reads as its round, verdict, and one line per finding by severity", () => {
+  const summary = reviewSummary(
+    {
+      lens: "review",
+      head: "21260599aae29357e2d6f2ca3bd06ab2d43eeb2e",
+      generation: 1,
+      pass: false,
+      summary: "Long reviewer notes that stay in the durable result.",
+      findings: [
+        {
+          id: "review/tablet",
+          severity: "P2",
+          verdict: "plausible",
+          description: "Tablet-width navigation stacks above the section. More detail follows.",
+        },
+        {
+          id: "review/entrance",
+          severity: "P1",
+          verdict: "confirmed",
+          file: "src/components/motion/page-transition.tsx",
+          line: 188,
+          description: `Referrals content enters at zero opacity ${"x".repeat(200)}`,
+        },
+      ],
+    },
+    2,
+  );
+  const lines = summary.split("\n");
+  expect(lines[0]).toBe("Review round 2: changes needed, 2 findings");
+  expect(lines[1]).toStartWith("- P1 Referrals content enters at zero opacity");
+  expect(lines[1]).toContain("…");
+  expect(lines[1]).toEndWith("(src/components/motion/page-transition.tsx:188)");
+  expect(lines[2]).toBe("- P2 Tablet-width navigation stacks above the section. [unconfirmed]");
+  expect(summary).not.toContain("21260599");
+  expect(summary).not.toContain("generation");
+});
+
+test("a clean review, or one from a job without a round, still reads plainly", () => {
+  const clean = {
+    lens: "review" as const,
+    head: "head",
+    generation: 0,
+    pass: true,
+    summary: "",
+    findings: [],
+  };
+  expect(reviewSummary(clean, 1)).toBe("Review round 1: approved, no findings.");
+  expect(reviewSummary(clean, undefined)).toBe("Review: approved, no findings.");
+  const knownIssueOnly = {
+    ...clean,
+    pass: false,
+    findings: [
+      { id: "f", severity: "P2" as const, verdict: "confirmed" as const, description: "Minor." },
+    ],
+  };
+  expect(reviewSummary(knownIssueOnly, 1)).toBe("Review round 1: approved, 1 finding\n- P2 Minor.");
+});
+
+test("a turn with no tool activity for five minutes is stalled", () => {
+  const quiet = { turnActive: true, toolsRunning: 0, lastActivityAt: 0 };
+  expect(turnStalled({ ...quiet, now: 5 * 60_000 - 1 })).toBe(false);
+  expect(turnStalled({ ...quiet, now: 5 * 60_000 })).toBe(true);
+});
+
+test("a running tool or a finished turn is never stalled", () => {
+  const late = { lastActivityAt: 0, now: 60 * 60_000 };
+  expect(turnStalled({ ...late, turnActive: true, toolsRunning: 1 })).toBe(false);
+  expect(turnStalled({ ...late, turnActive: false, toolsRunning: 0 })).toBe(false);
 });

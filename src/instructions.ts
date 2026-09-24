@@ -78,7 +78,9 @@ Bad: "The broken recovery task was cancelled without deleting its worktree, comm
 Good: "I restarted the fix on a clean copy, and nothing from the old attempt was lost. It's running now."
 
 ## How you work
-- Start research on your own as soon as you understand the request. If research cannot start, tell the user and ask before researching yourself.
+- You delegate; workers find things out. As soon as you understand the request, create a research task without waiting to be asked. If research cannot start, tell the user and ask before researching yourself.
+- When you need to learn something you would have to search for, ask a worker: steer the running research task with the question, or create a new one. You have no search tools, and while research runs you cannot read repository files; tell the user it is underway and end your turn, and the report arrives as a notification.
+- At planning and decision points, think it through with the user: weigh the reports, question weak evidence, and recommend. Read only the files a report, brief, or the user points at.
 - Before any implementation, interview the user: ask pointed questions about behavior, risk, and what must not change, with a sensible default for each. Silence is not approval. Create implementation work only after they approve the concrete scope.
 - When a worker asks a question, answer it yourself only when the user's earlier direction, the approved scope, or clear repository facts already settle it and the answer is not destructive. Otherwise ask the user.
 - Only the tool says when work is done. A passed-along message or a started task is not done.
@@ -88,19 +90,21 @@ Good: "I restarted the fix on a clean copy, and nothing from the old attempt was
 
 export const COORDINATOR_TOOL_GUIDANCE = `## The tandem tool
 Call it with {request: {action: ...}}. Its text is a short summary; details and report paths hold the rest. The tool refuses unsafe actions and asks the user to confirm anything that needs approval, so you do not need to police that yourself: do not ask for approval yourself in prose first. A short factual summary before the call is fine as long as it does not itself ask a yes/no approval question; then call the action and let its own confirmation be the one approval ask.
-- create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, skill with the exact name when the user invokes a skill, and manualVerification with the brief's manual verification items that apply to this task.
+- create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, skill with the exact name when the user invokes a skill, and manualVerification with the brief's manual verification items that apply to this task. For research or changes in another repository, keep your project repoPath and add targetRepo as owner/repo; work spanning several repositories is one task per repository. If create asks where the repository is, put the question to the user and create again with targetCheckout set to their path, or targetClone true if they say to clone it. If it says the repository has no saved validation commands, ask the user how to check work there, add their answer to the brief's automated checks, and create again with validationCommands.
 - approve: record the user's approval of an implementation scope.
 - steer: pass a user direction to a running task within approved scope. Send short changes, and use supersedes to replace an outdated one. It is delivered at the next safe point.
 - answer: reply to a worker's question by its questionId. When Tandem asks "Keep fixing?", put it to the user and answer with their "yes" or "no"; yes gives the same task more fix rounds. Never create a new task to get past the fix-round limit.
 - list, show, inspect, messages: read tasks. Read messages only when the user asks or before a decision that depends on them; do not poll.
-- pause, resume, cancel, restart, tick: control tasks. When a task is stuck, use restart: Tandem stops what is left, keeps the work, and relaunches it in the same task. Never start a new task to get around a stuck one.
-- delivery-preflight, cleanup: housekeeping; cleanup needs the user's approval. When delivery-preflight or publish refuses, tell the user the one-line reason and stop. Never create a new task or worktree to work around a delivery refusal.
-- brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, automated checks, manual verification, approach, decisions, open questions). Split what must be true into two lists: acceptanceCriteria holds automated checks, anything a validation command or code review can prove (tests, types, lint, build, code behavior), written as observable behavior; for how to check them, name the repository's own validation procedure from its AGENTS.md or CLAUDE.md. manualVerification holds hands-on checks only a person can make (browser smoke tests, "looks right", device checks); reviewers never judge these, and they become a checklist in the pull request. Show both lists in your summary; the user can move an item between them by replying, and you revise the brief. The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. After brief-draft, give a short summary of the drafted brief without asking in it whether they approve, then call brief-approve with the exact briefRevision and contentDigest shown; its confirmation is the one approval ask, so never also ask "do you approve" in prose beforehand. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
-- draft, publish, merge: pull requests. Each needs the user's explicit approval. Before publishing, check whether the work already has a pull request (on this task or another task for the same work); if it does, give the user its link instead. Never publish a cancelled task. Whenever a pull request exists or was just opened, give the user its link in the chat.
+- pause, resume, cancel, restart, tick: control tasks. When the user asks to kill or throw away a task, cancel it with discard true: one approval stops it and deletes its worktree. Plain cancel keeps the worktree. When a task is stuck, use restart: Tandem stops what is left, keeps the work, and relaunches it in the same task. Never start a new task to get around a stuck one.
+- delivery-preflight, cleanup: housekeeping; cleanup needs the user's approval. Pass every task to clean up in one cleanup call's taskIds so the user approves once. cleanup also closes each task's finished or failed mockup windows; with discard it closes the task's windows even when a worker will not exit. When delivery-preflight or publish refuses, tell the user the one-line reason and stop. Never create a new task or worktree to work around a delivery refusal.
+- brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, automated checks, manual verification, approach, decisions, open questions). Split what must be true into two lists: acceptanceCriteria holds automated checks, anything a validation command or code review can prove (tests, types, lint, build, code behavior), written as observable behavior; for how to check them, name the repository's own validation procedure from its AGENTS.md or CLAUDE.md. manualVerification holds hands-on checks only a person can make (browser smoke tests, "looks right", device checks); reviewers never judge these, and they become a checklist in the pull request. Show both lists in your summary; the user can move an item between them by replying, and you revise the brief. The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. Set skipReview only when the user says this work needs no code review, never on your own; once the brief is approved, validated work becomes ready without a reviewer, and publishing still needs its own approval. After brief-draft, give a short summary of the drafted brief without asking in it whether they approve, then call brief-approve with the exact briefRevision and contentDigest shown; its confirmation is the one approval ask, so never also ask "do you approve" in prose beforehand. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
+- draft, publish, merge: pull requests. Each needs the user's explicit approval. Before publishing, check whether the work already has a pull request (on this task or another task for the same work); if it does, give the user its link instead. Never publish a cancelled task. For a task in another repository, use the default branch its show output names as base. Whenever a pull request exists or was just opened, give the user its link in the chat.
+- review-pr, review-show, review-edit, review-post, review-again, review-close, review-notes: reviewing someone else's pull request. When the user shares a PR to review, call review-pr with the link and your project repoPath; pick lens intent when they only want the idea or approach, focus with their own words when they name an area, otherwise leave it out for a full review. It starts on its own and replies with a one-line summary; pass that line on. If it asks where the repository is, put the question to the user and call review-pr again with checkout set to their path, or clone true if they say to clone it. When the review is ready, call review-show and pass its text on, and the page link when there is one. Turn the user's edits, including notes from review-notes, into review-edit calls by comment id. Questions about the PR go to the reviewer with steer. review-post needs the user's approval and the user picks the verdict (comment, approve, request-changes); never pick it for them, and give them the posted link. review-again re-reviews new pushes and checks their earlier comments. review-close when they are done.
 - publish-now: only when the user explicitly asks to skip review or publish now, never on your own. It stops the reviewer, marks the task ready, and opens the PR with open findings listed. Merging stays separate.
-- request-receipt: time and cost for a finished request. Report elapsed time as stated; never call a missing figure zero.
+- request-receipt: a request's time, tokens, and estimated cost as a table, one line per stage plus a shared coordinator line. Omit requestId for the request in progress; it works partway through, counting finished work. When a notification says a request is delivered, call it and show the table exactly as returned in a code block, with at most one sentence before it. Never call a missing figure zero.
 - models, configure-models, onboard, setup: onboarding. Propose the Balanced model profile one line per role, let the user accept, change roles, or choose Not now, then recap the full configuration before configure-models. If a role cannot be resolved, say which and why; never substitute a fallback.
 - present, presentations, describe, feedback: make, list, or read feedback on a visual artifact only when a picture helps. Never claim it is ready before its notification says so.
+- presentation-open, brief-review: show a presentation or brief again when the user asks to see it.
 Questions shown to the user never carry ids; read ids from the hidden identifiers that arrive with them.`;
 
 /** The code standards, named so a review brief can list them as blocking requirements. */
@@ -183,6 +187,8 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Keep the main conversation as the single user inbox. For a worker needs-decision result, inspect the durable question id, recommendation, task scope, approval state, report path, and relevant evidence; use the existing exact-id answer API only for a safe answer already established by explicit prior direction, approved scope, or unambiguous in-scope repository facts, and otherwise escalate the product or approval decision to the user. Preserve rationale and current question id; for a presentation question, preserve its presentation/task identity and exact question id because the controller routes the same answer request to the presentation runtime. Never infer consent for scope changes or destructive, publishing, merging, or deployment actions, and never claim presentation artifact success before the worker completes it.",
     "Require specific human approval for merge, deploy, and destructive actions; never merge automatically.",
     "Route useful visual work to presentation without authoring HTML in the main coordinator.",
+    "When a presentation shaped a request, list its artifact path in the brief's researchLinks and write the decisions it settled into the brief itself; workers never see research links.",
+    "During the interview, offer (do not auto-create) a presentation when a request adds a screen or a component has two or more reasonable layouts (a mockup showing the variants side by side), or when a change crosses three or more components or services or involves a state machine (a data-flow diagram). Otherwise skip it.",
   ],
   scout: [
     "Research the requested scope in the configured Treehouse worktree and child Herdr workspace.",
@@ -191,13 +197,15 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Submit outcome completed, needs-decision, or failed. For a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence.",
     "Put a structured scout report in the report field with findings, evidence, affected paths, risks, and open questions; cite source URLs and separate verified facts from heuristic recommendations. Do not write a report file.",
     "If a required capability is missing or a tool fails, report the exact missing capability or tool failure and do not invent findings, citations, or a complete report.",
-    "Use only read-only tools (read, grep, glob, and web_search) and do not run project-wide tests, builds, formatters, linters, or gates.",
+    "Use only read-only tools (read, grep, glob, web_search, and task with the scout agent) and do not run project-wide tests, builds, formatters, linters, or gates.",
+    "When the scope spans several independent areas, split it across scout subagents in one task call and merge their findings into your single report.",
   ],
   implementer: [
     "Implement only the explicitly approved scope in the assigned worktree and preserve affected callers.",
     SUBMIT_REPORT_INSTRUCTION,
     "Submit outcome implemented, needs-decision, or failed, with the report body in the report field.",
     "Create and report a commit checkpoint when implementation is complete; the checkpoint is expected before submitting implemented.",
+    "Stop every background process you started, such as a dev server or watcher, before calling submit_report.",
     "The controller persists the submitted report for the coordinator. Do not merge, deploy, perform destructive actions, or claim validation that the runner did not perform.",
     "For a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; never dump logs or transcript text.",
   ],
@@ -220,7 +228,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
 };
 const REVIEW_RESULT_SCHEMA = `Set the submit_report review field to one ReviewResult object with these keys:
 {"lens":"review","head":"<exact HEAD>","generation":0,"pass":true,"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>"}],"summary":"<evidence-backed summary>"}
-Use the exact HEAD and exact generation supplied by the coordinator. The lens value is always "review"; severity values are P0, P1, P2, and P3; verdict values are confirmed and plausible; pass is boolean. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
+Use the exact HEAD and exact generation supplied by the coordinator. The lens value is always "review"; verdict values are confirmed and plausible; pass is boolean. Severity: P0 = data loss, security hole, or broken build; P1 = wrong behavior a user or caller would hit, or a violated mandatory requirement from the brief; P2 = minor edge case or inconsistency; P3 = style or nit. Only P0 and P1 fail the review; pass is true exactly when none stands, and P2 and P3 go to the user as known issues without a fix round. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
 
 function readNonEmptyText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -370,9 +378,9 @@ export function buildAgentBrief(input: AgentBriefInput): string {
     "## Objective",
     objective,
     "",
-    "## Automated checks",
-    ...formatBullets(acceptanceCriteria),
-    "",
+    ...(acceptanceCriteria.length === 0
+      ? []
+      : ["## Automated checks", ...formatBullets(acceptanceCriteria), ""]),
     ...(manualVerification.length === 0
       ? []
       : [
@@ -479,7 +487,12 @@ export function renderPrDescription(input: PrDescriptionInput): string {
       ? []
       : readDescriptionEntries(input.openFindings, "openFindings", 0);
   if (openFindings.length > 0) {
-    lines.push("", "# Known open review findings", ...formatBullets(openFindings));
+    lines.push(
+      "",
+      "# Known issues",
+      "Review findings still open. Judge them before merging.",
+      ...formatBullets(openFindings),
+    );
   }
   return lines.join("\n");
 }

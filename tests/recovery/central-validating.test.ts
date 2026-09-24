@@ -13,11 +13,11 @@ import type {
 } from "../../src/contracts.ts";
 import {
   CentralRecoveryWorkflow,
-  MAX_VALIDATION_RETRIES,
   type RelaunchWorker,
   type RevalidateWorker,
   VALIDATION_RETRY_QUESTION_ID_PREFIX,
 } from "../../src/recovery/central.ts";
+import { MAX_VALIDATION_RETRIES } from "../../src/recovery/central-reentry.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { DurableJob, RuntimeState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";

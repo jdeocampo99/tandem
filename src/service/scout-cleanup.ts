@@ -1,22 +1,23 @@
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { runCommand } from "../adapters/commands.ts";
-import { closeEndpoint, inspectEndpoint } from "../adapters/herdr.ts";
+import { closeEndpoint } from "../adapters/herdr.ts";
 import {
   AdapterProtocolError,
   EndpointBusyError,
   EndpointOwnershipError,
 } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
+import { readCleanupCommands } from "../config/repositories.ts";
 import type {
   Clock,
   CommandRunner,
-  Endpoint,
   TaskCleanupState,
   TaskCleanupStatus,
   TaskRecord,
   WorktreeLease,
 } from "../contracts.ts";
+import { removeReviewWorktree } from "../pr-review/worktree.ts";
 import { activeRuntimeJob, taskRuntime, unreleasedReservation } from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
 import {
@@ -27,6 +28,7 @@ import {
 } from "../runtime/persistence.ts";
 import type { RuntimeState, RuntimeTaskState } from "../runtime/schema.ts";
 import { createTaskStore, type TaskStore } from "../tasks/store.ts";
+import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import {
   absoluteDirectory,
   describeError,
@@ -35,7 +37,7 @@ import {
   isTerminalTask,
   replaceRuntimeTask,
 } from "./records.ts";
-import { taskSourcePath } from "./source.ts";
+import { taskCheckoutPath, taskSourcePath } from "./source.ts";
 import {
   containerRefs,
   otherTaskWork,
@@ -58,6 +60,8 @@ export type TaskCleanupDependencies = Readonly<{
   readonly runtimePath: string;
   readonly run: CommandRunner;
   readonly clock: Clock;
+  /** The project's cleanupCommands, read when a finished task's worktree is cleaned up. */
+  readonly cleanupCommands: (repoPath: string) => Promise<readonly string[]>;
 }>;
 export type TerminalTaskCleanupOptions = Readonly<{
   /** Discard is reserved for explicitly approved cancelled or blocked implementation tasks. */
@@ -282,27 +286,20 @@ type PaneClosureProgress = Readonly<{
 }>;
 
 /**
- * Closes each owned endpoint after proving the pane is the one Tandem opened and that no worker is
- * still running in it. An endpoint that is already gone counts as closed.
+ * Closes each owned endpoint after proving the pane is the one Tandem opened. A finished worker
+ * that OMP left idle in the pane is asked to exit first; a busy one defers cleanup. An endpoint
+ * that is already gone counts as closed.
  */
 async function closeOwnedPanes(
   run: CommandRunner,
-  endpoints: readonly Endpoint[],
+  runtime: Pick<RuntimeTaskState, "endpoints" | "jobs">,
   cwd: string,
 ): Promise<PaneClosureProgress> {
   const closedPaneIds: string[] = [];
-  for (const endpoint of endpoints) {
+  for (const endpoint of runtime.endpoints) {
     try {
-      const inspection = await inspectEndpoint(run, { endpoint, cwd });
-      if (inspection.activeWorker) {
-        return {
-          closedPaneIds,
-          failure: {
-            status: "deferred",
-            reason: `pane ${endpoint.paneId} still has an active worker`,
-          },
-        };
-      }
+      const job = workerJobForEndpoint(runtime.jobs, endpoint);
+      await prepareWorkerTerminal(run, { endpoint, cwd, ...(job === undefined ? {} : { job }) });
       await closeEndpoint(run, { endpoint, cwd });
     } catch (error) {
       if (isMissingEndpoint(error)) {
@@ -314,7 +311,7 @@ async function closeOwnedPanes(
           closedPaneIds,
           failure: {
             status: "deferred",
-            reason: `pane ${endpoint.paneId} became busy while closing`,
+            reason: `pane ${endpoint.paneId} still has an active worker`,
           },
         };
       }
@@ -434,6 +431,39 @@ function hasBusyPresentation(state: RuntimeState, taskId: string): boolean {
   );
 }
 
+const CLEANUP_COMMAND_TIMEOUT_MS = 120_000;
+
+/**
+ * Runs the project's cleanupCommands in a finished task's worktree once its agents are closed, so
+ * what they started outside their own processes, like a Docker stack, stops too. A failure never
+ * keeps the worktree; it is returned so the caller can report it.
+ */
+export async function runCleanupCommands(
+  deps: Pick<TaskCleanupDependencies, "run" | "cleanupCommands">,
+  repoPath: string,
+  worktreePath: string | undefined,
+): Promise<string | undefined> {
+  if (worktreePath === undefined) return undefined;
+  let commands: readonly string[];
+  try {
+    commands = await deps.cleanupCommands(repoPath);
+  } catch (error) {
+    return `cleanup commands could not be read: ${describeError(error)}`;
+  }
+  const failures: string[] = [];
+  for (const command of commands) {
+    const result = await deps
+      .run({
+        argv: ["/bin/sh", "-c", command],
+        cwd: worktreePath,
+        timeoutMs: CLEANUP_COMMAND_TIMEOUT_MS,
+      })
+      .catch((error: unknown) => ({ code: -1, stdout: "", stderr: describeError(error) }));
+    if (result.code !== 0) failures.push(`${command} exited ${result.code}`);
+  }
+  return failures.length === 0 ? undefined : `cleanup commands failed: ${failures.join("; ")}`;
+}
+
 /**
  * Releases the child pane and worktree of one terminal task, and leaves a durable note saying what
  * happened.
@@ -491,7 +521,7 @@ export async function releaseTerminalTaskResources(
     }
 
     const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
-    const panes = await closeOwnedPanes(deps.run, runtime.endpoints, cwd);
+    const panes = await closeOwnedPanes(deps.run, runtime, cwd);
     if (panes.failure !== undefined) {
       const failure = panes.failure;
       if (failure.status === "deferred") return deferred(task.id, failure.reason);
@@ -503,72 +533,119 @@ export async function releaseTerminalTaskResources(
       });
     }
 
-    const lease = runtime.worktree;
-    if (lease === undefined) {
+    // A PR review worktree holds someone else's repository, where the project's commands do not apply.
+    const cleanupFailure =
+      task.kind === "pr-review"
+        ? undefined
+        : await runCleanupCommands(deps, taskCheckoutPath(task), runtime.worktree?.path);
+    const settle = async (): Promise<TaskCleanupOutcome> => {
+      const lease = runtime.worktree;
+      if (lease !== undefined && task.kind === "pr-review") {
+        return settlePrReviewWorktree(deps, task, lease, panes.closedPaneIds);
+      }
+      if (lease === undefined) {
+        return recordCleanupAttempt(deps, task, {
+          closedPaneIds: panes.closedPaneIds,
+          leaseReleased: false,
+          status: "released",
+          reason: "the task holds no worktree lease",
+        });
+      }
+      if (options.free !== undefined) {
+        return await freeSupersededWorktree(deps, task, lease, options.free, panes.closedPaneIds);
+      }
+      const checkout =
+        task.kind === "scout" ? await observeScoutCheckout(deps.run, lease.path) : undefined;
+      const decision =
+        checkout === undefined
+          ? ({
+              kind: "release",
+              reason: "the lease release contract proves an implementation worktree landed",
+            } as const)
+          : decideScoutWorktreeRelease({ lease, checkout });
+      if (
+        decision.kind === "release" &&
+        checkout?.status === "observed" &&
+        scoutLeadsToImplementation(task)
+      ) {
+        return recordCleanupAttempt(deps, task, {
+          closedPaneIds: panes.closedPaneIds,
+          leaseReleased: false,
+          status: "retained",
+          reason: "the scout worktree is kept for the implementation that follows this research",
+        });
+      }
+      if (decision.kind !== "release") {
+        return recordCleanupAttempt(deps, task, {
+          closedPaneIds: panes.closedPaneIds,
+          leaseReleased: false,
+          status: decision.kind === "retain" ? "retained" : "quarantined",
+          reason: decision.reason,
+        });
+      }
+      try {
+        await releaseWorktree(deps.run, {
+          repo: taskCheckoutPath(task),
+          lease,
+          childWorkerStopped: true,
+          ...(options.discard === true &&
+          task.kind === "implementation" &&
+          (task.stage === "cancelled" || task.stage === "blocked")
+            ? { discard: true, destructiveApproval: true }
+            : {}),
+        });
+      } catch (error) {
+        return recordCleanupAttempt(deps, task, {
+          closedPaneIds: panes.closedPaneIds,
+          leaseReleased: false,
+          status: classifyCleanupFailure(error),
+          reason: `the worktree lease was retained: ${describeError(error)}`,
+        });
+      }
       return recordCleanupAttempt(deps, task, {
         closedPaneIds: panes.closedPaneIds,
-        leaseReleased: false,
+        leaseReleased: true,
         status: "released",
-        reason: "the task holds no worktree lease",
-      });
-    }
-    if (options.free !== undefined) {
-      return await freeSupersededWorktree(deps, task, lease, options.free, panes.closedPaneIds);
-    }
-    const checkout =
-      task.kind === "scout" ? await observeScoutCheckout(deps.run, lease.path) : undefined;
-    const decision =
-      checkout === undefined
-        ? ({
-            kind: "release",
-            reason: "the lease release contract proves an implementation worktree landed",
-          } as const)
-        : decideScoutWorktreeRelease({ lease, checkout });
-    if (
-      decision.kind === "release" &&
-      checkout?.status === "observed" &&
-      scoutLeadsToImplementation(task)
-    ) {
-      return recordCleanupAttempt(deps, task, {
-        closedPaneIds: panes.closedPaneIds,
-        leaseReleased: false,
-        status: "retained",
-        reason: "the scout worktree is kept for the implementation that follows this research",
-      });
-    }
-    if (decision.kind !== "release") {
-      return recordCleanupAttempt(deps, task, {
-        closedPaneIds: panes.closedPaneIds,
-        leaseReleased: false,
-        status: decision.kind === "retain" ? "retained" : "quarantined",
         reason: decision.reason,
       });
-    }
-    try {
-      await releaseWorktree(deps.run, {
-        repo: task.repoPath,
-        lease,
-        childWorkerStopped: true,
-        ...(options.discard === true &&
-        task.kind === "implementation" &&
-        (task.stage === "cancelled" || task.stage === "blocked")
-          ? { discard: true, destructiveApproval: true }
-          : {}),
-      });
-    } catch (error) {
-      return recordCleanupAttempt(deps, task, {
-        closedPaneIds: panes.closedPaneIds,
-        leaseReleased: false,
-        status: classifyCleanupFailure(error),
-        reason: `the worktree lease was retained: ${describeError(error)}`,
-      });
-    }
+    };
+    const outcome = await settle();
+    // ponytail: the failure reaches the caller's outcome, not the durable cleanup record.
+    return cleanupFailure === undefined
+      ? outcome
+      : { ...outcome, reason: `${outcome.reason}; ${cleanupFailure}` };
+  });
+}
+
+/**
+ * Keeps a finished PR review's worktree for follow-up questions and re-reviews, and removes it once
+ * the user closes the review or cancels the task. Only the review worktree and its refs go; the
+ * user's checkout is otherwise untouched.
+ */
+async function settlePrReviewWorktree(
+  deps: TaskCleanupDependencies,
+  task: TaskRecord,
+  lease: WorktreeLease,
+  closedPaneIds: readonly string[],
+): Promise<TaskCleanupOutcome> {
+  const state = task.prReview;
+  if (state !== undefined && state.closed !== true && task.stage !== "cancelled") {
     return recordCleanupAttempt(deps, task, {
-      closedPaneIds: panes.closedPaneIds,
-      leaseReleased: true,
-      status: "released",
-      reason: decision.reason,
+      closedPaneIds,
+      leaseReleased: false,
+      status: "retained",
+      reason:
+        "the review checkout is kept for follow-up questions and re-reviews until the review is closed",
     });
+  }
+  if (state !== undefined) {
+    await removeReviewWorktree(deps.run, { checkout: lease.root, path: lease.path }, state.ref);
+  }
+  return recordCleanupAttempt(deps, task, {
+    closedPaneIds,
+    leaseReleased: true,
+    status: "released",
+    reason: "the review checkout was removed",
   });
 }
 
@@ -589,7 +666,7 @@ async function freeSupersededWorktree(
       ? "only a cancelled or completed implementation task can be freed"
       : await recheckSuperseded(
           deps.run,
-          task.repoPath,
+          taskCheckoutPath(task),
           lease,
           proof,
           containerRefs(
@@ -608,7 +685,7 @@ async function freeSupersededWorktree(
   }
   try {
     await releaseWorktree(deps.run, {
-      repo: task.repoPath,
+      repo: taskCheckoutPath(task),
       lease,
       childWorkerStopped: true,
       discard: true,
@@ -663,6 +740,7 @@ export async function finishPendingScoutCleanup(
     runtimePath: runtimeFile(home),
     run,
     clock,
+    cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home }),
   };
   return withStateLock(home, async () => {
     const tasks = await deps.store.list();
@@ -712,6 +790,7 @@ export async function finishPendingImplementationCleanup(
     runtimePath: runtimeFile(home),
     run,
     clock,
+    cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home }),
   };
   return withStateLock(home, async () => {
     const tasks = await deps.store.list();

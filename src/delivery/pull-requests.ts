@@ -177,6 +177,17 @@ export function repositoryFromRemote(value: string): string {
   return repository;
 }
 
+/** A task in another repository publishes only there, never to a fork its checkout's origin names. */
+function publishRepository(task: TaskRecord, remote: string): string {
+  const repository = repositoryFromRemote(remote);
+  if (task.target !== undefined && repository.toLowerCase() !== task.target.repo) {
+    throw new Error(
+      `origin is ${repository}, not ${task.target.repo}; pull requests for this task go to ${task.target.repo}`,
+    );
+  }
+  return repository;
+}
+
 function assertRepositoryIdentity(remote: string, expected: string): void {
   const observed = repositoryFromRemote(remote);
   if (observed !== expected) {
@@ -519,7 +530,7 @@ export async function publishReviewedTask(input: {
   const ready = await assertReadyCheckout(run, input.task);
   return publishCheckout(run, {
     ready,
-    repository: repositoryFromRemote(ready.remote),
+    repository: publishRepository(input.task, ready.remote),
     title,
     base,
     body: describeTaskPr(input.task, input.summary),
@@ -658,7 +669,7 @@ export async function publishTaskDraft(input: {
   const base = readSingleLine(input.base, "base");
 
   const checkout = await assertDraftCheckout(run, input.task);
-  const repository = repositoryFromRemote(checkout.remote);
+  const repository = publishRepository(input.task, checkout.remote);
   const existing = await observeExistingPullRequest(
     run,
     checkout.cwd,

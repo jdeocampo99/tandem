@@ -8,3 +8,6 @@ compaction:
   enabled: true
 prewalk:
   enabled: false
+# ponytail: blocks OMP's bundled write-capable agents only; a repo's own agents can still be spawned.
+task:
+  disabledAgents: [task, sonic, reviewer, security-reviewer]

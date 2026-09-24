@@ -13,7 +13,7 @@ current status, non-negotiable boundaries, and links to the focused documents.
 | Experiments and rollout evidence | Measurement plan for routing and future context reuse | [evaluation plan](jev-evaluation.md) |
 
 Operational instructions live in the [README](../README.md#jev-integration-and-prompt-routing)
-and [agent reference](agent-reference.md#typesafe-jev-prompt-routing).
+and [policy reference](reference/policy.md#jev-prompt-routing).
 
 ## Product goal
 
@@ -50,7 +50,10 @@ The extension intercepts interactive prompts before the coordinator turn:
    read-only effect, and an explicit task ID for task-specific actions.
 5. Allowlisted direct actions are `list`, `presentations`, `show`, `messages`, `inspect`, and
    `recovery-plan`. They call the existing `TandemService` and display a bounded result.
-6. Every other case returns `undefined` so the normal coordinator handles the original prompt.
+6. A short reply while Tandem waits on a fixed-choice answer (recovery restart, validation retry,
+   "Keep fixing?", or brief approval) is mapped by Jev to one code-listed choice. Code answers
+   low-risk choices directly and asks an exact `y` before approving a brief.
+7. Every other case returns `undefined` so the normal coordinator handles the original prompt.
 
 Route events are append-only diagnostics at `<home>/logs/tandem.jsonl`. They record a short prompt
 hash, bounded route facts, reason, confidence, and latency; raw prompts and API keys are excluded.

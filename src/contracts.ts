@@ -1,3 +1,5 @@
+import type { PrReviewState } from "./pr-review/state.ts";
+
 export const MODEL_ROLE_ORDER = [
   "coordinator",
   "scout",
@@ -20,7 +22,10 @@ export function isAgentRole(value: unknown): value is AgentRole {
   return typeof value === "string" && MODEL_ROLE_ORDER.includes(value as AgentRole);
 }
 
-export type TaskKind = "scout" | "implementation";
+export type TaskKind = "scout" | "implementation" | "pr-review";
+
+/** Kinds the generic create action starts; a PR review starts through its own action. */
+export type CreatableTaskKind = Exclude<TaskKind, "pr-review">;
 
 export type TaskStage =
   | "awaiting-approval"
@@ -504,6 +509,8 @@ export type RequestBriefContent = Readonly<{
   readonly keyDecisions: readonly string[];
   readonly openQuestions: readonly string[];
   readonly researchLinks: readonly string[];
+  /** The user decided while planning that this work needs no code review. Absent when not. */
+  readonly skipReview?: boolean | undefined;
 }>;
 
 /** Whether a revision changed what was agreed or only annotated it. */
@@ -717,6 +724,23 @@ export type TaskRecord = {
   readonly communication?: TaskCommunication;
   readonly pullRequest?: PullRequestMetadata;
   readonly cleanup?: TaskCleanupState;
+  /** The pull request a `pr-review` task reviews; present on exactly those tasks. */
+  readonly prReview?: PrReviewState;
+  /** The other repository this task works in; absent when it works in the coordinator's own. */
+  readonly target?: TaskTarget;
+};
+
+/**
+ * Another repository a coordinator's task works in. `repoPath` stays the coordinator's project, so
+ * ownership and scope are unchanged; git work happens in `checkout`.
+ */
+export type TaskTarget = {
+  /** GitHub `owner/repo`. */
+  readonly repo: string;
+  /** The user's checkout of it, where task worktrees come from. */
+  readonly checkout: string;
+  /** The default branch the source commit was pinned from; pull requests target it. */
+  readonly branch: string;
 };
 
 export type CommandRequest = {
