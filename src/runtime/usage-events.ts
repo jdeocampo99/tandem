@@ -28,6 +28,7 @@ import {
   type RequestWorkStatus,
   requestUsageEventKey,
   type TokenMeasurement,
+  USD_MICROS_PER_DOLLAR,
   type UsageRecord,
 } from "./usage.ts";
 
@@ -36,6 +37,15 @@ export type RequestWorkObservation = Readonly<{
   readonly requestId: string;
   readonly runtime: RuntimeTaskState;
   readonly presentations: readonly RuntimePresentation[];
+  /** Token tallies the task's workers recorded, by job id; a job without one stays unmeasured. */
+  readonly tallies?: ReadonlyMap<string, JobTokenTally>;
+}>;
+
+/** The tokens one job's model replies reported, and OMP's price-table estimate of their cost. */
+export type JobTokenTally = Readonly<{
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly costUsd: number;
 }>;
 
 /** One provider call's reported usage, bound to the request identity it was made under. */
@@ -70,15 +80,17 @@ export function requestIntakeEvent(
 }
 
 /**
- * The wall-clock end of a request: the terminal delivery, cancellation, or failure of work done
- * under it, taken from the task update that settled it. A task that only reached `merged` records
- * nothing, because a later human merge is not the delivery moment the receipt measures to.
+ * The wall-clock end of a request: a scout's finished research, an implementation's published pull
+ * request, or a cancellation, stamped at the task update that showed it. Implementation work never
+ * reaches `completed`, so its delivery is the verified-PR handoff; the event is keyed without a
+ * time, so a later human merge re-derives the same event and cannot move the delivery moment.
  */
 export function requestTerminalEvent(
   requestId: string,
-  task: Pick<TaskRecord, "id" | "stage" | "generation" | "updatedAt">,
+  task: Pick<TaskRecord, "id" | "stage" | "generation" | "updatedAt" | "pullRequest">,
 ): RequestUsageEvent | undefined {
-  const outcome = terminalOutcomeForStage(task.stage);
+  const published = task.pullRequest?.state === "open" || task.pullRequest?.state === "merged";
+  const outcome = published ? "delivered" : terminalOutcomeForStage(task.stage);
   if (outcome === undefined) return undefined;
   return {
     ...pointEvent({
@@ -102,9 +114,10 @@ export function settledWorkEvents(
   observation: RequestWorkObservation,
 ): readonly RequestUsageEvent[] {
   const { requestId, runtime, presentations } = observation;
-  const taskEvents = operationSpans(requestId, allOperations(runtime), runtime.jobs);
+  const tallies = observation.tallies ?? new Map<string, JobTokenTally>();
+  const taskEvents = operationSpans(requestId, allOperations(runtime), runtime.jobs, tallies);
   const presentationEvents = presentations.flatMap((presentation) =>
-    operationSpans(requestId, allOperations(presentation), [presentation.job]),
+    operationSpans(requestId, allOperations(presentation), [presentation.job], tallies),
   );
   return [...taskEvents, ...presentationEvents];
 }
@@ -269,14 +282,15 @@ function pointEvent(
 }
 
 /**
- * Child agents run interactive OMP, which reports no tokens, price, or allowance back to Tandem.
- * A work span therefore accounts for latency, identity, and outcome, and says so explicitly
- * instead of implying the work was free.
+ * Child agents run interactive OMP. A worker that tallied its model replies' reported tokens
+ * carries them as actual tokens, with OMP's price-table cost as an estimate; one that did not,
+ * such as a model-free validation run, says so explicitly instead of implying the work was free.
  */
 function operationSpans(
   requestId: string,
   operations: readonly DurableOperation[],
   jobs: readonly DurableJob[],
+  tallies: ReadonlyMap<string, JobTokenTally>,
 ): readonly RequestUsageEvent[] {
   const events: RequestUsageEvent[] = [];
   for (const operation of operations) {
@@ -307,10 +321,34 @@ function operationSpans(
       startedAt: operation.createdAt,
       endedAt,
       status,
-      tokens: { provenance: "unavailable", reason: "no-provider-boundary" },
-      charge: { provenance: "unavailable", reason: "no-provider-boundary" },
+      ...measuredUsage(tallies.get(operation.jobId)),
       quota: { provenance: "unavailable", reason: "no-quota-contract" },
     });
   }
   return events;
+}
+
+function measuredUsage(
+  tally: JobTokenTally | undefined,
+): Pick<RequestUsageEvent, "tokens" | "charge"> {
+  if (tally === undefined) {
+    return {
+      tokens: { provenance: "unavailable", reason: "no-provider-boundary" },
+      charge: { provenance: "unavailable", reason: "no-provider-boundary" },
+    };
+  }
+  return {
+    tokens: {
+      provenance: "actual",
+      inputTokens: tally.inputTokens,
+      outputTokens: tally.outputTokens,
+    },
+    charge: {
+      provenance: "estimated",
+      currency: "USD",
+      amountMicros: Math.round(tally.costUsd * USD_MICROS_PER_DOLLAR),
+      pricingSource: "omp-model-price-table",
+      pricingVersion: 1,
+    },
+  };
 }

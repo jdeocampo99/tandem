@@ -85,8 +85,15 @@ function runtime(overrides: Partial<RuntimeTaskState> = {}): RuntimeTaskState {
 
 function terminalTask(
   stage: TaskRecord["stage"],
-): Pick<TaskRecord, "id" | "stage" | "generation" | "updatedAt"> {
-  return { id: "task-1", stage, generation: 2, updatedAt: "2030-01-01T01:00:00.000Z" };
+  pullRequest?: TaskRecord["pullRequest"],
+): Pick<TaskRecord, "id" | "stage" | "generation" | "updatedAt" | "pullRequest"> {
+  return {
+    id: "task-1",
+    stage,
+    generation: 2,
+    updatedAt: "2030-01-01T01:00:00.000Z",
+    ...(pullRequest === undefined ? {} : { pullRequest }),
+  };
 }
 
 function jevUsage(overrides: Partial<UsageRecord> = {}): UsageRecord {
@@ -217,11 +224,26 @@ test("a distinct retry keys differently from the attempt it replaced", () => {
   expect(retry?.identity.attempt).toBe(2);
 });
 
-test("a completed task delivers the request and a later human merge does not", () => {
+test("a completed task or a published pull request delivers the request; a merge adds nothing new", () => {
+  const pullRequest = (state: "draft" | "open" | "merged") => ({
+    repository: "owner/app",
+    number: 7,
+    state,
+    head: "abc",
+    base: "main",
+  });
   expect(requestTerminalEvent(REQUEST_ID, terminalTask("completed"))?.outcome).toBe("delivered");
   expect(requestTerminalEvent(REQUEST_ID, terminalTask("cancelled"))?.outcome).toBe("cancelled");
   expect(requestTerminalEvent(REQUEST_ID, terminalTask("merged"))).toBeUndefined();
   expect(requestTerminalEvent(REQUEST_ID, terminalTask("implementing"))).toBeUndefined();
+  expect(
+    requestTerminalEvent(REQUEST_ID, terminalTask("ready", pullRequest("draft"))),
+  ).toBeUndefined();
+  const published = requestTerminalEvent(REQUEST_ID, terminalTask("ready", pullRequest("open")));
+  const merged = requestTerminalEvent(REQUEST_ID, terminalTask("merged", pullRequest("merged")));
+  expect(published?.outcome).toBe("delivered");
+  // Same identity, so the ledger keeps the publish moment and ignores the later merge.
+  expect(merged?.eventKey).toBe(published?.eventKey);
 });
 
 test("intake is the durable brief creation, not the first worker launch", () => {
@@ -283,4 +305,30 @@ test("child agent work states that no provider boundary reported tokens or price
 
   expect(event?.tokens).toEqual({ provenance: "unavailable", reason: "no-provider-boundary" });
   expect(event?.charge).toEqual({ provenance: "unavailable", reason: "no-provider-boundary" });
+});
+
+test("a settled worker's token tally becomes actual tokens and an estimated list-price charge", () => {
+  const measured = {
+    requestId: REQUEST_ID,
+    runtime: runtime({ operationHistory: [operation()], jobs: [job()] }),
+    presentations: [],
+  };
+  const [withTally] = settledWorkEvents({
+    ...measured,
+    tallies: new Map([["job-1", { inputTokens: 120_000, outputTokens: 8_000, costUsd: 0.4 }]]),
+  });
+  const [withoutTally] = settledWorkEvents(measured);
+
+  expect(withTally?.tokens).toEqual({
+    provenance: "actual",
+    inputTokens: 120_000,
+    outputTokens: 8_000,
+  });
+  expect(withTally?.charge).toMatchObject({ provenance: "estimated", amountMicros: 400_000 });
+  expect(withoutTally?.tokens).toEqual({
+    provenance: "unavailable",
+    reason: "no-provider-boundary",
+  });
+  // The tally never changes the span's identity, so a later pass cannot record it twice.
+  expect(withTally?.eventKey).toBe(withoutTally?.eventKey);
 });

@@ -22,7 +22,8 @@ export type RequestBriefErrorCode =
   | "stale-revision"
   | "stale-content"
   | "no-pending-approval"
-  | "ambiguous-pending-approval";
+  | "ambiguous-pending-approval"
+  | "ambiguous-open-request";
 
 export class RequestBriefError extends Error {
   readonly code: RequestBriefErrorCode;
@@ -300,6 +301,32 @@ export function singlePendingApprovalId(records: readonly RequestBriefRecord[]):
     throw new RequestBriefError("no-pending-approval", "No request brief is awaiting approval");
   }
   return only.id;
+}
+
+/**
+ * The request new implementation work in this repository belongs to when the coordinator named
+ * none: the one approved request whose work is not finished. None means the work stands alone;
+ * several means it cannot be attributed safely, so the coordinator must name one.
+ */
+export function openRequestForNewWork(
+  records: readonly RequestBriefRecord[],
+  tasks: readonly Pick<TaskRecord, "requestId" | "stage">[],
+  repoPath: string,
+): string | undefined {
+  const finished = (task: Pick<TaskRecord, "stage">): boolean =>
+    task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged";
+  const open = records.filter((record) => {
+    if (record.repoPath !== repoPath || requestApprovalState(record) !== "current") return false;
+    const governed = tasks.filter((task) => task.requestId === record.id);
+    return governed.length === 0 || !governed.every(finished);
+  });
+  if (open.length > 1) {
+    throw new RequestBriefError(
+      "ambiguous-open-request",
+      `Several approved requests are open for this repository (${open.map((record) => record.id).join(", ")}); pass requestId`,
+    );
+  }
+  return open[0]?.id;
 }
 
 export function decideRequestDispatch(record: RequestBriefRecord): RequestDispatchDecision {

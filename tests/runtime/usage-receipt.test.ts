@@ -4,7 +4,11 @@ import {
   type RequestUsageEvent,
   requestUsageEventKey,
 } from "../../src/runtime/usage.ts";
-import { buildRequestUsageReceipt } from "../../src/runtime/usage-receipt.ts";
+import {
+  buildRequestUsageReceipt,
+  coordinatorShare,
+  renderRequestReceiptTable,
+} from "../../src/runtime/usage-receipt.ts";
 
 const REQUEST_ID = "req-receipt";
 
@@ -227,4 +231,59 @@ test("the breakdown groups by work kind and by provider", () => {
     expect.objectContaining({ provider: "typesafe", model: "jev-1.13.0", sampleCount: 1 }),
   ]);
   expect(receipt.breakdown.samples.every((sample) => sample.kind !== "intake")).toBe(true);
+});
+
+test("the coordinator's shared line counts only its replies in this repository and window", () => {
+  const entry = (minutes: number, repoPath: string) => ({
+    at: at(minutes),
+    repoPath,
+    inputTokens: 1_000,
+    outputTokens: 500,
+    costUsd: 0.01,
+  });
+  const share = coordinatorShare(
+    [entry(5, "/app"), entry(50, "/app"), entry(200, "/app"), entry(10, "/other"), "garbage"],
+    "/app",
+    at(0),
+    at(120),
+  );
+
+  expect(share).toEqual({ replies: 2, tokens: 3_000, costMicros: 20_000 });
+});
+
+test("the receipt table lists each stage, the coordinator apart, and the wall time", () => {
+  const measured = (tokens: number, costMicros: number) => ({
+    tokens: { provenance: "actual" as const, inputTokens: tokens, outputTokens: 0 },
+    charge: {
+      provenance: "estimated" as const,
+      currency: "USD" as const,
+      amountMicros: costMicros,
+      pricingSource: "omp-model-price-table",
+      pricingVersion: 1,
+    },
+  });
+  const receipt = receiptOf([
+    intake(0),
+    work("research", 0, 12, { workKind: "research", ...measured(180_000, 400_000) }),
+    work("build-1", 30, 60, measured(700_000, 1_200_000)),
+    work("build-2", 70, 81, measured(500_000, 900_000)),
+    work("review", 81, 89, { workKind: "review", ...measured(300_000, 550_000) }),
+    work("checks", 89, 95, { workKind: "validation" }),
+    terminal(130, "delivered"),
+  ]);
+
+  const table = renderRequestReceiptTable({
+    ...receipt,
+    coordinator: { replies: 40, tokens: 90_000, costMicros: 300_000 },
+  });
+
+  expect(table.split("\n")).toEqual([
+    "Research           12m   180k tokens  ~$0.40",
+    "Implementation     41m   1.2M tokens  ~$2.10  (2 runs)",
+    "Review              8m   300k tokens  ~$0.55",
+    "Validation          6m  not measured",
+    "Coordinator     shared    90k tokens  ~$0.30  (also serves other requests)",
+    "Total: 2h10m elapsed (1h07m working, 1h03m waiting)",
+    "Costs are OMP's list-price estimates, not what a subscription is billed.",
+  ]);
 });

@@ -134,6 +134,102 @@ function parseTerminal(value: unknown): WorkerTerminalState {
   return value as WorkerTerminalState;
 }
 
+/**
+ * The tokens one worker's model replies reported, summed as OMP delivers them. `costUsd` is OMP's
+ * own estimate from its model price table, not a bill: a subscription account is not charged it.
+ */
+export type WorkerTokenTally = Readonly<{
+  readonly schemaVersion: 1;
+  readonly provider: string;
+  readonly model: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
+  readonly costUsd: number;
+  readonly replies: number;
+}>;
+
+/** The token counts one model reply reported, as OMP's assistant message carries them. */
+export type ReplyUsage = Readonly<{
+  readonly provider: string;
+  readonly model: string;
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly costUsd: number;
+}>;
+
+export function addReplyUsage(
+  tally: WorkerTokenTally | undefined,
+  reply: ReplyUsage,
+): WorkerTokenTally {
+  return {
+    schemaVersion: 1,
+    provider: reply.provider,
+    model: reply.model,
+    inputTokens: (tally?.inputTokens ?? 0) + reply.input,
+    outputTokens: (tally?.outputTokens ?? 0) + reply.output,
+    cacheReadTokens: (tally?.cacheReadTokens ?? 0) + reply.cacheRead,
+    cacheWriteTokens: (tally?.cacheWriteTokens ?? 0) + reply.cacheWrite,
+    costUsd: (tally?.costUsd ?? 0) + reply.costUsd,
+    replies: (tally?.replies ?? 0) + 1,
+  };
+}
+
+/** The usage an OMP assistant message reports, or undefined for any other message. */
+export function replyUsage(message: unknown): ReplyUsage | undefined {
+  if (!record(message) || message.role !== "assistant" || !record(message.usage)) return undefined;
+  const usage = message.usage;
+  const cost = record(usage.cost) ? usage.cost.total : 0;
+  const counts = [usage.input, usage.output, usage.cacheRead ?? 0, usage.cacheWrite ?? 0, cost];
+  if (!counts.every((count) => typeof count === "number" && Number.isFinite(count) && count >= 0)) {
+    return undefined;
+  }
+  return {
+    provider: typeof message.provider === "string" ? message.provider : "unknown",
+    model: typeof message.model === "string" ? message.model : "unknown",
+    input: usage.input as number,
+    output: usage.output as number,
+    cacheRead: (usage.cacheRead ?? 0) as number,
+    cacheWrite: (usage.cacheWrite ?? 0) as number,
+    costUsd: cost as number,
+  };
+}
+
+export async function writeWorkerTokenTally(
+  jobPath: string,
+  tally: WorkerTokenTally,
+): Promise<void> {
+  await writeJsonAtomically(`${jobPath}.usage.json`, tally);
+}
+
+/** The worker's token tally, or undefined when it recorded none or the file is unreadable. */
+export async function readWorkerTokenTally(jobPath: string): Promise<WorkerTokenTally | undefined> {
+  try {
+    const value: unknown = await readOptionalJson(`${jobPath}.usage.json`);
+    if (!record(value) || value.schemaVersion !== 1) return undefined;
+    const numbers = [
+      value.inputTokens,
+      value.outputTokens,
+      value.cacheReadTokens,
+      value.cacheWriteTokens,
+      value.costUsd,
+      value.replies,
+    ];
+    if (!text(value.provider) || !text(value.model)) return undefined;
+    if (
+      !numbers.every((count) => typeof count === "number" && Number.isFinite(count) && count >= 0)
+    ) {
+      return undefined;
+    }
+    return value as WorkerTokenTally;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function readWorkerTerminal(
   job: WorkerTerminalJob,
 ): Promise<WorkerTerminalState | undefined> {

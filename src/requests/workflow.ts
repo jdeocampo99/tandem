@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import type {
   Clock,
   CommandRunner,
@@ -10,6 +11,7 @@ import {
   assertSafeRequestId,
   checkedRequestBriefContent,
   decideRequestDispatch,
+  openRequestForNewWork,
   type RequestApprovalState,
   RequestBriefError,
   requestApprovalState,
@@ -147,6 +149,21 @@ export class RequestBriefWorkflow {
   /** Confirms a request exists before a task is bound to it, so no task points at nothing. */
   async requireRequest(requestId: string): Promise<RequestBriefRecord> {
     return this.#require(requestId);
+  }
+
+  /** The open approved request new implementation work in this repository joins, if any. */
+  async openRequestForNewWork(
+    repoPath: string,
+    tasks: readonly Pick<TaskRecord, "requestId" | "stage">[],
+  ): Promise<string | undefined> {
+    const canonical = (path: string): Promise<string> => realpath(path).catch(() => path);
+    const records = await Promise.all(
+      (await this.#deps.store.list()).map(async (record) => ({
+        ...record,
+        repoPath: await canonical(record.repoPath),
+      })),
+    );
+    return openRequestForNewWork(records, tasks, await canonical(repoPath));
   }
 
   /** The one request whose brief is awaiting approval; fails closed when that is not unambiguous. */

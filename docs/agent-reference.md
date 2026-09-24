@@ -1003,12 +1003,40 @@ handoff, not at a later human merge, so a task reaching `merged` records no term
 cost receipt arriving after delivery updates the totals and is clamped out of the timing, so the
 recorded delivery time cannot move.
 
+Workers count their own tokens. Each worker's extension adds up the usage OMP reports on every
+model reply (input, output, and cache tokens, and OMP's price-table cost) into
+`<job>.usage.json`, and the settled work span for that job carries the sum as `actual` tokens with
+an `estimated` charge from `omp-model-price-table`. That charge is a list-price estimate, not what a
+subscription bills. Research is credited to a request through the implementation that cites it in
+`researchTaskIds`, without joining the request's membership. The coordinator's own replies go to
+`<home>/coordinator-usage.jsonl` instead: its conversation serves every request in the repository,
+so a receipt shows the replies inside the request's window as a separate shared line and never adds
+them to the request's total.
+
+An implementation task never reaches `completed`, so its delivery is the first time the ledger sees
+its pull request published (`open`, or already `merged`); the terminal event is keyed without a
+time, so a later merge cannot move it. When a delivery is first recorded, Tandem adds one
+coordinator notification to show the receipt, and `request-receipt` renders it as a table:
+
+```text
+Research           12m   180k tokens  ~$0.40
+Implementation     41m   1.2M tokens  ~$2.10  (2 runs)
+Review              8m   300k tokens  ~$0.55
+Validation          6m  not measured
+Coordinator     shared    90k tokens  ~$0.30  (also serves other requests)
+Total: 2h10m elapsed (1h07m working, 1h03m waiting)
+```
+
+An implementation task created without `requestId` joins its repository's one open request: an
+approved brief whose governed work is not all finished. With none it stands alone; with several,
+create is refused so the coordinator names one.
+
 Every token, charge, and quota figure carries its provenance. `actual` is what a provider reported,
 `estimated` names the method and source that produced it, and `unavailable` names one of a closed
 set of reasons. An unavailable figure is counted as an unavailable sample and excluded from the
-totals; it is never added as zero and never used to claim a saving. Tandem's child agents run
-interactive OMP, which reports no tokens, price, or allowance, so their work spans account for
-latency, identity, and outcome and say `no-provider-boundary` about the rest. Included subscription
+totals; it is never added as zero and never used to claim a saving. A work span whose job left no
+token tally, such as a model-free validation run, says `no-provider-boundary` about its tokens and
+charge. Included subscription
 quota is recorded in the provider's own units and never converted into a dollar charge. Charges are
 held in integer USD micro-dollars so a receipt's totals do not drift when summed.
 
