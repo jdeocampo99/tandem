@@ -91,6 +91,7 @@ import {
   jobDirectoryFor,
   jobPaths,
   makeDurableJob,
+  modelRoleForTask,
   nowMilliseconds,
   recognizesAppliedEvent,
   replaceJob,
@@ -293,6 +294,7 @@ function attemptNumber(runtime: RuntimeTaskState, role: WorkerRole): number {
 function priorExecutionAttempt(
   runtime: RuntimeTaskState,
   role: WorkerRole,
+  modelRole: WorkerRole,
   pinned: Readonly<Record<AgentRole, ModelSpec>>,
 ): PriorExecutionAttempt | undefined {
   const operations = roleOperations(runtime, role);
@@ -301,7 +303,7 @@ function priorExecutionAttempt(
   if (last.phase !== "failed" && last.phase !== "quarantined") return undefined;
   return {
     operationId: last.id,
-    selector: last.routing?.selector ?? pinned[role].model,
+    selector: last.routing?.selector ?? pinned[modelRole].model,
     outcome: last.phase === "failed" ? "known-safe-failure" : "uncertain",
   };
 }
@@ -3462,8 +3464,7 @@ export class WorkerWorkflow {
       prReview === undefined
         ? buildPrompt(task, role, reportPath, fixArtifacts, undefined, messages)
         : await this.prReviewPrompt(task, prReview, messages);
-    // A PR review runs on the review model: it reads a teammate's code cold and must be sharp.
-    const modelRole = prReview === undefined ? role : "reviewer";
+    const modelRole = modelRoleForTask(task, role);
     const spec: WorkerJob = {
       schemaVersion: 1,
       id: jobId,
@@ -3920,7 +3921,13 @@ export class WorkerWorkflow {
       policyDigest: attempt.policyDigest,
       inputHead: attempt.inputHead,
     };
-    const prior = priorExecutionAttempt(runtime, attempt.role, task.policy.config.models);
+    const modelRole = modelRoleForTask(task, attempt.role);
+    const prior = priorExecutionAttempt(
+      runtime,
+      attempt.role,
+      modelRole,
+      task.policy.config.models,
+    );
     // An uncertain-outcome question stops speaking once that attempt settles as a known failure.
     const settledUncertainty =
       runtime.routingPause?.reason === "prior-outcome-uncertain" && prior?.outcome !== "uncertain";
@@ -3940,7 +3947,7 @@ export class WorkerWorkflow {
         policyDigest: attempt.policyDigest,
         inputHead: attempt.inputHead,
       },
-      pinned: task.policy.config.models[attempt.role],
+      pinned: task.policy.config.models[modelRole],
       catalogue: await this.readCatalogue(attempt.cwd),
       limits: routingLimits(task),
       usage: await this.observeRequestUsage(task),

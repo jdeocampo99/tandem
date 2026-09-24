@@ -274,6 +274,14 @@ export function workerRoleForTask(task: TaskRecord): WorkerRole {
   return task.kind === "implementation" ? "implementer" : "scout";
 }
 
+/**
+ * Whose model settings a task's worker runs on. A PR review runs as a scout job but reads a
+ * teammate's code cold, so it gets the review model.
+ */
+export function modelRoleForTask(task: Pick<TaskRecord, "kind">, role: WorkerRole): WorkerRole {
+  return task.kind === "pr-review" ? "reviewer" : role;
+}
+
 export function roleChannel(role: WorkerRole): "implementation" | "review" {
   return role === "reviewer" ? "review" : "implementation";
 }

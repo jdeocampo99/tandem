@@ -442,3 +442,69 @@ test("asking what the request has cost so far routes straight to its receipt", a
   if (result.decision === undefined) throw new Error("expected a direct route");
   expect(actionForPromptDecision(result.decision)).toEqual({ action: "request-receipt" });
 });
+
+test("a pasted PR link starts a review under the project, and anything else goes to the coordinator", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-pr-"));
+  const started: unknown[] = [];
+  const sent: string[] = [];
+  const service = {
+    reviewPr: async (input: unknown) => {
+      started.push(input);
+      return { kind: "started", taskId: "task-9", message: "Reviewing acme/api#7 for intent." };
+    },
+  } as unknown as TandemService;
+  const prAnswers = (request: string): JevEvaluationResponse => ({
+    model: JEV_MODEL,
+    answers: {
+      request: {
+        type: "choice",
+        choice: request,
+        confidence: 0.95,
+        probabilities: {
+          review: request === "review" ? 0.95 : 0.05,
+          other: request === "review" ? 0.05 : 0.95,
+        },
+      },
+      lens: {
+        type: "choice",
+        choice: "intent",
+        confidence: 0.95,
+        probabilities: { full: 0.03, intent: 0.95, focus: 0.02 },
+      },
+    },
+    usage: { input_tokens: 12, output_tokens: 8 },
+  });
+  const deps = (request: string) => ({
+    config: { apiKey: "key", timeoutMs: 1_500 },
+    getService: () => service,
+    getHome: () => home,
+    getRepo: () => "/work/project",
+    sendMessage: ((message: string | { readonly content?: string }) => {
+      sent.push(typeof message === "string" ? message : (message.content ?? ""));
+    }) as never,
+    evaluate: async () => prAnswers(request),
+  });
+  try {
+    const url = "https://github.com/acme/api/pull/7";
+    const handled = await handlePromptInput(
+      { source: "interactive", text: `skim the idea behind ${url}` } as InputEvent,
+      context,
+      deps("review"),
+    );
+    expect(handled).toEqual({ handled: true });
+    expect(started).toEqual([
+      { pullRequest: "acme/api#7", repoPath: "/work/project", lens: { kind: "intent" } },
+    ]);
+    expect(sent.at(-1)).toContain("Reviewing acme/api#7 for intent.");
+
+    const declined = await handlePromptInput(
+      { source: "interactive", text: `merge ${url} when CI passes` } as InputEvent,
+      context,
+      deps("other"),
+    );
+    expect(declined).toBeUndefined();
+    expect(started).toHaveLength(1);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});

@@ -1,6 +1,15 @@
 # PR review PRD
 
-**Status: proposed, not implemented.**
+**Status: implemented.** The contract lives in
+[Reviewing someone else's pull request](agent-reference.md#reviewing-someone-elses-pull-request).
+Where the build differs from this proposal:
+
+- Drafts and PRs with merge conflicts are reviewed, with a note, rather than refused.
+- The crawl root is `~/Coding/Projects` or `TANDEM_PROJECT_ROOTS`; setup does not ask for it yet.
+- A remote other than `origin` can match, so a checkout whose `origin` is a personal fork works.
+- "Clone it" makes a blobless clone (full history for the merge base, file contents on demand) and
+  remembers it for next time, rather than a shallow clone deleted with the task.
+- A comment outside the diff moves into the summary comment instead of being dropped.
 
 ## Goal
 

@@ -31,6 +31,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Worktree capacity and maintenance | [pool/](src/pool/) |
 | Evidence, PR publication, merge | [delivery/](src/delivery/): `preflight.ts` checks a ready task before publishing |
 | Artifacts, feedback, Lavish | [presentations/](src/presentations/) |
+| Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `locate.ts`, `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |
 
 ## Safety boundaries
@@ -94,6 +95,7 @@ Before changing behavior, read its contract:
 - Tools/notifications/compaction: [OMP extension](docs/agent-reference.md#omp-extension).
 - Capacity/disk admission: [Safe automatic maintenance](docs/agent-reference.md#safe-automatic-maintenance).
 - PRs/artifacts: [Pull-request delivery](docs/agent-reference.md#pull-request-delivery), [Presentations and Lavish](docs/agent-reference.md#presentations-and-lavish).
+- Reviewing someone else's PR: [Reviewing someone else's pull request](docs/agent-reference.md#reviewing-someone-elses-pull-request).
 - Persistence/restart/locking: [Recovery and durable state](docs/agent-reference.md#recovery-durable-state-and-compaction), [Local limits](docs/agent-reference.md#local-limits-and-source-of-truth).
 - Central recovery (stop/save/re-enter, stage re-entry table, restart budget): [Central recovery: stop, save, re-enter](docs/agent-reference.md#central-recovery-stop-save-re-enter).
 - Stale records/panes/leases: [Reconciling Tandem resources across sessions](docs/agent-reference.md#reconciling-tandem-resources-across-sessions).

@@ -60,11 +60,6 @@ export function latestRound(state: PrReviewState): PrReviewRound | undefined {
   return state.rounds.at(-1);
 }
 
-/** The last round that was posted, whose comments a re-review checks. */
-export function lastPostedRound(state: PrReviewState): PrReviewRound | undefined {
-  return [...state.rounds].reverse().find((round) => round.posted !== undefined);
-}
-
 export function lensLabel(lens: ReviewLens): string {
   if (lens.kind === "intent") return "for intent";
   if (lens.kind === "focus") return `focused on ${lens.focus}`;
