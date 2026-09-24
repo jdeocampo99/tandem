@@ -222,19 +222,23 @@ function parseQuotedCommand(value: string): readonly string[] {
   return tokens;
 }
 
-/** Agent launchers keep the foreground; an ordinary command such as `cat` exits back to the shell. */
-const PERSISTENT_LAUNCHERS: Readonly<Record<string, true>> = {
-  bun: true,
-  node: true,
-  omp: true,
-  sh: true,
+/**
+ * The foreground program each long-running launcher leaves in the pane: agents keep it, and glow's
+ * pager stays open until `q`. An ordinary command such as `cat` exits back to the shell.
+ */
+const PERSISTENT_LAUNCHERS: Readonly<Record<string, string>> = {
+  bun: "omp",
+  node: "omp",
+  omp: "omp",
+  sh: "omp",
+  glow: "less",
 };
 
-function isPersistentLaunch(argv: readonly string[]): boolean {
-  // A `sh -c` one-shot, such as the brief viewer, exits back to the shell like `cat` does.
-  if (argv[1] === "-c") return false;
-  const launcher = (argv[0] ?? "").split("/").at(-1) ?? "";
-  return PERSISTENT_LAUNCHERS[launcher] === true;
+function persistentForeground(argv: readonly string[]): string | undefined {
+  // `sh -c 'exec "$1" …' sh PROGRAM …` runs PROGRAM, as the brief viewer does.
+  const program = argv[1] === "-c" ? argv[4] : argv[0];
+  const launcher = (program ?? "").split("/").at(-1) ?? "";
+  return PERSISTENT_LAUNCHERS[launcher];
 }
 
 async function bootstrapProcessArgv(command: string): Promise<readonly string[]> {
@@ -441,9 +445,10 @@ export async function createScenarioWorld(
     }
     if (action === "run") {
       const launched = await bootstrapProcessArgv(argv.at(-1) ?? "");
-      if (isPersistentLaunch(launched)) {
+      const foreground = persistentForeground(launched);
+      if (foreground !== undefined) {
         nextPid += 1;
-        pane.processes = [{ pid: nextPid, name: "omp", argv: launched }];
+        pane.processes = [{ pid: nextPid, name: foreground, argv: launched }];
       } else {
         pane.processes = [{ pid: pane.shellPid, name: "sh", argv: ["sh"] }];
       }

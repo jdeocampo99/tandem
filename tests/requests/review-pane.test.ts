@@ -140,6 +140,50 @@ test("approval closes only the owned pane and leaves unrelated panes untouched",
   });
 });
 
+test("the brief's own pager is quit before the pane is refreshed or closed", async () => {
+  await withScenario({}, async (world) => {
+    const recording = recordingRun(world);
+    const deps = dependencies(world, undefined, recording.run);
+    const first = record(world);
+    const opened = await projectRequestBriefPane(deps, first);
+    const showPager = () =>
+      world.run({
+        argv: [
+          "herdr",
+          "--session",
+          world.sessionId,
+          "pane",
+          "run",
+          opened.endpoint.paneId,
+          quoteShellCommand(["glow", "-p", "--", opened.renderedPath]),
+        ],
+        cwd: world.repoPath,
+      });
+
+    await showPager();
+    const revised = withRequestReviewPane(
+      { ...first, draft: { ...first.draft, revision: 2 } },
+      opened,
+      NOW,
+    );
+    const refreshed = await projectRequestBriefPane(deps, revised);
+    await showPager();
+    const closed = await closeRequestBriefPane(
+      deps,
+      withRequestReviewPane(revised, refreshed, NOW),
+    );
+
+    expect(refreshed.status).toBe("open");
+    expect(refreshed.renderedRevision).toBe(2);
+    expect(closed?.status).toBe("closed");
+    expect(world.paneIsPresent(opened.endpoint.paneId)).toBe(false);
+    expect(recording.herdrCommands("send-keys").map((argv) => argv.slice(5))).toEqual([
+      [opened.endpoint.paneId, "q"],
+      [opened.endpoint.paneId, "q"],
+    ]);
+  });
+});
+
 test("a busy pane is retained rather than closed", async () => {
   await withScenario({}, async (world) => {
     const opened = await projectRequestBriefPane(dependencies(world), record(world));

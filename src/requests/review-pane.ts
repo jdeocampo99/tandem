@@ -6,6 +6,8 @@ import {
   createTaskEndpoint,
   type HerdrPaneInspection,
   inspectEndpoint,
+  interruptEndpoint,
+  isWorkerProcess,
   sendCommand,
   splitBesidePane,
 } from "../adapters/herdr.ts";
@@ -43,16 +45,28 @@ export type RequestReviewPaneDependencies = Readonly<{
   readonly clock: Clock;
 }>;
 
+/** The programs a running glow pager leaves in the pane's foreground. */
+const BRIEF_PAGER_PROCESSES: Readonly<Record<string, true>> = { glow: true, less: true };
+const BRIEF_PAGER_QUIT_TIMEOUT_MS = 2_000;
+
 /**
  * Styles the Markdown with glow when it is installed, and shows it as plain text otherwise. Glow
- * wraps at the pane's own width: a `width` in the user's glow config would otherwise win, and a
- * split pane narrower than it re-wraps every line mid-word.
+ * opens the brief in `less` so it starts at the top, and wraps at the pane's own width: a `width`
+ * in the user's glow config would otherwise win, and a split pane narrower than it re-wraps every
+ * line mid-word. `PAGER` is pinned so a refresh or close knows which pager to quit.
  * ponytail: looks glow up on Tandem's PATH, not the pane's; bundle a renderer if glow proves rare.
  */
 export function briefViewerCommand(renderedPath: string): readonly string[] {
   const glow = Bun.which("glow");
   if (glow === null) return ["cat", "--", renderedPath];
-  return ["sh", "-c", 'exec "$1" -w "$(tput cols)" -- "$2"', "sh", glow, renderedPath];
+  return [
+    "sh",
+    "-c",
+    'PAGER="less -r" exec "$1" -p -w "$(tput cols)" -- "$2"',
+    "sh",
+    glow,
+    renderedPath,
+  ];
 }
 
 export function requestBriefMarkdownPath(home: string, requestId: string): string {
@@ -155,7 +169,8 @@ async function writeRenderedBrief(home: string, record: RequestBriefRecord): Pro
 
 /**
  * Confirms the recorded pane is still the same pane, in the same workspace and tab, sitting in the
- * directory it was opened in, with nothing running in it. A pane that appears more than once, has
+ * directory it was opened in, with nothing running in it. The brief's own pager is quit first; any
+ * other program leaves the pane `busy`. A pane that appears more than once, has
  * moved, or has been taken over is `unowned`, which every caller treats as do-not-touch. The
  * review pane shares the coordinator's tab, so a record naming the coordinator's own pane is
  * `unowned` before Herdr is even asked: that pane is never the brief's to write to or close.
@@ -178,8 +193,18 @@ async function proveOwnedPane(
     const pane = snapshotPaneForEndpoint(panes, endpoint, "request brief review");
     if (pane === undefined) return { kind: "missing" };
     inspection = await inspectEndpoint(run, { endpoint, cwd: repoPath });
+    if (inspection.activeWorker && showsOnlyBriefPager(inspection)) {
+      await interruptEndpoint(run, {
+        endpoint,
+        cwd: repoPath,
+        key: "q",
+        timeoutMs: BRIEF_PAGER_QUIT_TIMEOUT_MS,
+      });
+      inspection = await inspectEndpoint(run, { endpoint, cwd: repoPath });
+    }
   } catch (error) {
     if (isMissingEndpointError(error)) return { kind: "missing" };
+    if (error instanceof EndpointBusyError) return { kind: "busy", reason: error.message };
     return { kind: "unowned", reason: describeFailure(error) };
   }
   if (inspection.activeWorker) {
@@ -204,6 +229,13 @@ async function proveOwnedPane(
     };
   }
   return { kind: "owned" };
+}
+
+function showsOnlyBriefPager(inspection: HerdrPaneInspection): boolean {
+  return inspection.processInfo.foregroundProcesses.every(
+    (process) =>
+      !isWorkerProcess(process) || BRIEF_PAGER_PROCESSES[basename(process.name)] === true,
+  );
 }
 
 /**
