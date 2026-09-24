@@ -4782,6 +4782,7 @@ test("admitted fix context recovery materializes findings and launches the same 
                 operation,
                 reservation: { ...reservationFor(task.id), operationId: operation.id },
                 fixContextPath: join(home, "jobs", task.id, "fix-context-missing.json"),
+                sessionDirectory: join(home, "sessions", task.id),
                 endpoints: [endpointFor("implementer")],
                 jobs: [],
               },
@@ -4806,6 +4807,11 @@ test("admitted fix context recovery materializes findings and launches the same 
       expect(runtime?.operation?.jobId).toBe(operation.jobId);
       expect(runtime?.jobs[0]?.id).toBe(operation.jobId);
       expect(runnerState.launches).toBe(1);
+      // The fix round continues the implementer's own OMP conversation instead of starting fresh.
+      const jobPath = runtime?.jobs[0]?.jobPath;
+      if (jobPath === undefined) throw new Error("fix round job was not recorded");
+      const spec = JSON.parse(await readFile(jobPath, "utf8")) as WorkerJob;
+      expect(spec.sessionDirectory).toBe(join(home, "sessions", task.id));
     },
   );
 });
