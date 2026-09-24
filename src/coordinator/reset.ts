@@ -28,7 +28,7 @@ import type {
 } from "../runtime/schema.ts";
 import { replaceRuntimePresentation, replaceRuntimeTask } from "../service/records.ts";
 import { recoverEndpointFromLaunch } from "../tasks/control.ts";
-import { type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
+import { transitionTask } from "../tasks/lifecycle.ts";
 import { createTaskStore, type TaskStore, type TaskStoreTransaction } from "../tasks/store.ts";
 import { liveWorkerTerminal } from "../workers/terminal.ts";
 import { workerJobForEndpoint } from "../workers/terminal-control.ts";
@@ -78,6 +78,7 @@ function runtimeTaskHasActiveState(runtime: RuntimeTaskState, sessionId: string)
     runtime.jobs.some((job) => job.endpoint?.sessionId === sessionId || activeRuntimeJob(job))
   );
 }
+
 function hasSettledTerminalStopIntent(task: TaskRecord, runtime: RuntimeTaskState): boolean {
   return (
     runtime.stopRequest !== undefined &&
@@ -191,36 +192,43 @@ async function assertIdleResetCoordinator(
   }
 }
 
+function paneCloseRequest(endpoint: Endpoint, cwd: string): CommandRequest {
+  return {
+    argv: ["herdr", "--session", endpoint.sessionId, "pane", "close", endpoint.paneId],
+    cwd,
+  };
+}
+
+async function verifyPaneClosed(
+  run: CommandRunner,
+  endpoint: Endpoint,
+  cwd: string,
+  remainsMessage: string,
+): Promise<void> {
+  const request: CommandRequest = {
+    argv: ["herdr", "--session", endpoint.sessionId, "pane", "get", endpoint.paneId],
+    cwd,
+  };
+  const result = await run(request);
+  if (result.code === 0) throw new Error(remainsMessage);
+  if (!isMissingPaneResult(result)) {
+    throw new AdapterCommandError("herdr pane close verification", request, result);
+  }
+}
+
 async function closeCoordinatorPane(run: CommandRunner, record: CoordinatorRecord): Promise<void> {
-  const closeRequest: CommandRequest = {
-    argv: [
-      "herdr",
-      "--session",
-      record.endpoint.sessionId,
-      "pane",
-      "close",
-      record.endpoint.paneId,
-    ],
-    cwd: record.worktree.path,
-  };
-  const closeResult = await run(closeRequest);
-  if (closeResult.code !== 0) {
-    throw new AdapterCommandError("herdr pane close", closeRequest, closeResult);
+  const request = paneCloseRequest(record.endpoint, record.worktree.path);
+  const result = await run(request);
+  if (result.code !== 0) {
+    throw new AdapterCommandError("herdr pane close", request, result);
   }
-  assertCloseAcknowledgement(closeResult);
-  const verifyRequest: CommandRequest = {
-    argv: ["herdr", "--session", record.endpoint.sessionId, "pane", "get", record.endpoint.paneId],
-    cwd: record.worktree.path,
-  };
-  const verifyResult = await run(verifyRequest);
-  if (verifyResult.code === 0) {
-    throw new Error(
-      `Herdr pane close returned success but coordinator pane ${JSON.stringify(record.endpoint.paneId)} remains present`,
-    );
-  }
-  if (!isMissingPaneResult(verifyResult)) {
-    throw new AdapterCommandError("herdr pane close verification", verifyRequest, verifyResult);
-  }
+  assertCloseAcknowledgement(result);
+  await verifyPaneClosed(
+    run,
+    record.endpoint,
+    record.worktree.path,
+    `Herdr pane close returned success but coordinator pane ${JSON.stringify(record.endpoint.paneId)} remains present`,
+  );
 }
 
 function assertNoLiveSelectedEndpoint(
@@ -242,6 +250,7 @@ function assertNoLiveSelectedEndpoint(
     );
   }
 }
+
 type ForceEndpoint = Readonly<{
   readonly endpoint: Endpoint;
   readonly cwd: string;
@@ -270,13 +279,6 @@ function activeJobEndpoint(
     );
   }
   return endpoint;
-}
-
-function forceTaskContext(): TaskTransitionContext {
-  return {
-    now: new Date().toISOString(),
-    notificationId: randomUUID(),
-  };
 }
 
 async function proveForceEndpoint(run: CommandRunner, entry: ForceEndpoint): Promise<boolean> {
@@ -342,27 +344,17 @@ async function forceCloseEndpoint(run: CommandRunner, entry: ForceEndpoint): Pro
     // The validation runner owns detached command groups and reaps them on interrupt.
     await interruptEndpoint(run, { endpoint: entry.endpoint, cwd: entry.cwd });
   }
-  const request: CommandRequest = {
-    argv: ["herdr", "--session", entry.endpoint.sessionId, "pane", "close", entry.endpoint.paneId],
-    cwd: entry.cwd,
-  };
+  const request = paneCloseRequest(entry.endpoint, entry.cwd);
   const result = await run(request);
   if (isMissingPaneResult(result)) return;
   if (result.code !== 0) throw new AdapterCommandError("herdr pane close", request, result);
   assertCloseAcknowledgement(result);
-  const verify: CommandRequest = {
-    argv: ["herdr", "--session", entry.endpoint.sessionId, "pane", "get", entry.endpoint.paneId],
-    cwd: entry.cwd,
-  };
-  const verification = await run(verify);
-  if (verification.code === 0) {
-    throw new Error(
-      `force reset closed pane ${JSON.stringify(entry.endpoint.paneId)} but it remains present`,
-    );
-  }
-  if (!isMissingPaneResult(verification)) {
-    throw new AdapterCommandError("herdr pane close verification", verify, verification);
-  }
+  await verifyPaneClosed(
+    run,
+    entry.endpoint,
+    entry.cwd,
+    `force reset closed pane ${JSON.stringify(entry.endpoint.paneId)} but it remains present`,
+  );
 }
 
 function markForceTaskRuntime(
@@ -407,21 +399,128 @@ function markForceTaskRuntime(
   });
 }
 
-async function forceResetCoordinators(
+type ResetScope = Readonly<{
+  readonly home: string;
+  readonly sessionId: string;
+  readonly repoPaths: readonly string[];
+}>;
+
+/** Durable task and runtime state read once under the task store lock, with the tasks being reset. */
+type ResetSelection = Readonly<{
+  readonly tasks: readonly TaskRecord[];
+  readonly tasksById: ReadonlyMap<string, TaskRecord>;
+  readonly selectedTaskIds: ReadonlySet<string>;
+  readonly runtimeByTaskId: ReadonlyMap<string, RuntimeTaskState>;
+  readonly state: RuntimeState;
+}>;
+
+type ForceResetPlan = Readonly<{
+  readonly presentations: readonly RuntimePresentation[];
+  readonly liveRecords: readonly CoordinatorRecord[];
+  readonly endpoints: ReadonlyMap<string, ForceEndpoint>;
+  readonly taskIdsToCancel: ReadonlySet<string>;
+}>;
+
+/** What a force reset has already changed, reported if a later step fails. */
+type ForceResetProgress = {
+  readonly stoppedEndpointKeys: Set<string>;
+  readonly cancelledTaskIds: string[];
+  readonly stopped: RetiredCoordinator[];
+};
+
+function selectedTasks(selection: ResetSelection): readonly TaskRecord[] {
+  return selection.tasks.filter((task) => selection.selectedTaskIds.has(task.id));
+}
+
+async function findLiveCoordinators(
   run: CommandRunner,
-  home: string,
+  scope: ResetScope,
+): Promise<CoordinatorRecord[]> {
+  const records: CoordinatorRecord[] = [];
+  for (const repoPath of scope.repoPaths) {
+    const record = await findResetCoordinator(run, {
+      home: scope.home,
+      sessionId: scope.sessionId,
+      repoPath,
+    });
+    if (record !== undefined) records.push(record);
+  }
+  return records;
+}
+
+async function assertCleanCoordinatorSource(
+  run: CommandRunner,
+  record: CoordinatorRecord,
+): Promise<void> {
+  const checkpoint = await readCheckpoint(run, { repo: record.worktree.path });
+  if (checkpoint.dirty || checkpoint.unmerged) {
+    throw new Error(
+      `coordinator source worktree ${JSON.stringify(record.worktree.path)} is not clean`,
+    );
+  }
+  if (checkpoint.head !== record.worktree.baseHead) {
+    throw new Error(
+      `coordinator source worktree ${JSON.stringify(record.worktree.path)} HEAD ${JSON.stringify(
+        checkpoint.head,
+      )} does not match lease base HEAD ${JSON.stringify(record.worktree.baseHead)}`,
+    );
+  }
+}
+
+async function readResetSelection(
+  scope: ResetScope,
+  transaction: TaskStoreTransaction,
+): Promise<ResetSelection> {
+  await listCoordinatorRecords(scope.home, scope.sessionId);
+  const tasks = await transaction.list();
+  const state: RuntimeState = await readRuntimeState(runtimeFile(scope.home));
+  const selectedRoots = new Set(scope.repoPaths);
+  const repositoryByPath = new Map<string, Promise<string>>();
+  const tasksById = new Map<string, TaskRecord>();
+  const selectedTaskIds = new Set<string>();
+  for (const task of tasks) {
+    tasksById.set(task.id, task);
+    let repository = repositoryByPath.get(task.repoPath);
+    if (repository === undefined) {
+      repository = canonicalPath(task.repoPath, "task.repoPath");
+      repositoryByPath.set(task.repoPath, repository);
+    }
+    if (selectedRoots.has(await repository)) selectedTaskIds.add(task.id);
+  }
+  const runtimeByTaskId = new Map<string, RuntimeTaskState>();
+  for (const runtime of state.tasks) {
+    runtimeByTaskId.set(runtime.taskId, runtime);
+    if (!tasksById.has(runtime.taskId) && runtimeTaskHasActiveState(runtime, scope.sessionId)) {
+      throw ownershipFailure(
+        `active runtime task ${JSON.stringify(runtime.taskId)} has no matching durable task record`,
+      );
+    }
+  }
+  return { tasks, tasksById, selectedTaskIds, runtimeByTaskId, state };
+}
+
+function forceCancelsTask(task: TaskRecord, runtime: RuntimeTaskState | undefined): boolean {
+  if (task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged") {
+    return false;
+  }
+  return (
+    RESET_ACTIVE_TASK_STAGES.includes(task.stage) ||
+    (runtime !== undefined &&
+      (runtime.jobs.some(activeRuntimeJob) ||
+        unreleasedReservation(runtime.reservation) ||
+        runtime.endpointLaunch !== undefined ||
+        runtime.stopRequest !== undefined))
+  );
+}
+
+async function selectForcePresentations(
+  selection: ResetSelection,
   sessionId: string,
-  repoPaths: readonly string[],
-  store: TaskStore,
-  tasks: readonly TaskRecord[],
-  runtimeByTaskId: ReadonlyMap<string, RuntimeTaskState>,
-  selectedTaskIds: ReadonlySet<string>,
-  state: RuntimeState,
-  lockedPresentationPaths: ReadonlySet<string> | undefined,
-): Promise<readonly RetiredCoordinator[]> {
-  const selectedPresentations: RuntimePresentation[] = [];
-  for (const presentation of state.presentations) {
-    const task = tasks.find((entry) => entry.id === presentation.taskId);
+  lockedPresentationPaths: ReadonlySet<string>,
+): Promise<RuntimePresentation[]> {
+  const selected: RuntimePresentation[] = [];
+  for (const presentation of selection.state.presentations) {
+    const task = selection.tasksById.get(presentation.taskId);
     if (task === undefined) {
       if (runtimePresentationHasActiveState(presentation, sessionId)) {
         throw ownershipFailure(
@@ -430,8 +529,8 @@ async function forceResetCoordinators(
       }
       continue;
     }
-    if (!selectedTaskIds.has(task.id)) continue;
-    if (!lockedPresentationPaths?.has(presentation.recordPath)) {
+    if (!selection.selectedTaskIds.has(task.id)) continue;
+    if (!lockedPresentationPaths.has(presentation.recordPath)) {
       throw new Error("selected presentations changed while acquiring reset locks; retry reset");
     }
     const record = await readPresentationRecord(presentation.recordPath);
@@ -449,68 +548,49 @@ async function forceResetCoordinators(
         `presentation ${JSON.stringify(presentation.id)} reservation belongs to another session`,
       );
     }
-    selectedPresentations.push(presentation);
+    selected.push(presentation);
   }
+  return selected;
+}
 
-  const liveRecords: CoordinatorRecord[] = [];
-  for (const repoPath of repoPaths) {
-    const record = await findResetCoordinator(run, { home, sessionId, repoPath });
-    if (record !== undefined) liveRecords.push(record);
+function addForceEndpoint(
+  entries: Map<string, ForceEndpoint>,
+  sessionId: string,
+  entry: ForceEndpoint,
+): void {
+  if (entry.endpoint.sessionId !== sessionId) {
+    throw ownershipFailure(
+      `${entry.kind} endpoint ${JSON.stringify(entry.endpoint.paneId)} belongs to session ${JSON.stringify(entry.endpoint.sessionId)}`,
+    );
   }
-  for (const record of liveRecords) {
-    const checkpoint = await readCheckpoint(run, { repo: record.worktree.path });
-    if (checkpoint.dirty || checkpoint.unmerged) {
-      throw new Error(
-        `coordinator source worktree ${JSON.stringify(record.worktree.path)} is not clean`,
-      );
-    }
-    if (checkpoint.head !== record.worktree.baseHead) {
-      throw new Error(
-        `coordinator source worktree ${JSON.stringify(record.worktree.path)} HEAD ${JSON.stringify(
-          checkpoint.head,
-        )} does not match lease base HEAD ${JSON.stringify(record.worktree.baseHead)}`,
-      );
-    }
-  }
+  entries.set(endpointKey(entry.endpoint), entry);
+}
 
-  const endpointEntries = new Map<string, ForceEndpoint>();
-  const taskIdsToCancel = new Set<string>();
-  const addEndpoint = (
+/** Collects every endpoint a force reset must close, recovering endpoints of pending launches. */
+async function collectForceEndpoints(
+  run: CommandRunner,
+  sessionId: string,
+  selection: ResetSelection,
+  presentations: readonly RuntimePresentation[],
+): Promise<Map<string, ForceEndpoint>> {
+  const entries = new Map<string, ForceEndpoint>();
+  const add = (
     endpoint: Endpoint,
     cwd: string,
     job: DurableJob | undefined,
     kind: ForceEndpoint["kind"],
-  ): void => {
-    if (endpoint.sessionId !== sessionId) {
-      throw ownershipFailure(
-        `${kind} endpoint ${JSON.stringify(endpoint.paneId)} belongs to session ${JSON.stringify(endpoint.sessionId)}`,
-      );
-    }
-    endpointEntries.set(endpointKey(endpoint), {
+  ) =>
+    addForceEndpoint(entries, sessionId, {
       endpoint,
       cwd,
       ...(job === undefined ? {} : { job }),
       kind,
     });
-  };
-  for (const task of tasks) {
-    if (!selectedTaskIds.has(task.id)) continue;
-    const runtime = runtimeByTaskId.get(task.id);
-    if (
-      task.stage !== "cancelled" &&
-      task.stage !== "completed" &&
-      task.stage !== "merged" &&
-      (RESET_ACTIVE_TASK_STAGES.includes(task.stage) ||
-        (runtime !== undefined &&
-          (runtime.jobs.some(activeRuntimeJob) ||
-            unreleasedReservation(runtime.reservation) ||
-            runtime.endpointLaunch !== undefined ||
-            runtime.stopRequest !== undefined)))
-    )
-      taskIdsToCancel.add(task.id);
+  for (const task of selectedTasks(selection)) {
+    const runtime = selection.runtimeByTaskId.get(task.id);
     if (runtime === undefined) {
       for (const endpoint of task.endpoints ?? []) {
-        addEndpoint(endpoint, task.worktree?.path ?? task.repoPath, undefined, "task");
+        add(endpoint, task.worktree?.path ?? task.repoPath, undefined, "task");
       }
       continue;
     }
@@ -527,18 +607,15 @@ async function forceResetCoordinators(
         );
       }
       launchEndpoint = recovered.endpoint;
-      addEndpoint(launchEndpoint, cwd, undefined, "task");
+      add(launchEndpoint, cwd, undefined, "task");
     }
-    for (const endpoint of runtime.endpoints) {
-      addEndpoint(endpoint, cwd, workerJobForEndpoint(runtime.jobs, endpoint), "task");
-    }
-    for (const endpoint of task.endpoints ?? []) {
-      addEndpoint(endpoint, cwd, workerJobForEndpoint(runtime.jobs, endpoint), "task");
+    for (const endpoint of [...runtime.endpoints, ...(task.endpoints ?? [])]) {
+      add(endpoint, cwd, workerJobForEndpoint(runtime.jobs, endpoint), "task");
     }
     for (const job of runtime.jobs) {
       if (!activeRuntimeJob(job) && job.endpoint === undefined) continue;
       const endpoint = activeJobEndpoint(job.endpoint ?? launchEndpoint, job, sessionId, "worker");
-      addEndpoint(endpoint, job.cwd, job, "task");
+      add(endpoint, job.cwd, job, "task");
     }
     if (
       runtime.reservation !== undefined &&
@@ -550,10 +627,10 @@ async function forceResetCoordinators(
       );
     }
   }
-  for (const presentation of selectedPresentations) {
+  for (const presentation of presentations) {
     const endpoint = presentation.endpoint ?? presentation.job.endpoint;
     if (endpoint !== undefined) {
-      addEndpoint(endpoint, presentation.job.cwd, presentation.job, "presentation");
+      add(endpoint, presentation.job.cwd, presentation.job, "presentation");
     }
     if (presentation.endpoint === undefined && presentation.endpointLaunch !== undefined) {
       const recovered = await recoverEndpointFromLaunch(run, presentation.endpointLaunch);
@@ -562,16 +639,45 @@ async function forceResetCoordinators(
           `presentation ${JSON.stringify(presentation.id)} endpoint launch could not be recovered: ${recovered.detail}`,
         );
       }
-      addEndpoint(recovered.endpoint, presentation.job.cwd, presentation.job, "presentation");
+      add(recovered.endpoint, presentation.job.cwd, presentation.job, "presentation");
     }
   }
+  return entries;
+}
 
-  for (const entry of endpointEntries.values()) await proveForceEndpoint(run, entry);
+/** Proves ownership of everything a force reset will touch before it changes anything. */
+async function planForceReset(
+  run: CommandRunner,
+  scope: ResetScope,
+  selection: ResetSelection,
+  lockedPresentationPaths: ReadonlySet<string>,
+): Promise<ForceResetPlan> {
+  const presentations = await selectForcePresentations(
+    selection,
+    scope.sessionId,
+    lockedPresentationPaths,
+  );
+  const liveRecords = await findLiveCoordinators(run, scope);
+  for (const record of liveRecords) await assertCleanCoordinatorSource(run, record);
+  const endpoints = await collectForceEndpoints(run, scope.sessionId, selection, presentations);
+  const taskIdsToCancel = new Set(
+    selectedTasks(selection)
+      .filter((task) => forceCancelsTask(task, selection.runtimeByTaskId.get(task.id)))
+      .map((task) => task.id),
+  );
+  for (const entry of endpoints.values()) await proveForceEndpoint(run, entry);
+  return { presentations, liveRecords, endpoints, taskIdsToCancel };
+}
 
-  let currentState: RuntimeState = {
-    ...state,
-    tasks: state.tasks.map((runtime) => {
-      const task = tasks.find((entry) => entry.id === runtime.taskId);
+function requestForceCancellation(
+  selection: ResetSelection,
+  taskIdsToCancel: ReadonlySet<string>,
+  requestedAt: string,
+): RuntimeState {
+  return {
+    ...selection.state,
+    tasks: selection.state.tasks.map((runtime) => {
+      const task = selection.tasksById.get(runtime.taskId);
       if (task === undefined || !taskIdsToCancel.has(task.id)) return runtime;
       return {
         ...runtime,
@@ -579,229 +685,232 @@ async function forceResetCoordinators(
           schemaVersion: 1 as const,
           action: "cancel" as const,
           generation: task.generation,
-          requestedAt: new Date().toISOString(),
+          requestedAt,
         },
         lastError: "force reset requested",
       };
     }),
   };
-  await writeRuntimeState(runtimeFile(home), currentState);
-
-  const stoppedEndpointKeys = new Set<string>();
-  const stopped: RetiredCoordinator[] = [];
-  const cancelledTaskIds: string[] = [];
-  try {
-    for (const entry of endpointEntries.values()) {
-      await forceCloseEndpoint(run, entry);
-      const key = endpointKey(entry.endpoint);
-      stoppedEndpointKeys.add(key);
-      const task = tasks.find((candidate) => candidate.id === entry.job?.taskId);
-      if (task !== undefined) {
-        currentState = replaceRuntimeTask(currentState, task.id, (current) => ({
-          ...current,
-          endpoints: current.endpoints.filter((endpoint) => endpointKey(endpoint) !== key),
-          jobs: current.jobs.map((job) =>
-            activeRuntimeJob(job) && job.endpoint !== undefined && endpointKey(job.endpoint) === key
-              ? { ...job, phase: "failed" as const, error: "cancelled by force reset" }
-              : job,
-          ),
-        }));
-      }
-      const presentation = selectedPresentations.find(
-        (candidate) => candidate.job.id === entry.job?.id,
-      );
-      if (presentation !== undefined) {
-        currentState = replaceRuntimePresentation(currentState, presentation.id, (current) => {
-          const { endpoint: _endpoint, ...withoutEndpoint } = current;
-          const { endpoint: _jobEndpoint, ...withoutJobEndpoint } = current.job;
-          return {
-            ...withoutEndpoint,
-            job: {
-              ...withoutJobEndpoint,
-              phase: "failed" as const,
-              error: "cancelled by force reset",
-            },
-            lastError: "cancelled by force reset",
-          };
-        });
-        const record = await readPresentationRecord(presentation.recordPath);
-        if (record.status !== "ended" && record.status !== "failed") {
-          await writeJsonAtomically(presentation.recordPath, {
-            ...record,
-            status: "failed",
-            error: "cancelled by force reset",
-            updatedAt: new Date().toISOString(),
-          });
-        }
-      }
-      await writeRuntimeState(runtimeFile(home), currentState);
-    }
-
-    await store.exclusive(async (transaction) => {
-      const clock = () => new Date().toISOString();
-      for (const task of tasks) {
-        if (!selectedTaskIds.has(task.id)) continue;
-        const runtime = runtimeByTaskId.get(task.id);
-        if (taskIdsToCancel.has(task.id)) {
-          const nextTask = transitionTask(
-            task,
-            { type: "cancel", reason: "force reset" },
-            forceTaskContext(),
-          );
-          await transaction.update(task.id, task.revision, () => nextTask);
-          cancelledTaskIds.push(task.id);
-        }
-        if (runtime !== undefined) {
-          currentState = markForceTaskRuntime(currentState, task, stoppedEndpointKeys, clock);
-        }
-      }
-      for (const presentation of selectedPresentations) {
-        currentState = replaceRuntimePresentation(currentState, presentation.id, (current) => {
-          const {
-            endpoint: _endpoint,
-            endpointLaunch: _endpointLaunch,
-            ...withoutTransient
-          } = current;
-          const reservation =
-            current.reservation === undefined
-              ? undefined
-              : { ...current.reservation, phase: "released" as const, releasedAt: clock() };
-          const job =
-            current.job.phase === "reserved" ||
-            current.job.phase === "launching" ||
-            current.job.phase === "running"
-              ? (() => {
-                  const { endpoint: _jobEndpoint, ...withoutEndpoint } = current.job;
-                  return {
-                    ...withoutEndpoint,
-                    phase: "failed" as const,
-                    error: "cancelled by force reset",
-                  };
-                })()
-              : current.job;
-          return {
-            ...withoutTransient,
-            ...(reservation === undefined ? {} : { reservation }),
-            job,
-            lastError: "cancelled by force reset",
-          };
-        });
-        const record = await readPresentationRecord(presentation.recordPath);
-        if (record.status !== "ended" && record.status !== "failed") {
-          await writeJsonAtomically(presentation.recordPath, {
-            ...record,
-            status: "failed",
-            error: "cancelled by force reset",
-            updatedAt: clock(),
-          });
-        }
-      }
-      await writeRuntimeState(runtimeFile(home), currentState);
-    });
-
-    for (const record of liveRecords) {
-      const latest = await findResetCoordinator(run, {
-        home,
-        sessionId,
-        repoPath: record.repoPath,
-      });
-      if (latest === undefined) {
-        const snapshot = await readSessionSnapshot(run, sessionId, record.worktree.path);
-        if (snapshotPaneForEndpoint(snapshot, record.endpoint, "coordinator") !== undefined) {
-          throw ownershipFailure(
-            `coordinator ${JSON.stringify(record.repoPath)} lost its recorded identity`,
-          );
-        }
-        continue;
-      }
-      if (!sameCoordinatorIdentity(latest, record)) {
-        throw ownershipFailure(
-          `coordinator record for ${JSON.stringify(record.repoPath)} changed before force reset`,
-        );
-      }
-      await closeCoordinatorPane(run, latest);
-      const workspaceRetirement = await retireCoordinatorWorkspace(run, latest);
-      stopped.push({ ...latest, workspaceRetirement });
-    }
-  } catch (error) {
-    if (stoppedEndpointKeys.size === 0 && stopped.length === 0 && cancelledTaskIds.length === 0)
-      throw error;
-    const endpoints = [...stoppedEndpointKeys].map(
-      (key) => endpointEntries.get(key)?.endpoint.paneId,
-    );
-    const cause = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `force reset partially completed: cancelled tasks ${JSON.stringify(cancelledTaskIds)}, stopped worker/presentation panes ${JSON.stringify(endpoints)}, closed coordinators ${JSON.stringify(stopped.map((record) => record.repoPath))}; ${cause}`,
-      { cause: error },
-    );
-  }
-  return stopped;
 }
 
-async function resetCoordinatorsUnlocked(
+function detachStoppedTaskEndpoint(state: RuntimeState, taskId: string, key: string): RuntimeState {
+  return replaceRuntimeTask(state, taskId, (current) => ({
+    ...current,
+    endpoints: current.endpoints.filter((endpoint) => endpointKey(endpoint) !== key),
+    jobs: current.jobs.map((job) =>
+      activeRuntimeJob(job) && job.endpoint !== undefined && endpointKey(job.endpoint) === key
+        ? { ...job, phase: "failed" as const, error: "cancelled by force reset" }
+        : job,
+    ),
+  }));
+}
+
+function detachStoppedPresentationEndpoint(state: RuntimeState, id: string): RuntimeState {
+  return replaceRuntimePresentation(state, id, (current) => {
+    const { endpoint: _endpoint, ...withoutEndpoint } = current;
+    const { endpoint: _jobEndpoint, ...withoutJobEndpoint } = current.job;
+    return {
+      ...withoutEndpoint,
+      job: { ...withoutJobEndpoint, phase: "failed" as const, error: "cancelled by force reset" },
+      lastError: "cancelled by force reset",
+    };
+  });
+}
+
+function markForcePresentationRuntime(
+  state: RuntimeState,
+  id: string,
+  clock: () => string,
+): RuntimeState {
+  return replaceRuntimePresentation(state, id, (current) => {
+    const { endpoint: _endpoint, endpointLaunch: _endpointLaunch, ...withoutTransient } = current;
+    const reservation =
+      current.reservation === undefined
+        ? undefined
+        : { ...current.reservation, phase: "released" as const, releasedAt: clock() };
+    let job = current.job;
+    if (job.phase === "reserved" || job.phase === "launching" || job.phase === "running") {
+      const { endpoint: _jobEndpoint, ...withoutEndpoint } = job;
+      job = { ...withoutEndpoint, phase: "failed" as const, error: "cancelled by force reset" };
+    }
+    return {
+      ...withoutTransient,
+      ...(reservation === undefined ? {} : { reservation }),
+      job,
+      lastError: "cancelled by force reset",
+    };
+  });
+}
+
+async function failPresentationRecord(recordPath: string, clock: () => string): Promise<void> {
+  const record = await readPresentationRecord(recordPath);
+  if (record.status === "ended" || record.status === "failed") return;
+  await writeJsonAtomically(recordPath, {
+    ...record,
+    status: "failed",
+    error: "cancelled by force reset",
+    updatedAt: clock(),
+  });
+}
+
+/** Closes each planned endpoint, saving runtime state after every close. */
+async function closeForceEndpoints(
   run: CommandRunner,
   home: string,
-  sessionId: string,
-  repoPaths: readonly string[],
-  store: TaskStore,
-  transaction: TaskStoreTransaction,
-  force: boolean,
-  lockedPresentationPaths?: ReadonlySet<string>,
-): Promise<readonly RetiredCoordinator[]> {
-  await listCoordinatorRecords(home, sessionId);
-  const tasks = await transaction.list();
-  const state: RuntimeState = await readRuntimeState(runtimeFile(home));
-  const tasksById = new Map<string, TaskRecord>();
-  const repositoryCache = new Map<string, Promise<string>>();
-  const canonicalTaskRepository = (path: string): Promise<string> => {
-    const cached = repositoryCache.get(path);
-    if (cached !== undefined) return cached;
-    const pending = canonicalPath(path, "task.repoPath");
-    repositoryCache.set(path, pending);
-    return pending;
-  };
-  const selectedRoots = new Set(repoPaths);
-  const selectedTaskIds = new Set<string>();
-  for (const task of tasks) {
-    tasksById.set(task.id, task);
-    const repository = await canonicalTaskRepository(task.repoPath);
-    if (selectedRoots.has(repository)) selectedTaskIds.add(task.id);
+  selection: ResetSelection,
+  plan: ForceResetPlan,
+  initialState: RuntimeState,
+  progress: ForceResetProgress,
+): Promise<RuntimeState> {
+  let state = initialState;
+  for (const entry of plan.endpoints.values()) {
+    await forceCloseEndpoint(run, entry);
+    const key = endpointKey(entry.endpoint);
+    progress.stoppedEndpointKeys.add(key);
+    const taskId = entry.job?.taskId;
+    if (taskId !== undefined && selection.tasksById.has(taskId)) {
+      state = detachStoppedTaskEndpoint(state, taskId, key);
+    }
+    const presentation = plan.presentations.find((candidate) => candidate.job.id === entry.job?.id);
+    if (presentation !== undefined) {
+      state = detachStoppedPresentationEndpoint(state, presentation.id);
+      await failPresentationRecord(presentation.recordPath, () => new Date().toISOString());
+    }
+    await writeRuntimeState(runtimeFile(home), state);
   }
-  const runtimeByTaskId = new Map<string, RuntimeTaskState>();
-  for (const runtime of state.tasks) {
-    runtimeByTaskId.set(runtime.taskId, runtime);
-    const task = tasksById.get(runtime.taskId);
-    if (task === undefined && runtimeTaskHasActiveState(runtime, sessionId)) {
+  return state;
+}
+
+async function settleForceResetRecords(
+  transaction: TaskStoreTransaction,
+  home: string,
+  selection: ResetSelection,
+  plan: ForceResetPlan,
+  initialState: RuntimeState,
+  progress: ForceResetProgress,
+): Promise<void> {
+  const clock = () => new Date().toISOString();
+  let state = initialState;
+  for (const task of selectedTasks(selection)) {
+    if (plan.taskIdsToCancel.has(task.id)) {
+      const nextTask = transitionTask(
+        task,
+        { type: "cancel", reason: "force reset" },
+        { now: clock(), notificationId: randomUUID() },
+      );
+      await transaction.update(task.id, task.revision, () => nextTask);
+      progress.cancelledTaskIds.push(task.id);
+    }
+    if (selection.runtimeByTaskId.has(task.id)) {
+      state = markForceTaskRuntime(state, task, progress.stoppedEndpointKeys, clock);
+    }
+  }
+  for (const presentation of plan.presentations) {
+    state = markForcePresentationRuntime(state, presentation.id, clock);
+    await failPresentationRecord(presentation.recordPath, clock);
+  }
+  await writeRuntimeState(runtimeFile(home), state);
+}
+
+async function closeForceCoordinators(
+  run: CommandRunner,
+  scope: ResetScope,
+  liveRecords: readonly CoordinatorRecord[],
+  stopped: RetiredCoordinator[],
+): Promise<void> {
+  for (const record of liveRecords) {
+    const latest = await findResetCoordinator(run, {
+      home: scope.home,
+      sessionId: scope.sessionId,
+      repoPath: record.repoPath,
+    });
+    if (latest === undefined) {
+      const snapshot = await readSessionSnapshot(run, scope.sessionId, record.worktree.path);
+      if (snapshotPaneForEndpoint(snapshot, record.endpoint, "coordinator") !== undefined) {
+        throw ownershipFailure(
+          `coordinator ${JSON.stringify(record.repoPath)} lost its recorded identity`,
+        );
+      }
+      continue;
+    }
+    if (!sameCoordinatorIdentity(latest, record)) {
       throw ownershipFailure(
-        `active runtime task ${JSON.stringify(runtime.taskId)} has no matching durable task record`,
+        `coordinator record for ${JSON.stringify(record.repoPath)} changed before force reset`,
       );
     }
+    await closeCoordinatorPane(run, latest);
+    const workspaceRetirement = await retireCoordinatorWorkspace(run, latest);
+    stopped.push({ ...latest, workspaceRetirement });
   }
-  if (!force) {
-    for (const task of tasks) {
-      if (selectedTaskIds.has(task.id)) {
-        assertSafeTaskState(task, runtimeByTaskId.get(task.id));
-      }
-    }
-  }
-  if (force) {
-    return forceResetCoordinators(
-      run,
-      home,
-      sessionId,
-      repoPaths,
-      store,
-      tasks,
-      runtimeByTaskId,
-      selectedTaskIds,
-      state,
-      lockedPresentationPaths,
-    );
-  }
+}
 
-  const selectedPresentations: RuntimePresentation[] = [];
-  for (const presentation of state.presentations) {
-    const task = tasksById.get(presentation.taskId);
+function forcePartialFailure(
+  error: unknown,
+  plan: ForceResetPlan,
+  progress: ForceResetProgress,
+): unknown {
+  if (
+    progress.stoppedEndpointKeys.size === 0 &&
+    progress.stopped.length === 0 &&
+    progress.cancelledTaskIds.length === 0
+  )
+    return error;
+  const endpoints = [...progress.stoppedEndpointKeys].map(
+    (key) => plan.endpoints.get(key)?.endpoint.paneId,
+  );
+  const cause = error instanceof Error ? error.message : String(error);
+  return new Error(
+    `force reset partially completed: cancelled tasks ${JSON.stringify(progress.cancelledTaskIds)}, stopped worker/presentation panes ${JSON.stringify(endpoints)}, closed coordinators ${JSON.stringify(progress.stopped.map((record) => record.repoPath))}; ${cause}`,
+    { cause: error },
+  );
+}
+
+async function forceResetCoordinators(
+  run: CommandRunner,
+  scope: ResetScope,
+  store: TaskStore,
+  selection: ResetSelection,
+  lockedPresentationPaths: ReadonlySet<string>,
+): Promise<readonly RetiredCoordinator[]> {
+  const plan = await planForceReset(run, scope, selection, lockedPresentationPaths);
+  const cancelRequested = requestForceCancellation(
+    selection,
+    plan.taskIdsToCancel,
+    new Date().toISOString(),
+  );
+  await writeRuntimeState(runtimeFile(scope.home), cancelRequested);
+
+  const progress: ForceResetProgress = {
+    stoppedEndpointKeys: new Set(),
+    cancelledTaskIds: [],
+    stopped: [],
+  };
+  try {
+    const endpointsClosed = await closeForceEndpoints(
+      run,
+      scope.home,
+      selection,
+      plan,
+      cancelRequested,
+      progress,
+    );
+    await store.exclusive((transaction) =>
+      settleForceResetRecords(transaction, scope.home, selection, plan, endpointsClosed, progress),
+    );
+    await closeForceCoordinators(run, scope, plan.liveRecords, progress.stopped);
+  } catch (error) {
+    throw forcePartialFailure(error, plan, progress);
+  }
+  return progress.stopped;
+}
+
+function selectIdlePresentations(
+  selection: ResetSelection,
+  sessionId: string,
+): RuntimePresentation[] {
+  const selected: RuntimePresentation[] = [];
+  for (const presentation of selection.state.presentations) {
+    const task = selection.tasksById.get(presentation.taskId);
     if (task === undefined) {
       if (runtimePresentationHasActiveState(presentation, sessionId)) {
         throw ownershipFailure(
@@ -810,7 +919,7 @@ async function resetCoordinatorsUnlocked(
       }
       continue;
     }
-    if (!selectedTaskIds.has(task.id)) continue;
+    if (!selection.selectedTaskIds.has(task.id)) continue;
     if (presentation.endpointLaunch !== undefined) {
       throw new Error(
         `selected presentation ${JSON.stringify(presentation.id)} has a pending endpoint launch`,
@@ -826,81 +935,62 @@ async function resetCoordinatorsUnlocked(
         `selected presentation ${JSON.stringify(presentation.id)} has a ${presentation.job.phase} job`,
       );
     }
-    selectedPresentations.push(presentation);
+    selected.push(presentation);
   }
+  return selected;
+}
 
-  const liveRecords: CoordinatorRecord[] = [];
-  for (const repoPath of repoPaths) {
-    const record = await findResetCoordinator(run, { home, sessionId, repoPath });
-    if (record !== undefined) liveRecords.push(record);
-  }
-
-  let snapshot: readonly SnapshotPane[] | undefined;
-  if (liveRecords.length > 0) {
-    const first = liveRecords[0];
-    if (first === undefined) throw new Error("reset discovered an invalid coordinator record set");
-    snapshot = await readSessionSnapshot(run, sessionId, first.worktree.path);
-    for (const record of liveRecords) {
-      await assertIdleResetCoordinator(run, snapshot, record);
-      const checkpoint = await readCheckpoint(run, { repo: record.worktree.path });
-      if (checkpoint.dirty || checkpoint.unmerged) {
-        throw new Error(
-          `coordinator source worktree ${JSON.stringify(record.worktree.path)} is not clean`,
-        );
-      }
-      if (checkpoint.head !== record.worktree.baseHead) {
-        throw new Error(
-          `coordinator source worktree ${JSON.stringify(record.worktree.path)} HEAD ${JSON.stringify(
-            checkpoint.head,
-          )} does not match lease base HEAD ${JSON.stringify(record.worktree.baseHead)}`,
-        );
-      }
-    }
-  }
-
-  const selectedEndpoints = new Map<string, Endpoint>();
-  for (const task of tasks) {
-    if (!selectedTaskIds.has(task.id)) continue;
-    for (const endpoint of task.endpoints ?? []) {
-      selectedEndpoints.set(`${endpoint.sessionId}\0${endpoint.paneId}`, endpoint);
-    }
-    const runtime = runtimeByTaskId.get(task.id);
-    for (const endpoint of runtime?.endpoints ?? []) {
-      selectedEndpoints.set(`${endpoint.sessionId}\0${endpoint.paneId}`, endpoint);
-    }
+function selectedWorkerEndpoints(selection: ResetSelection): Endpoint[] {
+  const endpoints = new Map<string, Endpoint>();
+  const add = (endpoint: Endpoint): void => {
+    endpoints.set(`${endpoint.sessionId}\0${endpoint.paneId}`, endpoint);
+  };
+  for (const task of selectedTasks(selection)) {
+    for (const endpoint of task.endpoints ?? []) add(endpoint);
+    const runtime = selection.runtimeByTaskId.get(task.id);
+    for (const endpoint of runtime?.endpoints ?? []) add(endpoint);
     for (const job of runtime?.jobs ?? []) {
-      if (job.endpoint !== undefined) {
-        selectedEndpoints.set(`${job.endpoint.sessionId}\0${job.endpoint.paneId}`, job.endpoint);
-      }
+      if (job.endpoint !== undefined) add(job.endpoint);
     }
   }
-  const selectedPresentationEndpoints = selectedPresentations
-    .map((presentation) => presentation.endpoint ?? presentation.job.endpoint)
-    .filter((endpoint): endpoint is Endpoint => endpoint !== undefined);
-  if (
-    snapshot === undefined &&
-    ([...selectedEndpoints.values()].some((endpoint) => endpoint.sessionId === sessionId) ||
-      selectedPresentationEndpoints.some((endpoint) => endpoint.sessionId === sessionId))
-  ) {
-    snapshot = await readSessionSnapshot(run, sessionId, repoPaths[0] ?? home, true);
-  }
-  for (const endpoint of selectedEndpoints.values()) {
-    assertNoLiveSelectedEndpoint(endpoint, sessionId, snapshot, "worker");
-  }
-  for (const endpoint of selectedPresentationEndpoints) {
-    assertNoLiveSelectedEndpoint(endpoint, sessionId, snapshot, "presentation");
-  }
+  return [...endpoints.values()];
+}
 
+/** Proves each live coordinator is idle with a clean source, returning the snapshot used. */
+async function readIdleCoordinatorSnapshot(
+  run: CommandRunner,
+  sessionId: string,
+  liveRecords: readonly CoordinatorRecord[],
+): Promise<readonly SnapshotPane[] | undefined> {
+  const first = liveRecords[0];
+  if (first === undefined) return undefined;
+  const snapshot = await readSessionSnapshot(run, sessionId, first.worktree.path);
+  for (const record of liveRecords) {
+    await assertIdleResetCoordinator(run, snapshot, record);
+    await assertCleanCoordinatorSource(run, record);
+  }
+  return snapshot;
+}
+
+async function closeIdleCoordinators(
+  run: CommandRunner,
+  scope: ResetScope,
+  liveRecords: readonly CoordinatorRecord[],
+): Promise<readonly RetiredCoordinator[]> {
   const stopped: RetiredCoordinator[] = [];
   for (const record of liveRecords) {
     try {
       const latest = await findResetCoordinator(run, {
-        home,
-        sessionId,
+        home: scope.home,
+        sessionId: scope.sessionId,
         repoPath: record.repoPath,
       });
       if (latest === undefined) {
-        const latestSnapshot = await readSessionSnapshot(run, sessionId, record.worktree.path);
+        const latestSnapshot = await readSessionSnapshot(
+          run,
+          scope.sessionId,
+          record.worktree.path,
+        );
         const pane = snapshotPaneForEndpoint(latestSnapshot, record.endpoint, "coordinator");
         if (pane === undefined) continue;
         throw ownershipFailure(
@@ -912,7 +1002,7 @@ async function resetCoordinatorsUnlocked(
           `coordinator record for ${JSON.stringify(record.repoPath)} changed before reset`,
         );
       }
-      const latestSnapshot = await readSessionSnapshot(run, sessionId, latest.worktree.path);
+      const latestSnapshot = await readSessionSnapshot(run, scope.sessionId, latest.worktree.path);
       await assertIdleResetCoordinator(run, latestSnapshot, latest);
       await closeCoordinatorPane(run, latest);
       const workspaceRetirement = await retireCoordinatorWorkspace(run, latest);
@@ -930,6 +1020,44 @@ async function resetCoordinatorsUnlocked(
     }
   }
   return stopped;
+}
+
+async function resetIdleCoordinators(
+  run: CommandRunner,
+  scope: ResetScope,
+  selection: ResetSelection,
+): Promise<readonly RetiredCoordinator[]> {
+  for (const task of selectedTasks(selection)) {
+    assertSafeTaskState(task, selection.runtimeByTaskId.get(task.id));
+  }
+  const presentations = selectIdlePresentations(selection, scope.sessionId);
+  const liveRecords = await findLiveCoordinators(run, scope);
+  let snapshot = await readIdleCoordinatorSnapshot(run, scope.sessionId, liveRecords);
+
+  const workerEndpoints = selectedWorkerEndpoints(selection);
+  const presentationEndpoints = presentations
+    .map((presentation) => presentation.endpoint ?? presentation.job.endpoint)
+    .filter((endpoint): endpoint is Endpoint => endpoint !== undefined);
+  if (
+    snapshot === undefined &&
+    [...workerEndpoints, ...presentationEndpoints].some(
+      (endpoint) => endpoint.sessionId === scope.sessionId,
+    )
+  ) {
+    snapshot = await readSessionSnapshot(
+      run,
+      scope.sessionId,
+      scope.repoPaths[0] ?? scope.home,
+      true,
+    );
+  }
+  for (const endpoint of workerEndpoints) {
+    assertNoLiveSelectedEndpoint(endpoint, scope.sessionId, snapshot, "worker");
+  }
+  for (const endpoint of presentationEndpoints) {
+    assertNoLiveSelectedEndpoint(endpoint, scope.sessionId, snapshot, "presentation");
+  }
+  return closeIdleCoordinators(run, scope, liveRecords);
 }
 
 async function withForcePresentationLocks<Result>(
@@ -992,6 +1120,7 @@ export async function resetCoordinators(
     seen.add(repoPath);
     repoPaths.push(repoPath);
   }
+  const scope: ResetScope = { home, sessionId, repoPaths };
   return withCoordinatorLaunchLock(home, sessionId, async () => {
     const store = createTaskStore({
       directory: join(home, "tasks"),
@@ -1000,22 +1129,19 @@ export async function resetCoordinators(
     });
     if (input.force === true) {
       return withForcePresentationLocks(home, repoPaths, store, (paths) =>
-        store.serialized((transaction) =>
-          resetCoordinatorsUnlocked(
+        store.serialized(async (transaction) =>
+          forceResetCoordinators(
             run,
-            home,
-            sessionId,
-            repoPaths,
+            scope,
             store,
-            transaction,
-            true,
+            await readResetSelection(scope, transaction),
             paths,
           ),
         ),
       );
     }
-    return store.serialized((transaction) =>
-      resetCoordinatorsUnlocked(run, home, sessionId, repoPaths, store, transaction, false),
+    return store.serialized(async (transaction) =>
+      resetIdleCoordinators(run, scope, await readResetSelection(scope, transaction)),
     );
   });
 }

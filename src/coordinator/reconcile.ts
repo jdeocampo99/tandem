@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { readTreehousePoolStatus, type TreehousePoolStatusRecord } from "../adapters/treehouse.ts";
-import type { Clock, CommandRunner, WorktreeLease } from "../contracts.ts";
+import type { Clock, CommandRunner, TaskRecord, WorktreeLease } from "../contracts.ts";
 import { taskRuntime } from "../runtime/activity.ts";
 import { databasePath } from "../runtime/database.ts";
 import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
+import type { RuntimeState, RuntimeTaskState } from "../runtime/schema.ts";
 import { isTerminalTask } from "../service/records.ts";
 import {
   decideScoutCleanupEligibility,
@@ -430,6 +431,37 @@ async function observePoolLeases(
   return { leases, failures };
 }
 
+type TaskState = Readonly<{
+  readonly tasks: readonly TaskRecord[];
+  readonly state: RuntimeState;
+}>;
+
+/** Reads durable tasks and runtime state, or nothing when this home has never stored a task. */
+async function readTaskState(home: string, clock: Clock): Promise<TaskState | undefined> {
+  if (!(await fileExists(databasePath(home)))) return undefined;
+  const store = createTaskStore({
+    directory: join(home, "tasks"),
+    clock,
+    idFactory: defaultIdFactory(),
+  });
+  const tasks = await store.list();
+  return { tasks, state: await readRuntimeState(runtimeFile(home)) };
+}
+
+/** A task whose cleanup already settled, or was quarantined, has nothing left for reconcile. */
+function cleanupUnsettled(task: TaskRecord, runtime: RuntimeTaskState | undefined): boolean {
+  return (
+    task.cleanup?.status !== "quarantined" &&
+    runtime !== undefined &&
+    runtime.terminalCleanupRevision !== task.revision
+  );
+}
+
+function implementationAwaitsCleanup(task: TaskRecord, discard: boolean): boolean {
+  if (task.kind !== "implementation") return false;
+  return isTerminalTask(task) || (discard && task.stage === "blocked");
+}
+
 /**
  * Lists the terminal scouts whose cleanup is still unsettled, using the same durable eligibility
  * owner the cleanup itself uses, so the plan never promises work that owner would refuse.
@@ -438,27 +470,19 @@ async function observePendingScouts(
   home: string,
   clock: Clock,
 ): Promise<readonly ObservedPendingScout[]> {
-  if (!(await fileExists(databasePath(home)))) return [];
-  const store = createTaskStore({
-    directory: join(home, "tasks"),
-    clock,
-    idFactory: defaultIdFactory(),
-  });
-  const tasks = await store.list();
-  const state = await readRuntimeState(runtimeFile(home));
-  const pending: ObservedPendingScout[] = [];
-  for (const task of tasks) {
-    if (decideScoutCleanupEligibility(task).kind !== "eligible") continue;
-    if (task.cleanup?.status === "quarantined") continue;
-    const runtime = taskRuntime(state, task.id);
-    if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) continue;
-    pending.push({
+  const stored = await readTaskState(home, clock);
+  if (stored === undefined) return [];
+  return stored.tasks
+    .filter(
+      (task) =>
+        decideScoutCleanupEligibility(task).kind === "eligible" &&
+        cleanupUnsettled(task, taskRuntime(stored.state, task.id)),
+    )
+    .map((task) => ({
       taskId: task.id,
       repoPath: task.repoPath,
       reason: `the ${task.stage} scout still holds child resources its coordinator did not release`,
-    });
-  }
-  return pending;
+    }));
 }
 
 /**
@@ -471,24 +495,15 @@ async function observePendingImplementations(
   clock: Clock,
   discard: boolean,
 ): Promise<readonly ObservedPendingImplementation[]> {
-  if (!(await fileExists(databasePath(home)))) return [];
-  const store = createTaskStore({
-    directory: join(home, "tasks"),
-    clock,
-    idFactory: defaultIdFactory(),
-  });
-  const tasks = await store.list();
-  const state = await readRuntimeState(runtimeFile(home));
+  const stored = await readTaskState(home, clock);
+  if (stored === undefined) return [];
+  const { tasks, state } = stored;
   const pending: ObservedPendingImplementation[] = [];
   const others = otherTaskWork(tasks, state);
   for (const task of tasks) {
-    const explicitlyDiscardedBlocked =
-      discard && task.kind === "implementation" && task.stage === "blocked";
-    if (task.kind !== "implementation" || (!isTerminalTask(task) && !explicitlyDiscardedBlocked))
-      continue;
-    if (task.cleanup?.status === "quarantined") continue;
+    if (!implementationAwaitsCleanup(task, discard)) continue;
     const runtime = taskRuntime(state, task.id);
-    if (runtime === undefined || runtime.terminalCleanupRevision === task.revision) continue;
+    if (runtime === undefined || !cleanupUnsettled(task, runtime)) continue;
     const lease = runtime.worktree;
     const containment =
       lease !== undefined && (task.stage === "cancelled" || task.stage === "completed")
@@ -674,6 +689,70 @@ function planPoolLease(observed: ObservedPoolLease): ReconcilePlanItem {
   );
 }
 
+function planScout(scout: ObservedPendingScout): ReconcilePlanItem {
+  return {
+    kind: "scout-task",
+    action: "clean",
+    reason: scout.reason,
+    taskId: scout.taskId,
+    repoPath: scout.repoPath,
+  };
+}
+
+/** A superseded worktree is only offered unless freeing it was separately approved. */
+function planImplementationTask(
+  task: ObservedPendingImplementation,
+  freeSuperseded: boolean,
+): ReconcilePlanItem {
+  const containment = task.containment;
+  if (containment?.kind === "superseded" && !freeSuperseded) {
+    return {
+      kind: "superseded-task",
+      action: "offer",
+      reason: `its worktree is clean and every commit is already in ${containment.proof.label}`,
+      taskId: task.taskId,
+      repoPath: task.repoPath,
+      proof: containment.proof,
+    };
+  }
+  return {
+    kind: "implementation-task",
+    action: "clean",
+    reason: task.reason,
+    taskId: task.taskId,
+    repoPath: task.repoPath,
+    ...(containment?.kind === "superseded" ? { free: containment.proof } : {}),
+    ...(containment?.kind === "kept" ? { worktreeStays: containment.reason } : {}),
+  };
+}
+
+function planUnreadableRecord(entry: UnreadableCoordinatorRecord): ReconcilePlanItem {
+  return {
+    kind: "unreadable-record",
+    action: "quarantine",
+    reason: `the stored coordinator record could not be read and is left in place: ${entry.reason}`,
+    path: entry.path,
+  };
+}
+
+function planQuarantineNote(
+  record: CoordinatorQuarantineRecord,
+  observation: ReconcileObservation,
+): ReconcilePlanItem {
+  const settled = observation.settledQuarantineIds.includes(record.quarantineId);
+  return {
+    kind: "quarantine-note",
+    action: settled ? "clean" : "quarantine",
+    reason: settled
+      ? `the lease this note kept track of has since been returned, so the note can be removed`
+      : `${record.stage} quarantine from ${record.quarantinedAt}: ${record.reason}`,
+    record,
+    path: join(coordinatorQuarantineDirectory(observation.home), `${record.quarantineId}.json`),
+    repoPath: record.repoPath,
+    sessionId: record.sessionId,
+  };
+}
+
 /**
  * Turns one scan into the whole plan, before anything is touched.
  *
@@ -684,66 +763,19 @@ export function planTandemReconciliation(
   observation: ReconcileObservation,
   options: Readonly<{ readonly freeSuperseded?: boolean }> = {},
 ): ReconcilePlan {
-  const items: ReconcilePlanItem[] = [];
-  for (const observed of observation.coordinators) {
-    items.push(planCoordinator(observed, observation.quarantines));
-  }
-  for (const observed of observation.leases) items.push(planPoolLease(observed));
-  for (const scout of observation.scouts) {
-    items.push({
-      kind: "scout-task",
-      action: "clean",
-      reason: scout.reason,
-      taskId: scout.taskId,
-      repoPath: scout.repoPath,
-    });
-  }
-  for (const task of observation.implementationTasks ?? []) {
-    const containment = task.containment;
-    if (containment?.kind === "superseded" && options.freeSuperseded !== true) {
-      items.push({
-        kind: "superseded-task",
-        action: "offer",
-        reason: `its worktree is clean and every commit is already in ${containment.proof.label}`,
-        taskId: task.taskId,
-        repoPath: task.repoPath,
-        proof: containment.proof,
-      });
-      continue;
-    }
-    items.push({
-      kind: "implementation-task",
-      action: "clean",
-      reason: task.reason,
-      taskId: task.taskId,
-      repoPath: task.repoPath,
-      ...(containment?.kind === "superseded" ? { free: containment.proof } : {}),
-      ...(containment?.kind === "kept" ? { worktreeStays: containment.reason } : {}),
-    });
-  }
-
-  for (const entry of observation.unreadable) {
-    items.push({
-      kind: "unreadable-record",
-      action: "quarantine",
-      reason: `the stored coordinator record could not be read and is left in place: ${entry.reason}`,
-      path: entry.path,
-    });
-  }
-  for (const record of observation.quarantines) {
-    const settled = observation.settledQuarantineIds.includes(record.quarantineId);
-    items.push({
-      kind: "quarantine-note",
-      action: settled ? "clean" : "quarantine",
-      reason: settled
-        ? `the lease this note kept track of has since been returned, so the note can be removed`
-        : `${record.stage} quarantine from ${record.quarantinedAt}: ${record.reason}`,
-      record,
-      path: join(coordinatorQuarantineDirectory(observation.home), `${record.quarantineId}.json`),
-      repoPath: record.repoPath,
-      sessionId: record.sessionId,
-    });
-  }
+  const freeSuperseded = options.freeSuperseded === true;
+  const items: ReconcilePlanItem[] = [
+    ...observation.coordinators.map((observed) =>
+      planCoordinator(observed, observation.quarantines),
+    ),
+    ...observation.leases.map(planPoolLease),
+    ...observation.scouts.map(planScout),
+    ...(observation.implementationTasks ?? []).map((task) =>
+      planImplementationTask(task, freeSuperseded),
+    ),
+    ...observation.unreadable.map(planUnreadableRecord),
+    ...observation.quarantines.map((record) => planQuarantineNote(record, observation)),
+  ];
   return { schemaVersion: RECONCILE_REPORT_SCHEMA_VERSION, items };
 }
 
@@ -859,19 +891,15 @@ function taskCleanupResult(
   return { item, outcome: "retained", reason: outcome.reason };
 }
 
-/** Finishes every unsettled scout through the one durable owner that may release their resources. */
-async function applyScoutItems(
-  input: ReconcileApplyInput,
-  items: readonly ScoutItem[],
+/** Runs one durable task cleanup owner and records its outcome for each item, failing all on error. */
+async function recordTaskCleanup(
+  items: readonly (ScoutItem | ImplementationTaskItem)[],
+  finishCleanup: () => Promise<readonly TaskCleanupOutcome[]>,
   results: Map<ReconcilePlanItem, ReconcileResult>,
 ): Promise<void> {
   let settled: readonly TaskCleanupOutcome[];
   try {
-    settled = await finishPendingScoutCleanup({
-      home: input.home,
-      run: input.run,
-      clock: input.clock,
-    });
+    settled = await finishCleanup();
   } catch (error) {
     const reason = describeFailure(error);
     for (const item of items) results.set(item, { item, outcome: "failed", reason });
@@ -881,31 +909,49 @@ async function applyScoutItems(
   for (const item of items) results.set(item, taskCleanupResult(item, outcomes.get(item.taskId)));
 }
 
+/** Finishes every unsettled scout through the one durable owner that may release their resources. */
+function applyScoutItems(
+  input: ReconcileApplyInput,
+  items: readonly ScoutItem[],
+  results: Map<ReconcilePlanItem, ReconcileResult>,
+): Promise<void> {
+  return recordTaskCleanup(
+    items,
+    () => finishPendingScoutCleanup({ home: input.home, run: input.run, clock: input.clock }),
+    results,
+  );
+}
+
 /** Finishes every unsettled implementation task through the durable task cleanup owner. */
-async function applyImplementationItems(
+function applyImplementationItems(
   input: ReconcileApplyInput,
   items: readonly ImplementationTaskItem[],
   results: Map<ReconcilePlanItem, ReconcileResult>,
 ): Promise<void> {
-  let settled: readonly TaskCleanupOutcome[];
-  try {
-    const free = new Map<string, SupersededProof>();
-    for (const item of items) if (item.free !== undefined) free.set(item.taskId, item.free);
-    settled = await finishPendingImplementationCleanup({
-      home: input.home,
-      run: input.run,
-      clock: input.clock,
-      discard: input.discard,
-      taskIds: new Set(items.map((item) => item.taskId)),
-      free,
-    });
-  } catch (error) {
-    const reason = describeFailure(error);
-    for (const item of items) results.set(item, { item, outcome: "failed", reason });
-    return;
-  }
-  const outcomes = new Map(settled.map((outcome) => [outcome.taskId, outcome]));
-  for (const item of items) results.set(item, taskCleanupResult(item, outcomes.get(item.taskId)));
+  const free = new Map<string, SupersededProof>();
+  for (const item of items) if (item.free !== undefined) free.set(item.taskId, item.free);
+  return recordTaskCleanup(
+    items,
+    () =>
+      finishPendingImplementationCleanup({
+        home: input.home,
+        run: input.run,
+        clock: input.clock,
+        discard: input.discard,
+        taskIds: new Set(items.map((item) => item.taskId)),
+        free,
+      }),
+    results,
+  );
+}
+
+function applyRepositoryItem(
+  input: ReconcileApplyInput,
+  item: RepositoryItem,
+): Promise<ReconcileResult> {
+  if (item.kind === "coordinator") return applyCoordinatorItem(input, item);
+  if (item.kind === "quarantine-note") return applyQuarantineNoteItem(input, item);
+  return applyLeaseItem(input, item);
 }
 
 type ReconcileWork = Readonly<{
@@ -968,14 +1014,7 @@ export async function applyTandemReconciliation(
     await withCoordinatorRepositoryLock(input.home, repoPath, async () => {
       for (const item of items) {
         try {
-          results.set(
-            item,
-            item.kind === "coordinator"
-              ? await applyCoordinatorItem(input, item)
-              : item.kind === "quarantine-note"
-                ? await applyQuarantineNoteItem(input, item)
-                : await applyLeaseItem(input, item),
-          );
+          results.set(item, await applyRepositoryItem(input, item));
         } catch (error) {
           results.set(item, { item, outcome: "failed", reason: describeFailure(error) });
         }
