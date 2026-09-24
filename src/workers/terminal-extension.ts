@@ -11,7 +11,7 @@ import type { Finding, ReviewResult } from "../contracts.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
-import { isBlockingFinding } from "../tasks/findings.ts";
+import { findingHeadline, isBlockingFinding } from "../tasks/findings.ts";
 import {
   parseWorkerJob,
   parseWorkerResult,
@@ -194,15 +194,6 @@ const SEVERITY_ORDER: Readonly<Record<Finding["severity"], number>> = {
   P2: 2,
   P3: 3,
 };
-const FINDING_SUMMARY_MAX_CHARS = 160;
-
-/** The first sentence of a finding, capped so each finding stays one readable line. */
-function findingHeadline(description: string): string {
-  const sentence = description.trim().split(/(?<=[.!?])\s/, 1)[0] ?? "";
-  return sentence.length <= FINDING_SUMMARY_MAX_CHARS
-    ? sentence
-    : `${sentence.slice(0, FINDING_SUMMARY_MAX_CHARS - 1).trimEnd()}…`;
-}
 
 /**
  * What a reviewer's pane shows once its review is submitted: the round, the verdict, and one line

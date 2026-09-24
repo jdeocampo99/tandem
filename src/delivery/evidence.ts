@@ -13,7 +13,7 @@ import {
   finalAcceptanceStatus,
   ValidationConfigurationError,
 } from "../tasks/acceptance.ts";
-import { fixRoundBudget } from "../tasks/findings.ts";
+import { findingHeadline, fixRoundBudget } from "../tasks/findings.ts";
 import { recordedReviewLevel } from "../tasks/review-levels.ts";
 
 export type PrSummary = Readonly<{
@@ -204,7 +204,7 @@ function findingBullet(entry: FindingLedgerEntry): string {
     entry.file === undefined
       ? ""
       : ` (${entry.file}${entry.line === undefined ? "" : `:${entry.line}`})`;
-  return `${entry.severity}: ${entry.description}${where}`;
+  return `${entry.severity}: ${findingHeadline(entry.description)}${where}`;
 }
 
 function acceptedValidation(task: TaskRecord, head: string): readonly string[] {

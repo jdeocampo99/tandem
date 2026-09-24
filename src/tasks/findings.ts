@@ -11,6 +11,16 @@ import type {
 } from "../contracts.ts";
 import { formatDecisionQuestion, shortNote, taskName } from "./question.ts";
 
+const FINDING_SUMMARY_MAX_CHARS = 160;
+
+/** The first sentence of a finding, capped so each finding stays one readable line. */
+export function findingHeadline(description: string): string {
+  const sentence = description.trim().split(/(?<=[.!?])\s/, 1)[0] ?? "";
+  return sentence.length <= FINDING_SUMMARY_MAX_CHARS
+    ? sentence
+    : `${sentence.slice(0, FINDING_SUMMARY_MAX_CHARS - 1).trimEnd()}…`;
+}
+
 export const FINDING_STATUSES: readonly FindingStatus[] = [
   "addressed",
   "unresolved",
