@@ -163,7 +163,7 @@ export class RequestBriefWorkflow {
         repoPath: await canonical(record.repoPath),
       })),
     );
-    return openRequestForNewWork(records, tasks, await canonical(repoPath));
+    return openRequestForNewWork(records, tasks, await canonical(repoPath), this.#deps.clock());
   }
 
   /** The one request whose brief is awaiting approval; fails closed when that is not unambiguous. */
