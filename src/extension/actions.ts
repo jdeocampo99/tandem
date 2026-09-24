@@ -41,7 +41,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "pr-draft": { min: 4, max: 4 },
   merge: { min: 3, max: 3 },
   "pr-merge": { min: 3, max: 3 },
-  cleanup: { min: 2, max: 3 },
+  cleanup: { min: 2, max: Number.POSITIVE_INFINITY },
   messages: { min: 2, max: 2 },
   inspect: { min: 2, max: 2 },
   "brief-show": { min: 2, max: 2 },
@@ -171,7 +171,7 @@ export type TandemAction =
     }>
   | Readonly<{
       readonly action: "cleanup";
-      readonly taskId: string;
+      readonly taskIds: readonly string[];
       readonly discard?: boolean | undefined;
     }>
   | Readonly<{
@@ -274,6 +274,18 @@ async function approvalPrompt(
       message: taskName(view.record.draft.content.goal),
     };
   }
+  if (action.action === "cleanup") {
+    const names = await Promise.all(
+      action.taskIds.map(async (taskId) => taskName((await service.get(taskId)).objective)),
+    );
+    const [only] = names;
+    return names.length === 1 && only !== undefined
+      ? { title: `Delete the worktree for ${only}?`, message: "This discards its changes." }
+      : {
+          title: `Delete the worktrees for ${names.length} tasks?`,
+          message: `${names.map((name) => `- ${name}`).join("\n")}\nThis discards their changes.`,
+        };
+  }
   if (!("taskId" in action)) return { title: "Allow this Tandem action?", message: "" };
   const task = await service.get(action.taskId);
   const name = taskName(task.objective);
@@ -320,8 +332,6 @@ async function approvalPrompt(
             : `Merge PR #${task.pullRequest.number}?`,
         message: `${capitalize(action.method)}, once checks pass.`,
       };
-    case "cleanup":
-      return { title: `Delete the worktree for ${name}?`, message: "This discards its changes." };
     case "review-post": {
       const round = task.prReview?.rounds.at(-1);
       const count = round?.review.comments.length ?? 0;
@@ -538,8 +548,19 @@ export async function executeTandemAction(
       );
     case "cleanup": {
       const input = action.discard === true ? { discard: true, destructiveApproval: true } : {};
+      // One approval covers the batch; a task that can't be cleaned doesn't stop the rest.
+      const lines: string[] = [];
+      for (const taskId of action.taskIds) {
+        try {
+          const task = await service.cleanup(taskId, input);
+          lines.push(`- ${taskName(task.objective)} (${taskId}): cleaned up`);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          lines.push(`- ${taskId}: not cleaned up: ${reason}`);
+        }
+      }
       return textResult(
-        await service.cleanup(action.taskId, input),
+        lines.join("\n"),
         action.action,
         action.discard === true ? true : undefined,
       );
@@ -862,14 +883,13 @@ export function parseTandemCommand(input: string): TandemAction {
         throw new TypeError(`unsupported merge method ${method}`);
       return { action: "merge", taskId: value(1, "merge"), method };
     }
-    case "cleanup":
-      if (words[2] !== undefined && words[2] !== "--discard")
-        throw new TypeError("cleanup accepts only --discard as its optional flag");
-      return {
-        action: "cleanup",
-        taskId: value(1, "cleanup"),
-        ...(words[2] === "--discard" ? { discard: true } : {}),
-      };
+    case "cleanup": {
+      const discard = words.at(-1) === "--discard";
+      const taskIds = words.slice(1, discard ? -1 : undefined);
+      if (taskIds.length === 0 || taskIds.some((taskId) => taskId.startsWith("--")))
+        throw new TypeError("cleanup takes task ids and only --discard as its optional flag");
+      return { action: "cleanup", taskIds, ...(discard ? { discard: true } : {}) };
+    }
     default:
       throw new TypeError(`unknown Tandem command ${command}`);
   }

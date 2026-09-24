@@ -311,7 +311,7 @@ export function registerTandemOmp(
     z
       .object({
         action: z.literal("cleanup"),
-        taskId: z.string(),
+        taskIds: z.array(z.string()).min(1),
         discard: z.boolean().optional(),
       })
       .strict(),
