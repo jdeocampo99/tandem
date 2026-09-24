@@ -38,6 +38,9 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   or closed. Users edit by replying, never in the pane.
 - Every pane operation proves ownership with the coordinator-pane checks (session snapshot, endpoint
   identity, stopped-pane, close verification).
+- With glow installed, the brief opens in glow's pager (`less`) from the top, wrapped at the pane's
+  width; otherwise it prints as plain text. Before a refresh or close, a pane running only that
+  pager gets `q` and must return to its shell; any other program leaves the pane `retained`.
 
 | Status | Meaning |
 | --- | --- |

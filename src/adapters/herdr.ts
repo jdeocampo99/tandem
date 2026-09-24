@@ -179,6 +179,8 @@ export type HerdrCommandResult = Readonly<{
 export type InterruptEndpointInput = Readonly<{
   endpoint: Endpoint;
   cwd: string;
+  /** The key that stops the foreground program; `ctrl+c` unless the program quits another way. */
+  key?: string;
   timeoutMs?: number;
   pollIntervalMs?: number;
 }>;
@@ -408,7 +410,7 @@ function processBasename(value: string): string {
   return withoutPath.replace(/^-/, "").toLowerCase();
 }
 
-function isWorkerProcess(process: HerdrForegroundProcess): boolean {
+export function isWorkerProcess(process: HerdrForegroundProcess): boolean {
   const name = processBasename(process.name);
   const argv0 = process.argv0 === undefined ? undefined : processBasename(process.argv0);
   return (
@@ -1061,7 +1063,7 @@ export async function interruptEndpoint(
     "pane",
     "send-keys",
     input.endpoint.paneId,
-    "ctrl+c",
+    input.key ?? "ctrl+c",
   ]);
   await runChecked(run, request, "herdr pane interrupt");
 
