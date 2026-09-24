@@ -66,9 +66,14 @@ function silentUi(): { readonly ui: Pick<ExtensionContext["ui"], "notify"> } {
   return { ui: { notify: () => undefined } };
 }
 
-function noopAcknowledge(record: TaskRecord): Pick<TandemService, "acknowledge"> {
+function noopAcknowledge(
+  record: TaskRecord,
+): Pick<TandemService, "acknowledge" | "requestReceipt"> {
   return {
     acknowledge: async () => record,
+    requestReceipt: async () => {
+      throw new Error("no receipt in this test");
+    },
   };
 }
 
@@ -395,10 +400,18 @@ test("a finished research wake carries a short report so the coordinator need no
     const store = createTaskStore({ directory, clock: () => NOW, idFactory: () => "unused" });
     const record = await store.read("scout-task");
     if (record === undefined) throw new Error("scout task was not persisted");
+    const savedDetails: string[] = [];
     const deliver = async (): Promise<readonly string[]> => {
       const sent: string[] = [];
       await deliverPendingNotifications({
-        pi: recordingSink(sent),
+        pi: {
+          sendMessage: (message) => {
+            if (typeof message === "string") throw new Error("expected a custom message payload");
+            sent.push(String(message.content));
+            savedDetails.push(JSON.stringify(message.details ?? null));
+          },
+          appendEntry: () => undefined,
+        },
         service: noopAcknowledge(record),
         tasks: [record],
         delivered: new Set<string>(),
@@ -413,6 +426,8 @@ test("a finished research wake carries a short report so the coordinator need no
     expect(hidden).toContain("Full report for task scout-task");
     expect(hidden).toContain("The retry loop drops the final attempt.");
     expect(shown).not.toContain("The retry loop drops the final attempt.");
+    expect(savedDetails.join("\n")).toContain("scout-task");
+    expect(savedDetails.join("\n")).not.toContain("The retry loop drops the final attempt.");
 
     await writeFile(reportPath, "x".repeat(INLINE_RESEARCH_REPORT_MAX_CHARS + 1), "utf8");
     const [longHidden, longShown] = await deliver();

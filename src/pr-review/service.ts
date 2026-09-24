@@ -37,7 +37,15 @@ export type StartPrReviewInput = Readonly<{
 export type StartPrReviewResult =
   | Readonly<{ kind: "started"; taskId: string; message: string }>
   | Readonly<{ kind: "existing"; taskId: string; message: string }>
-  | Readonly<{ kind: "needs-location"; repo: string; paths: readonly string[]; message: string }>
+  | Readonly<{
+      kind: "needs-location";
+      repo: string;
+      paths: readonly string[];
+      /** The question for the user. */
+      message: string;
+      /** What the coordinator does with the user's answer. */
+      nextStep: string;
+    }>
   | Readonly<{ kind: "refused"; message: string }>;
 
 export type ShowPrReviewResult = Readonly<{
@@ -118,6 +126,8 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
         repo: ref.repo,
         paths: location.kind === "ambiguous" ? location.paths : [],
         message: checkoutQuestion(ref.repo, location, input.checkout),
+        nextStep:
+          "Ask the user this, then call review-pr again with checkout set to their path, or clone true if they say to clone it.",
       };
     }
     const lens = input.lens ?? { kind: "full" };
