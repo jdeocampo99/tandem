@@ -227,6 +227,30 @@ export function finalAcceptanceStatus(task: TaskRecord, head: string): FinalAcce
 }
 
 /**
+ * Whether a finished round at `head` can go straight to review. It can when the complete manifest
+ * already passed at this HEAD and policy, or when the round only answered review findings after
+ * every check passed; that round's checks then run once, as the final manifest, after review passes.
+ */
+export function canSkipValidation(task: TaskRecord, head: string): boolean {
+  const scope = task.iterationScope;
+  if (
+    scope !== undefined &&
+    scope.reproduces.length === 0 &&
+    scope.policyDigest === policyIdentity(task.policy)
+  ) {
+    return true;
+  }
+  try {
+    const status = finalAcceptanceStatus(task, head);
+    return status.missing.length === 0 && status.failed.length === 0 && status.stale.length === 0;
+  } catch (error) {
+    // Validation runs anyway so the configuration refusal reaches the user through the runner.
+    if (error instanceof ValidationConfigurationError) return false;
+    throw error;
+  }
+}
+
+/**
  * Chooses the contract for the next validation run: targeted iteration checks when the recorded
  * scope is contained and current, and the complete final manifest otherwise. A targeted plan is
  * never returned once every required lens passes, so a final run always precedes acceptance.
