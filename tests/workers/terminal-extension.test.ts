@@ -6,6 +6,7 @@ import {
   isBackgroundResultWake,
   planAbortWithReason,
   reviewSummary,
+  turnStalled,
   userInterruptedTurn,
 } from "../../src/workers/terminal-extension.ts";
 
@@ -189,4 +190,16 @@ test("a clean review, or one from a job without a round, still reads plainly", (
   };
   expect(reviewSummary(clean, 1)).toBe("Review round 1: approved, no findings.");
   expect(reviewSummary(clean, undefined)).toBe("Review: approved, no findings.");
+});
+
+test("a turn with no tool activity for five minutes is stalled", () => {
+  const quiet = { turnActive: true, toolsRunning: 0, lastActivityAt: 0 };
+  expect(turnStalled({ ...quiet, now: 5 * 60_000 - 1 })).toBe(false);
+  expect(turnStalled({ ...quiet, now: 5 * 60_000 })).toBe(true);
+});
+
+test("a running tool or a finished turn is never stalled", () => {
+  const late = { lastActivityAt: 0, now: 60 * 60_000 };
+  expect(turnStalled({ ...late, turnActive: true, toolsRunning: 1 })).toBe(false);
+  expect(turnStalled({ ...late, turnActive: false, toolsRunning: 0 })).toBe(false);
 });
