@@ -209,67 +209,108 @@ const RECEIPT_STAGE_LABELS: Readonly<Record<RequestWorkKind, string>> = {
 };
 
 /**
- * The receipt as a small table: one line per stage with its working time, tokens, and OMP's
- * estimated list-price cost, then the coordinator's shared line and the request's wall time.
- * A stage whose tokens were never measured says so instead of showing zero.
+ * The receipt as a boxed table: one row per stage with its working time, tokens, and OMP's
+ * estimated list-price cost, the coordinator's shared row, and a total row for the request's own
+ * work, followed by short notes. A figure that was never measured shows as a dash, never zero.
  */
 export function renderRequestReceiptTable(receipt: RequestUsageReceipt): string {
-  const rows: string[][] = [];
+  const rows: ReceiptRow[] = [];
   for (const stage of receipt.breakdown.byWorkKind) {
     if (stage.workKind === "coordinator") continue;
-    const measured = stage.tokens.actualInputTokens + stage.tokens.actualOutputTokens;
-    const unmeasured = measured === 0 && stage.tokens.unavailableSamples > 0;
-    rows.push([
-      RECEIPT_STAGE_LABELS[stage.workKind],
-      formatDuration(stage.activeMs),
-      unmeasured ? "not measured" : `${formatTokens(measured)} tokens`,
-      unmeasured || stage.charges.estimatedSamples + stage.charges.actualSamples === 0
-        ? ""
-        : `~${formatDollars(stage.charges.amountMicros)}`,
-      stage.sampleCount > 1 ? `(${stage.sampleCount} runs)` : "",
-    ]);
+    const runs = stage.sampleCount > 1 ? ` ×${stage.sampleCount}` : "";
+    rows.push({
+      stage: `${RECEIPT_STAGE_LABELS[stage.workKind]}${runs}`,
+      time: formatDuration(stage.activeMs),
+      tokens: measuredTokens(stage.tokens),
+      cost: measuredCost(stage.charges),
+    });
   }
-  if (receipt.coordinator !== undefined && receipt.coordinator.replies > 0) {
-    rows.push([
-      "Coordinator",
-      "shared",
-      `${formatTokens(receipt.coordinator.tokens)} tokens`,
-      `~${formatDollars(receipt.coordinator.costMicros)}`,
-      "(also serves other requests)",
-    ]);
+  const shared = receipt.coordinator !== undefined && receipt.coordinator.replies > 0;
+  if (receipt.coordinator !== undefined && shared) {
+    rows.push({
+      stage: "Coordinator *",
+      time: "shared",
+      tokens: formatTokens(receipt.coordinator.tokens),
+      cost: formatDollars(receipt.coordinator.costMicros),
+    });
   }
-  const widths =
-    rows[0]?.map((_, column) => Math.max(...rows.map((row) => row[column]?.length ?? 0))) ?? [];
-  const lines = rows.map((row) =>
-    row
-      .map((cell, column) => {
-        const width = widths[column] ?? 0;
-        // Labels and notes read left to right; the figures between them line up on the right.
-        return column === 0 || column === row.length - 1
-          ? cell.padEnd(width)
-          : cell.padStart(width);
-      })
-      .join("  ")
-      .trimEnd(),
-  );
   const { timing } = receipt;
-  const working = `${formatDuration(timing.activeMs)} working`;
   const sinceIntake =
     receipt.asOf === undefined || timing.intakeAt === "unavailable"
       ? undefined
       : Date.parse(receipt.asOf) - Date.parse(timing.intakeAt);
-  if (timing.elapsedMs !== "unavailable") {
-    const waiting =
-      timing.waitingMs === "unavailable" ? "" : `, ${formatDuration(timing.waitingMs)} waiting`;
-    lines.push(`Total: ${formatDuration(timing.elapsedMs)} elapsed (${working}${waiting})`);
-  } else if (sinceIntake !== undefined && Number.isFinite(sinceIntake)) {
-    lines.push(`So far: ${formatDuration(sinceIntake)} since the request started (${working})`);
-    lines.push("Still open: work that is running now is added when it finishes.");
-  } else {
-    lines.push(`So far: ${working}; the request is still open.`);
-  }
-  lines.push("Costs are OMP's list-price estimates, not what a subscription is billed.");
-  return [...(receipt.goal === undefined ? [] : [receipt.goal]), ...lines].join("\n");
+  const open = timing.elapsedMs === "unavailable";
+  const wallTime = open ? sinceIntake : timing.elapsedMs;
+  const total: ReceiptRow = {
+    stage: open ? "So far" : "Total",
+    time:
+      wallTime === undefined || typeof wallTime !== "number" || !Number.isFinite(wallTime)
+        ? "—"
+        : formatDuration(wallTime),
+    tokens: measuredTokens(receipt.tokens),
+    cost: measuredCost(receipt.charges),
+  };
+
+  const notes = [
+    typeof timing.waitingMs === "number"
+      ? `${formatDuration(timing.activeMs)} working · ${formatDuration(timing.waitingMs)} waiting`
+      : `${formatDuration(timing.activeMs)} working so far`,
+    ...(open ? ["Still open: work running now is added when it finishes."] : []),
+    ...(shared ? ["* The coordinator also serves other requests, so it is not in the total."] : []),
+    "Costs are OMP's list-price estimates, not what a subscription is billed.",
+  ];
+  return [
+    ...(receipt.goal === undefined ? [] : [receipt.goal, ""]),
+    ...boxedTable([RECEIPT_HEADER, ...rows], total),
+    ...notes,
+  ].join("\n");
+}
+
+type ReceiptRow = Readonly<{ stage: string; time: string; tokens: string; cost: string }>;
+
+const RECEIPT_HEADER: ReceiptRow = {
+  stage: "Stage",
+  time: "Time",
+  tokens: "Tokens",
+  cost: "Est. cost",
+};
+
+const RECEIPT_COLUMNS = ["stage", "time", "tokens", "cost"] as const;
+
+/** Draws rows in a rounded box, with the header and the total set off by rules. */
+function boxedTable(rows: readonly ReceiptRow[], total: ReceiptRow): readonly string[] {
+  const all = [...rows, total];
+  const widths = RECEIPT_COLUMNS.map((column) => Math.max(...all.map((row) => row[column].length)));
+  const rule = (left: string, middle: string, right: string): string =>
+    `${left}${widths.map((width) => "─".repeat(width + 2)).join(middle)}${right}`;
+  const line = (row: ReceiptRow): string =>
+    `│${RECEIPT_COLUMNS.map((column, index) => {
+      const width = widths[index] ?? 0;
+      // The stage reads left to right; the figures line up on the right.
+      const cell = index === 0 ? row[column].padEnd(width) : row[column].padStart(width);
+      return ` ${cell} `;
+    }).join("│")}│`;
+  const [header, ...body] = rows;
+  return [
+    rule("╭", "┬", "╮"),
+    ...(header === undefined ? [] : [line(header)]),
+    rule("├", "┼", "┤"),
+    ...body.map(line),
+    rule("├", "┼", "┤"),
+    line(total),
+    rule("╰", "┴", "╯"),
+  ];
+}
+
+function measuredTokens(tokens: TokenTotals): string {
+  const measured = tokens.actualInputTokens + tokens.actualOutputTokens;
+  return measured === 0 && tokens.unavailableSamples > 0 ? "—" : formatTokens(measured);
+}
+
+function measuredCost(charges: AdditionalCharges): string {
+  return charges.actualSamples + charges.estimatedSamples === 0
+    ? "—"
+    : formatDollars(charges.amountMicros);
 }
 
 function formatDuration(ms: number): string {

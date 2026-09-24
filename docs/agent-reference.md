@@ -1019,12 +1019,19 @@ time, so a later merge cannot move it. When a delivery is first recorded, Tandem
 coordinator notification to show the receipt, and `request-receipt` renders it as a table:
 
 ```text
-Research           12m   180k tokens  ~$0.40
-Implementation     41m   1.2M tokens  ~$2.10  (2 runs)
-Review              8m   300k tokens  ~$0.55
-Validation          6m  not measured
-Coordinator     shared    90k tokens  ~$0.30  (also serves other requests)
-Total: 2h10m elapsed (1h07m working, 1h03m waiting)
+╭───────────────────┬────────┬────────┬───────────╮
+│ Stage             │   Time │ Tokens │ Est. cost │
+├───────────────────┼────────┼────────┼───────────┤
+│ Research          │    12m │   180k │     $0.40 │
+│ Implementation ×2 │    41m │   1.2M │     $2.10 │
+│ Review            │     8m │   300k │     $0.55 │
+│ Validation        │     6m │      — │         — │
+│ Coordinator *     │ shared │    90k │     $0.30 │
+├───────────────────┼────────┼────────┼───────────┤
+│ Total             │  2h10m │   1.7M │     $3.05 │
+╰───────────────────┴────────┴────────┴───────────╯
+1h07m working · 1h03m waiting
+* The coordinator also serves other requests, so it is not in the total.
 ```
 
 A receipt can be checked partway through. `/tandem request-receipt` with no id prints it for the

@@ -278,12 +278,19 @@ test("the receipt table lists each stage, the coordinator apart, and the wall ti
   });
 
   expect(table.split("\n")).toEqual([
-    "Research           12m   180k tokens  ~$0.40",
-    "Implementation     41m   1.2M tokens  ~$2.10  (2 runs)",
-    "Review              8m   300k tokens  ~$0.55",
-    "Validation          6m  not measured",
-    "Coordinator     shared    90k tokens  ~$0.30  (also serves other requests)",
-    "Total: 2h10m elapsed (1h07m working, 1h03m waiting)",
+    "╭───────────────────┬────────┬────────┬───────────╮",
+    "│ Stage             │   Time │ Tokens │ Est. cost │",
+    "├───────────────────┼────────┼────────┼───────────┤",
+    "│ Research          │    12m │   180k │     $0.40 │",
+    "│ Implementation ×2 │    41m │   1.2M │     $2.10 │",
+    "│ Review            │     8m │   300k │     $0.55 │",
+    "│ Validation        │     6m │      — │         — │",
+    "│ Coordinator *     │ shared │    90k │     $0.30 │",
+    "├───────────────────┼────────┼────────┼───────────┤",
+    "│ Total             │  2h10m │   1.7M │     $3.05 │",
+    "╰───────────────────┴────────┴────────┴───────────╯",
+    "1h07m working · 1h03m waiting",
+    "* The coordinator also serves other requests, so it is not in the total.",
     "Costs are OMP's list-price estimates, not what a subscription is billed.",
   ]);
 });
@@ -299,9 +306,16 @@ test("an open request's receipt names its goal and measures up to now", () => {
 
   expect(table.split("\n")).toEqual([
     "Make Settings familiar and consistent",
-    "Research  12m  not measured",
-    "So far: 1h20m since the request started (12m working)",
-    "Still open: work that is running now is added when it finishes.",
+    "",
+    "╭──────────┬───────┬────────┬───────────╮",
+    "│ Stage    │  Time │ Tokens │ Est. cost │",
+    "├──────────┼───────┼────────┼───────────┤",
+    "│ Research │   12m │      — │         — │",
+    "├──────────┼───────┼────────┼───────────┤",
+    "│ So far   │ 1h20m │      — │         — │",
+    "╰──────────┴───────┴────────┴───────────╯",
+    "12m working so far",
+    "Still open: work running now is added when it finishes.",
     "Costs are OMP's list-price estimates, not what a subscription is billed.",
   ]);
 });
