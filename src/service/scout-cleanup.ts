@@ -37,7 +37,7 @@ import {
   isTerminalTask,
   replaceRuntimeTask,
 } from "./records.ts";
-import { taskSourcePath } from "./source.ts";
+import { taskCheckoutPath, taskSourcePath } from "./source.ts";
 import {
   containerRefs,
   otherTaskWork,
@@ -537,7 +537,7 @@ export async function releaseTerminalTaskResources(
     const cleanupFailure =
       task.kind === "pr-review"
         ? undefined
-        : await runCleanupCommands(deps, task.repoPath, runtime.worktree?.path);
+        : await runCleanupCommands(deps, taskCheckoutPath(task), runtime.worktree?.path);
     const settle = async (): Promise<TaskCleanupOutcome> => {
       const lease = runtime.worktree;
       if (lease !== undefined && task.kind === "pr-review") {
@@ -585,7 +585,7 @@ export async function releaseTerminalTaskResources(
       }
       try {
         await releaseWorktree(deps.run, {
-          repo: task.repoPath,
+          repo: taskCheckoutPath(task),
           lease,
           childWorkerStopped: true,
           ...(options.discard === true &&
@@ -666,7 +666,7 @@ async function freeSupersededWorktree(
       ? "only a cancelled or completed implementation task can be freed"
       : await recheckSuperseded(
           deps.run,
-          task.repoPath,
+          taskCheckoutPath(task),
           lease,
           proof,
           containerRefs(
@@ -685,7 +685,7 @@ async function freeSupersededWorktree(
   }
   try {
     await releaseWorktree(deps.run, {
-      repo: task.repoPath,
+      repo: taskCheckoutPath(task),
       lease,
       childWorkerStopped: true,
       discard: true,

@@ -724,6 +724,21 @@ export type TaskRecord = {
   readonly cleanup?: TaskCleanupState;
   /** The pull request a `pr-review` task reviews; present on exactly those tasks. */
   readonly prReview?: PrReviewState;
+  /** The other repository this task works in; absent when it works in the coordinator's own. */
+  readonly target?: TaskTarget;
+};
+
+/**
+ * Another repository a coordinator's task works in. `repoPath` stays the coordinator's project, so
+ * ownership and scope are unchanged; git work happens in `checkout`.
+ */
+export type TaskTarget = {
+  /** GitHub `owner/repo`. */
+  readonly repo: string;
+  /** The user's checkout of it, where task worktrees come from. */
+  readonly checkout: string;
+  /** The default branch the source commit was pinned from; pull requests target it. */
+  readonly branch: string;
 };
 
 export type CommandRequest = {

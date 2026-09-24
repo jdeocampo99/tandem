@@ -18,6 +18,7 @@ import {
   type TaskKind,
   type TaskRecord,
   type TaskStage,
+  type TaskTarget,
   type ValidationContractName,
   type ValidationEvidence,
   type WorktreeLease,
@@ -59,6 +60,7 @@ export type TaskInput = Readonly<{
   readonly skill?: SkillInvocation;
   /** Required for, and only for, a `pr-review` task. */
   readonly prReview?: PrReviewState;
+  readonly target?: TaskTarget;
 }>;
 
 export type TaskTransitionContext = Readonly<{
@@ -298,6 +300,9 @@ function assertTaskInput(input: TaskInput): void {
   }
   if ((input.kind === "pr-review") !== (input.prReview !== undefined)) {
     throw new TypeError("prReview is required for, and only for, pr-review tasks");
+  }
+  if (input.target !== undefined && input.kind === "pr-review") {
+    throw new TypeError("a pr-review task records its repository in prReview, not target");
   }
   if (!isNonEmptyText(input.objective)) {
     throw new TypeError("Task objective must be a non-empty string");
@@ -825,6 +830,7 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
       : { researchHandoffs: [...input.researchHandoffs] }),
     ...(input.skill === undefined ? {} : { skill: { ...input.skill } }),
     ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
+    ...(input.target === undefined ? {} : { target: { ...input.target } }),
     ...(input.kind === "scout"
       ? {
           researchContinuation:

@@ -71,6 +71,10 @@ export type TandemAction =
       readonly researchTaskIds?: readonly string[] | undefined;
       /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
       readonly skill?: SkillInvocation | undefined;
+      readonly targetRepo?: string | undefined;
+      readonly targetCheckout?: string | undefined;
+      readonly targetClone?: boolean | undefined;
+      readonly validationCommands?: readonly string[] | undefined;
     }>
   | Readonly<{ readonly action: "list" }>
   | Readonly<{ readonly action: "presentations" }>
@@ -352,6 +356,12 @@ function serviceCreateInput(
     surfaces: action.surfaces,
     ...(action.researchTaskIds === undefined ? {} : { researchTaskIds: action.researchTaskIds }),
     ...(action.skill === undefined ? {} : { skill: action.skill }),
+    ...(action.targetRepo === undefined ? {} : { targetRepo: action.targetRepo }),
+    ...(action.targetCheckout === undefined ? {} : { targetCheckout: action.targetCheckout }),
+    ...(action.targetClone === undefined ? {} : { targetClone: action.targetClone }),
+    ...(action.validationCommands === undefined
+      ? {}
+      : { validationCommands: action.validationCommands }),
   };
 }
 

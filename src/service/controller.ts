@@ -4,7 +4,7 @@ import { lstat, readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
-import { readCheckpoint } from "../adapters/git.ts";
+import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
@@ -21,6 +21,7 @@ import {
   discoveredProviders,
   resolveBalancedProfile,
 } from "../config/operating-profile.ts";
+import { parsePolicyOverride } from "../config/policy.ts";
 import {
   type OnboardRepoResult,
   onboardRepo,
@@ -45,6 +46,7 @@ import {
   type SteerTaskInput,
   type TaskCommunicationView,
   type TaskRecord,
+  type TaskTarget,
 } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { describeTaskPr, draftProgressDigest, type PrSummary } from "../delivery/evidence.ts";
@@ -68,7 +70,6 @@ import {
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import {
   createPrReviewWorkflow,
-  defaultProjectRoots,
   type PostPrReviewResult,
   type PrReviewEdits,
   type PrReviewWorkflow,
@@ -88,6 +89,13 @@ import {
   reportBlock,
   VALIDATION_RETRY_QUESTION_ID_PREFIX,
 } from "../recovery/central.ts";
+import {
+  checkoutQuestion,
+  defaultProjectRoots,
+  findCheckout,
+  pinDefaultBranch,
+  repoName,
+} from "../repos/locate.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../requests/store.ts";
 import {
   type ApproveRequestBriefInput,
@@ -182,7 +190,7 @@ import {
   workerRoleForTask,
 } from "./records.ts";
 import { releaseTerminalTaskResources, runCleanupCommands } from "./scout-cleanup.ts";
-import { mapTaskSource, SourceInboxWorkflow, taskSourcePath } from "./source.ts";
+import { mapTaskSource, SourceInboxWorkflow, taskCheckoutPath, taskSourcePath } from "./source.ts";
 
 export type CreateTaskRequest = Readonly<{
   readonly repoPath: string;
@@ -199,6 +207,14 @@ export type CreateTaskRequest = Readonly<{
   readonly researchContinuation?: ResearchContinuation;
   /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
   readonly skill?: SkillInvocation;
+  /** Another repository to work in, as GitHub `owner/repo`; absent works in this project. */
+  readonly targetRepo?: string;
+  /** Where the user said the target repository is checked out. */
+  readonly targetCheckout?: string;
+  /** The user said to clone the target repository. */
+  readonly targetClone?: boolean;
+  /** How to check work in a target repository with no saved validation commands, from the brief. */
+  readonly validationCommands?: readonly string[];
 }>;
 /** The internal create request behind `reviewPr`; the generic create action never takes it. */
 type PrReviewTaskRequest = Omit<CreateTaskRequest, "kind"> &
@@ -238,7 +254,7 @@ export type TandemServiceOptions = Readonly<{
   readonly classifyResearchContinuation?: ResearchContinuationClassifier;
   /** The Jev transport, cache, and diagnostics sink review-level assistance is allowed to use. */
   readonly reviewAssistance?: ReviewAssistanceRuntime;
-  /** Folders a PR review crawls for the repository's checkout; see `defaultProjectRoots`. */
+  /** Folders crawled for another repository's checkout; see `defaultProjectRoots`. */
   readonly projectRoots?: readonly string[];
 }>;
 export type TandemService = Readonly<{
@@ -957,17 +973,23 @@ class TandemController {
     const brief =
       requestId === undefined ? undefined : await this.#requests.requireRequest(requestId);
     const classifiedContinuation = await this.continuationFor(input, brief);
+    const pinned = input.kind === "pr-review" ? undefined : await this.pinTarget(input);
     return this.#deps.store.exclusive(async (store) => {
       const source = await mapTaskSource(
         this.#deps.run,
         input.repoPath,
         this.#deps.sourceWorkspace,
       );
-      const policy = await resolveRepoPolicy({
-        repoPath: source.repoPath,
-        home: this.#deps.home,
-        ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
-      });
+      const policy =
+        pinned === undefined
+          ? await resolveRepoPolicy({
+              repoPath: source.repoPath,
+              home: this.#deps.home,
+              ...(source.sourceRepoPath === undefined
+                ? {}
+                : { checkoutPath: source.sourceRepoPath }),
+            })
+          : pinned.policy;
       const researchTaskIds =
         input.researchTaskIds === undefined
           ? undefined
@@ -978,7 +1000,8 @@ class TandemController {
       if (input.researchContinuation !== undefined && input.kind !== "scout") {
         throw new Error("a research continuation disposition is only valid for scout tasks");
       }
-      const checkpoint = await readCheckpoint(this.#deps.run, { repo: source.checkoutPath });
+      const checkpoint =
+        pinned?.checkpoint ?? (await readCheckpoint(this.#deps.run, { repo: source.checkoutPath }));
       const runtime = await readRuntimeState(this.#deps.runtimePath);
       const researchHandoffs = await resolveResearchHandoffs(
         researchTaskIds,
@@ -995,12 +1018,14 @@ class TandemController {
           ...(classifiedContinuation === undefined
             ? {}
             : { researchContinuation: classifiedContinuation }),
+          ...(pinned === undefined ? {} : { target: pinned.target }),
         },
         source.repoPath,
         policy,
       );
       const id = singleLine(this.#deps.idFactory(), "task id");
       if (
+        pinned === undefined &&
         this.#deps.refreshSource !== undefined &&
         (this.#sourceReadyHead === undefined || checkpoint.head !== this.#sourceReadyHead)
       ) {
@@ -1015,7 +1040,11 @@ class TandemController {
         schemaVersion: 1,
         taskId: created.id,
         sourceCheckpoint: checkpoint,
-        ...(source.sourceRepoPath === undefined ? {} : { sourceRepoPath: source.sourceRepoPath }),
+        ...(pinned !== undefined
+          ? { sourceRepoPath: pinned.target.checkout }
+          : source.sourceRepoPath === undefined
+            ? {}
+            : { sourceRepoPath: source.sourceRepoPath }),
         taskName: taskNameFor(created),
         endpoints: [],
         jobs: [],
@@ -1032,6 +1061,74 @@ class TandemController {
       });
       return created;
     });
+  }
+
+  /**
+   * Finds the other repository a create names and pins its default branch. When it is not in
+   * exactly one place, the error is the question to ask; the answer comes back as
+   * `targetCheckout` or `targetClone`.
+   */
+  private async pinTarget(
+    input: CreateTaskRequest,
+  ): Promise<
+    | Readonly<{ target: TaskTarget; checkpoint: GitCheckpoint; policy: TaskRecord["policy"] }>
+    | undefined
+  > {
+    if (input.targetRepo === undefined) {
+      if (
+        input.targetCheckout !== undefined ||
+        input.targetClone !== undefined ||
+        input.validationCommands !== undefined
+      ) {
+        throw new Error("targetCheckout, targetClone, and validationCommands need targetRepo");
+      }
+      return undefined;
+    }
+    const repo = repoName(input.targetRepo);
+    const location = await findCheckout(
+      repo,
+      { checkout: input.targetCheckout, clone: input.targetClone },
+      {
+        home: this.#deps.home,
+        run: this.#deps.run,
+        clock: this.#deps.clock,
+        roots: this.#deps.projectRoots,
+      },
+    );
+    if (location.kind !== "found") {
+      throw new Error(checkoutQuestion(repo, location, input.targetCheckout));
+    }
+    if ((await realpath(location.path)) === (await realpath(input.repoPath))) {
+      throw new Error(`${repo} is this project; create the task without targetRepo`);
+    }
+    const { branch, head } = await pinDefaultBranch(this.#deps.run, location.path, location.remote);
+    const target = { repo, checkout: location.path, branch };
+    return {
+      target,
+      checkpoint: { head, base: head, diff: "", dirty: false, unmerged: false },
+      policy: await this.targetPolicy(input, target),
+    };
+  }
+
+  /**
+   * The target repository's own saved policy and guidance. Implementation there needs validation
+   * commands; when none are saved, the user's answer from the brief supplies them.
+   */
+  private async targetPolicy(
+    input: CreateTaskRequest,
+    target: TaskTarget,
+  ): Promise<TaskRecord["policy"]> {
+    const saved = await resolveRepoPolicy({ repoPath: target.checkout, home: this.#deps.home });
+    const config =
+      input.validationCommands === undefined
+        ? saved.config
+        : parsePolicyOverride({ validationCommands: input.validationCommands }, saved.config);
+    if (input.kind === "implementation" && config.validationCommands.length === 0) {
+      throw new Error(
+        `${target.repo} has no saved validation commands. Ask the user how to check work there (for example "bun test"), add it to the brief, and pass it as validationCommands.`,
+      );
+    }
+    return { ...saved, config };
   }
 
   async list(): Promise<readonly TaskRecord[]> {
@@ -1053,7 +1150,7 @@ class TandemController {
     if (dispatch !== undefined && !dispatch.allowed) {
       throw new Error(`Task ${task.id} cannot be dispatched: ${dispatch.reason}`);
     }
-    if (task.kind === "implementation") {
+    if (task.kind === "implementation" && task.target === undefined) {
       const runtime = await this.runtimeFor(task.id);
       if (runtime === undefined) throw new Error(`Task ${task.id} has no durable runtime metadata`);
       const current = await readCheckpoint(this.#deps.run, {
@@ -1432,13 +1529,13 @@ class TandemController {
         run: this.#deps.run,
         cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home: this.#deps.home }),
       },
-      task.repoPath,
+      taskCheckoutPath(task),
       runtime.worktree?.path,
     );
     if (cleanupFailure !== undefined) await this.setRuntimeError(task.id, cleanupFailure);
     if (runtime.worktree !== undefined) {
       await releaseWorktree(this.#deps.run, {
-        repo: task.repoPath,
+        repo: taskCheckoutPath(task),
         lease: runtime.worktree,
         childWorkerStopped: true,
         ...(discard ? { discard: true, destructiveApproval: true } : {}),

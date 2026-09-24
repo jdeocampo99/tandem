@@ -348,6 +348,22 @@ test("refuses delivery when final evidence was recorded under a superseded polic
   );
 });
 
+test("a task in another repository refuses to publish when its checkout's origin is a fork", async () => {
+  const runner = publishRunner();
+  const target = { repo: "upstream/repo", checkout: "/tmp/upstream", branch: "main" };
+  await expect(
+    publishReviewedTask({
+      task: { ...task(), target },
+      summary,
+      title: "Reviewed delivery",
+      base: "main",
+      approved: true,
+      run: runner.run,
+    }),
+  ).rejects.toThrow("origin is acme/repo, not upstream/repo");
+  expect(runner.calls.some((call) => call.argv.includes("push"))).toBe(false);
+});
+
 test("publishes the exact task branch only after identity checks and avoids duplicate pull requests", async () => {
   const runner = publishRunner();
   const published = await publishReviewedTask({
