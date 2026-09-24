@@ -35,9 +35,11 @@ import {
 } from "./protocol.ts";
 import {
   addReplyUsage,
+  type ReplyUsage,
   readWorkerTerminalCommand,
   replyUsage,
   SUBMIT_REPORT_TOOL,
+  taskUsage,
   traceWorkerTurn,
   WORKER_JOB_PATH_ENV,
   type WorkerTerminalCommand,
@@ -696,6 +698,16 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
 
   pi.on("tool_call", (event) => guardTool(event.toolName) ?? guardReviewShell(event));
 
+  const recordUsage = (usage: ReplyUsage | undefined): void => {
+    if (usage === undefined) return;
+    tokenTally = addReplyUsage(tokenTally, usage);
+    const tally = tokenTally;
+    tallyWrites = tallyWrites
+      .then(() => writeWorkerTokenTally(jobPath, tally))
+      // Token accounting is informational; a failed write must not disturb the worker.
+      .catch(() => undefined);
+  };
+
   pi.on("session_start", async (_event, ctx) => {
     traceWorkerTurn(jobPath, "session_start");
     // Freeze an empty editor before the controller sends the native exit key.
@@ -757,6 +769,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   });
   pi.on("tool_execution_end", (event, ctx) => {
     traceWorkerTurn(jobPath, "tool_end", { tool: event.toolName });
+    if (event.toolName === "task") recordUsage(taskUsage(event.result, tokenTally));
     runningTools.delete(event.toolCallId);
     lastActivityAt = Date.now();
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
@@ -767,15 +780,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     traceWorkerTurn(jobPath, "turn_end");
     turnActive = false;
     runningTools.clear();
-    const reply = replyUsage(event.message);
-    if (reply !== undefined) {
-      tokenTally = addReplyUsage(tokenTally, reply);
-      const tally = tokenTally;
-      tallyWrites = tallyWrites
-        .then(() => writeWorkerTokenTally(jobPath, tally))
-        // Token accounting is informational; a failed write must not disturb the worker.
-        .catch(() => undefined);
-    }
+    recordUsage(replyUsage(event.message));
     void persistState("idle", currentState.completed).catch(() => abort(ctx));
   });
   pi.on("context", (event, ctx) => {

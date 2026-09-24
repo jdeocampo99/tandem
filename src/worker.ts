@@ -32,7 +32,7 @@ export type WorkerRunOptions = Readonly<{
   ) => ExecutionAdmission | PromiseLike<ExecutionAdmission>;
 }>;
 
-const SCOUT_TOOLS = ["read", "grep", "glob", "web_search", SUBMIT_REPORT_TOOL] as const;
+const SCOUT_TOOLS = ["read", "grep", "glob", "web_search", "task", SUBMIT_REPORT_TOOL] as const;
 const READ_ONLY_TOOLS = ["read", "grep", "glob", SUBMIT_REPORT_TOOL] as const;
 const IMPLEMENTER_TOOLS = [
   "read",

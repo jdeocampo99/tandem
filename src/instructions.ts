@@ -194,7 +194,8 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Submit outcome completed, needs-decision, or failed. For a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence.",
     "Put a structured scout report in the report field with findings, evidence, affected paths, risks, and open questions; cite source URLs and separate verified facts from heuristic recommendations. Do not write a report file.",
     "If a required capability is missing or a tool fails, report the exact missing capability or tool failure and do not invent findings, citations, or a complete report.",
-    "Use only read-only tools (read, grep, glob, and web_search) and do not run project-wide tests, builds, formatters, linters, or gates.",
+    "Use only read-only tools (read, grep, glob, web_search, and task with the scout agent) and do not run project-wide tests, builds, formatters, linters, or gates.",
+    "When the scope spans several independent areas, split it across scout subagents in one task call and merge their findings into your single report.",
   ],
   implementer: [
     "Implement only the explicitly approved scope in the assigned worktree and preserve affected callers.",
