@@ -7,6 +7,7 @@ import { matchesKey } from "@oh-my-pi/pi-tui";
 import { runCommand } from "../adapters/commands.ts";
 import { createHerdrStatusReporter, type HerdrAgentState } from "../adapters/herdr-status.ts";
 import type { Finding, ReviewResult } from "../contracts.ts";
+import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import { isBlockingFinding } from "../tasks/findings.ts";
 import {
@@ -651,6 +652,20 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     await persistState("closing", true, confirmed.id);
   };
 
+  /** A PR reviewer's shell may only read; anything else is refused with the reason. */
+  const guardReviewShell = (
+    event: Readonly<{ toolName: string; input: unknown }>,
+  ): { block: true; reason: string } | undefined => {
+    if (job.prReview === undefined || event.toolName !== "bash") return undefined;
+    const command =
+      typeof event.input === "object" && event.input !== null && "command" in event.input
+        ? event.input.command
+        : undefined;
+    const refusal =
+      typeof command === "string" ? readOnlyCommandRefusal(command) : "bash needs a command";
+    return refusal === undefined ? undefined : { block: true, reason: refusal };
+  };
+
   const guardTool = (toolName: string): { block: true; reason: string } | undefined => {
     if (
       !delegatedSettled &&
@@ -668,7 +683,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     };
   };
 
-  pi.on("tool_call", (event) => guardTool(event.toolName));
+  pi.on("tool_call", (event) => guardTool(event.toolName) ?? guardReviewShell(event));
 
   pi.on("session_start", async (_event, ctx) => {
     traceWorkerTurn(jobPath, "session_start");

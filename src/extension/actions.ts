@@ -1,6 +1,14 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { RepoPolicy, RequestBriefContent, SkillInvocation, TaskKind } from "../contracts.ts";
+import type {
+  CreatableTaskKind,
+  RepoPolicy,
+  RequestBriefContent,
+  SkillInvocation,
+} from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
+import type { ReviewVerdict } from "../pr-review/post.ts";
+import type { ReviewLens } from "../pr-review/review.ts";
+import type { CommentEdit } from "../pr-review/service.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
@@ -55,7 +63,7 @@ export type TandemAction =
   | Readonly<{
       readonly action: "create";
       readonly repoPath: string;
-      readonly kind: TaskKind;
+      readonly kind: CreatableTaskKind;
       readonly objective: string;
       readonly acceptanceCriteria: readonly string[];
       readonly manualVerification?: readonly string[] | undefined;
@@ -158,7 +166,36 @@ export type TandemAction =
       readonly action: "cleanup";
       readonly taskId: string;
       readonly discard?: boolean | undefined;
-    }>;
+    }>
+  | Readonly<{
+      readonly action: "review-pr";
+      readonly pullRequest: string;
+      readonly repoPath: string;
+      readonly lens?: "full" | "intent" | "focus" | undefined;
+      /** The user's own words for a focus review, such as "the migration". */
+      readonly focus?: string | undefined;
+      readonly checkout?: string | undefined;
+      readonly clone?: boolean | undefined;
+    }>
+  | Readonly<{
+      readonly action: "review-show";
+      readonly taskId: string;
+      readonly page?: boolean | undefined;
+    }>
+  | Readonly<{ readonly action: "review-notes"; readonly taskId: string }>
+  | Readonly<{
+      readonly action: "review-edit";
+      readonly taskId: string;
+      readonly comments?: readonly CommentEdit[] | undefined;
+      readonly summaryComment?: string | undefined;
+    }>
+  | Readonly<{
+      readonly action: "review-post";
+      readonly taskId: string;
+      readonly verdict: ReviewVerdict;
+    }>
+  | Readonly<{ readonly action: "review-again"; readonly taskId: string }>
+  | Readonly<{ readonly action: "review-close"; readonly taskId: string }>;
 
 export type TandemActionResult = Readonly<{
   readonly action: TandemAction["action"];
@@ -192,7 +229,8 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "publish" ||
     action.action === "publish-now" ||
     action.action === "draft" ||
-    action.action === "merge"
+    action.action === "merge" ||
+    action.action === "review-post"
   );
 }
 function capitalize(value: string): string {
@@ -272,6 +310,18 @@ async function approvalPrompt(
       };
     case "cleanup":
       return { title: `Delete the worktree for ${name}?`, message: "This discards its changes." };
+    case "review-post": {
+      const round = task.prReview?.rounds.at(-1);
+      const count = round?.review.comments.length ?? 0;
+      const target =
+        task.prReview === undefined
+          ? name
+          : `${task.prReview.ref.repo}#${task.prReview.ref.number}`;
+      return {
+        title: `Post your review on ${target}?`,
+        message: `${VERDICT_LABELS[action.verdict]}, with ${count} inline comment${count === 1 ? "" : "s"}. It goes up under your GitHub name.`,
+      };
+    }
     default:
       return { title: "Allow this Tandem action?", message: "" };
   }
@@ -470,7 +520,63 @@ export async function executeTandemAction(
         action.discard === true ? true : undefined,
       );
     }
+    case "review-pr":
+      return textResult(
+        await service.reviewPr({
+          pullRequest: action.pullRequest,
+          repoPath: action.repoPath,
+          ...(action.lens === undefined ? {} : { lens: reviewLens(action.lens, action.focus) }),
+          ...(action.checkout === undefined ? {} : { checkout: action.checkout }),
+          ...(action.clone === undefined ? {} : { clone: action.clone }),
+        }),
+        action.action,
+      );
+    case "review-show":
+      return textResult(
+        await service.reviewShow(
+          action.taskId,
+          action.page === undefined ? {} : { page: action.page },
+        ),
+        action.action,
+      );
+    case "review-notes":
+      return textResult(await service.reviewNotes(action.taskId), action.action);
+    case "review-edit":
+      return textResult(
+        await service.reviewEdit(action.taskId, {
+          ...(action.comments === undefined ? {} : { comments: action.comments }),
+          ...(action.summaryComment === undefined ? {} : { summaryComment: action.summaryComment }),
+        }),
+        action.action,
+      );
+    case "review-post":
+      return textResult(
+        await service.reviewPost(action.taskId, { verdict: action.verdict, approved: true }),
+        action.action,
+        true,
+      );
+    case "review-again":
+      return textResult(await service.reviewAgain(action.taskId), action.action);
+    case "review-close":
+      return textResult(await service.reviewClose(action.taskId), action.action);
   }
+}
+
+const VERDICT_LABELS: Readonly<Record<ReviewVerdict, string>> = {
+  comment: "Comment only",
+  approve: "Approve",
+  "request-changes": "Request changes",
+};
+
+/** A focus lens without the user's words falls back to a full review rather than guessing. */
+export function reviewLens(
+  kind: "full" | "intent" | "focus",
+  focus: string | undefined,
+): ReviewLens {
+  if (kind === "focus" && focus !== undefined && focus.trim().length > 0) {
+    return { kind: "focus", focus: focus.trim() };
+  }
+  return kind === "intent" ? { kind: "intent" } : { kind: "full" };
 }
 
 function parseShellWords(input: string): readonly string[] {

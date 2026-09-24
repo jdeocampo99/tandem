@@ -20,6 +20,8 @@ import { coordinatorToolRefusal } from "./tool-guard.ts";
 export type TandemOmpRegistrationDependencies = Readonly<{
   readonly getService: (ctx: ExtensionContext) => TandemService;
   readonly getHome: (ctx: ExtensionContext) => string;
+  /** The project a routed PR review runs under; without it, PR links go to the coordinator. */
+  readonly getRepo?: (ctx: ExtensionContext) => string;
   readonly promptRouting: PromptRoutingConfig;
   readonly reconcile: (ctx: ExtensionContext, runTick: boolean) => Promise<void>;
   readonly postAction: (ctx: ExtensionContext) => Promise<void>;
@@ -87,6 +89,7 @@ export function registerTandemOmp(
       config: dependencies.promptRouting,
       getService: dependencies.getService,
       getHome: dependencies.getHome,
+      ...(dependencies.getRepo === undefined ? {} : { getRepo: dependencies.getRepo }),
       sendMessage: pi.sendMessage.bind(pi),
     }),
   );
@@ -287,6 +290,56 @@ export function registerTandemOmp(
         discard: z.boolean().optional(),
       })
       .strict(),
+    z
+      .object({
+        action: z.literal("review-pr"),
+        pullRequest: z.string().describe("A GitHub PR URL or owner/repo#123."),
+        repoPath: z.string(),
+        lens: z.enum(["full", "intent", "focus"]).optional(),
+        focus: z
+          .string()
+          .optional()
+          .describe("For lens focus: the user's words, e.g. the migration."),
+        checkout: z.string().optional().describe("A path the user gave for the repository."),
+        clone: z.boolean().optional().describe("True when the user said to clone it."),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("review-show"),
+        taskId: z.string(),
+        page: z.boolean().optional(),
+      })
+      .strict(),
+    z.object({ action: z.literal("review-notes"), taskId: z.string() }).strict(),
+    z
+      .object({
+        action: z.literal("review-edit"),
+        taskId: z.string(),
+        comments: z
+          .array(
+            z
+              .object({
+                id: z.string(),
+                body: z.string().optional(),
+                severity: z.enum(["blocking", "question", "suggestion", "nit"]).optional(),
+                drop: z.boolean().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+        summaryComment: z.string().optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("review-post"),
+        taskId: z.string(),
+        verdict: z.enum(["comment", "approve", "request-changes"]),
+      })
+      .strict(),
+    z.object({ action: z.literal("review-again"), taskId: z.string() }).strict(),
+    z.object({ action: z.literal("review-close"), taskId: z.string() }).strict(),
   ]);
 
   const requestSchema = z.object({ request: actionSchema }).strict();

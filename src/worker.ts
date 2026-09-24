@@ -67,7 +67,10 @@ async function promptWithInitialCommunication(job: WorkerJob): Promise<string> {
   return job.prompt.includes(marker) ? job.prompt : `${job.prompt}\n\n${marker}`;
 }
 
-function toolsForRole(role: WorkerJob["role"]): string {
+function toolsForJob(job: WorkerJob): string {
+  const role = job.role;
+  // The bash tool is limited to read-only git and gh commands by the worker terminal extension.
+  if (job.prReview !== undefined) return [...READ_ONLY_TOOLS, "bash"].join(",");
   if (role === "scout") return SCOUT_TOOLS.join(",");
   if (role === "implementer") return IMPLEMENTER_TOOLS.join(",");
   if (role === "presentation") return PRESENTATION_TOOLS.join(",");
@@ -114,7 +117,7 @@ function buildWorkerCommand(job: WorkerJob, prompt: string, jobPath: string): Co
       "--cwd",
       job.cwd,
       "--tools",
-      toolsForRole(job.role),
+      toolsForJob(job),
       prompt,
     ],
     cwd: job.cwd,

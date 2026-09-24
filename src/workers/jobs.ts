@@ -55,6 +55,11 @@ export type WorkerJob = Readonly<{
   readonly timeoutMs?: number;
   /** The pinned worktree setup commands an implementer runs before OMP starts. */
   readonly setup?: readonly SetupCommand[];
+  /**
+   * A scout job reviewing a pull request: it gets a read-only git/gh shell, and when
+   * `structuredReport` is set its report must be one PrReview JSON object.
+   */
+  readonly prReview?: Readonly<{ readonly structuredReport: boolean }>;
 }>;
 export type WorkerQuestion = Readonly<{
   readonly text: string;
@@ -387,6 +392,10 @@ export function parseWorkerJob(value: unknown): WorkerJob {
   if (setup !== undefined && role !== "implementer") {
     throw new TypeError("setup is only permitted for implementer jobs");
   }
+  const prReview = value.prReview === undefined ? undefined : readPrReviewJob(value.prReview);
+  if (prReview !== undefined && role !== "scout") {
+    throw new TypeError("prReview is only permitted for scout jobs");
+  }
 
   return {
     schemaVersion: 1,
@@ -404,7 +413,15 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     ...(communication === undefined ? {} : { communication }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(setup === undefined ? {} : { setup }),
+    ...(prReview === undefined ? {} : { prReview }),
   };
+}
+
+function readPrReviewJob(value: unknown): NonNullable<WorkerJob["prReview"]> {
+  if (!isRecord(value) || typeof value.structuredReport !== "boolean") {
+    throw new TypeError("prReview must be an object with a boolean structuredReport");
+  }
+  return { structuredReport: value.structuredReport };
 }
 export function parseWorkerResult(value: unknown): WorkerResult {
   if (!isRecord(value)) {

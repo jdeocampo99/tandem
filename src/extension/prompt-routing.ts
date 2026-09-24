@@ -6,10 +6,10 @@ import type {
   InputEventResult,
 } from "@oh-my-pi/pi-coding-agent";
 import {
+  choiceConfidence,
   evaluateJev,
   JEV_MODEL,
   type JevAttemptOutcome,
-  type JevChoiceAnswer,
   JevEvaluationError,
   type JevEvaluationInput,
   type JevEvaluationOptions,
@@ -18,6 +18,8 @@ import {
   type JevQuestions,
   jevUsageRecord,
 } from "../adapters/typesafe.ts";
+import { findPullRequestRef } from "../pr-review/pull-request.ts";
+import { classifyPrReviewPrompt, PR_REVIEW_ROUTE_QUESTION_VERSION } from "../pr-review/route.ts";
 import { appendDiagnosticEvent, type DiagnosticValue } from "../runtime/diagnostics.ts";
 import type { UsageRecord } from "../runtime/usage.ts";
 import type { TandemService } from "../service/controller.ts";
@@ -68,6 +70,8 @@ export type PromptRoutingDependencies = Readonly<{
   readonly config: PromptRoutingConfig;
   readonly getService: (ctx: ExtensionContext) => TandemService;
   readonly getHome: (ctx: ExtensionContext) => string;
+  /** The project a routed PR review runs under; without it, PR links go to the coordinator. */
+  readonly getRepo?: (ctx: ExtensionContext) => string;
   readonly sendMessage: ExtensionAPI["sendMessage"];
   readonly evaluate?: (
     input: JevEvaluationInput,
@@ -166,23 +170,6 @@ export function promptRoutingConfig(
 
 export function extractPromptTaskId(prompt: string): string | undefined {
   return prompt.match(TASK_ID_PATTERN)?.[0];
-}
-
-/**
- * The routed confidence for one choice answer: the lesser of the model's stated confidence
- * and the probability it assigned to its own chosen option. Exported so evaluation tooling can
- * reproduce the same confidence figure from a saved response without a second accounting path.
- */
-export function choiceConfidence(answer: JevChoiceAnswer): number | undefined {
-  const probability = answer.probabilities[answer.choice];
-  if (
-    probability === undefined ||
-    !Number.isFinite(probability) ||
-    !Number.isFinite(answer.confidence)
-  ) {
-    return undefined;
-  }
-  return Math.min(answer.confidence, probability);
 }
 
 function choiceAnswer(
@@ -461,6 +448,8 @@ export async function handlePromptInput(
     return undefined;
   }
 
+  if (findPullRequestRef(prompt) !== undefined) return routePrReview(prompt, ctx, deps);
+
   const evaluation = await classifyPrompt(prompt, deps.config, deps.evaluate, deps.now);
   await recordDiagnostic(
     deps,
@@ -506,6 +495,71 @@ export async function handlePromptInput(
       action: action.action,
       error: "action-failed",
     });
+    await recordDiagnostic(deps, ctx, "prompt-route-failed", {
+      promptHash: promptHash(prompt),
+      action: action.action,
+      error: "action-failed",
+    });
+  }
+  return { handled: true };
+}
+
+/**
+ * A prompt with a PR link either starts a review directly, when Jev is confident it asks for one,
+ * or goes to the coordinator. It never falls through to the read-only lookup routes.
+ */
+async function routePrReview(
+  prompt: string,
+  ctx: ExtensionContext,
+  deps: PromptRoutingDependencies,
+): Promise<InputEventResult | undefined> {
+  const evaluation = await classifyPrReviewPrompt(prompt, deps.config, deps.evaluate, deps.now);
+  await recordDiagnostic(
+    deps,
+    ctx,
+    "prompt-route-evaluated",
+    {
+      promptHash: promptHash(prompt),
+      classifier: "jev",
+      reason: evaluation.reason,
+      durationMs: evaluation.durationMs,
+      questionVersion: PR_REVIEW_ROUTE_QUESTION_VERSION,
+      ...(evaluation.route === undefined ? {} : { lens: evaluation.route.lens.kind }),
+    },
+    evaluation.usage,
+  );
+  const route = evaluation.route;
+  if (route === undefined || deps.getRepo === undefined) {
+    await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
+      promptHash: promptHash(prompt),
+      reason: route === undefined ? evaluation.reason : "no-project",
+    });
+    return undefined;
+  }
+  const action: TandemAction = {
+    action: "review-pr",
+    pullRequest: route.pullRequest,
+    repoPath: deps.getRepo(ctx),
+    lens: route.lens.kind,
+    ...(route.lens.kind === "focus" ? { focus: route.lens.focus } : {}),
+  };
+  try {
+    const result = await executeTandemAction(action, deps.getService(ctx), ctx);
+    sendDisplayedMessage(deps, summarizeTandemActionValue(result.action, result.value), {
+      promptHash: promptHash(prompt),
+      action: action.action,
+    });
+    await recordDiagnostic(deps, ctx, "prompt-route-dispatched", {
+      promptHash: promptHash(prompt),
+      action: action.action,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    sendDisplayedMessage(
+      deps,
+      `Tandem review-pr failed: ${compactText(message, ACTION_RESULT_MAX_CHARS)}`,
+      { promptHash: promptHash(prompt), action: action.action, error: "action-failed" },
+    );
     await recordDiagnostic(deps, ctx, "prompt-route-failed", {
       promptHash: promptHash(prompt),
       action: action.action,
