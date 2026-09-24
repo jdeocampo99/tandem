@@ -5,7 +5,8 @@ rounds, and how review depth is classified.
 
 Code: src/tasks/acceptance.ts, src/tasks/findings.ts, src/tasks/review-brief.ts,
 src/tasks/review-levels.ts, src/tasks/review-assistance.ts, src/tasks/lifecycle.ts,
-src/validation-worker.ts, src/workers/validation.ts, src/workers/protocol.ts, src/instructions.ts
+src/validation-worker.ts, src/workers/validation.ts, src/workers/protocol.ts, src/workers/review-round.ts,
+src/workers/prompts.ts, src/instructions.ts
 
 ## Review
 

@@ -13,7 +13,7 @@ import type {
 } from "../contracts.ts";
 import { activeRuntimeJob, unreleasedReservation } from "../runtime/activity.ts";
 import type { RuntimeRecoveryState, RuntimeTaskState } from "../runtime/schema.ts";
-import type { ReservationRefusal } from "../workers/workflow.ts";
+import type { ReservationRefusal } from "../workers/admission.ts";
 
 /** Prefix shared by every recovery question id, so an answer path can recognize one. */
 export const RECOVERY_QUESTION_ID_PREFIX = "recovery-";
