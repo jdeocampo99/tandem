@@ -1,5 +1,3 @@
-import { realpath } from "node:fs/promises";
-import { resolve } from "node:path";
 import { readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
@@ -21,14 +19,12 @@ import type {
   RuntimeTaskState,
 } from "../runtime/schema.ts";
 import {
-  absoluteDirectory,
   currentWriter,
   DEFAULT_STARTUP_GRACE_MS,
   describeError,
   isMissing,
   isMissingEndpoint,
   isOlderThan,
-  isRecord,
   replaceRuntimeTask,
   singleLine,
   text,
@@ -44,50 +40,20 @@ import {
 } from "../workers/terminal-control.ts";
 import type { OperationClaim } from "../workers/workflow.ts";
 import { appendTaskMessage } from "./communication-protocol.ts";
-import { type TaskEvent, type TaskTransitionContext, transitionTask } from "./lifecycle.ts";
-import type { TaskStore } from "./store.ts";
+import { recoverEndpointFromLaunch, sameEndpointLaunch } from "./endpoint-launch.ts";
+import {
+  isActiveTask,
+  type TaskEvent,
+  type TaskTransitionContext,
+  transitionTask,
+} from "./lifecycle.ts";
+import type { TaskStore, TaskStoreTransaction } from "./store.ts";
 
 type ControlAction = "pause" | "cancel";
-type HerdrWorkspaceObservation = Readonly<{
-  readonly workspaceId: string;
-  readonly activeTabId: string;
-  readonly label: string;
-}>;
-type HerdrPaneObservation = Readonly<{
-  readonly paneId: string;
-  readonly tabId: string;
-  readonly workspaceId: string;
-  readonly cwd: string;
-  readonly foregroundCwd: string | undefined;
-}>;
-type EndpointLaunchRecovery =
-  | Readonly<{ readonly status: "recovered"; readonly endpoint: Endpoint }>
-  | Readonly<{ readonly status: "pending"; readonly detail: string }>
-  | Readonly<{ readonly status: "ambiguous"; readonly detail: string }>;
 type OwnedEndpointProbe = Readonly<{
   readonly status: "active" | "stopped" | "missing" | "rejected";
   readonly detail: string | undefined;
 }>;
-
-function sameEndpointLaunch(
-  left: DurableEndpointLaunch | undefined,
-  right: DurableEndpointLaunch,
-): boolean {
-  return (
-    left !== undefined &&
-    left.schemaVersion === right.schemaVersion &&
-    left.reservationId === right.reservationId &&
-    left.operationId === right.operationId &&
-    left.sessionId === right.sessionId &&
-    left.taskName === right.taskName &&
-    left.workspaceLabel === right.workspaceLabel &&
-    left.cwd === right.cwd &&
-    left.role === right.role &&
-    left.generation === right.generation &&
-    left.createdAt === right.createdAt &&
-    left.parentWorkspaceId === right.parentWorkspaceId
-  );
-}
 type TerminalResultProbe =
   | Readonly<{ readonly status: "valid" }>
   | Readonly<{ readonly status: "missing" }>
@@ -96,6 +62,25 @@ type ResumeResourceCheck = Readonly<{
   readonly failure: string | undefined;
   readonly abandonedJobIds: readonly string[];
   readonly terminalJobIds: readonly string[];
+}>;
+type PreparedStop =
+  | Readonly<{
+      readonly kind: "terminal";
+      readonly task: TaskRecord;
+      readonly runtime: RuntimeTaskState | undefined;
+    }>
+  | Readonly<{
+      readonly kind: "active";
+      readonly task: TaskRecord;
+      readonly runtime: RuntimeTaskState;
+      readonly event: TaskEvent;
+    }>;
+/** A launch recovery problem to record, and the block to apply when it can no longer wait. */
+type LaunchFailure = Readonly<{
+  readonly claim: OperationClaim | undefined;
+  readonly launch: DurableEndpointLaunch;
+  readonly reason: string;
+  readonly blockCause?: BlockCause;
 }>;
 
 export type TaskControlDependencies = Readonly<{
@@ -127,199 +112,175 @@ export type TaskControlDependencies = Readonly<{
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
 }>;
 
-function parseHerdrPayload(raw: string, operation: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch (error) {
-    throw new Error(`${operation} returned invalid JSON: ${describeError(error)}`, {
-      cause: error,
-    });
-  }
-  if (!isRecord(parsed)) throw new Error(`${operation} returned a non-object response`);
-  return parsed;
+const REDIRECT_STAGES: readonly TaskRecord["stage"][] = [
+  "validating",
+  "reviewing",
+  "ready",
+  "awaiting-fixes",
+];
+
+function workerCwd(task: TaskRecord, runtime: RuntimeTaskState): string {
+  return runtime.worktree?.path ?? taskSourcePath(task, runtime);
 }
 
-async function readHerdrPayload(
-  run: CommandRunner,
-  sessionId: string,
-  cwd: string,
-  args: readonly string[],
-  operation: string,
-): Promise<Record<string, unknown>> {
-  const result = await run({
-    argv: ["herdr", "--session", singleLine(sessionId, "sessionId"), ...args],
-    cwd: absoluteDirectory(cwd, "cwd"),
-  });
-  if (result.code !== 0) {
-    const detail = result.stderr.trim().length === 0 ? result.stdout.trim() : result.stderr.trim();
-    throw new Error(`${operation} failed with exit code ${result.code}: ${detail}`);
-  }
-  return parseHerdrPayload(result.stdout, operation);
+function operationClaim(runtime: RuntimeTaskState): OperationClaim | undefined {
+  const operation = runtime.operation;
+  return operation === undefined
+    ? undefined
+    : {
+        id: operation.id,
+        fencingRevision: operation.fencingRevision,
+        claimOwner: operation.claimOwner,
+      };
 }
 
-function herdrResult(payload: Record<string, unknown>, operation: string): Record<string, unknown> {
-  const result = payload.result;
-  if (!isRecord(result)) throw new Error(`${operation} response.result must be an object`);
-  return result;
+/** With no claim, only a runtime with no operation is owned; otherwise the claim must match it. */
+function claimOwnsOperation(
+  operation: RuntimeTaskState["operation"],
+  claim: OperationClaim | undefined,
+): boolean {
+  return claim === undefined
+    ? operation === undefined
+    : operation?.id === claim.id &&
+        operation.claimOwner === claim.claimOwner &&
+        operation.fencingRevision === claim.fencingRevision;
 }
 
-function requiredHerdrText(value: unknown, field: string, operation: string): string {
-  try {
-    return singleLine(value, field);
-  } catch (error) {
-    throw new Error(`${operation} ${field} is invalid: ${describeError(error)}`, { cause: error });
-  }
+/** The runtime still holds exactly this launch, under this claim, with no stop requested. */
+function launchStillClaimed(
+  current: RuntimeTaskState | undefined,
+  launch: DurableEndpointLaunch,
+  claim: OperationClaim | undefined,
+): boolean {
+  return (
+    current !== undefined &&
+    current.stopRequest === undefined &&
+    claimOwnsOperation(current.operation, claim) &&
+    current.reservation?.id === launch.reservationId &&
+    current.reservation?.operationId === launch.operationId &&
+    sameEndpointLaunch(current.endpointLaunch, launch)
+  );
 }
 
-function parseHerdrWorkspaces(
-  payload: Record<string, unknown>,
-  operation: string,
-): readonly HerdrWorkspaceObservation[] {
-  const workspaces = herdrResult(payload, operation).workspaces;
-  if (!Array.isArray(workspaces))
-    throw new Error(`${operation} response.result.workspaces must be an array`);
-  return workspaces.map((value, index) => {
-    if (!isRecord(value)) throw new Error(`${operation} workspace ${index} must be an object`);
-    return {
-      workspaceId: requiredHerdrText(
-        value.workspace_id,
-        `workspace[${index}].workspace_id`,
-        operation,
-      ),
-      activeTabId: requiredHerdrText(
-        value.active_tab_id,
-        `workspace[${index}].active_tab_id`,
-        operation,
-      ),
-      label: requiredHerdrText(value.label, `workspace[${index}].label`, operation),
-    };
-  });
+function stopEvent(action: ControlAction, reason: string | undefined): TaskEvent {
+  return action === "pause"
+    ? { type: "pause", reason: reason ?? "paused by coordinator" }
+    : { type: "cancel", ...(reason === undefined ? {} : { reason }) };
 }
 
-function parseHerdrPanes(
-  payload: Record<string, unknown>,
-  operation: string,
-): readonly HerdrPaneObservation[] {
-  const panes = herdrResult(payload, operation).panes;
-  if (!Array.isArray(panes)) throw new Error(`${operation} response.result.panes must be an array`);
-  return panes.map((value, index) => {
-    if (!isRecord(value)) throw new Error(`${operation} pane ${index} must be an object`);
-    const foregroundCwd =
-      value.foreground_cwd === undefined
-        ? undefined
-        : requiredHerdrText(value.foreground_cwd, `pane[${index}].foreground_cwd`, operation);
-    return {
-      paneId: requiredHerdrText(value.pane_id, `pane[${index}].pane_id`, operation),
-      tabId: requiredHerdrText(value.tab_id, `pane[${index}].tab_id`, operation),
-      workspaceId: requiredHerdrText(value.workspace_id, `pane[${index}].workspace_id`, operation),
-      cwd: requiredHerdrText(value.cwd, `pane[${index}].cwd`, operation),
-      foregroundCwd,
-    };
-  });
+/** Only the implementer or scout pane survives a redirect, renumbered to the new generation. */
+function workerEndpoints(endpoints: readonly Endpoint[], generation: number): Endpoint[] {
+  return endpoints
+    .filter((endpoint) => endpoint.role === "scout" || endpoint.role === "implementer")
+    .map((endpoint) => ({ ...endpoint, generation }));
 }
 
-async function samePhysicalDirectory(expected: string, actual: string): Promise<boolean> {
-  try {
-    const [expectedPath, actualPath] = await Promise.all([realpath(expected), realpath(actual)]);
-    return expectedPath === actualPath;
-  } catch {
-    return resolve(expected) === resolve(actual);
+/**
+ * Clears the stop request after every owned worker was proven stopped: abandoned jobs fail, and the
+ * reservation is released once nothing active remains to hold it.
+ */
+function releaseStoppedRuntime(
+  current: RuntimeTaskState,
+  resources: ResumeResourceCheck,
+  clock: Clock,
+): RuntimeTaskState {
+  const abandonedJobIds = new Set(resources.abandonedJobIds);
+  const { stopRequest: _stopRequest, lastError: _lastError, ...withoutControl } = current;
+  const jobs: readonly DurableJob[] =
+    abandonedJobIds.size === 0
+      ? current.jobs
+      : current.jobs.map(
+          (job): DurableJob =>
+            abandonedJobIds.has(job.id)
+              ? {
+                  ...job,
+                  phase: "failed",
+                  error:
+                    "worker stopped before writing a terminal result; continuation will be dispatched",
+                }
+              : job,
+        );
+  // Every owned worker was just proven stopped, so a quarantined operation's outcome is no
+  // longer uncertain: nothing it started is still running. Settle it here rather than leave a
+  // stored "uncertain" that would refuse every relaunch.
+  const settlesQuarantine =
+    withoutControl.operation?.phase === "quarantined" &&
+    resources.terminalJobIds.length === 0 &&
+    !jobs.some(activeRuntimeJob);
+  const operation =
+    settlesQuarantine && withoutControl.operation !== undefined
+      ? { operation: { ...withoutControl.operation, phase: "failed" as const } }
+      : {};
+  const reservation = withoutControl.reservation;
+  if (
+    (abandonedJobIds.size === 0 && !settlesQuarantine) ||
+    jobs.some(activeRuntimeJob) ||
+    reservation === undefined ||
+    reservation.phase === "released"
+  ) {
+    return { ...withoutControl, ...operation, jobs };
   }
-}
-
-export async function recoverEndpointFromLaunch(
-  run: CommandRunner,
-  intent: DurableEndpointLaunch,
-): Promise<EndpointLaunchRecovery> {
-  let workspaces: readonly HerdrWorkspaceObservation[];
-  try {
-    workspaces = parseHerdrWorkspaces(
-      await readHerdrPayload(
-        run,
-        intent.sessionId,
-        intent.cwd,
-        ["workspace", "list"],
-        "herdr workspace list",
-      ),
-      "herdr workspace list",
-    );
-  } catch (error) {
-    return {
-      status: "pending",
-      detail: `workspace recovery is unavailable: ${describeError(error)}`,
-    };
-  }
-  const matches = workspaces.filter((workspace) => workspace.label === intent.workspaceLabel);
-  if (matches.length === 0) {
-    return {
-      status: "pending",
-      detail: `no Herdr workspace has label ${JSON.stringify(intent.workspaceLabel)}`,
-    };
-  }
-  if (matches.length !== 1) {
-    return {
-      status: "ambiguous",
-      detail: `Herdr workspace label ${JSON.stringify(intent.workspaceLabel)} matched ${matches.length} workspaces`,
-    };
-  }
-  const workspace = matches[0];
-  if (workspace === undefined) {
-    return { status: "pending", detail: "Herdr workspace recovery returned no selected workspace" };
-  }
-  let panes: readonly HerdrPaneObservation[];
-  try {
-    panes = parseHerdrPanes(
-      await readHerdrPayload(
-        run,
-        intent.sessionId,
-        intent.cwd,
-        ["pane", "list", "--workspace", workspace.workspaceId],
-        "herdr pane list",
-      ),
-      "herdr pane list",
-    );
-  } catch (error) {
-    return { status: "pending", detail: `pane recovery is unavailable: ${describeError(error)}` };
-  }
-  const candidates: HerdrPaneObservation[] = [];
-  for (const pane of panes) {
-    if (pane.workspaceId !== workspace.workspaceId || pane.tabId !== workspace.activeTabId)
-      continue;
-    if (!(await samePhysicalDirectory(intent.cwd, pane.cwd))) continue;
-    if (
-      pane.foregroundCwd !== undefined &&
-      !(await samePhysicalDirectory(intent.cwd, pane.foregroundCwd))
-    ) {
-      continue;
-    }
-    candidates.push(pane);
-  }
-  if (candidates.length === 0) {
-    return {
-      status: "pending",
-      detail: `workspace ${workspace.workspaceId} has no unique root pane at ${intent.cwd}`,
-    };
-  }
-  if (candidates.length !== 1) {
-    return {
-      status: "ambiguous",
-      detail: `workspace ${workspace.workspaceId} has ${candidates.length} matching root panes`,
-    };
-  }
-  const pane = candidates[0];
-  if (pane === undefined)
-    return { status: "pending", detail: "Herdr root pane recovery returned no pane" };
   return {
-    status: "recovered",
-    endpoint: {
-      sessionId: intent.sessionId,
-      workspaceId: workspace.workspaceId,
-      tabId: pane.tabId,
-      paneId: pane.paneId,
-      role: intent.role,
-      generation: intent.generation,
-    },
+    ...withoutControl,
+    ...operation,
+    jobs,
+    reservation: { ...reservation, phase: "released", releasedAt: clock() },
+  };
+}
+
+function cancelledRuntime(current: RuntimeTaskState, clock: Clock): RuntimeTaskState {
+  const { stopRequest: _stopRequest, ...withoutStopRequest } = current;
+  const jobs = current.jobs.map((job) =>
+    activeRuntimeJob(job)
+      ? { ...job, phase: "failed" as const, error: "worker stopped after task cancellation" }
+      : job,
+  );
+  return {
+    ...withoutStopRequest,
+    endpoints: [],
+    jobs,
+    ...(current.operation === undefined
+      ? {}
+      : { operation: { ...current.operation, phase: "cancelled" as const } }),
+    ...(current.reservation === undefined || current.reservation.phase === "released"
+      ? {}
+      : {
+          reservation: {
+            ...current.reservation,
+            phase: "released" as const,
+            releasedAt: clock(),
+          },
+        }),
+  };
+}
+
+function redirectedRuntime(
+  current: RuntimeTaskState,
+  generation: number,
+  clock: Clock,
+): RuntimeTaskState {
+  const jobs = current.jobs.map((job) =>
+    activeRuntimeJob(job)
+      ? { ...job, phase: "failed" as const, error: "job invalidated by newer user instruction" }
+      : job,
+  );
+  const reservation = current.reservation;
+  const {
+    stopRequest: _stopRequest,
+    fixContextPath: _fixContextPath,
+    ...withoutTransient
+  } = current;
+  return {
+    ...withoutTransient,
+    // Every owned worker was proven stopped before the redirect, which answers a quarantined outcome.
+    ...(current.operation?.phase === "quarantined"
+      ? { operation: { ...current.operation, phase: "failed" as const } }
+      : {}),
+    endpoints: workerEndpoints(current.endpoints, generation),
+    jobs,
+    ...(reservation === undefined
+      ? {}
+      : { reservation: { ...reservation, phase: "released" as const, releasedAt: clock() } }),
   };
 }
 
@@ -330,14 +291,12 @@ export class TaskControlWorkflow {
     this.#deps = deps;
   }
 
-  private async mutateIfOperationClaim(
-    task: TaskRecord,
-    claim: OperationClaim | undefined,
-    reason: string,
-    block: boolean,
-    expectedLaunch?: DurableEndpointLaunch,
-    cause?: BlockCause,
-  ): Promise<boolean> {
+  /**
+   * Records a launch recovery problem while the launch is still this claim's, and blocks an open
+   * task when `blockCause` is given. Returns false, changing nothing, once the launch moved on.
+   */
+  private async recordLaunchFailure(task: TaskRecord, failure: LaunchFailure): Promise<boolean> {
+    const { claim, launch, reason, blockCause } = failure;
     return withStateLock(this.#deps.home, async () =>
       this.#deps.store.exclusive(async (store) => {
         const currentTask = await store.read(task.id);
@@ -345,38 +304,14 @@ export class TaskControlWorkflow {
           return false;
         }
         const state = await readRuntimeState(this.#deps.runtimePath);
-        const current = taskRuntime(state, task.id);
-        const operation = current?.operation;
-        const owns =
-          claim === undefined
-            ? operation === undefined
-            : operation?.id === claim.id &&
-              operation.claimOwner === claim.claimOwner &&
-              operation.fencingRevision === claim.fencingRevision;
+        if (!launchStillClaimed(taskRuntime(state, task.id), launch, claim)) return false;
+        await writeRuntimeState(
+          this.#deps.runtimePath,
+          replaceRuntimeTask(state, task.id, (entry) => ({ ...entry, lastError: reason })),
+        );
         if (
-          !owns ||
-          (expectedLaunch !== undefined &&
-            (current?.reservation?.id !== expectedLaunch.reservationId ||
-              current?.reservation?.operationId !== expectedLaunch.operationId ||
-              !sameEndpointLaunch(current?.endpointLaunch, expectedLaunch))) ||
-          current?.stopRequest !== undefined
-        ) {
-          return false;
-        }
-        if (current !== undefined) {
-          await writeRuntimeState(
-            this.#deps.runtimePath,
-            replaceRuntimeTask(state, task.id, (entry) => ({
-              ...entry,
-              lastError: reason,
-            })),
-          );
-        }
-        if (
-          block &&
-          currentTask.stage !== "cancelled" &&
-          currentTask.stage !== "completed" &&
-          currentTask.stage !== "merged" &&
+          blockCause !== undefined &&
+          isActiveTask(currentTask) &&
           currentTask.stage !== "paused" &&
           currentTask.stage !== "blocked"
         ) {
@@ -385,8 +320,8 @@ export class TaskControlWorkflow {
               entry,
               {
                 type: "block",
-                reason: text(cause?.summary ?? reason, "block reason"),
-                ...(cause === undefined ? {} : { cause }),
+                reason: text(blockCause.summary, "block reason"),
+                cause: blockCause,
               },
               this.#deps.context(),
             ),
@@ -396,29 +331,21 @@ export class TaskControlWorkflow {
       }),
     );
   }
+
   async reconcileEndpointLaunch(
     task: TaskRecord,
     runtime: RuntimeTaskState,
   ): Promise<RuntimeTaskState | undefined> {
     const launch = runtime.endpointLaunch;
     if (launch === undefined) return runtime;
-    const claim: OperationClaim | undefined =
-      runtime.operation === undefined
-        ? undefined
-        : {
-            id: runtime.operation.id,
-            fencingRevision: runtime.operation.fencingRevision,
-            claimOwner: runtime.operation.claimOwner,
-          };
+    const claim = operationClaim(runtime);
     if (runtime.stopRequest !== undefined) return runtime;
     if (runtime.reservation?.ownerSessionId !== this.#deps.sessionId) {
-      await this.mutateIfOperationClaim(
-        task,
+      await this.recordLaunchFailure(task, {
         claim,
-        "endpoint launch is owned by another session; recovery was not attempted",
-        false,
         launch,
-      );
+        reason: "endpoint launch is owned by another session; recovery was not attempted",
+      });
       return undefined;
     }
     return withStateLock(this.#deps.home, async () => {
@@ -428,37 +355,32 @@ export class TaskControlWorkflow {
           recovery.status === "ambiguous"
             ? `endpoint recovery is ambiguous: ${recovery.detail}`
             : `endpoint recovery is pending: ${recovery.detail}`;
-        await this.mutateIfOperationClaim(
-          task,
-          claim,
-          reason,
+        const block =
           recovery.status === "ambiguous" ||
-            isOlderThan(launch.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS),
+          isOlderThan(launch.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS);
+        await this.recordLaunchFailure(task, {
+          claim,
           launch,
-          {
-            group: "lost-resource",
-            kind: "resource-lost",
-            summary: "Tandem couldn't find the worker's terminal after a restart.",
-            detail: reason,
-          },
-        );
+          reason,
+          ...(block
+            ? {
+                blockCause: {
+                  group: "lost-resource",
+                  kind: "resource-lost",
+                  summary: "Tandem couldn't find the worker's terminal after a restart.",
+                  detail: reason,
+                },
+              }
+            : {}),
+        });
         return undefined;
       }
       const currentTask = await this.#deps.getTask(task.id);
       const current = await this.#deps.runtimeFor(task.id);
       if (
-        current === undefined ||
-        current.stopRequest !== undefined ||
-        current.reservation?.id !== launch.reservationId ||
-        current.reservation?.ownerSessionId !== this.#deps.sessionId ||
-        current.reservation?.operationId !== launch.operationId ||
-        !sameEndpointLaunch(current.endpointLaunch, launch) ||
-        (claim === undefined
-          ? launch.operationId !== undefined || current.operation !== undefined
-          : launch.operationId !== claim.id ||
-            current.operation?.id !== claim.id ||
-            current.operation?.claimOwner !== claim.claimOwner ||
-            current.operation?.fencingRevision !== claim.fencingRevision) ||
+        !launchStillClaimed(current, launch, claim) ||
+        current?.reservation?.ownerSessionId !== this.#deps.sessionId ||
+        launch.operationId !== claim?.id ||
         currentTask.generation !== launch.generation
       ) {
         return undefined;
@@ -466,17 +388,12 @@ export class TaskControlWorkflow {
       try {
         await this.#deps.saveEndpoint(task.id, recovery.endpoint, claim);
       } catch (error) {
-        if (
-          !(await this.mutateIfOperationClaim(
-            task,
-            claim,
-            `recovered endpoint identity could not be persisted: ${describeError(error)}`,
-            false,
-            launch,
-          ))
-        ) {
-          return undefined;
-        }
+        const recorded = await this.recordLaunchFailure(task, {
+          claim,
+          launch,
+          reason: `recovered endpoint identity could not be persisted: ${describeError(error)}`,
+        });
+        if (!recorded) return undefined;
       }
       return this.#deps.runtimeFor(task.id);
     });
@@ -489,112 +406,140 @@ export class TaskControlWorkflow {
     discard = false,
   ): Promise<TaskRecord> {
     return withStateLock(this.#deps.home, async () => {
-      const prepared = await this.#deps.store.exclusive(async (store) => {
-        const task = await store.read(taskId);
-        if (task === undefined || !(await this.#deps.taskInScope(task))) {
-          throw new Error(`task ${taskId} is missing`);
-        }
-        const terminal =
-          task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged";
-        const state = await readRuntimeState(this.#deps.runtimePath);
-        const runtime = taskRuntime(state, taskId);
-        if (terminal) return { kind: "terminal" as const, task, runtime };
-        if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
-        const event: TaskEvent =
-          action === "pause"
-            ? { type: "pause", reason: reason ?? "paused by coordinator" }
-            : { type: "cancel", ...(reason === undefined ? {} : { reason }) };
-        const stopRequest: DurableStopRequest = {
-          schemaVersion: 1,
-          action,
-          generation: task.generation,
-          requestedAt: this.#deps.clock(),
-          ...(action === "cancel" && discard ? { discard: true } : {}),
-        };
-        await writeRuntimeState(
-          this.#deps.runtimePath,
-          replaceRuntimeTask(state, taskId, (current) => ({
-            ...current,
-            stopRequest,
-            lastError: `${action} requested`,
-          })),
-        );
-        return { kind: "active" as const, task, runtime, event };
-      });
+      const prepared = await this.requestStop(taskId, action, reason, discard);
       if (prepared.kind === "terminal") {
         if (prepared.runtime !== undefined) {
-          const resources = await this.inspectOwnedResources(prepared.task, prepared.runtime);
-          if (
-            resources.failure !== undefined ||
-            resources.abandonedJobIds.length > 0 ||
-            resources.terminalJobIds.length > 0
-          ) {
-            throw new Error(
-              `cannot confirm task ${taskId} is stopped: ${
-                resources.failure ?? "a durable worker job remains"
-              }`,
-            );
-          }
+          await this.assertOwnedResourcesStopped(prepared.task, prepared.runtime);
         }
         return prepared.task;
       }
       const { task, runtime, event } = prepared;
-      const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
-      let stopFailure: string | undefined;
-      for (const endpoint of runtime.endpoints) {
-        const job = workerJobForEndpoint(runtime.jobs, endpoint);
-        try {
-          await pauseWorkerTerminal(this.#deps.run, {
-            endpoint,
-            cwd,
-            ...(job === undefined ? {} : { job }),
-          });
-          const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-          if (!(await workerDelegationStopped(inspection, job))) {
-            stopFailure = `pane ${endpoint.paneId} still has an active worker`;
-          }
-        } catch (error) {
-          if (isMissingEndpoint(error)) continue;
-          stopFailure = `pane ${endpoint.paneId} could not be proven stopped: ${describeError(error)}`;
-        }
-      }
-      if (runtime.jobs.some(activeRuntimeJob) && runtime.endpoints.length === 0) {
-        stopFailure = "a durable worker job has no endpoint identity";
-      }
-
+      const stopFailure = await this.pauseOwnedWorkers(task, runtime);
       return this.#deps.store.exclusive(async (store) => {
         const current = await store.read(taskId);
         if (current === undefined) throw new Error(`task ${taskId} is missing`);
-        const state = await readRuntimeState(this.#deps.runtimePath);
         if (stopFailure !== undefined) {
-          const blockedReason = `could not safely ${action} task ${taskId}: ${stopFailure}`;
-          const cause: BlockCause = {
-            group: "lost-resource",
-            kind: "resource-lost",
-            summary: `Tandem couldn't confirm the worker stopped, so it couldn't ${action} the task.`,
-            detail: blockedReason,
-          };
-          const failedState = replaceRuntimeTask(state, taskId, (entry) => ({
-            ...entry,
-            lastError: blockedReason,
-          }));
-          await writeRuntimeState(this.#deps.runtimePath, failedState);
-          const blocked =
-            current.stage === "paused" || current.stage === "blocked"
-              ? current
-              : transitionTask(
-                  current,
-                  { type: "block", reason: cause.summary, cause },
-                  this.#deps.context(),
-                );
-          if (blocked !== current) await store.update(current.id, current.revision, () => blocked);
-          return blocked;
+          return this.blockUnstoppedTask(store, current, action, stopFailure);
         }
         const planned = transitionTask(current, event, this.#deps.context());
         await store.update(current.id, current.revision, () => planned);
         return planned;
       });
     });
+  }
+
+  /** Durably records the stop request for a live task; a finished task needs none. */
+  private async requestStop(
+    taskId: string,
+    action: ControlAction,
+    reason: string | undefined,
+    discard: boolean,
+  ): Promise<PreparedStop> {
+    return this.#deps.store.exclusive(async (store) => {
+      const task = await store.read(taskId);
+      if (task === undefined || !(await this.#deps.taskInScope(task))) {
+        throw new Error(`task ${taskId} is missing`);
+      }
+      const state = await readRuntimeState(this.#deps.runtimePath);
+      const runtime = taskRuntime(state, taskId);
+      if (!isActiveTask(task)) return { kind: "terminal", task, runtime };
+      if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
+      const event = stopEvent(action, reason);
+      const stopRequest: DurableStopRequest = {
+        schemaVersion: 1,
+        action,
+        generation: task.generation,
+        requestedAt: this.#deps.clock(),
+        ...(action === "cancel" && discard ? { discard: true } : {}),
+      };
+      await writeRuntimeState(
+        this.#deps.runtimePath,
+        replaceRuntimeTask(state, taskId, (current) => ({
+          ...current,
+          stopRequest,
+          lastError: `${action} requested`,
+        })),
+      );
+      return { kind: "active", task, runtime, event };
+    });
+  }
+
+  private async assertOwnedResourcesStopped(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+  ): Promise<void> {
+    const resources = await this.inspectOwnedResources(task, runtime);
+    if (
+      resources.failure !== undefined ||
+      resources.abandonedJobIds.length > 0 ||
+      resources.terminalJobIds.length > 0
+    ) {
+      throw new Error(
+        `cannot confirm task ${task.id} is stopped: ${
+          resources.failure ?? "a durable worker job remains"
+        }`,
+      );
+    }
+  }
+
+  /** Pauses every owned worker pane; returns why the task could not be proven stopped, if so. */
+  private async pauseOwnedWorkers(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+  ): Promise<string | undefined> {
+    const cwd = workerCwd(task, runtime);
+    let stopFailure: string | undefined;
+    for (const endpoint of runtime.endpoints) {
+      const job = workerJobForEndpoint(runtime.jobs, endpoint);
+      try {
+        await pauseWorkerTerminal(this.#deps.run, {
+          endpoint,
+          cwd,
+          ...(job === undefined ? {} : { job }),
+        });
+        const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
+        if (!(await workerDelegationStopped(inspection, job))) {
+          stopFailure = `pane ${endpoint.paneId} still has an active worker`;
+        }
+      } catch (error) {
+        if (isMissingEndpoint(error)) continue;
+        stopFailure = `pane ${endpoint.paneId} could not be proven stopped: ${describeError(error)}`;
+      }
+    }
+    if (runtime.jobs.some(activeRuntimeJob) && runtime.endpoints.length === 0) {
+      stopFailure = "a durable worker job has no endpoint identity";
+    }
+    return stopFailure;
+  }
+
+  private async blockUnstoppedTask(
+    store: TaskStoreTransaction,
+    current: TaskRecord,
+    action: ControlAction,
+    stopFailure: string,
+  ): Promise<TaskRecord> {
+    const blockedReason = `could not safely ${action} task ${current.id}: ${stopFailure}`;
+    const cause: BlockCause = {
+      group: "lost-resource",
+      kind: "resource-lost",
+      summary: `Tandem couldn't confirm the worker stopped, so it couldn't ${action} the task.`,
+      detail: blockedReason,
+    };
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    await writeRuntimeState(
+      this.#deps.runtimePath,
+      replaceRuntimeTask(state, current.id, (entry) => ({ ...entry, lastError: blockedReason })),
+    );
+    const blocked =
+      current.stage === "paused" || current.stage === "blocked"
+        ? current
+        : transitionTask(
+            current,
+            { type: "block", reason: cause.summary, cause },
+            this.#deps.context(),
+          );
+    if (blocked !== current) await store.update(current.id, current.revision, () => blocked);
+    return blocked;
   }
 
   async resumeTask(taskId: string): Promise<TaskRecord> {
@@ -677,60 +622,18 @@ export class TaskControlWorkflow {
         );
         throw new Error(message);
       }
-      const abandonedJobIds = new Set(resources.abandonedJobIds);
       const resumed = transitionTask(task, event, this.#deps.context());
-      const clearStopRequest = replaceRuntimeTask(state, taskId, (current) => {
-        const { stopRequest: _stopRequest, lastError: _lastError, ...withoutControl } = current;
-        const jobs: readonly DurableJob[] =
-          abandonedJobIds.size === 0
-            ? current.jobs
-            : current.jobs.map(
-                (job): DurableJob =>
-                  abandonedJobIds.has(job.id)
-                    ? {
-                        ...job,
-                        phase: "failed",
-                        error:
-                          "worker stopped before writing a terminal result; continuation will be dispatched",
-                      }
-                    : job,
-              );
-        // Every owned worker was just proven stopped, so a quarantined operation's outcome is no
-        // longer uncertain: nothing it started is still running. Settle it here rather than leave a
-        // stored "uncertain" that would refuse every relaunch.
-        const settlesQuarantine =
-          withoutControl.operation?.phase === "quarantined" &&
-          resources.terminalJobIds.length === 0 &&
-          !jobs.some(activeRuntimeJob);
-        const operation =
-          settlesQuarantine && withoutControl.operation !== undefined
-            ? { operation: { ...withoutControl.operation, phase: "failed" as const } }
-            : {};
-        const reservation = withoutControl.reservation;
-        if (
-          (abandonedJobIds.size === 0 && !settlesQuarantine) ||
-          jobs.some(activeRuntimeJob) ||
-          reservation === undefined ||
-          reservation.phase === "released"
-        ) {
-          return { ...withoutControl, ...operation, jobs };
-        }
-        return {
-          ...withoutControl,
-          ...operation,
-          jobs,
-          reservation: {
-            ...reservation,
-            phase: "released",
-            releasedAt: this.#deps.clock(),
-          },
-        };
-      });
-      await writeRuntimeState(this.#deps.runtimePath, clearStopRequest);
+      await writeRuntimeState(
+        this.#deps.runtimePath,
+        replaceRuntimeTask(state, taskId, (current) =>
+          releaseStoppedRuntime(current, resources, this.#deps.clock),
+        ),
+      );
       await store.update(task.id, task.revision, () => resumed);
       return { task: resumed, resumed: true };
     });
   }
+
   /**
    * Restart managed worker execution without changing task identity or
    * generation. Stop/resume reuses the durable job/session context and the
@@ -858,7 +761,7 @@ export class TaskControlWorkflow {
     if (runtime.endpointLaunch !== undefined) {
       return empty("an endpoint launch identity is unresolved");
     }
-    const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
+    const cwd = workerCwd(task, runtime);
     const activeJobs = runtime.jobs.filter(activeRuntimeJob);
     const dependentPanes = new Set(
       activeJobs.flatMap((job) => (job.endpoint === undefined ? [] : [job.endpoint.paneId])),
@@ -918,44 +821,16 @@ export class TaskControlWorkflow {
     await withStateLock(this.#deps.home, async () => {
       await this.#deps.store.exclusive(async () => {
         const state = await readRuntimeState(this.#deps.runtimePath);
-        const settled = replaceRuntimeTask(state, taskId, (current) => {
-          const { stopRequest: _stopRequest, ...withoutStopRequest } = current;
-          const jobs = current.jobs.map((job) =>
-            activeRuntimeJob(job)
-              ? {
-                  ...job,
-                  phase: "failed" as const,
-                  error: "worker stopped after task cancellation",
-                }
-              : job,
-          );
-          return {
-            ...withoutStopRequest,
-            endpoints: [],
-            jobs,
-            ...(current.operation === undefined
-              ? {}
-              : {
-                  operation: {
-                    ...current.operation,
-                    phase: "cancelled" as const,
-                  },
-                }),
-            ...(current.reservation === undefined || current.reservation.phase === "released"
-              ? {}
-              : {
-                  reservation: {
-                    ...current.reservation,
-                    phase: "released" as const,
-                    releasedAt: this.#deps.clock(),
-                  },
-                }),
-          };
-        });
-        await writeRuntimeState(this.#deps.runtimePath, settled);
+        await writeRuntimeState(
+          this.#deps.runtimePath,
+          replaceRuntimeTask(state, taskId, (current) =>
+            cancelledRuntime(current, this.#deps.clock),
+          ),
+        );
       });
     });
   }
+
   private async clearSettledStopRequest(taskId: string): Promise<void> {
     await withStateLock(this.#deps.home, async () => {
       await this.#deps.store.exclusive(async () => {
@@ -970,22 +845,31 @@ export class TaskControlWorkflow {
     });
   }
 
-  async reconcileStopRequest(task: TaskRecord, runtime: RuntimeTaskState): Promise<void> {
-    const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
+  /**
+   * Inspects the pane and pauses its worker only if it is still running. Throws when the pane
+   * cannot be inspected or paused.
+   */
+  private async ensureWorkerStopped(
+    endpoint: Endpoint,
+    cwd: string,
+    jobs: readonly DurableJob[],
+  ): Promise<boolean> {
+    const job = workerJobForEndpoint(jobs, endpoint);
+    const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
+    if (await workerDelegationStopped(inspection, job)) return true;
+    await pauseWorkerTerminal(this.#deps.run, {
+      endpoint,
+      cwd,
+      ...(job === undefined ? {} : { job }),
+    });
+    return workerDelegationStopped(await inspectEndpoint(this.#deps.run, { endpoint, cwd }), job);
+  }
 
+  async reconcileStopRequest(task: TaskRecord, runtime: RuntimeTaskState): Promise<void> {
+    const cwd = workerCwd(task, runtime);
     for (const endpoint of runtime.endpoints) {
       try {
-        const job = workerJobForEndpoint(runtime.jobs, endpoint);
-        let inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-        if (!(await workerDelegationStopped(inspection, job))) {
-          await pauseWorkerTerminal(this.#deps.run, {
-            endpoint,
-            cwd,
-            ...(job === undefined ? {} : { job }),
-          });
-          inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-        }
-        if (!(await workerDelegationStopped(inspection, job))) {
+        if (!(await this.ensureWorkerStopped(endpoint, cwd, runtime.jobs))) {
           await this.#deps.setRuntimeError(
             task.id,
             `stop request remains pending because pane ${endpoint.paneId} is still active`,
@@ -1013,7 +897,7 @@ export class TaskControlWorkflow {
     if (task.stage === "paused" || task.stage === "blocked") {
       return;
     }
-    if (task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged") {
+    if (!isActiveTask(task)) {
       await this.clearSettledStopRequest(task.id);
       return;
     }
@@ -1059,8 +943,19 @@ export class TaskControlWorkflow {
         instruction === undefined || communication === undefined
           ? candidate
           : { ...candidate, communication };
-      const targetStages = ["validating", "reviewing", "ready", "awaiting-fixes"];
-      if (!targetStages.includes(task.stage)) {
+      const commitBlock = async (cause: BlockCause): Promise<TaskRecord> => {
+        const blocked = withInstruction(
+          transitionTask(
+            task,
+            { type: "block", reason: cause.summary, cause },
+            this.#deps.context(),
+          ),
+        );
+        await store.update(task.id, task.revision, () => blocked);
+        await this.#deps.publishTaskInbox(blocked);
+        return blocked;
+      };
+      if (!REDIRECT_STAGES.includes(task.stage)) {
         if (instruction === undefined) return task;
         const updated = await store.update(task.id, task.revision, (current) => ({
           ...current,
@@ -1072,28 +967,17 @@ export class TaskControlWorkflow {
         return updated;
       }
       if (task.reviewHead === undefined) {
-        const reason = "cannot redirect task without reviewed HEAD";
-        const cause: BlockCause = {
+        return commitBlock({
           group: "user-decision",
           kind: "prerequisite-not-met",
           summary: "There's no reviewed work yet, so a new instruction can't be applied.",
-          detail: reason,
-        };
-        const blocked = withInstruction(
-          transitionTask(
-            task,
-            { type: "block", reason: cause.summary, cause },
-            this.#deps.context(),
-          ),
-        );
-        await store.update(task.id, task.revision, () => blocked);
-        await this.#deps.publishTaskInbox(blocked);
-        return blocked;
+          detail: "cannot redirect task without reviewed HEAD",
+        });
       }
       const state = await readRuntimeState(this.#deps.runtimePath);
       const runtime = taskRuntime(state, taskId);
       if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
-      const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
+      const cwd = workerCwd(task, runtime);
       const requested = replaceRuntimeTask(state, taskId, (current) => ({
         ...current,
         stopRequest: {
@@ -1105,90 +989,23 @@ export class TaskControlWorkflow {
         lastError: "new instruction requires evidence invalidation",
       }));
       await writeRuntimeState(this.#deps.runtimePath, requested);
-      let stopFailure: string | undefined;
-      for (const endpoint of runtime.endpoints) {
-        try {
-          const job = workerJobForEndpoint(runtime.jobs, endpoint);
-          let inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-          if (!(await workerDelegationStopped(inspection, job))) {
-            await pauseWorkerTerminal(this.#deps.run, {
-              endpoint,
-              cwd,
-              ...(job === undefined ? {} : { job }),
-            });
-            inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
-          }
-          if (!(await workerDelegationStopped(inspection, job))) {
-            stopFailure = `pane ${endpoint.paneId} still has an active worker`;
-            break;
-          }
-        } catch (error) {
-          stopFailure = `pane ${endpoint.paneId} could not be proven stopped: ${describeError(error)}`;
-          break;
-        }
-      }
+      const stopFailure = await this.stopWorkersForRedirect(runtime, cwd);
       if (stopFailure !== undefined) {
         const reason = `could not safely redirect task ${taskId}: ${stopFailure}`;
-        const cause: BlockCause = {
+        await writeRuntimeState(
+          this.#deps.runtimePath,
+          replaceRuntimeTask(requested, taskId, (current) => ({ ...current, lastError: reason })),
+        );
+        return commitBlock({
           group: "lost-resource",
           kind: "resource-lost",
           summary:
             "Tandem couldn't confirm the worker stopped, so your new instruction wasn't applied.",
           detail: reason,
-        };
-        await writeRuntimeState(
-          this.#deps.runtimePath,
-          replaceRuntimeTask(requested, taskId, (current) => ({ ...current, lastError: reason })),
-        );
-        const blocked = withInstruction(
-          transitionTask(
-            task,
-            { type: "block", reason: cause.summary, cause },
-            this.#deps.context(),
-          ),
-        );
-        await store.update(task.id, task.revision, () => blocked);
-        await this.#deps.publishTaskInbox(blocked);
-        return blocked;
+        });
       }
-      // ponytail: "verifier" stays matched so a legacy pane still gets handled here; see
-      // LEGACY_ENDPOINT_ROLES.
-      const reviewers = runtime.endpoints.filter(
-        (endpoint) => endpoint.role === "reviewer" || endpoint.role === "verifier",
-      );
-      for (const endpoint of reviewers) {
-        try {
-          const job = workerJobForEndpoint(runtime.jobs, endpoint);
-          await prepareWorkerTerminal(this.#deps.run, {
-            endpoint,
-            cwd,
-            ...(job === undefined ? {} : { job }),
-          });
-          await closeEndpoint(this.#deps.run, { endpoint, cwd });
-        } catch (error) {
-          if (!isMissingEndpoint(error)) {
-            const reason = `reviewer pane ${endpoint.paneId} could not close: ${describeError(error)}`;
-            const cause: BlockCause = {
-              group: "lost-resource",
-              kind: "resource-lost",
-              summary:
-                "A reviewer's terminal wouldn't close, so your new instruction couldn't be applied.",
-              detail: reason,
-              paneId: endpoint.paneId,
-            };
-            const blocked = withInstruction(
-              transitionTask(
-                task,
-                { type: "block", reason: cause.summary, cause },
-                this.#deps.context(),
-              ),
-            );
-            await store.update(task.id, task.revision, () => blocked);
-            await this.#deps.publishTaskInbox(blocked);
-            return blocked;
-          }
-        }
-      }
+      const reviewerFailure = await this.closeReviewerPanes(runtime, cwd);
+      if (reviewerFailure !== undefined) return commitBlock(reviewerFailure);
       const redirected = withInstruction(
         transitionTask(
           task,
@@ -1196,51 +1013,71 @@ export class TaskControlWorkflow {
           this.#deps.context(),
         ),
       );
-      const endpoints = (redirected.endpoints ?? [])
-        .filter((endpoint) => endpoint.role === "scout" || endpoint.role === "implementer")
-        .map((endpoint) => ({ ...endpoint, generation: redirected.generation }));
-      const nextTask = { ...redirected, endpoints };
+      const nextTask = {
+        ...redirected,
+        endpoints: workerEndpoints(redirected.endpoints ?? [], redirected.generation),
+      };
       await store.update(task.id, task.revision, () => nextTask);
-      const nextRuntime = replaceRuntimeTask(requested, taskId, (current) => {
-        const jobs = current.jobs.map((job) =>
-          activeRuntimeJob(job)
-            ? {
-                ...job,
-                phase: "failed" as const,
-                error: "job invalidated by newer user instruction",
-              }
-            : job,
-        );
-        const reservation = current.reservation;
-        const {
-          stopRequest: _stopRequest,
-          fixContextPath: _fixContextPath,
-          ...withoutTransient
-        } = current;
-        return {
-          ...withoutTransient,
-          // Every owned worker was proven stopped above, which answers a quarantined outcome.
-          ...(current.operation?.phase === "quarantined"
-            ? { operation: { ...current.operation, phase: "failed" as const } }
-            : {}),
-          endpoints: current.endpoints
-            .filter((endpoint) => endpoint.role === "scout" || endpoint.role === "implementer")
-            .map((endpoint) => ({ ...endpoint, generation: redirected.generation })),
-          jobs,
-          ...(reservation === undefined
-            ? {}
-            : {
-                reservation: {
-                  ...reservation,
-                  phase: "released" as const,
-                  releasedAt: this.#deps.clock(),
-                },
-              }),
-        };
-      });
-      await writeRuntimeState(this.#deps.runtimePath, nextRuntime);
+      await writeRuntimeState(
+        this.#deps.runtimePath,
+        replaceRuntimeTask(requested, taskId, (current) =>
+          redirectedRuntime(current, redirected.generation, this.#deps.clock),
+        ),
+      );
       await this.#deps.publishTaskInbox(nextTask);
       return nextTask;
     });
+  }
+
+  /** Stops every owned worker before a redirect; returns the first pane that would not stop. */
+  private async stopWorkersForRedirect(
+    runtime: RuntimeTaskState,
+    cwd: string,
+  ): Promise<string | undefined> {
+    for (const endpoint of runtime.endpoints) {
+      try {
+        if (!(await this.ensureWorkerStopped(endpoint, cwd, runtime.jobs))) {
+          return `pane ${endpoint.paneId} still has an active worker`;
+        }
+      } catch (error) {
+        return `pane ${endpoint.paneId} could not be proven stopped: ${describeError(error)}`;
+      }
+    }
+    return undefined;
+  }
+
+  /** Closes reviewer panes a redirect retires; returns the block cause for one that won't close. */
+  private async closeReviewerPanes(
+    runtime: RuntimeTaskState,
+    cwd: string,
+  ): Promise<BlockCause | undefined> {
+    // ponytail: "verifier" stays matched so a legacy pane still gets handled here; see
+    // LEGACY_ENDPOINT_ROLES.
+    const reviewers = runtime.endpoints.filter(
+      (endpoint) => endpoint.role === "reviewer" || endpoint.role === "verifier",
+    );
+    for (const endpoint of reviewers) {
+      try {
+        const job = workerJobForEndpoint(runtime.jobs, endpoint);
+        await prepareWorkerTerminal(this.#deps.run, {
+          endpoint,
+          cwd,
+          ...(job === undefined ? {} : { job }),
+        });
+        await closeEndpoint(this.#deps.run, { endpoint, cwd });
+      } catch (error) {
+        if (isMissingEndpoint(error)) continue;
+        const reason = `reviewer pane ${endpoint.paneId} could not close: ${describeError(error)}`;
+        return {
+          group: "lost-resource",
+          kind: "resource-lost",
+          summary:
+            "A reviewer's terminal wouldn't close, so your new instruction couldn't be applied.",
+          detail: reason,
+          paneId: endpoint.paneId,
+        };
+      }
+    }
+    return undefined;
   }
 }

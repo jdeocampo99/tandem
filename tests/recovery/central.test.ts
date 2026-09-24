@@ -14,12 +14,12 @@ import {
 } from "../../src/contracts.ts";
 import {
   CentralRecoveryWorkflow,
-  MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
   RESTART_QUESTION_ID_PREFIX,
   type RelaunchWorker,
   type RevalidateWorker,
   reportBlock,
 } from "../../src/recovery/central.ts";
+import { MAX_AUTOMATIC_RESTARTS_PER_GENERATION } from "../../src/recovery/central-reentry.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { DurableJob, RuntimeState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";

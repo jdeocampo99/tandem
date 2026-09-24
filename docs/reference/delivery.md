@@ -5,7 +5,7 @@ What draft PRs, final publication, merge, and Lavish presentations must guarante
 Code: src/delivery/pull-requests.ts, src/delivery/evidence.ts, src/delivery/preflight.ts,
 src/instructions.ts (`renderPrDescription`, `renderDraftPrDescription`), src/adapters/git.ts,
 src/service/controller.ts (`publish`, `publishNow`, `publishDraft`, `merge`),
-src/presentations/, src/adapters/lavish.ts
+src/service/draft-refresh.ts, src/presentations/, src/adapters/lavish.ts
 
 ## Approval boundaries
 

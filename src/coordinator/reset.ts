@@ -27,7 +27,7 @@ import type {
   RuntimeTaskState,
 } from "../runtime/schema.ts";
 import { replaceRuntimePresentation, replaceRuntimeTask } from "../service/records.ts";
-import { recoverEndpointFromLaunch } from "../tasks/control.ts";
+import { recoverEndpointFromLaunch } from "../tasks/endpoint-launch.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
 import { createTaskStore, type TaskStore, type TaskStoreTransaction } from "../tasks/store.ts";
 import { liveWorkerTerminal } from "../workers/terminal.ts";

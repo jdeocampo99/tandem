@@ -2,10 +2,8 @@ import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommandRunner } from "../../src/contracts.ts";
-import {
-  MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
-  RESTART_QUESTION_ID_PREFIX,
-} from "../../src/recovery/central.ts";
+import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
+import { MAX_AUTOMATIC_RESTARTS_PER_GENERATION } from "../../src/recovery/central-reentry.ts";
 import { activeRuntimeJob } from "../../src/runtime/activity.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { DurableJob } from "../../src/runtime/schema.ts";

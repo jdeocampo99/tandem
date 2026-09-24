@@ -4,7 +4,7 @@ How Tandem records what a request cost and took, and how it picks the exact mode
 
 Code: src/runtime/usage.ts, src/runtime/usage-events.ts, src/runtime/usage-ledger.ts,
 src/runtime/usage-codec.ts, src/runtime/usage-receipt.ts, src/config/model-tier.ts,
-src/workers/execution-routing.ts
+src/workers/execution-routing.ts, src/service/request-accounting.ts
 
 ## The accounting ledger
 

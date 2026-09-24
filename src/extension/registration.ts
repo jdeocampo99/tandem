@@ -7,7 +7,11 @@ import {
   type TandemAction,
   type TandemActionResult,
 } from "./actions.ts";
-import { handlePromptInput, type PromptRoutingConfig } from "./prompt-routing.ts";
+import {
+  type ChoiceConfirmation,
+  handlePromptInput,
+  type PromptRoutingConfig,
+} from "./prompt-routing.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -84,8 +88,10 @@ export function registerTandemOmp(
   dependencies: TandemOmpRegistrationDependencies,
 ): void {
   const z = pi.zod;
+  const confirmation: ChoiceConfirmation = {};
   pi.on("input", (event, ctx) =>
     handlePromptInput(event, ctx, {
+      confirmation,
       config: dependencies.promptRouting,
       getService: dependencies.getService,
       getHome: dependencies.getHome,
@@ -311,7 +317,7 @@ export function registerTandemOmp(
     z
       .object({
         action: z.literal("cleanup"),
-        taskId: z.string(),
+        taskIds: z.array(z.string()).min(1),
         discard: z.boolean().optional(),
       })
       .strict(),
@@ -380,12 +386,9 @@ export function registerTandemOmp(
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const request = params.request;
       try {
-        const result = await executeTandemAction(
-          request,
-          dependencies.getService(ctx),
-          ctx,
+        const result = await executeTandemAction(request, dependencies.getService(ctx), ctx, {
           signal,
-        );
+        });
         if (request.action === "tick") {
           await dependencies.reconcile(ctx, false);
         } else {

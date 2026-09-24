@@ -13,11 +13,13 @@ import {
 } from "../../src/contracts.ts";
 import {
   CentralRecoveryWorkflow,
-  canCentralRecoverBlockedTask,
-  MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
   type RelaunchWorker,
   type RevalidateWorker,
 } from "../../src/recovery/central.ts";
+import {
+  canCentralRecoverBlockedTask,
+  MAX_AUTOMATIC_RESTARTS_PER_GENERATION,
+} from "../../src/recovery/central-reentry.ts";
 import { runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { RuntimeState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";

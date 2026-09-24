@@ -164,7 +164,7 @@ Policy resolution builds a guidance snapshot per channel (`implementation`, `val
 ## Jev prompt routing
 
 Jev optionally classifies unmatched natural-language coordinator prompts so simple read-only
-lookups skip the model.
+lookups, and short replies to Tandem's fixed-choice questions, skip the model.
 
 - Enabled only when `TYPESAFE_API_KEY` is set at launch; otherwise the coordinator path is
   unchanged. Model `jev-1.13.0` at `https://api.typesafe.ai/v1/systemone`.
@@ -176,6 +176,20 @@ lookups skip the model.
 - Direct dispatch is read-only through the existing service: `list`, `presentations`, and
   `receipt` (repository-wide), plus `show`, `messages`, `inspect`, which need an explicit
   `task-...` ID or UUID in the prompt.
+- Choice replies (src/extension/choice-reply-route.ts): a prompt of at most 160 characters, while
+  Tandem is waiting on a fixed-choice answer, first gets one Jev call listing those choices plus
+  `other`. The choices are read from durable state: each open recovery restart (`restart`/`stop`),
+  validation retry (`retry`/`stop`), and "Keep fixing?" (`yes`/`no`) question on a non-terminal
+  task, and approval of the one brief awaiting it (none when zero or several are pending). A
+  choice picked with confidence of at least 0.80 runs in code with no coordinator turn:
+  - Low-risk choices (every task-question reply) run `answer` with the exact reply text, so the
+    question's own answer path still validates and acts.
+  - Risky choices (brief approval) only display a code-written `... ? (y/n)` line. The next
+    message decides: an exact `y` runs the action bound to that brief revision and digest, and
+    stands in for the approval dialog; an exact `n` drops it; anything else drops it and routes
+    as a new prompt. Jev never approves anything on its own.
+  - `other`, low confidence, and provider errors continue to the routes below, then the
+    coordinator.
 - Pull-up: a prompt that names a brief or a visual and a verb like "pull up", "open", or "show"
   first gets one Jev call (src/extension/pull-up-route.ts) listing the coordinator repository's
   briefs and openable presentations (15 newest of each), described by goal or objective. Only a
@@ -183,8 +197,9 @@ lookups skip the model.
   `presentation-open`; anything else continues to the lookup routing above.
 - Everything else goes to normal coordinator handling: incomplete or invalid output, target
   mismatch, non-read-only effect, mixed or multi-part requests, provider errors, missing task ID.
-  Jev never generates commands, authorizes actions, mutates state, or picks a model. Tandem code
-  still validates identity, ownership, state, approvals, and policy.
+  Jev never generates commands, authorizes actions, mutates state, or picks a model; it only picks
+  among choices code listed. Tandem code still validates identity, ownership, state, approvals,
+  and policy.
 - Diagnostics append to `<home>/logs/tandem.jsonl`: short prompt hash, route facts, confidence,
   reason, latency. An attempted request adds a schema-versioned usage record (tokens or an
   explicit `unavailable`, never zero; duration; timeout; pricing snapshot or `unavailable`) read

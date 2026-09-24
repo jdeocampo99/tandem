@@ -25,6 +25,13 @@ import type { UsageRecord } from "../runtime/usage.ts";
 import type { TandemService } from "../service/controller.ts";
 import { executeTandemAction, type TandemAction } from "./actions.ts";
 import {
+  CHOICE_REPLY_ROUTE_QUESTION_VERSION,
+  classifyChoiceReply,
+  MAX_CHOICE_REPLY_CHARS,
+  type OpenChoice,
+  openChoices,
+} from "./choice-reply-route.ts";
+import {
   classifyPullUpPrompt,
   MAX_PULL_UP_CANDIDATES,
   mentionsPullUp,
@@ -85,7 +92,15 @@ export type PromptRoutingDependencies = Readonly<{
     options: JevEvaluationOptions,
   ) => Promise<JevEvaluationResponse>;
   readonly now?: PromptRoutingClock;
+  /**
+   * Holds a risky choice waiting for an exact "y" across prompts. Without it, risky replies go to
+   * the coordinator, since nothing could ask for the confirmation.
+   */
+  readonly confirmation?: ChoiceConfirmation;
 }>;
+
+/** The one risky choice code asked the person to confirm, until their next message. */
+export type ChoiceConfirmation = { pending?: OpenChoice | undefined };
 
 /** Bumped whenever the shape or meaning of {@link ROUTING_QUESTIONS} changes. */
 export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 2;
@@ -440,6 +455,29 @@ export async function handlePromptInput(
   if (event.source !== "interactive") return undefined;
   const prompt = normalizePrompt(event.text);
   if (prompt.length === 0) return undefined;
+  // A confirmation lasts one message: anything but an exact "y" or "n" routes as a new prompt.
+  const pending = deps.confirmation?.pending;
+  if (deps.confirmation !== undefined && pending !== undefined) {
+    deps.confirmation.pending = undefined;
+    if (prompt === "y") {
+      await dispatchRoutedAction(prompt, pending.action, ctx, deps, {
+        confirmedInConversation: true,
+      });
+      return { handled: true };
+    }
+    if (prompt === "n") {
+      sendDisplayedMessage(deps, "Okay, I didn't do that.", {
+        promptHash: promptHash(prompt),
+        action: pending.action.action,
+        declined: true,
+      });
+      await recordDiagnostic(deps, ctx, "prompt-route-declined", {
+        promptHash: promptHash(prompt),
+        action: pending.action.action,
+      });
+      return { handled: true };
+    }
+  }
   if (prompt.startsWith("/")) {
     await recordDiagnostic(deps, ctx, "prompt-route-bypassed", {
       promptHash: promptHash(prompt),
@@ -456,6 +494,13 @@ export async function handlePromptInput(
   }
 
   if (findPullRequestRef(prompt) !== undefined) return routePrReview(prompt, ctx, deps);
+  if (
+    deps.config.apiKey !== undefined &&
+    prompt.length <= MAX_CHOICE_REPLY_CHARS &&
+    (await routeChoiceReply(prompt, ctx, deps)) !== undefined
+  ) {
+    return { handled: true };
+  }
   // A prompt that is not a confident pull-up still gets the ordinary lookup routes below.
   if (
     deps.config.apiKey !== undefined &&
@@ -490,33 +535,42 @@ export async function handlePromptInput(
     return undefined;
   }
 
+  await dispatchRoutedAction(prompt, action, ctx, deps, {
+    details: decision.taskId === undefined ? {} : { taskId: decision.taskId },
+  });
+  return { handled: true };
+}
+
+/**
+ * Runs one routed action and shows its result, or its failure, as the turn's reply. Every route
+ * that skips the coordinator ends here, so they all display and record outcomes the same way.
+ */
+async function dispatchRoutedAction(
+  prompt: string,
+  action: TandemAction,
+  ctx: ExtensionContext,
+  deps: PromptRoutingDependencies,
+  options: Readonly<{
+    readonly details?: Record<string, DiagnosticValue>;
+    readonly confirmedInConversation?: boolean;
+  }> = {},
+): Promise<void> {
+  const shared = { promptHash: promptHash(prompt), action: action.action };
   try {
-    const result = await executeTandemAction(action, deps.getService(ctx), ctx);
+    const result = await executeTandemAction(action, deps.getService(ctx), ctx, {
+      confirmedInConversation: options.confirmedInConversation ?? false,
+    });
     sendDisplayedMessage(deps, summarizeTandemActionValue(result.action, result.value), {
-      promptHash: promptHash(prompt),
-      action: action.action,
-      ...(decision.taskId === undefined ? {} : { taskId: decision.taskId }),
+      ...shared,
+      ...options.details,
     });
-    await recordDiagnostic(deps, ctx, "prompt-route-dispatched", {
-      promptHash: promptHash(prompt),
-      action: action.action,
-      ...(decision.taskId === undefined ? {} : { taskId: decision.taskId }),
-    });
+    await recordDiagnostic(deps, ctx, "prompt-route-dispatched", { ...shared, ...options.details });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const output = `Tandem ${action.action} failed: ${compactText(message, ACTION_RESULT_MAX_CHARS)}`;
-    sendDisplayedMessage(deps, output, {
-      promptHash: promptHash(prompt),
-      action: action.action,
-      error: "action-failed",
-    });
-    await recordDiagnostic(deps, ctx, "prompt-route-failed", {
-      promptHash: promptHash(prompt),
-      action: action.action,
-      error: "action-failed",
-    });
+    sendDisplayedMessage(deps, output, { ...shared, error: "action-failed" });
+    await recordDiagnostic(deps, ctx, "prompt-route-failed", { ...shared, error: "action-failed" });
   }
-  return { handled: true };
 }
 
 /**
@@ -558,29 +612,7 @@ async function routePrReview(
     lens: route.lens.kind,
     ...(route.lens.kind === "focus" ? { focus: route.lens.focus } : {}),
   };
-  try {
-    const result = await executeTandemAction(action, deps.getService(ctx), ctx);
-    sendDisplayedMessage(deps, summarizeTandemActionValue(result.action, result.value), {
-      promptHash: promptHash(prompt),
-      action: action.action,
-    });
-    await recordDiagnostic(deps, ctx, "prompt-route-dispatched", {
-      promptHash: promptHash(prompt),
-      action: action.action,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    sendDisplayedMessage(
-      deps,
-      `Tandem review-pr failed: ${compactText(message, ACTION_RESULT_MAX_CHARS)}`,
-      { promptHash: promptHash(prompt), action: action.action, error: "action-failed" },
-    );
-    await recordDiagnostic(deps, ctx, "prompt-route-failed", {
-      promptHash: promptHash(prompt),
-      action: action.action,
-      error: "action-failed",
-    });
-  }
+  await dispatchRoutedAction(prompt, action, ctx, deps);
   return { handled: true };
 }
 
@@ -657,28 +689,74 @@ async function routePullUp(
     target.kind === "brief"
       ? { action: "brief-review", requestId: target.id }
       : { action: "presentation-open", presentationId: target.id };
+  await dispatchRoutedAction(prompt, action, ctx, deps);
+  return true;
+}
+
+/**
+ * Answers the fixed-choice question a short reply picks, when Jev names exactly one with
+ * confidence. A low-risk choice runs now; a risky one is only asked back as a y/n question.
+ * Returns undefined, with nothing done, when the prompt should route on.
+ */
+async function routeChoiceReply(
+  prompt: string,
+  ctx: ExtensionContext,
+  deps: PromptRoutingDependencies,
+): Promise<true | undefined> {
+  let choices: readonly OpenChoice[];
   try {
-    const result = await executeTandemAction(action, service, ctx);
-    sendDisplayedMessage(deps, summarizeTandemActionValue(result.action, result.value), {
+    choices = await openChoices(deps.getService(ctx));
+  } catch {
+    await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
       promptHash: promptHash(prompt),
-      action: action.action,
+      reason: "open-choices-unavailable",
     });
-    await recordDiagnostic(deps, ctx, "prompt-route-dispatched", {
-      promptHash: promptHash(prompt),
-      action: action.action,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    sendDisplayedMessage(
-      deps,
-      `Tandem ${action.action} failed: ${compactText(message, ACTION_RESULT_MAX_CHARS)}`,
-      { promptHash: promptHash(prompt), action: action.action, error: "action-failed" },
-    );
-    await recordDiagnostic(deps, ctx, "prompt-route-failed", {
-      promptHash: promptHash(prompt),
-      action: action.action,
-      error: "action-failed",
-    });
+    return undefined;
   }
+  if (choices.length === 0) return undefined;
+  const evaluation = await classifyChoiceReply(
+    prompt,
+    choices,
+    deps.config,
+    deps.evaluate,
+    deps.now,
+  );
+  await recordDiagnostic(
+    deps,
+    ctx,
+    "prompt-route-evaluated",
+    {
+      promptHash: promptHash(prompt),
+      classifier: "jev",
+      reason: evaluation.reason,
+      durationMs: evaluation.durationMs,
+      questionVersion: CHOICE_REPLY_ROUTE_QUESTION_VERSION,
+      candidates: choices.length,
+    },
+    evaluation.usage,
+  );
+  const choice = evaluation.choice;
+  if (choice === undefined) return undefined;
+  if (choice.confirm === undefined) {
+    await dispatchRoutedAction(prompt, choice.action, ctx, deps);
+    return true;
+  }
+  if (deps.confirmation === undefined) {
+    await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
+      promptHash: promptHash(prompt),
+      reason: "confirmation-unavailable",
+    });
+    return undefined;
+  }
+  deps.confirmation.pending = choice;
+  sendDisplayedMessage(deps, choice.confirm, {
+    promptHash: promptHash(prompt),
+    action: choice.action.action,
+    awaitingConfirmation: true,
+  });
+  await recordDiagnostic(deps, ctx, "prompt-route-confirm-asked", {
+    promptHash: promptHash(prompt),
+    action: choice.action.action,
+  });
   return true;
 }
