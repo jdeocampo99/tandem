@@ -123,6 +123,10 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
 - The controller creates a fresh private artifact directory outside the source repository, reads
   installed `lavish-axi --help`, selects matching playbooks, and requests fallback design guidance
   when neither the project nor the objective has a design direction (src/presentations/session.ts).
+- A mockup or wireframe objective skips all Lavish guidance and the task's automated checks. Its
+  brief carries [mockup-style.md](../../src/presentations/mockup-style.md) (screens only, no AI
+  visual or copy tells) and points the worker at the project's AGENTS.md/CLAUDE.md writing rules,
+  which win over the guide.
 - The presentation worker gets a bounded brief, writes complete HTML only to the supplied path, and
   returns exactly one `Artifact: <absolute path>` line. It cannot open or poll Lavish.
 - The controller verifies the artifact before opening it.

@@ -1,6 +1,7 @@
 import type { Stats } from "node:fs";
 import { lstat, mkdir, readdir, readFile, realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { listenPresentation, openPresentation, pollPresentation } from "../adapters/lavish.ts";
 import type { Clock, CommandRequest, CommandRunner, TaskRecord } from "../contracts.ts";
 import { buildAgentBrief } from "../instructions.ts";
@@ -35,6 +36,7 @@ const MAX_OBJECTIVE_BYTES = 3_000;
 const MAX_ENTRY_BYTES = 256;
 const MAX_LIST_ENTRIES = 12;
 const HELP_TIMEOUT_MS = 30_000;
+const MOCKUP_STYLE_PATH = fileURLToPath(new URL("./mockup-style.md", import.meta.url));
 
 type PlaybookRule = Readonly<{
   readonly id: string;
@@ -52,8 +54,6 @@ const PLAYBOOK_RULES: readonly PlaybookRule[] = [
       "tradeoff",
       "options",
       "before and after",
-      "mockup",
-      "mock up",
       "variant",
       "layout",
     ],
@@ -195,6 +195,11 @@ function hasExplicitDesignDirection(objective: string): boolean {
   return /(?:design system|tailwind|daisyui|mui|chakra|brand|palette|colou?rs?|typograph\w*|font|typeface|theme|dark(?: mode)?|light(?: mode)?|style(?: guide)?)/iu.test(
     objective,
   );
+}
+
+// ponytail: keyword match on the objective; add an explicit request flag if mockups get misrouted.
+function isMockup(objective: string): boolean {
+  return /\bmock[\s-]?ups?\b|\bwireframes?\b/iu.test(objective);
 }
 
 function taskGuidance(task: TaskRecord): readonly string[] {
@@ -409,7 +414,7 @@ function buildPresentationPrompt(
   artifacts: readonly string[],
   artifactPath: string,
   repository: string,
-  lavishGuidance: string,
+  guidance: Readonly<{ mockup: boolean; text: string }>,
 ): string {
   const instructions = [
     "You are the restricted presentation worker. Author the HTML artifact, but do not open or poll Lavish yourself.",
@@ -417,14 +422,24 @@ function buildPresentationPrompt(
     `Write complete, useful HTML at exactly ${artifactPath}; do not write it to another path and do not modify the repository.`,
     "Use only read, grep, glob, write, and edit. Bash is not available or permitted.",
     `Subject project design source: ${repository}. Inspect and preserve its existing styles, tokens, components, and brand assets when present; do not replace them with a generic system.`,
-    "Follow every matching Lavish playbook guide below before authoring HTML. The controller retrieved these guides; do not run unavailable Lavish commands.",
-    `Controller-retrieved Lavish guidance:\n${lavishGuidance}`,
+    ...(guidance.mockup
+      ? [
+          "Before writing any screen copy, read the subject project's AGENTS.md and CLAUDE.md for writing, copy, or design rules and read the files they name; those rules win over the mockup style guide where they conflict.",
+          `Mockup style guide (follow it exactly):\n${guidance.text}`,
+        ]
+      : [
+          "Follow every matching Lavish playbook guide below before authoring HTML. The controller retrieved these guides; do not run unavailable Lavish commands.",
+          `Controller-retrieved Lavish guidance:\n${guidance.text}`,
+        ]),
     ...taskGuidance(task),
   ];
   const prompt = buildAgentBrief({
     role: "presentation",
     objective: boundedText(objective, "objective", MAX_OBJECTIVE_BYTES),
-    acceptanceCriteria: boundedList(task.acceptanceCriteria, "task.acceptanceCriteria"),
+    // The task's research or implementation checks would turn a mockup into a report.
+    acceptanceCriteria: guidance.mockup
+      ? []
+      : boundedList(task.acceptanceCriteria, "task.acceptanceCriteria"),
     instructions,
     reportPath: artifactPath,
     artifacts: boundedList([...artifacts, repository], "artifacts"),
@@ -506,21 +521,20 @@ export async function preparePresentation(input: {
   const artifactPath = join(directory, ARTIFACT_FILE);
   const jobPath = join(directory, JOB_FILE);
   const resultPath = join(directory, RESULT_FILE);
-  const lavishGuidance = await readLavishGuides(
-    run,
-    directory,
-    repository,
-    objective,
-    artifacts,
-    timeoutMs,
-  );
+  const mockup = isMockup(objective);
+  const guidance = {
+    mockup,
+    text: mockup
+      ? (await readFile(MOCKUP_STYLE_PATH, "utf8")).trim()
+      : await readLavishGuides(run, directory, repository, objective, artifacts, timeoutMs),
+  };
   const prompt = buildPresentationPrompt(
     input.task,
     objective,
     artifacts,
     artifactPath,
     repository,
-    lavishGuidance,
+    guidance,
   );
   const model = input.task.policy.config.models.presentation;
   const job: WorkerJob = {

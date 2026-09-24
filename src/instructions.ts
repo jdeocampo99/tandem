@@ -378,9 +378,9 @@ export function buildAgentBrief(input: AgentBriefInput): string {
     "## Objective",
     objective,
     "",
-    "## Automated checks",
-    ...formatBullets(acceptanceCriteria),
-    "",
+    ...(acceptanceCriteria.length === 0
+      ? []
+      : ["## Automated checks", ...formatBullets(acceptanceCriteria), ""]),
     ...(manualVerification.length === 0
       ? []
       : [
