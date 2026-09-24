@@ -30,6 +30,7 @@ import {
   decideScoutCleanupEligibility,
   decideScoutWorktreeRelease,
   finishPendingScoutCleanup,
+  runCleanupCommands,
 } from "../../src/service/scout-cleanup.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
@@ -789,4 +790,36 @@ test("scout completion releases resources in the same pass that writes the repor
     await service.shutdown();
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test("cleanup commands run in the finished task's worktree and report failures without throwing", async () => {
+  const requests: CommandRequest[] = [];
+  const run = async (request: CommandRequest): Promise<CommandResult> => {
+    requests.push(request);
+    return {
+      code: request.argv.at(-1) === "npm run db:stop:local" ? 0 : 3,
+      stdout: "",
+      stderr: "",
+    };
+  };
+  const deps = {
+    run,
+    cleanupCommands: async () => ["npm run db:stop:local", "docker compose down"],
+  };
+
+  const failure = await runCleanupCommands(deps, "/repo", "/pool/3/app");
+
+  expect(requests.map((request) => [request.argv, request.cwd])).toEqual([
+    [["/bin/sh", "-c", "npm run db:stop:local"], "/pool/3/app"],
+    [["/bin/sh", "-c", "docker compose down"], "/pool/3/app"],
+  ]);
+  expect(failure).toBe("cleanup commands failed: docker compose down exited 3");
+  expect(await runCleanupCommands(deps, "/repo", undefined)).toBeUndefined();
+  expect(
+    await runCleanupCommands(
+      { run, cleanupCommands: async () => ["npm run db:stop:local"] },
+      "/repo",
+      "/w",
+    ),
+  ).toBeUndefined();
 });
