@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { RequestBriefContent, RequestBriefRecord, TaskRecord } from "../../src/contracts.ts";
 import {
   approveRequestBriefRecord,
+  briefSkipsReview,
   checkedRequestBriefContent,
   createRequestBriefRecord,
   decideRequestDispatch,
@@ -217,6 +218,33 @@ test("moving an item into manual verification changes what was agreed and needs 
 
   expect(moved.draft.changeKind).toBe("agreement");
   expect(requestApprovalState(moved)).toBe("superseded");
+});
+
+test("skipping review is part of what was agreed, and only an approved brief skips it", () => {
+  const approve = (record: RequestBriefRecord): RequestBriefRecord =>
+    approveRequestBriefRecord(
+      record,
+      {
+        requestId: "req-1",
+        briefRevision: record.draft.revision,
+        contentDigest: record.draft.contentDigest,
+      },
+      NOW,
+    );
+  const approved = approve(seeded());
+  const skipping = reviseRequestBriefRecord(approved, content({ skipReview: true }), LATER);
+
+  expect(requestBriefDigests(checkedRequestBriefContent(content({ skipReview: false })))).toEqual(
+    requestBriefDigests(content()),
+  );
+  expect(skipping.draft.changeKind).toBe("agreement");
+  expect(briefSkipsReview(approved)).toBe(false);
+  expect(briefSkipsReview(skipping)).toBe(false);
+  expect(briefSkipsReview(approve(skipping))).toBe(true);
+  expect(renderRequestBriefMarkdown(skipping)).toContain("## Code review\nSkipped at your request");
+  expect(() => checkedRequestBriefContent({ ...content(), skipReview: "yes" })).toThrow(
+    RequestBriefError,
+  );
 });
 
 test("the brief shows automated checks and manual verification as two lists", () => {

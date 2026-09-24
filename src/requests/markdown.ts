@@ -12,6 +12,7 @@ const SECTION_TITLES: Readonly<Record<keyof RequestBriefContent, string>> = {
   keyDecisions: "Key decisions",
   openQuestions: "Unresolved questions",
   researchLinks: "Research links",
+  skipReview: "Code review",
 };
 
 const LIST_SECTIONS = [
@@ -50,6 +51,13 @@ export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
   ];
   for (const section of LIST_SECTIONS) {
     lines.push("", `## ${SECTION_TITLES[section]}`, ...bullets(content[section]));
+  }
+  if (content.skipReview === true) {
+    lines.push(
+      "",
+      `## ${SECTION_TITLES.skipReview}`,
+      "Skipped at your request: once validation passes, the work is ready to publish unreviewed.",
+    );
   }
   return `${lines.join("\n")}\n`;
 }

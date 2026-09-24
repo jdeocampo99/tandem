@@ -509,6 +509,8 @@ export type RequestBriefContent = Readonly<{
   readonly keyDecisions: readonly string[];
   readonly openQuestions: readonly string[];
   readonly researchLinks: readonly string[];
+  /** The user decided while planning that this work needs no code review. Absent when not. */
+  readonly skipReview?: boolean | undefined;
 }>;
 
 /** Whether a revision changed what was agreed or only annotated it. */
