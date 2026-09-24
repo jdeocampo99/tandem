@@ -1,29 +1,30 @@
 # Tandem
 
-Tandem runs a small team of AI agents on your repository, on your own Mac. You describe what you
-want in plain language and approve the plan. Tandem hands the work to agents that research, write
-the code, run your checks, and review the result, then asks you before anything is published or
-merged.
+Tandem lets you hand coding work to AI agents without babysitting them. You say what you want and
+approve the plan. Tandem handles the rest: it splits the work across agents, gives each one its own
+copy of the repository, checks and reviews every change, and remembers where everything stands. You
+stop juggling context windows, worktrees, and a mental list of half-finished tasks. You just ask.
 
-Tandem also keeps track of every task. You can close the terminal, come back tomorrow, and pick up
-where you left off: what's finished, what's still running, and what's waiting on you.
+Tandem runs locally on your Mac.
 
 ## Why use it
 
-- **You stay in charge.** Research starts on its own, but code changes wait for your approval.
-  Publishing a pull request and merging each need a separate yes. Tandem never merges on its own.
-- **Your checkout is never touched.** Every agent works in its own clean copy of the repository,
-  so your working directory can stay messy.
-- **Work is checked twice.** After an agent writes code, Tandem runs your project's own checks
-  (tests, types, lint), then a fresh agent that didn't write the code reviews it. If either finds
-  a problem, the coding agent fixes it and the checks run again. After three rounds Tandem stops
-  and asks whether to keep going.
-- **Progress survives restarts.** Tasks, plans, answers, and reports are saved to disk. A crash
-  or a closed terminal doesn't lose work.
-- **One place to talk.** You chat with one coordinator per project. It plans with you, dispatches
-  workers, and brings you only the questions that actually need you.
+- **No context juggling.** Each job gets a fresh agent with only what it needs, so you're never
+  nursing one long chat that's losing the thread.
+- **No worktree chores.** Tandem creates, reuses, and cleans up worktrees for you. Your own checkout
+  is never touched, so it can stay messy.
+- **Nothing to remember.** Every task is saved with its plan, progress, and open questions. Close
+  the terminal, come back tomorrow, and ask "where are we?"
+- **Code you can trust.** Your project's own checks (tests, types, lint) run on every change, then a
+  separate agent that didn't write the code reviews it. Work is only called done when both pass.
+  If fixes go three rounds without passing, Tandem stops and asks instead of looping.
+- **Costs you control.** You pick a model for each job, so research and review can run on cheaper
+  models while coding gets a stronger one. Tandem never switches to a pricier model on its own, and
+  it can show what each request cost.
+- **You approve what matters.** Research starts on its own, but code changes, pull requests, and
+  merges each wait for your yes. Tandem never merges by itself.
 - **Several projects at once.** Open multiple repositories in one session; each gets its own
-  coordinator and workers.
+  coordinator and agents.
 
 ## How a request flows
 
