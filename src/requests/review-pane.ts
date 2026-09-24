@@ -44,12 +44,15 @@ export type RequestReviewPaneDependencies = Readonly<{
 }>;
 
 /**
- * Styles the Markdown with glow when it is installed, and shows it as plain text otherwise.
+ * Styles the Markdown with glow when it is installed, and shows it as plain text otherwise. Glow
+ * wraps at the pane's own width: a `width` in the user's glow config would otherwise win, and a
+ * split pane narrower than it re-wraps every line mid-word.
  * ponytail: looks glow up on Tandem's PATH, not the pane's; bundle a renderer if glow proves rare.
  */
 export function briefViewerCommand(renderedPath: string): readonly string[] {
   const glow = Bun.which("glow");
-  return glow === null ? ["cat", "--", renderedPath] : [glow, "--", renderedPath];
+  if (glow === null) return ["cat", "--", renderedPath];
+  return ["sh", "-c", 'exec "$1" -w "$(tput cols)" -- "$2"', "sh", glow, renderedPath];
 }
 
 export function requestBriefMarkdownPath(home: string, requestId: string): string {

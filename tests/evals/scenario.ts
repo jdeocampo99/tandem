@@ -231,6 +231,8 @@ const PERSISTENT_LAUNCHERS: Readonly<Record<string, true>> = {
 };
 
 function isPersistentLaunch(argv: readonly string[]): boolean {
+  // A `sh -c` one-shot, such as the brief viewer, exits back to the shell like `cat` does.
+  if (argv[1] === "-c") return false;
   const launcher = (argv[0] ?? "").split("/").at(-1) ?? "";
   return PERSISTENT_LAUNCHERS[launcher] === true;
 }

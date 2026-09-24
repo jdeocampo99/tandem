@@ -288,7 +288,7 @@ test("the pane shows the brief with glow when it is installed, and plain text ot
 
     const [paneRun] = recording.herdrCommands("run");
     const viewer = briefViewerCommand(opened.renderedPath);
-    expect(viewer.at(0)).toBe(Bun.which("glow") ?? "cat");
+    expect(viewer).toContain(Bun.which("glow") ?? "cat");
     expect(viewer.at(-1)).toBe(opened.renderedPath);
     expect(paneRun?.at(-1)).toBe(quoteShellCommand(viewer));
   });
