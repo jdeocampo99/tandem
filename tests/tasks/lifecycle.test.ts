@@ -550,10 +550,101 @@ test("records failed validation, bounds fix rounds, and invalidates old review a
   expect(task.reviewRound).toBe(1);
   expect(task.generation).toBe(1);
   expect(task.reviewHead).toBeUndefined();
-  expect(task.validationEvidence).toHaveLength(0);
   expect(() =>
     transitionTask(task, { type: "begin-fixes", head: "head-1", generation: 1 }, context()),
   ).toThrow(TaskTransitionError);
+
+  // The failed check never carries forward, even when the round reports the same commit.
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head: "head-1", generation: 1 },
+    context(),
+  );
+  expect(task.stage).toBe("validating");
+  expect(task.validationEvidence).toHaveLength(0);
+});
+
+test("a review-only fix round goes straight to review and runs the checks once it passes", () => {
+  let task = implementationToReviewing();
+  task = transitionTask(
+    task,
+    { type: "record-review", review: review("review", false) },
+    context(),
+  );
+  task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
+  task = transitionTask(
+    task,
+    {
+      type: "begin-fixes",
+      head: "head-1",
+      generation: 0,
+      iterationScope: {
+        head: "head-1",
+        generation: 0,
+        policyDigest,
+        reproduces: [],
+        surfaces: [],
+        findingIds: ["finding-1"],
+      },
+    },
+    context(),
+  );
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head: "head-2", generation: 1 },
+    context(),
+  );
+  expect(task.stage).toBe("reviewing");
+  expect(task.validationEvidence).toHaveLength(0);
+
+  task = transitionTask(
+    task,
+    { type: "record-review", review: review("review", true, "head-2", 1) },
+    context(),
+  );
+  task = transitionTask(task, { type: "finish-review", head: "head-2", generation: 1 }, context());
+  expect(task.stage).toBe("validating");
+
+  task = transitionTask(
+    task,
+    {
+      type: "validation-succeeded",
+      head: "head-2",
+      generation: 1,
+      contract: "final",
+      policyDigest,
+      evidence: [evidence("head-2", "final")],
+    },
+    context(),
+  );
+  task = transitionTask(task, { type: "finish-review", head: "head-2", generation: 1 }, context());
+  expect(task.stage).toBe("ready");
+});
+
+test("a fix round that reports an already-validated commit skips the checks", () => {
+  let task = implementationToReviewing();
+  task = transitionTask(
+    task,
+    { type: "record-review", review: review("review", false) },
+    context(),
+  );
+  task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
+  task = transitionTask(task, { type: "begin-fixes", head: "head-1", generation: 0 }, context());
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head: "head-1", generation: 1 },
+    context(),
+  );
+  expect(task.stage).toBe("reviewing");
+  expect(task.validationEvidence).toEqual([evidence("head-1", "final")]);
+
+  task = transitionTask(
+    task,
+    { type: "record-review", review: review("review", true, "head-1", 1) },
+    context(),
+  );
+  task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 1 }, context());
+  expect(task.stage).toBe("ready");
 });
 
 test("carries finding identities and their status across review rounds", () => {

@@ -1,14 +1,15 @@
 # Tandem agent guide
 
-Local, OMP-first orchestration for durable repository work. Bun + strict TypeScript; macOS required
-for the task store's native `O_EXLOCK` locking.
+Tandem runs a coordinator conversation plus child OMP agents that research, implement, validate,
+review, and deliver repository changes, with every task saved to durable local state. Bun + strict
+TypeScript; macOS required for the task store's native `O_EXLOCK` locking.
 
 ## Start here
 
 1. Find the relevant domain below; read its implementation and matching `tests/<domain>/`.
 2. Follow imports and read only the relevant [behavioral contract](#read-on-demand), not the entire reference.
 3. Shared types/roles: [contracts.ts](src/contracts.ts). Service composition/scheduling:
-   [service/controller.ts](src/service/controller.ts). Setup/examples: [README.md](README.md).
+   [service/controller.ts](src/service/controller.ts). What users see and do: [README.md](README.md).
 
 ## Source layout
 
@@ -16,17 +17,17 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 
 | Working on | Start here |
 | --- | --- |
-| Normal `tandem`, onboarding, project selection | [main.ts](src/main.ts) → [terminal/](src/terminal/) |
+| `tandem` terminal command, onboarding, project selection | [main.ts](src/main.ts) → [terminal/](src/terminal/) |
 | Action CLI / JSON automation | [cli.ts](src/cli.ts) → [terminal/cli-application.ts](src/terminal/cli-application.ts) |
-| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
+| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `registry.ts`, `restart.ts` (`tandem update`), `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
 | Models, environment, policy | [config/](src/config/) |
 | Request briefs, approval revisions, review pane | [requests/](src/requests/): `brief.ts`, `store.ts`, `store-codec.ts`, `markdown.ts`, `review-pane.ts`, `workflow.ts` |
-| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts`, `inspection.ts` (`tandem status TASK_ID`) |
+| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts`, `question.ts`, `communication-protocol.ts`, `inspection.ts` (`tandem status TASK_ID`) |
 | Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `central.ts` (stop/save/re-enter), `central-review.ts` |
 | Request usage, cost, quota, elapsed-time receipts | [runtime/](src/runtime/): `usage.ts`, `usage-events.ts`, `usage-ledger.ts`, `usage-codec.ts`, `usage-receipt.ts` |
 | Model tier evidence and economical routing | [config/model-tier.ts](src/config/model-tier.ts), [workers/execution-routing.ts](src/workers/execution-routing.ts) |
 | Worker execution, results, control, validation | [workers/](src/workers/); entry points: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [validation-worker.ts](src/validation-worker.ts) |
-| OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
+| OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/) (`tool-guard.ts` limits coordinator tools); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
 | Worktree capacity and maintenance | [pool/](src/pool/) |
 | Evidence, PR publication, merge | [delivery/](src/delivery/): `preflight.ts` checks a ready task before publishing |
 | Artifacts, feedback, Lavish | [presentations/](src/presentations/) |
@@ -60,6 +61,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 - Separate decisions from effects; inject runners, clocks, IDs, and policy. Update all affected callers.
   No `any`, stubs, suppressed checks, or compatibility shims.
 - File moves must update imports and `import.meta.url` worker/extension resource paths together.
+- Running coordinators load extension code at launch; `tandem update` reloads them after a change.
 - Test observable behavior. Native process/terminal checks use isolated Herdr sessions and temporary
   Tandem homes, never the user's live state.
 - Cross-subsystem scenario evals live in [tests/evals/](tests/evals/). Reuse
@@ -97,4 +99,5 @@ Before changing behavior, read its contract:
 - Stale records/panes/leases: [Reconciling Tandem resources across sessions](docs/agent-reference.md#reconciling-tandem-resources-across-sessions).
 
 Keep this file a routing map and cross-cutting rules. Update links when code moves; put detailed
-behavior in the reference instead of accumulating incident-specific instructions here.
+behavior in the reference instead of accumulating incident-specific instructions here. The README
+is written for users: describe benefits and everyday use there, and keep contracts in the reference.
