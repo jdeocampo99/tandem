@@ -1,21 +1,17 @@
 import type { Stats } from "node:fs";
-import { lstat, mkdir, readdir, readFile, realpath } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { listenPresentation, openPresentation, pollPresentation } from "../adapters/lavish.ts";
 import type { Clock, CommandRequest, CommandRunner, TaskRecord } from "../contracts.ts";
-import { buildAgentBrief } from "../instructions.ts";
-import { parseWorkerResult, type WorkerJob, type WorkerResult } from "../workers/jobs.ts";
-import { writePrivateJson } from "./evidence.ts";
 import {
   ARTIFACT_FILE,
   clearRecordError,
   failedRecord,
   isWithin,
-  JOB_FILE,
   observationError,
+  type PresentationAgent,
   type PresentationRecord,
-  RESULT_FILE,
   readAbsolutePath,
   readSingleLine,
   readText,
@@ -24,7 +20,8 @@ import {
   validateRecord,
 } from "./records.ts";
 
-const PRIVATE_ENTRY_NAMES = [ARTIFACT_FILE, JOB_FILE, RESULT_FILE] as const;
+const DRAW_BRIEF_FILE = "brief.md";
+const PRIVATE_ENTRY_NAMES = [ARTIFACT_FILE, DRAW_BRIEF_FILE] as const;
 const MAX_HELP_BYTES = 8_000;
 const MAX_PLAYBOOK_BYTES = 2_000;
 const MAX_TOTAL_PLAYBOOK_BYTES = 6_000;
@@ -408,46 +405,58 @@ async function readLavishGuides(
   return sections.join("\n\n");
 }
 
-function buildPresentationPrompt(
+function buildDrawBrief(
   task: TaskRecord,
   objective: string,
   artifacts: readonly string[],
   artifactPath: string,
-  repository: string,
   guidance: Readonly<{ mockup: boolean; text: string }>,
 ): string {
-  const instructions = [
-    "You are the restricted presentation worker. Author the HTML artifact, but do not open or poll Lavish yourself.",
-    "The controller—not the restricted worker—opens Lavish after verifying the artifact and keeps a single tracked background feedback poll for each open presentation; feedback is an observation, never approval.",
-    `Write complete, useful HTML at exactly ${artifactPath}; do not write it to another path and do not modify the repository.`,
-    "Use only read, grep, glob, write, and edit. Bash is not available or permitted.",
-    `Subject project design source: ${repository}. Inspect and preserve its existing styles, tokens, components, and brand assets when present; do not replace them with a generic system.`,
+  const brief = [
+    "Tandem: the user wants a visual built on your research. Draw it now.",
+    `What to show:\n${boundedText(objective, "objective", MAX_OBJECTIVE_BYTES)}`,
+    `Write the complete HTML to exactly ${artifactPath}. Its folder is the only place you can write; do not change the repository.`,
+    "To use an image, font, or other file from the repository, copy it into that folder with copy_asset and reference it by relative path (./name). Never embed a path to the repository.",
+    "Do not open Lavish or call submit_report. Tandem opens the page when your turn ends, and the user's comments on it come back to you in this conversation.",
+    "When you finish, reply with one short line saying what you drew.",
     ...(guidance.mockup
       ? [
-          "Before writing any screen copy, read the subject project's AGENTS.md and CLAUDE.md for writing, copy, or design rules and read the files they name; those rules win over the mockup style guide where they conflict.",
+          "Before writing any screen copy, read the project's AGENTS.md and CLAUDE.md for writing, copy, or design rules and the files they name; those rules win over the mockup style guide where they conflict.",
           `Mockup style guide (follow it exactly):\n${guidance.text}`,
         ]
       : [
-          "Follow every matching Lavish playbook guide below before authoring HTML. The controller retrieved these guides; do not run unavailable Lavish commands.",
-          `Controller-retrieved Lavish guidance:\n${guidance.text}`,
+          "Follow every matching Lavish playbook guide below. Tandem retrieved them for you; do not run Lavish commands.",
+          `Lavish guidance:\n${guidance.text}`,
+          ...(task.acceptanceCriteria.length === 0
+            ? []
+            : [
+                `The research questions it should help answer:\n${boundedList(
+                  task.acceptanceCriteria,
+                  "task.acceptanceCriteria",
+                )
+                  .map((criterion) => `- ${criterion}`)
+                  .join("\n")}`,
+              ]),
         ]),
-    ...taskGuidance(task),
-  ];
-  const prompt = buildAgentBrief({
-    role: "presentation",
-    objective: boundedText(objective, "objective", MAX_OBJECTIVE_BYTES),
-    // The task's research or implementation checks would turn a mockup into a report.
-    acceptanceCriteria: guidance.mockup
+    ...(artifacts.length === 0
       ? []
-      : boundedList(task.acceptanceCriteria, "task.acceptanceCriteria"),
-    instructions,
-    reportPath: artifactPath,
-    artifacts: boundedList([...artifacts, repository], "artifacts"),
-  });
-  if (prompt.length > MAX_BRIEF_BYTES) {
-    throw new Error("presentation worker brief exceeded the bounded prompt limit");
+      : [`Supporting files:\n${artifacts.map((artifact) => `- ${artifact}`).join("\n")}`]),
+    ...taskGuidance(task),
+  ].join("\n\n");
+  if (brief.length > MAX_BRIEF_BYTES) {
+    throw new Error("presentation brief exceeded the bounded prompt limit");
   }
-  return prompt;
+  return brief;
+}
+
+/** The request that sends the user's Lavish comments back to the agent that drew the page. */
+export function buildRevisionBrief(artifactPath: string, feedback: string): string {
+  return [
+    "Tandem: the user commented on your visual in Lavish:",
+    boundedText(feedback, "feedback", MAX_BRIEF_BYTES - 1_000),
+    `Update ${artifactPath} in place to address it; keep the same file so the open tab reloads. Keep everything they did not ask to change. Use copy_asset for any repository file you need.`,
+    "When you finish, reply with one short line saying what you changed.",
+  ].join("\n\n");
 }
 
 async function verifyArtifact(paths: ValidatedRecordPaths): Promise<void> {
@@ -494,16 +503,22 @@ function signalRunner(run: CommandRunner, signal: AbortSignal | undefined): Comm
   };
 }
 
+/**
+ * Creates the private folder and the draw request for the research agent whose live job is
+ * `agent`. The agent writes the HTML; Tandem opens it once the agent's turn ends.
+ */
 export async function preparePresentation(input: {
   readonly task: TaskRecord;
   readonly id: string;
+  readonly requestId: string;
   readonly directory: string;
   readonly objective: string;
   readonly artifacts: readonly string[];
+  readonly agent: PresentationAgent;
   readonly now: string;
   readonly timeoutMs?: number;
   readonly run: CommandRunner;
-}): Promise<{ readonly record: PresentationRecord; readonly job: WorkerJob }> {
+}): Promise<PresentationRecord> {
   const run = readRunner(input.run);
   const id = readSingleLine(input.id, "id");
   const objective = boundedText(input.objective, "objective", MAX_OBJECTIVE_BYTES);
@@ -519,8 +534,7 @@ export async function preparePresentation(input: {
   await ensurePrivateDirectory(directory, repository);
 
   const artifactPath = join(directory, ARTIFACT_FILE);
-  const jobPath = join(directory, JOB_FILE);
-  const resultPath = join(directory, RESULT_FILE);
+  const briefPath = join(directory, DRAW_BRIEF_FILE);
   const mockup = isMockup(objective);
   const guidance = {
     mockup,
@@ -528,104 +542,64 @@ export async function preparePresentation(input: {
       ? (await readFile(MOCKUP_STYLE_PATH, "utf8")).trim()
       : await readLavishGuides(run, directory, repository, objective, artifacts, timeoutMs),
   };
-  const prompt = buildPresentationPrompt(
-    input.task,
-    objective,
-    artifacts,
-    artifactPath,
-    repository,
-    guidance,
-  );
-  const model = input.task.policy.config.models.presentation;
-  const job: WorkerJob = {
-    schemaVersion: 1,
-    id,
-    taskId,
-    generation,
-    role: "presentation",
-    cwd: directory,
-    model: { model: model.model, thinking: model.thinking },
-    prompt,
-    resultPath,
-    ...(timeoutMs === undefined ? {} : { timeoutMs }),
-  };
-  const record: PresentationRecord = {
+  const brief = buildDrawBrief(input.task, objective, artifacts, artifactPath, guidance);
+  await assertFreshPresentationEntries(directory);
+  await writeFile(briefPath, brief, { flag: "wx", mode: 0o600 });
+  return {
     id,
     taskId,
     generation,
     cwd: directory,
     artifactPath,
     objective,
-    jobPath,
-    resultPath,
-    status: "queued",
+    agent: input.agent,
+    request: {
+      id: readSingleLine(input.requestId, "requestId"),
+      kind: "draw",
+      briefPath,
+      requestedAt: now,
+    },
+    status: "running",
     createdAt: now,
     updatedAt: now,
   };
-  await assertFreshPresentationEntries(directory);
-  await writePrivateJson(jobPath, job);
-  return { record, job };
 }
 
-export async function completePresentation(input: {
+/** Writes one revision request next to the page, for the agent to read as its next turn. */
+export async function writeRevisionBrief(
+  record: PresentationRecord,
+  requestId: string,
+  feedback: string,
+): Promise<string> {
+  const paths = validateRecord(record);
+  const id = readSingleLine(requestId, "requestId");
+  if (!/^[A-Za-z0-9-]+$/u.test(id)) throw new TypeError("requestId must be a plain id");
+  const briefPath = join(paths.cwd, `revision-${id}.md`);
+  await writeFile(briefPath, buildRevisionBrief(paths.artifactPath, feedback), {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return briefPath;
+}
+
+/** Checks the agent's page and opens it in Lavish the first time. */
+export async function openDrawnPresentation(input: {
   readonly record: PresentationRecord;
-  readonly result: WorkerResult;
   readonly now: string;
   readonly run: CommandRunner;
 }): Promise<PresentationRecord> {
   const run = readRunner(input.run);
   const paths = validateRecord(input.record);
   const now = readSingleLine(input.now, "now");
-  if (input.record.status !== "queued" && input.record.status !== "running") {
-    throw new Error(
-      `presentation completion requires a queued or running record, not ${input.record.status}`,
-    );
-  }
-  const result = parseWorkerResult(input.result);
-  if (
-    result.id !== input.record.id ||
-    result.taskId !== input.record.taskId ||
-    result.generation !== input.record.generation ||
-    result.role !== "presentation"
-  ) {
-    throw new Error("presentation worker result identity does not match the presentation record");
-  }
-  if (result.status === "needs-decision") {
-    if (result.question === undefined) {
-      return failedRecord(
-        input.record,
-        now,
-        "presentation needs-decision result omitted its question",
-      );
-    }
-    return {
-      ...input.record,
-      status: "blocked",
-      updatedAt: now,
-      question: {
-        id: result.id,
-        text: result.question.text,
-        ...(result.question.recommendation === undefined
-          ? {}
-          : { recommendation: result.question.recommendation }),
-      },
-      ...(result.error === undefined ? {} : { error: result.error }),
-    };
-  }
-  if (result.status !== "completed") {
+  try {
+    await verifyArtifact(paths);
+  } catch {
     return failedRecord(
       input.record,
       now,
-      result.error ?? `presentation worker returned ${result.status}`,
+      "The research agent finished without writing the page; its pane shows what it said.",
     );
   }
-  if (result.artifactPath !== paths.artifactPath) {
-    throw new Error(
-      "presentation worker result artifact does not match the expected artifact path",
-    );
-  }
-  await verifyArtifact(paths);
-
   try {
     const observation = await openPresentation(run, paths.artifactPath, paths.cwd);
     const status = statusForObservation(observation);

@@ -1,9 +1,14 @@
 import { expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { WorkerJob } from "../../src/workers/jobs.ts";
 import {
+  copyMockupAsset,
   idleAfterResult,
   isBackgroundResultWake,
+  mockupWriteDecision,
   planAbortWithReason,
   reviewSummary,
   turnStalled,
@@ -210,4 +215,82 @@ test("a running tool or a finished turn is never stalled", () => {
   const late = { lastActivityAt: 0, now: 60 * 60_000 };
   expect(turnStalled({ ...late, turnActive: true, toolsRunning: 1 })).toBe(false);
   expect(turnStalled({ ...late, turnActive: false, toolsRunning: 0 })).toBe(false);
+});
+
+test("a scout writes only inside the mockup folder it was asked to draw in", () => {
+  const base = { role: "scout", cwd: "/tmp/worktree" } as const;
+  const artifactDir = "/tmp/presentations/p-1";
+  expect(
+    mockupWriteDecision({ ...base, toolName: "read", toolInput: {}, artifactDir: undefined }),
+  ).toBeUndefined();
+  expect(
+    mockupWriteDecision({
+      ...base,
+      toolName: "write",
+      toolInput: { path: `${artifactDir}/artifact.html` },
+      artifactDir: undefined,
+    }),
+  ).toMatchObject({ block: true });
+  expect(
+    mockupWriteDecision({
+      ...base,
+      toolName: "write",
+      toolInput: { path: `${artifactDir}/artifact.html` },
+      artifactDir,
+    }),
+  ).toBe("allow");
+  for (const path of ["src/app.ts", "/tmp/presentations/p-10/artifact.html", "xd://mcp__tool"]) {
+    expect(
+      mockupWriteDecision({ ...base, toolName: "edit", toolInput: { path }, artifactDir }),
+    ).toMatchObject({ block: true });
+  }
+  expect(mockupWriteDecision({ ...base, toolName: "copy_asset", toolInput: {}, artifactDir })).toBe(
+    "allow",
+  );
+  expect(
+    mockupWriteDecision({
+      role: "implementer",
+      cwd: "/tmp/worktree",
+      toolName: "write",
+      toolInput: { path: "src/app.ts" },
+      artifactDir: undefined,
+    }),
+  ).toBeUndefined();
+});
+
+test("copy_asset copies a checkout file byte for byte and refuses anything outside it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-copy-asset-"));
+  try {
+    const cwd = join(root, "worktree");
+    const artifactDir = join(root, "presentation");
+    await mkdir(join(cwd, "public"), { recursive: true });
+    await mkdir(artifactDir);
+    const bytes = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x00, 0xff, 0x10, 0x80]);
+    await writeFile(join(cwd, "public", "jr.webp"), bytes);
+    const target = await copyMockupAsset({
+      cwd,
+      artifactDir,
+      from: "public/jr.webp",
+      name: "jr.webp",
+    });
+    expect(target).toBe(join(artifactDir, "jr.webp"));
+    expect(new Uint8Array(await readFile(target))).toEqual(bytes);
+
+    await writeFile(join(root, "secret.txt"), "secret");
+    await symlink(join(root, "secret.txt"), join(cwd, "public", "link.txt"));
+    await expect(
+      copyMockupAsset({ cwd, artifactDir, from: "../secret.txt", name: "secret.txt" }),
+    ).rejects.toThrow("inside the repository checkout");
+    await expect(
+      copyMockupAsset({ cwd, artifactDir, from: "public/link.txt", name: "link.txt" }),
+    ).rejects.toThrow("inside the repository checkout");
+    await expect(
+      copyMockupAsset({ cwd, artifactDir, from: "public/jr.webp", name: "../jr.webp" }),
+    ).rejects.toThrow("plain file name");
+    await expect(
+      copyMockupAsset({ cwd, artifactDir, from: "public", name: "dir" }),
+    ).rejects.toThrow("regular file");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
