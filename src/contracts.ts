@@ -1,3 +1,5 @@
+import type { PrReviewState } from "./pr-review/state.ts";
+
 export const MODEL_ROLE_ORDER = [
   "coordinator",
   "scout",
@@ -20,7 +22,10 @@ export function isAgentRole(value: unknown): value is AgentRole {
   return typeof value === "string" && MODEL_ROLE_ORDER.includes(value as AgentRole);
 }
 
-export type TaskKind = "scout" | "implementation";
+export type TaskKind = "scout" | "implementation" | "pr-review";
+
+/** Kinds the generic create action starts; a PR review starts through its own action. */
+export type CreatableTaskKind = Exclude<TaskKind, "pr-review">;
 
 export type TaskStage =
   | "awaiting-approval"
@@ -717,6 +722,8 @@ export type TaskRecord = {
   readonly communication?: TaskCommunication;
   readonly pullRequest?: PullRequestMetadata;
   readonly cleanup?: TaskCleanupState;
+  /** The pull request a `pr-review` task reviews; present on exactly those tasks. */
+  readonly prReview?: PrReviewState;
 };
 
 export type CommandRequest = {

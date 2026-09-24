@@ -8,6 +8,7 @@ import type {
   IsoTimestamp,
   RepoPolicy,
   ReviewLens,
+  TaskKind,
   TaskQuestion,
   TaskRecord,
 } from "../contracts.ts";
@@ -32,7 +33,7 @@ import type { WorkerRole } from "../workers/jobs.ts";
 export const DEFAULT_STARTUP_GRACE_MS = 15 * 1000;
 
 export type TaskCreationRequest = Readonly<{
-  readonly kind: "scout" | "implementation";
+  readonly kind: TaskKind;
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
   readonly manualVerification?: readonly string[];
@@ -42,6 +43,7 @@ export type TaskCreationRequest = Readonly<{
   readonly researchHandoffs?: TaskRecord["researchHandoffs"];
   readonly researchContinuation?: TaskRecord["researchContinuation"];
   readonly skill?: TaskRecord["skill"];
+  readonly prReview?: TaskRecord["prReview"];
 }>;
 
 export function isTerminalTask(task: TaskRecord): boolean {
@@ -267,8 +269,17 @@ export function durableOperation(
   };
 }
 
+/** A PR review runs as a read-only scout job with its own brief, tools, and report shape. */
 export function workerRoleForTask(task: TaskRecord): WorkerRole {
-  return task.kind === "scout" ? "scout" : "implementer";
+  return task.kind === "implementation" ? "implementer" : "scout";
+}
+
+/**
+ * Whose model settings a task's worker runs on. A PR review runs as a scout job but reads a
+ * teammate's code cold, so it gets the review model.
+ */
+export function modelRoleForTask(task: Pick<TaskRecord, "kind">, role: WorkerRole): WorkerRole {
+  return task.kind === "pr-review" ? "reviewer" : role;
 }
 
 export function roleChannel(role: WorkerRole): "implementation" | "review" {
@@ -473,7 +484,7 @@ export function recognizesAppliedEvent(task: TaskRecord, event: TaskEvent): bool
   switch (event.type) {
     case "scout-report-complete":
       return (
-        task.kind === "scout" &&
+        task.kind !== "implementation" &&
         task.stage === "completed" &&
         task.generation === event.generation &&
         task.reportPath === event.reportPath
@@ -543,5 +554,6 @@ export function taskInputFor(
       ? {}
       : { researchContinuation: request.researchContinuation }),
     ...(request.skill === undefined ? {} : { skill: request.skill }),
+    ...(request.prReview === undefined ? {} : { prReview: request.prReview }),
   };
 }

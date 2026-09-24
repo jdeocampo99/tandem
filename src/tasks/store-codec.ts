@@ -53,6 +53,7 @@ import {
   type ValidationEvidence,
   type WorktreeLease,
 } from "../contracts.ts";
+import { type PrReviewState, parsePrReviewState } from "../pr-review/state.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
 import { FINDING_STATUSES } from "./findings.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
@@ -76,7 +77,7 @@ const TASK_STAGES: readonly TaskStage[] = [
   "completed",
   "merged",
 ];
-const TASK_KINDS: readonly TaskKind[] = ["scout", "implementation"];
+const TASK_KINDS: readonly TaskKind[] = ["scout", "implementation", "pr-review"];
 const INSTRUCTION_CHANNELS: readonly InstructionChannel[] = [
   "implementation",
   "validation",
@@ -139,6 +140,7 @@ const TOP_LEVEL_KEYS = [
   "communication",
   "pullRequest",
   "cleanup",
+  "prReview",
 ] as const;
 const TASK_CLEANUP_STATUSES: readonly TaskCleanupStatus[] = [
   "released",
@@ -1046,6 +1048,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     ? requiredValue(value, "skill", source)
     : undefined;
   const kind = requiredEnum(value, "kind", TASK_KINDS, source);
+  if (kind !== "pr-review" && Object.hasOwn(value, "prReview")) {
+    failState(source, "only pr-review tasks may record a pull request to review");
+  }
   const researchContinuation = parseResearchContinuation(value, kind, source);
   const taskBase = {
     schemaVersion: 1 as const,
@@ -1135,7 +1140,19 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     ...(cleanupValue === undefined
       ? {}
       : { cleanup: parseTaskCleanup(cleanupValue, `${source}.cleanup`) }),
+    ...(kind === "pr-review" ? { prReview: parseStoredPrReview(value, source) } : {}),
   };
+}
+
+/** A `pr-review` task always carries its PR state, and no other kind may carry one. */
+function parseStoredPrReview(value: UnknownRecord, source: string): PrReviewState {
+  if (!Object.hasOwn(value, "prReview"))
+    failState(source, "a pr-review task must record its pull request");
+  try {
+    return parsePrReviewState(value.prReview, `${source}.prReview`);
+  } catch (error) {
+    failState(`${source}.prReview`, error instanceof Error ? error.message : String(error), error);
+  }
 }
 
 export function serializeTaskRecord(task: TaskRecord): string {

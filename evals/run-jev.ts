@@ -18,13 +18,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionContext, InputEvent } from "@oh-my-pi/pi-coding-agent";
 import {
+  choiceConfidence,
   evaluateJev,
   JEV_MODEL,
   JevEvaluationError,
   type JevEvaluationResponse,
 } from "../src/adapters/typesafe.ts";
 import {
-  choiceConfidence,
   classifyPrompt,
   extractPromptTaskId,
   handlePromptInput,

@@ -22,6 +22,7 @@ import {
   type ValidationEvidence,
   type WorktreeLease,
 } from "../contracts.ts";
+import type { PrReviewRound, PrReviewState } from "../pr-review/state.ts";
 import {
   canSkipValidation,
   FINAL_REVIEW_LENSES,
@@ -56,6 +57,8 @@ export type TaskInput = Readonly<{
   readonly researchContinuation?: ResearchContinuation;
   /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
   readonly skill?: SkillInvocation;
+  /** Required for, and only for, a `pr-review` task. */
+  readonly prReview?: PrReviewState;
 }>;
 
 export type TaskTransitionContext = Readonly<{
@@ -147,6 +150,8 @@ type ScoutReportCompleteEvent = Readonly<{
   readonly type: "scout-report-complete";
   readonly reportPath: string;
   readonly generation: number;
+  /** A finished PR review round; a `pr-review` answer to a question carries none. */
+  readonly prReviewRound?: PrReviewRound;
 }>;
 
 type PauseEvent = Readonly<{
@@ -288,8 +293,11 @@ function assertTaskInput(input: TaskInput): void {
   if (!isNonEmptyText(input.repoPath)) {
     throw new TypeError("Task repoPath must be a non-empty string");
   }
-  if (input.kind !== "scout" && input.kind !== "implementation") {
+  if (input.kind !== "scout" && input.kind !== "implementation" && input.kind !== "pr-review") {
     throw new TypeError(`Unsupported task kind: ${String(input.kind)}`);
+  }
+  if ((input.kind === "pr-review") !== (input.prReview !== undefined)) {
+    throw new TypeError("prReview is required for, and only for, pr-review tasks");
   }
   if (!isNonEmptyText(input.objective)) {
     throw new TypeError("Task objective must be a non-empty string");
@@ -787,7 +795,8 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
 export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
   assertTimestamp(now);
   assertTaskInput(input);
-  const scopeApproved = input.kind === "scout";
+  // Research and PR review only read, so they start without a scope approval.
+  const scopeApproved = input.kind === "scout" || input.kind === "pr-review";
   return {
     schemaVersion: 1,
     id: input.id,
@@ -815,6 +824,7 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
       ? {}
       : { researchHandoffs: [...input.researchHandoffs] }),
     ...(input.skill === undefined ? {} : { skill: { ...input.skill } }),
+    ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
     ...(input.kind === "scout"
       ? {
           researchContinuation:
@@ -824,6 +834,37 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
         }
       : {}),
   };
+}
+
+/** Records a PR review round, or an answer to a follow-up question, and tells the coordinator. */
+function completePrReviewRun(
+  task: TaskRecord,
+  event: ScoutReportCompleteEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  const state = task.prReview;
+  if (state === undefined) {
+    throw new TaskTransitionError("invalid-input", task, "pr-review task has no pull request");
+  }
+  const round = event.prReviewRound;
+  if ((state.mode === "question") !== (round === undefined)) {
+    throw new TaskTransitionError(
+      "invalid-input",
+      task,
+      `A ${state.mode} run ${round === undefined ? "needs" : "cannot record"} a review round`,
+    );
+  }
+  const prReview: PrReviewState =
+    round === undefined ? state : { ...state, rounds: [...state.rounds, round] };
+  return commitWithNotification(
+    task,
+    context,
+    { stage: "completed", reportPath: event.reportPath, prReview },
+    round === undefined
+      ? `Answer about ${state.ref.repo}#${state.ref.number} is ready for task ${task.id}; read it at ${event.reportPath} and pass it on`
+      : `PR review of ${state.ref.repo}#${state.ref.number} is ready for task ${task.id}; show it with review-show`,
+    "coordinator",
+  );
 }
 
 export function transitionTask(
@@ -864,7 +905,7 @@ export function transitionTask(
       assertWorktree(event.worktree, task);
       assertEndpoints(event.endpoints, task);
       return commitTask(task, context.now, {
-        stage: task.kind === "scout" ? "scouting" : "implementing",
+        stage: task.kind === "implementation" ? "implementing" : "scouting",
         worktree: event.worktree,
         endpoints: [...event.endpoints],
       });
@@ -1069,7 +1110,7 @@ export function transitionTask(
       });
     }
     case "follow-up-research": {
-      if (task.kind !== "scout" || task.stage !== "completed") {
+      if (task.kind === "implementation" || task.stage !== "completed") {
         invalidStage(task, event.type, ["completed"]);
       }
       const withoutCleanup = clearCleanup(task);
@@ -1145,12 +1186,20 @@ export function transitionTask(
       );
     }
     case "scout-report-complete": {
-      if (task.stage !== "scouting" || task.kind !== "scout") {
+      if (task.stage !== "scouting" || task.kind === "implementation") {
         invalidStage(task, event.type, ["scouting"]);
       }
       assertCurrentGeneration(task, event.generation, "Scout report");
       if (!isNonEmptyText(event.reportPath)) {
         throw new TaskTransitionError("invalid-input", task, "Scout reportPath must be non-empty");
+      }
+      if (task.kind === "pr-review") return completePrReviewRun(task, event, context);
+      if (event.prReviewRound !== undefined) {
+        throw new TaskTransitionError(
+          "invalid-input",
+          task,
+          "Only a pr-review task records a review round",
+        );
       }
       return commitWithNotification(
         task,

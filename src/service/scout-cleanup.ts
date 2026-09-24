@@ -17,6 +17,7 @@ import type {
   TaskRecord,
   WorktreeLease,
 } from "../contracts.ts";
+import { removeReviewWorktree } from "../pr-review/worktree.ts";
 import { activeRuntimeJob, taskRuntime, unreleasedReservation } from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
 import {
@@ -532,9 +533,16 @@ export async function releaseTerminalTaskResources(
       });
     }
 
-    const cleanupFailure = await runCleanupCommands(deps, task.repoPath, runtime.worktree?.path);
+    // A PR review worktree holds someone else's repository, where the project's commands do not apply.
+    const cleanupFailure =
+      task.kind === "pr-review"
+        ? undefined
+        : await runCleanupCommands(deps, task.repoPath, runtime.worktree?.path);
     const settle = async (): Promise<TaskCleanupOutcome> => {
       const lease = runtime.worktree;
+      if (lease !== undefined && task.kind === "pr-review") {
+        return settlePrReviewWorktree(deps, task, lease, panes.closedPaneIds);
+      }
       if (lease === undefined) {
         return recordCleanupAttempt(deps, task, {
           closedPaneIds: panes.closedPaneIds,
@@ -606,6 +614,38 @@ export async function releaseTerminalTaskResources(
     return cleanupFailure === undefined
       ? outcome
       : { ...outcome, reason: `${outcome.reason}; ${cleanupFailure}` };
+  });
+}
+
+/**
+ * Keeps a finished PR review's worktree for follow-up questions and re-reviews, and removes it once
+ * the user closes the review or cancels the task. Only the review worktree and its refs go; the
+ * user's checkout is otherwise untouched.
+ */
+async function settlePrReviewWorktree(
+  deps: TaskCleanupDependencies,
+  task: TaskRecord,
+  lease: WorktreeLease,
+  closedPaneIds: readonly string[],
+): Promise<TaskCleanupOutcome> {
+  const state = task.prReview;
+  if (state !== undefined && state.closed !== true && task.stage !== "cancelled") {
+    return recordCleanupAttempt(deps, task, {
+      closedPaneIds,
+      leaseReleased: false,
+      status: "retained",
+      reason:
+        "the review checkout is kept for follow-up questions and re-reviews until the review is closed",
+    });
+  }
+  if (state !== undefined) {
+    await removeReviewWorktree(deps.run, { checkout: lease.root, path: lease.path }, state.ref);
+  }
+  return recordCleanupAttempt(deps, task, {
+    closedPaneIds,
+    leaseReleased: true,
+    status: "released",
+    reason: "the review checkout was removed",
   });
 }
 

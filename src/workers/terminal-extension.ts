@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type {
   ExtensionAPI,
@@ -7,6 +8,8 @@ import { matchesKey } from "@oh-my-pi/pi-tui";
 import { runCommand } from "../adapters/commands.ts";
 import { createHerdrStatusReporter, type HerdrAgentState } from "../adapters/herdr-status.ts";
 import type { Finding, ReviewResult } from "../contracts.ts";
+import { commentableLines } from "../pr-review/diff.ts";
+import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import { isBlockingFinding } from "../tasks/findings.ts";
 import {
@@ -304,6 +307,15 @@ function terminalState(
   };
 }
 
+/** The lines a PR review's comments may anchor on, read from the diff the run was given. */
+async function reviewAnchors(
+  job: WorkerJob,
+): Promise<ReadonlyMap<string, ReadonlySet<number>> | undefined> {
+  const diffPath = job.prReview?.diffPath;
+  if (diffPath === undefined || job.prReview?.structuredReport !== true) return undefined;
+  return commentableLines(await readFile(diffPath, "utf8"));
+}
+
 export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise<void> {
   const jobPath = process.env[WORKER_JOB_PATH_ENV];
   if (jobPath === undefined || jobPath.trim().length === 0) return;
@@ -450,7 +462,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   ): Promise<WorkerResult | ReportRejection> => {
     try {
       assertSelectedModel(expectedModelParts(job.model.model), ctx.model);
-      const report = resolveSubmittedReport(job, submission);
+      const report = resolveSubmittedReport(job, submission, await reviewAnchors(job));
       const revision = await instructionRevision(job, report.status !== "failed");
       return resultFor(job, report.status, report.text, {
         ...(report.error === undefined ? {} : { error: report.error }),
@@ -651,6 +663,20 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     await persistState("closing", true, confirmed.id);
   };
 
+  /** A PR reviewer's shell may only read; anything else is refused with the reason. */
+  const guardReviewShell = (
+    event: Readonly<{ toolName: string; input: unknown }>,
+  ): { block: true; reason: string } | undefined => {
+    if (job.prReview === undefined || event.toolName !== "bash") return undefined;
+    const command =
+      typeof event.input === "object" && event.input !== null && "command" in event.input
+        ? event.input.command
+        : undefined;
+    const refusal =
+      typeof command === "string" ? readOnlyCommandRefusal(command) : "bash needs a command";
+    return refusal === undefined ? undefined : { block: true, reason: refusal };
+  };
+
   const guardTool = (toolName: string): { block: true; reason: string } | undefined => {
     if (
       !delegatedSettled &&
@@ -668,7 +694,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     };
   };
 
-  pi.on("tool_call", (event) => guardTool(event.toolName));
+  pi.on("tool_call", (event) => guardTool(event.toolName) ?? guardReviewShell(event));
 
   pi.on("session_start", async (_event, ctx) => {
     traceWorkerTurn(jobPath, "session_start");

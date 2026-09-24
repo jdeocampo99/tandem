@@ -120,6 +120,7 @@ Talk to it in plain language. Some things you can say:
 - "Also make the toggle remember the last choice." (a follow-up for work you already approved)
 - "Open a draft PR so I can see progress."
 - "Publish it." / "Merge it."
+- "Review https://github.com/acme/api/pull/7" (or "skim the idea behind …", or "check the migration in …")
 
 When a worker needs a decision, the coordinator relays the question and a recommendation. It will
 answer routine questions itself when your approved plan already settles them, and brings you
@@ -127,6 +128,20 @@ anything involving product choices, scope changes, credentials, or publishing.
 
 The coordinator also has a `/tandem` command for direct actions (for example
 `/tandem restart TASK_ID` to restart one stuck worker). Type `/tandem` to see the list.
+
+### Reviewing a teammate's pull request
+
+Paste a PR link and ask for a review. Tandem finds the repository on your machine (it looks under
+`~/Coding/Projects`, or the folders in `TANDEM_PROJECT_ROOTS`, and asks if it can't tell), checks out
+the PR in its own worktree without touching your branch, and comes back with what the PR does and
+why, the order to read it in, a diagram of the change when it helps, the concerns that matter, and
+draft comments written the way a teammate would write them. Bigger reviews open as a page you can
+leave notes on.
+
+Tell it what to change ("drop the nit", "make the first one blocking"), ask it questions about the
+code, and when you're happy, say whether to comment, approve, or request changes. It posts one
+review under your name only after you confirm. When the author pushes again, ask for a re-review:
+it looks only at what changed and tells you which of your comments were addressed.
 
 ## Terminal commands
 

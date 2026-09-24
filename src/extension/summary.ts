@@ -26,6 +26,8 @@ export const DIGEST_MAX_CHARS = 8_000;
 export const ACTION_SUMMARY_MAX_TEXT = 220;
 export const ACTION_SUMMARY_MAX_ITEMS = 6;
 export const ACTION_RESULT_MAX_CHARS = 4_000;
+/** A review with many comments runs long; it is still shown in full up to this bound. */
+const PR_REVIEW_RESULT_MAX_CHARS = 24_000;
 export const ACTION_FULL_RESULT_MAX_CHARS = 12_000;
 const TERMINAL_TASK_STAGES: Readonly<Partial<Record<TaskRecord["stage"], true>>> = {
   cancelled: true,
@@ -854,6 +856,24 @@ function isNonEmptyEntry(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/**
+ * PR review results carry text meant for the user: a one-line message, the review itself, or raw
+ * page notes. The review is shown whole, since it is the point of the action.
+ */
+function summarizePrReview(result: unknown): string {
+  const value = summaryRecord(result);
+  if (value === undefined) return boundedJson(result, ACTION_RESULT_MAX_CHARS);
+  const parts: string[] = [];
+  if (typeof value.taskId === "string") parts.push(`Task ${value.taskId}.`);
+  if (typeof value.message === "string") parts.push(value.message);
+  if (typeof value.pageUrl === "string") parts.push(`Review page: ${value.pageUrl}`);
+  if (typeof value.text === "string") parts.push("", value.text);
+  if (typeof value.feedback === "string") {
+    parts.push(value.feedback.trim().length === 0 ? "No notes on the page yet." : value.feedback);
+  }
+  return boundedOutput(parts.join("\n"), PR_REVIEW_RESULT_MAX_CHARS);
+}
+
 export function summarizeTandemActionValue(action: TandemAction["action"], value: unknown): string {
   if (action === "list" || action === "tick") {
     return isTaskArray(value)
@@ -894,6 +914,18 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     return summarizeRequestBrief(value);
   }
   if (action === "request-receipt") return summarizeRequestReceipt(value);
+  if (
+    action === "review-pr" ||
+    action === "review-show" ||
+    action === "review-edit" ||
+    action === "review-post" ||
+    action === "review-notes"
+  ) {
+    return summarizePrReview(value);
+  }
+  if (action === "review-again" || action === "review-close") {
+    return isTaskRecord(value) ? summarizeTask(value) : boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  }
   if (action === "presentations" || action === "present" || action === "feedback") {
     return summarizePresentations(action, value);
   }

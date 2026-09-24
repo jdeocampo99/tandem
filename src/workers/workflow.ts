@@ -36,6 +36,11 @@ import type {
   TaskQuestion,
   TaskRecord,
 } from "../contracts.ts";
+import { buildPrReviewBrief } from "../pr-review/brief.ts";
+import { renderReviewText } from "../pr-review/render.ts";
+import { checkReview } from "../pr-review/review.ts";
+import { preparePrReviewRun, readRunFiles } from "../pr-review/run.ts";
+import { type PrReviewRound, prReviewRunDiffPath } from "../pr-review/state.ts";
 import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "../recovery/central-review.ts";
 import {
   activeReservations,
@@ -86,6 +91,7 @@ import {
   jobDirectoryFor,
   jobPaths,
   makeDurableJob,
+  modelRoleForTask,
   nowMilliseconds,
   recognizesAppliedEvent,
   replaceJob,
@@ -288,6 +294,7 @@ function attemptNumber(runtime: RuntimeTaskState, role: WorkerRole): number {
 function priorExecutionAttempt(
   runtime: RuntimeTaskState,
   role: WorkerRole,
+  modelRole: WorkerRole,
   pinned: Readonly<Record<AgentRole, ModelSpec>>,
 ): PriorExecutionAttempt | undefined {
   const operations = roleOperations(runtime, role);
@@ -296,7 +303,7 @@ function priorExecutionAttempt(
   if (last.phase !== "failed" && last.phase !== "quarantined") return undefined;
   return {
     operationId: last.id,
-    selector: last.routing?.selector ?? pinned[role].model,
+    selector: last.routing?.selector ?? pinned[modelRole].model,
     outcome: last.phase === "failed" ? "known-safe-failure" : "uncertain",
   };
 }
@@ -767,7 +774,37 @@ export class WorkerWorkflow {
         return;
       }
       const reportPath = reportPathFor(job.jobPath);
-      await writeTextAtomically(reportPath, result.text);
+      const prReviewRound =
+        task.prReview === undefined || task.prReview.mode === "question"
+          ? undefined
+          : await this.readPrReviewRound(task, task.prReview, job, result.text);
+      if (prReviewRound instanceof Error) {
+        const reason = `the PR review could not be read: ${prReviewRound.message}`;
+        await this.consumeJob(
+          task.id,
+          job.id,
+          claim,
+          {
+            type: "block",
+            reason,
+            cause: {
+              group: "unusable-result",
+              kind: "worker-failed",
+              summary: "The PR reviewer's result couldn't be read.",
+              detail: reason,
+              jobId: job.id,
+            },
+          },
+          instructionOptions(result.instructionRevision),
+        );
+        return;
+      }
+      await writeTextAtomically(
+        reportPath,
+        task.prReview === undefined || prReviewRound === undefined
+          ? result.text
+          : renderReviewText(task.prReview, prReviewRound),
+      );
       await this.consumeJob(
         task.id,
         job.id,
@@ -776,6 +813,7 @@ export class WorkerWorkflow {
           type: "scout-report-complete",
           reportPath,
           generation: job.generation,
+          ...(prReviewRound === undefined ? {} : { prReviewRound }),
         },
         instructionOptions(result.instructionRevision),
       );
@@ -1559,6 +1597,96 @@ export class WorkerWorkflow {
       fencingRevision: operation.fencingRevision,
       claimOwner: operation.claimOwner,
     };
+    const lease =
+      task.kind === "pr-review"
+        ? await this.preparePrReviewLease(task, runtime, reservation, claim)
+        : await this.prepareTaskLease(task, runtime, reservation, claim);
+    if (lease === "stopped") return;
+    if (lease === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      const noLeaseReason = "worktree allocation returned no lease";
+      await this.blockIfOperationClaim(task.id, noLeaseReason, claim, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: "Tandem couldn't set up a working copy for this task.",
+        detail: noLeaseReason,
+      });
+      return;
+    }
+    const launch = await this.ensureLaunchEndpoint(
+      task,
+      runtime,
+      claim,
+      role,
+      lease,
+      reservation.reservation,
+      ["queued"],
+    );
+    if (launch === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      return;
+    }
+    try {
+      await this.transitionIfOperationClaim(task.id, claim, {
+        type: "start",
+        worktree: lease,
+        endpoints: [launch.endpoint],
+      });
+    } catch (error) {
+      if (launch.created) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      }
+      const reason = `task start transition failed ${launch.created ? "after pane allocation" : "with recovered pane"}: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "transition-failed",
+        summary: "Tandem couldn't start this task.",
+        detail: reason,
+      });
+      return;
+    }
+    const currentTask = await this.#deps.getTask(task.id);
+    const expectedStage = role === "scout" ? "scouting" : "implementing";
+    if (currentTask.stage !== expectedStage) {
+      if (["paused", "blocked", "cancelled", "completed", "merged"].includes(currentTask.stage)) {
+        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      }
+      return;
+    }
+    const currentRuntime = await this.#deps.runtimeFor(task.id);
+    if (currentRuntime === undefined || currentRuntime.worktree === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      const reason = "runtime lost its acquired worktree before worker launch";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "The task's working copy is missing.",
+        detail: reason,
+      });
+      return;
+    }
+    const writer = currentWriter(currentRuntime);
+    if (writer === undefined) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      const reason = "runtime lost its worker endpoint before launch";
+      await this.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "The worker's terminal is gone.",
+        detail: reason,
+      });
+      return;
+    }
+    await this.launchAgent(currentTask, currentRuntime, writer, role);
+  }
+
+  /** Leases and checks a pool worktree at the pinned source commit for a scout or implementation. */
+  private async prepareTaskLease(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    reservation: ReservationResult,
+    claim: OperationClaim,
+  ): Promise<NonNullable<RuntimeTaskState["worktree"]> | undefined | "stopped"> {
     const adoption =
       runtime.worktree === undefined ? await this.adoptableScoutWorktree(task) : undefined;
     if (runtime.worktree === undefined && adoption === undefined) {
@@ -1571,7 +1699,7 @@ export class WorkerWorkflow {
       );
       if (poolReady !== true) {
         await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-        return;
+        return "stopped";
       }
     }
     let lease = runtime.worktree;
@@ -1703,7 +1831,7 @@ export class WorkerWorkflow {
         );
         if (prepared === undefined) {
           await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-          return;
+          return "stopped";
         }
         lease = prepared;
       }
@@ -1726,84 +1854,58 @@ export class WorkerWorkflow {
         summary: "Tandem couldn't set up a working copy for this task.",
         detail: noLeaseReason,
       });
-      return;
+      return "stopped";
     }
-    if (lease === undefined) {
+    return lease;
+  }
+
+  /**
+   * Readies the PR review worktree from the user's own checkout and writes the run's diff and
+   * context. It replaces the pool lease: a review never uses the coordinator's source commit.
+   */
+  private async preparePrReviewLease(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    reservation: ReservationResult,
+    claim: OperationClaim,
+  ): Promise<NonNullable<RuntimeTaskState["worktree"]> | "stopped"> {
+    const state = task.prReview;
+    try {
+      if (state === undefined) throw new Error("the task records no pull request");
+      const lease = await this.withOperationEffect(
+        task.id,
+        claim,
+        task.generation,
+        ["queued"],
+        async ({ task: currentTask }) => {
+          const prepared = await preparePrReviewRun({
+            run: this.#deps.run,
+            clock: this.#deps.clock,
+            home: this.#deps.home,
+            taskId: currentTask.id,
+            holder: `${this.#deps.sessionId}:${currentTask.id}`,
+            generation: currentTask.generation,
+            state: currentTask.prReview ?? state,
+            ...(runtime.worktree === undefined ? {} : { existing: runtime.worktree }),
+          });
+          await this.saveWorktree(currentTask.id, prepared.lease, claim);
+          return prepared.lease;
+        },
+      );
+      if (lease !== undefined) return lease;
       await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      const noLeaseReason = "worktree allocation returned no lease";
-      await this.blockIfOperationClaim(task.id, noLeaseReason, claim, {
+      return "stopped";
+    } catch (error) {
+      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
+      const reason = `PR review checkout failed: ${describeError(error)}`;
+      await this.blockIfOperationClaim(task.id, reason, claim, {
         group: "lost-resource",
         kind: "allocation-failed",
-        summary: "Tandem couldn't set up a working copy for this task.",
-        detail: noLeaseReason,
-      });
-      return;
-    }
-    const launch = await this.ensureLaunchEndpoint(
-      task,
-      runtime,
-      claim,
-      role,
-      lease,
-      reservation.reservation,
-      ["queued"],
-    );
-    if (launch === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      return;
-    }
-    try {
-      await this.transitionIfOperationClaim(task.id, claim, {
-        type: "start",
-        worktree: lease,
-        endpoints: [launch.endpoint],
-      });
-    } catch (error) {
-      if (launch.created) {
-        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      }
-      const reason = `task start transition failed ${launch.created ? "after pane allocation" : "with recovered pane"}: ${describeError(error)}`;
-      await this.blockIfOperationClaim(task.id, reason, claim, {
-        group: "lost-resource",
-        kind: "transition-failed",
-        summary: "Tandem couldn't start this task.",
+        summary: "Tandem couldn't set up a checkout of this pull request.",
         detail: reason,
       });
-      return;
+      return "stopped";
     }
-    const currentTask = await this.#deps.getTask(task.id);
-    const expectedStage = role === "scout" ? "scouting" : "implementing";
-    if (currentTask.stage !== expectedStage) {
-      if (["paused", "blocked", "cancelled", "completed", "merged"].includes(currentTask.stage)) {
-        await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      }
-      return;
-    }
-    const currentRuntime = await this.#deps.runtimeFor(task.id);
-    if (currentRuntime === undefined || currentRuntime.worktree === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      const reason = "runtime lost its acquired worktree before worker launch";
-      await this.blockIfOperationClaim(task.id, reason, claim, {
-        group: "lost-resource",
-        kind: "resource-lost",
-        summary: "The task's working copy is missing.",
-        detail: reason,
-      });
-      return;
-    }
-    const writer = currentWriter(currentRuntime);
-    if (writer === undefined) {
-      await this.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id, claim);
-      const reason = "runtime lost its worker endpoint before launch";
-      await this.blockIfOperationClaim(task.id, reason, claim, {
-        group: "lost-resource",
-        kind: "resource-lost",
-        summary: "The worker's terminal is gone.",
-        detail: reason,
-      });
-      return;
-    }
-    await this.launchAgent(currentTask, currentRuntime, writer, role);
   }
 
   /**
@@ -3346,12 +3448,7 @@ export class WorkerWorkflow {
       receiptPath: workerReceiptPath(paths.jobPath),
       initialRevision: instructionRevision,
     };
-    const prompt = buildPrompt(
-      task,
-      role,
-      reportPath,
-      fixArtifacts,
-      undefined,
+    const messages =
       instructionRevision === 0
         ? extra
         : [
@@ -3361,8 +3458,13 @@ export class WorkerWorkflow {
               instructionRevision,
               activeTaskMessages(task.communication),
             ),
-          ],
-    );
+          ];
+    const prReview = task.prReview;
+    const prompt =
+      prReview === undefined
+        ? buildPrompt(task, role, reportPath, fixArtifacts, undefined, messages)
+        : await this.prReviewPrompt(task, prReview, messages);
+    const modelRole = modelRoleForTask(task, role);
     const spec: WorkerJob = {
       schemaVersion: 1,
       id: jobId,
@@ -3370,7 +3472,10 @@ export class WorkerWorkflow {
       generation: task.generation,
       role,
       cwd: runtime.worktree?.path ?? taskSourcePath(task, runtime),
-      model: resolvedExecutionModel(runtime.operation?.routing, task.policy.config.models[role]),
+      model: resolvedExecutionModel(
+        runtime.operation?.routing,
+        task.policy.config.models[modelRole],
+      ),
       prompt,
       resultPath: paths.resultPath,
       ...(runtime.operation === undefined
@@ -3393,6 +3498,15 @@ export class WorkerWorkflow {
       ...(role === "implementer" && task.policy.config.setupCommands.length > 0
         ? { setup: task.policy.config.setupCommands }
         : {}),
+      ...(prReview === undefined
+        ? {}
+        : {
+            prReview: {
+              structuredReport: prReview.mode !== "question",
+              diffPath: prReviewRunDiffPath(this.#deps.home, task.id, task.generation),
+              inlineComments: prReview.lens.kind !== "intent",
+            },
+          }),
     };
     const specWritten = await this.withOperationEffect(
       task.id,
@@ -3438,6 +3552,45 @@ export class WorkerWorkflow {
       workerCommand(this.#deps.workerPath, paths.jobPath),
       claim,
     );
+  }
+
+  /** Checks a finished review against the lens and the diff it was given; an Error when unusable. */
+  private async readPrReviewRound(
+    task: TaskRecord,
+    state: NonNullable<TaskRecord["prReview"]>,
+    job: DurableJob,
+    text: string,
+  ): Promise<PrReviewRound | Error> {
+    try {
+      const files = await readRunFiles(this.#deps.home, task.id, job.generation);
+      const checked = checkReview(JSON.parse(text), state.lens, files.commentable);
+      return {
+        generation: job.generation,
+        head: files.head,
+        from: files.from,
+        // The runner's head is authoritative; a typo in the reviewer's copy must not misplace a post.
+        review: { ...checked.review, head: files.head },
+        notes: checked.notes,
+      };
+    } catch (error) {
+      return error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  private async prReviewPrompt(
+    task: TaskRecord,
+    state: NonNullable<TaskRecord["prReview"]>,
+    messages: readonly string[],
+  ): Promise<string> {
+    const files = await readRunFiles(this.#deps.home, task.id, task.generation);
+    return buildPrReviewBrief({
+      state,
+      head: files.head,
+      from: files.from,
+      contextPath: files.contextPath,
+      diffPath: files.numberedDiffPath,
+      extra: messages,
+    });
   }
 
   private async launchJob(
@@ -3774,7 +3927,13 @@ export class WorkerWorkflow {
       policyDigest: attempt.policyDigest,
       inputHead: attempt.inputHead,
     };
-    const prior = priorExecutionAttempt(runtime, attempt.role, task.policy.config.models);
+    const modelRole = modelRoleForTask(task, attempt.role);
+    const prior = priorExecutionAttempt(
+      runtime,
+      attempt.role,
+      modelRole,
+      task.policy.config.models,
+    );
     // An uncertain-outcome question stops speaking once that attempt settles as a known failure.
     const settledUncertainty =
       runtime.routingPause?.reason === "prior-outcome-uncertain" && prior?.outcome !== "uncertain";
@@ -3794,7 +3953,7 @@ export class WorkerWorkflow {
         policyDigest: attempt.policyDigest,
         inputHead: attempt.inputHead,
       },
-      pinned: task.policy.config.models[attempt.role],
+      pinned: task.policy.config.models[modelRole],
       catalogue: await this.readCatalogue(attempt.cwd),
       limits: routingLimits(task),
       usage: await this.observeRequestUsage(task),

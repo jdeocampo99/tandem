@@ -1,4 +1,4 @@
-import type { TaskKind, ThinkingLevel } from "../contracts.ts";
+import type { CreatableTaskKind, ThinkingLevel } from "../contracts.ts";
 
 const PATH_OPTIONS: Readonly<Record<string, true>> = {
   "--home": true,
@@ -19,7 +19,7 @@ const THINKING_LEVELS: Readonly<Record<ThinkingLevel, true>> = {
   max: true,
   auto: true,
 };
-const TASK_KINDS: Readonly<Record<TaskKind, true>> = {
+const TASK_KINDS: Readonly<Record<CreatableTaskKind, true>> = {
   scout: true,
   implementation: true,
 };
@@ -154,7 +154,7 @@ export type CliOptions = Readonly<{
   readonly taskId?: string;
   readonly presentationId?: string;
   readonly reason?: string;
-  readonly kind?: TaskKind;
+  readonly kind?: CreatableTaskKind;
   readonly objective?: string;
   readonly text?: string;
   readonly questionId?: string;
@@ -263,10 +263,10 @@ export function parseThinking(value: string): ThinkingLevel {
   return value as ThinkingLevel;
 }
 
-export function parseTaskKind(value: string): TaskKind {
-  if (TASK_KINDS[value as TaskKind] !== true)
+export function parseTaskKind(value: string): CreatableTaskKind {
+  if (TASK_KINDS[value as CreatableTaskKind] !== true)
     throw new CliUsageError(`unsupported task kind ${JSON.stringify(value)}`);
-  return value as TaskKind;
+  return value as CreatableTaskKind;
 }
 
 export function parseMergeMethod(value: string): MergeMethod {
@@ -299,7 +299,7 @@ type MutableCliOptions = {
   taskId?: string;
   presentationId?: string;
   reason?: string;
-  kind?: TaskKind;
+  kind?: CreatableTaskKind;
   objective?: string;
   text?: string;
   questionId?: string;

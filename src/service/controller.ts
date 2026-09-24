@@ -27,7 +27,7 @@ import {
   readCleanupCommands,
   resolveRepoPolicy,
 } from "../config/repositories.ts";
-import type { RequestBriefRecord } from "../contracts.ts";
+import type { CreatableTaskKind, RequestBriefRecord } from "../contracts.ts";
 import {
   type AnswerTaskInput,
   type BlockCause,
@@ -65,6 +65,19 @@ import {
   poolAdmissionNotice,
   poolNotificationMessage,
 } from "../pool/policy.ts";
+import type { ReviewVerdict } from "../pr-review/post.ts";
+import {
+  createPrReviewWorkflow,
+  defaultProjectRoots,
+  type PostPrReviewResult,
+  type PrReviewEdits,
+  type PrReviewWorkflow,
+  type ShowPrReviewResult,
+  type StartPrReviewInput,
+  type StartPrReviewResult,
+} from "../pr-review/service.ts";
+import type { PrReviewState } from "../pr-review/state.ts";
+import { removeReviewWorktree } from "../pr-review/worktree.ts";
 import { PresentationFeedbackWorkflow } from "../presentations/feedback.ts";
 import { type PresentationRecord, readPresentationRecord } from "../presentations/records.ts";
 import { preparePresentation } from "../presentations/session.ts";
@@ -173,7 +186,7 @@ import { mapTaskSource, SourceInboxWorkflow, taskSourcePath } from "./source.ts"
 
 export type CreateTaskRequest = Readonly<{
   readonly repoPath: string;
-  readonly kind: "scout" | "implementation";
+  readonly kind: CreatableTaskKind;
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
   /** Hands-on checks a person makes before merging; they become the PR's checklist. */
@@ -187,6 +200,9 @@ export type CreateTaskRequest = Readonly<{
   /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
   readonly skill?: SkillInvocation;
 }>;
+/** The internal create request behind `reviewPr`; the generic create action never takes it. */
+type PrReviewTaskRequest = Omit<CreateTaskRequest, "kind"> &
+  Readonly<{ readonly kind: "pr-review"; readonly prReview: PrReviewState }>;
 export type ModelOptionsResult = Readonly<{
   readonly modelSettings: ModelSettings;
   readonly availableModels: readonly OmpModelRecord[];
@@ -222,6 +238,8 @@ export type TandemServiceOptions = Readonly<{
   readonly classifyResearchContinuation?: ResearchContinuationClassifier;
   /** The Jev transport, cache, and diagnostics sink review-level assistance is allowed to use. */
   readonly reviewAssistance?: ReviewAssistanceRuntime;
+  /** Folders a PR review crawls for the repository's checkout; see `defaultProjectRoots`. */
+  readonly projectRoots?: readonly string[];
 }>;
 export type TandemService = Readonly<{
   readonly onboard: (
@@ -307,6 +325,19 @@ export type TandemService = Readonly<{
   ) => Promise<PresentationRecord>;
   readonly presentations: () => Promise<readonly PresentationRecord[]>;
   readonly feedback: (presentationId: string, signal?: AbortSignal) => Promise<PresentationRecord>;
+  readonly reviewPr: (input: StartPrReviewInput) => Promise<StartPrReviewResult>;
+  readonly reviewShow: (
+    id: string,
+    input?: { readonly page?: boolean },
+  ) => Promise<ShowPrReviewResult>;
+  readonly reviewNotes: (id: string) => Promise<Readonly<{ taskId: string; feedback: string }>>;
+  readonly reviewEdit: (id: string, edits: PrReviewEdits) => Promise<ShowPrReviewResult>;
+  readonly reviewPost: (
+    id: string,
+    input: { readonly verdict: ReviewVerdict; readonly approved: boolean },
+  ) => Promise<PostPrReviewResult>;
+  readonly reviewAgain: (id: string) => Promise<TaskRecord>;
+  readonly reviewClose: (id: string) => Promise<TaskRecord>;
   readonly shutdown: () => Promise<void>;
 }>;
 
@@ -335,6 +366,7 @@ type ServiceDependencies = Readonly<{
   workerPath: string;
   validationWorkerPath: string;
   reviewAssistance: ReviewAssistanceRuntime;
+  projectRoots: readonly string[];
 }>;
 
 function assertTaskId(id: unknown): string {
@@ -545,6 +577,7 @@ class TandemController {
   readonly #recoveryCentral: CentralRecoveryWorkflow;
   readonly #requests: RequestBriefWorkflow;
   readonly #usage: RequestUsageLedger;
+  readonly #prReviews: PrReviewWorkflow;
   /** Durable-state digest of the draft body last published per task, to avoid redundant refreshes. */
   readonly #draftDigests = new Map<string, string>();
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
@@ -556,6 +589,38 @@ class TandemController {
   constructor(deps: ServiceDependencies) {
     this.#deps = deps;
     this.#usage = deps.usageLedger;
+    this.#prReviews = createPrReviewWorkflow({
+      home: deps.home,
+      run: deps.run,
+      clock: deps.clock,
+      projectRoots: deps.projectRoots,
+      listTasks: () => deps.store.list(),
+      getTask: (id) => this.get(id),
+      createTask: (input) =>
+        this.create({
+          repoPath: input.repoPath,
+          kind: "pr-review",
+          objective: input.objective,
+          acceptanceCriteria: [],
+          surfaces: [],
+          prReview: input.prReview,
+        }).then(async (task) => {
+          await this.reconcileTask(task);
+          return task;
+        }),
+      updatePrReview: (task, next) =>
+        deps.store.update(task.id, task.revision, (current) => ({
+          ...current,
+          revision: current.revision + 1,
+          updatedAt: deps.clock(),
+          prReview: next,
+        })),
+      runAgain: async (task) => {
+        const followUp = await this.transition(task.id, { type: "follow-up-research" });
+        await this.reconcileTask(followUp);
+      },
+      settle: (taskId) => this.cleanupSettledTask(taskId),
+    });
     this.#sourceReady = deps.refreshSource === undefined;
     this.#source = new SourceInboxWorkflow({
       home: deps.home,
@@ -732,6 +797,14 @@ class TandemController {
       present: (id, input) => this.present(id, input),
       presentations: () => this.presentations(),
       feedback: (id, signal) => this.feedback(id, signal),
+      reviewPr: (input) => this.#prReviews.start(input),
+      reviewShow: (id, input) => this.#prReviews.show(assertTaskId(id), input),
+      reviewNotes: (id) => this.#prReviews.notes(assertTaskId(id)),
+      reviewEdit: (id, edits) => this.#prReviews.edit(assertTaskId(id), edits),
+      reviewPost: (id, input) =>
+        this.#prReviews.post(assertTaskId(id), input.verdict, input.approved),
+      reviewAgain: (id) => this.#prReviews.again(assertTaskId(id)),
+      reviewClose: (id) => this.#prReviews.close(assertTaskId(id)),
       shutdown: () => this.shutdown(),
     };
   }
@@ -854,7 +927,7 @@ class TandemController {
    * Constraints and non-goals stay out for the same reason.
    */
   private async continuationFor(
-    input: CreateTaskRequest,
+    input: CreateTaskRequest | PrReviewTaskRequest,
     brief: RequestBriefRecord | undefined,
   ): Promise<ResearchContinuation | undefined> {
     if (input.kind !== "scout" || input.researchContinuation !== undefined) return undefined;
@@ -871,7 +944,7 @@ class TandemController {
     return classified.continuation;
   }
 
-  async create(input: CreateTaskRequest): Promise<TaskRecord> {
+  async create(input: CreateTaskRequest | PrReviewTaskRequest): Promise<TaskRecord> {
     await this.ensureSourceReady();
     if (!isRecord(input)) throw new TypeError("create input must be an object");
     // Implementation work the coordinator did not attribute joins the repository's one open
@@ -946,7 +1019,7 @@ class TandemController {
         taskName: taskNameFor(created),
         endpoints: [],
         jobs: [],
-        ...(["scout", "implementation"].includes(created.kind)
+        ...(["scout", "implementation", "pr-review"].includes(created.kind)
           ? { sessionDirectory: taskSessionDirectory(this.#deps.home, created.id) }
           : {}),
       };
@@ -1073,6 +1146,8 @@ class TandemController {
     } else if (next.stage === "completed" && next.kind === "scout") {
       const followUp = await this.transition(next.id, { type: "follow-up-research" });
       await this.reconcileTask(followUp);
+    } else if (next.stage === "completed" && next.kind === "pr-review") {
+      await this.#prReviews.ask(next.id);
     }
     return this.messages(taskId);
   }
@@ -1340,6 +1415,17 @@ class TandemController {
       } catch (error) {
         if (!isMissingEndpoint(error)) throw error;
       }
+    }
+    if (task.prReview !== undefined) {
+      if (runtime.worktree !== undefined) {
+        await removeReviewWorktree(
+          this.#deps.run,
+          { checkout: runtime.worktree.root, path: runtime.worktree.path },
+          task.prReview.ref,
+        );
+      }
+      await this.removeRuntimeResources(task.id);
+      return task;
     }
     const cleanupFailure = await runCleanupCommands(
       {
@@ -2456,6 +2542,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
           }
         },
       }),
+    projectRoots: options.projectRoots ?? defaultProjectRoots(process.env),
   };
 }
 

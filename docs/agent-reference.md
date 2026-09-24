@@ -1863,6 +1863,61 @@ bun src/cli.ts pr merge TASK_ID squash --yes
 
 The CLI defaults to `squash` only when no method is supplied; specify the method explicitly for clarity. Before invoking `gh pr merge`, Tandem re-observes the PR and requires the same task/repository/base/branch, an open non-draft state, a non-empty set of required CI checks, and every required check passing. It rechecks the local reviewed HEAD, invokes GitHub CLI with the exact reviewed SHA as `--match-head-commit`, and re-observes the result. The task becomes `merged` only when the remote PR reports `merged` with the same SHA. Tandem never merges automatically.
 
+## Reviewing someone else's pull request
+
+A `pr-review` task reviews a pull request Tandem did not write, in any repository the user's `gh`
+login can read. It is read-only, so it starts without scope approval, like research. Code lives in
+[src/pr-review/](../src/pr-review/).
+
+- **Start.** `review-pr` takes a PR URL or `owner/repo#N`, the coordinator's project `repoPath`
+  (whose policy and model settings the review runs under), and an optional lens: `full` (default),
+  `intent` (approach and scope only, no inline comments), or `focus` with the user's own words.
+  Merged, closed, and unreadable PRs are refused with one line; drafts and conflicted PRs are
+  reviewed and noted. An open review of the same PR is returned instead of a second task. The
+  prompt router starts a review directly when Jev is confident a prompt with a PR link asks for one,
+  picking the lens the same way; an unsure lens becomes `full`, and anything else goes to the
+  coordinator.
+- **Finding the code.** `locateRepo` is plain code: a saved `repo_locations` row in `state.sqlite`
+  (re-checked on every use: the folder exists and a remote still points at the repository), then a
+  crawl of the project roots up to three levels deep, matching any remote and preferring `origin`.
+  Roots default to `~/Coding/Projects` and can be set with `TANDEM_PROJECT_ROOTS` (colon-separated).
+  No match or several matches become a question; the answer (`checkout`, or `clone: true` for a
+  blobless clone under `<home>/pr-review/clones/`) is re-checked and saved.
+- **Worktree.** Each run fetches `refs/pull/N/head` and the base branch into
+  `refs/tandem/pr-review/N/*` in the user's checkout (branches, remote-tracking refs, and
+  `FETCH_HEAD` are untouched) and adds a detached worktree at `<home>/pr-review/TASK_ID/worktree`.
+  The lease record uses the checkout as `root`; Treehouse and the pool are never involved, and the
+  project's cleanup commands never run there.
+- **What the reviewer reads.** `<home>/pr-review/TASK_ID/run-N/` holds `diff.patch` (merge base to
+  head on a first review; previous head to new head on a re-review, or the merge base again after a
+  force-push), `diff-numbered.patch` (the same diff with each line's new-file number, which is
+  what the reviewer reads), `context.md` (description, linked issues, CI, `git diff --stat`, files
+  that mention the changed files as likely callers, the user's earlier threads with their comment
+  ids, other reviewers' threads, skipped files), and `run.json`. Lockfiles and
+  `linguist-generated` files are skipped and listed.
+- **Worker.** A scout-role job with its own brief, the review model (`models.reviewer`, in both
+  routing and launch), and `prReview.structuredReport`. Its tools are read, grep, glob, and bash,
+  and the worker extension refuses any bash command that is not one plain read-only `git` or `gh`
+  command. A review or re-review must submit one `PrReview` JSON object, which the worker checks
+  before accepting: a comment on a line outside the run's diff, or any inline comment in an
+  intent review, is sent back naming the lines that can take comments. A question gets plain text.
+- **Result.** The runner checks the review against the lens and the run's diff: comments on lines
+  GitHub cannot anchor move into the summary comment, and an intent review has no inline comments.
+  The round is recorded on `task.prReview.rounds` with the runner's head, and the report file is the
+  review as plain text. The task completes; its pane closes and its worktree is kept.
+- **Show, edit, post.** `review-show` returns the text and, for reviews with a diagram or more than
+  five comments (or `page: true`), opens a fixed HTML template in Lavish; the model never writes
+  HTML. `review-notes` reads notes left on that page. `review-edit` rewrites, re-labels, or drops
+  comments by id and replaces the summary until the round is posted. `review-post` needs the user's
+  approval and verdict (`comment`, `approve`, `request-changes`). It posts one GitHub review pinned
+  to the reviewed `commit_id`, refuses when the PR moved, and marks the body with a hidden
+  `tandem-review:TASK_ID:GENERATION` comment it looks for before and after posting, so an uncertain
+  failure never posts twice. Replies drafted for addressed earlier comments are posted after it.
+- **Follow-ups.** `review-again` re-reviews new pushes; `steer` on a finished review asks the
+  reviewer a question. Both resume the same conversation in the same worktree.
+- **Close.** `review-close` marks the review closed, and cleanup removes the worktree and its refs.
+  A cancelled review is cleaned the same way.
+
 ## Presentations and Lavish
 
 Use presentation only when a useful visual artifact will improve understanding:

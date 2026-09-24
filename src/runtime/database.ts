@@ -88,6 +88,20 @@ function ensureRequestUsageTable(db: StateDatabase): void {
   `);
 }
 
+/**
+ * Where each GitHub repository was last found on disk, so a PR review skips the folder crawl. A row
+ * is a hint: callers re-check the folder and its remotes before trusting it.
+ */
+function ensureRepoLocationsTable(db: StateDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS repo_locations (
+      repo TEXT PRIMARY KEY NOT NULL,
+      path TEXT NOT NULL,
+      last_used_at TEXT NOT NULL
+    );
+  `);
+}
+
 function assertSchema(db: StateDatabase): void {
   const rows = db
     .query(
@@ -127,6 +141,7 @@ async function openDatabase(home: string): Promise<StateDatabase> {
     }
     ensureRequestTables(db);
     ensureRequestUsageTable(db);
+    ensureRepoLocationsTable(db);
     await chmod(path, 0o600);
   } catch (error) {
     try {
@@ -342,6 +357,27 @@ export function readRequestUsagePayloads(
       return null;
     }
   });
+}
+
+export function readRepoLocation(db: StateDatabase, repo: string): string | undefined {
+  const row = db.query("SELECT path FROM repo_locations WHERE repo = ?").get(repo) as
+    | { path?: unknown }
+    | null
+    | undefined;
+  return typeof row?.path === "string" ? row.path : undefined;
+}
+
+export function writeRepoLocation(
+  db: StateDatabase,
+  entry: Readonly<{ repo: string; path: string; lastUsedAt: string }>,
+): void {
+  db.query(
+    "INSERT INTO repo_locations(repo, path, last_used_at) VALUES (?, ?, ?) ON CONFLICT(repo) DO UPDATE SET path = excluded.path, last_used_at = excluded.last_used_at",
+  ).run(entry.repo, entry.path, entry.lastUsedAt);
+}
+
+export function deleteRepoLocation(db: StateDatabase, repo: string): void {
+  db.query("DELETE FROM repo_locations WHERE repo = ?").run(repo);
 }
 
 export function readRuntimePayload(db: StateDatabase): unknown | undefined {

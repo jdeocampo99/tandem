@@ -417,3 +417,20 @@ export async function evaluateJev(
     controller.abort();
   }
 }
+
+/**
+ * The routed confidence for one choice answer: the lesser of the model's stated confidence
+ * and the probability it assigned to its own chosen option. Shared by every Jev router so
+ * they agree on what "confident" means, and so evaluation tooling can reproduce the figure.
+ */
+export function choiceConfidence(answer: JevChoiceAnswer): number | undefined {
+  const probability = answer.probabilities[answer.choice];
+  if (
+    probability === undefined ||
+    !Number.isFinite(probability) ||
+    !Number.isFinite(answer.confidence)
+  ) {
+    return undefined;
+  }
+  return Math.min(answer.confidence, probability);
+}

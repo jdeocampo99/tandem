@@ -55,6 +55,17 @@ export type WorkerJob = Readonly<{
   readonly timeoutMs?: number;
   /** The pinned worktree setup commands an implementer runs before OMP starts. */
   readonly setup?: readonly SetupCommand[];
+  /**
+   * A scout job reviewing a pull request: it gets a read-only git/gh shell, and when
+   * `structuredReport` is set its report must be one PrReview JSON object.
+   */
+  readonly prReview?: Readonly<{
+    readonly structuredReport: boolean;
+    /** The run's raw diff; submitted comments must sit on lines it shows. */
+    readonly diffPath?: string;
+    /** False for an intent review, which posts no inline comments. */
+    readonly inlineComments?: boolean;
+  }>;
 }>;
 export type WorkerQuestion = Readonly<{
   readonly text: string;
@@ -387,6 +398,10 @@ export function parseWorkerJob(value: unknown): WorkerJob {
   if (setup !== undefined && role !== "implementer") {
     throw new TypeError("setup is only permitted for implementer jobs");
   }
+  const prReview = value.prReview === undefined ? undefined : readPrReviewJob(value.prReview);
+  if (prReview !== undefined && role !== "scout") {
+    throw new TypeError("prReview is only permitted for scout jobs");
+  }
 
   return {
     schemaVersion: 1,
@@ -404,6 +419,23 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     ...(communication === undefined ? {} : { communication }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(setup === undefined ? {} : { setup }),
+    ...(prReview === undefined ? {} : { prReview }),
+  };
+}
+
+function readPrReviewJob(value: unknown): NonNullable<WorkerJob["prReview"]> {
+  if (!isRecord(value) || typeof value.structuredReport !== "boolean") {
+    throw new TypeError("prReview must be an object with a boolean structuredReport");
+  }
+  if (value.inlineComments !== undefined && typeof value.inlineComments !== "boolean") {
+    throw new TypeError("prReview.inlineComments must be a boolean");
+  }
+  return {
+    structuredReport: value.structuredReport,
+    ...(value.diffPath === undefined
+      ? {}
+      : { diffPath: readAbsolutePath(value.diffPath, "prReview.diffPath") }),
+    ...(value.inlineComments === undefined ? {} : { inlineComments: value.inlineComments }),
   };
 }
 export function parseWorkerResult(value: unknown): WorkerResult {

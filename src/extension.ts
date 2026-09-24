@@ -256,6 +256,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     registerTandemOmp(pi, {
       getService,
       getHome: (ctx) => getEnvironment(ctx).home,
+      getRepo: (ctx) => getEnvironment(ctx).repo,
       promptRouting,
       reconcile,
       postAction,
