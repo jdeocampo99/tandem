@@ -30,6 +30,8 @@ export type LegacyWorkerRole = WorkerRole | "verifier";
 export type WorkerReviewContext = Readonly<{
   readonly head: string;
   readonly lens: ReviewLens;
+  /** Which review of the task this is, counting from 1; absent on jobs written before it existed. */
+  readonly round?: number;
 }>;
 
 export type WorkerJob = Readonly<{
@@ -250,7 +252,9 @@ function readReviewContext(value: unknown): WorkerReviewContext {
   if (!isReviewLens(value.lens)) {
     throw new TypeError("review.lens must be a valid review lens");
   }
-  return { head, lens: value.lens };
+  const round =
+    value.round === undefined ? undefined : readPositiveInteger(value.round, "review.round");
+  return { head, lens: value.lens, ...(round === undefined ? {} : { round }) };
 }
 
 function readWorkerCommunication(

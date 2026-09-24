@@ -5,6 +5,7 @@ import {
   idleAfterResult,
   isBackgroundResultWake,
   planAbortWithReason,
+  reviewSummary,
   userInterruptedTurn,
 } from "../../src/workers/terminal-extension.ts";
 
@@ -138,4 +139,54 @@ test("idle-after-result never settles an unsubmitted, working, or messaged worke
       settle: false,
     });
   }
+});
+
+test("a submitted review reads as its round, verdict, and one line per finding by severity", () => {
+  const summary = reviewSummary(
+    {
+      lens: "review",
+      head: "21260599aae29357e2d6f2ca3bd06ab2d43eeb2e",
+      generation: 1,
+      pass: false,
+      summary: "Long reviewer notes that stay in the durable result.",
+      findings: [
+        {
+          id: "review/tablet",
+          severity: "P2",
+          verdict: "plausible",
+          description: "Tablet-width navigation stacks above the section. More detail follows.",
+        },
+        {
+          id: "review/entrance",
+          severity: "P1",
+          verdict: "confirmed",
+          file: "src/components/motion/page-transition.tsx",
+          line: 188,
+          description: `Referrals content enters at zero opacity ${"x".repeat(200)}`,
+        },
+      ],
+    },
+    2,
+  );
+  const lines = summary.split("\n");
+  expect(lines[0]).toBe("Review round 2: changes needed, 2 findings");
+  expect(lines[1]).toStartWith("- P1 Referrals content enters at zero opacity");
+  expect(lines[1]).toContain("…");
+  expect(lines[1]).toEndWith("(src/components/motion/page-transition.tsx:188)");
+  expect(lines[2]).toBe("- P2 Tablet-width navigation stacks above the section. [unconfirmed]");
+  expect(summary).not.toContain("21260599");
+  expect(summary).not.toContain("generation");
+});
+
+test("a clean review, or one from a job without a round, still reads plainly", () => {
+  const clean = {
+    lens: "review" as const,
+    head: "head",
+    generation: 0,
+    pass: true,
+    summary: "",
+    findings: [],
+  };
+  expect(reviewSummary(clean, 1)).toBe("Review round 1: approved, no findings.");
+  expect(reviewSummary(clean, undefined)).toBe("Review: approved, no findings.");
 });

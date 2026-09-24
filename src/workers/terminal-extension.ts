@@ -6,6 +6,7 @@ import type {
 import { matchesKey } from "@oh-my-pi/pi-tui";
 import { runCommand } from "../adapters/commands.ts";
 import { createHerdrStatusReporter, type HerdrAgentState } from "../adapters/herdr-status.ts";
+import type { Finding, ReviewResult } from "../contracts.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import {
   parseWorkerJob,
@@ -171,6 +172,47 @@ export type IdleAfterResultInput = Readonly<{
   readonly idleSince: number | undefined;
   readonly now: number;
 }>;
+
+const SEVERITY_ORDER: Readonly<Record<Finding["severity"], number>> = {
+  P0: 0,
+  P1: 1,
+  P2: 2,
+  P3: 3,
+};
+const FINDING_SUMMARY_MAX_CHARS = 160;
+
+/** The first sentence of a finding, capped so each finding stays one readable line. */
+function findingHeadline(description: string): string {
+  const sentence = description.trim().split(/(?<=[.!?])\s/, 1)[0] ?? "";
+  return sentence.length <= FINDING_SUMMARY_MAX_CHARS
+    ? sentence
+    : `${sentence.slice(0, FINDING_SUMMARY_MAX_CHARS - 1).trimEnd()}…`;
+}
+
+/**
+ * What a reviewer's pane shows once its review is submitted: the round, the verdict, and one line
+ * per finding, most severe first. The full review stays in the durable result.
+ */
+export function reviewSummary(review: ReviewResult, round: number | undefined): string {
+  const title = round === undefined ? "Review" : `Review round ${round}`;
+  const count = review.findings.length;
+  if (count === 0) return `${title}: approved, no findings.`;
+  const verdict = review.pass ? "approved" : "changes needed";
+  const lines = [...review.findings]
+    .sort((left, right) => SEVERITY_ORDER[left.severity] - SEVERITY_ORDER[right.severity])
+    .map((finding) => {
+      const location =
+        finding.file === undefined
+          ? ""
+          : ` (${finding.file}${finding.line === undefined ? "" : `:${finding.line}`})`;
+      const unconfirmed = finding.verdict === "plausible" ? " [unconfirmed]" : "";
+      return `- ${finding.severity} ${findingHeadline(finding.description)}${location}${unconfirmed}`;
+    });
+  return [
+    `${title}: ${verdict}, ${count === 1 ? "1 finding" : `${count} findings`}`,
+    ...lines,
+  ].join("\n");
+}
 
 /**
  * After submit_report, OMP ends the turn with willContinue while a background command it started
@@ -471,9 +513,11 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       }
       await settle(result, ctx);
       const summary =
-        result.error === undefined
-          ? `Report submitted with status ${result.status}.`
-          : `Report submitted with status ${result.status}: ${result.error}`;
+        result.review !== undefined
+          ? `${reviewSummary(result.review, job.review?.round)}\n\nEnd your turn by replying with exactly this summary and nothing else.`
+          : result.error === undefined
+            ? `Report submitted with status ${result.status}.`
+            : `Report submitted with status ${result.status}: ${result.error}`;
       return { content: [{ type: "text", text: summary }], details: undefined };
     },
   });

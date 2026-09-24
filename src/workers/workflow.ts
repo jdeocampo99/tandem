@@ -3220,7 +3220,7 @@ export class WorkerWorkflow {
               },
             }),
         communication,
-        review: { head: task.reviewHead, lens: nextLens },
+        review: { head: task.reviewHead, lens: nextLens, round: task.reviewRound + 1 },
         ...(this.#deps.workerTimeoutMs === undefined
           ? {}
           : { timeoutMs: this.#deps.workerTimeoutMs }),
