@@ -288,6 +288,29 @@ test("renders validation bullets from recorded evidence rather than supplied cla
   expect(rendered).not.toContain("all tests passed by user claim");
 });
 
+test("lists the known issues review did not block on", () => {
+  const withKnownIssue: TaskRecord = {
+    ...task(),
+    findingLedger: [
+      {
+        id: "f-2",
+        lens: "review",
+        severity: "P2",
+        verdict: "confirmed",
+        description: "Label says Back.",
+        file: "src/back.tsx",
+        status: "unresolved",
+        raisedAt: { head: "head-1", generation: 0, reviewRound: 0 },
+        statusAt: { head: "head-1", generation: 0, reviewRound: 0 },
+      },
+    ],
+  };
+  expect(describeTaskPr(withKnownIssue, summary)).toContain(
+    "# Known issues\nReview findings still open. Judge them before merging.\n- P2: Label says Back. (src/back.tsx)",
+  );
+  expect(describeTaskPr(task(), summary)).not.toContain("# Known issues");
+});
+
 test("refuses delivery when only targeted iteration checks passed at the reviewed head", () => {
   const iterationOnly: TaskRecord = {
     ...task(),

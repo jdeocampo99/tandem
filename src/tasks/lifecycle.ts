@@ -29,7 +29,12 @@ import {
   finalAcceptanceStatus,
   isPinnedEvidence,
 } from "./acceptance.ts";
-import { fixRoundBudget, recordReviewFindings } from "./findings.ts";
+import {
+  fixRoundBudget,
+  isBlockingFinding,
+  ledgerSuggestions,
+  recordReviewFindings,
+} from "./findings.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
 import { checkSkillInvocation } from "./skill-invocation.ts";
@@ -644,22 +649,7 @@ function assertReview(review: ReviewResult, task: TaskRecord): void {
       "Review must contain pass, findings, and summary values",
     );
   }
-  for (const finding of review.findings) {
-    assertFinding(finding, task);
-    if (
-      review.pass &&
-      (finding.severity === "P0" || finding.severity === "P1" || finding.severity === "P2") &&
-      (finding.verdict === "confirmed" ||
-        (finding.verdict === "plausible" &&
-          (finding.severity === "P0" || finding.severity === "P1")))
-    ) {
-      throw new TaskTransitionError(
-        "invalid-review",
-        task,
-        `Review lens ${review.lens} cannot pass with a ${finding.verdict} ${finding.severity} finding`,
-      );
-    }
-  }
+  for (const finding of review.findings) assertFinding(finding, task);
 }
 
 /** A merge must land the pull request at exactly the task's own reviewed commit. */
@@ -703,7 +693,14 @@ function reviewSummary(task: TaskRecord): string {
  * manifest is satisfied for the delivered code and policy. It never implies delivery.
  */
 function readySummary(task: TaskRecord, head: string): string {
-  return `Ready: task ${task.id} passed review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}. Ready is not publication, merge, or deploy approval; each remains explicit.`;
+  const ready = `Ready: task ${task.id} passed review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}. Ready is not publication, merge, or deploy approval; each remains explicit.`;
+  const knownIssues = ledgerSuggestions(task.findingLedger ?? []);
+  if (knownIssues.length === 0) return ready;
+  return [
+    ready,
+    `Tell the user about ${knownIssues.length === 1 ? "this known issue" : `these ${knownIssues.length} known issues`} the review did not block on; the pull request lists them too:`,
+    ...knownIssues.map((entry) => `- ${entry.severity}: ${entry.description}`),
+  ].join("\n");
 }
 
 /** Review may finish before any check ran at this HEAD; the final manifest runs after it passes. */
@@ -982,11 +979,14 @@ export function transitionTask(
           `Review lens ${event.review.lens} already exists for head ${event.review.head} generation ${event.review.generation}`,
         );
       }
+      // The findings decide the outcome, not the reviewer's own pass flag: a review fails exactly
+      // when a P0 or P1 stands.
+      const review = { ...event.review, pass: !event.review.findings.some(isBlockingFinding) };
       return commitTask(task, context.now, {
-        reviews: [...task.reviews, event.review],
+        reviews: [...task.reviews, review],
         findingLedger: recordReviewFindings({
           ledger: task.findingLedger ?? [],
-          review: event.review,
+          review,
           reviewRound: task.reviewRound,
         }),
       });

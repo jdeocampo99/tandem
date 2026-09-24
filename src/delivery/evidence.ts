@@ -228,9 +228,7 @@ export function describeTaskPr(task: TaskRecord, summary: PrSummary): string {
     what: validatedSummary.what,
     why: validatedSummary.why,
     validation,
-    ...(skipped && openFindings.length > 0
-      ? { openFindings: openFindings.map(findingBullet) }
-      : {}),
+    ...(openFindings.length > 0 ? { openFindings: openFindings.map(findingBullet) } : {}),
     ...(task.manualVerification === undefined
       ? {}
       : { manualVerification: task.manualVerification }),

@@ -190,6 +190,14 @@ test("a clean review, or one from a job without a round, still reads plainly", (
   };
   expect(reviewSummary(clean, 1)).toBe("Review round 1: approved, no findings.");
   expect(reviewSummary(clean, undefined)).toBe("Review: approved, no findings.");
+  const knownIssueOnly = {
+    ...clean,
+    pass: false,
+    findings: [
+      { id: "f", severity: "P2" as const, verdict: "confirmed" as const, description: "Minor." },
+    ],
+  };
+  expect(reviewSummary(knownIssueOnly, 1)).toBe("Review round 1: approved, 1 finding\n- P2 Minor.");
 });
 
 test("a turn with no tool activity for five minutes is stalled", () => {
