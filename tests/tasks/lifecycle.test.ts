@@ -172,7 +172,9 @@ function review(
     head,
     generation,
     pass,
-    findings: [],
+    findings: pass
+      ? []
+      : [{ id: "finding-1", severity: "P1", verdict: "confirmed", description: "A defect" }],
     summary: pass ? `${lens} review passed` : `${lens} review found work`,
   };
 }
@@ -494,22 +496,45 @@ test("requires current-head validation and the current-generation review before 
   ).toThrow(TaskTransitionError);
 });
 
-test("rejects duplicate or stale review results and never treats blocking findings as a pass", () => {
-  let task = implementationToReviewing();
-  const blocking: ReviewResult = {
-    ...review("review"),
+test("a review with only P2 and P3 findings is ready and lists them as known issues", () => {
+  const withKnownIssues: ReviewResult = {
+    ...review("review", false),
     findings: [
-      {
-        id: "finding-1",
-        severity: "P1",
-        verdict: "confirmed",
-        description: "A blocking behavior defect",
-      },
+      { id: "f-2", severity: "P2", verdict: "confirmed", description: "Label says Back." },
+      { id: "f-3", severity: "P3", verdict: "confirmed", description: "Stale comment." },
     ],
   };
-  expect(() =>
-    transitionTask(task, { type: "record-review", review: blocking }, context()),
-  ).toThrow(TaskTransitionError);
+  let task = transitionTask(
+    implementationToReviewing(),
+    { type: "record-review", review: withKnownIssues },
+    context(),
+  );
+  task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
+  expect(task.stage).toBe("ready");
+  const message = task.notifications.at(-1)?.message ?? "";
+  expect(message).toContain("these 2 known issues");
+  expect(message).toContain("- P2: Label says Back.");
+  expect(message).toContain("- P3: Stale comment.");
+});
+
+test("the findings decide a review's outcome, not the reviewer's pass flag", () => {
+  const withFinding = (severity: "P1" | "P2", pass: boolean): ReviewResult => ({
+    ...review("review"),
+    pass,
+    findings: [{ id: "finding-1", severity, verdict: "confirmed", description: "A defect" }],
+  });
+  const recorded = (result: ReviewResult) =>
+    transitionTask(
+      implementationToReviewing(),
+      { type: "record-review", review: result },
+      context(),
+    ).reviews[0]?.pass;
+  expect(recorded(withFinding("P1", true))).toBe(false);
+  expect(recorded(withFinding("P2", false))).toBe(true);
+});
+
+test("rejects duplicate or stale review results", () => {
+  let task = implementationToReviewing();
   task = transitionTask(task, { type: "record-review", review: review("review") }, context());
   expect(() =>
     transitionTask(task, { type: "record-review", review: review("review") }, context()),

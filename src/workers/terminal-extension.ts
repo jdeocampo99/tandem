@@ -8,6 +8,7 @@ import { runCommand } from "../adapters/commands.ts";
 import { createHerdrStatusReporter, type HerdrAgentState } from "../adapters/herdr-status.ts";
 import type { Finding, ReviewResult } from "../contracts.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
+import { isBlockingFinding } from "../tasks/findings.ts";
 import {
   parseWorkerJob,
   parseWorkerResult,
@@ -206,7 +207,7 @@ export function reviewSummary(review: ReviewResult, round: number | undefined): 
   const title = round === undefined ? "Review" : `Review round ${round}`;
   const count = review.findings.length;
   if (count === 0) return `${title}: approved, no findings.`;
-  const verdict = review.pass ? "approved" : "changes needed";
+  const verdict = review.findings.some(isBlockingFinding) ? "changes needed" : "approved";
   const lines = [...review.findings]
     .sort((left, right) => SEVERITY_ORDER[left.severity] - SEVERITY_ORDER[right.severity])
     .map((finding) => {

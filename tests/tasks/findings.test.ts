@@ -104,11 +104,11 @@ function taskWith(
   };
 }
 
-test("separates evidence-backed blockers from optional suggestions by the recorded pass rule", () => {
-  expect(isBlockingFinding({ severity: "P2", verdict: "confirmed" })).toBe(true);
-  expect(isBlockingFinding({ severity: "P2", verdict: "plausible" })).toBe(false);
-  expect(isBlockingFinding({ severity: "P1", verdict: "plausible" })).toBe(true);
-  expect(isBlockingFinding({ severity: "P3", verdict: "confirmed" })).toBe(false);
+test("only a P0 or P1 blocks; a P2 or P3 is a known issue", () => {
+  expect(isBlockingFinding({ severity: "P0" })).toBe(true);
+  expect(isBlockingFinding({ severity: "P1" })).toBe(true);
+  expect(isBlockingFinding({ severity: "P2" })).toBe(false);
+  expect(isBlockingFinding({ severity: "P3" })).toBe(false);
 });
 
 test("a first review raises each finding as unresolved with a stable identity", () => {

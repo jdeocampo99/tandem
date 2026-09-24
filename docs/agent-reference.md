@@ -898,7 +898,8 @@ Reaching `ready` and exhausting the bounded fix-round loop are both surfaced pro
 coordinator notifications through the existing notification path, so neither needs a follow-up
 prompt. The ready message is emitted only at true readiness, after the final acceptance manifest is
 satisfied, and it names the required lenses, the review level, the accepted HEAD, and that ready is
-not publication, merge, or deploy approval. Exhaustion blocks the task with a reason that names the
+not publication, merge, or deploy approval. It lists any P2/P3 known issues for the coordinator to
+pass on. Exhaustion blocks the task with a reason that names the
 rounds used, asks `Keep fixing?`, and lists the evidence-backed blockers that remain in the
 question's details. Neither message claims delivery.
 
@@ -1287,10 +1288,12 @@ its current status. Since one merged review now covers everything a round review
 a later generation that stops reporting an identity settles it as `addressed` regardless of which
 lens originally raised it, including a legacy pre-merge lens name; only a later review that reports
 it again reopens it as `regressed`, so a settled finding is never reopened without new evidence. Two reviews of one identity that record
-contradicting verdicts mark it `disputed`. Blockers and suggestions are split by the rule a review
-already enforces: a confirmed P0, P1, or P2, or a plausible P0 or P1, blocks, and everything else is
-an optional suggestion. A violation of a mandatory design rule or applicable principle blocks through
-the same rule.
+contradicting verdicts mark it `disputed`. Blockers and known issues are split by severity: a P0 or
+P1, confirmed or plausible, blocks, and a P2 or P3 is a known issue. The findings decide a review's
+outcome, not the reviewer's own `pass` flag: `record-review` stores `pass` as "no P0 or P1 stands".
+The reviewer prompt defines each severity, and a violation of a mandatory design rule or applicable
+principle is a P1. Known issues never cost a fix round; the ready message and the PR description's
+`# Known issues` section list them for the user to judge.
 
 The brief also states how wide this round must be. Impact is `contained`, `expanded`, or `unknown`,
 and it reuses the existing `EscalationReason` vocabulary rather than adding a parallel one. A fix that
@@ -1846,7 +1849,8 @@ nothing moves), settles the abandoned job, and applies the `skip-review` lifecyc
 becomes `ready` at its current HEAD with `reviewSkippedHead` recorded durably. That record stands in
 for the evidence, review, and final-acceptance checks at exactly that HEAD only; any later fix
 round or evidence invalidation clears it. The PR description's `# Validation` says review was
-skipped, and a `# Known open review findings` section lists every finding still open on the ledger,
+skipped. A `# Known issues` section lists every finding still open on the ledger (a normal ready task
+carries only P2/P3 there),
 next to `# Manual verification` when present. Merging stays a separate explicit action. If
 publication fails after the skip, the task stays `ready` and a normal `publish` can retry.
 

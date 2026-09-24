@@ -110,7 +110,7 @@ test("publish now stops the reviewer, makes the task ready, and lists open findi
     const description = await service.describePr(SCENARIO_TASK_ID, SUMMARY);
     expect(description).toContain("Review was skipped");
     expect(description).toContain(
-      "# Known open review findings\n- P1: Retries never stop after cancel. (src/retry.ts:12)",
+      "# Known issues\nReview findings still open. Judge them before merging.\n- P1: Retries never stop after cancel. (src/retry.ts:12)",
     );
     await service.shutdown();
   });
