@@ -17,6 +17,7 @@ import { writeModelSettings } from "../../src/config/models.ts";
 import { defaultPolicy, parsePolicy } from "../../src/config/policy.ts";
 import {
   onboardRepo,
+  readCleanupCommands,
   readCoordinatorMcpServers,
   resolveRepoPolicy,
 } from "../../src/config/repositories.ts";
@@ -503,6 +504,7 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
     const enabled = text.replace(/^# (?=[A-Za-z]+ = |\[)/gmu, "");
     const settings = Bun.TOML.parse(enabled) as Record<string, unknown>;
     expect(Object.keys(settings).sort()).toEqual([
+      "cleanupCommands",
       "coordinatorMcpServers",
       "instructionFiles",
       "instructions",
@@ -514,9 +516,10 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
       "setupCommands",
       "validationCommands",
     ]);
-    const { repoPath, coordinatorMcpServers, ...policy } = settings;
+    const { repoPath, coordinatorMcpServers, cleanupCommands, ...policy } = settings;
     expect(repoPath).toBe(repo);
     expect(coordinatorMcpServers).toEqual(["linear"]);
+    expect(cleanupCommands).toEqual(["docker compose down"]);
     expect(() => parsePolicy(policy)).not.toThrow();
   });
 });
@@ -551,6 +554,32 @@ test("onboarding saves the coordinator's MCP servers outside task policy", async
     );
     await expect(resolveRepoPolicy({ repoPath: repo, home })).rejects.toThrow(
       "coordinatorMcpServers must be an array of server names",
+    );
+  });
+});
+
+test("cleanup commands are read from settings.toml and kept out of task policy", async () => {
+  await withFixture("cleanup-commands", async ({ repo, home }) => {
+    expect(await readCleanupCommands({ repoPath: repo, home })).toEqual([]);
+    const written = await onboardRepo({ repoPath: repo, home, write: true });
+    expect(await readFile(written.configPath, "utf8")).toContain("# cleanupCommands = ");
+
+    await writeFile(
+      written.configPath,
+      `repoPath = ${JSON.stringify(repo)}\ncleanupCommands = ["npm run db:stop:local"]\n`,
+      "utf8",
+    );
+    expect(await readCleanupCommands({ repoPath: repo, home })).toEqual(["npm run db:stop:local"]);
+    const resolved = await resolveRepoPolicy({ repoPath: repo, home });
+    expect(resolved.config).not.toHaveProperty("cleanupCommands");
+
+    await writeFile(
+      written.configPath,
+      `repoPath = ${JSON.stringify(repo)}\ncleanupCommands = "npm run db:stop:local"\n`,
+      "utf8",
+    );
+    await expect(resolveRepoPolicy({ repoPath: repo, home })).rejects.toThrow(
+      "cleanupCommands must be an array of commands",
     );
   });
 });

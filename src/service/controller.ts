@@ -21,7 +21,12 @@ import {
   discoveredProviders,
   resolveBalancedProfile,
 } from "../config/operating-profile.ts";
-import { type OnboardRepoResult, onboardRepo, resolveRepoPolicy } from "../config/repositories.ts";
+import {
+  type OnboardRepoResult,
+  onboardRepo,
+  readCleanupCommands,
+  resolveRepoPolicy,
+} from "../config/repositories.ts";
 import type { RequestBriefRecord } from "../contracts.ts";
 import {
   type AnswerTaskInput,
@@ -157,7 +162,7 @@ import {
   validateModelAssignments,
   workerRoleForTask,
 } from "./records.ts";
-import { releaseTerminalTaskResources } from "./scout-cleanup.ts";
+import { releaseTerminalTaskResources, runCleanupCommands } from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskSourcePath } from "./source.ts";
 
 export type CreateTaskRequest = Readonly<{
@@ -1323,6 +1328,15 @@ class TandemController {
         if (!isMissingEndpoint(error)) throw error;
       }
     }
+    const cleanupFailure = await runCleanupCommands(
+      {
+        run: this.#deps.run,
+        cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home: this.#deps.home }),
+      },
+      task.repoPath,
+      runtime.worktree?.path,
+    );
+    if (cleanupFailure !== undefined) await this.setRuntimeError(task.id, cleanupFailure);
     if (runtime.worktree !== undefined) {
       await releaseWorktree(this.#deps.run, {
         repo: task.repoPath,
@@ -2113,6 +2127,7 @@ class TandemController {
         runtimePath: this.#deps.runtimePath,
         run: this.#deps.run,
         clock: this.#deps.clock,
+        cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home: this.#deps.home }),
       },
       task,
     );
