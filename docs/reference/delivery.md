@@ -120,16 +120,30 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
 ## Presentations and Lavish
 
 - Use a presentation only when a visual artifact improves understanding.
+- Only a research (scout) task draws, and its own agent draws it: `present` refuses any other task
+  kind and a research task whose scout pane is not running. There is no separate presentation
+  worker; records it left keep their Lavish listener, and unfinished ones fail.
 - The controller creates a fresh private artifact directory outside the source repository, reads
   installed `lavish-axi --help`, selects matching playbooks, and requests fallback design guidance
   when neither the project nor the objective has a design direction (src/presentations/session.ts).
-- A mockup or wireframe objective skips all Lavish guidance and the task's automated checks. Its
+  It writes the draw request to `brief.md` there.
+- A mockup or wireframe objective skips all Lavish guidance and the task's research checks. Its
   brief carries [mockup-style.md](../../src/presentations/mockup-style.md) (screens only, no AI
-  visual or copy tells) and points the worker at the project's AGENTS.md/CLAUDE.md writing rules,
+  visual or copy tells) and points the agent at the project's AGENTS.md/CLAUDE.md writing rules,
   which win over the guide.
-- The presentation worker gets a bounded brief, writes complete HTML only to the supplied path, and
-  returns exactly one `Artifact: <absolute path>` line. It cannot open or poll Lavish.
-- The controller verifies the artifact before opening it.
+- Each draw or revise request has a stable id and reaches the scout as a `mockup` terminal command
+  (src/workers/terminal.ts) only while the scout has reported, is idle, and has nothing typed or
+  queued in its pane; otherwise the next tick tries again. The scout's extension sends the brief as
+  its next turn, and records the id as settled when that turn ends.
+- During that turn the scout may `write` and `edit` only inside the artifact directory, and may
+  `copy_asset` a regular file from its checkout into it, byte for byte, for relative reference.
+  Outside a mockup turn, and for every other path, the scout's writes are refused
+  (src/workers/terminal-extension.ts).
+- When a draw settles, the controller verifies the artifact is a regular file inside the directory
+  before opening it in Lavish; a missing or escaping artifact fails the presentation with a
+  coordinator notification.
+- A request whose scout pane has closed or stopped heartbeating is abandoned: a draw fails, and a
+  revision's comments go to the coordinator as a notification.
 
 ## Presentation feedback
 
@@ -140,13 +154,19 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
   browser-disconnected presentation. Automatic listening resumes after it returns an open,
   non-disconnected observation.
 - Ready/opened and ordinary ended observations are routine UI bookkeeping. Each feedback event is
-  stored as full private evidence under the presentation directory and delivered through the
-  owning task's bounded notification path; poll failures and `browser_disconnected` are persisted
-  and delivered the same way.
+  stored as full private evidence under the presentation directory. On a page the scout drew, the
+  comment becomes that scout's next revise request (a `revision-<id>.md` brief to update the same
+  artifact, which Lavish reloads in the open tab) and the coordinator gets a routine note, not a
+  turn. A comment that arrives while a request is pending is queued and sent with the next one.
+  Other feedback, poll failures, and `browser_disconnected` are delivered through the owning task's
+  bounded notification path.
+- The listener lays its observation over the record as it is when the poll returns, never over the
+  copy it started with, so it cannot undo a request or failure recorded meanwhile.
 - `browser_disconnected` leaves an open presentation recoverable without automatic reopen.
   `user-ended` is never reopened automatically, and its final feedback is drained once.
 - `presentation-open` shows a presentation again because the user asked: an open, ended, or
   previously opened failed one. With its listener running it only resumes the browser view;
   otherwise it runs `lavish-axi <artifact> --reopen`, records the new observation, and restarts
   the listener (src/presentations/feedback.ts).
-- Feedback is an observation, never approval for implementation or delivery.
+- Feedback is an observation, never approval for implementation or delivery. It changes only the
+  artifact in the private directory.

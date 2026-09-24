@@ -117,7 +117,12 @@ export function settledWorkEvents(
   const tallies = observation.tallies ?? new Map<string, JobTokenTally>();
   const taskEvents = operationSpans(requestId, allOperations(runtime), runtime.jobs, tallies);
   const presentationEvents = presentations.flatMap((presentation) =>
-    operationSpans(requestId, allOperations(presentation), [presentation.job], tallies),
+    operationSpans(
+      requestId,
+      allOperations(presentation),
+      presentation.job === undefined ? [] : [presentation.job],
+      tallies,
+    ),
   );
   return [...taskEvents, ...presentationEvents];
 }

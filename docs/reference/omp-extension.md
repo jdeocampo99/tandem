@@ -106,7 +106,8 @@ Explicit discard is the only path that bypasses the Git safety proof.
   retain it and report why. An unreadable checkout, or one on a branch the lease does not name, is
   quarantined with every resource kept.
 - Blocked, paused, and decision-waiting scouts keep pane and worktree as evidence. Completed scouts
-  with a durable report and safely cancelled scouts are released.
+  with a durable report and safely cancelled scouts are released, except as described under
+  scout worktree adoption.
 - Interactive OMP stays open after a scout reports, so cleanup asks an idle completed worker to
   close (close request, then ctrl+d) before closing its pane; a busy worker defers to a later tick.
 - Cleanup never touches scout output. The report, source checkpoint, consumed job, notifications,
@@ -115,11 +116,16 @@ Explicit discard is the only path that bypasses the Git safety proof.
 
 ## Scout worktree adoption
 
-- A completed scout with disposition `ask-intent` or `implementation-interview` closes its pane but
-  keeps its clean worktree (`retained`, no time limit) for the implementation that follows.
-- The implementation adopts the worktree of the first scout in its `researchTaskIds` only if that
-  scout is settled, holds no pane or reservation, and is still clean on its lease branch at its
-  source commit. Otherwise it leases a fresh worktree and leaves the scout alone.
+- A completed scout with disposition `ask-intent` or `implementation-interview` keeps both its pane
+  and its clean worktree (`retained`, no time limit), so the user's mockup requests and Lavish
+  comments reach the agent that did the research, and the implementation that follows can adopt the
+  worktree. Cancelling the scout releases both.
+- When an implementation starts, Tandem first closes the pane of the first scout in its
+  `researchTaskIds` if that scout is completed and idle (close request, then ctrl+d), since
+  building has started (`closeFinishedScoutPanes`, src/service/scout-cleanup.ts).
+- The implementation adopts that scout's worktree only if the scout is settled, holds no pane or
+  reservation, and is still clean on its lease branch at its source commit. Otherwise it leases a
+  fresh worktree and leaves the scout alone.
 - The adapter re-proves that state, switches the worktree to the implementation branch at the
   implementation's pinned source commit (fast-forwarding past older research), and deletes the
   merged scout branch.
@@ -157,6 +163,6 @@ force return. The extension's `cancel` with `discard` covers the same deletion i
 The extension's `cleanup` takes `taskIds`, so one confirmation covers a batch; each task is cleaned
 in turn and one that fails is reported without stopping the rest.
 Discard also closes the task's own panes when their worker ignores the close request or keeps the
-foreground; pane ownership is still verified first. Any cleanup closes the panes of the task's
-finished or failed presentations, whose artifacts stay on disk; a running presentation is left alone. Never use it to resolve an ambiguous, dirty, ignored, or unmerged worktree unless the
+foreground; pane ownership is still verified first. Any cleanup closes the panes that
+the retired presentation worker left behind, whose artifacts stay on disk. Never use it to resolve an ambiguous, dirty, ignored, or unmerged worktree unless the
 human explicitly accepts losing that work.

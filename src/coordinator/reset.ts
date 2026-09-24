@@ -96,10 +96,10 @@ function runtimePresentationHasActiveState(
 ): boolean {
   return (
     runtime.endpoint?.sessionId === sessionId ||
-    runtime.job.endpoint?.sessionId === sessionId ||
+    runtime.job?.endpoint?.sessionId === sessionId ||
     runtime.endpointLaunch !== undefined ||
     unreleasedReservation(runtime.reservation) ||
-    activeRuntimeJob(runtime.job)
+    (runtime.job !== undefined && activeRuntimeJob(runtime.job))
   );
 }
 
@@ -628,9 +628,12 @@ async function collectForceEndpoints(
     }
   }
   for (const presentation of presentations) {
-    const endpoint = presentation.endpoint ?? presentation.job.endpoint;
+    // Only the retired presentation worker had a pane of its own.
+    const job = presentation.job;
+    if (job === undefined) continue;
+    const endpoint = presentation.endpoint ?? job.endpoint;
     if (endpoint !== undefined) {
-      add(endpoint, presentation.job.cwd, presentation.job, "presentation");
+      add(endpoint, job.cwd, job, "presentation");
     }
     if (presentation.endpoint === undefined && presentation.endpointLaunch !== undefined) {
       const recovered = await recoverEndpointFromLaunch(run, presentation.endpointLaunch);
@@ -639,7 +642,7 @@ async function collectForceEndpoints(
           `presentation ${JSON.stringify(presentation.id)} endpoint launch could not be recovered: ${recovered.detail}`,
         );
       }
-      add(recovered.endpoint, presentation.job.cwd, presentation.job, "presentation");
+      add(recovered.endpoint, job.cwd, job, "presentation");
     }
   }
   return entries;
@@ -708,6 +711,9 @@ function detachStoppedTaskEndpoint(state: RuntimeState, taskId: string, key: str
 function detachStoppedPresentationEndpoint(state: RuntimeState, id: string): RuntimeState {
   return replaceRuntimePresentation(state, id, (current) => {
     const { endpoint: _endpoint, ...withoutEndpoint } = current;
+    if (current.job === undefined) {
+      return { ...withoutEndpoint, lastError: "cancelled by force reset" };
+    }
     const { endpoint: _jobEndpoint, ...withoutJobEndpoint } = current.job;
     return {
       ...withoutEndpoint,
@@ -729,14 +735,14 @@ function markForcePresentationRuntime(
         ? undefined
         : { ...current.reservation, phase: "released" as const, releasedAt: clock() };
     let job = current.job;
-    if (job.phase === "reserved" || job.phase === "launching" || job.phase === "running") {
+    if (job !== undefined && activeRuntimeJob(job)) {
       const { endpoint: _jobEndpoint, ...withoutEndpoint } = job;
       job = { ...withoutEndpoint, phase: "failed" as const, error: "cancelled by force reset" };
     }
     return {
       ...withoutTransient,
       ...(reservation === undefined ? {} : { reservation }),
-      job,
+      ...(job === undefined ? {} : { job }),
       lastError: "cancelled by force reset",
     };
   });
@@ -771,7 +777,9 @@ async function closeForceEndpoints(
     if (taskId !== undefined && selection.tasksById.has(taskId)) {
       state = detachStoppedTaskEndpoint(state, taskId, key);
     }
-    const presentation = plan.presentations.find((candidate) => candidate.job.id === entry.job?.id);
+    const presentation = plan.presentations.find(
+      (candidate) => candidate.job !== undefined && candidate.job.id === entry.job?.id,
+    );
     if (presentation !== undefined) {
       state = detachStoppedPresentationEndpoint(state, presentation.id);
       await failPresentationRecord(presentation.recordPath, () => new Date().toISOString());
@@ -930,7 +938,7 @@ function selectIdlePresentations(
         `selected presentation ${JSON.stringify(presentation.id)} has an unreleased reservation`,
       );
     }
-    if (activeRuntimeJob(presentation.job)) {
+    if (presentation.job !== undefined && activeRuntimeJob(presentation.job)) {
       throw new Error(
         `selected presentation ${JSON.stringify(presentation.id)} has a ${presentation.job.phase} job`,
       );
@@ -1036,7 +1044,7 @@ async function resetIdleCoordinators(
 
   const workerEndpoints = selectedWorkerEndpoints(selection);
   const presentationEndpoints = presentations
-    .map((presentation) => presentation.endpoint ?? presentation.job.endpoint)
+    .map((presentation) => presentation.endpoint ?? presentation.job?.endpoint)
     .filter((endpoint): endpoint is Endpoint => endpoint !== undefined);
   if (
     snapshot === undefined &&

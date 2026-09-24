@@ -65,8 +65,8 @@ import {
 } from "../../src/tasks/review-levels.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { assertSourceUnchanged } from "../../src/workers/checkout.ts";
-import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
-import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
+import type { WorkerJob } from "../../src/workers/jobs.ts";
+import { type WorkerTerminalState, writeWorkerTerminal } from "../../src/workers/terminal.ts";
 
 const TIMESTAMP = "2030-01-01T00:00:00.000Z";
 const SOURCE_CHECKPOINT = {
@@ -1488,355 +1488,12 @@ async function seedConsumedPresentation(
   return { artifactPath, recordPath };
 }
 
-async function seedRunningPresentation(
-  home: string,
-  id: string,
-): Promise<
-  Readonly<{
-    readonly artifactPath: string;
-    readonly recordPath: string;
-    readonly resultPath: string;
-  }>
-> {
-  const recordPath = join(home, `${id}-record.json`);
-  const jobPath = join(home, `${id}-job.json`);
-  const resultPath = join(home, `${id}-result.json`);
-  const artifactPath = join(home, `${id}-artifact.html`);
-  const endpoint = endpointFor("presentation");
-  await writeFile(artifactPath, "<!doctype html><title>presentation</title>", "utf8");
-  await writeJsonAtomically(recordPath, {
-    id,
-    taskId: "task-1",
-    generation: 0,
-    cwd: home,
-    artifactPath,
-    jobPath,
-    resultPath,
-    status: "running",
-    createdAt: TIMESTAMP,
-    updatedAt: TIMESTAMP,
-    endpoint,
-  });
-  const operation: DurableOperation = {
-    schemaVersion: 1,
-    id: `${id}-operation`,
-    taskId: "task-1",
-    kind: "presentation",
-    role: "presentation",
-    generation: 0,
-    inputHead: SOURCE_CHECKPOINT.head,
-    policyDigest: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
-    instructionRevision: 0,
-    jobId: id,
-    phase: "running",
-    fencingRevision: 1,
-    claimOwner: "seeded-controller",
-    createdAt: TIMESTAMP,
-    effects: [],
-  };
-  const runtime = await readRuntime(home);
-  await writeRuntimeState(runtimeFile(home), {
-    schemaVersion: 1,
-    tasks: runtime.tasks,
-    presentations: [
-      {
-        schemaVersion: 1,
-        id,
-        operation,
-        taskId: "task-1",
-        recordPath,
-        endpoint,
-        job: {
-          schemaVersion: 1,
-          id,
-          taskId: "task-1",
-          generation: 0,
-          role: "presentation",
-          kind: "worker",
-          cwd: home,
-          jobPath,
-          operationId: operation.id,
-          resultPath,
-          attempt: 1,
-          phase: "running",
-          launchAttempted: true,
-          createdAt: TIMESTAMP,
-          endpoint,
-        },
-      },
-    ],
-  });
-  await writeJsonAtomically(resultPath, {
-    id,
-    taskId: "task-1",
-    generation: 0,
-    role: "presentation",
-    status: "completed",
-    text: `Artifact: ${artifactPath}`,
-    artifactPath,
-    finishedAt: TIMESTAMP,
-  });
-  return { artifactPath, recordPath, resultPath };
-}
-async function seedBlockedPresentation(
-  home: string,
-  id: string,
-  taskId: string,
-  questionText: string,
-): Promise<
-  Readonly<{
-    readonly recordPath: string;
-    readonly jobPath: string;
-    readonly resultPath: string;
-    readonly questionId: string;
-  }>
-> {
-  const recordPath = join(home, `${id}-record.json`);
-  const jobPath = join(home, `${id}-job.json`);
-  const resultPath = join(home, `${id}-result.json`);
-  const artifactPath = join(home, `${id}-artifact.html`);
-  const questionId = `${id}-old-job`;
-  const endpoint = endpointFor("presentation");
-  const question = { id: questionId, text: questionText };
-  await writeFile(artifactPath, "<!doctype html><title>blocked presentation</title>", "utf8");
-  const job = {
-    schemaVersion: 1 as const,
-    id: questionId,
-    taskId,
-    generation: 0,
-    role: "presentation" as const,
-    cwd: home,
-    model: { model: "test/presentation", thinking: "low" as const },
-    prompt: `Create the ${id} artifact.`,
-    resultPath,
-  } satisfies WorkerJob;
-  await writeJsonAtomically(jobPath, job);
-  const result = {
-    id: questionId,
-    taskId,
-    generation: 0,
-    role: "presentation" as const,
-    status: "needs-decision" as const,
-    text: `Outcome: needs-decision\nQuestion: ${questionText}`,
-    question: { text: questionText },
-    finishedAt: TIMESTAMP,
-  } satisfies WorkerResult;
-  await writeJsonAtomically(resultPath, result);
-  const record = {
-    id,
-    taskId,
-    generation: 0,
-    cwd: home,
-    artifactPath,
-    jobPath,
-    resultPath,
-    status: "blocked" as const,
-    question,
-    createdAt: TIMESTAMP,
-    updatedAt: TIMESTAMP,
-  } satisfies PresentationRecord;
-  await writeJsonAtomically(recordPath, record);
-  const operation: DurableOperation = {
-    schemaVersion: 1,
-    id: `${questionId}-operation`,
-    taskId,
-    kind: "presentation",
-    role: "presentation",
-    generation: 0,
-    inputHead: SOURCE_CHECKPOINT.head,
-    policyDigest: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
-    instructionRevision: 0,
-    jobId: questionId,
-    phase: "completed",
-    fencingRevision: 1,
-    claimOwner: "seeded-controller",
-    createdAt: TIMESTAMP,
-    effects: [],
-    resultConsumedAt: TIMESTAMP,
-  };
-  const runtime = await readRuntime(home);
-  await writeRuntimeState(runtimeFile(home), {
-    ...runtime,
-    presentations: [
-      ...runtime.presentations,
-      {
-        schemaVersion: 1,
-        id,
-        taskId,
-        recordPath,
-        operation,
-        endpoint,
-        job: {
-          schemaVersion: 1,
-          id: questionId,
-          taskId,
-          generation: 0,
-          role: "presentation",
-          kind: "worker",
-          cwd: home,
-          jobPath,
-          operationId: operation.id,
-          resultPath,
-          attempt: 1,
-          phase: "consumed",
-          launchAttempted: true,
-          createdAt: TIMESTAMP,
-          consumedAt: TIMESTAMP,
-          endpoint,
-        },
-      },
-    ],
-  });
-  return { recordPath, jobPath, resultPath, questionId };
-}
-test("presentation answers create isolated attempts, preserve evidence, and target the owning record", async () => {
-  await withFixture(
-    { kind: "implementation", stage: "paused", runner: { active: false } },
-    async ({ home, service }) => {
-      const first = await seedBlockedPresentation(
-        home,
-        "presentation-first",
-        "task-1",
-        "Which first direction should be used?",
-      );
-      const second = await seedBlockedPresentation(
-        home,
-        "presentation-second",
-        "task-1",
-        "Which second direction should be used?",
-      );
-      await expect(
-        service.answer({
-          taskId: "task-1",
-          questionId: "stale-question",
-          text: "stale",
-        }),
-      ).rejects.toThrow("no longer current");
-
-      const answered = await service.answer({
-        taskId: "task-1",
-        questionId: second.questionId,
-        text: "Use the second direction.",
-      });
-      expect(answered.presentationAnswer).toEqual({
-        presentationId: "presentation-second",
-        questionId: second.questionId,
-        status: "queued",
-      });
-      const state = await readRuntime(home);
-      const restarted = state.presentations.find((entry) => entry.id === "presentation-second");
-      if (restarted === undefined) throw new Error("restarted presentation runtime missing");
-      expect(restarted.job.jobPath).not.toBe(second.jobPath);
-      expect(restarted.job.resultPath).not.toBe(second.resultPath);
-      const worker = JSON.parse(await readFile(restarted.job.jobPath, "utf8")) as {
-        readonly prompt: string;
-      };
-      expect(worker.prompt).toContain(`Prior worker report: ${second.resultPath}`);
-      expect(worker.prompt).toContain("Which second direction should be used?");
-      expect(worker.prompt).toContain("Use the second direction.");
-      expect(await readFile(second.resultPath, "utf8")).toContain("needs-decision");
-
-      await service.tick();
-      const afterTick = await readRuntime(home);
-      const afterRestart = afterTick.presentations.find(
-        (entry) => entry.id === "presentation-second",
-      );
-      if (afterRestart === undefined) throw new Error("restarted presentation disappeared");
-      expect(afterRestart.job.phase).toBe("running");
-      const firstRecord = (await service.presentations()).find(
-        (record) => record.id === "presentation-first",
-      );
-      expect(firstRecord?.status).toBe("blocked");
-      expect(firstRecord?.question?.id).toBe(first.questionId);
-    },
-  );
-});
-
-test("presentation answers reject cancelled owners but remain allowed for completed owners", async () => {
-  await withFixture({ kind: "implementation", stage: "paused" }, async ({ home, service }) => {
-    const blocked = await seedBlockedPresentation(
-      home,
-      "presentation-cancelled",
-      "task-1",
-      "Which cancelled direction should be used?",
-    );
-    await service.cancel("task-1", "cancel presentation owner");
-    await expect(
-      service.answer({
-        taskId: "task-1",
-        questionId: blocked.questionId,
-        text: "Do not relaunch.",
-      }),
-    ).rejects.toThrow("cancelled task");
-  });
-
-  await withFixture({ kind: "implementation", stage: "completed" }, async ({ home, service }) => {
-    const blocked = await seedBlockedPresentation(
-      home,
-      "presentation-completed",
-      "task-1",
-      "Which completed-task direction should be used?",
-    );
-    const answered = await service.answer({
-      taskId: "task-1",
-      questionId: blocked.questionId,
-      text: "Reuse the approved completed artifact.",
-    });
-    expect(answered.presentationAnswer?.presentationId).toBe("presentation-completed");
-    expect((await service.presentations())[0]?.status).toBe("running");
-  });
-});
-
-test("concurrent controllers consume one completed presentation only once", async () => {
-  await withFixture(
-    {
-      kind: "implementation",
-      runner: {
-        presentationOpenResponse: commandResult(
-          "session:\n  status: opened\n  session_ended: false\n",
-        ),
-      },
-    },
-    async ({ home, run, runnerState, service }) => {
-      await seedRunningPresentation(home, "presentation-1");
-      const secondService = createTandemService({
-        home,
-        sessionId: "session-2",
-        poolRoot: join(home, "pool"),
-        run,
-        clock: () => TIMESTAMP,
-        idFactory: () => "second-service-id",
-      });
-      try {
-        await Promise.all([service.tick(), secondService.tick()]);
-        const openCalls = runnerState.calls.filter(
-          (request) => request.argv[0] === "lavish-axi" && request.argv[1] !== "poll",
-        );
-        expect(openCalls).toHaveLength(1);
-        const runtime = await readRuntime(home);
-        expect(runtime.presentations[0]?.job.phase).toBe("consumed");
-        expect(runtime.presentations[0]?.endpoint?.paneId).toBe("pane-1");
-        const record = JSON.parse(
-          await Bun.file(join(home, "presentation-1-record.json")).text(),
-        ) as {
-          readonly status: string;
-        };
-        expect(record.status).toBe("open");
-        runnerState.releasePresentation();
-      } finally {
-        await secondService.shutdown();
-      }
-    },
-  );
-});
-
-test("quarantines a presentation notification after delivering pending feedback exactly once", async () => {
+test("a presentation the retired worker never finished fails once, after its pending feedback", async () => {
   await withFixture({ stage: "completed" }, async ({ home, service }) => {
     const recordPath = join(home, "failure-record.json");
     const jobPath = join(home, "failure-job.json");
     const resultPath = join(home, "failure-result.json");
     const artifactPath = join(home, "failure-artifact.html");
-    await writeFile(artifactPath, "<!doctype html><title>failure</title>", "utf8");
     await writeJsonAtomically(recordPath, {
       id: "presentation-failure",
       taskId: "task-1",
@@ -1845,56 +1502,24 @@ test("quarantines a presentation notification after delivering pending feedback 
       artifactPath,
       jobPath,
       resultPath,
-      status: "open",
+      status: "running",
       createdAt: TIMESTAMP,
       updatedAt: TIMESTAMP,
-      observation: {
-        artifact: artifactPath,
-        status: "opened",
-        terminal: false,
-        sessionEnded: false,
-        raw: "session:\n  status: opened\n  session_ended: false",
-        rawFeedback: "",
-      },
       pendingNotification: {
         id: "feedback-before-failure",
         kind: "coordinator",
         message: "Choose a direction before the worker fails",
       },
     });
-    const operation: DurableOperation = {
-      schemaVersion: 1,
-      id: "failure-operation",
-      taskId: "task-1",
-      kind: "presentation",
-      role: "presentation",
-      generation: 0,
-      inputHead: SOURCE_CHECKPOINT.head,
-      policyDigest: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
-      instructionRevision: 0,
-      jobId: "failure-job",
-      phase: "running",
-      fencingRevision: 1,
-      claimOwner: "seeded-controller",
-      createdAt: TIMESTAMP,
-      effects: [],
-    };
-    const presentationReservation = { ...reservationFor("task-1"), operationId: operation.id };
     const runtime = await readRuntime(home);
     await writeRuntimeState(runtimeFile(home), {
-      schemaVersion: 1,
-      tasks: runtime.tasks.map((entry) => ({
-        ...entry,
-        operation,
-        reservation: presentationReservation,
-      })),
+      ...runtime,
       presentations: [
         {
           schemaVersion: 1,
           id: "presentation-failure",
           taskId: "task-1",
           recordPath,
-          operation,
           job: {
             schemaVersion: 1,
             id: "failure-job",
@@ -1907,7 +1532,6 @@ test("quarantines a presentation notification after delivering pending feedback 
             resultPath,
             attempt: 1,
             phase: "running",
-            operationId: operation.id,
             launchAttempted: true,
             createdAt: "2020-01-01T00:00:00.000Z",
           },
@@ -1915,25 +1539,14 @@ test("quarantines a presentation notification after delivering pending feedback 
       ],
     });
     await service.tick();
-    let task = await service.get("task-1");
-    let notifications = task.notifications.filter((entry) => entry.kind === "coordinator");
-    expect(notifications.filter((entry) => entry.id === "feedback-before-failure")).toHaveLength(1);
-    expect(notifications.filter((entry) => entry.id !== "feedback-before-failure")).toHaveLength(1);
-    expect(notifications.findIndex((entry) => entry.id === "feedback-before-failure")).toBeLessThan(
-      notifications.findIndex((entry) => entry.id !== "feedback-before-failure"),
-    );
-    let persistedRuntime = await readRuntime(home);
-    expect(persistedRuntime.presentations[0]?.job.phase).toBe("running");
-    expect(persistedRuntime.presentations[0]?.operation?.phase).toBe("quarantined");
-    expect(persistedRuntime.tasks[0]?.reservation?.phase).toBe("reserved");
-    expect(activeReservations(persistedRuntime)).toBe(1);
     await service.tick();
-    task = await service.get("task-1");
-    notifications = task.notifications.filter((entry) => entry.kind === "coordinator");
-    expect(notifications.filter((entry) => entry.id === "feedback-before-failure")).toHaveLength(1);
-    expect(notifications.filter((entry) => entry.id !== "feedback-before-failure")).toHaveLength(1);
-    persistedRuntime = await readRuntime(home);
-    expect(persistedRuntime.presentations[0]?.job.phase).toBe("running");
+    const task = await service.get("task-1");
+    const notifications = task.notifications.filter((entry) => entry.kind === "coordinator");
+    expect(notifications.map((entry) => entry.id)[0]).toBe("feedback-before-failure");
+    expect(notifications).toHaveLength(2);
+    expect(notifications[1]?.message).toContain("no longer uses a separate presentation agent");
+    const [record] = await service.presentations();
+    expect(record?.status).toBe("failed");
   });
 });
 
@@ -1948,7 +1561,8 @@ test("feedback poll failure marks a consumed presentation failed without resurre
       await seedConsumedPresentation(home, id);
       const state = await readRuntime(home);
       const current = state.presentations[0];
-      if (current === undefined) throw new Error("consumed presentation fixture missing");
+      if (current?.job === undefined) throw new Error("consumed presentation fixture missing");
+      const job = current.job;
       const operation: DurableOperation = {
         schemaVersion: 1,
         id: `${id}-operation`,
@@ -1959,7 +1573,7 @@ test("feedback poll failure marks a consumed presentation failed without resurre
         inputHead: SOURCE_CHECKPOINT.head,
         policyDigest: createHash("sha256").update(JSON.stringify(policy)).digest("hex"),
         instructionRevision: 0,
-        jobId: current.job.id,
+        jobId: job.id,
         phase: "completed",
         fencingRevision: 1,
         claimOwner: "seeded-controller",
@@ -1978,7 +1592,7 @@ test("feedback poll failure marks a consumed presentation failed without resurre
             ...current,
             operation,
             reservation,
-            job: { ...current.job, operationId: operation.id },
+            job: { ...job, operationId: operation.id },
           },
         ],
       });
@@ -1995,7 +1609,7 @@ test("feedback poll failure marks a consumed presentation failed without resurre
       expect(task.notifications.some((entry) => entry.kind === "coordinator")).toBe(true);
       const persisted = await readRuntime(home);
       const presentation = persisted.presentations[0];
-      expect(presentation?.job.phase).toBe("consumed");
+      expect(presentation?.job?.phase).toBe("consumed");
       expect(presentation?.operation?.phase).toBe("completed");
       expect(presentation?.reservation?.phase).toBe("released");
     },
@@ -3462,7 +3076,7 @@ test("an existing presentation reservation is not treated as permission for a du
     const persisted = await readRuntime(home);
     expect(runnerState.launches).toBe(0);
     expect(persisted.presentations[0]?.reservation?.id).toBe("reservation-1");
-    expect(persisted.presentations[0]?.job.phase).toBe("reserved");
+    expect(persisted.presentations[0]?.job?.phase).toBe("reserved");
   });
 });
 
@@ -3869,6 +3483,212 @@ test("shutdown stops owned presentation polling without starting a later poll", 
       (request) => request.argv[0] === "lavish-axi" && request.argv[1] === "poll",
     );
     expect(polls).toHaveLength(1);
+  });
+});
+
+/** The finished scout whose pane draws visuals: its endpoint, consumed job, and terminal file. */
+async function seedResearchAgent(
+  home: string,
+  lease: WorktreeLease,
+  terminal: Partial<WorkerTerminalState> = {},
+): Promise<DurableJob> {
+  const endpoint = endpointFor("scout");
+  const job = workerJob(home, endpoint, "scout", "consumed");
+  await seedTaskResources(home, lease, [endpoint], [job]);
+  await writeAgentTerminal(job, terminal);
+  return job;
+}
+
+async function writeAgentTerminal(
+  job: DurableJob,
+  terminal: Partial<WorkerTerminalState> = {},
+): Promise<void> {
+  await mkdir(dirname(job.jobPath), { recursive: true });
+  await writeWorkerTerminal(job.jobPath, {
+    schemaVersion: 1,
+    jobId: job.id,
+    taskId: job.taskId,
+    generation: job.generation,
+    role: "scout",
+    cwd: job.cwd,
+    pid: 100,
+    phase: "busy",
+    completed: true,
+    heartbeatAt: TIMESTAMP,
+    ...terminal,
+  });
+}
+
+/** An open page the research agent drew, optionally with a revision it has not finished. */
+async function seedAgentPresentation(
+  home: string,
+  job: DurableJob,
+  request?: Readonly<{ id: string; comment: string }>,
+): Promise<string> {
+  const directory = join(home, "presentations", "presentation-agent");
+  await mkdir(directory, { recursive: true });
+  const recordPath = join(directory, "record.json");
+  const artifactPath = join(directory, "artifact.html");
+  await writeFile(artifactPath, "<!doctype html><title>mockup</title>", "utf8");
+  const briefPath = join(directory, "revision.md");
+  if (request !== undefined) await writeFile(briefPath, request.comment, "utf8");
+  await writeJsonAtomically(recordPath, {
+    id: "presentation-agent",
+    taskId: "task-1",
+    generation: 0,
+    cwd: directory,
+    artifactPath,
+    objective: "Mock up the cancellation flow",
+    agent: { jobId: job.id, jobPath: job.jobPath, generation: job.generation, cwd: job.cwd },
+    ...(request === undefined
+      ? {}
+      : { request: { id: request.id, kind: "revise", briefPath, requestedAt: TIMESTAMP } }),
+    status: "open",
+    createdAt: TIMESTAMP,
+    updatedAt: TIMESTAMP,
+    observation: {
+      artifact: artifactPath,
+      status: "opened",
+      terminal: false,
+      sessionEnded: false,
+      raw: "session:\n  status: opened\n  session_ended: false",
+      rawFeedback: "",
+    },
+  } satisfies PresentationRecord);
+  const runtime = await readRuntime(home);
+  await writeRuntimeState(runtimeFile(home), {
+    ...runtime,
+    presentations: [{ schemaVersion: 1, id: "presentation-agent", taskId: "task-1", recordPath }],
+  });
+  return recordPath;
+}
+
+function lavishFeedback(message: string): CommandResult {
+  return commandResult(
+    [
+      "session:",
+      "  status: feedback",
+      "  session_ended: false",
+      "feedback[0]{message,kind}:",
+      `  message: ${message}`,
+    ].join("\n"),
+  );
+}
+
+test("only a research task can be asked for a visual", async () => {
+  await withFixture({ kind: "implementation", stage: "implementing" }, async ({ service }) => {
+    await expect(
+      service.present("task-1", { objective: "Mock up the screen", artifacts: [] }),
+    ).rejects.toThrow("is not research");
+  });
+});
+
+test("a visual is refused when the research agent's pane is gone", async () => {
+  await withFixture({ stage: "completed" }, async ({ home, service }) => {
+    await expect(
+      service.present("task-1", { objective: "Mock up the screen", artifacts: [] }),
+    ).rejects.toThrow("research agent has closed");
+    expect((await readRuntime(home)).presentations).toHaveLength(0);
+  });
+});
+
+test("the research agent's finished draw opens in Lavish once", async () => {
+  await withFixture(
+    {
+      stage: "completed",
+      runner: {
+        presentationOpenResponse: commandResult(
+          "session:\n  status: opened\n  session_ended: false\n",
+        ),
+      },
+    },
+    async ({ home, lease, service, runnerState }) => {
+      const job = await seedResearchAgent(home, lease);
+      const created = await service.present("task-1", {
+        objective: "Mock up the cancellation flow",
+        artifacts: [],
+      });
+      expect(created.status).toBe("running");
+      const request = created.request;
+      if (request === undefined) throw new Error("draw request was not recorded");
+      expect(request.kind).toBe("draw");
+      expect(await readFile(request.briefPath, "utf8")).toContain(created.artifactPath);
+      const opens = (): number =>
+        runnerState.calls.filter((call) => call.argv[0] === "lavish-axi" && call.argv[1] !== "poll")
+          .length;
+      expect(opens()).toBe(0);
+
+      await writeFile(created.artifactPath, "<!doctype html><title>mockup</title>", "utf8");
+      await writeAgentTerminal(job, {
+        phase: "idle",
+        commandId: request.id,
+        settledCommandId: request.id,
+      });
+      await service.tick();
+      const [opened] = await service.presentations();
+      expect(opened?.status).toBe("open");
+      expect(opened?.request).toBeUndefined();
+      await service.tick();
+      expect(opens()).toBe(1);
+    },
+  );
+});
+
+test("a Lavish comment on the agent's page becomes its next request, and a second one waits", async () => {
+  await withFixture(
+    {
+      stage: "completed",
+      runner: {
+        presentationResponses: [
+          lavishFeedback("Add a sad JR to the last screen"),
+          lavishFeedback("Make the button red"),
+        ],
+      },
+    },
+    async ({ home, lease, service, runnerState }) => {
+      const job = await seedResearchAgent(home, lease);
+      await seedAgentPresentation(home, job);
+      runnerState.releasePresentation();
+
+      const first = await service.feedback("presentation-agent");
+      const request = first.request;
+      if (request === undefined) throw new Error("revise request was not recorded");
+      expect(request.kind).toBe("revise");
+      expect(await readFile(request.briefPath, "utf8")).toContain(
+        "Add a sad JR to the last screen",
+      );
+      let task = await service.get("task-1");
+      expect(task.notifications.filter((entry) => entry.kind === "coordinator")).toHaveLength(0);
+      expect(
+        task.notifications.some(
+          (entry) => entry.kind === "routine" && entry.message.includes("Add a sad JR"),
+        ),
+      ).toBe(true);
+
+      const second = await service.feedback("presentation-agent");
+      expect(second.request?.id).toBe(request.id);
+      expect(second.pendingFeedback?.join("\n")).toContain("Make the button red");
+      task = await service.get("task-1");
+      expect(task.notifications.filter((entry) => entry.kind === "coordinator")).toHaveLength(0);
+    },
+  );
+});
+
+test("a revision whose agent pane closed goes to the coordinator with the comment", async () => {
+  await withFixture({ stage: "completed" }, async ({ home, lease, service }) => {
+    const job = await seedResearchAgent(home, lease, { phase: "closed" });
+    await seedAgentPresentation(home, job, {
+      id: "revise-1",
+      comment: "Add a sad JR to the last screen",
+    });
+    await service.tick();
+    const [record] = await service.presentations();
+    expect(record?.request).toBeUndefined();
+    expect(record?.status).toBe("open");
+    const task = await service.get("task-1");
+    const coordinator = task.notifications.filter((entry) => entry.kind === "coordinator");
+    expect(coordinator).toHaveLength(1);
+    expect(coordinator[0]?.message).toContain("Add a sad JR to the last screen");
   });
 });
 

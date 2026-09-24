@@ -215,8 +215,9 @@ test("an implementation built on research adopts the scout's worktree instead of
     await service.tick();
     const scout = await service.get(SCENARIO_TASK_ID);
     expect(scout.cleanup?.status).toBe("retained");
-    expect(scout.cleanup?.reason).toContain("kept for the implementation");
-    expect(world.paneIsPresent("pane-1")).toBe(false);
+    expect(scout.cleanup?.reason).toContain("mockups");
+    // The research agent stays open for mockups until building starts.
+    expect(world.paneIsPresent("pane-1")).toBe(true);
 
     const implementation = await service.create({
       repoPath: world.repoPath,
@@ -235,6 +236,8 @@ test("an implementation built on research adopts the scout's worktree instead of
     expect(runtime(implementation.id)?.worktree?.leaseId).toBe("lease-1");
     expect(runtime(implementation.id)?.worktree?.branch).not.toBe("tandem/scenario-task");
     expect(runtime(SCENARIO_TASK_ID)?.worktree).toBeUndefined();
+    expect(runtime(SCENARIO_TASK_ID)?.endpoints).toEqual([]);
+    expect(world.paneIsPresent("pane-1")).toBe(false);
     expect(snapshot.trace.some((event) => event.action === "treehouse get")).toBe(false);
     expect(snapshot.trace.some((event) => event.action === "treehouse return")).toBe(false);
     await service.shutdown();
