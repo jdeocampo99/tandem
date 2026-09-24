@@ -5,9 +5,13 @@ import {
   idleAfterResult,
   isBackgroundResultWake,
   planAbortWithReason,
+  reviewShellRefusal,
   reviewSummary,
+  submittedReportText,
   turnStalled,
   userInterruptedTurn,
+  workerPaneStatus,
+  workerToolRefusal,
 } from "../../src/workers/terminal-extension.ts";
 
 function job(): WorkerJob {
@@ -210,4 +214,94 @@ test("a running tool or a finished turn is never stalled", () => {
   const late = { lastActivityAt: 0, now: 60 * 60_000 };
   expect(turnStalled({ ...late, turnActive: true, toolsRunning: 1 })).toBe(false);
   expect(turnStalled({ ...late, turnActive: false, toolsRunning: 0 })).toBe(false);
+});
+
+test("only read-only tools run once the worker is settled, timed out, paused, or completed", () => {
+  const open = {
+    delegatedSettled: false,
+    timeoutRequested: false,
+    pauseRequested: false,
+    phase: "busy" as const,
+    completed: false,
+  };
+  expect(workerToolRefusal(open, "edit")).toBeUndefined();
+  for (const closed of [
+    { ...open, delegatedSettled: true },
+    { ...open, timeoutRequested: true },
+    { ...open, pauseRequested: true },
+    { ...open, phase: "paused" as const },
+    { ...open, completed: true },
+  ]) {
+    expect(workerToolRefusal(closed, "read")).toBeUndefined();
+    expect(workerToolRefusal(closed, "edit")).toEqual({
+      block: true,
+      reason: "worker terminal is paused or completed; mutating tools are disabled",
+    });
+  }
+});
+
+test("a PR reviewer's bash is limited to read-only commands; other workers are not", () => {
+  const bash = (input: unknown) => ({ toolName: "bash", input });
+  expect(reviewShellRefusal(true, bash({ command: "git diff" }))).toBeUndefined();
+  expect(reviewShellRefusal(true, bash({ command: "rm -rf src" }))?.block).toBe(true);
+  expect(reviewShellRefusal(true, bash({}))).toEqual({
+    block: true,
+    reason: "bash needs a command",
+  });
+  expect(reviewShellRefusal(false, bash({ command: "rm -rf src" }))).toBeUndefined();
+  expect(reviewShellRefusal(true, { toolName: "read", input: {} })).toBeUndefined();
+});
+
+test("the worker pane shows pause, then a pending answer, then work, then the settled outcome", () => {
+  const settled = {
+    paused: false,
+    waitingForAnswer: false,
+    agentActive: false,
+    settled: "blocked" as const,
+    settledMessage: "tests failed",
+  };
+  expect(workerPaneStatus({ ...settled, paused: true, waitingForAnswer: true })).toEqual({
+    state: "blocked",
+    message: "Worker paused",
+  });
+  expect(workerPaneStatus({ ...settled, waitingForAnswer: true, agentActive: true })).toEqual({
+    state: "blocked",
+    message: "Waiting for your answer",
+  });
+  expect(workerPaneStatus({ ...settled, agentActive: true })).toEqual({
+    state: "working",
+    message: undefined,
+  });
+  expect(workerPaneStatus(settled)).toEqual({ state: "blocked", message: "tests failed" });
+});
+
+test("submit_report confirms the status, or for a review, the summary to reply with", () => {
+  const base = {
+    id: "job-1",
+    taskId: "task-1",
+    generation: 0,
+    role: "implementer" as const,
+    text: "",
+    finishedAt: "2030-01-01T00:00:00.000Z",
+  };
+  expect(submittedReportText({ ...base, status: "completed" }, undefined)).toBe(
+    "Report submitted with status completed.",
+  );
+  expect(submittedReportText({ ...base, status: "failed", error: "no tests" }, undefined)).toBe(
+    "Report submitted with status failed: no tests",
+  );
+  const review = { lens: "review" as const, head: "h", generation: 0, pass: true };
+  expect(
+    submittedReportText(
+      {
+        ...base,
+        role: "reviewer",
+        status: "completed",
+        review: { ...review, summary: "", findings: [] },
+      },
+      2,
+    ),
+  ).toBe(
+    "Review round 2: approved, no findings.\n\nEnd your turn by replying with exactly this summary and nothing else.",
+  );
 });

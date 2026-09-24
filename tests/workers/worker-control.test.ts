@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TaskCommunication } from "../../src/contracts.ts";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { TaskCommunication, WorkerReceipt } from "../../src/contracts.ts";
 import { readWorkerReceipt, writeTaskInbox } from "../../src/tasks/communication-persistence.ts";
 import {
   appendTaskMessage,
@@ -10,6 +11,13 @@ import {
   taskInbox,
 } from "../../src/tasks/communication-protocol.ts";
 import workerControlExtension, { WORKER_CONTROL_ENV } from "../../src/worker-control.ts";
+import {
+  atLeastAsNewBatch,
+  contextWithTaskMessages,
+  inboxMessageBatch,
+  newestTaskMarker,
+  touchedReceipt,
+} from "../../src/workers/control-protocol.ts";
 
 type Handler = (event: unknown, context: unknown) => unknown | Promise<unknown>;
 
@@ -193,4 +201,87 @@ test("poll observes receipts without model wakes, context applies one bounded ba
     else process.env[WORKER_CONTROL_ENV] = previousEnvironment;
     await rm(root, { recursive: true, force: true });
   }
+});
+
+function communicationWith(count: number): TaskCommunication {
+  let communication: TaskCommunication | undefined;
+  for (let index = 1; index <= count; index += 1) {
+    communication = appendTaskMessage(communication, {
+      id: `direction-${index}`,
+      kind: "instruction",
+      text: `Direction ${index}.`,
+      createdAt: "2030-01-02T03:04:05.000Z",
+    });
+  }
+  if (communication === undefined) throw new Error("no communication");
+  return communication;
+}
+
+test("an inbox batch replaces the retained one only when at least as new", () => {
+  expect(inboxMessageBatch("task-a", undefined)).toBeUndefined();
+  const one = inboxMessageBatch("task-a", taskInbox("task-a", communicationWith(1)));
+  const two = inboxMessageBatch("task-a", taskInbox("task-a", communicationWith(2)));
+  expect(one?.revision).toBe(1);
+  expect(atLeastAsNewBatch(one, two)).toBe(two);
+  expect(atLeastAsNewBatch(two, one)).toBe(two);
+  expect(atLeastAsNewBatch(undefined, one)).toBe(one);
+  const sameRevision = inboxMessageBatch("task-a", taskInbox("task-a", communicationWith(2)));
+  expect(atLeastAsNewBatch(sameRevision, two)).toBe(sameRevision);
+});
+
+test("task messages collapse into one copy at the first marker, or are appended", () => {
+  const two = inboxMessageBatch("task-a", taskInbox("task-a", communicationWith(2)));
+  if (two === undefined) throw new Error("no batch");
+  const marker = (revision: number): string => {
+    const inbox = taskInbox("task-a", communicationWith(revision));
+    return formatTaskMessages("task-a", inbox.revision, inbox.messages);
+  };
+  const history = [
+    { role: "user", content: `note\n${marker(1)}`, timestamp: 1 },
+    { role: "user", content: marker(2), timestamp: 2 },
+  ] as AgentMessage[];
+  expect(newestTaskMarker(history, "task-a")?.batch.revision).toBe(2);
+  expect(newestTaskMarker(history, "task-b")).toBeUndefined();
+
+  const collapsed = contextWithTaskMessages(history, "task-a", two, true, 9);
+  expect(collapsed).toEqual([{ role: "user", content: `note\n${marker(2)}`, timestamp: 1 }]);
+
+  const plain = [{ role: "user", content: "hello", timestamp: 1 }] as AgentMessage[];
+  expect(contextWithTaskMessages(plain, "task-a", two, false, 9)).toEqual([
+    ...plain,
+    { role: "user", content: marker(2), synthetic: true, attribution: "agent", timestamp: 9 },
+  ] as AgentMessage[]);
+});
+
+test("a receipt touch writes at once only on a phase or tool change", () => {
+  const receipt: WorkerReceipt = {
+    schemaVersion: 1,
+    jobId: "job",
+    taskId: "task-a",
+    generation: 0,
+    receivedRevision: 0,
+    appliedRevision: 0,
+    heartbeatAt: "2030-01-01T00:00:00.000Z",
+    progressAt: "2030-01-01T00:00:00.000Z",
+    phase: "tool",
+    tool: "bash",
+  };
+  const later = "2030-01-01T00:01:00.000Z";
+  const heartbeat = touchedReceipt(
+    receipt,
+    { phase: "tool", tool: "bash", meaningful: false },
+    later,
+  );
+  expect(heartbeat.changed).toBe(false);
+  expect(heartbeat.receipt).toEqual({ ...receipt, heartbeatAt: later });
+  const nextTool = touchedReceipt(
+    receipt,
+    { phase: "tool", tool: "read", meaningful: true },
+    later,
+  );
+  expect(nextTool.changed).toBe(true);
+  expect(nextTool.receipt).toMatchObject({ tool: "read", progressAt: later });
+  const idle = touchedReceipt(receipt, { phase: "idle", tool: "bash", meaningful: true }, later);
+  expect(idle.changed).toBe(true);
+  expect(idle.receipt.tool).toBeUndefined();
 });
