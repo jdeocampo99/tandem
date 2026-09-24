@@ -325,6 +325,10 @@ export type TandemService = Readonly<{
   ) => Promise<PresentationRecord>;
   readonly presentations: () => Promise<readonly PresentationRecord[]>;
   readonly feedback: (presentationId: string, signal?: AbortSignal) => Promise<PresentationRecord>;
+  /** Shows a presentation again because the user asked, even one they ended in the browser. */
+  readonly openPresentation: (presentationId: string) => Promise<PresentationRecord>;
+  /** Briefs for the coordinator's repository, newest first. */
+  readonly requestBriefs: () => Promise<readonly RequestBriefRecord[]>;
   readonly reviewPr: (input: StartPrReviewInput) => Promise<StartPrReviewResult>;
   readonly reviewShow: (
     id: string,
@@ -797,6 +801,8 @@ class TandemController {
       present: (id, input) => this.present(id, input),
       presentations: () => this.presentations(),
       feedback: (id, signal) => this.feedback(id, signal),
+      openPresentation: (id) => this.#presentationFeedback.open(id),
+      requestBriefs: () => this.requestBriefs(),
       reviewPr: (input) => this.#prReviews.start(input),
       reviewShow: (id, input) => this.#prReviews.show(assertTaskId(id), input),
       reviewNotes: (id) => this.#prReviews.notes(assertTaskId(id)),
@@ -1877,11 +1883,8 @@ class TandemController {
     };
   }
 
-  /**
-   * The request a person means by "this request": the one open approved request in the
-   * coordinator's repository, or else the one whose brief changed most recently.
-   */
-  private async requestInProgress(): Promise<string> {
+  /** Briefs for the coordinator's repository (all of them without one), newest first. */
+  private async requestBriefs(): Promise<readonly RequestBriefRecord[]> {
     const repoPath = this.#deps.sourceWorkspace?.repoPath;
     const canonical = (path: string): Promise<string> => realpath(path).catch(() => path);
     const here = repoPath === undefined ? undefined : await canonical(repoPath);
@@ -1889,13 +1892,21 @@ class TandemController {
     for (const record of await this.#deps.requestStore.list()) {
       if (here === undefined || (await canonical(record.repoPath)) === here) records.push(record);
     }
-    if (here !== undefined) {
+    return records.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  /**
+   * The request a person means by "this request": the one open approved request in the
+   * coordinator's repository, or else the one whose brief changed most recently.
+   */
+  private async requestInProgress(): Promise<string> {
+    const repoPath = this.#deps.sourceWorkspace?.repoPath;
+    if (repoPath !== undefined) {
+      const here = await realpath(repoPath).catch(() => repoPath);
       const open = await this.#requests.openRequestForNewWork(here, await this.#deps.store.list());
       if (open !== undefined) return open;
     }
-    const latest = records.toSorted((left, right) =>
-      right.updatedAt.localeCompare(left.updatedAt),
-    )[0];
+    const latest = (await this.requestBriefs())[0];
     if (latest === undefined) throw new Error("There is no request to show a receipt for yet");
     return latest.id;
   }

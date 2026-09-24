@@ -541,6 +541,7 @@ export async function preparePresentation(input: {
     generation,
     cwd: directory,
     artifactPath,
+    objective,
     jobPath,
     resultPath,
     status: "queued",

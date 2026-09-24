@@ -1,3 +1,4 @@
+import { openPresentation } from "../adapters/lavish.ts";
 import type { Clock, CommandRunner, IdFactory, TaskRecord } from "../contracts.ts";
 import { presentationRuntime } from "../runtime/activity.ts";
 import { readRuntimeState, writeJsonAtomically } from "../runtime/persistence.ts";
@@ -14,13 +15,16 @@ import {
   withPresentationLock,
 } from "./lock.ts";
 import {
+  clearRecordError,
   hasPendingPresentationNotification,
+  observationError,
   type PendingPresentationNotification,
   type PresentationRecord,
   presentationNotificationForTransition,
   presentationPendingNotifications,
   readPresentationRecord,
   samePresentationRecord,
+  statusForObservation,
 } from "./records.ts";
 import { readPresentationFeedback } from "./session.ts";
 
@@ -366,6 +370,52 @@ export class PresentationFeedbackWorkflow {
     await this.#deps.readTask(runtime.taskId);
     const record = await readPresentationRecord(runtime.recordPath);
     return this.beginPresentationFeedback(runtime, record, signal, false, true);
+  }
+
+  /**
+   * Brings a presentation back up because the user asked to see it, including one they ended in
+   * the browser. While its listener runs this only resumes the browser view; otherwise it records
+   * the new session and starts listening again.
+   */
+  async open(presentationId: string): Promise<PresentationRecord> {
+    const id = singleLine(presentationId, "presentationId");
+    const runtime = presentationRuntime(await this.readState(), id);
+    if (runtime === undefined) throw new Error(`Presentation ${id} was not found`);
+    await this.#deps.readTask(runtime.taskId);
+    const record = await readPresentationRecord(runtime.recordPath);
+    // A failed record that was never opened has no verified artifact to show.
+    const shown = record.status === "open" || record.status === "ended";
+    if (!shown && !(record.status === "failed" && record.observation !== undefined)) {
+      throw new Error(`Presentation ${id} is ${record.status}, so there is nothing to open yet`);
+    }
+    if (this.#polls.has(id)) {
+      await openPresentation(this.#deps.run, record.artifactPath, record.cwd);
+      return record;
+    }
+    const opened = await withPresentationLock(runtime.recordPath, undefined, async () => {
+      const current = await readPresentationRecord(runtime.recordPath);
+      const observation = await openPresentation(
+        this.#deps.run,
+        current.artifactPath,
+        current.cwd,
+        { reopen: true },
+      );
+      const failure = observationError(observation);
+      const sessionUrl = observation.sessionUrl ?? current.sessionUrl;
+      const next: PresentationRecord = {
+        ...clearRecordError(current),
+        status: statusForObservation(observation),
+        updatedAt: this.#deps.clock(),
+        ...(sessionUrl === undefined ? {} : { sessionUrl }),
+        observation,
+        ...(failure === undefined ? {} : { error: failure }),
+      };
+      await writeJsonAtomically(runtime.recordPath, next);
+      // Re-read so the listener's same-record check compares the parsed shape it will see.
+      return readPresentationRecord(runtime.recordPath);
+    });
+    this.startPresentationFeedback(runtime, opened);
+    return opened;
   }
 
   private async readState(): Promise<RuntimeState> {

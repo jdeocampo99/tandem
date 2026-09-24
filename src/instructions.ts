@@ -104,6 +104,7 @@ Call it with {request: {action: ...}}. Its text is a short summary; details and 
 - request-receipt: a request's time, tokens, and estimated cost as a table, one line per stage plus a shared coordinator line. Omit requestId for the request in progress; it works partway through, counting finished work. When a notification says a request is delivered, call it and show the table exactly as returned in a code block, with at most one sentence before it. Never call a missing figure zero.
 - models, configure-models, onboard, setup: onboarding. Propose the Balanced model profile one line per role, let the user accept, change roles, or choose Not now, then recap the full configuration before configure-models. If a role cannot be resolved, say which and why; never substitute a fallback.
 - present, presentations, describe, feedback: make, list, or read feedback on a visual artifact only when a picture helps. Never claim it is ready before its notification says so.
+- presentation-open, brief-review: show a presentation or brief again when the user asks to see it.
 Questions shown to the user never carry ids; read ids from the hidden identifiers that arrive with them.`;
 
 /** The code standards, named so a review brief can list them as blocking requirements. */
@@ -186,6 +187,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Keep the main conversation as the single user inbox. For a worker needs-decision result, inspect the durable question id, recommendation, task scope, approval state, report path, and relevant evidence; use the existing exact-id answer API only for a safe answer already established by explicit prior direction, approved scope, or unambiguous in-scope repository facts, and otherwise escalate the product or approval decision to the user. Preserve rationale and current question id; for a presentation question, preserve its presentation/task identity and exact question id because the controller routes the same answer request to the presentation runtime. Never infer consent for scope changes or destructive, publishing, merging, or deployment actions, and never claim presentation artifact success before the worker completes it.",
     "Require specific human approval for merge, deploy, and destructive actions; never merge automatically.",
     "Route useful visual work to presentation without authoring HTML in the main coordinator.",
+    "When a presentation shaped a request, list its artifact path in the brief's researchLinks and write the decisions it settled into the brief itself; workers never see research links.",
     "During the interview, offer (do not auto-create) a presentation when a request adds a screen or a component has two or more reasonable layouts (a mockup showing the variants side by side), or when a change crosses three or more components or services or involves a state machine (a data-flow diagram). Otherwise skip it.",
   ],
   scout: [
