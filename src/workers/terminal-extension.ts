@@ -48,6 +48,11 @@ const TERMINAL_HEARTBEAT_MS = 1_000;
 const TERMINAL_POLL_MS = 250;
 const BUSY_AFTER_RESULT_TRACE_MS = 60_000;
 const IDLE_AFTER_RESULT_GRACE_MS = 30_000;
+// ponytail: fixed window; healthy workers peaked at 3 minutes without a tool call in recorded traces.
+const STALLED_TURN_MINUTES = 5;
+const STALLED_TURN_MS = STALLED_TURN_MINUTES * 60_000;
+const STALL_REMINDER_ENTRY = "tandem-stall-reminder";
+const STALL_REMINDER = `Tandem stopped your turn: you went ${STALLED_TURN_MINUTES} minutes without calling a tool. Do not wait on a background command; its result can be lost. Check its output directly, run commands in the foreground, or finish and call ${SUBMIT_REPORT_TOOL}.`;
 const READ_ONLY_TOOLS: Readonly<Record<string, true>> = {
   read: true,
   grep: true,
@@ -218,6 +223,26 @@ export function reviewSummary(review: ReviewResult, round: number | undefined): 
   ].join("\n");
 }
 
+export type StalledTurnInput = Readonly<{
+  readonly turnActive: boolean;
+  readonly toolsRunning: number;
+  /** When the current turn started or a tool last started or finished. */
+  readonly lastActivityAt: number;
+  readonly now: number;
+}>;
+
+/**
+ * A turn that goes the whole window without starting or finishing a tool is stuck, typically
+ * waiting on a background command whose result never arrived. A running tool is progress.
+ */
+export function turnStalled(input: StalledTurnInput): boolean {
+  return (
+    input.turnActive &&
+    input.toolsRunning === 0 &&
+    input.now - input.lastActivityAt >= STALLED_TURN_MS
+  );
+}
+
 /**
  * After submit_report, OMP ends the turn with willContinue while a background command it started
  * (such as a dev server) is still running, then waits for that command forever. A submitted worker
@@ -303,6 +328,11 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   let settledStatus: HerdrAgentState = "idle";
   let statusMessage: string | undefined;
   const waitingInputs = new Set<string>();
+  const runningTools = new Set<string>();
+  let turnActive = false;
+  let lastActivityAt = Date.now();
+  let stallReminded = false;
+  let stallAbortPending = false;
   const abort = (ctx: ExtensionContext): void => {
     extensionAborted = true;
     ctx.abort();
@@ -334,6 +364,31 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     void persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id).catch(
       () => abort(ctx),
     );
+  };
+  // The first stall stops the turn and reminds the worker; a second fails the job so central
+  // recovery restarts it or asks the user.
+  const checkStalledTurn = (ctx: ExtensionContext): void => {
+    if (resultPublished || timeoutRequested || pauseCommand !== undefined || stallAbortPending) {
+      return;
+    }
+    const stalled = turnStalled({
+      turnActive,
+      toolsRunning: runningTools.size,
+      lastActivityAt,
+      now: Date.now(),
+    });
+    if (!stalled) return;
+    traceWorkerTurn(jobPath, "stalled_turn", { reminded: stallReminded });
+    if (stallReminded) {
+      void abortWithReason(
+        ctx,
+        `worker stalled: no tool call for ${STALLED_TURN_MINUTES} minutes, again after a reminder`,
+      );
+      return;
+    }
+    stallReminded = true;
+    stallAbortPending = true;
+    abort(ctx);
   };
   let lastBusyTraceAt = 0;
   // While a submitted worker still reads busy, record what OMP itself reports, at most once a minute.
@@ -635,6 +690,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     ctx.setInterval(() => {
       traceBusyAfterResult(ctx);
       settleIdleAfterResult(ctx);
+      checkStalledTurn(ctx);
       void persistState(currentState.phase, currentState.completed).catch((error) => {
         void abortWithReason(
           ctx,
@@ -657,12 +713,16 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   });
   pi.on("turn_start", (_event, ctx) => {
     traceWorkerTurn(jobPath, "turn_start");
+    turnActive = true;
+    lastActivityAt = Date.now();
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     void reportStatus();
   });
   pi.on("tool_execution_start", (event, ctx) => {
     traceWorkerTurn(jobPath, "tool_start", { tool: event.toolName });
+    runningTools.add(event.toolCallId);
+    lastActivityAt = Date.now();
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     if (event.toolName === "ask") waitingInputs.add(event.toolCallId);
@@ -670,12 +730,16 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   });
   pi.on("tool_execution_end", (event, ctx) => {
     traceWorkerTurn(jobPath, "tool_end", { tool: event.toolName });
+    runningTools.delete(event.toolCallId);
+    lastActivityAt = Date.now();
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     waitingInputs.delete(event.toolCallId);
     void reportStatus();
   });
   pi.on("turn_end", (event, ctx) => {
     traceWorkerTurn(jobPath, "turn_end");
+    turnActive = false;
+    runningTools.clear();
     const reply = replyUsage(event.message);
     if (reply !== undefined) {
       tokenTally = addReplyUsage(tokenTally, reply);
@@ -698,6 +762,27 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   pi.on("agent_end", async (event, ctx) => {
     traceWorkerTurn(jobPath, "agent_end", { willContinue: event.willContinue, resultPublished });
     agentActive = event.willContinue === true;
+    if (stallAbortPending) {
+      // The watchdog's own abort: the worker keeps going with the reminder, not a failure.
+      stallAbortPending = false;
+      extensionAborted = false;
+      pi.sendMessage(
+        {
+          customType: STALL_REMINDER_ENTRY,
+          content: STALL_REMINDER,
+          display: true,
+          attribution: "agent",
+        },
+        { deliverAs: "nextTurn", triggerTurn: true },
+      );
+      if (event.willContinue !== true) {
+        agentActive = true;
+        await persistState("busy", currentState.completed);
+        await reportStatus();
+        traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
+        return;
+      }
+    }
     if (event.willContinue === true) {
       await persistState("busy", currentState.completed);
       await reportStatus();
