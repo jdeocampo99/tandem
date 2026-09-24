@@ -11,7 +11,8 @@ import type {
 } from "../../src/contracts.ts";
 import {
   deliverPendingNotifications,
-  isResearchReportReadable,
+  INLINE_RESEARCH_REPORT_MAX_CHARS,
+  readResearchReport,
 } from "../../src/extension/notifications.ts";
 import { buildResearchFollowUpContent } from "../../src/extension/research-follow-up.ts";
 import { summarizeTandemActionValue } from "../../src/extension/summary.ts";
@@ -196,7 +197,7 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
       ctx: silentUi(),
-      reportReadable: isResearchReportReadable,
+      readReport: readResearchReport,
     });
 
     const restarted = createTaskStore({ directory, clock: () => NOW, idFactory: () => "unused" });
@@ -210,7 +211,7 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
       ctx: silentUi(),
-      reportReadable: isResearchReportReadable,
+      readReport: readResearchReport,
     });
 
     expect(first).toHaveLength(2);
@@ -239,7 +240,7 @@ test("an unreadable report downgrades the recorded interview to a disclosed bloc
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
       ctx: silentUi(),
-      reportReadable: isResearchReportReadable,
+      readReport: readResearchReport,
     });
 
     expect(sent).toHaveLength(2);
@@ -266,7 +267,7 @@ test("an implementation-interview wake approves no scope and creates no implemen
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
       ctx: silentUi(),
-      reportReadable: isResearchReportReadable,
+      readReport: readResearchReport,
     });
 
     const after = await store.list();
@@ -307,7 +308,7 @@ test("routine scout bookkeeping stays out of the model wake and carries no follo
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
       ctx: { ui: { notify: (message) => notices.push(message) } },
-      reportReadable: isResearchReportReadable,
+      readReport: readResearchReport,
     });
 
     expect(sent).toHaveLength(0);
@@ -375,13 +376,48 @@ test("the delivered wake matches the pure decision for the same durable record",
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
       ctx: silentUi(),
-      reportReadable: isResearchReportReadable,
+      readReport: readResearchReport,
     });
 
     const expected = buildResearchFollowUpContent(
       decideResearchFollowUp({ task: record, reportReadable: true }),
     );
     expect(sent[1]).toContain(expected);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("a finished research wake carries a short report so the coordinator need not read it", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-follow-up-inline-"));
+  try {
+    const { directory, reportPath } = await completedScout(home, "report-only");
+    const store = createTaskStore({ directory, clock: () => NOW, idFactory: () => "unused" });
+    const record = await store.read("scout-task");
+    if (record === undefined) throw new Error("scout task was not persisted");
+    const deliver = async (): Promise<readonly string[]> => {
+      const sent: string[] = [];
+      await deliverPendingNotifications({
+        pi: recordingSink(sent),
+        service: noopAcknowledge(record),
+        tasks: [record],
+        delivered: new Set<string>(),
+        unacknowledged: new Set<string>(),
+        ctx: silentUi(),
+        readReport: readResearchReport,
+      });
+      return sent;
+    };
+
+    const [hidden, shown] = await deliver();
+    expect(hidden).toContain("Full report for task scout-task");
+    expect(hidden).toContain("The retry loop drops the final attempt.");
+    expect(shown).not.toContain("The retry loop drops the final attempt.");
+
+    await writeFile(reportPath, "x".repeat(INLINE_RESEARCH_REPORT_MAX_CHARS + 1), "utf8");
+    const [longHidden, longShown] = await deliver();
+    expect(longHidden).not.toContain("Full report");
+    expect(longShown).toContain(`Evidence report: ${reportPath}`);
   } finally {
     await rm(home, { recursive: true, force: true });
   }

@@ -40,7 +40,7 @@ function describeResearchOverride(override: ResearchContinuationOverride): strin
  * this overrides the coordinator's usual one-or-two-sentence limit.
  */
 const RESEARCH_SUMMARY =
-  "Read the report, then give the user a research summary in plain language; the one-or-two-sentence limit does not apply here. Cover the three to five findings that matter, each with its evidence; the options the research surfaced; which one you recommend and why; and what is still uncertain.";
+  "Give the user a summary of the research report in plain language (read the report first unless its full text came with this notice); the one-or-two-sentence limit does not apply here. Cover the three to five findings that matter, each with its evidence; the options the research surfaced; which one you recommend and why; and what is still uncertain.";
 
 function followUpSteps(decision: ResearchFollowUpDecision): readonly string[] {
   switch (decision.followUp) {

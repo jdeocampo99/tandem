@@ -30,7 +30,9 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   scout reports, and PR-ready notices. The newest ones in a delivery batch coalesce into at most
   one model wake; routine backlog is excluded, and a delivered wake is never repeated.
 - A judgment-needed scout notice carries that scout's post-research follow-up, rebuilt from the
-  durable record on every delivery (see [task lifecycle](task-lifecycle.md)).
+  durable record on every delivery (see [task lifecycle](task-lifecycle.md)). When the follow-up
+  asks for a summary and the report is at most 16,000 characters, its full text rides along in the
+  hidden identifiers message, so the coordinator answers without a separate `read` call.
 - A scout is completed research only when durable state records `completed` and its report.
 
 ## Compaction and the durable digest

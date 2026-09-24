@@ -139,15 +139,11 @@ async function submitReport(
 const IMPLEMENTED: SubmittedReport = { outcome: "implemented", report: "Committed the change." };
 
 function review(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    lens: "review",
-    head: "abc123",
-    generation: 3,
-    pass: true,
-    findings: [],
-    summary: "No behavior findings.",
-    ...overrides,
-  };
+  return { findings: [], summary: "No behavior findings.", ...overrides };
+}
+
+function finding(severity: string): Record<string, unknown> {
+  return { id: `f-${severity}`, severity, verdict: "confirmed", description: "Evidence." };
 }
 
 async function startExtension(
@@ -262,8 +258,8 @@ test("malformed submissions are rejected back to the worker without settling the
   }[] = [
     {
       role: "reviewer",
-      bad: { outcome: "completed", review: review({ head: "stale" }) },
-      rejection: "head abc123",
+      bad: { outcome: "completed", review: { findings: [] } },
+      rejection: "review.summary",
       good: { outcome: "completed", review: review() },
     },
     {
@@ -359,13 +355,95 @@ test("every worker role submits a structured needs-decision, and reviews submit 
       const result = await readWorkerResult(job.resultPath, job);
       expect(result.status).toBe("completed");
       expect(result.review?.lens).toBe("review");
-      expect(JSON.parse(result.text)).toEqual(review());
+      expect(JSON.parse(result.text)).toEqual({
+        lens: "review",
+        head: "abc123",
+        generation: 3,
+        pass: true,
+        ...review(),
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   } finally {
     if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
     else process.env.TANDEM_WORKER_JOB_PATH = previous;
+  }
+});
+
+test("Tandem binds a submitted review to its job and derives pass from the findings", async () => {
+  const previous = process.env.TANDEM_WORKER_JOB_PATH;
+  const cases = [
+    { findings: [finding("P2"), finding("P3")], pass: true },
+    { findings: [finding("P2"), finding("P1")], pass: false },
+    { findings: [finding("P0")], pass: false },
+  ] as const;
+  try {
+    for (const value of cases) {
+      const root = await mkdtemp(join(tmpdir(), "tandem-review-derived-"));
+      try {
+        const job = makeJob(root, "reviewer");
+        const { fixture: f } = await startExtension(root, job);
+        await submitReport(f, {
+          outcome: "completed",
+          review: review({ findings: value.findings }),
+        });
+        const result = await readWorkerResult(job.resultPath, job);
+        expect(result.review).toMatchObject({
+          lens: "review",
+          head: "abc123",
+          generation: 3,
+          pass: value.pass,
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
+    else process.env.TANDEM_WORKER_JOB_PATH = previous;
+  }
+});
+
+test("an implementer cannot report implemented while its worktree has uncommitted changes", async () => {
+  const previous = process.env.TANDEM_WORKER_JOB_PATH;
+  const root = await mkdtemp(join(tmpdir(), "tandem-uncommitted-"));
+  const git = (...args: string[]): void => {
+    const result = Bun.spawnSync(["git", "-C", root, ...args]);
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  };
+  try {
+    git("init", "--quiet");
+    const job = makeJob(root);
+    await writeFile(
+      join(root, ".gitignore"),
+      "job.json\nresult.json\n*.terminal*\n*.tokens*\n*.trace*\n",
+    );
+    const { fixture: f, terminalJob } = await startExtension(root, job);
+    await writeFile(join(root, "change.ts"), "export const changed = true;\n");
+    const rejected = await submitReport(f, IMPLEMENTED);
+    expect(rejected.isError).toBe(true);
+    expect(rejected.content[0]?.text).toContain("uncommitted changes (.gitignore, change.ts)");
+    expect(await Bun.file(job.resultPath).exists()).toBe(false);
+    expect((await readWorkerTerminal(terminalJob))?.completed).toBe(false);
+
+    git("add", "-A");
+    git(
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      "change",
+    );
+    expect((await submitReport(f, IMPLEMENTED)).isError).toBeUndefined();
+    expect((await readWorkerResult(job.resultPath, job)).status).toBe("completed");
+  } finally {
+    if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
+    else process.env.TANDEM_WORKER_JOB_PATH = previous;
+    await rm(root, { recursive: true, force: true });
   }
 });
 

@@ -177,7 +177,7 @@ test("prepares a private directory and worker job from bounded Lavish guidance",
     expect(prepared.job.prompt).toContain("fallback design guidance");
     expect(prepared.job.prompt).toContain(paths.repository);
     expect(prepared.job.prompt).toContain("The controller—not the restricted worker—opens Lavish");
-    expect(prepared.job.prompt).toContain("Never invoke bash, shell commands, or Lavish");
+    expect(prepared.job.prompt).toContain("Bash is not available or permitted");
     expect(prepared.job.prompt).not.toContain("## Controller command boundary");
     expect(prepared.job.prompt).toContain("/tmp/reference.png");
     expect(JSON.parse(await readFile(prepared.record.jobPath, "utf8"))).toEqual(prepared.job);

@@ -21,10 +21,7 @@ import {
   coordinatorCompactTokens,
   finishedTaskIds,
 } from "./extension/compaction.ts";
-import {
-  deliverPendingNotifications,
-  isResearchReportReadable,
-} from "./extension/notifications.ts";
+import { deliverPendingNotifications, readResearchReport } from "./extension/notifications.ts";
 import { promptRoutingConfig } from "./extension/prompt-routing.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { buildDurableDigest } from "./extension/summary.ts";
@@ -236,7 +233,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             delivered: deliveredNotifications,
             unacknowledged: unacknowledgedNotifications,
             ctx,
-            reportReadable: isResearchReportReadable,
+            readReport: readResearchReport,
           });
           compactIfAtBoundary(ctx, tasks);
         } catch (error) {

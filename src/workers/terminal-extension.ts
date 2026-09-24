@@ -31,6 +31,7 @@ import {
   ReportRejection,
   resolveSubmittedReport,
   type SubmittedReport,
+  uncommittedWorkRejection,
   WorkerOutputError,
 } from "./protocol.ts";
 import {
@@ -301,6 +302,22 @@ function terminalState(
   };
 }
 
+/**
+ * The worktree's `git status --porcelain=v1` output, or undefined when git cannot report it. The
+ * settle-time checkpoint check stays authoritative, so an unreadable status never blocks a report.
+ */
+async function worktreeStatus(cwd: string): Promise<string | undefined> {
+  try {
+    const result = await runCommand({
+      argv: ["git", "-C", cwd, "status", "--porcelain=v1", "--untracked-files=all"],
+      cwd,
+    });
+    return result.code === 0 ? result.stdout : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The lines a PR review's comments may anchor on, read from the diff the run was given. */
 async function reviewAnchors(
   job: WorkerJob,
@@ -456,6 +473,11 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   ): Promise<WorkerResult | ReportRejection> => {
     try {
       assertSelectedModel(expectedModelParts(job.model.model), ctx.model);
+      if (job.role === "implementer" && submission.outcome === "implemented") {
+        const status = await worktreeStatus(job.cwd);
+        const uncommitted = status === undefined ? undefined : uncommittedWorkRejection(status);
+        if (uncommitted !== undefined) return uncommitted;
+      }
       const report = resolveSubmittedReport(job, submission, await reviewAnchors(job));
       const revision = await instructionRevision(job, report.status !== "failed");
       return resultFor(job, report.status, report.text, {
@@ -504,10 +526,6 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   const reviews = job.role === "reviewer";
   const reviewSchema = z
     .object({
-      lens: z.enum(["review"]),
-      head: z.string(),
-      generation: z.number().int().nonnegative(),
-      pass: z.boolean(),
       findings: z.array(
         z
           .object({
@@ -557,7 +575,11 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
           : {}),
         ...(reviews
           ? {
-              review: reviewSchema.optional().describe("Required for completed: the ReviewResult."),
+              review: reviewSchema
+                .optional()
+                .describe(
+                  "Required for completed: your findings and summary. Tandem records the commit and whether the review passes.",
+                ),
             }
           : {}),
       })

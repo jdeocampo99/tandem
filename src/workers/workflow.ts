@@ -3282,7 +3282,7 @@ export class WorkerWorkflow {
             ? []
             : [reservedRuntime.reviewProvenancePath]),
         ],
-        { head: task.reviewHead, generation: task.generation, pass: nextLens },
+        { head: task.reviewHead, pass: nextLens },
         [
           `Review only the selected ${nextLens} lens. The immutable diff is at ${diffPath}.`,
           `The deterministic review brief for this round is at ${briefPath}. It reuses the recorded scope, identities, diffs, evidence, and prior finding status so you do not rebuild them; it never replaces your own reading of the source at this HEAD.`,
