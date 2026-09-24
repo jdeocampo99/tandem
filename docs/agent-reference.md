@@ -301,6 +301,9 @@ The installed `tandem` command uses the following terminal options and environme
 | Hard reset | `tandem reset --hard`; stop everything best-effort, then delete the Tandem home, an outside pool root, and a remembered setup that points at the home; confirms (or `--yes`) |
 | Parallel coordinators | `TANDEM_ALLOW_PARALLEL_COORDINATORS=1` (or `true`); off by default, and the only way to run more than one coordinator for one repository in a shared home |
 
+Retired spellings (`restart`, `--restart`, `--reset`, `--force`, `--continue`, `logs`,
+`reconcile-resources`, `inspect`) exit with an error that names the replacement.
+
 ### Remembered setup
 
 The optional user preference `$XDG_CONFIG_HOME/tandem/config.json` (default
