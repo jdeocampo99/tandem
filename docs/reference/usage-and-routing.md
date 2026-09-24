@@ -32,8 +32,8 @@ src/workers/execution-routing.ts
 
 ## Attribution
 
-- Each worker's extension sums OMP's per-reply usage (tokens and price-table cost) into
-  `<job>.usage.json`; the settled work span carries `actual` tokens and an `estimated` charge from
+- Each worker's extension sums OMP's per-reply usage (tokens and price-table cost), plus each
+  `task` call's aggregated subagent usage (`details.usage`), into `<job>.usage.json`; the settled work span carries `actual` tokens and an `estimated` charge from
   `omp-model-price-table`, a list price rather than a subscription bill.
 - Research is credited through the implementation that cites it in `researchTaskIds`, without joining
   the request.

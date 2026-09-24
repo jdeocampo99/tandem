@@ -180,16 +180,36 @@ export function addReplyUsage(
 
 /** The usage an OMP assistant message reports, or undefined for any other message. */
 export function replyUsage(message: unknown): ReplyUsage | undefined {
-  if (!record(message) || message.role !== "assistant" || !record(message.usage)) return undefined;
-  const usage = message.usage;
+  if (!record(message) || message.role !== "assistant") return undefined;
+  return usageCounts(
+    message.usage,
+    typeof message.provider === "string" ? message.provider : "unknown",
+    typeof message.model === "string" ? message.model : "unknown",
+  );
+}
+
+/**
+ * The usage all subagents of one OMP `task` call reported, from the tool result's aggregated
+ * `details.usage`. It is attributed to the worker's own provider and model, since the tally keeps one.
+ */
+export function taskUsage(
+  result: unknown,
+  tally: WorkerTokenTally | undefined,
+): ReplyUsage | undefined {
+  if (!record(result) || !record(result.details)) return undefined;
+  return usageCounts(result.details.usage, tally?.provider ?? "unknown", tally?.model ?? "unknown");
+}
+
+function usageCounts(usage: unknown, provider: string, model: string): ReplyUsage | undefined {
+  if (!record(usage)) return undefined;
   const cost = record(usage.cost) ? usage.cost.total : 0;
   const counts = [usage.input, usage.output, usage.cacheRead ?? 0, usage.cacheWrite ?? 0, cost];
   if (!counts.every((count) => typeof count === "number" && Number.isFinite(count) && count >= 0)) {
     return undefined;
   }
   return {
-    provider: typeof message.provider === "string" ? message.provider : "unknown",
-    model: typeof message.model === "string" ? message.model : "unknown",
+    provider,
+    model,
     input: usage.input as number,
     output: usage.output as number,
     cacheRead: (usage.cacheRead ?? 0) as number,

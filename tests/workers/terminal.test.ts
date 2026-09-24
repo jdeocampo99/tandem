@@ -11,6 +11,7 @@ import {
   readWorkerTokenTally,
   replyUsage,
   requestWorkerTerminalCommand,
+  taskUsage,
   traceWorkerTurn,
   type WorkerTerminalJob,
   type WorkerTerminalState,
@@ -265,6 +266,19 @@ test("a worker's replies add up to one token tally that round-trips through its 
     replies: 2,
   });
   expect(tally.costUsd).toBeCloseTo(0.03);
+
+  const subagents = taskUsage(
+    { content: [], details: { results: [], usage: assistant(2_000, 400, 0, 0.005).usage } },
+    tally,
+  );
+  expect(taskUsage({ content: [] }, tally)).toBeUndefined();
+  if (subagents === undefined) throw new Error("task usage should parse");
+  expect(addReplyUsage(tally, subagents)).toMatchObject({
+    provider: "openai-codex",
+    model: "gpt-6-luna",
+    inputTokens: 3_500,
+    outputTokens: 700,
+  });
 
   const home = await mkdtemp(join(tmpdir(), "tandem-token-tally-"));
   try {

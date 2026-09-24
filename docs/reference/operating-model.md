@@ -35,7 +35,7 @@ child worker also gets `submit_report`.
 | Role | Workspace | Tools | Must not |
 | --- | --- | --- | --- |
 | Coordinator | OMP conversation in the clean source worktree | `read`, `ask`, `tandem`, plus MCP servers listed in the project's `coordinatorMcpServers` | Edit code, run shell commands, search the repo (scouts do that) |
-| Scout | Isolated Treehouse worktree, child Herdr workspace | `read`, `grep`, `glob`, `web_search` | Write files, run project-wide gates, invent findings when a tool fails (report the exact failure) |
+| Scout | Isolated Treehouse worktree, child Herdr workspace | `read`, `grep`, `glob`, `web_search`, `task` (fans broad scope out to OMP's bundled read-only `scout` subagents; other bundled agents are disabled in worker-config.yml, repository-defined agents are not blocked) | Write files, run project-wide gates, invent findings when a tool fails (report the exact failure) |
 | Implementer | Assigned task worktree, child Herdr workspace | `read`, `grep`, `glob`, `edit`, `write`, `bash` | Exceed approved scope, merge, deploy, destructive cleanup, claim validation results |
 | Reviewer | Fresh read-only pane in the task worktree | `read`, `grep`, `glob` | Edit or write a report file; returns evidence-bound `ReviewResult` data |
 | Presentation | Private artifact directory | `read`, `grep`, `glob`, `write`, `edit` | Write anywhere but the supplied artifact path; no bash |
