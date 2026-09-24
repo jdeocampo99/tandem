@@ -102,7 +102,10 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
 - The `skip-review` lifecycle event makes the task `ready` at its current HEAD with
   `reviewSkippedHead` recorded. That record replaces the evidence, review, and final-acceptance
   checks at exactly that HEAD; any later fix round or evidence invalidation clears it.
-- `# Validation` says review was skipped. If publication fails after the skip, the task stays
+- A brief approved with `skipReview` applies the same event from `reviewing` once validation
+  passes, without the stop step (see [request-briefs.md](request-briefs.md#brief-record)).
+- `# Validation` says review was skipped, names any safety floors the diff tripped, and lists the
+  validation that passed before the skip. If publication fails after the skip, the task stays
   `ready` and a normal `publish` can retry. Merge stays separate.
 
 ## Merge

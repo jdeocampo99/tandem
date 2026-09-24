@@ -124,6 +124,7 @@ export function registerTandemOmp(
       keyDecisions: z.array(z.string()),
       openQuestions: z.array(z.string()),
       researchLinks: z.array(z.string()),
+      skipReview: z.boolean().optional(),
     })
     .strict();
   const actionSchema = z.union([

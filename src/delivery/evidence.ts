@@ -215,12 +215,30 @@ function acceptedValidation(task: TaskRecord, head: string): readonly string[] {
   ];
 }
 
+function skippedValidation(task: TaskRecord, head: string): readonly string[] {
+  const floors = task.reviewLevel?.floors ?? [];
+  return [
+    `Review was skipped at the user's request at HEAD ${head}.`,
+    ...(floors.length === 0 ? [] : [`Risk checks the change tripped: ${floors.join(", ")}.`]),
+    ...passedValidation(task, head),
+  ];
+}
+
+/** Validation that did pass before a skip; a skip mid-validation may have none. */
+function passedValidation(task: TaskRecord, head: string): readonly string[] {
+  try {
+    return assertEvidence(task, head).map(evidenceBullet);
+  } catch {
+    return [];
+  }
+}
+
 export function describeTaskPr(task: TaskRecord, summary: PrSummary): string {
   const shape = assertTaskShape(task);
   const validatedSummary = validateSummary(summary);
   const skipped = task.reviewSkippedHead === shape.head;
   const validation = skipped
-    ? [`Review was skipped: the user asked to publish at HEAD ${shape.head} before it finished.`]
+    ? skippedValidation(task, shape.head)
     : acceptedValidation(task, shape.head);
   const openFindings = (task.findingLedger ?? []).filter((entry) => entry.status !== "addressed");
   return renderPrDescription({

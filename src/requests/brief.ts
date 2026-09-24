@@ -75,6 +75,9 @@ const AGREEMENT_FIELDS = [
  */
 const MANUAL_VERIFICATION_FIELD = "manualVerification";
 
+/** Also agreement and added later: it joins the agreement digest only when set. */
+const SKIP_REVIEW_FIELD = "skipReview";
+
 const ANNOTATION_FIELDS = ["openQuestions", "researchLinks"] as const;
 
 const TEXT_FIELDS = ["goal", "recommendedApproach"] as const;
@@ -128,6 +131,7 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
   const allowed: readonly string[] = [
     ...AGREEMENT_FIELDS,
     MANUAL_VERIFICATION_FIELD,
+    SKIP_REVIEW_FIELD,
     ...ANNOTATION_FIELDS,
   ];
   for (const key of Object.keys(record)) {
@@ -148,6 +152,7 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
     keyDecisions: briefList(record, "keyDecisions"),
     openQuestions: briefList(record, "openQuestions"),
     researchLinks: briefList(record, "researchLinks"),
+    ...(briefFlag(record, SKIP_REVIEW_FIELD) ? { skipReview: true } : {}),
   };
   const bytes = Buffer.byteLength(JSON.stringify(content), "utf8");
   if (bytes > MAX_REQUEST_BRIEF_BYTES) {
@@ -329,6 +334,11 @@ export function openRequestForNewWork(
   return open[0]?.id;
 }
 
+/** Whether the user's approved agreement for this request says its work needs no code review. */
+export function briefSkipsReview(record: RequestBriefRecord): boolean {
+  return requestApprovalState(record) === "current" && record.draft.content.skipReview === true;
+}
+
 export function decideRequestDispatch(record: RequestBriefRecord): RequestDispatchDecision {
   const state = requestApprovalState(record);
   if (state === "current" && record.approval !== undefined) {
@@ -371,12 +381,22 @@ function canonicalContent(content: RequestBriefContent): string {
 function canonicalAgreement(content: RequestBriefContent): string {
   const agreement: unknown[] = AGREEMENT_FIELDS.map((field) => content[field]);
   if (content.manualVerification.length > 0) agreement.push(content.manualVerification);
+  if (content.skipReview === true) agreement.push({ skipReview: true });
   return JSON.stringify(agreement);
 }
 
 function checkedLine(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new RequestBriefError("invalid-content", `${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function briefFlag(record: Record<string, unknown>, field: typeof SKIP_REVIEW_FIELD): boolean {
+  const value = record[field];
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") {
+    throw new RequestBriefError("invalid-content", `${field} must be a boolean`);
   }
   return value;
 }

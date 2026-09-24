@@ -356,6 +356,8 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly recordRequestUsage: (events: readonly RequestUsageEvent[]) => Promise<void>;
   /** The accounting ledger's own rows for one request, read for economical routing's usage check. */
   readonly readRequestUsage: (requestId: string) => Promise<RequestUsageReadout>;
+  /** Whether the request's approved brief says its work needs no code review. */
+  readonly briefSkipsReview: (requestId: string) => Promise<boolean>;
   /** Reads catalogue tier evidence at an execution boundary; it never enables a provider. */
   readonly readModelCatalogue: ModelCatalogueReader;
 }>;
@@ -3076,6 +3078,11 @@ export class WorkerWorkflow {
     });
     const classified = await this.classifyRound({ task, head: reviewHead, facts });
     const leveledTask = await this.recordReviewLevel(task, classified.record);
+    // The user's approved "no review" wins over the risk classification recorded just above.
+    if (task.requestId !== undefined && (await this.#deps.briefSkipsReview(task.requestId))) {
+      await this.#deps.transition(task.id, { type: "skip-review", head: reviewHead });
+      return;
+    }
     const nextLens = requiredReviewLenses(leveledTask, reviewHead).find(
       (lens) =>
         !leveledTask.reviews.some(

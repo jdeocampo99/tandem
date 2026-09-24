@@ -96,6 +96,7 @@ import {
   pinDefaultBranch,
   repoName,
 } from "../repos/locate.ts";
+import { briefSkipsReview } from "../requests/brief.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../requests/store.ts";
 import {
   type ApproveRequestBriefInput,
@@ -711,6 +712,10 @@ class TandemController {
       reviewAssistance: deps.reviewAssistance,
       recordRequestUsage: (events) => this.recordAccounting(events),
       readRequestUsage: (requestId) => this.#usage.read(requestId),
+      briefSkipsReview: async (requestId) => {
+        const brief = await deps.requestStore.read(requestId);
+        return brief !== undefined && briefSkipsReview(brief);
+      },
       readModelCatalogue: (cwd) => this.readModelCatalogue(cwd),
     });
     this.#control = new TaskControlWorkflow({

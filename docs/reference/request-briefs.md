@@ -17,6 +17,12 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   person can check. Tasks copy `manualVerification`; reviewers never judge it, implementers may
   report on it without blocking, and delivery renders it as an unticked PR checklist. It joins the
   agreement digest only when non-empty, so older briefs keep their digests and approval.
+- `skipReview: true` records the user's planning-time decision that the work needs no code review.
+  It is agreement (it joins the digest only when set) and only the coordinator sets it, when the
+  user says so. While the approval is current, a task under the brief skips the reviewer once
+  validation passes: `advanceReview` records the review level, then applies the `skip-review` event
+  (see [delivery.md](delivery.md#publish-now-user-skips-review)). The user's decision wins over every
+  safety floor; the PR body names any floors the diff tripped. Publishing still needs approval.
 
 ## Approval
 
