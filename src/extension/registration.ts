@@ -195,7 +195,7 @@ export function registerTandemOmp(
       .strict(),
     z.object({ action: z.literal("brief-review"), requestId: z.string() }).strict(),
     z.object({ action: z.literal("brief-show"), requestId: z.string() }).strict(),
-    z.object({ action: z.literal("request-receipt"), requestId: z.string() }).strict(),
+    z.object({ action: z.literal("request-receipt"), requestId: z.string().optional() }).strict(),
     z
       .object({
         action: z.literal("brief-approve"),

@@ -141,6 +141,10 @@ export type RequestUsageReceipt = Readonly<{
   readonly breakdown: RequestUsageBreakdown;
   /** The coordinator's usage over this request's window; shared with any request open alongside. */
   readonly coordinator?: CoordinatorShare;
+  /** The request's goal, so a receipt says which request it is. */
+  readonly goal?: string;
+  /** When an open request was measured; absent once the request has ended. */
+  readonly asOf?: IsoTimestamp;
 }>;
 
 /** One coordinator model reply, as the coordinator extension records it. */
@@ -249,15 +253,23 @@ export function renderRequestReceiptTable(receipt: RequestUsageReceipt): string 
       .trimEnd(),
   );
   const { timing } = receipt;
-  const elapsed =
-    timing.elapsedMs === "unavailable"
-      ? "still open"
-      : `${formatDuration(timing.elapsedMs)} elapsed`;
-  const waiting =
-    timing.waitingMs === "unavailable" ? "" : `, ${formatDuration(timing.waitingMs)} waiting`;
-  lines.push(`Total: ${elapsed} (${formatDuration(timing.activeMs)} working${waiting})`);
+  const working = `${formatDuration(timing.activeMs)} working`;
+  const sinceIntake =
+    receipt.asOf === undefined || timing.intakeAt === "unavailable"
+      ? undefined
+      : Date.parse(receipt.asOf) - Date.parse(timing.intakeAt);
+  if (timing.elapsedMs !== "unavailable") {
+    const waiting =
+      timing.waitingMs === "unavailable" ? "" : `, ${formatDuration(timing.waitingMs)} waiting`;
+    lines.push(`Total: ${formatDuration(timing.elapsedMs)} elapsed (${working}${waiting})`);
+  } else if (sinceIntake !== undefined && Number.isFinite(sinceIntake)) {
+    lines.push(`So far: ${formatDuration(sinceIntake)} since the request started (${working})`);
+    lines.push("Still open: work that is running now is added when it finishes.");
+  } else {
+    lines.push(`So far: ${working}; the request is still open.`);
+  }
   lines.push("Costs are OMP's list-price estimates, not what a subscription is billed.");
-  return lines.join("\n");
+  return [...(receipt.goal === undefined ? [] : [receipt.goal]), ...lines].join("\n");
 }
 
 function formatDuration(ms: number): string {

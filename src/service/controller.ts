@@ -254,7 +254,8 @@ export type TandemService = Readonly<{
   /** The one request whose brief is awaiting approval; fails closed when that is not unambiguous. */
   readonly pendingBriefApprovalId: () => Promise<string>;
   readonly requestBrief: (requestId: string) => Promise<RequestBriefView>;
-  readonly requestReceipt: (requestId: string) => Promise<RequestUsageReceipt>;
+  /** Without an id, the receipt is for the request in progress. */
+  readonly requestReceipt: (requestId?: string) => Promise<RequestUsageReceipt>;
   readonly tick: () => Promise<readonly TaskRecord[]>;
   readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly steer: (input: SteerTaskInput) => Promise<TaskCommunicationView>;
@@ -1764,17 +1765,23 @@ class TandemController {
     }
   }
 
-  /** The request's receipt, with the coordinator's shared usage over the request's window. */
-  private async requestReceipt(requestId: string): Promise<RequestUsageReceipt> {
-    const receipt = await this.#usage.receipt(requestId);
-    const brief = await this.#deps.requestStore.read(requestId);
+  /**
+   * The request's receipt, with its goal and the coordinator's shared usage over the request's
+   * window. An open request is measured up to now, so it can be checked partway through.
+   */
+  private async requestReceipt(requestId?: string): Promise<RequestUsageReceipt> {
+    const id = requestId ?? (await this.requestInProgress());
+    const receipt = await this.#usage.receipt(id);
+    const brief = await this.#deps.requestStore.read(id);
     const from = receipt.timing.intakeAt;
     if (brief === undefined || from === "unavailable") return receipt;
-    const to =
-      receipt.timing.terminalAt === "unavailable" ? this.#deps.clock() : receipt.timing.terminalAt;
+    const open = receipt.timing.terminalAt === "unavailable";
+    const to = open ? this.#deps.clock() : receipt.timing.terminalAt;
     const repoPath = await realpath(brief.repoPath).catch(() => brief.repoPath);
     return {
       ...receipt,
+      goal: brief.draft.content.goal,
+      ...(open ? { asOf: to } : {}),
       coordinator: coordinatorShare(
         await readCoordinatorUsage(this.#deps.home),
         repoPath,
@@ -1782,6 +1789,29 @@ class TandemController {
         to,
       ),
     };
+  }
+
+  /**
+   * The request a person means by "this request": the one open approved request in the
+   * coordinator's repository, or else the one whose brief changed most recently.
+   */
+  private async requestInProgress(): Promise<string> {
+    const repoPath = this.#deps.sourceWorkspace?.repoPath;
+    const canonical = (path: string): Promise<string> => realpath(path).catch(() => path);
+    const here = repoPath === undefined ? undefined : await canonical(repoPath);
+    const records = [];
+    for (const record of await this.#deps.requestStore.list()) {
+      if (here === undefined || (await canonical(record.repoPath)) === here) records.push(record);
+    }
+    if (here !== undefined) {
+      const open = await this.#requests.openRequestForNewWork(here, await this.#deps.store.list());
+      if (open !== undefined) return open;
+    }
+    const latest = records.toSorted((left, right) =>
+      right.updatedAt.localeCompare(left.updatedAt),
+    )[0];
+    if (latest === undefined) throw new Error("There is no request to show a receipt for yet");
+    return latest.id;
   }
 
   /**

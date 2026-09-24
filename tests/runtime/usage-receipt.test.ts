@@ -287,3 +287,21 @@ test("the receipt table lists each stage, the coordinator apart, and the wall ti
     "Costs are OMP's list-price estimates, not what a subscription is billed.",
   ]);
 });
+
+test("an open request's receipt names its goal and measures up to now", () => {
+  const receipt = receiptOf([intake(0), work("research", 0, 12, { workKind: "research" })]);
+
+  const table = renderRequestReceiptTable({
+    ...receipt,
+    goal: "Make Settings familiar and consistent",
+    asOf: at(80),
+  });
+
+  expect(table.split("\n")).toEqual([
+    "Make Settings familiar and consistent",
+    "Research  12m  not measured",
+    "So far: 1h20m since the request started (12m working)",
+    "Still open: work that is running now is added when it finishes.",
+    "Costs are OMP's list-price estimates, not what a subscription is billed.",
+  ]);
+});

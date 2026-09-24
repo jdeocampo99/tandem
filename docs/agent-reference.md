@@ -1027,6 +1027,12 @@ Coordinator     shared    90k tokens  ~$0.30  (also serves other requests)
 Total: 2h10m elapsed (1h07m working, 1h03m waiting)
 ```
 
+A receipt can be checked partway through. `/tandem request-receipt` with no id prints it for the
+request in progress (the repository's one open approved request, or else the most recently updated
+one) without a coordinator turn; the table then names the request's goal and reports the time since
+intake, counting only work that has finished. With `TYPESAFE_API_KEY` set, prompt routing sends a
+plain question such as "how much has this cost so far?" to the same receipt directly.
+
 An implementation task created without `requestId` joins its repository's one open request: an
 approved brief whose governed work is not all finished. With none it stands alone; with several,
 create is refused so the coordinator names one.

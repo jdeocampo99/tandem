@@ -15,6 +15,7 @@ import {
   type JevEvaluationResponse,
 } from "../../src/adapters/typesafe.ts";
 import {
+  actionForPromptDecision,
   choiceConfidence,
   classifyPrompt,
   handlePromptInput,
@@ -421,4 +422,23 @@ test("unconfigured and exact-command input preserves normal OMP handling", async
     ),
   ).toBeUndefined();
   expect(evaluations).toBe(0);
+});
+
+test("asking what the request has cost so far routes straight to its receipt", async () => {
+  const receiptFacts = response(
+    { choice: "receipt" },
+    { choice: "repository" },
+    { choice: "read-only" },
+    { choice: "within" },
+    { choice: "single" },
+  );
+  const result = await classifyPrompt(
+    "how much has this request cost so far?",
+    { apiKey: "key", timeoutMs: 1_500 },
+    async () => receiptFacts,
+  );
+
+  expect(result.reason).toBe("direct-read-only");
+  if (result.decision === undefined) throw new Error("expected a direct route");
+  expect(actionForPromptDecision(result.decision)).toEqual({ action: "request-receipt" });
 });
