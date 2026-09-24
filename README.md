@@ -312,6 +312,13 @@ must bring genuine product choices, ambiguity, scope changes, credentials, destr
 publishing, merging, or deployment decisions to you. A receipt is not proof that implementation is
 finished.
 
+## Coordinator compaction
+
+When a task finishes, nothing is waiting on you, and the coordinator is idle, Tandem compacts the
+coordinator's conversation once it is over 128,000 tokens, so later turns stop resending old
+history. Task state is re-added from durable records. Set `TANDEM_COORDINATOR_COMPACT_TOKENS` to
+change the threshold, or `0` to leave compaction to OMP alone.
+
 ## Jev integration and prompt routing
 
 TypeSafe Jev is an optional classifier for unmatched natural-language coordinator input. Set

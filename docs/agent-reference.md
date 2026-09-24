@@ -2192,6 +2192,18 @@ OMP-native compaction and the durable store work together:
 - during `session.compacting`, it refreshes that context and preserves `tandemDigest`;
 - after `session_compact`, it reconciles the scheduler and appends a fresh `tandem-digest` entry.
 
+The extension also compacts the coordinator early, to cut the cost of resending a long history on
+every turn. On a reconcile where a non-scout task newly reached `completed`, `merged`, or
+`cancelled`, it calls `ctx.compact()` only when the coordinator is idle (no turn, no pending `ask`,
+no unacknowledged delivery), no listed task is `blocked`, `paused`, `awaiting-approval`, or `ready`
+or has an unacknowledged notification, and context usage is at least
+`TANDEM_COORDINATOR_COMPACT_TOKENS` (default 128,000; `0` leaves compaction to OMP alone). Running
+tasks do not hold it back because the digest above restores them. A finished scout never triggers
+it, because its report usually opens the next conversation. Each finish is one chance: if context
+is under the threshold at that moment, a later idle moment does not compact until another task
+finishes. It fires right after a turn, while the provider cache is warm; OMP's configured
+`compaction.methodOrder` chooses the method.
+
 The aggregate durable digest is bounded to 8,000 characters and may omit older task detail;
 `state.sqlite` and durable reports/evidence remain authoritative. Model-facing action summaries
 are bounded separately, while `show --full` retains more structured detail.
