@@ -44,7 +44,20 @@ type PlaybookRule = Readonly<{
 const PLAYBOOK_RULES: readonly PlaybookRule[] = [
   { id: "diagram", terms: ["diagram", "flow", "architecture", "relationship", "state machine"] },
   { id: "table", terms: ["table", "records", "matrix", "dense"] },
-  { id: "comparison", terms: ["comparison", "compare", "tradeoff", "options", "before and after"] },
+  {
+    id: "comparison",
+    terms: [
+      "comparison",
+      "compare",
+      "tradeoff",
+      "options",
+      "before and after",
+      "mockup",
+      "mock up",
+      "variant",
+      "layout",
+    ],
+  },
   { id: "plan", terms: ["plan", "roadmap", "scope", "implementation"] },
   { id: "code", terms: ["code", "source", "patch", "diff", "pull request", "pr"] },
   { id: "input", terms: ["input", "decision", "choice", "triage", "feedback"] },

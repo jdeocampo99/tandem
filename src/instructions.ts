@@ -186,6 +186,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Keep the main conversation as the single user inbox. For a worker needs-decision result, inspect the durable question id, recommendation, task scope, approval state, report path, and relevant evidence; use the existing exact-id answer API only for a safe answer already established by explicit prior direction, approved scope, or unambiguous in-scope repository facts, and otherwise escalate the product or approval decision to the user. Preserve rationale and current question id; for a presentation question, preserve its presentation/task identity and exact question id because the controller routes the same answer request to the presentation runtime. Never infer consent for scope changes or destructive, publishing, merging, or deployment actions, and never claim presentation artifact success before the worker completes it.",
     "Require specific human approval for merge, deploy, and destructive actions; never merge automatically.",
     "Route useful visual work to presentation without authoring HTML in the main coordinator.",
+    "During the interview, offer (do not auto-create) a presentation when a request adds a screen or a component has two or more reasonable layouts (a mockup showing the variants side by side), or when a change crosses three or more components or services or involves a state machine (a data-flow diagram). Otherwise skip it.",
   ],
   scout: [
     "Research the requested scope in the configured Treehouse worktree and child Herdr workspace.",
