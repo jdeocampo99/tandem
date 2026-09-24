@@ -22,18 +22,8 @@ ask where Tandem is installed; never assume `Coding_Projects` or run setup.
 The user can also run `tandem status` for the same overview in a terminal, or
 `tandem status TASK_ID --json` for one task's full durable inspection.
 
-This status skill never performs an update, reset, or launch. If a user explicitly asks to reload
-coordinators with the latest Tandem code, explain `tandem update`: it replaces every saved project's
-coordinator while keeping chats and tasks. If the user explicitly wants to interrupt active work,
-explain `tandem reset`: after confirmation it cancels all in-progress tasks across saved projects,
-stops owned terminals, and reopens coordinators with fresh chats, while preserving onboarding,
-settings, task history, files, and worktrees. Ownership and coordinator source-safety checks remain.
-Both can run from any terminal or Herdr pane except the coordinator pane they would close.
-Reset also handles recorded coordinators that exited to their verified terminal shell. Extra panes stay
-open and generated old coordinator labels are retired; custom labels are preserved. Never infer
-terminal ownership or permission to close a workspace from its displayed label.
-`tandem reset --hard` deletes the whole Tandem home and every pool worktree; mention it only when the
-user explicitly wants to start over.
+This skill only reads. When the user asks to reload coordinators, cancel work, or start over,
+explain `tandem update`, `tandem reset`, or `tandem reset --hard` and let them run it.
 
 For repository scope, canonicalize an explicit target or cwd to its Git top-level (expand `~`,
 resolve relative paths, preserve symlink identity). If unresolved, ask briefly. Explicit all-project
@@ -46,16 +36,7 @@ non-empty `sessionId`. Malformed preferences fail closed; do not guess or fall b
 An explicit home bypasses that remembered pair. Keep the resolved home absolute and consistent.
 `<home>/state.sqlite` is the canonical task/runtime store. Existence-check the home and this
 database before invoking status, without creating either. Missing means one sentence: no canonical
-durable store and no read attempted. If legacy `runtime.json` or `tasks/*.json` exists without the
-database, report that explicit offline migration is required; never edit, resume, or retry from the
-legacy JSON.
-
-Migration is separate from status. Only when explicitly requested, inspect the read-only plan with
-`bun "<tandem-root>/src/cli.ts" migrate-state --home "<home>" --json`; the user applies it with
-`tandem fix --home "<home>"`. Never add `--yes` from this status skill or apply a plan.
-Unknown owned-operation outcomes are quarantined with capacity/resources retained; do not clear
-reservations, replace tasks, change policy, or retry uncertain work. Reset is not migration or
-recovery; `tandem reset` cancels all in-progress tasks across saved projects.
+durable store and no read attempted.
 
 ## Communication receipts
 
@@ -71,7 +52,7 @@ Any task count or stage claim in this summary comes only from that durable read;
 
 ## Perform one read
 
-When the task directory exists, run exactly once, capture CLI stderr, and preserve the pipeline
+When the database exists, run exactly once, capture CLI stderr, and preserve the pipeline
 exit status with `pipefail`:
 
 ```sh

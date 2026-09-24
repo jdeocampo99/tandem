@@ -22,17 +22,8 @@ paths override the registry and open only the supplied subset or add/open projec
 empty, current-Git first-run onboarding and the outside-Git interactive project-path fallback remain.
 Multiple paths share one Herdr session but keep separate project coordinators and child-worker groups.
 
-Coordinator chats resume by default; `--fresh` starts new ones. `tandem update` loads the latest
-local Tandem code into every coordinator while keeping chats and tasks.
-For deliberate cancellation, `tandem reset` cancels all in-progress tasks across saved projects,
-stops their owned terminals, and reopens coordinators with fresh chats after confirmation (or
-`--yes`). It takes no paths, preserves onboarding, settings, task history, worktrees, and files, and
-does not bypass ownership or coordinator source-safety checks; it is not migration or task recovery.
-Reset also closes recorded coordinator shells after verifying native identity and worktree. Empty
-workspaces disappear when their last pane closes; extra panes and custom labels remain. Generated
-old coordinator labels are retired so retained terminals do not look like current coordinators.
-`tandem reset --hard` deletes the whole Tandem home, including onboarding and every pool worktree,
-so the next `tandem` onboards from scratch; never suggest it as part of onboarding.
+Coordinator chats resume by default; `--fresh` starts new ones. `tandem reset --hard` deletes
+the whole Tandem home; it is never part of onboarding.
 
 This conversational skill is optional. For exact structured discovery or automation, resolve a
 validated `TANDEM_ROOT` independently of every target repository and use the advanced
@@ -59,22 +50,7 @@ project ambiguity. For the project-setting step, after any required first-time m
 >
 > Choose **Save settings** or **Not now**.
 
-`<home>/state.sqlite` is the canonical task/runtime authority. Never edit, resume, or retry from
-legacy `runtime.json` or `tasks/*.json`. If a legacy home must be migrated, stop Tandem and use this
-explicit offline two-step flow with every Tandem pane stopped, after showing the read-only plan
-(`tandem fix --home "<home>"` offers the same migration interactively):
-
-```sh
-bun "<tandem-root>/src/cli.ts" migrate-state --home "<home>" --json
-bun "<tandem-root>/src/cli.ts" migrate-state --home "<home>" --yes --json
-```
-
-Do not run the `--yes` command as part of onboarding or without explicit migration approval. The
-plan/status read is non-applying; migration archives and fences the original bytes while preserving
-IDs, generations, fix-round/policy, and checkpoints/history, and refuses live or ambiguous ownership
-and unsettled work. Unknown owned operations remain quarantined with capacity/resources retained:
-never clear a reservation, replace a task, or change policy to bypass unknown ownership. Reset is not
-migration or recovery; `tandem reset` cancels all in-progress tasks across saved projects.
+`<home>/state.sqlite` is the canonical task/runtime store; read it only through Tandem commands.
 
 Keep default worker/fix limits, script identifiers, hash paths, raw commands, and JSON in structured
 details; share them only on request or when the user must choose meaningful custom settings. Capture
@@ -85,7 +61,7 @@ dumping raw payloads, repeating discovery, or hiding CLI failures.
 For normal user-facing onboarding and launch, prefer `tandem [PATH ...]`: bare `tandem` opens or
 reconnects every valid saved project under the selected home, while explicit `PATH ...` values
 override the registry for a subset or add/open flow. Use `tandem configure [PATH]` for the explicit
-six-role global model flow; `configure` remains a single-project catalogue anchor and never selects
+five-role global model flow; `configure` remains a single-project catalogue anchor and never selects
 all saved projects. The commands below are the advanced low-level path when exact JSON proposals,
 diagnostics, or automation are required.
 
@@ -119,29 +95,28 @@ bun "<tandem-root>/src/cli.ts" launch --repo "<canonical-repo>" --home "<home>"
 model-selection conversation is explicit and role-by-role:
 
 - Use these human labels and identities: **Planning** (`coordinator`), **Research** (`scout`),
-  **Coding** (`implementer`), **Review** (`reviewer`), **Final checks** (`verifier`), and
-  **Presentations** (`presentation`).
+  **Coding** (`implementer`), **Review** (`reviewer`), and **Presentations** (`presentation`).
 - If `modelSettings.configured` is false, run `models` once and use only its catalogue. For each
   role, show the suggested exact catalogue `selector` and the thinking levels that selector supports.
   Ask for an explicit selector and supported thinking level for every role. Offer **Not now** as an
   explicit pause: it ends onboarding without `configure-models`, `setup`, or `launch` and never
-  falls through to built-in defaults. One reply may contain all six answers, but never infer omitted
+  falls through to built-in defaults. One reply may contain all five answers, but never infer omitted
   roles, combine roles, or treat a general recommendation approval as consent; accepting a suggestion
   must be explicit for that role.
-- If saved choices exist, show all six current exact catalogue selectors and thinking levels on every
+- If saved choices exist, show all five current exact catalogue selectors and thinking levels on every
   onboarding, then offer **Keep all**, **Change roles**, or **Not now**. **Keep all** only reuses the
   displayed choices, requires no new role answers, and is read-only: do not call `configure-models`;
   it may continue the existing project-setting approval flow. **Not now** pauses onboarding, leaves
   the choices unchanged, and does not run `configure-models`, `setup`, or `launch` or fall through to
   built-in defaults. **Change roles** reruns `models` and asks for an explicit selector and supported
   thinking level for each role; the user may explicitly keep current values for untouched roles. Show
-  all six, including untouched roles, in a complete recap before saving.
+  all five, including untouched roles, in a complete recap before saving.
 - Explain recommendations briefly and that approved choices apply to future work across projects and
   do not start work. Recommendations are suggestions only; never invent model names, promise pricing
   or latency, parse private config, or silently substitute. Empty or failed discovery stays visible
   and requires asking, not fallback.
 
-Only after explicit approval of the complete six-role recap (never after **Not now**) save the
+Only after explicit approval of the complete five-role recap (never after **Not now**) save the
 global choices once. In the normal terminal flow use `tandem configure <canonical-repo>`; in the
 advanced low-level path use `configure-models` with a temporary selection JSON outside the target
 project and remove it afterward. If `existingConfig` is true, preserve the existing project
@@ -154,8 +129,7 @@ When saved records exist, a bare `tandem` instead opens or reconnects every vali
 the selected home; it does not use arbitrary disk discovery or auto-registration. A stopped coordinator
 resumes its saved conversation unless `--fresh` is given. An active coordinator
 remains pinned to its clean source even when the original HEAD advances; stop and relaunch to refresh.
-Stop any old pre-registry coordinator once before relaunching; Tandem never adopts it and never
-migrates existing tasks automatically. Changing the main conversation model takes effect on the next
+Changing the main conversation model takes effect on the next
 launch, not as a hot swap of an already-running OMP conversation.
 
 ## 3. Resolve explicit paths and saved registry records without guessing

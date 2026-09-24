@@ -65,7 +65,7 @@ Usage:
   tandem status [TASK_ID]  What's running and what needs you; --logs shows prompt routing
   tandem update            Load your latest local Tandem code into every coordinator
                            Keeps chats and tasks; --fresh starts new chats
-  tandem fix               Find stale Tandem resources or old-format state and offer the repair
+  tandem fix               Find stale Tandem resources and offer the repair
   tandem reset             Cancel all in-progress tasks and reopen fresh coordinators
                            Keeps onboarding, settings, task history, and your files
   tandem reset --hard      Delete all Tandem state and worktrees; next run onboards from scratch
