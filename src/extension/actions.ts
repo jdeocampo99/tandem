@@ -343,8 +343,9 @@ async function confirmAction(
   action: TandemAction,
   service: TandemService,
   ctx: ExtensionContext,
+  confirmedInConversation: boolean,
 ): Promise<boolean> {
-  if (!requiresHumanApproval(action)) return true;
+  if (!requiresHumanApproval(action) || confirmedInConversation) return true;
   if (!ctx.hasUI || ctx.mode !== "tui") return false;
   const prompt = await approvalPrompt(action, service);
   return ctx.ui.confirm(prompt.title, prompt.message);
@@ -373,13 +374,21 @@ function serviceCreateInput(
   };
 }
 
+/**
+ * `confirmedInConversation` is set only when the person already typed an exact "y" to a code-written
+ * confirmation of this same action, which stands in for the approval dialog.
+ */
 export async function executeTandemAction(
   action: TandemAction,
   service: TandemService,
   ctx: ExtensionContext,
-  signal?: AbortSignal,
+  options: Readonly<{
+    readonly signal?: AbortSignal | undefined;
+    readonly confirmedInConversation?: boolean;
+  }> = {},
 ): Promise<TandemActionResult> {
-  const approved = await confirmAction(action, service, ctx);
+  const { signal, confirmedInConversation = false } = options;
+  const approved = await confirmAction(action, service, ctx, confirmedInConversation);
   if (!approved)
     return textResult(
       "Action refused: interactive human approval is required.",
