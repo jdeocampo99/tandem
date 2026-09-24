@@ -146,6 +146,12 @@ export function describeError(error: unknown): string {
   return String(error);
 }
 
+/** Bounded, privacy-safe failure label: a class name, never message text or command payloads. */
+export function errorClassName(error: unknown): string {
+  if (error instanceof Error) return error.name.slice(0, 64);
+  return typeof error;
+}
+
 export function isMissing(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
 }

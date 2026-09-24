@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { lstat, readFile, realpath } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
@@ -28,45 +27,33 @@ import {
   readCleanupCommands,
   resolveRepoPolicy,
 } from "../config/repositories.ts";
-import type { CreatableTaskKind, RequestBriefRecord } from "../contracts.ts";
-import {
-  type AnswerTaskInput,
-  type BlockCause,
-  type Clock,
-  type CommandRunner,
-  type IdFactory,
-  MAX_RESEARCH_HANDOFF_COUNT,
-  MAX_RESEARCH_HANDOFF_EXCERPT_BYTES,
-  MAX_RESEARCH_HANDOFF_TOTAL_BYTES,
-  type PullRequestMetadata,
-  type RepoPolicy,
-  type ResearchContinuation,
-  type ResearchHandoff,
-  type SkillInvocation,
-  type SteerTaskInput,
-  type TaskCommunicationView,
-  type TaskRecord,
-  type TaskTarget,
+import type {
+  AnswerTaskInput,
+  BlockCause,
+  Clock,
+  CommandRunner,
+  CreatableTaskKind,
+  IdFactory,
+  PullRequestMetadata,
+  RepoPolicy,
+  RequestBriefRecord,
+  ResearchContinuation,
+  SkillInvocation,
+  SteerTaskInput,
+  TaskCommunicationView,
+  TaskRecord,
+  TaskTarget,
 } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
-import { describeTaskPr, draftProgressDigest, type PrSummary } from "../delivery/evidence.ts";
+import { describeTaskPr, type PrSummary } from "../delivery/evidence.ts";
 import { type DeliveryPreflightResult, deliveryPreflight } from "../delivery/preflight.ts";
 import {
-  type DraftPublication,
   mergeReviewedTask,
   publishReviewedTask,
   publishTaskDraft,
-  refreshTaskDraft,
 } from "../delivery/pull-requests.ts";
 import { maintainPool } from "../pool/maintenance.ts";
-import {
-  isPoolNotification,
-  isPoolNotificationForKey,
-  type PoolMaintenanceResult,
-  poolAdmissionKey,
-  poolAdmissionNotice,
-  poolNotificationMessage,
-} from "../pool/policy.ts";
+import type { PoolMaintenanceResult } from "../pool/policy.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import {
   createPrReviewWorkflow,
@@ -109,7 +96,6 @@ import {
   activeRuntimeJob,
   presentationRuntime,
   taskRuntime,
-  unreleasedReservation,
 } from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
@@ -117,7 +103,6 @@ import {
   defaultIdFactory,
   readRuntimeState,
   runtimeFile,
-  taskJobsDirectory,
   taskSessionDirectory,
   updateRuntimeState,
   writeJsonAtomically,
@@ -130,19 +115,9 @@ import type {
   RuntimeState,
   RuntimeTaskState,
 } from "../runtime/schema.ts";
-import type { RequestUsageEvent } from "../runtime/usage.ts";
-import {
-  type JobTokenTally,
-  requestIntakeEvent,
-  requestTerminalEvent,
-  settledWorkEvents,
-} from "../runtime/usage-events.ts";
-import {
-  createRequestUsageLedger,
-  type RequestUsageLedger,
-  readCoordinatorUsage,
-} from "../runtime/usage-ledger.ts";
-import { coordinatorShare, type RequestUsageReceipt } from "../runtime/usage-receipt.ts";
+import { requestIntakeEvent } from "../runtime/usage-events.ts";
+import { createRequestUsageLedger, type RequestUsageLedger } from "../runtime/usage-ledger.ts";
+import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import { TaskControlWorkflow } from "../tasks/control.ts";
 import { KEEP_FIXING_QUESTION_ID_PREFIX, keepFixingGrant } from "../tasks/findings.ts";
 import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
@@ -158,16 +133,19 @@ import {
   reviewAssistanceConfig,
   reviewAssistanceRuntime,
 } from "../tasks/review-assistance.ts";
-import {
-  createTaskStore,
-  type TaskStore,
-  type TaskStoreTransaction,
-  transitionStoredTask,
-} from "../tasks/store.ts";
+import { createTaskStore, type TaskStore, transitionStoredTask } from "../tasks/store.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
-import { readWorkerTokenTally } from "../workers/terminal.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
+import { DraftRefreshWorkflow } from "./draft-refresh.ts";
+import { runtimeWithPoolAdmission, taskWithPoolAdmission } from "./pool-admission.ts";
+import {
+  alreadyStopped,
+  type HeldTaskStep,
+  heldTaskStep,
+  type LiveTaskStep,
+  liveTaskStep,
+} from "./reconcile-step.ts";
 import {
   absoluteDirectory,
   currentWriter,
@@ -181,7 +159,6 @@ import {
   positiveInteger,
   readTextList,
   replaceRuntimeTask,
-  reportPathFor,
   serializedIdentity,
   singleLine,
   taskInputFor,
@@ -190,6 +167,8 @@ import {
   validateModelAssignments,
   workerRoleForTask,
 } from "./records.ts";
+import { RequestAccountingWorkflow } from "./request-accounting.ts";
+import { resolveResearchHandoffs } from "./research-handoffs.ts";
 import {
   releaseTerminalTaskResources,
   runCleanupCommands,
@@ -416,135 +395,6 @@ function operationClaim(operation: RuntimeTaskState["operation"]): OperationClai
       };
 }
 
-function pathWithin(root: string, candidate: string): boolean {
-  const relativePath = relative(root, candidate);
-  return (
-    relativePath.length > 0 &&
-    relativePath !== ".." &&
-    !relativePath.startsWith(`..${sep}`) &&
-    !relativePath.startsWith(sep)
-  );
-}
-
-function boundedUtf8Prefix(value: string, limit: number): string {
-  if (Buffer.byteLength(value, "utf8") <= limit) return value;
-  let end = Math.min(value.length, limit);
-  while (end > 0) {
-    const lastCodeUnit = value.charCodeAt(end - 1);
-    if (
-      Buffer.byteLength(value.slice(0, end), "utf8") <= limit &&
-      (lastCodeUnit < 0xd800 || lastCodeUnit > 0xdbff)
-    ) {
-      break;
-    }
-    end -= 1;
-  }
-  return value.slice(0, end);
-}
-
-async function readBoundedResearchReport(
-  path: string,
-): Promise<
-  Readonly<{ readonly hasContent: boolean; readonly digest: string; readonly excerpt: string }>
-> {
-  const digest = createHash("sha256");
-  let excerpt = "";
-  let hasContent = false;
-  for await (const chunk of createReadStream(path, { encoding: "utf8" })) {
-    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    if (text.length === 0) continue;
-    hasContent = true;
-    digest.update(text);
-    if (Buffer.byteLength(excerpt, "utf8") < MAX_RESEARCH_HANDOFF_EXCERPT_BYTES) {
-      excerpt = boundedUtf8Prefix(`${excerpt}${text}`, MAX_RESEARCH_HANDOFF_EXCERPT_BYTES);
-    }
-  }
-  return { hasContent, digest: digest.digest("hex"), excerpt };
-}
-
-async function resolveResearchHandoffs(
-  ids: readonly string[] | undefined,
-  implementationRepoPath: string,
-  home: string,
-  runtime: RuntimeState,
-  store: Pick<TaskStoreTransaction, "read">,
-): Promise<readonly ResearchHandoff[] | undefined> {
-  if (ids === undefined) return undefined;
-  if (ids.length > MAX_RESEARCH_HANDOFF_COUNT) {
-    throw new Error(`at most ${MAX_RESEARCH_HANDOFF_COUNT} research task references are allowed`);
-  }
-  const projectRoot = await realpath(implementationRepoPath);
-  const handoffs: ResearchHandoff[] = [];
-  for (const rawId of ids) {
-    const scoutTaskId = singleLine(rawId, "researchTaskIds entry");
-    if (handoffs.some((entry) => entry.scoutTaskId === scoutTaskId)) {
-      throw new Error(`duplicate research task reference ${scoutTaskId}`);
-    }
-    const scout = await store.read(scoutTaskId);
-    if (scout === undefined || scout.kind !== "scout" || scout.stage !== "completed") {
-      throw new Error(`research task ${scoutTaskId} is not a completed scout`);
-    }
-    if (scout.reportPath === undefined) {
-      throw new Error(`research task ${scoutTaskId} has no completed report`);
-    }
-    if ((await realpath(scout.repoPath)) !== projectRoot) {
-      throw new Error(`research task ${scoutTaskId} belongs to a different project`);
-    }
-    const runtimeTask = runtime.tasks.find((entry) => entry.taskId === scout.id);
-    if (
-      runtimeTask === undefined ||
-      runtimeTask.sourceCheckpoint.head.length === 0 ||
-      runtimeTask.sourceCheckpoint.base.length === 0 ||
-      runtimeTask.sourceCheckpoint.dirty ||
-      runtimeTask.sourceCheckpoint.unmerged
-    ) {
-      throw new Error(`research task ${scoutTaskId} has invalid or stale source provenance`);
-    }
-    const reportPath = resolve(scout.reportPath);
-    const reportRoot = await realpath(taskJobsDirectory(home, scout.id)).catch(() => undefined);
-    const physicalReport = await realpath(reportPath).catch(() => undefined);
-    if (
-      !isAbsolute(scout.reportPath) ||
-      reportRoot === undefined ||
-      physicalReport === undefined ||
-      basename(physicalReport) !== "report.txt" ||
-      !pathWithin(reportRoot, physicalReport)
-    ) {
-      throw new Error(`research task ${scoutTaskId} has an unsafe or missing report`);
-    }
-    const metadata = await lstat(physicalReport);
-    if (!metadata.isFile()) throw new Error(`research task ${scoutTaskId} report is not a file`);
-    const scoutJob = runtimeTask.jobs.find(
-      (job) =>
-        job.role === "scout" &&
-        job.phase === "consumed" &&
-        job.generation === scout.generation &&
-        resolve(reportPathFor(job.jobPath)) === reportPath,
-    );
-    if (scoutJob === undefined) {
-      throw new Error(`research task ${scoutTaskId} report provenance is stale`);
-    }
-    const report = await readBoundedResearchReport(physicalReport);
-    if (!report.hasContent) throw new Error(`research task ${scoutTaskId} report is empty`);
-    handoffs.push({
-      scoutTaskId,
-      scoutRepoPath: projectRoot,
-      scoutSourceHead: runtimeTask.sourceCheckpoint.head,
-      scoutSourceBase: runtimeTask.sourceCheckpoint.base,
-      reportPath: physicalReport,
-      reportDigest: report.digest,
-      excerpt: report.excerpt,
-    });
-  }
-  const totalBytes = handoffs.reduce(
-    (total, handoff) => total + Buffer.byteLength(handoff.excerpt, "utf8"),
-    0,
-  );
-  if (totalBytes > MAX_RESEARCH_HANDOFF_TOTAL_BYTES) {
-    throw new Error(`research handoff exceeds ${MAX_RESEARCH_HANDOFF_TOTAL_BYTES} UTF-8 bytes`);
-  }
-  return handoffs;
-}
 function sameOperationClaim(
   operation: RuntimeTaskState["operation"],
   claim: OperationClaim | undefined,
@@ -572,28 +422,34 @@ function sameReservationIdentity(
   );
 }
 
+function newRuntimeTask(
+  task: TaskRecord,
+  origin: Readonly<{
+    readonly checkpoint: GitCheckpoint;
+    readonly sourceRepoPath: string | undefined;
+    readonly home: string;
+  }>,
+): RuntimeTaskState {
+  return {
+    schemaVersion: 1,
+    taskId: task.id,
+    sourceCheckpoint: origin.checkpoint,
+    ...(origin.sourceRepoPath === undefined ? {} : { sourceRepoPath: origin.sourceRepoPath }),
+    taskName: taskNameFor(task),
+    endpoints: [],
+    jobs: [],
+    ...(["scout", "implementation", "pr-review"].includes(task.kind)
+      ? { sessionDirectory: taskSessionDirectory(origin.home, task.id) }
+      : {}),
+  };
+}
+
 /** A task advanced while a remote publication was in flight; the published result is retained. */
 class TaskRevisionConflictError extends Error {
   constructor(taskId: string) {
     super(`Task ${taskId} changed while publishing; remote publication is retained`);
     this.name = "TaskRevisionConflictError";
   }
-}
-
-/** Bounded, privacy-safe failure label: a class name, never message text or command payloads. */
-function errorClassName(error: unknown): string {
-  if (error instanceof Error) return error.name.slice(0, 64);
-  return typeof error;
-}
-
-function samePullRequest(left: PullRequestMetadata, right: PullRequestMetadata): boolean {
-  return (
-    left.repository === right.repository &&
-    left.number === right.number &&
-    left.state === right.state &&
-    left.head === right.head &&
-    left.base === right.base
-  );
 }
 
 class TandemController {
@@ -605,10 +461,9 @@ class TandemController {
   readonly #control: TaskControlWorkflow;
   readonly #recoveryCentral: CentralRecoveryWorkflow;
   readonly #requests: RequestBriefWorkflow;
-  readonly #usage: RequestUsageLedger;
+  readonly #accounting: RequestAccountingWorkflow;
   readonly #prReviews: PrReviewWorkflow;
-  /** Durable-state digest of the draft body last published per task, to avoid redundant refreshes. */
-  readonly #draftDigests = new Map<string, string>();
+  readonly #drafts: DraftRefreshWorkflow;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
@@ -617,7 +472,26 @@ class TandemController {
   #sourceReady = true;
   constructor(deps: ServiceDependencies) {
     this.#deps = deps;
-    this.#usage = deps.usageLedger;
+    this.#drafts = new DraftRefreshWorkflow({
+      home: deps.home,
+      clock: deps.clock,
+      run: deps.run,
+      recordPullRequest: (taskId, expectedRevision, metadata) =>
+        this.recordPullRequest(taskId, expectedRevision, metadata),
+    });
+    this.#accounting = new RequestAccountingWorkflow({
+      home: deps.home,
+      clock: deps.clock,
+      idFactory: deps.idFactory,
+      requestStore: deps.requestStore,
+      usage: deps.usageLedger,
+      sourceRepoPath: deps.sourceWorkspace?.repoPath,
+      listTasks: () => deps.store.list(),
+      openRequestForNewWork: (repoPath, tasks) =>
+        this.#requests.openRequestForNewWork(repoPath, tasks),
+      readState: () => this.readState(),
+      updateTask: (taskId, transform) => this.updateTask(taskId, transform),
+    });
     this.#prReviews = createPrReviewWorkflow({
       home: deps.home,
       run: deps.run,
@@ -710,8 +584,8 @@ class TandemController {
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
       reviewAssistance: deps.reviewAssistance,
-      recordRequestUsage: (events) => this.recordAccounting(events),
-      readRequestUsage: (requestId) => this.#usage.read(requestId),
+      recordRequestUsage: (events) => this.#accounting.record(events),
+      readRequestUsage: (requestId) => deps.usageLedger.read(requestId),
       briefSkipsReview: async (requestId) => {
         const brief = await deps.requestStore.read(requestId);
         return brief !== undefined && briefSkipsReview(brief);
@@ -811,7 +685,7 @@ class TandemController {
       approveRequestBrief: (intent) => this.#requests.approve(intent),
       pendingBriefApprovalId: () => this.#requests.pendingApprovalId(),
       requestBrief: (requestId) => this.#requests.read(requestId),
-      requestReceipt: (requestId) => this.requestReceipt(requestId),
+      requestReceipt: (requestId) => this.#accounting.receipt(requestId),
       tick: () => this.tick(),
       acknowledge: (id, notificationId) => this.acknowledge(id, notificationId),
       steer: (input) => this.steer(input),
@@ -831,7 +705,7 @@ class TandemController {
       presentations: () => this.presentations(),
       feedback: (id, signal) => this.feedback(id, signal),
       openPresentation: (id) => this.#presentationFeedback.open(id),
-      requestBriefs: () => this.requestBriefs(),
+      requestBriefs: () => this.#accounting.briefs(),
       reviewPr: (input) => this.#prReviews.start(input),
       reviewShow: (id, input) => this.#prReviews.show(assertTaskId(id), input),
       reviewNotes: (id) => this.#prReviews.notes(assertTaskId(id)),
@@ -1022,13 +896,15 @@ class TandemController {
       const checkpoint =
         pinned?.checkpoint ?? (await readCheckpoint(this.#deps.run, { repo: source.checkoutPath }));
       const runtime = await readRuntimeState(this.#deps.runtimePath);
-      const researchHandoffs = await resolveResearchHandoffs(
-        researchTaskIds,
-        source.repoPath,
-        this.#deps.home,
-        runtime,
-        store,
-      );
+      const researchHandoffs =
+        researchTaskIds === undefined
+          ? undefined
+          : await resolveResearchHandoffs(researchTaskIds, {
+              home: this.#deps.home,
+              projectRepoPath: source.repoPath,
+              runtime,
+              store,
+            });
       const taskInput = taskInputFor(
         {
           ...input,
@@ -1043,34 +919,14 @@ class TandemController {
         policy,
       );
       const id = singleLine(this.#deps.idFactory(), "task id");
-      if (
-        pinned === undefined &&
-        this.#deps.refreshSource !== undefined &&
-        (this.#sourceReadyHead === undefined || checkpoint.head !== this.#sourceReadyHead)
-      ) {
-        this.#sourceReady = false;
-        throw new Error(
-          `coordinator source changed after refresh (expected ${this.#sourceReadyHead ?? "a successful refresh"}, observed ${checkpoint.head}); refresh before creating new work`,
-        );
-      }
+      if (pinned === undefined) this.assertSourceUnchangedSinceRefresh(checkpoint.head);
       const created = await store.create({ ...taskInput, id });
       const current = await readRuntimeState(this.#deps.runtimePath);
-      const runtimeTask: RuntimeTaskState = {
-        schemaVersion: 1,
-        taskId: created.id,
-        sourceCheckpoint: checkpoint,
-        ...(pinned !== undefined
-          ? { sourceRepoPath: pinned.target.checkout }
-          : source.sourceRepoPath === undefined
-            ? {}
-            : { sourceRepoPath: source.sourceRepoPath }),
-        taskName: taskNameFor(created),
-        endpoints: [],
-        jobs: [],
-        ...(["scout", "implementation", "pr-review"].includes(created.kind)
-          ? { sessionDirectory: taskSessionDirectory(this.#deps.home, created.id) }
-          : {}),
-      };
+      const runtimeTask = newRuntimeTask(created, {
+        checkpoint,
+        sourceRepoPath: pinned?.target.checkout ?? source.sourceRepoPath,
+        home: this.#deps.home,
+      });
       if (current.tasks.some((entry) => entry.taskId === created.id)) {
         throw new Error(`runtime state already contains task ${created.id}`);
       }
@@ -1080,6 +936,16 @@ class TandemController {
       });
       return created;
     });
+  }
+
+  /** New work must start from the head the last successful refresh saw; a drift needs a refresh. */
+  private assertSourceUnchangedSinceRefresh(head: string): void {
+    if (this.#deps.refreshSource === undefined) return;
+    if (this.#sourceReadyHead !== undefined && head === this.#sourceReadyHead) return;
+    this.#sourceReady = false;
+    throw new Error(
+      `coordinator source changed after refresh (expected ${this.#sourceReadyHead ?? "a successful refresh"}, observed ${head}); refresh before creating new work`,
+    );
   }
 
   /**
@@ -1289,48 +1155,62 @@ class TandemController {
     const answer = singleLine(input.text, "text");
     const task = await this.get(taskId);
     if (task.communication?.question?.id === questionId) {
-      // A recovery question's answer is a recovery decision, never a worker instruction: it must
-      // never bump task.communication.revision, so neither path here goes through appendAnswer.
-      if (questionId.startsWith(RESTART_QUESTION_ID_PREFIX)) {
-        await this.#recoveryCentral.answerRestartQuestion(taskId, questionId, answer);
-        return this.messages(taskId);
-      }
-      if (questionId.startsWith(VALIDATION_RETRY_QUESTION_ID_PREFIX)) {
-        await this.#recoveryCentral.answerValidationRetryQuestion(taskId, questionId, answer);
-        return this.messages(taskId);
-      }
-      if (questionId.startsWith(KEEP_FIXING_QUESTION_ID_PREFIX)) {
-        await this.answerKeepFixing(taskId, questionId, answer);
-        return this.messages(taskId);
-      }
-      const result = await this.#source.appendAnswer(taskId, questionId, answer);
-      if (result.resumed) {
-        const resumed = await this.#control.resumeTask(taskId);
-        if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage)) {
-          await this.reconcileTask(resumed);
-        }
-      }
+      await this.answerTaskQuestion(taskId, questionId, answer);
       return this.messages(taskId);
     }
-    const state = await this.readState();
-    for (const presentation of state.presentations) {
-      if (presentation.taskId !== task.id) continue;
-      const record = await readPresentationRecord(presentation.recordPath);
-      if (record.status !== "blocked" || record.question?.id !== questionId) continue;
-      await this.#presentationRuntime.answer(presentation.id, questionId, answer);
+    const presentationId = await this.blockedPresentationAsking(task.id, questionId);
+    if (presentationId !== undefined) {
+      await this.#presentationRuntime.answer(presentationId, questionId, answer);
       const view = await this.messages(taskId);
-      return {
-        ...view,
-        presentationAnswer: {
-          presentationId: presentation.id,
-          questionId,
-          status: "queued",
-        },
-      };
+      return { ...view, presentationAnswer: { presentationId, questionId, status: "queued" } };
     }
     const result = await this.#source.appendAnswer(taskId, questionId, answer);
     if (result.resumed) await this.#control.resumeTask(taskId);
     return this.messages(taskId);
+  }
+
+  /** Answers the question the task itself is waiting on. */
+  private async answerTaskQuestion(
+    taskId: string,
+    questionId: string,
+    answer: string,
+  ): Promise<void> {
+    // A recovery question's answer is a recovery decision, never a worker instruction: it must
+    // never bump task.communication.revision, so neither path here goes through appendAnswer.
+    if (questionId.startsWith(RESTART_QUESTION_ID_PREFIX)) {
+      await this.#recoveryCentral.answerRestartQuestion(taskId, questionId, answer);
+      return;
+    }
+    if (questionId.startsWith(VALIDATION_RETRY_QUESTION_ID_PREFIX)) {
+      await this.#recoveryCentral.answerValidationRetryQuestion(taskId, questionId, answer);
+      return;
+    }
+    if (questionId.startsWith(KEEP_FIXING_QUESTION_ID_PREFIX)) {
+      await this.answerKeepFixing(taskId, questionId, answer);
+      return;
+    }
+    const result = await this.#source.appendAnswer(taskId, questionId, answer);
+    if (!result.resumed) return;
+    const resumed = await this.#control.resumeTask(taskId);
+    if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage)) {
+      await this.reconcileTask(resumed);
+    }
+  }
+
+  /** The task's blocked presentation waiting on this question, if one is. */
+  private async blockedPresentationAsking(
+    taskId: string,
+    questionId: string,
+  ): Promise<string | undefined> {
+    const state = await this.readState();
+    for (const presentation of state.presentations) {
+      if (presentation.taskId !== taskId) continue;
+      const record = await readPresentationRecord(presentation.recordPath);
+      if (record.status === "blocked" && record.question?.id === questionId) {
+        return presentation.id;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -1481,7 +1361,7 @@ class TandemController {
       prepared.task.revision,
       prepared.publication.pullRequest,
     );
-    this.#draftDigests.set(id, draftProgressDigest(prepared.task));
+    this.#drafts.published(prepared.task);
     return updated;
   }
 
@@ -1523,6 +1403,45 @@ class TandemController {
     if (runtime.jobs.some(activeRuntimeJob)) {
       throw new Error(`cannot clean task ${task.id} while a worker launch is in progress`);
     }
+    await this.closeTaskPanes(task, runtime, discard);
+    if (task.prReview !== undefined) {
+      if (runtime.worktree !== undefined) {
+        await removeReviewWorktree(
+          this.#deps.run,
+          { checkout: runtime.worktree.root, path: runtime.worktree.path },
+          task.prReview.ref,
+        );
+      }
+      await this.removeRuntimeResources(task.id);
+      return task;
+    }
+    const cleanupFailure = await runCleanupCommands(
+      {
+        run: this.#deps.run,
+        cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home: this.#deps.home }),
+      },
+      taskCheckoutPath(task),
+      runtime.worktree?.path,
+    );
+    if (cleanupFailure !== undefined) await this.setRuntimeError(task.id, cleanupFailure);
+    if (runtime.worktree !== undefined) {
+      await releaseWorktree(this.#deps.run, {
+        repo: taskCheckoutPath(task),
+        lease: runtime.worktree,
+        childWorkerStopped: true,
+        ...(discard ? { discard: true, destructiveApproval: true } : {}),
+      });
+    }
+    await this.removeRuntimeResources(task.id);
+    return task;
+  }
+
+  /** Asks each worker to exit, then closes its pane and any settled presentation pane. */
+  private async closeTaskPanes(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    discard: boolean,
+  ): Promise<void> {
     const cwd = taskSourcePath(task, runtime);
     for (const endpoint of runtime.endpoints) {
       try {
@@ -1556,36 +1475,6 @@ class TandemController {
         if (!isMissingEndpoint(error)) throw error;
       }
     }
-    if (task.prReview !== undefined) {
-      if (runtime.worktree !== undefined) {
-        await removeReviewWorktree(
-          this.#deps.run,
-          { checkout: runtime.worktree.root, path: runtime.worktree.path },
-          task.prReview.ref,
-        );
-      }
-      await this.removeRuntimeResources(task.id);
-      return task;
-    }
-    const cleanupFailure = await runCleanupCommands(
-      {
-        run: this.#deps.run,
-        cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home: this.#deps.home }),
-      },
-      taskCheckoutPath(task),
-      runtime.worktree?.path,
-    );
-    if (cleanupFailure !== undefined) await this.setRuntimeError(task.id, cleanupFailure);
-    if (runtime.worktree !== undefined) {
-      await releaseWorktree(this.#deps.run, {
-        repo: taskCheckoutPath(task),
-        lease: runtime.worktree,
-        childWorkerStopped: true,
-        ...(discard ? { discard: true, destructiveApproval: true } : {}),
-      });
-    }
-    await this.removeRuntimeResources(task.id);
-    return task;
   }
 
   async present(
@@ -1609,21 +1498,35 @@ class TandemController {
     });
     const recordPath = join(dirname(prepared.record.jobPath), "record.json");
     await writeJsonAtomically(recordPath, prepared.record);
+    await this.registerPresentation(task, prepared.record, recordPath);
+    await this.#presentationRuntime.startPresentation(prepared.record.id);
+    return this.readPresentation(prepared.record.id);
+  }
+
+  /**
+   * Records the presentation's durable job and owned operation, and stamps that operation into
+   * the worker spec so the worker can prove which claim it runs under.
+   */
+  private async registerPresentation(
+    task: TaskRecord,
+    record: PresentationRecord,
+    recordPath: string,
+  ): Promise<void> {
     const durableJob: DurableJob = makeDurableJob(
       task.id,
-      prepared.record.generation,
+      record.generation,
       "presentation",
       "worker",
-      prepared.record.cwd,
-      prepared.record.jobPath,
-      prepared.record.resultPath,
+      record.cwd,
+      record.jobPath,
+      record.resultPath,
       1,
       this.#deps.clock(),
     );
     await this.#deps.store.exclusive(async () => {
       const state = await readRuntimeState(this.#deps.runtimePath);
-      if (presentationRuntime(state, prepared.record.id) !== undefined) {
-        throw new Error(`presentation ${prepared.record.id} already exists`);
+      if (presentationRuntime(state, record.id) !== undefined) {
+        throw new Error(`presentation ${record.id} already exists`);
       }
       const taskRuntimeState = taskRuntime(state, task.id);
       if (taskRuntimeState === undefined) {
@@ -1635,7 +1538,7 @@ class TandemController {
         task.id,
         "presentation",
         "presentation",
-        prepared.record.generation,
+        record.generation,
         task.reviewHead ?? taskRuntimeState.sourceCheckpoint.head,
         createHash("sha256").update(serializedIdentity(task.policy, "task policy")).digest("hex"),
         task.communication?.revision ?? 0,
@@ -1643,12 +1546,11 @@ class TandemController {
         this.#worker.claimOwner,
         this.#deps.clock(),
       );
-      const linkedJob = { ...durableJob, operationId: operation.id };
-      const workerSpec = JSON.parse(await readFile(prepared.record.jobPath, "utf8")) as Record<
+      const workerSpec = JSON.parse(await readFile(record.jobPath, "utf8")) as Record<
         string,
         unknown
       >;
-      await writeJsonAtomically(prepared.record.jobPath, {
+      await writeJsonAtomically(record.jobPath, {
         ...workerSpec,
         execution: {
           schemaVersion: 1,
@@ -1660,19 +1562,17 @@ class TandemController {
       });
       const next: RuntimePresentation = {
         schemaVersion: 1,
-        id: prepared.record.id,
+        id: record.id,
         taskId: task.id,
         recordPath,
         operation,
-        job: linkedJob,
+        job: { ...durableJob, operationId: operation.id },
       };
       await writeRuntimeState(this.#deps.runtimePath, {
         ...state,
         presentations: [...state.presentations, next],
       });
     });
-    await this.#presentationRuntime.startPresentation(prepared.record.id);
-    return this.readPresentation(prepared.record.id);
   }
 
   async presentations(): Promise<readonly PresentationRecord[]> {
@@ -1702,33 +1602,48 @@ class TandemController {
 
   private async advance(): Promise<readonly TaskRecord[]> {
     const tasks = await this.#source.scopedTasks();
-    for (const task of tasks) {
-      let capturedRuntime: RuntimeTaskState | undefined;
-      let captureSucceeded = false;
-      try {
-        capturedRuntime = await this.runtimeFor(task.id);
-        captureSucceeded = true;
-      } catch {
-        // An unavailable pre-reconcile snapshot is an ownership uncertainty.
-      }
-      try {
-        await this.reconcileTask(task);
-      } catch (error) {
-        if (captureSucceeded) {
-          const reason = `scheduler failure: ${describeError(error)}`;
-          await this.blockTaskIfReconcileClaim(task, capturedRuntime, reason, {
-            cause: {
-              group: "lost-resource",
-              kind: "transition-failed",
-              summary: "Something went wrong inside Tandem, so this task couldn't move forward.",
-              detail: reason,
-            },
-          });
-        }
-      }
+    for (const task of tasks) await this.reconcileOrBlock(task);
+    await this.reconcilePresentations(new Set(tasks.map((task) => task.id)));
+    const settled = await this.#source.scopedTasks();
+    await this.#accounting.recordSettledTasks(settled);
+    let draftRecorded = false;
+    for (const task of settled) {
+      if (await this.#drafts.refresh(task)) draftRecorded = true;
     }
+    return draftRecorded ? this.#source.scopedTasks() : settled;
+  }
+
+  /**
+   * Reconciles one task; a failure blocks it only while the operation claim seen beforehand still
+   * holds. Without that snapshot, ownership is uncertain and the task is left alone.
+   */
+  private async reconcileOrBlock(task: TaskRecord): Promise<void> {
+    let capturedRuntime: RuntimeTaskState | undefined;
+    let captureSucceeded = false;
+    try {
+      capturedRuntime = await this.runtimeFor(task.id);
+      captureSucceeded = true;
+    } catch {
+      // Handled below: no block without a snapshot.
+    }
+    try {
+      await this.reconcileTask(task);
+    } catch (error) {
+      if (!captureSucceeded) return;
+      const reason = `scheduler failure: ${describeError(error)}`;
+      await this.blockTaskIfReconcileClaim(task, capturedRuntime, reason, {
+        cause: {
+          group: "lost-resource",
+          kind: "transition-failed",
+          summary: "Something went wrong inside Tandem, so this task couldn't move forward.",
+          detail: reason,
+        },
+      });
+    }
+  }
+
+  private async reconcilePresentations(scopedTaskIds: ReadonlySet<string>): Promise<void> {
     const state = await this.readState();
-    const scopedTaskIds = new Set(tasks.map((task) => task.id));
     for (const presentation of state.presentations) {
       if (!scopedTaskIds.has(presentation.taskId)) continue;
       try {
@@ -1747,13 +1662,6 @@ class TandemController {
         );
       }
     }
-    const settled = await this.#source.scopedTasks();
-    await this.recordRequestAccounting(settled);
-    let draftRecorded = false;
-    for (const task of settled) {
-      if (await this.refreshDraftPullRequest(task)) draftRecorded = true;
-    }
-    return draftRecorded ? this.#source.scopedTasks() : settled;
   }
 
   private async blockTaskIfReconcileClaim(
@@ -1767,64 +1675,60 @@ class TandemController {
     }> = {},
   ): Promise<void> {
     const claim = operationClaim(capturedRuntime?.operation);
-    await withStateLock(this.#deps.home, async () => {
-      await this.#deps.store.exclusive(async (store) => {
-        const currentTask = await store.read(capturedTask.id);
-        if (
-          currentTask === undefined ||
-          currentTask.revision !== capturedTask.revision ||
-          currentTask.generation !== capturedTask.generation
-        ) {
-          return;
-        }
-        const state = await readRuntimeState(this.#deps.runtimePath);
-        const currentRuntime = taskRuntime(state, capturedTask.id);
-        if (
-          !sameOperationClaim(currentRuntime?.operation, claim) ||
-          (options.reservation !== undefined &&
-            !sameReservationIdentity(currentRuntime?.reservation, options.reservation))
-        ) {
-          return;
-        }
-        if (options.runtimeError === true && currentRuntime !== undefined) {
-          await writeRuntimeState(
-            this.#deps.runtimePath,
-            replaceRuntimeTask(state, capturedTask.id, (current) => ({
-              ...current,
-              lastError: reason,
-            })),
-          );
-        }
-        if (
-          currentTask.stage === "cancelled" ||
-          currentTask.stage === "completed" ||
-          currentTask.stage === "merged" ||
-          currentTask.stage === "paused" ||
-          currentTask.stage === "blocked"
-        ) {
-          return;
-        }
-        await store.update(currentTask.id, currentTask.revision, (task) =>
-          transitionTask(
-            task,
-            {
-              type: "block",
-              // `reason` (kept in `lastError` above) stays the raw diagnostic text; the block
-              // itself prefers the cause's user-facing summary when one was recorded.
-              reason: text(options.cause?.summary ?? reason, "block reason"),
-              ...(options.cause === undefined ? {} : { cause: options.cause }),
-            },
-            this.context(),
-          ),
-        );
-      });
-    });
+    const { reservation } = options;
+    await this.blockUnchangedTask(
+      capturedTask,
+      { reason, cause: options.cause },
+      {
+        matches: (current) =>
+          sameOperationClaim(current?.operation, claim) &&
+          (reservation === undefined || sameReservationIdentity(current?.reservation, reservation)),
+        ...(options.runtimeError === true
+          ? { update: (current) => ({ ...current, lastError: reason }) }
+          : {}),
+      },
+    );
   }
+
   private async quarantineLegacyReservation(
     capturedTask: TaskRecord,
     reservation: DurableReservation,
-    reason: string,
-    cause?: BlockCause,
+    cause: BlockCause,
+  ): Promise<void> {
+    const reason = cause.detail;
+    await this.blockUnchangedTask(
+      capturedTask,
+      { reason, cause },
+      {
+        matches: (current) =>
+          current?.operation === undefined &&
+          sameReservationIdentity(current?.reservation, reservation),
+        update: (current) => ({
+          ...current,
+          lastError: reason,
+          legacyQuarantine: {
+            schemaVersion: 1,
+            reservationId: reservation.id,
+            reason,
+            observedAt: this.#deps.clock(),
+          },
+        }),
+      },
+    );
+  }
+
+  /**
+   * Blocks a task only while its record and runtime are still what the scheduler decided from, so
+   * a decision made on a stale snapshot never overrides newer work. `reason` is kept raw in
+   * `lastError` by `update`; the block itself prefers the cause's user-facing summary.
+   */
+  private async blockUnchangedTask(
+    capturedTask: TaskRecord,
+    block: Readonly<{ reason: string; cause: BlockCause | undefined }>,
+    runtime: Readonly<{
+      matches: (current: RuntimeTaskState | undefined) => boolean;
+      update?: (current: RuntimeTaskState) => RuntimeTaskState;
+    }>,
   ): Promise<void> {
     await withStateLock(this.#deps.home, async () => {
       await this.#deps.store.exclusive(async (store) => {
@@ -1838,40 +1742,21 @@ class TandemController {
         }
         const state = await readRuntimeState(this.#deps.runtimePath);
         const currentRuntime = taskRuntime(state, capturedTask.id);
-        if (
-          currentRuntime?.operation !== undefined ||
-          !sameReservationIdentity(currentRuntime?.reservation, reservation)
-        ) {
-          return;
+        if (!runtime.matches(currentRuntime)) return;
+        if (runtime.update !== undefined && currentRuntime !== undefined) {
+          await writeRuntimeState(
+            this.#deps.runtimePath,
+            replaceRuntimeTask(state, capturedTask.id, runtime.update),
+          );
         }
-        const nextRuntime = replaceRuntimeTask(state, capturedTask.id, (current) => ({
-          ...current,
-          lastError: reason,
-          legacyQuarantine: {
-            schemaVersion: 1,
-            reservationId: reservation.id,
-            reason,
-            observedAt: this.#deps.clock(),
-          },
-        }));
-        await writeRuntimeState(this.#deps.runtimePath, nextRuntime);
-        if (
-          currentTask.stage === "cancelled" ||
-          currentTask.stage === "completed" ||
-          currentTask.stage === "merged" ||
-          currentTask.stage === "paused" ||
-          currentTask.stage === "blocked"
-        ) {
-          return;
-        }
+        if (alreadyStopped(currentTask)) return;
+        const { cause } = block;
         await store.update(currentTask.id, currentTask.revision, (task) =>
           transitionTask(
             task,
             {
               type: "block",
-              // `reason` (kept as `lastError` above) stays the raw diagnostic text; the block
-              // itself prefers the cause's user-facing summary when one was recorded.
-              reason: text(cause?.summary ?? reason, "block reason"),
+              reason: text(cause?.summary ?? block.reason, "block reason"),
               ...(cause === undefined ? {} : { cause }),
             },
             this.context(),
@@ -1909,268 +1794,8 @@ class TandemController {
    */
   private async draftRequestBrief(input: DraftRequestBriefInput): Promise<RequestBriefView> {
     const view = await this.#requests.draft(input);
-    await this.recordAccounting([requestIntakeEvent(view.record)]);
+    await this.#accounting.record([requestIntakeEvent(view.record)]);
     return view;
-  }
-
-  /**
-   * Brings the ledger level with durable state: the intake of every governing request, one span
-   * per settled operation, and the terminal fact of every delivered or cancelled task. Each event
-   * identity is derived from the records themselves, so repeating this pass after a restart, a
-   * reconciliation, or a compaction records nothing new.
-   */
-  private async recordRequestAccounting(tasks: readonly TaskRecord[]): Promise<void> {
-    const governed = tasks.filter((task) => task.requestId !== undefined);
-    if (governed.length === 0) return;
-    const state = await this.readState();
-    try {
-      await this.recordAccounting(await this.requestAccountingEvents(governed, state));
-    } catch (error) {
-      await this.diagnoseAccountingFailure(error);
-    }
-  }
-
-  private async requestAccountingEvents(
-    tasks: readonly TaskRecord[],
-    state: RuntimeState,
-  ): Promise<readonly RequestUsageEvent[]> {
-    const events: RequestUsageEvent[] = [];
-    const openedRequests = new Set<string>();
-    for (const task of tasks) {
-      const requestId = task.requestId;
-      if (requestId === undefined) continue;
-      if (!openedRequests.has(requestId)) {
-        openedRequests.add(requestId);
-        const brief = await this.#deps.requestStore.read(requestId);
-        if (brief !== undefined) events.push(requestIntakeEvent(brief));
-      }
-      // Research usually runs before its brief exists, so it is credited to the request through
-      // the implementation that cites it rather than by joining the request's membership.
-      const researchTaskIds = (task.researchHandoffs ?? []).map((handoff) => handoff.scoutTaskId);
-      for (const taskId of [task.id, ...researchTaskIds]) {
-        const runtime = state.tasks.find((entry) => entry.taskId === taskId);
-        if (runtime === undefined) continue;
-        const presentations = state.presentations.filter(
-          (presentation) => presentation.taskId === taskId,
-        );
-        events.push(
-          ...settledWorkEvents({
-            requestId,
-            runtime,
-            presentations,
-            tallies: await jobTokenTallies([
-              ...runtime.jobs,
-              ...presentations.map((presentation) => presentation.job),
-            ]),
-          }),
-        );
-      }
-      const terminal = requestTerminalEvent(requestId, task);
-      if (terminal !== undefined) events.push(terminal);
-    }
-    return events;
-  }
-
-  /**
-   * Appends accounting facts. Accounting observes work; it never authorizes, pauses, retries, or
-   * blocks it, so a ledger failure is reported and the caller carries on unchanged.
-   */
-  private async recordAccounting(events: readonly RequestUsageEvent[]): Promise<void> {
-    if (events.length === 0) return;
-    let added: readonly RequestUsageEvent[];
-    try {
-      added = (await this.#usage.record(events)).added;
-    } catch (error) {
-      await this.diagnoseAccountingFailure(error, events.length);
-      return;
-    }
-    for (const event of added) {
-      if (event.kind === "terminal" && event.outcome === "delivered") {
-        await this.notifyReceiptReady(event);
-      }
-    }
-  }
-
-  /**
-   * The request's receipt, with its goal and the coordinator's shared usage over the request's
-   * window. An open request is measured up to now, so it can be checked partway through.
-   */
-  private async requestReceipt(requestId?: string): Promise<RequestUsageReceipt> {
-    const id = requestId ?? (await this.requestInProgress());
-    const receipt = await this.#usage.receipt(id);
-    const brief = await this.#deps.requestStore.read(id);
-    const from = receipt.timing.intakeAt;
-    if (brief === undefined || from === "unavailable") return receipt;
-    const open = receipt.timing.terminalAt === "unavailable";
-    const to = open ? this.#deps.clock() : receipt.timing.terminalAt;
-    const repoPath = await realpath(brief.repoPath).catch(() => brief.repoPath);
-    return {
-      ...receipt,
-      goal: brief.draft.content.goal,
-      ...(open ? { asOf: to } : {}),
-      coordinator: coordinatorShare(
-        await readCoordinatorUsage(this.#deps.home),
-        repoPath,
-        from,
-        to,
-      ),
-    };
-  }
-
-  /** Briefs for the coordinator's repository (all of them without one), newest first. */
-  private async requestBriefs(): Promise<readonly RequestBriefRecord[]> {
-    const repoPath = this.#deps.sourceWorkspace?.repoPath;
-    const canonical = (path: string): Promise<string> => realpath(path).catch(() => path);
-    const here = repoPath === undefined ? undefined : await canonical(repoPath);
-    const records = [];
-    for (const record of await this.#deps.requestStore.list()) {
-      if (here === undefined || (await canonical(record.repoPath)) === here) records.push(record);
-    }
-    return records.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  }
-
-  /**
-   * The request a person means by "this request": the one open approved request in the
-   * coordinator's repository, or else the one whose brief changed most recently.
-   */
-  private async requestInProgress(): Promise<string> {
-    const repoPath = this.#deps.sourceWorkspace?.repoPath;
-    if (repoPath !== undefined) {
-      const here = await realpath(repoPath).catch(() => repoPath);
-      const open = await this.#requests.openRequestForNewWork(here, await this.#deps.store.list());
-      if (open !== undefined) return open;
-    }
-    const latest = (await this.requestBriefs())[0];
-    if (latest === undefined) throw new Error("There is no request to show a receipt for yet");
-    return latest.id;
-  }
-
-  /**
-   * Wakes the coordinator once, when a request's delivery is first recorded, to show the person
-   * where the request's time and tokens went. The ledger records each delivery once, so a replay
-   * never repeats this.
-   */
-  private async notifyReceiptReady(event: RequestUsageEvent): Promise<void> {
-    const taskId = event.identity.taskId;
-    if (taskId === undefined) return;
-    await this.updateTask(taskId, (current) => ({
-      ...current,
-      revision: current.revision + 1,
-      updatedAt: this.#deps.clock(),
-      notifications: [
-        ...current.notifications,
-        {
-          id: singleLine(this.#deps.idFactory(), "receipt notification id"),
-          message:
-            "The request is delivered. Show where its time and tokens went: call request-receipt for this task's request and show its table exactly as returned.",
-          acknowledged: false,
-          kind: "coordinator",
-        },
-      ],
-    }));
-  }
-
-  private async diagnoseAccountingFailure(error: unknown, events?: number): Promise<void> {
-    try {
-      await appendDiagnosticEvent(
-        this.#deps.home,
-        {
-          event: "request-accounting-failed",
-          details: {
-            errorClass: errorClassName(error),
-            ...(events === undefined ? {} : { events }),
-          },
-        },
-        this.#deps.clock,
-      );
-    } catch {
-      // Observability must not make request accounting fail either.
-    }
-  }
-
-  /**
-   * Record a draft-refresh failure so a stale draft is observable, without letting observability
-   * change workflow behavior. Details stay bounded: task id, pull request number, which step
-   * failed, and the error class name. No message text, stdout, stderr, or command payload.
-   */
-  private async recordDraftRefreshFailure(input: {
-    readonly taskId: string;
-    readonly step: "digest" | "remote-refresh" | "record";
-    readonly pullRequestNumber?: number;
-    readonly error: unknown;
-  }): Promise<void> {
-    await appendDiagnosticEvent(
-      this.#deps.home,
-      {
-        event: "draft-refresh-failed",
-        taskId: input.taskId,
-        details: {
-          step: input.step,
-          errorClass: errorClassName(input.error),
-          ...(input.pullRequestNumber === undefined
-            ? {}
-            : { pullRequest: input.pullRequestNumber }),
-        },
-      },
-      this.#deps.clock,
-    );
-  }
-
-  /**
-   * Keep an already approved draft showing current durable task state. It never creates a pull
-   * request, never asks for a new approval, and never blocks durable work when the remote is
-   * unavailable; the next durable change retries. Answers whether the task record changed.
-   */
-  private async refreshDraftPullRequest(task: TaskRecord): Promise<boolean> {
-    const recorded = task.pullRequest;
-    if (recorded === undefined || recorded.state !== "draft") {
-      this.#draftDigests.delete(task.id);
-      return false;
-    }
-    let digest: string;
-    try {
-      digest = draftProgressDigest(task);
-    } catch (error) {
-      await this.recordDraftRefreshFailure({
-        taskId: task.id,
-        step: "digest",
-        pullRequestNumber: recorded.number,
-        error,
-      });
-      return false;
-    }
-    if (this.#draftDigests.get(task.id) === digest) return false;
-    // Consume this durable state before attempting it, so one failure is one bounded attempt and
-    // one diagnostic rather than a per-tick retry loop against an unavailable remote.
-    this.#draftDigests.set(task.id, digest);
-
-    let publication: DraftPublication | undefined;
-    try {
-      publication = await refreshTaskDraft({ task, run: this.#deps.run });
-    } catch (error) {
-      await this.recordDraftRefreshFailure({
-        taskId: task.id,
-        step: "remote-refresh",
-        pullRequestNumber: recorded.number,
-        error,
-      });
-      return false;
-    }
-    if (publication === undefined || samePullRequest(publication.pullRequest, recorded)) {
-      return false;
-    }
-    try {
-      await this.recordPullRequest(task.id, task.revision, publication.pullRequest);
-      return true;
-    } catch (error) {
-      await this.recordDraftRefreshFailure({
-        taskId: task.id,
-        step: "record",
-        pullRequestNumber: publication.pullRequest.number,
-        error,
-      });
-      return false;
-    }
   }
 
   private async reconcileTask(task: TaskRecord): Promise<void> {
@@ -2189,27 +1814,48 @@ class TandemController {
       });
       return;
     }
-    let runtime = loadedRuntime;
-    if (runtime.stopRequest !== undefined) {
-      // Settling clears the stop request, so read the cancel's discard approval first. A crash in
-      // between loses it and keeps the worktree, which is the safe side.
-      const discard = runtime.stopRequest.discard === true;
-      await this.#control.reconcileStopRequest(task, runtime);
-      await this.cleanupSettledTask(task.id, { discard });
+    const held = heldTaskStep(task, loadedRuntime);
+    if (held !== undefined) {
+      await this.runHeldTaskStep(task, loadedRuntime, held);
       return;
     }
-    if (isTerminalTask(task)) {
-      await this.cleanupTerminalTask(task);
-      return;
+    const runtime = await this.settleOwnership(task, loadedRuntime);
+    if (runtime === undefined) return;
+    await this.runLiveTaskStep(task, runtime, liveTaskStep(task, runtime));
+  }
+
+  private async runHeldTaskStep(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    step: HeldTaskStep,
+  ): Promise<void> {
+    switch (step.kind) {
+      case "settle-stop-request":
+        // Settling clears the stop request, so its discard approval was read first. A crash in
+        // between loses it and keeps the worktree, which is the safe side.
+        await this.#control.reconcileStopRequest(task, runtime);
+        await this.cleanupSettledTask(task.id, { discard: step.discard });
+        return;
+      case "release-terminal-resources":
+        await this.cleanupTerminalTask(task);
+        return;
+      case "recover-blocked":
+        await this.#recoveryCentral.recoverBlockedTask(task);
+        return;
+      case "wait":
+        return;
     }
-    if (task.stage === "paused") return;
-    if (task.stage === "blocked") {
-      // A blocked task whose cause is recoverable (a worker/pane vanishing, not a person's decision)
-      // reaches central recovery here without anyone asking; anything not eligible is left exactly
-      // as blocked as it already was.
-      await this.#recoveryCentral.recoverBlockedTask(task);
-      return;
-    }
+  }
+
+  /**
+   * Takes over an operation another coordinator claimed and resolves an unfinished endpoint
+   * launch. Undefined means the launch could not be resolved this pass.
+   */
+  private async settleOwnership(
+    task: TaskRecord,
+    loaded: RuntimeTaskState,
+  ): Promise<RuntimeTaskState | undefined> {
+    let runtime = loaded;
     if (
       runtime.operation !== undefined &&
       runtime.operation.claimOwner !== this.#worker.claimOwner
@@ -2218,211 +1864,123 @@ class TandemController {
       if (claimed !== undefined) runtime = claimed;
     }
     if (runtime.endpointLaunch !== undefined && currentWriter(runtime) === undefined) {
-      const recovered = await this.#control.reconcileEndpointLaunch(task, runtime);
-      if (recovered === undefined) return;
-      runtime = recovered;
+      return this.#control.reconcileEndpointLaunch(task, runtime);
     }
-    const active = runtime.jobs.find(activeRuntimeJob);
-    if (active !== undefined) {
-      await this.#worker.reconcileJob(task, runtime, active);
-      await this.cleanupSettledTask(task.id);
-      return;
-    }
-    if (unreleasedReservation(runtime.reservation)) {
-      const reconciledRuntime = runtime;
-      const reservation = runtime.reservation;
-      if (runtime.operation === undefined) {
-        const reason =
-          "legacy reservation has no durable operation; quarantined without clearing reservation or checkpoint";
-        await this.quarantineLegacyReservation(task, reservation, reason, {
-          group: "safety-stop",
-          kind: "quarantined-unknown-outcome",
-          summary:
-            "Tandem's records for this task are incomplete, so it paused the task without touching your work.",
-          detail: reason,
-        });
+    return runtime;
+  }
+
+  private async runLiveTaskStep(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    step: LiveTaskStep,
+  ): Promise<void> {
+    switch (step.kind) {
+      case "reconcile-job":
+        await this.#worker.reconcileJob(task, runtime, step.job);
+        await this.cleanupSettledTask(task.id);
         return;
-      }
-      if (reservation.operationId !== runtime.operation.id) {
-        const reason =
-          "reservation and operation identities do not match; quarantined without launch";
-        await this.blockTaskIfReconcileClaim(task, runtime, reason, {
+      case "quarantine-legacy-reservation":
+        await this.quarantineLegacyReservation(task, step.reservation, step.cause);
+        return;
+      case "block-claimed":
+        await this.blockTaskIfReconcileClaim(task, runtime, step.cause.detail, {
           runtimeError: true,
-          reservation,
-          cause: {
-            group: "safety-stop",
-            kind: "identity-mismatch",
-            summary:
-              "Tandem's records for this task don't match each other, so it didn't start anything.",
-            detail: reason,
-          },
+          reservation: step.reservation,
+          cause: step.cause,
         });
         return;
-      }
-      if (reconciledRuntime.operation !== undefined) {
-        await this.#worker.reconcileOperation(task, reconciledRuntime);
+      case "reconcile-operation":
+        await this.#worker.reconcileOperation(task, runtime);
         return;
-      }
-      return;
-    }
-    switch (task.stage) {
-      case "queued": {
+      case "start-queued":
         await this.#worker.startQueuedTask(task);
         return;
-      }
-      case "awaiting-fixes":
+      case "begin-fixes":
         // beginFixes admits the fix round and transitions the task to `implementing` before it ever
         // touches a pane; if the carried-forward pane turns out to be gone, it leaves the task there
-        // unblocked rather than blocking, so the `implementing` branch below's central recovery
-        // picks it up on the next tick (see src/recovery/central.ts).
+        // unblocked rather than blocking, so the `implementing` step's central recovery picks it up
+        // on the next tick (see src/recovery/central.ts).
         await this.#worker.beginFixes(task);
         return;
-      case "validating": {
+      case "validate": {
         // A validation job that died for an infrastructure reason settles without blocking (see
         // WorkerWorkflow.reconcileJob's validation branches), leaving the task at `validating` with
         // no active job/reservation and a terminal failed job behind it. Central recovery owns the
         // stop/save/re-entry decision for that shape; it reports `skipped` for a fresh entry (no
         // dead job) so the normal startValidation path runs unchanged.
         const recovered = await this.#recoveryCentral.recoverStuckWorker(task);
-        if (recovered.action !== "skipped") return;
-        await this.#worker.startValidation(task);
+        if (recovered.action === "skipped") await this.#worker.startValidation(task);
         return;
       }
-      case "reviewing": {
+      case "advance-review": {
         // A resumed reviewing task can carry a quarantined (proven-unowned) reviewer/verifier job
         // left over from before it was blocked. Central recovery owns the stop/save/re-entry
         // decision for that case, exactly as it does for implementing/scouting; "skipped" means
         // nothing needs recovery, so review advances normally.
         const recovered = await this.#recoveryCentral.recoverStuckWorker(task);
-        if (recovered.action !== "skipped") return;
-        await this.#worker.advanceReview(task);
+        if (recovered.action === "skipped") await this.#worker.advanceReview(task);
         return;
       }
-      case "scouting":
-      case "implementing": {
-        if (runtime.endpointLaunch !== undefined) return;
-        if (runtime.worktree === undefined) {
-          await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
-            group: "lost-resource",
-            kind: "resource-lost",
-            summary: "The task's working copy is missing.",
-            detail: `task is ${task.stage} but its durable worktree is missing`,
-          });
-          return;
-        }
-        const writer = currentWriter(runtime);
-        if (writer === undefined) {
-          // No owned pane is recorded and no job or reservation is active: the prior worker is
-          // either already proven dead or needs the stop ladder run against a stale record. Central
-          // recovery owns the stop/save/re-entry decision here; it blocks or asks itself when it
-          // cannot proceed automatically.
-          await this.#recoveryCentral.recoverStuckWorker(task);
-          return;
-        }
-        const admission = await this.#worker.reserveTask(task.id, workerRoleForTask(task));
-        if ("refusal" in admission) return;
-        const admittedWriter = currentWriter(admission.runtime);
-        if (admission.runtime.worktree === undefined || admittedWriter === undefined) {
-          await this.#worker.releaseUnlaunchedTaskReservation(task.id, admission.reservation.id);
-          await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
-            group: "lost-resource",
-            kind: "resource-lost",
-            summary: "The worker's terminal and files are gone.",
-            detail: `task is ${task.stage} but its worker resources are missing`,
-          });
-          return;
-        }
-        await this.#worker.launchAgent(
-          admission.task,
-          admission.runtime,
-          admittedWriter,
-          workerRoleForTask(admission.task),
+      case "block":
+        await reportBlock(
+          (id, reason, cause) => this.blockTask(id, reason, cause),
+          task.id,
+          step.cause,
         );
         return;
-      }
-      default:
+      case "recover-stuck-writer":
+        await this.#recoveryCentral.recoverStuckWorker(task);
+        return;
+      case "launch-writer":
+        await this.launchWriter(task);
+        return;
+      case "wait":
         return;
     }
   }
 
+  private async launchWriter(task: TaskRecord): Promise<void> {
+    const admission = await this.#worker.reserveTask(task.id, workerRoleForTask(task));
+    if ("refusal" in admission) return;
+    const admittedWriter = currentWriter(admission.runtime);
+    if (admission.runtime.worktree === undefined || admittedWriter === undefined) {
+      await this.#worker.releaseUnlaunchedTaskReservation(task.id, admission.reservation.id);
+      await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "The worker's terminal and files are gone.",
+        detail: `task is ${task.stage} but its worker resources are missing`,
+      });
+      return;
+    }
+    await this.#worker.launchAgent(
+      admission.task,
+      admission.runtime,
+      admittedWriter,
+      workerRoleForTask(admission.task),
+    );
+  }
+
   private async recordPoolResult(taskId: string, result: PoolMaintenanceResult): Promise<void> {
-    const admissionKey = poolAdmissionKey(result);
-    const admissionNotice = admissionKey === undefined ? undefined : poolAdmissionNotice(result);
     await this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
       if (task === undefined || !(await this.#source.taskInScope(task))) return;
       const state = await readRuntimeState(this.#deps.runtimePath);
       const runtime = taskRuntime(state, taskId);
-      const previousKey = runtime?.poolAdmissionKey;
-      const nextRuntime =
-        runtime === undefined
-          ? state
-          : replaceRuntimeTask(state, taskId, (current) => {
-              if (admissionKey === undefined) {
-                const {
-                  poolAdmissionKey: _poolAdmissionKey,
-                  poolNotice: _poolNotice,
-                  ...withoutPoolNotice
-                } = current;
-                if (current.lastError === current.poolNotice) {
-                  const { lastError: _lastError, ...withoutError } = withoutPoolNotice;
-                  return withoutError;
-                }
-                return withoutPoolNotice;
-              }
-              const notice = poolAdmissionNotice(result);
-              return {
-                ...current,
-                poolAdmissionKey: admissionKey,
-                poolNotice: notice,
-                lastError: notice,
-              };
-            });
-      const notificationMessage =
-        admissionKey === undefined || admissionNotice === undefined
-          ? undefined
-          : poolNotificationMessage(admissionKey, admissionNotice);
-      const hasNotification =
-        admissionKey !== undefined &&
-        task.notifications.some((entry) => isPoolNotificationForKey(entry, admissionKey));
-      const shouldNotify =
-        task.stage === "queued" &&
-        notificationMessage !== undefined &&
-        previousKey !== admissionKey &&
-        !hasNotification;
-      const recoveredNotifications =
-        admissionKey === undefined
-          ? task.notifications.filter((entry) => !isPoolNotification(entry))
-          : task.notifications;
-      const taskWithNotification: TaskRecord =
-        shouldNotify && notificationMessage !== undefined
-          ? {
-              ...task,
-              revision: task.revision + 1,
-              updatedAt: this.#deps.clock(),
-              notifications: [
-                ...task.notifications,
-                {
-                  id: singleLine(this.#deps.idFactory(), "pool notification id"),
-                  message: notificationMessage,
-                  acknowledged: false,
-                },
-              ],
-            }
-          : recoveredNotifications.length === task.notifications.length
-            ? task
-            : {
-                ...task,
-                revision: task.revision + 1,
-                updatedAt: this.#deps.clock(),
-                notifications: recoveredNotifications,
-              };
-      if (taskWithNotification !== task) {
-        await store.update(task.id, task.revision, () => taskWithNotification);
+      const next = taskWithPoolAdmission(task, runtime?.poolAdmissionKey, result, {
+        clock: this.#deps.clock,
+        notificationId: () => singleLine(this.#deps.idFactory(), "pool notification id"),
+      });
+      if (next !== task) await store.update(task.id, task.revision, () => next);
+      if (runtime !== undefined) {
+        await writeRuntimeState(
+          this.#deps.runtimePath,
+          replaceRuntimeTask(state, taskId, (current) => runtimeWithPoolAdmission(current, result)),
+        );
       }
-      if (runtime !== undefined) await writeRuntimeState(this.#deps.runtimePath, nextRuntime);
     });
   }
+
   private async maintainPoolForAllocation(task: TaskRecord): Promise<boolean> {
     const [state, tasks] = await Promise.all([this.readState(), this.#deps.store.list()]);
     const sourceRepoPath = taskRuntime(state, task.id)?.sourceRepoPath ?? task.repoPath;
@@ -2520,19 +2078,8 @@ class TandemController {
       event,
       context,
     );
-    await this.recordTerminalDelivery(next);
+    await this.#accounting.recordTerminalTransition(next);
     return next;
-  }
-
-  /**
-   * Pins the request's delivery, cancellation, or failure moment at the transition that caused it,
-   * so a later cleanup or reconciliation pass that touches the task cannot move the recorded time.
-   */
-  private async recordTerminalDelivery(task: TaskRecord): Promise<void> {
-    const requestId = task.requestId;
-    if (requestId === undefined) return;
-    const terminal = requestTerminalEvent(requestId, task);
-    if (terminal !== undefined) await this.recordAccounting([terminal]);
   }
 
   private context(): TaskTransitionContext {
@@ -2552,7 +2099,7 @@ class TandemController {
 
   private async blockTask(taskId: string, reason: string, cause?: BlockCause): Promise<TaskRecord> {
     const task = await this.get(taskId);
-    if (["cancelled", "completed", "merged", "paused", "blocked"].includes(task.stage)) return task;
+    if (alreadyStopped(task)) return task;
     return this.transition(taskId, {
       type: "block",
       reason: text(reason, "block reason"),
@@ -2569,7 +2116,7 @@ class TandemController {
       throw error;
     }
   }
-  private async removeRuntimeResources(taskId: string, terminalRevision?: number): Promise<void> {
+  private async removeRuntimeResources(taskId: string): Promise<void> {
     await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) =>
       replaceRuntimeTask(state, taskId, (current) => {
         const {
@@ -2593,7 +2140,6 @@ class TandemController {
                 },
               }),
           endpoints: [],
-          ...(terminalRevision === undefined ? {} : { terminalCleanupRevision: terminalRevision }),
         };
       }),
     );
@@ -2699,23 +2245,6 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
       }),
     projectRoots: options.projectRoots ?? defaultProjectRoots(process.env),
   };
-}
-
-/** The token tallies the given jobs' workers recorded, keyed by job id. */
-async function jobTokenTallies(
-  jobs: readonly DurableJob[],
-): Promise<ReadonlyMap<string, JobTokenTally>> {
-  const tallies = new Map<string, JobTokenTally>();
-  for (const job of jobs) {
-    const tally = await readWorkerTokenTally(job.jobPath);
-    if (tally === undefined) continue;
-    tallies.set(job.id, {
-      inputTokens: tally.inputTokens + tally.cacheReadTokens + tally.cacheWriteTokens,
-      outputTokens: tally.outputTokens,
-      costUsd: tally.costUsd,
-    });
-  }
-  return tallies;
 }
 
 export function createTandemService(options: TandemServiceOptions): TandemService {

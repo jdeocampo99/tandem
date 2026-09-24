@@ -154,7 +154,8 @@ When the gate admits nothing, `reserveTask` returns a `ReservationRefusal`; its 
   make a task ineligible, and an ineligible task is never mutated.
 - An eligible task gets the `resume` event, then its stage's `recoverStuckWorker`, spending the same
   budgets and stop ladder as an unblocked task.
-- Both the scheduler tick (`ServiceController.reconcileTask`) and `TaskControlWorkflow.restartTask`
+- Both the scheduler tick (`reconcileTask` in src/service/controller.ts, which acts on the step
+  src/service/reconcile-step.ts picks) and `TaskControlWorkflow.restartTask`
   call it. `restartTask` resumes a paused or blocked task after proving owned panes stopped, then
   runs the stage's reconcile; in `implementing`/`scouting` with no live writer that relaunches in
   the same task and worktree.
