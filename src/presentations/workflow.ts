@@ -40,7 +40,7 @@ import {
   singleLine,
   workerCommand,
 } from "../service/records.ts";
-import { recoverEndpointFromLaunch } from "../tasks/control.ts";
+import { recoverEndpointFromLaunch } from "../tasks/endpoint-launch.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import { parseWorkerJob, readWorkerResult, type WorkerResult } from "../workers/jobs.ts";
 import { liveWorkerTerminal } from "../workers/terminal.ts";

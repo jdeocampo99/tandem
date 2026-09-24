@@ -899,7 +899,6 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     action === "pause" ||
     action === "resume" ||
     action === "cancel" ||
-    action === "cleanup" ||
     action === "publish" ||
     action === "publish-now" ||
     action === "draft" ||

@@ -13,16 +13,19 @@ import {
   JEV_MODEL,
   type JevChoiceAnswer,
   JevEvaluationError,
+  type JevEvaluationInput,
   type JevEvaluationResponse,
 } from "../../src/adapters/typesafe.ts";
 import {
   actionForPromptDecision,
+  type ChoiceConfirmation,
   classifyPrompt,
   handlePromptInput,
   PROMPT_ROUTING_QUESTION_SCHEMA_VERSION,
   promptRoutingConfig,
 } from "../../src/extension/prompt-routing.ts";
 import { registerTandemOmp } from "../../src/extension/registration.ts";
+import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
 import { readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
 import { JEV_PRICING_SNAPSHOT, USAGE_RECORD_SCHEMA_VERSION } from "../../src/runtime/usage.ts";
 import type { TandemService } from "../../src/service/controller.ts";
@@ -306,7 +309,8 @@ test("direct routing executes a read-only service action and records ordered dia
       },
     );
     expect(result).toEqual({ handled: true });
-    expect(listCalls).toBe(1);
+    // Once to look for open questions a short reply could answer, once for the lookup itself.
+    expect(listCalls).toBe(2);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain("task-1");
 
@@ -560,6 +564,179 @@ test("a pull-up prompt opens the one presentation Jev matched", async () => {
     expect(result).toEqual({ handled: true });
     expect(opened).toEqual(["presentation-1"]);
     expect(sent).toHaveLength(1);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+function choiceReplyFixture(replyChoice: Choice) {
+  const sent: string[] = [];
+  const answered: unknown[] = [];
+  const approved: unknown[] = [];
+  const service = {
+    list: async () => [
+      {
+        id: "task-1",
+        stage: "blocked",
+        communication: {
+          revision: 1,
+          messages: [],
+          question: {
+            id: `${RESTART_QUESTION_ID_PREFIX}incident`,
+            text: 'The worker for "fix login" stopped. Restart it? Reply "restart" or "stop".',
+          },
+        },
+      },
+    ],
+    pendingBriefApprovalId: async () => "req-1",
+    requestBrief: async () => ({
+      record: { draft: { revision: 3, contentDigest: "digest", content: { goal: "Fix login" } } },
+    }),
+    answer: async (input: unknown) => {
+      answered.push(input);
+      return { taskId: "task-1", messages: [] };
+    },
+    approveRequestBrief: async (input: unknown) => {
+      approved.push(input);
+      return { record: { id: "req-1" }, approvalState: "current", markdown: "", pausedTaskIds: [] };
+    },
+  } as unknown as TandemService;
+  const lookups: string[] = [];
+  const deps = (home: string, confirmation?: ChoiceConfirmation) => ({
+    config: { apiKey: "key", timeoutMs: 1_500 },
+    getService: () => service,
+    getHome: () => home,
+    sendMessage: ((message: string | { readonly content?: string }) => {
+      sent.push(typeof message === "string" ? message : (message.content ?? ""));
+    }) as never,
+    evaluate: async (input: JevEvaluationInput): Promise<JevEvaluationResponse> => {
+      const question = input.questions.reply;
+      if (question === undefined) {
+        lookups.push(JSON.stringify(input.state));
+        return response(
+          { choice: "none" },
+          { choice: "conversation" },
+          { choice: "read-only" },
+          { choice: "within" },
+          { choice: "single" },
+        );
+      }
+      const options = Object.keys(question.criteria ?? {});
+      const confidence = replyChoice.confidence ?? 0.95;
+      return {
+        model: JEV_MODEL,
+        answers: {
+          reply: {
+            type: "choice",
+            choice: replyChoice.choice,
+            confidence,
+            probabilities: Object.fromEntries(
+              options.map((option) => [
+                option,
+                option === replyChoice.choice
+                  ? confidence
+                  : (1 - confidence) / (options.length - 1),
+              ]),
+            ),
+          },
+        },
+        usage: { input_tokens: 9, output_tokens: 1 },
+      };
+    },
+    ...(confirmation === undefined ? {} : { confirmation }),
+  });
+  return { sent, answered, approved, lookups, deps };
+}
+
+function typed(text: string): InputEvent {
+  return { source: "interactive", text } as InputEvent;
+}
+
+test("a short reply to a fixed-choice question answers it in code, with no coordinator turn", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-"));
+  const fixture = choiceReplyFixture({ choice: "c1" });
+  try {
+    const result = await handlePromptInput(typed("yeah restart it"), context, fixture.deps(home));
+    expect(result).toEqual({ handled: true });
+    expect(fixture.answered).toEqual([
+      { taskId: "task-1", questionId: `${RESTART_QUESTION_ID_PREFIX}incident`, text: "restart" },
+    ]);
+    expect(fixture.sent).toHaveLength(1);
+    expect(fixture.lookups).toEqual([]);
+    const raw = await readFile(join(home, "logs", "tandem.jsonl"), "utf8");
+    expect(raw).toContain("choice-reply-route/1");
+    expect(raw).toContain("prompt-route-dispatched");
+    expect(raw).not.toContain("yeah restart it");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("a risky choice runs only after an exact y to a code-written confirmation", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-"));
+  // c3 is the brief approval, after the restart question's two choices.
+  const fixture = choiceReplyFixture({ choice: "c3" });
+  const confirmation: ChoiceConfirmation = {};
+  try {
+    expect(
+      await handlePromptInput(typed("yes sounds good"), context, fixture.deps(home, confirmation)),
+    ).toEqual({ handled: true });
+    expect(fixture.sent).toEqual(['Approve the brief for "Fix login"? (y/n)']);
+    expect(fixture.approved).toEqual([]);
+
+    // The context has no approval dialog, so only the typed "y" can approve.
+    expect(await handlePromptInput(typed("y"), context, fixture.deps(home, confirmation))).toEqual({
+      handled: true,
+    });
+    expect(fixture.approved).toEqual([
+      { requestId: "req-1", briefRevision: 3, contentDigest: "digest" },
+    ]);
+    expect(confirmation.pending).toBeUndefined();
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("a risky choice is dropped on n, and on anything else the reply routes as a new prompt", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-"));
+  const declined = choiceReplyFixture({ choice: "c3" });
+  const confirmation: ChoiceConfirmation = {};
+  try {
+    await handlePromptInput(typed("approve it"), context, declined.deps(home, confirmation));
+    expect(await handlePromptInput(typed("n"), context, declined.deps(home, confirmation))).toEqual(
+      { handled: true },
+    );
+    expect(declined.approved).toEqual([]);
+    expect(declined.sent.at(-1)).toBe("Okay, I didn't do that.");
+
+    await handlePromptInput(typed("approve it"), context, declined.deps(home, confirmation));
+    // "yes please" is not an exact "y": nothing is approved and the reply goes on to the coordinator.
+    const changed = choiceReplyFixture({ choice: "other" });
+    expect(
+      await handlePromptInput(typed("yes please"), context, changed.deps(home, confirmation)),
+    ).toBeUndefined();
+    expect(changed.approved).toEqual([]);
+    expect(declined.approved).toEqual([]);
+    expect(confirmation.pending).toBeUndefined();
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("without a confirmation holder, or below the cutoff, the reply goes to the coordinator", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-"));
+  try {
+    const risky = choiceReplyFixture({ choice: "c3" });
+    expect(await handlePromptInput(typed("approve it"), context, risky.deps(home))).toBeUndefined();
+    expect(risky.approved).toEqual([]);
+
+    const unsure = choiceReplyFixture({ choice: "c1", confidence: 0.6 });
+    expect(
+      await handlePromptInput(typed("hmm restart?"), context, unsure.deps(home)),
+    ).toBeUndefined();
+    expect(unsure.answered).toEqual([]);
+    // The ordinary lookup routes still get their turn.
+    expect(unsure.lookups).toHaveLength(1);
   } finally {
     await rm(home, { recursive: true, force: true });
   }

@@ -156,6 +156,8 @@ A missing note loads unchanged; a present but malformed note fails the read as s
 
 `cleanup --discard` needs `--yes` (CLI) or live TUI confirmation (extension), then uses Treehouse's
 force return. The extension's `cancel` with `discard` covers the same deletion in its one confirmation.
+The extension's `cleanup` takes `taskIds`, so one confirmation covers a batch; each task is cleaned
+in turn and one that fails is reported without stopping the rest.
 Discard also closes the task's own panes when their worker ignores the close request or keeps the
 foreground; pane ownership is still verified first. Any cleanup closes the panes of the task's
 finished or failed presentations, whose artifacts stay on disk; a running presentation is left alone. Never use it to resolve an ambiguous, dirty, ignored, or unmerged worktree unless the
