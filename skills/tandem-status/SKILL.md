@@ -1,81 +1,108 @@
 ---
 name: tandem-status
 description: >-
-  Give a brief evidence-only view of durable Tandem work for the current repository; trigger on
-  status/progress questions or /skill:tandem-status.
+  Tell the user, in plain English, what their Tandem tasks are doing and what to do when one seems
+  stuck. Trigger on status or progress questions, "why is my task stuck", "Tandem is acting weird",
+  or /skill:tandem-status.
 user-invocable: true
 ---
 
 # tandem-status
 
-Read durable state once; do not advance work.
+This skill reads Tandem's saved state and explains it. It only reads: when a fix is needed, it
+recommends one command for the user to run.
 
-## Resolve scope without guessing
+Pick the branch:
 
-The installed `tandem` command is the primary launch/reconnect front door: bare `tandem` opens or
-reconnects every valid saved project under the selected home from any cwd, while explicit paths
-select only a subset or add/open projects. This status skill is optional and uses the advanced
-low-level `src/cli.ts status` action for an evidence-only durable read. Resolve the checkout
-independently: use validated `TANDEM_ROOT`, else this skill's real path plus `../../`. If unavailable,
-ask where Tandem is installed; never assume `Coding_Projects` or run setup.
+- **Overview**: "what's going on?", "how are my tasks?" Go to [Overview](#overview).
+- **Stuck**: a task seems stuck, failed, or blocked, or Tandem is acting strangely. Go to
+  [Stuck](#stuck).
 
-The user can also run `tandem status` for the same overview in a terminal, or
-`tandem status TASK_ID --json` for one task's full durable inspection.
+## Talk like a teammate
 
-This skill only reads. When the user asks to reload coordinators, cancel work, or start over,
-explain `tandem update`, `tandem reset`, or `tandem reset --hard` and let them run it.
+Every reply is for someone who doesn't know Tandem's internals.
 
-For repository scope, canonicalize an explicit target or cwd to its Git top-level (expand `~`,
-resolve relative paths, preserve symlink identity). If unresolved, ask briefly. Explicit all-project
-scope skips Git-root resolution and `--repo`.
+- Describe each task by what it's for (its objective), not its ID. Add the ID only when the user
+  needs to type it.
+- Use the plain words in the table below for stages. Leave out internal terms such as generation,
+  lease, reservation, endpoint, HEAD, or quarantine.
+- Lead with what needs the user, then what's running, then what's done.
+- Say "Tandem's records show" rather than claiming something is running right now; the records
+  can't prove a process is alive.
+- Keep it to a few short bullets. Offer detail if they want it.
 
-Home precedence is `--home` > `TANDEM_HOME` > remembered setup > `~/.tandem`.
-When neither explicit home source is set, inspect `$XDG_CONFIG_HOME/tandem/config.json` (default
-`~/.config/tandem/config.json`) if present: require schema version 1, an absolute `home`, and a
-non-empty `sessionId`. Malformed preferences fail closed; do not guess or fall back to old state.
-An explicit home bypasses that remembered pair. Keep the resolved home absolute and consistent.
-`<home>/state.sqlite` is the canonical task/runtime store. Existence-check the home and this
-database before invoking status, without creating either. Missing means one sentence: no canonical
-durable store and no read attempted.
+| Stage | Say |
+| --- | --- |
+| `awaiting-approval` | waiting for your OK on the plan |
+| `queued` | waiting its turn to start |
+| `scouting` | researching |
+| `implementing` | writing code |
+| `validating` | running your project's checks |
+| `reviewing` | being reviewed by a fresh agent |
+| `awaiting-fixes` | checks or review found problems; a fix round is next |
+| `ready` | finished and checked, waiting for you to decide on a pull request (nothing published yet) |
+| `paused` | paused |
+| `blocked` | stopped and needs attention (explain why, see [Stuck](#stuck)) |
+| `completed` | research finished (mention the report) |
+| `merged` | merged |
+| `cancelled` | cancelled |
 
-## Communication receipts
+## Find Tandem's data
 
-This skill reports the task list once; it does not perform a second communication read. In a
-managed coordinator, use the `messages` action (or `bun src/cli.ts messages --task TASK_ID`) when
-you need per-direction queued, received, or delivered receipts, a worker Question:, a
-Recommendation:, or activity metadata. Queued/received/delivered are communication states, not
-proof that code changed, and this summary never treats a recorded stage or passive progress as
-proof that a live worker is running. Elapsed time alone does not kill a worker; explicit limits and
-cancellation remain the controls.
+Use the installed `tandem` command. The data folder ("home") is, in order: `--home` if the user
+gave one, `TANDEM_HOME`, the `home` in `$XDG_CONFIG_HOME/tandem/config.json` (default
+`~/.config/tandem/config.json`), then `~/.tandem`. If `<home>/state.sqlite` doesn't exist, say in one
+sentence that Tandem has no saved tasks there, and stop.
 
-Any task count or stage claim in this summary comes only from that durable read; queued/received/delivered receipts and live activity never establish a running or completed scout.
+For "this project", resolve the current folder to its Git top-level path. When the user says "all
+projects", skip that.
 
-## Perform one read
+## Overview
 
-When the database exists, run exactly once, capture CLI stderr, and preserve the pipeline
-exit status with `pipefail`:
+Run once, capturing errors:
 
 ```sh
 set -o pipefail
-bun "<tandem-root>/src/cli.ts" status --home "<home>" --json |
-  jq --arg repo "<canonical-repo>" 'map(select($repo == "" or .repoPath == $repo) | {id,repoPath,objective,stage,scopeApproved,blockReason,reportPath,pullRequest,updatedAt})'
+tandem status --home "<home>" --json |
+  jq --arg repo "<project-root or empty for all>" '.tasks | map(select($repo == "" or .repoPath == $repo)
+    | {id, objective, stage, blockReason, blockCause, reportPath, pullRequest, updatedAt})'
 ```
 
-`status` aliases `list`. The CLI success shape is a raw JSON array; the pipeline emits only the
-compact projection. Use the exact canonical `repoPath` as `<canonical-repo>`. For explicit
-all-project scope, pass an empty jq argument (`--arg repo ""`) and do not add CLI `--repo`; the
-CLI flag does not filter. If `jq` is unavailable, use equivalent in-memory capture/filter/
-projection. Never display raw records or policy/review payloads. Nonzero exit or malformed JSON is
-failed; JSON errors go to stderr as `{ "error": { "name", "message" } }` (exit 1/2). Preserve
-stderr and uncertainty; do not retry with `show`, `doctor`, or another read. Page captured
-projected output if needed, never rerun status.
+If it fails or the output isn't JSON, say so and show the error; don't retry with other commands.
+Otherwise reply in three
+to five bullets following [Talk like a teammate](#talk-like-a-teammate). No tasks means one sentence.
+If any task is `blocked`, name the reason in plain words and offer to look into it.
 
-## Reply in 3–5 bullets
+## Stuck
 
-Omit empty headings: current work (objective and recorded stage), outcomes (terminal stage,
-report/evidence, or PR metadata), blockers/needed decisions (`blockReason`, approval, paused/fix
-signals), and next action supported by the record. Include concrete outcomes or unresolved
-decisions explicitly stated in the current conversation, labeled as conversation context; chat is
-not live-state proof. A successful empty selected array gets one sentence. Never imply `ready`
-means merged/delivered or that any stage proves a live worker/process; this read checks neither.
-Do not tick, watch, approve, launch, validate, set up, audit, or otherwise mutate anything.
+1. Find the task. If the user didn't name one, run the overview read and pick the task that's
+   `blocked` or has sat in one stage unusually long; ask if more than one fits.
+2. Read it once:
+
+   ```sh
+   tandem status TASK_ID --home "<home>" --json
+   ```
+
+3. Work out which case applies, using `stage`, `blockCause` (its `group` and plain `summary`),
+   `blockReason`, `codeFixRounds`, and whether its worker `endpoints` are `alive`.
+4. Reply with: what happened (one or two sentences, using `blockCause.summary` when present),
+   whether their work is safe (task worktrees are always kept), and **one** recommended next step.
+   Leave the step for the user to run.
+
+| What you see | Plain explanation | Recommend |
+| --- | --- | --- |
+| Blocked, `group` is `lost-resource` or `unusable-result` | Something the worker relied on broke (a crash, a lost terminal, a result it couldn't use). Tandem retries these on its own, up to twice. | Wait for the automatic retry; if it already used both, ask the coordinator to restart the task, or type `/tandem restart TASK_ID` in the coordinator. |
+| Blocked, `fix-rounds-exhausted` | The fixes went three rounds without passing, so Tandem stopped to ask. | Answer "Keep fixing?" in the coordinator: yes for another round, no to stop. |
+| Blocked, `validation-config-refused` | The project's check commands don't cover this change or can't run. | Open the settings with `tandem config` and fix the check commands, then restart the task. |
+| Blocked, `prerequisite-not-met` or `explicit-block` | Tandem is waiting on something only the user can decide. | Quote the question from `summary` or `blockReason` and tell them to answer it in the coordinator. |
+| Blocked, `group` is `safety-stop` | Tandem couldn't confirm it was safe to touch something, so it stopped instead of guessing. | Run `tandem fix` to see what it found (it asks before changing anything). If the task stays blocked, share this status output. |
+| Blocked, no `blockCause` | Explain `blockReason` in plain words. | Pick the closest row above. |
+| Active stage, worker endpoint `alive` | It's still working. | Watch it in its Herdr pane; nothing to fix. |
+| Active stage, worker endpoint `stopped` or `missing` | The worker's terminal is gone, but the task still says it's working. | Ask the coordinator to restart the task, or `/tandem restart TASK_ID`. |
+| `queued` for a long time | Other tasks are using all the worker slots. | Wait, or cancel a task they no longer need. |
+| The coordinator itself misbehaves | Its code or chat is in a bad state. | `tandem update` (keeps chats and tasks). |
+| Leftover panes or worktrees after a crash | Something wasn't cleaned up. | `tandem fix`. |
+
+Stronger options exist: `tandem reset` cancels every in-progress task, and `tandem reset --hard`
+deletes all Tandem data. Mention them only when the user asks to start over, and say what each
+loses.
