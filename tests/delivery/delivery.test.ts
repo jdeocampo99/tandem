@@ -297,7 +297,8 @@ test("lists the known issues review did not block on", () => {
         lens: "review",
         severity: "P2",
         verdict: "confirmed",
-        description: "Label says Back.",
+        description:
+          "Label says Back. The mobile header renders it next to the close icon, so users see two exits.",
         file: "src/back.tsx",
         status: "unresolved",
         raisedAt: { head: "head-1", generation: 0, reviewRound: 0 },
