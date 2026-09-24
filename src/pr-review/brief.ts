@@ -6,6 +6,7 @@ export type PrReviewBriefInput = Readonly<{
   head: string;
   from: string;
   contextPath: string;
+  /** The diff with new-file line numbers in front of each line. */
   diffPath: string;
   /** Recovery notices and the user's messages, appended as given. */
   extra: readonly string[];
@@ -33,7 +34,7 @@ export function buildPrReviewBrief(input: PrReviewBriefInput): string {
     "## Where things are",
     `- You are in a checkout of the PR at HEAD ${input.head}.`,
     `- PR context (description, CI, linked issues, existing threads): ${input.contextPath}`,
-    `- The diff to review (${input.from}..${input.head}): ${input.diffPath}`,
+    `- The diff to review (${input.from}..${input.head}): ${input.diffPath}. The number before each line is its new-file line; anchor comments on those numbers. Removed lines have none and cannot take a comment.`,
     "",
     ...modeSection(input),
     "",

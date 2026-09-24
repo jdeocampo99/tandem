@@ -59,7 +59,13 @@ export type WorkerJob = Readonly<{
    * A scout job reviewing a pull request: it gets a read-only git/gh shell, and when
    * `structuredReport` is set its report must be one PrReview JSON object.
    */
-  readonly prReview?: Readonly<{ readonly structuredReport: boolean }>;
+  readonly prReview?: Readonly<{
+    readonly structuredReport: boolean;
+    /** The run's raw diff; submitted comments must sit on lines it shows. */
+    readonly diffPath?: string;
+    /** False for an intent review, which posts no inline comments. */
+    readonly inlineComments?: boolean;
+  }>;
 }>;
 export type WorkerQuestion = Readonly<{
   readonly text: string;
@@ -421,7 +427,16 @@ function readPrReviewJob(value: unknown): NonNullable<WorkerJob["prReview"]> {
   if (!isRecord(value) || typeof value.structuredReport !== "boolean") {
     throw new TypeError("prReview must be an object with a boolean structuredReport");
   }
-  return { structuredReport: value.structuredReport };
+  if (value.inlineComments !== undefined && typeof value.inlineComments !== "boolean") {
+    throw new TypeError("prReview.inlineComments must be a boolean");
+  }
+  return {
+    structuredReport: value.structuredReport,
+    ...(value.diffPath === undefined
+      ? {}
+      : { diffPath: readAbsolutePath(value.diffPath, "prReview.diffPath") }),
+    ...(value.inlineComments === undefined ? {} : { inlineComments: value.inlineComments }),
+  };
 }
 export function parseWorkerResult(value: unknown): WorkerResult {
   if (!isRecord(value)) {

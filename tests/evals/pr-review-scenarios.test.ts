@@ -254,7 +254,12 @@ test("a PR review runs end to end: start, review, edit, post, re-review, questio
     expect(running.stage).toBe("scouting");
     const first = await latestJob(world, taskId);
     const firstHead = await git(pr.author, "rev-parse", "HEAD");
-    expect(first.spec.prReview).toEqual({ structuredReport: true });
+    expect(first.spec.prReview).toEqual({
+      structuredReport: true,
+      diffPath: join(world.home, "pr-review", taskId, "run-0", "diff.patch"),
+      inlineComments: true,
+    });
+    expect(first.spec.prompt).toContain("diff-numbered.patch");
     expect(first.spec.prompt).toContain("# Tandem PR review: acme/api#7");
     expect(first.spec.cwd).toBe(join(world.home, "pr-review", taskId, "worktree"));
     expect(await git(first.spec.cwd, "rev-parse", "HEAD")).toBe(firstHead);
@@ -333,7 +338,7 @@ test("a PR review runs end to end: start, review, edit, post, re-review, questio
 
     await service.steer({ taskId, text: "Why does retry take the file handle?" });
     const question = await latestJob(world, taskId);
-    expect(question.spec.prReview).toEqual({ structuredReport: false });
+    expect(question.spec.prReview).toMatchObject({ structuredReport: false });
     expect(question.spec.prompt).toContain("Why does retry take the file handle?");
     const answered = await finishRun(
       world,

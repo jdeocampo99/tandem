@@ -1,8 +1,9 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { readReferencingFiles } from "../adapters/git.ts";
 import { isRecord } from "../adapters/primitives.ts";
 import type { Clock, CommandRunner, WorktreeLease } from "../contracts.ts";
-import { commentableLines, readReviewDiff } from "./diff.ts";
+import { commentableLines, numberedDiff, readReviewDiff } from "./diff.ts";
 import {
   isRefusal,
   type PullRequestFacts,
@@ -12,6 +13,7 @@ import {
 import {
   latestRound,
   type PrReviewState,
+  prReviewRunDiffPath,
   prReviewRunDirectory,
   prReviewWorktreePath,
 } from "./state.ts";
@@ -21,6 +23,9 @@ import {
   type ReviewWorktree,
   refreshReviewWorktree,
 } from "./worktree.ts";
+
+/** How many likely callers the context lists; the reviewer can grep for more. */
+const MAX_CALLERS = 30;
 
 /** One earlier inline comment on the PR, with the replies under it. */
 export type ThreadComment = Readonly<{
@@ -75,11 +80,24 @@ export async function preparePrReviewRun(input: PrepareRunInput): Promise<Prepar
   const directory = prReviewRunDirectory(input.home, input.taskId, input.generation);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const diff = await readReviewDiff(run, worktree.path, from, worktree.head);
-  const diffPath = join(directory, "diff.patch");
+  const diffPath = prReviewRunDiffPath(input.home, input.taskId, input.generation);
   const contextPath = join(directory, "context.md");
   const threads = await readThreads(run, state.ref, state.checkout);
   const viewer = await currentLogin(run, state.checkout);
   await writeFile(diffPath, diff.patch, { mode: 0o600 });
+  await writeFile(join(directory, "diff-numbered.patch"), numberedDiff(diff.patch), {
+    mode: 0o600,
+  });
+  const stat = await diffStat(run, worktree.path, from, worktree.head, diff.files);
+  const callers =
+    diff.files.length === 0
+      ? []
+      : await readReferencingFiles(run, {
+          repo: worktree.path,
+          ref: worktree.head,
+          files: diff.files,
+          maxResults: MAX_CALLERS,
+        });
   await writeFile(join(directory, "run.json"), JSON.stringify({ from, head: worktree.head }), {
     mode: 0o600,
   });
@@ -93,6 +111,8 @@ export async function preparePrReviewRun(input: PrepareRunInput): Promise<Prepar
       head: worktree.head,
       files: diff.files,
       skipped: diff.skipped,
+      stat,
+      callers,
       threads,
       viewer,
     }),
@@ -124,6 +144,8 @@ export type RunFiles = Readonly<{
   head: string;
   contextPath: string;
   diffPath: string;
+  /** The same diff with new-file line numbers, which is what the reviewer reads. */
+  numberedDiffPath: string;
   /** New-side lines GitHub accepts comments on, from the diff the run was given. */
   commentable: ReadonlyMap<string, ReadonlySet<number>>;
 }>;
@@ -138,12 +160,13 @@ export async function readRunFiles(
   if (!isRecord(range) || typeof range.from !== "string" || typeof range.head !== "string") {
     throw new TypeError(`${directory}/run.json is not a PR review run record`);
   }
-  const diffPath = join(directory, "diff.patch");
+  const diffPath = prReviewRunDiffPath(home, taskId, generation);
   return {
     from: range.from,
     head: range.head,
     contextPath: join(directory, "context.md"),
     diffPath,
+    numberedDiffPath: join(directory, "diff-numbered.patch"),
     commentable: commentableLines(await readFile(diffPath, "utf8")),
   };
 }
@@ -217,6 +240,8 @@ function renderContext(
     head: string;
     files: readonly string[];
     skipped: readonly string[];
+    stat: string;
+    callers: readonly string[];
     threads: readonly ThreadComment[];
     viewer: string;
   }>,
@@ -245,7 +270,11 @@ function renderContext(
     `Passing checks: ${ci.passing}. Do not comment on anything CI already reports.`,
     "",
     "## Changed files in the reviewed range",
-    ...input.files.map((file) => `- ${file}`),
+    input.stat.length === 0 ? "(no changes)" : input.stat,
+    "",
+    "## Files that mention the changed files (likely callers; check them)",
+    ...(input.callers.length === 0 ? ["(none found)"] : input.callers.map((file) => `- ${file}`)),
+    ...(input.callers.length === MAX_CALLERS ? [`(first ${MAX_CALLERS} shown)`] : []),
     ...(input.skipped.length === 0
       ? []
       : ["", "## Skipped as generated or lockfiles", ...input.skipped.map((file) => `- ${file}`)]),
@@ -284,6 +313,22 @@ async function ghPages(
   if (result.code !== 0) return [];
   const pages: unknown = JSON.parse(result.stdout);
   return (Array.isArray(pages) ? pages.flat() : []).filter(isRecord);
+}
+
+/** `git diff --stat` over the reviewed files, so the reviewer sees where the weight is first. */
+async function diffStat(
+  run: CommandRunner,
+  worktree: string,
+  from: string,
+  to: string,
+  files: readonly string[],
+): Promise<string> {
+  if (files.length === 0) return "";
+  const result = await run({
+    argv: ["git", "-C", worktree, "diff", "--no-ext-diff", "--stat=100", from, to, "--", ...files],
+    cwd: worktree,
+  });
+  return result.code === 0 ? result.stdout.trimEnd() : "";
 }
 
 async function isDirectory(path: string): Promise<boolean> {

@@ -81,3 +81,21 @@ test("a structured PR review report must be one review object; a fence around it
     }),
   ).toThrow("review.intent");
 });
+
+test("a review with a comment off the diff is sent back with the lines it can use", () => {
+  const anchors = new Map([["src/upload.ts", new Set([10, 11, 12])]]);
+  const submit = (line: number) =>
+    resolveSubmittedReport(
+      job,
+      {
+        outcome: "completed",
+        report: JSON.stringify({
+          ...review,
+          comments: [{ id: "c1", file: "src/upload.ts", line, body: "hm", severity: "nit" }],
+        }),
+      },
+      anchors,
+    );
+  expect(() => submit(40)).toThrow("lines that can take comments: 10-12");
+  expect(JSON.parse(submit(11).text).comments).toHaveLength(1);
+});

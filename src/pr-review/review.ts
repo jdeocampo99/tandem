@@ -1,4 +1,5 @@
 import { isRecord } from "../adapters/primitives.ts";
+import { lineRanges } from "./diff.ts";
 
 /** What the review looks at; `focus` carries the user's own words. */
 export type ReviewLens =
@@ -107,6 +108,34 @@ export function checkReview(
 
 function bySeverity(a: { severity: CommentSeverity }, b: { severity: CommentSeverity }): number {
   return SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity];
+}
+
+/**
+ * Why each inline comment cannot be posted as written, phrased so the reviewer can fix it: a line
+ * outside the diff names the lines that can take comments, and an intent review takes none.
+ */
+export function anchorProblems(
+  review: PrReview,
+  commentable: ReadonlyMap<string, ReadonlySet<number>>,
+  inlineComments: boolean,
+): readonly string[] {
+  if (!inlineComments && review.comments.length > 0) {
+    return [
+      "this is an intent review: leave comments empty and put those points in concerns and summaryComment",
+    ];
+  }
+  return review.comments.flatMap((comment) => {
+    const lines = commentable.get(comment.file);
+    if (lines === undefined) {
+      return [
+        `${comment.id}: ${comment.file} is not in the diff; comment on a changed file or use summaryComment`,
+      ];
+    }
+    if (lines.has(comment.line)) return [];
+    return [
+      `${comment.id}: line ${comment.line} of ${comment.file} is not in the diff; lines that can take comments: ${lineRanges(lines)}`,
+    ];
+  });
 }
 
 /** Reads a PrReview object, from the worker or from storage; throws a TypeError naming the bad field. */

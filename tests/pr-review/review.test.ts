@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { commentableLines } from "../../src/pr-review/diff.ts";
-import { checkReview, parsePrReview } from "../../src/pr-review/review.ts";
+import { commentableLines, lineRanges, numberedDiff } from "../../src/pr-review/diff.ts";
+import { anchorProblems, checkReview, parsePrReview } from "../../src/pr-review/review.ts";
 
 const PATCH = `diff --git a/src/upload.ts b/src/upload.ts
 index 1111111..2222222 100644
@@ -105,4 +105,33 @@ test("a malformed review names the field that is wrong", () => {
   expect(() =>
     parsePrReview(reviewWith([{ file: "a.ts", line: 0, body: "x", severity: "nit" }])),
   ).toThrow("review.comments[0].line");
+});
+
+test("the numbered diff shows each line's new-file number, and removed lines show none", () => {
+  const numbered = numberedDiff(PATCH).split("\n");
+  expect(numbered).toContain("       -  send(file);");
+  expect(numbered).toContain("    11 +  for (let attempt = 0; attempt < 3; attempt += 1) {");
+  expect(numbered).toContain("    10    const file = open();");
+  expect(numbered).toContain("@@ -10,4 +10,6 @@ export function upload() {");
+});
+
+test("line ranges compress consecutive lines", () => {
+  expect(lineRanges(new Set([15, 10, 11, 12, 40, 41, 7]))).toBe("7, 10-12, 15, 40-41");
+});
+
+test("misplaced comments get a fix the reviewer can act on", () => {
+  const review = parsePrReview(
+    reviewWith([
+      { id: "c1", file: "src/upload.ts", line: 12, body: "ok", severity: "nit" },
+      { id: "c2", file: "src/upload.ts", line: 40, body: "off", severity: "nit" },
+      { id: "c3", file: "src/other.ts", line: 3, body: "elsewhere", severity: "nit" },
+    ]),
+  );
+  expect(anchorProblems(review, commentableLines(PATCH), true)).toEqual([
+    "c2: line 40 of src/upload.ts is not in the diff; lines that can take comments: 10-15",
+    "c3: src/other.ts is not in the diff; comment on a changed file or use summaryComment",
+  ]);
+  expect(anchorProblems(review, commentableLines(PATCH), false)).toEqual([
+    "this is an intent review: leave comments empty and put those points in concerns and summaryComment",
+  ]);
 });

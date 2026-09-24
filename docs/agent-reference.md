@@ -1890,14 +1890,17 @@ login can read. It is read-only, so it starts without scope approval, like resea
   project's cleanup commands never run there.
 - **What the reviewer reads.** `<home>/pr-review/TASK_ID/run-N/` holds `diff.patch` (merge base to
   head on a first review; previous head to new head on a re-review, or the merge base again after a
-  force-push), `context.md` (description, linked issues, CI, the user's earlier threads with their
-  comment ids, other reviewers' threads, skipped files), and `run.json`. Lockfiles and
+  force-push), `diff-numbered.patch` (the same diff with each line's new-file number, which is
+  what the reviewer reads), `context.md` (description, linked issues, CI, `git diff --stat`, files
+  that mention the changed files as likely callers, the user's earlier threads with their comment
+  ids, other reviewers' threads, skipped files), and `run.json`. Lockfiles and
   `linguist-generated` files are skipped and listed.
 - **Worker.** A scout-role job with its own brief, the review model (`models.reviewer`, in both
   routing and launch), and `prReview.structuredReport`. Its tools are read, grep, glob, and bash,
   and the worker extension refuses any bash command that is not one plain read-only `git` or `gh`
   command. A review or re-review must submit one `PrReview` JSON object, which the worker checks
-  before accepting; a question gets plain text.
+  before accepting: a comment on a line outside the run's diff, or any inline comment in an
+  intent review, is sent back naming the lines that can take comments. A question gets plain text.
 - **Result.** The runner checks the review against the lens and the run's diff: comments on lines
   GitHub cannot anchor move into the summary comment, and an intent review has no inline comments.
   The round is recorded on `task.prReview.rounds` with the runner's head, and the report file is the

@@ -114,6 +114,50 @@ export function commentableLines(patch: string): ReadonlyMap<string, ReadonlySet
   return lines;
 }
 
+/**
+ * The patch with each line's new-file number in front, so a reviewer reads the exact line to anchor
+ * a comment on instead of working it out from hunk headers. Removed lines have no new number.
+ */
+export function numberedDiff(patch: string): string {
+  const out: string[] = [];
+  let next = 0;
+  let inHunk = false;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      inHunk = false;
+      out.push(line);
+    } else if (line.startsWith("@@")) {
+      next = Number(/\+(\d+)/.exec(line)?.[1] ?? 0);
+      inHunk = true;
+      out.push(line);
+    } else if (inHunk && (line.startsWith("+") || line.startsWith(" "))) {
+      out.push(`${String(next).padStart(6)} ${line}`);
+      next += 1;
+    } else if (inHunk && line.startsWith("-")) {
+      out.push(`${" ".repeat(6)} ${line}`);
+    } else {
+      out.push(line);
+    }
+  }
+  return out.join("\n");
+}
+
+/** Line numbers as compact ranges, e.g. `10-15, 40`, for telling a reviewer where it can comment. */
+export function lineRanges(lines: ReadonlySet<number>): string {
+  const sorted = [...lines].sort((a, b) => a - b);
+  const ranges: string[] = [];
+  for (let index = 0; index < sorted.length; index += 1) {
+    const start = sorted[index] ?? 0;
+    let end = start;
+    while (sorted[index + 1] === end + 1) {
+      end += 1;
+      index += 1;
+    }
+    ranges.push(start === end ? String(start) : `${start}-${end}`);
+  }
+  return ranges.join(", ");
+}
+
 async function gitText(run: CommandRunner, cwd: string, args: readonly string[]): Promise<string> {
   const result = await runChecked(
     run,

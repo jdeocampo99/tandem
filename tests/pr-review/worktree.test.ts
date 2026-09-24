@@ -48,6 +48,8 @@ async function world() {
   await runCommand({ argv: ["git", "init", "-q", "--bare", "-b", "main", origin], cwd: base });
   await runCommand({ argv: ["git", "clone", "-q", origin, author], cwd: base });
   await git(author, "checkout", "-q", "-b", "main");
+  await mkdir(join(author, "src"), { recursive: true });
+  await writeFile(join(author, "src/client.ts"), 'import { send } from "./upload";\n');
   const root = await commit(author, "src/upload.ts", "send(file);\n", "base");
   await git(author, "push", "-q", "origin", "main");
   await git(author, "checkout", "-q", "-b", "retry");
@@ -198,6 +200,10 @@ test("a first run writes the diff, the context, and a lease at the PR head", asy
   expect(context).toContain("## Other reviewers' threads");
   expect(context).toContain("lee on src/upload.ts:1: LGTM");
   expect(context).toContain("- bun.lock");
+  expect(context).toMatch(/src\/upload\.ts \| +2 \+-/);
+  expect(context).toContain("- src/client.ts");
+  const numbered = await readFile(join(prepared.directory, "diff-numbered.patch"), "utf8");
+  expect(numbered).toContain("     1 +retry(send, file);");
   const files = await readRunFiles(w.home, "task-1", 0);
   expect(files.head).toBe(prepared.head);
   expect(files.commentable.get("src/upload.ts")?.has(1)).toBe(true);

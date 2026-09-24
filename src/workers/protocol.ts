@@ -1,6 +1,11 @@
 import { isAbsolute } from "node:path";
 import type { ReviewResult } from "../contracts.ts";
-import { PR_REVIEW_SCHEMA, type PrReview, parsePrReview } from "../pr-review/review.ts";
+import {
+  anchorProblems,
+  PR_REVIEW_SCHEMA,
+  type PrReview,
+  parsePrReview,
+} from "../pr-review/review.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import {
   parseReviewResult,
@@ -254,6 +259,8 @@ export type ResolvedReport = Readonly<{
 export function resolveSubmittedReport(
   job: WorkerJob,
   submission: SubmittedReport,
+  /** New-side lines of a PR review's diff; when given, every inline comment must sit on one. */
+  commentable?: ReadonlyMap<string, ReadonlySet<number>>,
 ): ResolvedReport {
   const { role } = job;
   const reviews = role === "reviewer";
@@ -306,7 +313,16 @@ export function resolveSubmittedReport(
     };
   }
   if (job.prReview?.structuredReport === true) {
-    return { status, text: JSON.stringify(submittedPrReview(report)) };
+    const review = submittedPrReview(report);
+    if (commentable !== undefined) {
+      const problems = anchorProblems(review, commentable, job.prReview.inlineComments !== false);
+      if (problems.length > 0) {
+        throw new ReportRejection(
+          `fix these comments, then submit again:\n- ${problems.join("\n- ")}`,
+        );
+      }
+    }
+    return { status, text: JSON.stringify(review) };
   }
   return { status, text: renderReport(submission.outcome, undefined, undefined, report) };
 }

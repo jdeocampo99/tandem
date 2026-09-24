@@ -52,6 +52,11 @@ export function prReviewRunDirectory(home: string, taskId: string, generation: n
   return join(home, "pr-review", taskId, `run-${generation}`);
 }
 
+/** The raw diff one run reviews; worker and runner both check comment anchors against it. */
+export function prReviewRunDiffPath(home: string, taskId: string, generation: number): string {
+  return join(prReviewRunDirectory(home, taskId, generation), "diff.patch");
+}
+
 export function prReviewWorktreePath(home: string, taskId: string): string {
   return join(home, "pr-review", taskId, "worktree");
 }

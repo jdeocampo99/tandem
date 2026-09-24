@@ -40,7 +40,7 @@ import { buildPrReviewBrief } from "../pr-review/brief.ts";
 import { renderReviewText } from "../pr-review/render.ts";
 import { checkReview } from "../pr-review/review.ts";
 import { preparePrReviewRun, readRunFiles } from "../pr-review/run.ts";
-import type { PrReviewRound } from "../pr-review/state.ts";
+import { type PrReviewRound, prReviewRunDiffPath } from "../pr-review/state.ts";
 import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "../recovery/central-review.ts";
 import {
   activeReservations,
@@ -3500,7 +3500,13 @@ export class WorkerWorkflow {
         : {}),
       ...(prReview === undefined
         ? {}
-        : { prReview: { structuredReport: prReview.mode !== "question" } }),
+        : {
+            prReview: {
+              structuredReport: prReview.mode !== "question",
+              diffPath: prReviewRunDiffPath(this.#deps.home, task.id, task.generation),
+              inlineComments: prReview.lens.kind !== "intent",
+            },
+          }),
     };
     const specWritten = await this.withOperationEffect(
       task.id,
@@ -3582,7 +3588,7 @@ export class WorkerWorkflow {
       head: files.head,
       from: files.from,
       contextPath: files.contextPath,
-      diffPath: files.diffPath,
+      diffPath: files.numberedDiffPath,
       extra: messages,
     });
   }
