@@ -24,6 +24,13 @@ import { appendDiagnosticEvent, type DiagnosticValue } from "../runtime/diagnost
 import type { UsageRecord } from "../runtime/usage.ts";
 import type { TandemService } from "../service/controller.ts";
 import { executeTandemAction, type TandemAction } from "./actions.ts";
+import {
+  classifyPullUpPrompt,
+  MAX_PULL_UP_CANDIDATES,
+  mentionsPullUp,
+  PULL_UP_ROUTE_QUESTION_VERSION,
+  type PullUpCandidate,
+} from "./pull-up-route.ts";
 import { ACTION_RESULT_MAX_CHARS, compactText, summarizeTandemActionValue } from "./summary.ts";
 
 export const DEFAULT_PROMPT_ROUTING_TIMEOUT_MS = 1_500;
@@ -449,6 +456,14 @@ export async function handlePromptInput(
   }
 
   if (findPullRequestRef(prompt) !== undefined) return routePrReview(prompt, ctx, deps);
+  // A prompt that is not a confident pull-up still gets the ordinary lookup routes below.
+  if (
+    deps.config.apiKey !== undefined &&
+    mentionsPullUp(prompt) &&
+    (await routePullUp(prompt, ctx, deps)) !== undefined
+  ) {
+    return { handled: true };
+  }
 
   const evaluation = await classifyPrompt(prompt, deps.config, deps.evaluate, deps.now);
   await recordDiagnostic(
@@ -567,4 +582,103 @@ async function routePrReview(
     });
   }
   return { handled: true };
+}
+
+/** Briefs and presentations a person could ask to see, newest first. */
+async function pullUpCandidates(service: TandemService): Promise<readonly PullUpCandidate[]> {
+  const briefs = (await service.requestBriefs()).slice(0, MAX_PULL_UP_CANDIDATES).map(
+    (record): PullUpCandidate => ({
+      kind: "brief",
+      id: record.id,
+      about: record.draft.content.goal,
+    }),
+  );
+  const shown = (await service.presentations())
+    .filter(
+      (record) =>
+        record.status === "open" ||
+        record.status === "ended" ||
+        (record.status === "failed" && record.observation !== undefined),
+    )
+    .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, MAX_PULL_UP_CANDIDATES);
+  const presentations: PullUpCandidate[] = [];
+  for (const record of shown) {
+    const about = record.objective ?? (await service.get(record.taskId)).objective;
+    presentations.push({ kind: "presentation", id: record.id, about });
+  }
+  return [...presentations, ...briefs];
+}
+
+/**
+ * Opens the brief or presentation a prompt asks to see, when Jev names exactly one with
+ * confidence. Returns undefined, with nothing opened, when the prompt should route on.
+ */
+async function routePullUp(
+  prompt: string,
+  ctx: ExtensionContext,
+  deps: PromptRoutingDependencies,
+): Promise<true | undefined> {
+  const service = deps.getService(ctx);
+  let candidates: readonly PullUpCandidate[];
+  try {
+    candidates = await pullUpCandidates(service);
+  } catch {
+    await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
+      promptHash: promptHash(prompt),
+      reason: "pull-up-candidates-unavailable",
+    });
+    return undefined;
+  }
+  const evaluation = await classifyPullUpPrompt(
+    prompt,
+    candidates,
+    deps.config,
+    deps.evaluate,
+    deps.now,
+  );
+  await recordDiagnostic(
+    deps,
+    ctx,
+    "prompt-route-evaluated",
+    {
+      promptHash: promptHash(prompt),
+      classifier: "jev",
+      reason: evaluation.reason,
+      durationMs: evaluation.durationMs,
+      questionVersion: PULL_UP_ROUTE_QUESTION_VERSION,
+      candidates: candidates.length,
+    },
+    evaluation.usage,
+  );
+  const target = evaluation.target;
+  if (target === undefined) return undefined;
+  const action: TandemAction =
+    target.kind === "brief"
+      ? { action: "brief-review", requestId: target.id }
+      : { action: "presentation-open", presentationId: target.id };
+  try {
+    const result = await executeTandemAction(action, service, ctx);
+    sendDisplayedMessage(deps, summarizeTandemActionValue(result.action, result.value), {
+      promptHash: promptHash(prompt),
+      action: action.action,
+    });
+    await recordDiagnostic(deps, ctx, "prompt-route-dispatched", {
+      promptHash: promptHash(prompt),
+      action: action.action,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    sendDisplayedMessage(
+      deps,
+      `Tandem ${action.action} failed: ${compactText(message, ACTION_RESULT_MAX_CHARS)}`,
+      { promptHash: promptHash(prompt), action: action.action, error: "action-failed" },
+    );
+    await recordDiagnostic(deps, ctx, "prompt-route-failed", {
+      promptHash: promptHash(prompt),
+      action: action.action,
+      error: "action-failed",
+    });
+  }
+  return true;
 }

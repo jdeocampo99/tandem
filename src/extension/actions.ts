@@ -31,6 +31,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   resume: { min: 2, max: 2 },
   cancel: { min: 2, max: Number.POSITIVE_INFINITY },
   feedback: { min: 2, max: 2 },
+  "presentation-open": { min: 2, max: 2 },
   present: { min: 4, max: 4 },
   describe: { min: 3, max: 3 },
   "pr-describe": { min: 3, max: 3 },
@@ -135,6 +136,7 @@ export type TandemAction =
       readonly artifacts: readonly string[];
     }>
   | Readonly<{ readonly action: "feedback"; readonly presentationId: string }>
+  | Readonly<{ readonly action: "presentation-open"; readonly presentationId: string }>
   | Readonly<{ readonly action: "describe"; readonly taskId: string; readonly summary: PrSummary }>
   | Readonly<{
       readonly action: "publish";
@@ -471,6 +473,8 @@ export async function executeTandemAction(
       );
     case "feedback":
       return textResult(await service.feedback(action.presentationId, signal), action.action);
+    case "presentation-open":
+      return textResult(await service.openPresentation(action.presentationId), action.action);
     case "describe":
       return textResult(await service.describePr(action.taskId, action.summary), action.action);
     case "publish":
@@ -795,6 +799,8 @@ export function parseTandemCommand(input: string): TandemAction {
       return { action: "presentations" };
     case "feedback":
       return { action: "feedback", presentationId: value(1, "feedback") };
+    case "presentation-open":
+      return { action: "presentation-open", presentationId: value(1, "presentation-open") };
     case "present":
       return {
         action: "present",

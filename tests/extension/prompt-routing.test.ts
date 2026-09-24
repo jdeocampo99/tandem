@@ -508,3 +508,59 @@ test("a pasted PR link starts a review under the project, and anything else goes
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test("a pull-up prompt opens the one presentation Jev matched", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-"));
+  const sent: string[] = [];
+  const opened: string[] = [];
+  const service = {
+    requestBriefs: async () => [
+      { id: "req-1", draft: { content: { goal: "Add a settings page" } } },
+    ],
+    presentations: async () => [
+      {
+        id: "presentation-1",
+        taskId: "task-1",
+        status: "ended",
+        objective: "Mock up the settings page",
+        createdAt: "2026-09-24T00:00:00.000Z",
+      },
+      { id: "presentation-2", taskId: "task-1", status: "running", createdAt: "2026-09-24" },
+    ],
+    openPresentation: async (id: string) => {
+      opened.push(id);
+      return { id, taskId: "task-1", status: "open" };
+    },
+  } as unknown as TandemService;
+  try {
+    const result = await handlePromptInput(
+      { source: "interactive", text: "pull up the settings mockup" } as InputEvent,
+      context,
+      {
+        config: { apiKey: "key", timeoutMs: 1_500 },
+        getService: () => service,
+        getHome: () => home,
+        sendMessage: ((message: string | { readonly content?: string }) => {
+          sent.push(typeof message === "string" ? message : (message.content ?? ""));
+        }) as never,
+        evaluate: async (input) => {
+          // Only openable presentations are offered, before briefs.
+          expect(Object.keys(input.questions.target?.criteria ?? {})).toEqual(["c1", "c2", "none"]);
+          return {
+            model: JEV_MODEL,
+            answers: {
+              request: choiceAnswer({ choice: "open" }),
+              target: choiceAnswer({ choice: "c1" }),
+            },
+            usage: { input_tokens: 12, output_tokens: 8 },
+          };
+        },
+      },
+    );
+    expect(result).toEqual({ handled: true });
+    expect(opened).toEqual(["presentation-1"]);
+    expect(sent).toHaveLength(1);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
