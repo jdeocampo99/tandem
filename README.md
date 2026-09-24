@@ -190,15 +190,15 @@ data folder and session name are remembered in `~/.config/tandem/config.json`.
 - **Faster answers to simple questions.** With a `TYPESAFE_API_KEY` set, Tandem uses the TypeSafe
   Jev classifier to answer read-only lookups ("list my tasks") instantly without a full model turn.
   Anything that changes state still goes through the coordinator. See
-  [Jev prompt routing](docs/agent-reference.md#typesafe-jev-prompt-routing).
+  [Jev prompt routing](docs/reference/policy.md#jev-prompt-routing).
 - **Visual presentations.** With `lavish-axi` installed, the coordinator can produce an HTML page
   explaining a change and collect your feedback on it.
 - **Conversational skills.** Three skills let any agent session explain Tandem, onboard a
   repository, or report status. See
-  [installing the skills](docs/agent-reference.md#install-the-global-skills).
+  [installing the skills](skills/README.md).
 
 ## Learn more
 
-- [Agent/operator reference](docs/agent-reference.md): every command, setting, safety check, and
-  recovery rule in detail.
+- [Reference](docs/reference/): the behavior contracts behind every command, setting, safety
+  check, and recovery rule.
 - [AGENTS.md](AGENTS.md): a guide for contributing to Tandem's code.
