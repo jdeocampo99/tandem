@@ -176,6 +176,11 @@ lookups skip the model.
 - Direct dispatch is read-only through the existing service: `list`, `presentations`, and
   `receipt` (repository-wide), plus `show`, `messages`, `inspect`, which need an explicit
   `task-...` ID or UUID in the prompt.
+- Pull-up: a prompt that names a brief or a visual and a verb like "pull up", "open", or "show"
+  first gets one Jev call (src/extension/pull-up-route.ts) listing the coordinator repository's
+  briefs and openable presentations (15 newest of each), described by goal or objective. Only a
+  confident `open` request that matches one listed item runs `brief-review` or
+  `presentation-open`; anything else continues to the lookup routing above.
 - Everything else goes to normal coordinator handling: incomplete or invalid output, target
   mismatch, non-read-only effect, mixed or multi-part requests, provider errors, missing task ID.
   Jev never generates commands, authorizes actions, mutates state, or picks a model. Tandem code

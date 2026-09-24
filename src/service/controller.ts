@@ -189,7 +189,11 @@ import {
   validateModelAssignments,
   workerRoleForTask,
 } from "./records.ts";
-import { releaseTerminalTaskResources, runCleanupCommands } from "./scout-cleanup.ts";
+import {
+  releaseTerminalTaskResources,
+  runCleanupCommands,
+  type TerminalTaskCleanupOptions,
+} from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskCheckoutPath, taskSourcePath } from "./source.ts";
 
 export type CreateTaskRequest = Readonly<{
@@ -298,7 +302,11 @@ export type TandemService = Readonly<{
   readonly pause: (id: string, reason?: string) => Promise<TaskRecord>;
   readonly resume: (id: string) => Promise<TaskRecord>;
   readonly restart: (id: string) => Promise<TaskRecord>;
-  readonly cancel: (id: string, reason?: string) => Promise<TaskRecord>;
+  readonly cancel: (
+    id: string,
+    reason?: string,
+    input?: { readonly discard?: boolean },
+  ) => Promise<TaskRecord>;
   readonly describePr: (id: string, summary: PrSummary) => Promise<string>;
   readonly publish: (
     id: string,
@@ -341,6 +349,10 @@ export type TandemService = Readonly<{
   ) => Promise<PresentationRecord>;
   readonly presentations: () => Promise<readonly PresentationRecord[]>;
   readonly feedback: (presentationId: string, signal?: AbortSignal) => Promise<PresentationRecord>;
+  /** Shows a presentation again because the user asked, even one they ended in the browser. */
+  readonly openPresentation: (presentationId: string) => Promise<PresentationRecord>;
+  /** Briefs for the coordinator's repository, newest first. */
+  readonly requestBriefs: () => Promise<readonly RequestBriefRecord[]>;
   readonly reviewPr: (input: StartPrReviewInput) => Promise<StartPrReviewResult>;
   readonly reviewShow: (
     id: string,
@@ -803,7 +815,7 @@ class TandemController {
       pause: (id, reason) => this.pause(id, reason),
       resume: (id) => this.resume(id),
       restart: (id) => this.restart(id),
-      cancel: (id, reason) => this.cancel(id, reason),
+      cancel: (id, reason, input) => this.cancel(id, reason, input),
       describePr: (id, summary) => this.describePr(id, summary),
       publish: (id, input) => this.publish(id, input),
       publishNow: (id, input) => this.publishNow(id, input),
@@ -813,6 +825,8 @@ class TandemController {
       present: (id, input) => this.present(id, input),
       presentations: () => this.presentations(),
       feedback: (id, signal) => this.feedback(id, signal),
+      openPresentation: (id) => this.#presentationFeedback.open(id),
+      requestBriefs: () => this.requestBriefs(),
       reviewPr: (input) => this.#prReviews.start(input),
       reviewShow: (id, input) => this.#prReviews.show(assertTaskId(id), input),
       reviewNotes: (id) => this.#prReviews.notes(assertTaskId(id)),
@@ -1208,12 +1222,26 @@ class TandemController {
     return this.#control.restartTask(taskId);
   }
 
-  async cancel(id: string, reason?: string): Promise<TaskRecord> {
-    return this.#control.controlTask(
-      assertTaskId(id),
+  /** With discard, the cleanup that follows the cancel deletes the worktree and its changes. */
+  async cancel(
+    id: string,
+    reason?: string,
+    input: { readonly discard?: boolean } = {},
+  ): Promise<TaskRecord> {
+    const taskId = assertTaskId(id);
+    const discard = input.discard === true;
+    const alreadyCancelled = discard && (await this.get(taskId)).stage === "cancelled";
+    const task = await this.#control.controlTask(
+      taskId,
       "cancel",
       reason === undefined ? undefined : text(reason, "reason"),
+      discard,
     );
+    // An earlier cancel already ran its cleanup and kept the worktree, so discard it directly.
+    if (alreadyCancelled) {
+      await this.cleanup(taskId, { discard: true, destructiveApproval: true });
+    }
+    return task;
   }
 
   async acknowledge(id: string, notificationId: string): Promise<TaskRecord> {
@@ -1500,15 +1528,25 @@ class TandemController {
           ...(job === undefined ? {} : { job }),
         });
       } catch (error) {
-        if (!isMissingEndpoint(error)) throw error;
+        // A discard closes the pane below even when its worker won't exit on request.
+        if (!isMissingEndpoint(error) && !discard) throw error;
       }
     }
-    for (const endpoint of runtime.endpoints) {
+    // A finished or failed mockup's pane holds nothing its artifact file doesn't, so it closes even
+    // with its process still running; a running mockup is left alone.
+    const presentationPanes = (await this.readState()).presentations.flatMap((presentation) =>
+      presentation.taskId === task.id &&
+      presentation.endpoint !== undefined &&
+      !activeRuntimeJob(presentation.job)
+        ? [{ endpoint: presentation.endpoint, cwd: presentation.job.cwd, force: true }]
+        : [],
+    );
+    for (const pane of [
+      ...runtime.endpoints.map((endpoint) => ({ endpoint, cwd, force: discard })),
+      ...presentationPanes,
+    ]) {
       try {
-        await closeEndpoint(this.#deps.run, {
-          endpoint,
-          cwd: taskSourcePath(task, runtime),
-        });
+        await closeEndpoint(this.#deps.run, pane);
       } catch (error) {
         if (!isMissingEndpoint(error)) throw error;
       }
@@ -1974,11 +2012,8 @@ class TandemController {
     };
   }
 
-  /**
-   * The request a person means by "this request": the one open approved request in the
-   * coordinator's repository, or else the one whose brief changed most recently.
-   */
-  private async requestInProgress(): Promise<string> {
+  /** Briefs for the coordinator's repository (all of them without one), newest first. */
+  private async requestBriefs(): Promise<readonly RequestBriefRecord[]> {
     const repoPath = this.#deps.sourceWorkspace?.repoPath;
     const canonical = (path: string): Promise<string> => realpath(path).catch(() => path);
     const here = repoPath === undefined ? undefined : await canonical(repoPath);
@@ -1986,13 +2021,21 @@ class TandemController {
     for (const record of await this.#deps.requestStore.list()) {
       if (here === undefined || (await canonical(record.repoPath)) === here) records.push(record);
     }
-    if (here !== undefined) {
+    return records.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  /**
+   * The request a person means by "this request": the one open approved request in the
+   * coordinator's repository, or else the one whose brief changed most recently.
+   */
+  private async requestInProgress(): Promise<string> {
+    const repoPath = this.#deps.sourceWorkspace?.repoPath;
+    if (repoPath !== undefined) {
+      const here = await realpath(repoPath).catch(() => repoPath);
       const open = await this.#requests.openRequestForNewWork(here, await this.#deps.store.list());
       if (open !== undefined) return open;
     }
-    const latest = records.toSorted((left, right) =>
-      right.updatedAt.localeCompare(left.updatedAt),
-    )[0];
+    const latest = (await this.requestBriefs())[0];
     if (latest === undefined) throw new Error("There is no request to show a receipt for yet");
     return latest.id;
   }
@@ -2143,8 +2186,11 @@ class TandemController {
     }
     let runtime = loadedRuntime;
     if (runtime.stopRequest !== undefined) {
+      // Settling clears the stop request, so read the cancel's discard approval first. A crash in
+      // between loses it and keeps the worktree, which is the safe side.
+      const discard = runtime.stopRequest.discard === true;
       await this.#control.reconcileStopRequest(task, runtime);
-      await this.cleanupSettledTask(task.id);
+      await this.cleanupSettledTask(task.id, { discard });
       return;
     }
     if (isTerminalTask(task)) {
@@ -2405,7 +2451,10 @@ class TandemController {
     return result.canAllocate;
   }
 
-  private async cleanupTerminalTask(task: TaskRecord): Promise<void> {
+  private async cleanupTerminalTask(
+    task: TaskRecord,
+    options: TerminalTaskCleanupOptions = {},
+  ): Promise<void> {
     await releaseTerminalTaskResources(
       {
         home: this.#deps.home,
@@ -2416,6 +2465,7 @@ class TandemController {
         cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home: this.#deps.home }),
       },
       task,
+      options,
     );
   }
 
@@ -2423,10 +2473,13 @@ class TandemController {
    * Releases a task's child resources in the same pass that settled it, so a completed scout does
    * not hold its pane and worktree until a later coordinator turn.
    */
-  private async cleanupSettledTask(taskId: string): Promise<void> {
+  private async cleanupSettledTask(
+    taskId: string,
+    options: TerminalTaskCleanupOptions = {},
+  ): Promise<void> {
     const current = await this.#deps.store.read(taskId);
     if (current === undefined || !isTerminalTask(current)) return;
-    await this.cleanupTerminalTask(current);
+    await this.cleanupTerminalTask(current, options);
   }
 
   private async removeEndpoint(taskId: string, paneId: string): Promise<void> {

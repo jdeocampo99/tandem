@@ -928,7 +928,12 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   if (action === "review-again" || action === "review-close") {
     return isTaskRecord(value) ? summarizeTask(value) : boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
-  if (action === "presentations" || action === "present" || action === "feedback") {
+  if (
+    action === "presentations" ||
+    action === "present" ||
+    action === "feedback" ||
+    action === "presentation-open"
+  ) {
     return summarizePresentations(action, value);
   }
   if (typeof value === "string")

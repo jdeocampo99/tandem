@@ -20,6 +20,8 @@ export type PresentationRecord = Readonly<{
   readonly generation: number;
   readonly cwd: string;
   readonly artifactPath: string;
+  /** What the coordinator asked to show; absent on records made before it was kept. */
+  readonly objective?: string;
   readonly jobPath: string;
   readonly resultPath: string;
   readonly status: "queued" | "running" | "blocked" | "open" | "ended" | "failed";
@@ -529,12 +531,15 @@ export function parsePresentationRecord(value: unknown, source: string): Present
           `${source}.pendingNotificationQueue`,
         );
   const error = value.error === undefined ? undefined : text(value.error, `${source}.error`);
+  const objective =
+    value.objective === undefined ? undefined : text(value.objective, `${source}.objective`);
   return {
     id: singleLine(value.id, `${source}.id`),
     taskId: singleLine(value.taskId, `${source}.taskId`),
     generation: nonNegativeInteger(value.generation, `${source}.generation`),
     cwd: absoluteDirectory(value.cwd, `${source}.cwd`),
     artifactPath: absoluteDirectory(value.artifactPath, `${source}.artifactPath`),
+    ...(objective === undefined ? {} : { objective }),
     jobPath: absoluteDirectory(value.jobPath, `${source}.jobPath`),
     resultPath: absoluteDirectory(value.resultPath, `${source}.resultPath`),
     status: status as PresentationRecord["status"],

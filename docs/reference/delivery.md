@@ -137,5 +137,9 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
   owning task's bounded notification path; poll failures and `browser_disconnected` are persisted
   and delivered the same way.
 - `browser_disconnected` leaves an open presentation recoverable without automatic reopen.
-  `user-ended` is never reopened, and its final feedback is drained once.
+  `user-ended` is never reopened automatically, and its final feedback is drained once.
+- `presentation-open` shows a presentation again because the user asked: an open, ended, or
+  previously opened failed one. With its listener running it only resumes the browser view;
+  otherwise it runs `lavish-axi <artifact> --reopen`, records the new observation, and restarts
+  the listener (src/presentations/feedback.ts).
 - Feedback is an observation, never approval for implementation or delivery.

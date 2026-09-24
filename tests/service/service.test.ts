@@ -3539,6 +3539,106 @@ test("reloads a browser-disconnected presentation as open for an explicit user d
     expect(polls).toHaveLength(1);
   });
 });
+async function seedPresentation(
+  home: string,
+  status: "open" | "ended" | "running",
+  observationStatus?: "user-ended",
+): Promise<string> {
+  const recordPath = join(home, "record.json");
+  const artifactPath = join(home, "artifact.html");
+  await writeJsonAtomically(recordPath, {
+    id: "presentation-3",
+    taskId: "task-1",
+    generation: 0,
+    cwd: home,
+    artifactPath,
+    objective: "Mock up the settings page",
+    jobPath: join(home, "job.json"),
+    resultPath: join(home, "result.json"),
+    status,
+    createdAt: TIMESTAMP,
+    updatedAt: TIMESTAMP,
+    ...(observationStatus === undefined
+      ? {}
+      : {
+          observation: {
+            artifact: artifactPath,
+            status: observationStatus,
+            terminal: true,
+            sessionEnded: true,
+            raw: "ended by user",
+            rawFeedback: "",
+          },
+        }),
+  });
+  const runtime = await readRuntime(home);
+  await writeRuntimeState(runtimeFile(home), {
+    ...runtime,
+    presentations: [
+      {
+        schemaVersion: 1,
+        id: "presentation-3",
+        taskId: "task-1",
+        recordPath,
+        job: {
+          schemaVersion: 1,
+          id: "presentation-job-3",
+          taskId: "task-1",
+          generation: 0,
+          role: "presentation",
+          kind: "worker",
+          cwd: home,
+          jobPath: join(home, "job.json"),
+          resultPath: join(home, "result.json"),
+          attempt: 1,
+          phase: "consumed",
+          launchAttempted: true,
+          createdAt: TIMESTAMP,
+          consumedAt: TIMESTAMP,
+        },
+      },
+    ],
+  });
+  return artifactPath;
+}
+
+test("opening a presentation the user ended reopens it and starts listening again", async () => {
+  await withFixture(
+    {
+      runner: {
+        presentationOpenResponse: commandResult(
+          "session:\n  status: opened\n  session_ended: false\n  url: http://127.0.0.1:4387/session/abc\n",
+        ),
+      },
+    },
+    async ({ home, service, runnerState }) => {
+      const artifactPath = await seedPresentation(home, "ended", "user-ended");
+      const opened = await service.openPresentation("presentation-3");
+      expect(opened.status).toBe("open");
+      expect(opened.sessionUrl).toBe("http://127.0.0.1:4387/session/abc");
+      expect(opened.objective).toBe("Mock up the settings page");
+      const open = runnerState.calls.filter(
+        (request) => request.argv[0] === "lavish-axi" && request.argv[1] !== "poll",
+      );
+      expect(open.map((request) => request.argv)).toEqual([
+        ["lavish-axi", artifactPath, "--reopen"],
+      ]);
+      await runnerState.presentationStarted;
+      runnerState.releasePresentation();
+    },
+  );
+});
+
+test("opening a presentation that is still being made is refused without calling Lavish", async () => {
+  await withFixture({}, async ({ home, service, runnerState }) => {
+    await seedPresentation(home, "running");
+    await expect(service.openPresentation("presentation-3")).rejects.toThrow(
+      "Presentation presentation-3 is running, so there is nothing to open yet",
+    );
+    expect(runnerState.calls.some((request) => request.argv[0] === "lavish-axi")).toBe(false);
+  });
+});
+
 test("scheduler starts open presentation feedback polling without blocking task reconciliation", async () => {
   await withFixture(
     {
