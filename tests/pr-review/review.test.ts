@@ -135,3 +135,33 @@ test("misplaced comments get a fix the reviewer can act on", () => {
     "this is an intent review: leave comments empty and put those points in concerns and summaryComment",
   ]);
 });
+
+test("a multi-line comment must cover lines in one part of the diff", () => {
+  const review = parsePrReview(
+    reviewWith([
+      {
+        id: "r1",
+        file: "src/upload.ts",
+        startLine: 11,
+        line: 13,
+        body: "ok",
+        severity: "suggestion",
+      },
+      { id: "r2", file: "src/upload.ts", startLine: 9, line: 12, body: "off", severity: "nit" },
+    ]),
+  );
+  expect(anchorProblems(review, commentableLines(PATCH), true)).toEqual([
+    "r2: lines 9-12 of src/upload.ts are not all in one part of the diff; lines that can take comments: 10-15",
+  ]);
+  const checked = checkReview(review, { kind: "full" }, commentableLines(PATCH));
+  expect(checked.review.comments.map((comment) => comment.id)).toEqual(["r1"]);
+  expect(checked.review.summaryComment).toContain("On `src/upload.ts:9-12`: off");
+});
+
+test("startLine must sit below line", () => {
+  expect(() =>
+    parsePrReview(
+      reviewWith([{ file: "a.ts", startLine: 12, line: 12, body: "x", severity: "nit" }]),
+    ),
+  ).toThrow("startLine must be a positive integer below line");
+});

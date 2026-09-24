@@ -15,7 +15,7 @@ export type PrReviewBriefInput = Readonly<{
 const VOICE = [
   'Write every comment the way a kind, busy teammate would: short, specific, and phrased as a suggestion or a question, e.g. "Could we move the release into a `finally`? Otherwise the lock leaks if `save` throws."',
   'Never use severity codes, P0-P3, headings, or bullet lists inside a comment. Start minor points with "nit:".',
-  "For a small, exact fix, put the replacement lines in a GitHub ```suggestion block inside the comment body.",
+  "For a small, exact fix, put the replacement lines in a GitHub ```suggestion block inside the comment body. When the fix spans several lines, set startLine to the first line it replaces and line to the last; the suggestion replaces exactly those lines.",
   "Only raise what the diff or repository evidence supports; say so when you are unsure instead of asserting.",
 ];
 

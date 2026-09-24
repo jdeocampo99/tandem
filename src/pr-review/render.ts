@@ -1,4 +1,4 @@
-import type { DraftComment } from "./review.ts";
+import { commentLocation, type DraftComment } from "./review.ts";
 import type { PrReviewRound, PrReviewState } from "./state.ts";
 
 /** Small reviews read fine in chat; anything with a diagram or many comments gets the page. */
@@ -37,7 +37,7 @@ export function renderReviewText(state: PrReviewState, round: PrReviewRound): st
   lines.push("", "Draft comments");
   if (review.comments.length === 0) lines.push("None inline.");
   for (const comment of review.comments) {
-    lines.push(`- ${comment.id} ${comment.file}:${comment.line} [${comment.severity}]`);
+    lines.push(`- ${comment.id} ${commentLocation(comment)} [${comment.severity}]`);
     lines.push(...comment.body.split("\n").map((line) => `    ${line}`));
   }
   if (review.summaryComment.length > 0) {
@@ -116,7 +116,7 @@ export function renderReviewHtml(state: PrReviewState, round: PrReviewRound): st
 }
 
 function renderCommentCard(comment: DraftComment): string {
-  return `<article class="comment" data-comment-id="${escapeHtml(comment.id)}"><p class="where"><span class="tag ${comment.severity}">${comment.severity}</span><code>${escapeHtml(comment.file)}:${comment.line}</code> <span class="id">${escapeHtml(comment.id)}</span></p>${paragraphs(comment.body)}</article>`;
+  return `<article class="comment" data-comment-id="${escapeHtml(comment.id)}"><p class="where"><span class="tag ${comment.severity}">${comment.severity}</span><code>${escapeHtml(commentLocation(comment))}</code> <span class="id">${escapeHtml(comment.id)}</span></p>${paragraphs(comment.body)}</article>`;
 }
 
 /** Keeps fenced blocks (such as GitHub suggestions) as code and the rest as paragraphs. */

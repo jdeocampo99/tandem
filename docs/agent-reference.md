@@ -1900,7 +1900,9 @@ login can read. It is read-only, so it starts without scope approval, like resea
   and the worker extension refuses any bash command that is not one plain read-only `git` or `gh`
   command. A review or re-review must submit one `PrReview` JSON object, which the worker checks
   before accepting: a comment on a line outside the run's diff, or any inline comment in an
-  intent review, is sent back naming the lines that can take comments. A question gets plain text.
+  intent review, is sent back naming the lines that can take comments. A comment may cover a range
+  (`startLine` to `line`, posted as one multi-line comment whose suggestion replaces the range); every
+  line in it must be in one hunk of the diff. A question gets plain text.
 - **Result.** The runner checks the review against the lens and the run's diff: comments on lines
   GitHub cannot anchor move into the summary comment, and an intent review has no inline comments.
   The round is recorded on `task.prReview.rounds` with the runner's head, and the report file is the

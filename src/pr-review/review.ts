@@ -15,7 +15,10 @@ export type ReviewConcern = Readonly<{ title: string; detail: string; severity: 
 export type DraftComment = Readonly<{
   id: string;
   file: string;
+  /** The last line the comment covers; the only line for a single-line comment. */
   line: number;
+  /** The first line of a multi-line comment; a suggestion block then replaces startLine..line. */
+  startLine?: number;
   body: string;
   severity: CommentSeverity;
 }>;
@@ -57,8 +60,8 @@ const PRIOR_STATUSES: ReadonlySet<string> = new Set(["addressed", "not-addressed
 
 /** The review result shape the reviewer is told to submit, kept beside the parser that reads it. */
 export const PR_REVIEW_SCHEMA = `Put exactly one PrReview JSON object, with no prose around it, in the submit_report report field:
-{"head":"<exact HEAD>","intent":"<2-3 plain sentences: what the PR does and why>","diagram":"<optional Mermaid flowchart from entry point to where the data ends up; changed nodes use class changed>","readingOrder":[{"file":"<path>","why":"<one line>"}],"concerns":[{"title":"<short>","detail":"<plain English>","severity":"blocking|suggestion|nit|question"}],"comments":[{"id":"<stable id>","file":"<path>","line":1,"body":"<comment as a friendly teammate would write it>","severity":"blocking|suggestion|nit|question"}],"summaryComment":"<the review body to post, 1-4 short sentences in the same voice>","priorComments":[{"commentId":123,"status":"addressed|not-addressed|replied","reply":"<optional short reply>"}]}
-Omit diagram for renames, config-only or one-file changes. Lines are new-file line numbers inside the diff. priorComments is empty on a first review.`;
+{"head":"<exact HEAD>","intent":"<2-3 plain sentences: what the PR does and why>","diagram":"<optional Mermaid flowchart from entry point to where the data ends up; changed nodes use class changed>","readingOrder":[{"file":"<path>","why":"<one line>"}],"concerns":[{"title":"<short>","detail":"<plain English>","severity":"blocking|suggestion|nit|question"}],"comments":[{"id":"<stable id>","file":"<path>","startLine":10,"line":12,"body":"<comment as a friendly teammate would write it>","severity":"blocking|suggestion|nit|question"}],"summaryComment":"<the review body to post, 1-4 short sentences in the same voice>","priorComments":[{"commentId":123,"status":"addressed|not-addressed|replied","reply":"<optional short reply>"}]}
+Omit diagram for renames, config-only or one-file changes. Lines are new-file line numbers inside the diff. startLine is optional: set it (below line) when the comment covers several lines, and every line from startLine to line must be in the same part of the diff; a suggestion block replaces all of them. priorComments is empty on a first review.`;
 
 /** Parses the reviewer's result, then fits it to the lens and to the lines GitHub can anchor. */
 export function checkReview(
@@ -71,7 +74,7 @@ export function checkReview(
   const inline: DraftComment[] = [];
   const unanchored: DraftComment[] = [];
   for (const comment of review.comments) {
-    if (lens.kind !== "intent" && commentable.get(comment.file)?.has(comment.line) === true) {
+    if (lens.kind !== "intent" && coversDiff(comment, commentable.get(comment.file))) {
       inline.push(comment);
     } else {
       unanchored.push(comment);
@@ -90,7 +93,7 @@ export function checkReview(
     }
     summaryComment = [
       summaryComment,
-      ...unanchored.map((comment) => `On \`${comment.file}:${comment.line}\`: ${comment.body}`),
+      ...unanchored.map((comment) => `On \`${commentLocation(comment)}\`: ${comment.body}`),
     ]
       .filter((part) => part.length > 0)
       .join("\n\n");
@@ -131,11 +134,32 @@ export function anchorProblems(
         `${comment.id}: ${comment.file} is not in the diff; comment on a changed file or use summaryComment`,
       ];
     }
-    if (lines.has(comment.line)) return [];
-    return [
-      `${comment.id}: line ${comment.line} of ${comment.file} is not in the diff; lines that can take comments: ${lineRanges(lines)}`,
-    ];
+    if (coversDiff(comment, lines)) return [];
+    const where =
+      comment.startLine === undefined
+        ? `line ${comment.line} of ${comment.file} is not in the diff`
+        : `lines ${comment.startLine}-${comment.line} of ${comment.file} are not all in one part of the diff`;
+    return [`${comment.id}: ${where}; lines that can take comments: ${lineRanges(lines)}`];
   });
+}
+
+/** `file:12` or `file:10-12`, for showing where a comment sits. */
+export function commentLocation(comment: DraftComment): string {
+  return comment.startLine === undefined
+    ? `${comment.file}:${comment.line}`
+    : `${comment.file}:${comment.startLine}-${comment.line}`;
+}
+
+/**
+ * Whether every line the comment covers can take a comment. The diff's commentable lines are
+ * contiguous only within one hunk, so a covered range is also one GitHub accepts.
+ */
+function coversDiff(comment: DraftComment, lines: ReadonlySet<number> | undefined): boolean {
+  if (lines === undefined) return false;
+  for (let line = comment.startLine ?? comment.line; line <= comment.line; line += 1) {
+    if (!lines.has(line)) return false;
+  }
+  return true;
 }
 
 /** Reads a PrReview object, from the worker or from storage; throws a TypeError naming the bad field. */
@@ -164,10 +188,23 @@ export function parsePrReview(value: unknown): PrReview {
       if (typeof line !== "number" || !Number.isSafeInteger(line) || line <= 0) {
         throw new TypeError(`review.comments[${index}].line must be a positive integer`);
       }
+      const startLine = entry.startLine;
+      if (
+        startLine !== undefined &&
+        (typeof startLine !== "number" ||
+          !Number.isSafeInteger(startLine) ||
+          startLine <= 0 ||
+          startLine >= line)
+      ) {
+        throw new TypeError(
+          `review.comments[${index}].startLine must be a positive integer below line, or omitted`,
+        );
+      }
       return {
         id: optionalText(entry.id) ?? `c${index + 1}`,
         file: requireText(entry.file, "file"),
         line,
+        ...(startLine === undefined ? {} : { startLine }),
         body: requireText(entry.body, "body"),
         severity: severity(entry.severity),
       };

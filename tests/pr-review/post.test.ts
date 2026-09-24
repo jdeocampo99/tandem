@@ -95,3 +95,32 @@ test("a failure that did not land reports GitHub's reason", async () => {
     message: "Unprocessable Entity: line must be part of the diff",
   });
 });
+
+test("a multi-line comment posts as one range on the new side", () => {
+  const ranged = {
+    ...input,
+    review: {
+      ...review,
+      comments: [
+        {
+          id: "r1",
+          file: "src/upload.ts",
+          startLine: 10,
+          line: 12,
+          body: "```suggestion\nretry()\n```",
+          severity: "suggestion" as const,
+        },
+      ],
+    },
+  };
+  expect(reviewRequestBody(ranged).comments).toEqual([
+    {
+      path: "src/upload.ts",
+      start_line: 10,
+      start_side: "RIGHT",
+      line: 12,
+      side: "RIGHT",
+      body: "```suggestion\nretry()\n```",
+    },
+  ]);
+});

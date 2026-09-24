@@ -41,6 +41,9 @@ export function reviewRequestBody(input: Omit<PostReviewInput, "cwd">): Record<s
     body: body.join("\n\n"),
     comments: input.review.comments.map((comment) => ({
       path: comment.file,
+      ...(comment.startLine === undefined
+        ? {}
+        : { start_line: comment.startLine, start_side: "RIGHT" }),
       line: comment.line,
       side: "RIGHT",
       body: comment.body,
