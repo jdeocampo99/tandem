@@ -23,6 +23,7 @@ import {
   type WorktreeLease,
 } from "../contracts.ts";
 import {
+  canSkipValidation,
   FINAL_REVIEW_LENSES,
   type FinalRequirement,
   finalAcceptanceStatus,
@@ -705,12 +706,10 @@ function readySummary(task: TaskRecord, head: string): string {
   return `Ready: task ${task.id} passed review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}. Ready is not publication, merge, or deploy approval; each remains explicit.`;
 }
 
-function hasSuccessfulCurrentValidation(task: TaskRecord): boolean {
-  return (
-    task.stage === "reviewing" &&
-    task.reviewHead !== undefined &&
-    task.validationEvidence.length > 0 &&
-    task.validationEvidence.every((entry) => entry.head === task.reviewHead && entry.exitCode === 0)
+/** Review may finish before any check ran at this HEAD; the final manifest runs after it passes. */
+function hasFailedCurrentValidation(task: TaskRecord): boolean {
+  return task.validationEvidence.some(
+    (entry) => entry.head === task.reviewHead && entry.exitCode !== 0,
   );
 }
 
@@ -899,10 +898,15 @@ export function transitionTask(
       // round back; the unchanged review that follows asks "Keep fixing?" instead of looping.
       const noCommit =
         task.reviewRound > 0 && task.reviews.some((review) => review.head === event.head);
+      // Passing pinned checks at this exact HEAD still hold; everything else is stale.
+      const validationEvidence = task.validationEvidence.filter(
+        (entry) => isPinnedEvidence(entry) && entry.head === event.head && entry.exitCode === 0,
+      );
+      const skipValidation = canSkipValidation({ ...task, validationEvidence }, event.head);
       return commitTask(task, context.now, {
-        stage: "validating",
+        stage: skipValidation ? "reviewing" : "validating",
         reviewHead: event.head,
-        validationEvidence: [],
+        validationEvidence,
         ...(event.reportPath === undefined ? {} : { reportPath: event.reportPath }),
         ...(noCommit
           ? {
@@ -993,11 +997,11 @@ export function transitionTask(
       }
       assertHeadEvent(task, event.head, event.generation, "Review completion");
       assertCurrentHead(task, event.head, "Review completion");
-      if (!hasSuccessfulCurrentValidation(task)) {
+      if (hasFailedCurrentValidation(task)) {
         throw new TaskTransitionError(
           "validation-mismatch",
           task,
-          "Review completion requires successful validation for the current head",
+          "Review completion requires no failed validation for the current head",
         );
       }
       const current = activeReviews(task);
@@ -1099,7 +1103,6 @@ export function transitionTask(
         stage: "implementing",
         reviewRound: task.reviewRound + 1,
         generation: task.generation + 1,
-        validationEvidence: [],
         ...(event.iterationScope === undefined ? {} : { iterationScope: event.iterationScope }),
       });
     }

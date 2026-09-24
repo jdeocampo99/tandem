@@ -863,14 +863,14 @@ The durable stages are:
 | `queued` | Approved work is waiting for scheduler capacity; it is not proof of an active worker or completed research. |
 | `scouting` / `implementing` | A worker is active in its owned workspace. |
 | `validating` | The runner is executing one named validation contract at that exact HEAD: targeted iteration checks between fix rounds, or the complete final acceptance manifest once the candidate is otherwise ready. |
-| `reviewing` | The contract's checks passed; fresh reviewers are recording the required lenses. |
+| `reviewing` | The contract's checks passed, or the round skipped them (see [Review and validation](#review-and-validation)); fresh reviewers are recording the required lenses. |
 | `awaiting-fixes` | Validation or review found a failure; a bounded fix round may be started. |
 | `ready` | The complete final acceptance manifest and all required review lenses pass for the delivered code and policy at the current HEAD, or the user explicitly chose to [publish now](#publish-now-user-skips-review) at that HEAD. |
 | `paused` | Work is stopped with a resumable previous stage. |
 | `blocked` | Work cannot safely proceed; a reason is durable, requires coordinator judgment, and is surfaced as an actionable blocker. |
 | `cancelled` / `completed` / `merged` | Terminal states. A scout is research-complete only in durable `completed` state with its report; implementation reaches `merged` only after verified delivery. |
 
-For implementation, each completion and fix cycle is bound to the current generation and HEAD. A fix cycle increments the generation, clears stale review/validation evidence, and returns to `implementing`. The default `maxFixRounds` is three; once exhausted, the task stops and asks rather than looping indefinitely.
+For implementation, each completion and fix cycle is bound to the current generation and HEAD. A fix cycle increments the generation, retires the old review round, and returns to `implementing`; when it reports its commit, only passing checks at that exact HEAD are kept. The default `maxFixRounds` is three; once exhausted, the task stops and asks rather than looping indefinitely.
 
 #### Keep fixing?
 
@@ -1246,9 +1246,11 @@ The **iteration contract** covers targeted reproduction between authorized fix r
 
 The **final acceptance contract** is the complete command and criterion manifest pinned to the delivered code, the pinned policy digest, and the current HEAD. It lists every required check, the review lens, and the recorded acceptance criteria. It runs in full only when the candidate is otherwise ready, meaning the required review already passes at that HEAD and generation. Review completion with a passing review sends the task back to `validating` for that final run instead of straight to `ready`; `ready` is reached only once every manifest item passed under the same code and policy identity. Delivery repeats the check and refuses a branch whose manifest is incomplete, failed, or stale.
 
+A finished round goes straight to `reviewing` without running checks in two cases, both decided by `canSkipValidation` in `src/tasks/acceptance.ts`. First, when the complete manifest already passed at the reported HEAD under the same policy, as when a fix round makes no new commit. Second, when the round only answered review findings after every check passed (its iteration scope reproduces no check); review completion with a passing review then runs the complete manifest once, as above. Review completion refuses a HEAD with failed evidence; it does not require evidence to exist.
+
 Targeted checks are refused for the complete manifest when the scope was recorded under a different policy identity (`stale-identity`), when a reviewer rejected a candidate whose checks all passed (`disputed-result`), when the scope names a check the manifest does not configure (`unknown-impact`), or when the scope already covers every configured check (`broad-impact`). The escalation reason is durable on the validation job and visible through `tandem status TASK_ID`.
 
-Any relevant change invalidates prior evidence. A fix round increments the generation and clears validation evidence; `invalidate-evidence` additionally clears the recorded scope and the reviews. Evidence carrying a policy digest other than the one the run reported is refused rather than recorded, and final evidence recorded at another HEAD or policy digest reads as stale, never as a pass. After a candidate fails the complete manifest it returns to the authorized fix phase, runs targeted checks between fix rounds, and re-enters the complete manifest from the beginning once it is ready again.
+Any relevant change invalidates prior evidence. A fix round increments the generation, and its completion keeps only passing pinned evidence at the HEAD it reports; `invalidate-evidence` additionally clears the recorded scope and the reviews. Evidence carrying a policy digest other than the one the run reported is refused rather than recorded, and final evidence recorded at another HEAD or policy digest reads as stale, never as a pass. After a candidate fails the complete manifest it returns to the authorized fix phase, runs targeted checks between fix rounds, and re-enters the complete manifest from the beginning once it is ready again.
 
 Validation evidence written before contracts existed loads unchanged and is marked legacy. Legacy records stay readable as durable history, including on completed and cancelled tasks, and satisfy neither contract, so a candidate carrying them must run the complete final manifest again before it can be delivered. A record naming only part of its contract identity, or marked legacy while also claiming an origin or policy digest, is a corrupt shape and fails closed. A validation job persisted without its contract identity is refused for the same reason and the task is blocked with that cause, rather than being consumed as if it were pinned.
 
