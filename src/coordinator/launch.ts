@@ -122,7 +122,7 @@ export type CoordinatorLaunchDependencies = Readonly<{
       readonly sessionId: string;
       readonly parentWorkspaceId: string;
     }>,
-  ) => Promise<void>;
+  ) => Promise<readonly string[]>;
 }>;
 export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly string[] {
   const cwd = checkLaunchPath(input.cwd, "cwd");

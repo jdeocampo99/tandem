@@ -20,7 +20,12 @@ import {
 import { resolveCoordinatorSourceHead } from "./source.ts";
 
 export type CoordinatorRestartResult = CoordinatorLaunchResult &
-  Readonly<{ restarted: boolean; previousPaneId?: string }>;
+  Readonly<{
+    restarted: boolean;
+    previousPaneId?: string;
+    /** Why task workspaces could not all be put back under this coordinator, one line each. */
+    renestWarnings?: readonly string[];
+  }>;
 
 async function closeSupersededPane(
   run: CommandRunner,
@@ -135,16 +140,18 @@ export async function restartCoordinator(
       },
       dependencies,
     );
-    if (launch.workspaceId !== undefined && dependencies.rehomeTaskWorkspaces !== undefined) {
-      await dependencies.rehomeTaskWorkspaces({
-        home: request.home,
-        cwd: request.cwd,
-        sessionId: request.sessionId,
-        parentWorkspaceId: launch.workspaceId,
-      });
-    }
+    const renestWarnings =
+      launch.workspaceId !== undefined && dependencies.rehomeTaskWorkspaces !== undefined
+        ? await dependencies.rehomeTaskWorkspaces({
+            home: request.home,
+            cwd: request.cwd,
+            sessionId: request.sessionId,
+            parentWorkspaceId: launch.workspaceId,
+          })
+        : [];
     return {
       ...launch,
+      ...(renestWarnings.length === 0 ? {} : { renestWarnings }),
       restarted: prior !== undefined,
       ...(prior === undefined ? {} : { previousPaneId: prior.endpoint.paneId }),
       ...(reconciliations.length === 0 ? {} : { otherSessionReconciliations: reconciliations }),

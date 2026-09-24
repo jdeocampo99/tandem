@@ -182,8 +182,15 @@ fix` re-nest (renest.ts):
 - `workspace.move`'s `insert_index` is a gap in the list as it was before the move.
 - Display-only: never creates, closes, or renames. No moves when already nested. An unreadable
   session or failed move becomes a one-line warning and never blocks launch or fix.
+- It reads task records under the state lock and waits up to 30 seconds for it, because a restarted
+  coordinator runs its first scheduler pass under that lock when the restart re-nests.
+- The front door re-nests after every launch and again before attaching to Herdr (attaching blocks
+  until the person leaves Herdr), and prints every warning, including each restart's, one per line.
 - `fix` applies it without asking; `--json` reports it as `renest` (`planned`, `moved`,
-  `warnings`).
+  `warnings`, `leftovers`).
+- A workspace carrying Tandem's `└ ` task label that no coordinator, task, or presentation record
+  names (and no in-flight worker launch claims) is listed as a leftover and kept: a label is never
+  ownership proof, so Tandem does not close it.
 
 ## Self-pane guard
 

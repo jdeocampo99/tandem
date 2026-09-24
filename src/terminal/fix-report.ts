@@ -321,5 +321,13 @@ export function renderRenest(renest: RenestReport, details: FixDetails): string 
     lines.push(`Re-nested (${renest.moved}) · moved ${what}`);
   }
   for (const warning of renest.warnings) lines.push(`Re-nest skipped: ${warning}`);
+  // A label is never proof of ownership, so a workspace no record names is reported, not closed.
+  for (const leftover of renest.leftovers) {
+    const text = leftover.label.replace(/^└\s*/u, "");
+    const name = TICKET_KEY.exec(text)?.[0] ?? (text.length > 32 ? `${text.slice(0, 31)}…` : text);
+    lines.push(
+      `Leftover workspace · ${name} · ${leftover.workspaceId}   kept: no task owns it any more; close it in Herdr if it is done`,
+    );
+  }
   return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
 }
