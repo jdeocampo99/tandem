@@ -308,22 +308,30 @@ export function singlePendingApprovalId(records: readonly RequestBriefRecord[]):
   return only.id;
 }
 
+/** How long an approved request may wait for its first task before it stops counting as open. */
+const UNSTARTED_REQUEST_EXPIRY_MS = 3 * 24 * 60 * 60 * 1000;
+
 /**
  * The request new implementation work in this repository belongs to when the coordinator named
- * none: the one approved request whose work is not finished. None means the work stands alone;
- * several means it cannot be attributed safely, so the coordinator must name one.
+ * none: the one approved request whose work is not finished. An approved request that got no task
+ * within three days has lapsed and is skipped. None means the work stands alone; several means it
+ * cannot be attributed safely, so the coordinator must name one.
  */
 export function openRequestForNewWork(
   records: readonly RequestBriefRecord[],
   tasks: readonly Pick<TaskRecord, "requestId" | "stage">[],
   repoPath: string,
+  now: string,
 ): string | undefined {
   const finished = (task: Pick<TaskRecord, "stage">): boolean =>
     task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged";
   const open = records.filter((record) => {
     if (record.repoPath !== repoPath || requestApprovalState(record) !== "current") return false;
     const governed = tasks.filter((task) => task.requestId === record.id);
-    return governed.length === 0 || !governed.every(finished);
+    if (governed.length > 0) return !governed.every(finished);
+    const approvedAt =
+      record.approval === undefined ? Number.NaN : Date.parse(record.approval.approvedAt);
+    return Date.parse(now) - approvedAt <= UNSTARTED_REQUEST_EXPIRY_MS;
   });
   if (open.length > 1) {
     throw new RequestBriefError(
