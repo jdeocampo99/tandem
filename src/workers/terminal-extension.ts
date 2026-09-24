@@ -30,14 +30,18 @@ import {
   WorkerOutputError,
 } from "./protocol.ts";
 import {
+  addReplyUsage,
   readWorkerTerminalCommand,
+  replyUsage,
   SUBMIT_REPORT_TOOL,
   traceWorkerTurn,
   WORKER_JOB_PATH_ENV,
   type WorkerTerminalCommand,
   type WorkerTerminalJob,
   type WorkerTerminalState,
+  type WorkerTokenTally,
   writeWorkerTerminal,
+  writeWorkerTokenTally,
 } from "./terminal.ts";
 
 const TERMINAL_HEARTBEAT_MS = 1_000;
@@ -312,6 +316,8 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     );
   };
   let ompIdleSince: number | undefined;
+  let tokenTally: WorkerTokenTally | undefined;
+  let tallyWrites = Promise.resolve();
   const settleIdleAfterResult = (ctx: ExtensionContext): void => {
     const decision = idleAfterResult({
       completed: currentState.completed,
@@ -668,8 +674,17 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     waitingInputs.delete(event.toolCallId);
     void reportStatus();
   });
-  pi.on("turn_end", (_event, ctx) => {
+  pi.on("turn_end", (event, ctx) => {
     traceWorkerTurn(jobPath, "turn_end");
+    const reply = replyUsage(event.message);
+    if (reply !== undefined) {
+      tokenTally = addReplyUsage(tokenTally, reply);
+      const tally = tokenTally;
+      tallyWrites = tallyWrites
+        .then(() => writeWorkerTokenTally(jobPath, tally))
+        // Token accounting is informational; a failed write must not disturb the worker.
+        .catch(() => undefined);
+    }
     void persistState("idle", currentState.completed).catch(() => abort(ctx));
   });
   pi.on("context", (event, ctx) => {

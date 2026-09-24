@@ -6,13 +6,17 @@ import { createReviewerEndpoint, type HerdrPaneInspection } from "../../src/adap
 import { EndpointBusyError } from "../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../src/contracts.ts";
 import {
+  addReplyUsage,
   readWorkerTerminalCommand,
+  readWorkerTokenTally,
+  replyUsage,
   requestWorkerTerminalCommand,
   traceWorkerTurn,
   type WorkerTerminalJob,
   type WorkerTerminalState,
   workerDelegationStopped,
   writeWorkerTerminal,
+  writeWorkerTokenTally,
 } from "../../src/workers/terminal.ts";
 import { pauseWorkerTerminal, prepareWorkerTerminal } from "../../src/workers/terminal-control.ts";
 
@@ -237,5 +241,38 @@ test("the turn trace appends one line per event and never throws", async () => {
     expect(() => traceWorkerTurn(join(root, "missing", "job.json"), "agent_end")).not.toThrow();
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a worker's replies add up to one token tally that round-trips through its job file", async () => {
+  const assistant = (input: number, output: number, cacheRead: number, total: number) => ({
+    role: "assistant",
+    provider: "openai-codex",
+    model: "gpt-6-luna",
+    usage: { input, output, cacheRead, cacheWrite: 0, totalTokens: 0, cost: { total } },
+  });
+  expect(replyUsage({ role: "user", content: "hi" })).toBeUndefined();
+  expect(replyUsage({ ...assistant(1, 1, 0, 0), usage: { input: -1 } })).toBeUndefined();
+
+  const first = replyUsage(assistant(1_000, 200, 5_000, 0.02));
+  const second = replyUsage(assistant(500, 100, 6_000, 0.01));
+  if (first === undefined || second === undefined) throw new Error("replies should parse");
+  const tally = addReplyUsage(addReplyUsage(undefined, first), second);
+  expect(tally).toMatchObject({
+    inputTokens: 1_500,
+    outputTokens: 300,
+    cacheReadTokens: 11_000,
+    replies: 2,
+  });
+  expect(tally.costUsd).toBeCloseTo(0.03);
+
+  const home = await mkdtemp(join(tmpdir(), "tandem-token-tally-"));
+  try {
+    const jobPath = join(home, "job.json");
+    expect(await readWorkerTokenTally(jobPath)).toBeUndefined();
+    await writeWorkerTokenTally(jobPath, tally);
+    expect(await readWorkerTokenTally(jobPath)).toEqual(tally);
+  } finally {
+    await rm(home, { recursive: true, force: true });
   }
 });

@@ -30,7 +30,7 @@ const MAX_ROUTABLE_PROMPT_CHARS = 16_000;
 const TASK_ID_PATTERN =
   /\b(?:task-[A-Za-z0-9][A-Za-z0-9._-]{0,127}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/giu;
 
-type ReadOnlyAction = "list" | "presentations" | "show" | "messages" | "inspect";
+type ReadOnlyAction = "list" | "presentations" | "show" | "messages" | "inspect" | "receipt";
 type RouteTarget = "repository" | "task" | "conversation" | "unresolved";
 type RouteEffect = "read-only" | "state-change" | "sensitive" | "unknown";
 type RouteScope = "within" | "changes" | "unclear";
@@ -77,7 +77,7 @@ export type PromptRoutingDependencies = Readonly<{
 }>;
 
 /** Bumped whenever the shape or meaning of {@link ROUTING_QUESTIONS} changes. */
-export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 1;
+export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 2;
 
 const ROUTING_QUESTIONS: JevQuestions = {
   action: {
@@ -90,6 +90,8 @@ const ROUTING_QUESTIONS: JevQuestions = {
       show: "The user asks to show one task or its durable record.",
       messages: "The user asks to read one task's durable messages or communication history.",
       inspect: "The user asks to inspect one task's runtime state.",
+      receipt:
+        "The user asks how much time, how many tokens, or how much money the current request has used so far.",
       none: "The request is not exactly one supported read-only lookup.",
     },
   },
@@ -201,6 +203,7 @@ function knownAction(choice: string): choice is ReadOnlyAction | "none" {
     choice === "show" ||
     choice === "messages" ||
     choice === "inspect" ||
+    choice === "receipt" ||
     choice === "none"
   );
 }
@@ -328,10 +331,13 @@ export async function classifyPrompt(
   if (confidence < PROMPT_ROUTING_CONFIDENCE_THRESHOLD) {
     return evaluationResult("jev", "low-confidence", startedAt, now, outcome);
   }
-  const targetMatchesAction =
-    actionAnswer.choice === "list" || actionAnswer.choice === "presentations"
-      ? targetAnswer.choice === "repository"
-      : targetAnswer.choice === "task";
+  const repositoryWide =
+    actionAnswer.choice === "list" ||
+    actionAnswer.choice === "presentations" ||
+    actionAnswer.choice === "receipt";
+  const targetMatchesAction = repositoryWide
+    ? targetAnswer.choice === "repository"
+    : targetAnswer.choice === "task";
   if (!targetMatchesAction) {
     return evaluationResult("jev", "classification-mismatch", startedAt, now, outcome);
   }
@@ -345,11 +351,7 @@ export async function classifyPrompt(
   ) {
     return evaluationResult("jev", "normal-coordinator", startedAt, now, outcome);
   }
-  if (
-    actionAnswer.choice !== "list" &&
-    actionAnswer.choice !== "presentations" &&
-    taskId === undefined
-  ) {
+  if (!repositoryWide && taskId === undefined) {
     return evaluationResult("jev", "missing-explicit-task-id", startedAt, now, outcome);
   }
   const decision: PromptRoutingDecision = {
@@ -366,10 +368,12 @@ export async function classifyPrompt(
 
 export function actionForPromptDecision(
   decision: PromptRoutingDecision,
-): Extract<TandemAction, { readonly action: ReadOnlyAction }> | undefined {
+): Extract<TandemAction, { readonly action: ReadOnlyAction | "request-receipt" }> | undefined {
   if (decision.action === "list" || decision.action === "presentations") {
     return { action: decision.action };
   }
+  // The receipt for the request in progress, measured up to now.
+  if (decision.action === "receipt") return { action: "request-receipt" };
   if (decision.taskId === undefined) return undefined;
   return { action: decision.action, taskId: decision.taskId } as Extract<
     TandemAction,

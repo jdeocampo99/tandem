@@ -369,6 +369,11 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
     objective: "show the changed screen",
     artifacts: ["/tmp/a.html", "/tmp/b.png"],
   });
+  expect(parseTandemCommand("request-receipt")).toEqual({ action: "request-receipt" });
+  expect(parseTandemCommand("request-receipt req-1")).toEqual({
+    action: "request-receipt",
+    requestId: "req-1",
+  });
   expect(parseTandemCommand("feedback presentation-1")).toEqual({
     action: "feedback",
     presentationId: "presentation-1",

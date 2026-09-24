@@ -125,7 +125,7 @@ test("replaying the same events after a restart does not double count", async ()
     const replay = await newLedger().record(events);
     const receipt = await newLedger().receipt(REQUEST_ID);
 
-    expect(replay).toEqual({ recorded: 0, duplicates: 3 });
+    expect(replay).toMatchObject({ recorded: 0, duplicates: 3, added: [] });
     expect(receipt.charges.amountMicros).toBe(42_000);
     expect(receipt.charges.actualSamples).toBe(1);
     expect(receipt.breakdown.duplicateSamples).toBe(0);
@@ -140,7 +140,8 @@ test("a distinct retry is recorded even when an earlier attempt is replayed", as
     const retry = await ledger.record([sample("first", 1, 42_000), sample("second", 2, 42_000)]);
     const receipt = await ledger.receipt(REQUEST_ID);
 
-    expect(retry).toEqual({ recorded: 1, duplicates: 1 });
+    expect(retry).toMatchObject({ recorded: 1, duplicates: 1 });
+    expect(retry.added).toHaveLength(1);
     expect(receipt.charges.amountMicros).toBe(84_000);
     expect(receipt.breakdown.byWorkKind[0]?.retries).toBe(1);
   });

@@ -38,7 +38,7 @@ const TANDEM_COMMAND_ARITY: Readonly<
   "brief-show": { min: 2, max: 2 },
   "brief-review": { min: 2, max: 2 },
   "brief-approve": { min: 3, max: 4 },
-  "request-receipt": { min: 2, max: 2 },
+  "request-receipt": { min: 1, max: 2 },
   "delivery-preflight": { min: 3, max: 3 },
 };
 export type TandemAction =
@@ -100,7 +100,7 @@ export type TandemAction =
     }>
   | Readonly<{ readonly action: "brief-review"; readonly requestId: string }>
   | Readonly<{ readonly action: "brief-show"; readonly requestId: string }>
-  | Readonly<{ readonly action: "request-receipt"; readonly requestId: string }>
+  | Readonly<{ readonly action: "request-receipt"; readonly requestId?: string | undefined }>
   | Readonly<{
       readonly action: "brief-approve";
       /** Omitted resolves to the one request whose brief is awaiting approval. */
@@ -638,7 +638,10 @@ export function parseTandemCommand(input: string): TandemAction {
     case "brief-show":
       return { action: "brief-show", requestId: value(1, "brief-show") };
     case "request-receipt":
-      return { action: "request-receipt", requestId: value(1, "request-receipt") };
+      // Without an id, the receipt is for the request in progress.
+      return words.length > 1
+        ? { action: "request-receipt", requestId: value(1, "request-receipt") }
+        : { action: "request-receipt" };
     case "brief-review":
       return { action: "brief-review", requestId: value(1, "brief-review") };
     case "brief-approve": {

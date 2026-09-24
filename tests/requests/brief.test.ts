@@ -5,6 +5,7 @@ import {
   checkedRequestBriefContent,
   createRequestBriefRecord,
   decideRequestDispatch,
+  openRequestForNewWork,
   RequestBriefError,
   requestApprovalState,
   requestBriefDigests,
@@ -233,4 +234,31 @@ test("the brief shows automated checks and manual verification as two lists", ()
   expect(markdown).toContain("## Automated checks\n- one stable request id\n");
   expect(markdown).toContain("## Manual verification\n- the streak bar glows at 5 in a row\n");
   expect(markdown).not.toContain("Acceptance criteria");
+});
+
+test("new implementation work joins the one open approved request in its repository", () => {
+  const approve = (id: string, repoPath = "/repo"): RequestBriefRecord => {
+    const record = createRequestBriefRecord({ id, repoPath, content: content() }, NOW);
+    return approveRequestBriefRecord(
+      record,
+      { requestId: id, briefRevision: 1, contentDigest: record.draft.contentDigest },
+      NOW,
+    );
+  };
+  const unapproved = createRequestBriefRecord(
+    { id: "req-draft", repoPath: "/repo", content: content() },
+    NOW,
+  );
+  const delivered = approve("req-done");
+  const settings = approve("req-settings");
+  const elsewhere = approve("req-other", "/other-repo");
+  const finishedTask = { requestId: "req-done", stage: "completed" as const };
+
+  expect(
+    openRequestForNewWork([unapproved, delivered, settings, elsewhere], [finishedTask], "/repo"),
+  ).toBe("req-settings");
+  expect(openRequestForNewWork([unapproved, delivered], [finishedTask], "/repo")).toBeUndefined();
+  expect(() =>
+    openRequestForNewWork([settings, approve("req-onboarding")], [finishedTask], "/repo"),
+  ).toThrow(RequestBriefError);
 });

@@ -24,6 +24,7 @@ import { promptRoutingConfig } from "./extension/prompt-routing.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { buildDurableDigest } from "./extension/summary.ts";
 import { COORDINATOR_INSTRUCTIONS, COORDINATOR_TOOL_GUIDANCE } from "./instructions.ts";
+import { appendCoordinatorUsage } from "./runtime/usage-ledger.ts";
 import {
   createTandemService,
   type TandemService,
@@ -36,6 +37,7 @@ import {
   researchContinuationClassifier,
   researchContinuationClassifierConfig,
 } from "./tasks/research-continuation-classifier.ts";
+import { replyUsage } from "./workers/terminal.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
 
@@ -320,6 +322,18 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     pi.on("tool_execution_end", (event) => {
       waitingInputs.delete(event.toolCallId);
       reportStatus();
+    });
+    pi.on("turn_end", async (event, ctx) => {
+      const reply = replyUsage(event.message);
+      if (reply === undefined) return;
+      const environment = getEnvironment(ctx);
+      await appendCoordinatorUsage(environment.home, {
+        at: new Date().toISOString(),
+        repoPath: await realpath(environment.repo).catch(() => environment.repo),
+        inputTokens: reply.input + reply.cacheRead + reply.cacheWrite,
+        outputTokens: reply.output,
+        costUsd: reply.costUsd,
+      }).catch(() => undefined);
     });
     pi.on("agent_end", async (event, ctx) => {
       agentActive = event.willContinue === true;

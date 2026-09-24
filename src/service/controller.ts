@@ -110,12 +110,17 @@ import type {
 } from "../runtime/schema.ts";
 import type { RequestUsageEvent } from "../runtime/usage.ts";
 import {
+  type JobTokenTally,
   requestIntakeEvent,
   requestTerminalEvent,
   settledWorkEvents,
 } from "../runtime/usage-events.ts";
-import { createRequestUsageLedger, type RequestUsageLedger } from "../runtime/usage-ledger.ts";
-import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
+import {
+  createRequestUsageLedger,
+  type RequestUsageLedger,
+  readCoordinatorUsage,
+} from "../runtime/usage-ledger.ts";
+import { coordinatorShare, type RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import { TaskControlWorkflow } from "../tasks/control.ts";
 import { KEEP_FIXING_QUESTION_ID_PREFIX, keepFixingGrant } from "../tasks/findings.ts";
 import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
@@ -138,6 +143,7 @@ import {
   transitionStoredTask,
 } from "../tasks/store.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
+import { readWorkerTokenTally } from "../workers/terminal.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
 import {
@@ -248,7 +254,8 @@ export type TandemService = Readonly<{
   /** The one request whose brief is awaiting approval; fails closed when that is not unambiguous. */
   readonly pendingBriefApprovalId: () => Promise<string>;
   readonly requestBrief: (requestId: string) => Promise<RequestBriefView>;
-  readonly requestReceipt: (requestId: string) => Promise<RequestUsageReceipt>;
+  /** Without an id, the receipt is for the request in progress. */
+  readonly requestReceipt: (requestId?: string) => Promise<RequestUsageReceipt>;
   readonly tick: () => Promise<readonly TaskRecord[]>;
   readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly steer: (input: SteerTaskInput) => Promise<TaskCommunicationView>;
@@ -706,7 +713,7 @@ class TandemController {
       approveRequestBrief: (intent) => this.#requests.approve(intent),
       pendingBriefApprovalId: () => this.#requests.pendingApprovalId(),
       requestBrief: (requestId) => this.#requests.read(requestId),
-      requestReceipt: (requestId) => this.#usage.receipt(requestId),
+      requestReceipt: (requestId) => this.requestReceipt(requestId),
       tick: () => this.tick(),
       acknowledge: (id, notificationId) => this.acknowledge(id, notificationId),
       steer: (input) => this.steer(input),
@@ -867,10 +874,15 @@ class TandemController {
   async create(input: CreateTaskRequest): Promise<TaskRecord> {
     await this.ensureSourceReady();
     if (!isRecord(input)) throw new TypeError("create input must be an object");
+    // Implementation work the coordinator did not attribute joins the repository's one open
+    // approved request, so its time and tokens land on that request's receipt.
+    const requestId =
+      input.requestId ??
+      (input.kind === "implementation"
+        ? await this.#requests.openRequestForNewWork(input.repoPath, await this.#deps.store.list())
+        : undefined);
     const brief =
-      input.requestId === undefined
-        ? undefined
-        : await this.#requests.requireRequest(input.requestId);
+      requestId === undefined ? undefined : await this.#requests.requireRequest(requestId);
     const classifiedContinuation = await this.continuationFor(input, brief);
     return this.#deps.store.exclusive(async (store) => {
       const source = await mapTaskSource(
@@ -905,6 +917,7 @@ class TandemController {
       const taskInput = taskInputFor(
         {
           ...input,
+          ...(requestId === undefined ? {} : { requestId }),
           ...(researchHandoffs === undefined ? {} : { researchHandoffs }),
           ...(classifiedContinuation === undefined
             ? {}
@@ -1705,15 +1718,24 @@ class TandemController {
         const brief = await this.#deps.requestStore.read(requestId);
         if (brief !== undefined) events.push(requestIntakeEvent(brief));
       }
-      const runtime = state.tasks.find((entry) => entry.taskId === task.id);
-      if (runtime !== undefined) {
+      // Research usually runs before its brief exists, so it is credited to the request through
+      // the implementation that cites it rather than by joining the request's membership.
+      const researchTaskIds = (task.researchHandoffs ?? []).map((handoff) => handoff.scoutTaskId);
+      for (const taskId of [task.id, ...researchTaskIds]) {
+        const runtime = state.tasks.find((entry) => entry.taskId === taskId);
+        if (runtime === undefined) continue;
+        const presentations = state.presentations.filter(
+          (presentation) => presentation.taskId === taskId,
+        );
         events.push(
           ...settledWorkEvents({
             requestId,
             runtime,
-            presentations: state.presentations.filter(
-              (presentation) => presentation.taskId === task.id,
-            ),
+            presentations,
+            tallies: await jobTokenTallies([
+              ...runtime.jobs,
+              ...presentations.map((presentation) => presentation.job),
+            ]),
           }),
         );
       }
@@ -1729,11 +1751,92 @@ class TandemController {
    */
   private async recordAccounting(events: readonly RequestUsageEvent[]): Promise<void> {
     if (events.length === 0) return;
+    let added: readonly RequestUsageEvent[];
     try {
-      await this.#usage.record(events);
+      added = (await this.#usage.record(events)).added;
     } catch (error) {
       await this.diagnoseAccountingFailure(error, events.length);
+      return;
     }
+    for (const event of added) {
+      if (event.kind === "terminal" && event.outcome === "delivered") {
+        await this.notifyReceiptReady(event);
+      }
+    }
+  }
+
+  /**
+   * The request's receipt, with its goal and the coordinator's shared usage over the request's
+   * window. An open request is measured up to now, so it can be checked partway through.
+   */
+  private async requestReceipt(requestId?: string): Promise<RequestUsageReceipt> {
+    const id = requestId ?? (await this.requestInProgress());
+    const receipt = await this.#usage.receipt(id);
+    const brief = await this.#deps.requestStore.read(id);
+    const from = receipt.timing.intakeAt;
+    if (brief === undefined || from === "unavailable") return receipt;
+    const open = receipt.timing.terminalAt === "unavailable";
+    const to = open ? this.#deps.clock() : receipt.timing.terminalAt;
+    const repoPath = await realpath(brief.repoPath).catch(() => brief.repoPath);
+    return {
+      ...receipt,
+      goal: brief.draft.content.goal,
+      ...(open ? { asOf: to } : {}),
+      coordinator: coordinatorShare(
+        await readCoordinatorUsage(this.#deps.home),
+        repoPath,
+        from,
+        to,
+      ),
+    };
+  }
+
+  /**
+   * The request a person means by "this request": the one open approved request in the
+   * coordinator's repository, or else the one whose brief changed most recently.
+   */
+  private async requestInProgress(): Promise<string> {
+    const repoPath = this.#deps.sourceWorkspace?.repoPath;
+    const canonical = (path: string): Promise<string> => realpath(path).catch(() => path);
+    const here = repoPath === undefined ? undefined : await canonical(repoPath);
+    const records = [];
+    for (const record of await this.#deps.requestStore.list()) {
+      if (here === undefined || (await canonical(record.repoPath)) === here) records.push(record);
+    }
+    if (here !== undefined) {
+      const open = await this.#requests.openRequestForNewWork(here, await this.#deps.store.list());
+      if (open !== undefined) return open;
+    }
+    const latest = records.toSorted((left, right) =>
+      right.updatedAt.localeCompare(left.updatedAt),
+    )[0];
+    if (latest === undefined) throw new Error("There is no request to show a receipt for yet");
+    return latest.id;
+  }
+
+  /**
+   * Wakes the coordinator once, when a request's delivery is first recorded, to show the person
+   * where the request's time and tokens went. The ledger records each delivery once, so a replay
+   * never repeats this.
+   */
+  private async notifyReceiptReady(event: RequestUsageEvent): Promise<void> {
+    const taskId = event.identity.taskId;
+    if (taskId === undefined) return;
+    await this.updateTask(taskId, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: this.#deps.clock(),
+      notifications: [
+        ...current.notifications,
+        {
+          id: singleLine(this.#deps.idFactory(), "receipt notification id"),
+          message:
+            "The request is delivered. Show where its time and tokens went: call request-receipt for this task's request and show its table exactly as returned.",
+          acknowledged: false,
+          kind: "coordinator",
+        },
+      ],
+    }));
   }
 
   private async diagnoseAccountingFailure(error: unknown, events?: number): Promise<void> {
@@ -2354,6 +2457,23 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
         },
       }),
   };
+}
+
+/** The token tallies the given jobs' workers recorded, keyed by job id. */
+async function jobTokenTallies(
+  jobs: readonly DurableJob[],
+): Promise<ReadonlyMap<string, JobTokenTally>> {
+  const tallies = new Map<string, JobTokenTally>();
+  for (const job of jobs) {
+    const tally = await readWorkerTokenTally(job.jobPath);
+    if (tally === undefined) continue;
+    tallies.set(job.id, {
+      inputTokens: tally.inputTokens + tally.cacheReadTokens + tally.cacheWriteTokens,
+      outputTokens: tally.outputTokens,
+      costUsd: tally.costUsd,
+    });
+  }
+  return tallies;
 }
 
 export function createTandemService(options: TandemServiceOptions): TandemService {
