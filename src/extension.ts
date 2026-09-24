@@ -17,6 +17,11 @@ import { readCoordinatorMcpServers } from "./config/repositories.ts";
 import type { TaskRecord } from "./contracts.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import {
+  atCompactionBoundary,
+  coordinatorCompactTokens,
+  finishedTaskIds,
+} from "./extension/compaction.ts";
+import {
   deliverPendingNotifications,
   isResearchReportReadable,
 } from "./extension/notifications.ts";
@@ -167,6 +172,35 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       }
       return service;
     };
+    const compactTokens = coordinatorCompactTokens(environmentSnapshot);
+    let knownFinished: Set<string> | undefined;
+    let taskFinished = false;
+    let compacting = false;
+    // Uses every listed task, like the digest and notifications, because this coordinator sees them all.
+    const compactIfAtBoundary = (ctx: ExtensionContext, tasks: readonly TaskRecord[]): void => {
+      if (compactTokens === 0) return;
+      const finished = finishedTaskIds(tasks);
+      const previous = knownFinished;
+      if (previous !== undefined && [...finished].some((id) => !previous.has(id))) {
+        taskFinished = true;
+      }
+      knownFinished = finished;
+      const idle =
+        !agentActive && waitingInputs.size === 0 && unacknowledgedNotifications.size === 0;
+      if (compacting || !atCompactionBoundary(tasks, { taskFinished, idle })) return;
+      // The boundary is used up either way, so a later unrelated idle moment never compacts.
+      taskFinished = false;
+      const usage = ctx.getContextUsage();
+      if (usage === undefined || usage.tokens < compactTokens) return;
+      compacting = true;
+      // Not awaited: the `session_compact` handler reconciles, and this runs inside `reconcile`.
+      void ctx
+        .compact()
+        .catch((error: unknown) => logExtensionError(pi, error))
+        .finally(() => {
+          compacting = false;
+        });
+    };
     const reconcile = async (ctx: ExtensionContext, runTick: boolean): Promise<void> => {
       if (shuttingDown) return;
       if (tickInFlight !== undefined) return tickInFlight;
@@ -204,6 +238,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             ctx,
             reportReadable: isResearchReportReadable,
           });
+          compactIfAtBoundary(ctx, tasks);
         } catch (error) {
           taskState = "blocked";
           taskMessage = error instanceof Error ? error.message : String(error);

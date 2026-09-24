@@ -20,7 +20,8 @@ Tandem runs locally on your Mac.
   If fixes go three rounds without passing, Tandem stops and asks instead of looping.
 - **Costs you control.** You pick a model for each job, so research and review can run on cheaper
   models while coding gets a stronger one. Tandem never switches to a pricier model on its own, and
-  it can show what each request cost.
+  it can show what each request cost. When a task finishes and the coordinator's chat has grown
+  long, it compacts that chat so later turns don't keep paying for old history.
 - **You approve what matters.** Research starts on its own, but code changes, pull requests, and
   merges each wait for your yes. Tandem never merges by itself.
 - **Several projects at once.** Open multiple repositories in one session; each gets its own
