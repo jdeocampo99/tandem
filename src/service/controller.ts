@@ -134,9 +134,11 @@ import {
   reviewAssistanceRuntime,
 } from "../tasks/review-assistance.ts";
 import { createTaskStore, type TaskStore, transitionStoredTask } from "../tasks/store.ts";
+import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
+import type { OperationClaim } from "../workers/operation-claim.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
-import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
+import { WorkerWorkflow } from "../workers/workflow.ts";
 import { DraftRefreshWorkflow } from "./draft-refresh.ts";
 import { runtimeWithPoolAdmission, taskWithPoolAdmission } from "./pool-admission.ts";
 import {
@@ -1041,7 +1043,7 @@ class TandemController {
       const current = await readCheckpoint(this.#deps.run, {
         repo: taskSourcePath(task, runtime),
       });
-      this.#worker.assertSourceUnchanged(runtime.sourceCheckpoint, current);
+      assertSourceUnchanged(runtime.sourceCheckpoint, current);
     }
     return this.transition(task.id, { type: "approve" });
   }

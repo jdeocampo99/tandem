@@ -29,7 +29,10 @@ export type FakeSidebar = Readonly<{
   fail: (message: string | undefined) => void;
 }>;
 
-export function fakeSidebar(initial: readonly string[]): FakeSidebar {
+export function fakeSidebar(
+  initial: readonly string[],
+  labels: Readonly<Record<string, string>> = {},
+): FakeSidebar {
   const order = [...initial];
   const moves: HerdrWorkspaceMoveRequest[] = [];
   const calls: CommandRequest[] = [];
@@ -40,7 +43,10 @@ export function fakeSidebar(initial: readonly string[]): FakeSidebar {
     stderr: "",
   });
   const list = () => ({
-    result: { type: "workspace_list", workspaces: order.map((id) => ({ workspace_id: id })) },
+    result: {
+      type: "workspace_list",
+      workspaces: order.map((id) => ({ workspace_id: id, label: labels[id] ?? `workspace ${id}` })),
+    },
   });
   return {
     order,

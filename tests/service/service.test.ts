@@ -64,9 +64,9 @@ import {
   requiredReviewLenses,
 } from "../../src/tasks/review-levels.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { assertSourceUnchanged } from "../../src/workers/checkout.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
-import { WorkerWorkflow } from "../../src/workers/workflow.ts";
 
 const TIMESTAMP = "2030-01-01T00:00:00.000Z";
 const SOURCE_CHECKPOINT = {
@@ -2554,7 +2554,6 @@ test("source checkpoint diagnostics distinguish dirty worktrees from changed HEA
   );
 });
 test("managed coordinator sources permit clean refreshes but retain dirty safety", () => {
-  const workflow = Object.create(WorkerWorkflow.prototype) as WorkerWorkflow;
   const pinned = {
     head: "source-a",
     base: "source-a",
@@ -2563,17 +2562,17 @@ test("managed coordinator sources permit clean refreshes but retain dirty safety
     unmerged: false,
   };
   expect(() =>
-    workflow.assertSourceUnchanged(pinned, { ...pinned, head: "source-b", base: "source-b" }, true),
+    assertSourceUnchanged(pinned, { ...pinned, head: "source-b", base: "source-b" }, true),
   ).not.toThrow();
   expect(() =>
-    workflow.assertSourceUnchanged(
+    assertSourceUnchanged(
       pinned,
       { ...pinned, head: "source-b", base: "source-b", dirty: true },
       true,
     ),
   ).toThrow("current worktree is dirty");
   expect(() =>
-    workflow.assertSourceUnchanged(pinned, { ...pinned, head: "source-b", base: "source-b" }),
+    assertSourceUnchanged(pinned, { ...pinned, head: "source-b", base: "source-b" }),
   ).toThrow("HEAD changed from source-a to source-b");
 });
 test("blocks a saved lease whose checkout moved before the first worker in both queue recovery shapes", async () => {

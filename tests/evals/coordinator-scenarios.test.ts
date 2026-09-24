@@ -44,6 +44,7 @@ function launchRequest(world: ScenarioWorld): CoordinatorLaunchRequest {
 function launchDependencies(
   world: ScenarioWorld,
   rehomed: RehomeCall[],
+  renestWarnings: readonly string[] = [],
 ): CoordinatorLaunchDependencies {
   return {
     run: world.run,
@@ -53,6 +54,7 @@ function launchDependencies(
     processEnvironment: {},
     rehomeTaskWorkspaces: async (input) => {
       rehomed.push({ parentWorkspaceId: input.parentWorkspaceId });
+      return renestWarnings;
     },
   };
 }
@@ -78,6 +80,17 @@ test("a first coordinator launch takes one lease, one pane, and one durable owne
       snapshot.trace.filter((event) => event.action === "herdr workspace create"),
     ).toHaveLength(1);
     expect(rehomed).toEqual([{ parentWorkspaceId: launched.workspaceId ?? "" }]);
+  });
+});
+
+test("a restart reports why task workspaces could not be re-nested instead of dropping it", async () => {
+  await withScenario({}, async (world) => {
+    const warning = "could not read Herdr workspaces: no server";
+    const launched = await restartCoordinator(
+      launchRequest(world),
+      launchDependencies(world, [], [warning]),
+    );
+    expect(launched.renestWarnings).toEqual([warning]);
   });
 });
 

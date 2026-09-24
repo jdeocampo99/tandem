@@ -1493,6 +1493,60 @@ test("update puts task workspaces back under the replacement coordinator", async
   await rm(root, { recursive: true, force: true });
 });
 
+test("update re-nests before attaching to Herdr and prints every re-nest warning", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const root = join(repo, "..");
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  await saveCoordinator(home, repo, "w-old");
+  await seedTasks(home, [{ id: "36a4f150-task", repoPath: repo, workspaceId: "w-task" }]);
+  const sidebar = fakeSidebar(["w-old", "w-task"]);
+  const fake = onboardingService({ existingConfig: true, configured: true });
+  const hookWarning = "could not read Tandem's task records: lock busy";
+  const application: CliApplication = {
+    invoke: async (invocation) => {
+      await saveCoordinator(home, repo, "w-new");
+      sidebar.order.splice(sidebar.order.indexOf("w-old"), 1);
+      sidebar.order.push("w-new");
+      return {
+        command: invocation.command,
+        value: { workspaceId: "w-new", renestWarnings: [hookWarning] },
+      };
+    },
+    shutdown: async () => undefined,
+  };
+  let orderWhenAttached: readonly string[] = [];
+  const output: string[] = [];
+  const result = await runTerminal(["update", "--home", home], {
+    cwd: repo,
+    processEnvironment: {},
+    run: (request) =>
+      request.argv[0] !== "herdr"
+        ? runCommand(request)
+        : request.argv.includes("focus")
+          ? Promise.resolve({ code: 0, stdout: "", stderr: "" })
+          : sidebar.run(request),
+    moveWorkspace: sidebar.moveWorkspace,
+    service: fake.service,
+    application,
+    isTTY: true,
+    // Attaching blocks until the person leaves Herdr, so the sidebar must already be right.
+    runInteractive: async () => {
+      orderWhenAttached = [...sidebar.order];
+      return 0;
+    },
+    stdout: (text) => output.push(text),
+    stderr: (text) => output.push(text),
+  });
+  expect(result.status).toBe("launched");
+  expect(orderWhenAttached).toEqual(["w-new", "w-task"]);
+  expect(output.join("")).toContain(
+    `Tandem left some task workspaces where they were: ${hookWarning}\n`,
+  );
+  await rm(root, { recursive: true, force: true });
+});
+
 test("fix re-nests task workspaces without asking, and says so in text and JSON", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");

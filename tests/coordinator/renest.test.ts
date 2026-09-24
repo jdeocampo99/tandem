@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { planRenest, renestWorkspaces } from "../../src/coordinator/renest.ts";
 import {
   type FakeSidebar,
@@ -10,6 +11,8 @@ import {
   saveCoordinator,
   seedTasks,
 } from "./fake-workspace-order.ts";
+
+const DATABASE_MODULE = fileURLToPath(new URL("../../src/runtime/database.ts", import.meta.url));
 
 type World = Readonly<{ home: string; tandem: string; tagalog: string }>;
 
@@ -60,6 +63,62 @@ test("task workspaces are moved back under their own coordinator, oldest first",
   });
 });
 
+test("a coordinator listed last gets its task moved to the very end, after it", async () => {
+  await withWorld(async (world) => {
+    // The live order after `tandem update`: the replacement coordinator w1J is last, and w1F is a
+    // Tandem-labelled workspace whose task no longer names it.
+    await saveCoordinator(world.home, world.tagalog, "w1J");
+    await seedTasks(world.home, [
+      { id: "e2c0fbb5-ready", repoPath: world.tagalog, workspaceId: "w1B" },
+    ]);
+    const sidebar = fakeSidebar(["wV", "w1F", "w1B", "w1J"], {
+      wV: "Tandem coordinator · tandem",
+      w1F: "└ implement Execute TAG-1036 Chapter 7 · 9c1d9272e688",
+      w1B: "└ implement Continue TAG-1036 · 5fb8c7082915",
+      w1J: "Tandem coordinator · tagalog-learning-app",
+    });
+
+    const report = await renest(world, sidebar, true);
+    // Herdr's insert_index may equal the list length, which appends; checked against a real session.
+    expect(sidebar.moves).toEqual([
+      { socketPath: "/tmp/fake-herdr.sock", workspaceId: "w1B", insertIndex: 4 },
+    ]);
+    expect(sidebar.order).toEqual(["wV", "w1F", "w1J", "w1B"]);
+    expect(report.moved).toBe(1);
+    expect(report.leftovers).toEqual([
+      { workspaceId: "w1F", label: "└ implement Execute TAG-1036 Chapter 7 · 9c1d9272e688" },
+    ]);
+  });
+});
+
+test("a coordinator busy with the state lock only delays re-nesting", async () => {
+  await withWorld(async (world) => {
+    const sidebar = await liveExample(world);
+    // A freshly started coordinator runs its first scheduler pass under the state lock, right
+    // when a restart re-nests. Hold it longer than the store's usual 5-second wait.
+    const holder = Bun.spawn(
+      [
+        "bun",
+        "-e",
+        `const { withStateLock } = await import(${JSON.stringify(DATABASE_MODULE)});
+         await withStateLock(${JSON.stringify(world.home)}, async () => {
+           console.log("holding");
+           await Bun.sleep(6000);
+         });`,
+      ],
+      { stdout: "pipe" },
+    );
+    const reader = holder.stdout.getReader();
+    await reader.read();
+
+    const report = await renest(world, sidebar, true);
+    await holder.exited;
+    expect(report.warnings).toEqual([]);
+    expect(report.moved).toBe(1);
+    expect(sidebar.order).toEqual(["wV", "w1G", "w1F", "w1B"]);
+  });
+}, 30_000);
+
 test("already-nested workspaces are not moved", async () => {
   await withWorld(async (world) => {
     const sidebar = await liveExample(world);
@@ -67,7 +126,7 @@ test("already-nested workspaces are not moved", async () => {
     const moves = sidebar.moves.length;
 
     const again = await renest(world, sidebar, true);
-    expect(again).toEqual({ planned: [], moved: 0, warnings: [] });
+    expect(again).toEqual({ planned: [], moved: 0, warnings: [], leftovers: [] });
     expect(sidebar.moves).toHaveLength(moves);
   });
 });

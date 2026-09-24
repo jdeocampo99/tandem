@@ -122,7 +122,7 @@ export type CoordinatorLaunchDependencies = Readonly<{
       readonly sessionId: string;
       readonly parentWorkspaceId: string;
     }>,
-  ) => Promise<void>;
+  ) => Promise<readonly string[]>;
 }>;
 export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly string[] {
   const cwd = checkLaunchPath(input.cwd, "cwd");
@@ -555,6 +555,66 @@ async function waitForCoordinatorOwnership(
   );
 }
 
+/** A running coordinator must still sit clean at its lease base and match any bound source. */
+async function assertRunningCoordinatorSource(
+  request: CoordinatorLaunchRequest,
+  dependencies: CoordinatorLaunchDependencies,
+  running: CoordinatorRecord,
+  context: HerdrContext | undefined,
+): Promise<void> {
+  const runningCheckpoint = await readCheckpoint(dependencies.run, {
+    repo: running.worktree.path,
+  });
+  validateCoordinatorCheckout(running.worktree.path, runningCheckpoint, running.worktree.baseHead);
+  const boundSourcePath = await validateBoundCoordinatorSource(
+    request,
+    dependencies,
+    running.worktree.baseHead,
+    context,
+  );
+  if (
+    boundSourcePath !== undefined &&
+    !(await sameCoordinatorPath(boundSourcePath, running.worktree.path))
+  ) {
+    throw new Error(
+      `coordinator source ${JSON.stringify(boundSourcePath)} does not match running coordinator worktree ${JSON.stringify(running.worktree.path)}`,
+    );
+  }
+}
+
+/** Retires the previous coordinator's workspace, then settles its lease for the replacement. */
+async function replacePreviousCoordinator(
+  request: CoordinatorLaunchRequest,
+  dependencies: CoordinatorLaunchDependencies,
+  paths: CoordinatorPaths,
+  previous: CoordinatorRecord,
+  sourceHead: string,
+): Promise<
+  Readonly<{
+    readonly workspaceRetirement: CoordinatorWorkspaceRetirement;
+    readonly previousResources: CoordinatorResourceOutcome;
+  }>
+> {
+  const workspaceRetirement = await retireCoordinatorWorkspace(dependencies.run, previous);
+  const previousResources = await applyCoordinatorReplacement({
+    run: dependencies.run,
+    home: paths.home,
+    sessionId: request.sessionId,
+    repoPath: paths.repo,
+    clock: dependencies.clock ?? defaultClock,
+    newId: dependencies.newId ?? randomUUID,
+    decision: decideCoordinatorReplacement({
+      previous,
+      paneRetirement: workspaceRetirement,
+      checkout: await observeCoordinatorCheckout(dependencies.run, previous.worktree.path),
+      requestedSourceHead: sourceHead,
+      replacementLeaseHolder: coordinatorLeaseIdentity(paths.repo, request.sessionId, sourceHead)
+        .tandemId,
+    }),
+  });
+  return { workspaceRetirement, previousResources };
+}
+
 export async function launchCoordinatorUnlocked(
   request: CoordinatorLaunchRequest,
   dependencies: CoordinatorLaunchDependencies,
@@ -581,80 +641,18 @@ export async function launchCoordinatorUnlocked(
     sessionId: request.sessionId,
     repoPath: paths.repo,
   });
-  if (running !== undefined && request.restart !== true) {
-    const runningCheckpoint = await readCheckpoint(dependencies.run, {
-      repo: running.worktree.path,
-    });
-    validateCoordinatorCheckout(
-      running.worktree.path,
-      runningCheckpoint,
-      running.worktree.baseHead,
-    );
-    const boundSourcePath = await validateBoundCoordinatorSource(
-      request,
-      dependencies,
-      running.worktree.baseHead,
-      context,
-    );
-    if (
-      boundSourcePath !== undefined &&
-      !(await sameCoordinatorPath(boundSourcePath, running.worktree.path))
-    ) {
-      throw new Error(
-        `coordinator source ${JSON.stringify(boundSourcePath)} does not match running coordinator worktree ${JSON.stringify(running.worktree.path)}`,
-      );
-    }
-    return coordinatorResultFromRecord(running);
-  }
   if (running !== undefined) {
-    const runningCheckpoint = await readCheckpoint(dependencies.run, {
-      repo: running.worktree.path,
-    });
-    validateCoordinatorCheckout(
-      running.worktree.path,
-      runningCheckpoint,
-      running.worktree.baseHead,
-    );
-    const boundSourcePath = await validateBoundCoordinatorSource(
-      request,
-      dependencies,
-      running.worktree.baseHead,
-      context,
-    );
-    if (
-      boundSourcePath !== undefined &&
-      !(await sameCoordinatorPath(boundSourcePath, running.worktree.path))
-    ) {
-      throw new Error(
-        `coordinator source ${JSON.stringify(boundSourcePath)} does not match running coordinator worktree ${JSON.stringify(running.worktree.path)}`,
-      );
-    }
+    await assertRunningCoordinatorSource(request, dependencies, running, context);
+    if (request.restart !== true) return coordinatorResultFromRecord(running);
   }
   const sourceHead =
     request.sourceHead ?? (await resolveCoordinatorSourceHead(dependencies.run, paths.repo)).head;
   const previous =
     running ?? (await readCoordinatorRecord(recordPath(paths.home, request.sessionId, paths.repo)));
-  let workspaceRetirement: CoordinatorWorkspaceRetirement | undefined;
-  let previousResources: CoordinatorResourceOutcome | undefined;
-  if (previous !== undefined) {
-    workspaceRetirement = await retireCoordinatorWorkspace(dependencies.run, previous);
-    previousResources = await applyCoordinatorReplacement({
-      run: dependencies.run,
-      home: paths.home,
-      sessionId: request.sessionId,
-      repoPath: paths.repo,
-      clock: dependencies.clock ?? defaultClock,
-      newId: dependencies.newId ?? randomUUID,
-      decision: decideCoordinatorReplacement({
-        previous,
-        paneRetirement: workspaceRetirement,
-        checkout: await observeCoordinatorCheckout(dependencies.run, previous.worktree.path),
-        requestedSourceHead: sourceHead,
-        replacementLeaseHolder: coordinatorLeaseIdentity(paths.repo, request.sessionId, sourceHead)
-          .tandemId,
-      }),
-    });
-  }
+  const { workspaceRetirement, previousResources } =
+    previous === undefined
+      ? {}
+      : await replacePreviousCoordinator(request, dependencies, paths, previous, sourceHead);
   const boundSourcePath = await validateBoundCoordinatorSource(
     request,
     dependencies,

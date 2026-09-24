@@ -7,6 +7,7 @@ import {
   NO_FIX_DETAILS,
   renderFixReport,
   renderFixReportVerbose,
+  renderRenest,
   taskTitle,
 } from "../../src/terminal/fix-report.ts";
 
@@ -221,5 +222,26 @@ test("a task is named by its ticket key or a shortened objective", () => {
   expect(taskTitle("scout", "Look into TAG-7 flakiness")).toBe("TAG-7 research");
   expect(taskTitle("implementation", "Make the settings page load faster on slow phones")).toBe(
     "Make the settings page load fas…",
+  );
+});
+
+test("a Tandem-labelled workspace no task owns is reported as kept, never cleaned", () => {
+  expect(
+    renderRenest(
+      {
+        planned: [],
+        moved: 0,
+        warnings: [],
+        leftovers: [
+          {
+            workspaceId: "w1F",
+            label: "└ implement Execute TAG-1036 Chapter 7 produ… · 9c1d9272e688",
+          },
+        ],
+      },
+      NO_FIX_DETAILS,
+    ),
+  ).toBe(
+    "Leftover workspace · TAG-1036 · w1F   kept: no task owns it any more; close it in Herdr if it is done\n",
   );
 });

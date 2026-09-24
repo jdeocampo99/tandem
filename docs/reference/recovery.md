@@ -3,8 +3,9 @@
 Where Tandem keeps durable state, how uncertain operations fail closed, and how central recovery
 stops, saves, and re-enters a stuck task.
 
-Code: src/recovery/central.ts, src/recovery/central-reentry.ts, src/recovery/central-review.ts, src/runtime/database.ts,
-src/runtime/persistence.ts, src/runtime/schema.ts, src/workers/workflow.ts,
+Code: src/recovery/central.ts, src/recovery/central-reentry.ts, src/recovery/central-review.ts,
+src/runtime/database.ts, src/runtime/persistence.ts, src/runtime/schema.ts, src/workers/workflow.ts,
+src/workers/admission.ts, src/workers/job-settlement.ts, src/workers/operation-claim.ts,
 src/workers/terminal-extension.ts, src/service/controller.ts, src/tasks/control.ts,
 src/tasks/endpoint-launch.ts, src/config/environment.ts
 
