@@ -223,14 +223,15 @@ export function reviewSummary(review: ReviewResult, round: number | undefined): 
 export type StalledTurnInput = Readonly<{
   readonly turnActive: boolean;
   readonly toolsRunning: number;
-  /** When the current turn started or a tool last started or finished. */
+  /** When the current turn started, the model last streamed output, or a tool started or finished. */
   readonly lastActivityAt: number;
   readonly now: number;
 }>;
 
 /**
- * A turn that goes the whole window without starting or finishing a tool is stuck, typically
- * waiting on a background command whose result never arrived. A running tool is progress.
+ * A turn that goes the whole window without streaming output or starting or finishing a tool is
+ * stuck, typically waiting on a background command whose result never arrived. A running tool is
+ * progress.
  */
 export function turnStalled(input: StalledTurnInput): boolean {
   return (
@@ -748,6 +749,11 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     void persistState("busy", currentState.completed).catch(() => abort(ctx));
     agentActive = true;
     void reportStatus();
+  });
+  // A long reply, such as a whole artifact written in one tool call, streams for minutes before
+  // the tool starts; streaming is progress.
+  pi.on("message_update", () => {
+    lastActivityAt = Date.now();
   });
   pi.on("tool_execution_start", (event, ctx) => {
     traceWorkerTurn(jobPath, "tool_start", { tool: event.toolName });

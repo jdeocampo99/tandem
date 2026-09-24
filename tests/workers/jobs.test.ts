@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setSystemTime, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -675,6 +675,34 @@ test("pause acknowledges only after the active turn unwinds and retains the inte
     expect((await readWorkerTerminal(terminalJob))?.phase).toBe("paused");
     expect(await Bun.file(job.resultPath).exists()).toBe(false);
   } finally {
+    if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
+    else process.env.TANDEM_WORKER_JOB_PATH = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a worker streaming a long reply is not stalled; one that stops streaming is", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-worker-stall-"));
+  const previous = process.env.TANDEM_WORKER_JOB_PATH;
+  const start = Date.now();
+  try {
+    const { fixture: f } = await startExtension(root, makeJob(root));
+    const turnStart = f.handlers.get("turn_start");
+    const update = f.handlers.get("message_update");
+    const heartbeat = f.intervals[1];
+    if (turnStart === undefined || update === undefined || heartbeat === undefined)
+      throw new Error("worker stall handlers missing");
+    await turnStart({ type: "turn_start" }, f.context);
+    setSystemTime(start + 4 * 60_000);
+    await update({ type: "message_update" }, f.context);
+    setSystemTime(start + 8 * 60_000);
+    heartbeat();
+    expect(f.state.aborts).toBe(0);
+    setSystemTime(start + 9 * 60_000);
+    heartbeat();
+    expect(f.state.aborts).toBe(1);
+  } finally {
+    setSystemTime();
     if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
     else process.env.TANDEM_WORKER_JOB_PATH = previous;
     await rm(root, { recursive: true, force: true });
