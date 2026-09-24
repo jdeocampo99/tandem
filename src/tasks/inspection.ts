@@ -13,6 +13,7 @@ import type {
   RuntimeTaskState,
 } from "../runtime/schema.ts";
 import { describeError, reportPathFor } from "../service/records.ts";
+import { taskCheckoutPath } from "../service/source.ts";
 import { fixRoundBudget } from "./findings.ts";
 
 export type InspectionDependencies = Readonly<{
@@ -298,7 +299,7 @@ export async function inspectTask(
     worktreePath,
     runtime?.worktree?.baseHead ?? task.worktree?.baseHead,
   );
-  const canonicalPath = await canonical(task.repoPath);
+  const canonicalPath = await canonical(taskCheckoutPath(task));
   const configuredSourcePath = runtime?.sourceRepoPath;
   const sourcePath =
     configuredSourcePath === undefined ? undefined : await canonical(configuredSourcePath);
@@ -386,7 +387,7 @@ export async function inspectTask(
           },
         ];
   const blocked = task.stage === "blocked" || safetyReasons.length > 0;
-  const branch = await gitText(deps.run, worktreePath ?? task.repoPath, [
+  const branch = await gitText(deps.run, worktreePath ?? taskCheckoutPath(task), [
     "symbolic-ref",
     "--quiet",
     "--short",

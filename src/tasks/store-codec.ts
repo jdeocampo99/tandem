@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import {
   type AgentRole,
   ALL_REVIEW_LENSES,
@@ -48,6 +49,7 @@ import {
   type TaskKind,
   type TaskRecord,
   type TaskStage,
+  type TaskTarget,
   type ValidationCommand,
   type ValidationContractName,
   type ValidationEvidence,
@@ -141,6 +143,7 @@ const TOP_LEVEL_KEYS = [
   "pullRequest",
   "cleanup",
   "prReview",
+  "target",
 ] as const;
 const TASK_CLEANUP_STATUSES: readonly TaskCleanupStatus[] = [
   "released",
@@ -1141,6 +1144,21 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
       ? {}
       : { cleanup: parseTaskCleanup(cleanupValue, `${source}.cleanup`) }),
     ...(kind === "pr-review" ? { prReview: parseStoredPrReview(value, source) } : {}),
+    ...(Object.hasOwn(value, "target")
+      ? { target: parseTaskTarget(requiredValue(value, "target", source), `${source}.target`) }
+      : {}),
+  };
+}
+
+function parseTaskTarget(value: unknown, source: string): TaskTarget {
+  if (!isRecord(value)) failState(source, "target must be an object");
+  assertExactKeys(value, ["repo", "checkout", "branch"], source);
+  const checkout = requiredText(value, "checkout", source);
+  if (!isAbsolute(checkout)) failState(`${source}.checkout`, "checkout must be an absolute path");
+  return {
+    repo: requiredText(value, "repo", source),
+    checkout,
+    branch: requiredText(value, "branch", source),
   };
 }
 

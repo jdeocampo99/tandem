@@ -9,7 +9,7 @@ import {
   type LocateRepoOptions,
   locateRepo,
   rememberRepoLocation,
-} from "../../src/pr-review/locate.ts";
+} from "../../src/repos/locate.ts";
 import { readRepoLocation, withStateTransaction } from "../../src/runtime/database.ts";
 
 const clock: Clock = () => "2030-01-01T00:00:00.000Z";

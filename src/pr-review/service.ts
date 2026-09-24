@@ -1,10 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { openPresentation, pollPresentation } from "../adapters/lavish.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import type { Clock, CommandRunner, TaskRecord } from "../contracts.ts";
-import { locateRepo, type RepoLocation, rememberRepoLocation } from "./locate.ts";
+import { checkoutQuestion, findCheckout, type RepoLocation } from "../repos/locate.ts";
 import { postReview, type ReviewVerdict, replyToComment, reviewMarker } from "./post.ts";
 import {
   acknowledgement,
@@ -22,7 +21,6 @@ import {
   type PrReviewRound,
   type PrReviewState,
 } from "./state.ts";
-import { cloneForReview } from "./worktree.ts";
 
 export type StartPrReviewInput = Readonly<{
   /** A PR URL, `owner/repo#123`, or text containing one. */
@@ -85,16 +83,6 @@ export type PrReviewDependencies = Readonly<{
   settle: (taskId: string) => Promise<void>;
 }>;
 
-/** `~/Coding/Projects` unless `TANDEM_PROJECT_ROOTS` names other folders, separated by colons. */
-export function defaultProjectRoots(
-  environment: Readonly<Record<string, string | undefined>>,
-): readonly string[] {
-  const configured = environment.TANDEM_PROJECT_ROOTS?.split(":").filter((root) => root.length > 0);
-  return configured !== undefined && configured.length > 0
-    ? configured
-    : [join(homedir(), "Coding", "Projects")];
-}
-
 export function createPrReviewWorkflow(deps: PrReviewDependencies) {
   async function start(input: StartPrReviewInput): Promise<StartPrReviewResult> {
     const ref = findPullRequestRef(input.pullRequest);
@@ -118,24 +106,18 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     }
     const facts = await readPullRequest(deps.run, ref, deps.home);
     if (isRefusal(facts)) return facts;
-    const location = await findCheckout(ref.repo, input);
-    if (location.kind === "ambiguous") {
+    const location = await findCheckout(ref.repo, input, {
+      home: deps.home,
+      run: deps.run,
+      clock: deps.clock,
+      roots: deps.projectRoots,
+    });
+    if (location.kind !== "found") {
       return {
         kind: "needs-location",
         repo: ref.repo,
-        paths: location.paths,
-        message: `I found ${ref.repo} in more than one place: ${location.paths.join(", ")}. Which one should I use?`,
-      };
-    }
-    if (location.kind === "missing") {
-      return {
-        kind: "needs-location",
-        repo: ref.repo,
-        paths: [],
-        message:
-          input.checkout === undefined
-            ? `Where's ${ref.repo} on your machine? Or say "clone it".`
-            : `${input.checkout} isn't a checkout of ${ref.repo}. Where is it? Or say "clone it".`,
+        paths: location.kind === "ambiguous" ? location.paths : [],
+        message: checkoutQuestion(ref.repo, location, input.checkout),
       };
     }
     const lens = input.lens ?? { kind: "full" };
@@ -146,16 +128,6 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     });
     const label = lensLabel(lens);
     return { kind: "started", taskId: task.id, message: acknowledgement(facts, label) };
-  }
-
-  async function findCheckout(repo: string, input: StartPrReviewInput): Promise<RepoLocation> {
-    const options = { home: deps.home, run: deps.run, clock: deps.clock };
-    if (input.clone === true) {
-      const cloned = await cloneForReview(deps.run, repo, deps.home);
-      return rememberRepoLocation(repo, cloned, options);
-    }
-    if (input.checkout !== undefined) return rememberRepoLocation(repo, input.checkout, options);
-    return locateRepo(repo, { ...options, roots: deps.projectRoots });
   }
 
   async function show(

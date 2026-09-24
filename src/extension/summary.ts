@@ -173,7 +173,9 @@ function summarizeTask(task: TaskRecord): string {
         );
   const lines = [
     `${task.id}: ${task.stage}`,
-    `Repository: ${compactText(task.repoPath, ACTION_SUMMARY_MAX_TEXT)}`,
+    task.target === undefined
+      ? `Repository: ${compactText(task.repoPath, ACTION_SUMMARY_MAX_TEXT)}`
+      : `Repository: ${task.target.repo} at ${compactText(task.target.checkout, ACTION_SUMMARY_MAX_TEXT)}; pull requests target ${task.target.branch}`,
     `Objective: ${compactText(task.objective, ACTION_SUMMARY_MAX_TEXT)}`,
     `Scope: ${task.scopeApproved ? "approved" : "awaiting approval"}; attempt ${task.generation}`,
     ...(task.requestId === undefined

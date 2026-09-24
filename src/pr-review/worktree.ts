@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { readGitText, runChecked } from "../adapters/primitives.ts";
 import type { CommandRunner } from "../contracts.ts";
 import type { PullRequestRef } from "./pull-request.ts";
@@ -80,28 +80,6 @@ export async function removeReviewWorktree(
       cwd: worktree.checkout,
     });
   }
-}
-
-/**
- * Clones a repository the user has no checkout of. A blobless clone keeps full history, which the
- * merge base needs, while downloading file contents only on demand.
- */
-export async function cloneForReview(
-  run: CommandRunner,
-  repo: string,
-  home: string,
-): Promise<string> {
-  const destination = join(home, "pr-review", "clones", ...repo.split("/"));
-  await mkdir(dirname(destination), { recursive: true });
-  await runChecked(
-    run,
-    {
-      argv: ["gh", "repo", "clone", repo, destination, "--", "--filter=blob:none", "--no-checkout"],
-      cwd: dirname(destination),
-    },
-    "clone for PR review",
-  );
-  return destination;
 }
 
 async function fetchPullRequest(

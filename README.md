@@ -129,6 +129,15 @@ anything involving product choices, scope changes, credentials, or publishing.
 The coordinator also has a `/tandem` command for direct actions (for example
 `/tandem restart TASK_ID` to restart one stuck worker). Type `/tandem` to see the list.
 
+### Working in another repository
+
+Ask for research or a change in another repository ("how does acme/api handle retries?", "add the
+field in acme/api too"), and the coordinator runs it from that repository's default branch, found
+the same way as for reviews below, without touching your checkout of it. A change that spans
+several repositories becomes one task, and one pull request, per repository. If a repository isn't
+set up in Tandem, the coordinator asks you how to check work there and adds your answer to the
+brief.
+
 ### Reviewing a teammate's pull request
 
 Paste a PR link and ask for a review. Tandem finds the repository on your machine (it looks under

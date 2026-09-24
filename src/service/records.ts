@@ -44,6 +44,7 @@ export type TaskCreationRequest = Readonly<{
   readonly researchContinuation?: TaskRecord["researchContinuation"];
   readonly skill?: TaskRecord["skill"];
   readonly prReview?: TaskRecord["prReview"];
+  readonly target?: TaskRecord["target"];
 }>;
 
 export function isTerminalTask(task: TaskRecord): boolean {
@@ -555,5 +556,6 @@ export function taskInputFor(
       : { researchContinuation: request.researchContinuation }),
     ...(request.skill === undefined ? {} : { skill: request.skill }),
     ...(request.prReview === undefined ? {} : { prReview: request.prReview }),
+    ...(request.target === undefined ? {} : { target: request.target }),
   };
 }

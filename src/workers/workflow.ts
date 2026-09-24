@@ -1704,14 +1704,17 @@ export class WorkerWorkflow {
     }
     let lease = runtime.worktree;
     try {
-      const source = await readCheckpoint(this.#deps.run, {
-        repo: taskSourcePath(task, runtime),
-      });
-      this.assertSourceUnchanged(
-        runtime.sourceCheckpoint,
-        source,
-        runtime.sourceRepoPath !== undefined,
-      );
+      // A target task is pinned to a fetched commit; the user's own checkout may be anywhere.
+      if (task.target === undefined) {
+        const source = await readCheckpoint(this.#deps.run, {
+          repo: taskSourcePath(task, runtime),
+        });
+        this.assertSourceUnchanged(
+          runtime.sourceCheckpoint,
+          source,
+          runtime.sourceRepoPath !== undefined,
+        );
+      }
       const expectedHolder = `${this.#deps.sessionId}:${task.id}`;
       // An implementation may run in the worktree it adopted from its first research handoff's
       // scout, which Treehouse still records under that scout's holder.
@@ -2263,6 +2266,7 @@ export class WorkerWorkflow {
     operation: DurableOperation,
     claim: OperationClaim,
   ): Promise<string | undefined> {
+    if (task.target !== undefined) return undefined;
     let current: GitCheckpoint;
     try {
       current = await readCheckpoint(this.#deps.run, { repo: taskSourcePath(task, runtime) });
@@ -4395,6 +4399,7 @@ export class WorkerWorkflow {
     ]);
     const lease = runtime?.worktree;
     if (
+      scout.target?.repo !== task.target?.repo ||
       scout.stage !== "completed" ||
       lease === undefined ||
       lease.leaseHolder !== `${this.#deps.sessionId}:${scoutId}` ||

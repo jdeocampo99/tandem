@@ -31,7 +31,8 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Worktree capacity and maintenance | [pool/](src/pool/) |
 | Evidence, PR publication, merge | [delivery/](src/delivery/): `preflight.ts` checks a ready task before publishing |
 | Artifacts, feedback, Lavish | [presentations/](src/presentations/) |
-| Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `locate.ts`, `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
+| Research and changes in another repository, finding a repository's checkout | [repos/locate.ts](src/repos/locate.ts); `target` on tasks |
+| Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |
 
 ## Safety boundaries
@@ -95,6 +96,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - Inspect, steer, answer, messages, CLI consent: [control.md](docs/reference/control.md).
 - Tool actions, notifications, compaction, maintenance, disk admission: [omp-extension.md](docs/reference/omp-extension.md).
 - Draft and final PRs, merge, presentations: [delivery.md](docs/reference/delivery.md).
+- Tasks in another repository (`targetRepo`), finding checkouts: [other-repositories.md](docs/reference/other-repositories.md).
 - Reviewing someone else's PR (`pr-review` tasks): [pr-review.md](docs/reference/pr-review.md).
 - Durable state, locking, restart, central recovery and its re-entry table: [recovery.md](docs/reference/recovery.md).
 - Block causes, stale records, panes, leases, `tandem fix`: [reconciliation.md](docs/reference/reconciliation.md).

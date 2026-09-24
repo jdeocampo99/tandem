@@ -150,6 +150,24 @@ export function registerTandemOmp(
         surfaces: z.array(z.string()),
         researchTaskIds: z.array(z.string()).optional(),
         skill: z.object({ name: z.string(), context: z.string() }).strict().optional(),
+        targetRepo: z
+          .string()
+          .optional()
+          .describe("Another repository to work in, as owner/repo. Leave out for this project."),
+        targetCheckout: z
+          .string()
+          .optional()
+          .describe("A path the user gave for the target repository."),
+        targetClone: z
+          .boolean()
+          .optional()
+          .describe("True when the user said to clone the target repository."),
+        validationCommands: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Commands that check work in a target repository with none saved, e.g. bun test.",
+          ),
       })
       .strict(),
     z.object({ action: z.literal("list") }).strict(),

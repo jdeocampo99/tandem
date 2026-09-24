@@ -3,7 +3,7 @@
 What a `pr-review` task guarantees: finding the code, the review worktree, the read-only reviewer,
 and posting one review only with the user's approval.
 
-Code: src/pr-review/ (locate.ts, worktree.ts, run.ts, diff.ts, review.ts, post.ts, service.ts,
+Code: src/pr-review/ (worktree.ts, run.ts, diff.ts, review.ts, post.ts, service.ts,
 route.ts, shell.ts), src/workers/workflow.ts (`preparePrReviewLease`, `readPrReviewRound`),
 src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/pr-review-scenarios.test.ts.
 
@@ -21,12 +21,9 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
 
 ## Finding the code
 
-- `locateRepo` is plain code, no agent: a saved `repo_locations` row in `state.sqlite`, re-checked
-  on every use (the folder exists and a remote still names the repository), then a crawl of the
-  project roots up to three levels deep, matching any remote and preferring `origin`.
-- Roots default to `~/Coding/Projects`; `TANDEM_PROJECT_ROOTS` (colon-separated) overrides them.
-- No match or several matches become a question for the user. The answer (`checkout`, or
-  `clone: true` for a blobless clone under `<home>/pr-review/clones/`) is re-checked and saved.
+- `findCheckout` in src/repos/locate.ts, shared with tasks in another repository; see
+  [other-repositories.md](other-repositories.md#finding-the-checkout). The answer to its question
+  comes back as `checkout` or `clone: true`.
 
 ## Review worktree
 
