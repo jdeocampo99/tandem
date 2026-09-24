@@ -47,9 +47,9 @@ import { isTerminalTask, replaceRuntimeTask, workerRoleForTask } from "../servic
 import { transitionTask } from "../tasks/lifecycle.ts";
 import { formatDecisionQuestion } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
+import type { ReservationRefusal } from "../workers/admission.ts";
 import { readWorkerTerminal, type WorkerTerminalJob } from "../workers/terminal.ts";
 import { pauseWorkerTerminal } from "../workers/terminal-control.ts";
-import type { ReservationRefusal } from "../workers/workflow.ts";
 import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "./central-review.ts";
 
 /** What one central recovery pass did for a task. */

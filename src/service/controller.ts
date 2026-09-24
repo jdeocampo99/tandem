@@ -164,10 +164,12 @@ import {
   type TaskStoreTransaction,
   transitionStoredTask,
 } from "../tasks/store.ts";
+import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
+import type { OperationClaim } from "../workers/operation-claim.ts";
 import { readWorkerTokenTally } from "../workers/terminal.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
-import { type OperationClaim, WorkerWorkflow } from "../workers/workflow.ts";
+import { WorkerWorkflow } from "../workers/workflow.ts";
 import {
   absoluteDirectory,
   currentWriter,
@@ -1175,7 +1177,7 @@ class TandemController {
       const current = await readCheckpoint(this.#deps.run, {
         repo: taskSourcePath(task, runtime),
       });
-      this.#worker.assertSourceUnchanged(runtime.sourceCheckpoint, current);
+      assertSourceUnchanged(runtime.sourceCheckpoint, current);
     }
     return this.transition(task.id, { type: "approve" });
   }

@@ -36,13 +36,13 @@ import {
 import { taskSourcePath } from "../service/source.ts";
 import { readValidationResult } from "../validation-worker.ts";
 import { readWorkerResult } from "../workers/jobs.ts";
+import type { OperationClaim } from "../workers/operation-claim.ts";
 import { workerDelegationStopped } from "../workers/terminal.ts";
 import {
   pauseWorkerTerminal,
   prepareWorkerTerminal,
   workerJobForEndpoint,
 } from "../workers/terminal-control.ts";
-import type { OperationClaim } from "../workers/workflow.ts";
 import { appendTaskMessage } from "./communication-protocol.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "./lifecycle.ts";
 import type { TaskStore } from "./store.ts";
