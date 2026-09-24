@@ -1,7 +1,7 @@
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { runCommand } from "../adapters/commands.ts";
-import { closeEndpoint, inspectEndpoint } from "../adapters/herdr.ts";
+import { closeEndpoint } from "../adapters/herdr.ts";
 import {
   AdapterProtocolError,
   EndpointBusyError,
@@ -12,7 +12,6 @@ import { readCleanupCommands } from "../config/repositories.ts";
 import type {
   Clock,
   CommandRunner,
-  Endpoint,
   TaskCleanupState,
   TaskCleanupStatus,
   TaskRecord,
@@ -28,6 +27,7 @@ import {
 } from "../runtime/persistence.ts";
 import type { RuntimeState, RuntimeTaskState } from "../runtime/schema.ts";
 import { createTaskStore, type TaskStore } from "../tasks/store.ts";
+import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import {
   absoluteDirectory,
   describeError,
@@ -285,27 +285,20 @@ type PaneClosureProgress = Readonly<{
 }>;
 
 /**
- * Closes each owned endpoint after proving the pane is the one Tandem opened and that no worker is
- * still running in it. An endpoint that is already gone counts as closed.
+ * Closes each owned endpoint after proving the pane is the one Tandem opened. A finished worker
+ * that OMP left idle in the pane is asked to exit first; a busy one defers cleanup. An endpoint
+ * that is already gone counts as closed.
  */
 async function closeOwnedPanes(
   run: CommandRunner,
-  endpoints: readonly Endpoint[],
+  runtime: Pick<RuntimeTaskState, "endpoints" | "jobs">,
   cwd: string,
 ): Promise<PaneClosureProgress> {
   const closedPaneIds: string[] = [];
-  for (const endpoint of endpoints) {
+  for (const endpoint of runtime.endpoints) {
     try {
-      const inspection = await inspectEndpoint(run, { endpoint, cwd });
-      if (inspection.activeWorker) {
-        return {
-          closedPaneIds,
-          failure: {
-            status: "deferred",
-            reason: `pane ${endpoint.paneId} still has an active worker`,
-          },
-        };
-      }
+      const job = workerJobForEndpoint(runtime.jobs, endpoint);
+      await prepareWorkerTerminal(run, { endpoint, cwd, ...(job === undefined ? {} : { job }) });
       await closeEndpoint(run, { endpoint, cwd });
     } catch (error) {
       if (isMissingEndpoint(error)) {
@@ -317,7 +310,7 @@ async function closeOwnedPanes(
           closedPaneIds,
           failure: {
             status: "deferred",
-            reason: `pane ${endpoint.paneId} became busy while closing`,
+            reason: `pane ${endpoint.paneId} still has an active worker`,
           },
         };
       }
@@ -527,7 +520,7 @@ export async function releaseTerminalTaskResources(
     }
 
     const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
-    const panes = await closeOwnedPanes(deps.run, runtime.endpoints, cwd);
+    const panes = await closeOwnedPanes(deps.run, runtime, cwd);
     if (panes.failure !== undefined) {
       const failure = panes.failure;
       if (failure.status === "deferred") return deferred(task.id, failure.reason);

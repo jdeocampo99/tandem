@@ -1670,7 +1670,9 @@ somebody's work: the worktree is retained and the reason is reported. A checkout
 read, or that sits on a branch the lease does not name, is quarantined with every resource kept.
 Blocked, paused, and decision-waiting scouts keep their pane and worktree, because those are the
 evidence a coordinator needs to answer them; completed scouts with a durable report and safely
-cancelled scouts are released.
+cancelled scouts are released. Interactive OMP stays open after a scout submits its report, so
+cleanup asks a completed worker that is idle to close (the close request, then ctrl+d) before
+closing its pane; a worker that is still busy defers cleanup to a later tick.
 
 A completed scout whose disposition is `ask-intent` or `implementation-interview` closes its pane
 but keeps its clean worktree (status `retained`), with no time limit, so the implementation that
