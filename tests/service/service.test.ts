@@ -3813,7 +3813,7 @@ test("a launched review job receives a bounded deterministic review brief", asyn
     {
       kind: "implementation",
       stage: "reviewing",
-      taskEdits: { reviewHead: "review-head" },
+      taskEdits: { reviewHead: "review-head", reviewRound: 1 },
       runner: {
         active: false,
         checkoutHead: "review-head",
@@ -3830,7 +3830,10 @@ test("a launched review job receives a bounded deterministic review brief", asyn
       if (launched === undefined) throw new Error("review job was not persisted");
       const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
         readonly prompt: string;
+        readonly review?: { readonly round?: number };
       };
+      // One fix round done, so this is the task's second review.
+      expect(spec.review?.round).toBe(2);
       const briefPath = join(dirname(launched.jobPath), "review-brief.md");
       expect(spec.prompt).toContain(briefPath);
       expect(spec.prompt).toContain("is not proof");

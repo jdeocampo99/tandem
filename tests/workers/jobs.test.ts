@@ -590,6 +590,18 @@ test("allows role-scoped session directories for scout and implementer jobs only
   ).toThrow(TypeError);
 });
 
+test("a reviewer job may name its review round, which must be a positive integer", () => {
+  const root = process.cwd();
+  const reviewer = makeJob(root, "reviewer");
+  const withRound = (round: unknown) => ({
+    ...reviewer,
+    review: { head: "abc123", lens: "review", round },
+  });
+  expect(parseWorkerJob(withRound(2)).review?.round).toBe(2);
+  expect(parseWorkerJob(reviewer).review?.round).toBeUndefined();
+  expect(() => parseWorkerJob(withRound(0))).toThrow(TypeError);
+});
+
 test("completed workers allow read-only conversation but refuse further mutations", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-worker-handoff-"));
   const previous = process.env.TANDEM_WORKER_JOB_PATH;
