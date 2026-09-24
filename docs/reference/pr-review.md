@@ -4,7 +4,8 @@ What a `pr-review` task guarantees: finding the code, the review worktree, the r
 and posting one review only with the user's approval.
 
 Code: src/pr-review/ (worktree.ts, run.ts, diff.ts, review.ts, post.ts, service.ts,
-route.ts, shell.ts), src/workers/workflow.ts (`preparePrReviewLease`, `readPrReviewRound`),
+route.ts, shell.ts), src/workers/worktree-lease.ts (`preparePrReviewLease`), src/workers/workflow.ts
+(`readPrReviewRound`),
 src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/pr-review-scenarios.test.ts.
 
 ## Starting

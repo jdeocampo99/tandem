@@ -73,6 +73,58 @@ async function refreshJobSpecClaim(job: DurableJob, claim: OperationClaim): Prom
   });
 }
 
+/** The job spec a scout, implementer, or PR review worker runs from. */
+function workerJobSpec(
+  input: Readonly<{
+    readonly home: string;
+    readonly task: TaskRecord;
+    readonly runtime: RuntimeTaskState;
+    readonly role: WorkerRole;
+    readonly jobId: string;
+    readonly prompt: string;
+    readonly resultPath: string;
+    readonly communication: NonNullable<WorkerJob["communication"]>;
+    readonly sessionDirectory: string | undefined;
+    readonly timeoutMs: number | undefined;
+  }>,
+): WorkerJob {
+  const { home, task, runtime, role, sessionDirectory, timeoutMs } = input;
+  const prReview = task.prReview;
+  return {
+    schemaVersion: 1,
+    id: input.jobId,
+    taskId: task.id,
+    generation: task.generation,
+    role,
+    cwd: runtime.worktree?.path ?? taskSourcePath(task, runtime),
+    model: resolvedExecutionModel(
+      runtime.operation?.routing,
+      task.policy.config.models[modelRoleForTask(task, role)],
+    ),
+    prompt: input.prompt,
+    resultPath: input.resultPath,
+    ...(runtime.operation === undefined
+      ? {}
+      : { execution: executionIdentity(home, runtime.operation) }),
+    communication: input.communication,
+    // One OMP conversation per task: a fix round continues where the implementer left off.
+    ...(sessionDirectory === undefined ? {} : { sessionDirectory }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(role === "implementer" && task.policy.config.setupCommands.length > 0
+      ? { setup: task.policy.config.setupCommands }
+      : {}),
+    ...(prReview === undefined
+      ? {}
+      : {
+          prReview: {
+            structuredReport: prReview.mode !== "question",
+            diffPath: prReviewRunDiffPath(home, task.id, task.generation),
+            inlineComments: prReview.lens.kind !== "intent",
+          },
+        }),
+  };
+}
+
 export type JobLauncherDependencies = Readonly<{
   readonly home: string;
   /** The owner this coordinator stamps on every operation it admits or takes over. */
@@ -113,8 +165,7 @@ export class JobLauncher {
     }> = {},
   ): Promise<void> {
     const jobId = runtime.operation?.jobId ?? singleLine(this.#deps.idFactory(), "worker job id");
-    const directory = jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId);
-    const paths = jobPaths(directory);
+    const paths = jobPaths(jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId));
     const context = workerBriefContext(task, runtime, role, options.extraInstructions ?? []);
     const sessionDirectory =
       role === "implementer" || role === "scout" ? runtime.sessionDirectory : undefined;
@@ -139,54 +190,18 @@ export class JobLauncher {
       receiptPath: workerReceiptPath(paths.jobPath),
       initialRevision: instructionRevision,
     };
-    const prReview = task.prReview;
-    const prompt =
-      prReview === undefined
-        ? buildPrompt(
-            task,
-            role,
-            reportPathFor(paths.jobPath),
-            context.artifacts,
-            undefined,
-            context.instructions,
-          )
-        : await this.prReviewPrompt(task, prReview, context.instructions);
-    const modelRole = modelRoleForTask(task, role);
-    const spec: WorkerJob = {
-      schemaVersion: 1,
-      id: jobId,
-      taskId: task.id,
-      generation: task.generation,
+    const spec = workerJobSpec({
+      home: this.#deps.home,
+      task,
+      runtime,
       role,
-      cwd: runtime.worktree?.path ?? taskSourcePath(task, runtime),
-      model: resolvedExecutionModel(
-        runtime.operation?.routing,
-        task.policy.config.models[modelRole],
-      ),
-      prompt,
+      jobId,
+      prompt: await this.workerPrompt(task, role, paths.jobPath, context),
       resultPath: paths.resultPath,
-      ...(runtime.operation === undefined
-        ? {}
-        : { execution: executionIdentity(this.#deps.home, runtime.operation) }),
       communication,
-      // One OMP conversation per task: a fix round continues where the implementer left off.
-      ...(sessionDirectory === undefined ? {} : { sessionDirectory }),
-      ...(this.#deps.workerTimeoutMs === undefined
-        ? {}
-        : { timeoutMs: this.#deps.workerTimeoutMs }),
-      ...(role === "implementer" && task.policy.config.setupCommands.length > 0
-        ? { setup: task.policy.config.setupCommands }
-        : {}),
-      ...(prReview === undefined
-        ? {}
-        : {
-            prReview: {
-              structuredReport: prReview.mode !== "question",
-              diffPath: prReviewRunDiffPath(this.#deps.home, task.id, task.generation),
-              inlineComments: prReview.lens.kind !== "intent",
-            },
-          }),
-    };
+      sessionDirectory,
+      timeoutMs: this.#deps.workerTimeoutMs,
+    });
     const specWritten = await this.#deps.records.withOperationEffect(
       task.id,
       claim,
@@ -233,19 +248,32 @@ export class JobLauncher {
     );
   }
 
-  private async prReviewPrompt(
+  /** The worker's prompt: the task brief, or for a PR review the brief built from its run files. */
+  private async workerPrompt(
     task: TaskRecord,
-    state: NonNullable<TaskRecord["prReview"]>,
-    messages: readonly string[],
+    role: WorkerRole,
+    jobPath: string,
+    context: ReturnType<typeof workerBriefContext>,
   ): Promise<string> {
+    const prReview = task.prReview;
+    if (prReview === undefined) {
+      return buildPrompt(
+        task,
+        role,
+        reportPathFor(jobPath),
+        context.artifacts,
+        undefined,
+        context.instructions,
+      );
+    }
     const files = await readRunFiles(this.#deps.home, task.id, task.generation);
     return buildPrReviewBrief({
-      state,
+      state: prReview,
       head: files.head,
       from: files.from,
       contextPath: files.contextPath,
       diffPath: files.numberedDiffPath,
-      extra: messages,
+      extra: context.instructions,
     });
   }
 

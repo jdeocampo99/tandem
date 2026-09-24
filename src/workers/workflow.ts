@@ -24,6 +24,7 @@ import { renderReviewText } from "../pr-review/render.ts";
 import { checkReview } from "../pr-review/review.ts";
 import { readRunFiles } from "../pr-review/run.ts";
 import type { PrReviewRound } from "../pr-review/state.ts";
+import type { RelaunchWorker } from "../recovery/central.ts";
 import { taskRuntime } from "../runtime/activity.ts";
 import {
   readRuntimeState,
@@ -87,6 +88,8 @@ import { ReviewStage } from "./review-stage.ts";
 import { liveWorkerTerminal } from "./terminal.ts";
 import { ValidationStage } from "./validation-stage.ts";
 import { WorktreeLeases } from "./worktree-lease.ts";
+
+type RelaunchOutcome = Awaited<ReturnType<RelaunchWorker>>;
 
 const DEFAULT_STALL_WARNING_MS = 5 * 60 * 1000;
 const DEFAULT_HEARTBEAT_GRACE_MS = 60 * 1000;
@@ -282,6 +285,24 @@ export class WorkerWorkflow {
       }
       return;
     }
+    if (!(await this.jobStopped(task, job, endpoint, claim))) return;
+    if (job.kind === "worker") {
+      await this.settleWorkerJob(task, runtime, job, claim);
+      return;
+    }
+    await this.settleValidationJob(task, runtime, job, claim);
+  }
+
+  /**
+   * Whether the job's pane shows its worker finished or paused, so its result can be read. A
+   * running worker's progress is observed instead, and a vanished pane is settled here.
+   */
+  private async jobStopped(
+    task: TaskRecord,
+    job: DurableJob,
+    endpoint: Endpoint,
+    claim: OperationClaim,
+  ): Promise<boolean> {
     let inspection: HerdrPaneInspection;
     try {
       inspection = await inspectEndpoint(this.#deps.run, {
@@ -291,59 +312,72 @@ export class WorkerWorkflow {
     } catch (error) {
       if (error instanceof EndpointOwnershipError && error.reason === "missing") {
         await this.reconcileMissingEndpoint(task, job, claim);
-        return;
+        return false;
       }
       throw error;
     }
-    if (inspection.activeWorker) {
-      await this.observeWorkerProgress(task, job, claim);
-      const terminal = await liveWorkerTerminal(inspection, job);
-      if (terminal === undefined || (!terminal.completed && terminal.phase !== "paused")) {
-        if (job.phase !== "running") {
-          await this.#records.updateJob(job.taskId, job.id, claim, (current) => ({
-            ...current,
-            phase: "running",
-          }));
-        }
-        return;
-      }
+    if (!inspection.activeWorker) return true;
+    await this.observeWorkerProgress(task, job, claim);
+    const terminal = await liveWorkerTerminal(inspection, job);
+    if (terminal !== undefined && (terminal.completed || terminal.phase === "paused")) return true;
+    if (job.phase !== "running") {
+      await this.#records.updateJob(job.taskId, job.id, claim, (current) => ({
+        ...current,
+        phase: "running",
+      }));
     }
-    if (job.kind === "worker") {
-      let result: WorkerResult;
-      try {
-        result = await readWorkerResult(job.resultPath, {
-          id: job.id,
-          taskId: job.taskId,
-          generation: job.generation,
-          ...(job.role === "validation" ? {} : { role: job.role }),
-        });
-      } catch (error) {
-        if (isMissing(error)) {
-          if (!isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) return;
-          const reason = `worker stopped without a durable result: ${describeError(error)}`;
-          await this.#records.failJob(task, job, reason, claim, true, true, {
-            group: "safety-stop",
-            kind: "quarantined-unknown-outcome",
-            summary:
-              "The worker stopped without reporting back, so Tandem can't tell what it finished.",
-            detail: reason,
-            jobId: job.id,
-          });
-          return;
-        }
-        const rejectedReason = `worker result rejected: ${describeError(error)}`;
-        await this.#records.failJob(task, job, rejectedReason, claim, true, false, {
-          group: "unusable-result",
-          kind: "worker-failed",
-          summary: "The worker's report couldn't be read.",
-          detail: rejectedReason,
+    return false;
+  }
+
+  /** Reads a stopped worker's durable result and consumes it, failing the job when it can't. */
+  private async settleWorkerJob(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    job: DurableJob,
+    claim: OperationClaim,
+  ): Promise<void> {
+    let result: WorkerResult;
+    try {
+      result = await readWorkerResult(job.resultPath, {
+        id: job.id,
+        taskId: job.taskId,
+        generation: job.generation,
+        ...(job.role === "validation" ? {} : { role: job.role }),
+      });
+    } catch (error) {
+      if (isMissing(error)) {
+        if (!isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) return;
+        const reason = `worker stopped without a durable result: ${describeError(error)}`;
+        await this.#records.failJob(task, job, reason, claim, true, true, {
+          group: "safety-stop",
+          kind: "quarantined-unknown-outcome",
+          summary:
+            "The worker stopped without reporting back, so Tandem can't tell what it finished.",
+          detail: reason,
           jobId: job.id,
         });
         return;
       }
-      await this.consumeWorkerResult(task, runtime, job, result);
+      const rejectedReason = `worker result rejected: ${describeError(error)}`;
+      await this.#records.failJob(task, job, rejectedReason, claim, true, false, {
+        group: "unusable-result",
+        kind: "worker-failed",
+        summary: "The worker's report couldn't be read.",
+        detail: rejectedReason,
+        jobId: job.id,
+      });
       return;
     }
+    await this.consumeWorkerResult(task, runtime, job, result);
+  }
+
+  /** Reads a stopped validation run's durable result and consumes it, failing the job when it can't. */
+  private async settleValidationJob(
+    task: TaskRecord,
+    runtime: RuntimeTaskState,
+    job: DurableJob,
+    claim: OperationClaim,
+  ): Promise<void> {
     let result: ValidationResult;
     try {
       if (job.head === undefined) throw new Error("validation job is missing expected HEAD");
@@ -1028,17 +1062,11 @@ export class WorkerWorkflow {
         : await this.#leases.prepareTaskLease(task, runtime, reservation, claim);
     if (lease === "stopped") return;
     if (lease === undefined) {
-      await this.#records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const noLeaseReason = "worktree allocation returned no lease";
-      await this.#records.blockIfOperationClaim(task.id, noLeaseReason, claim, {
+      await this.#records.releaseAndBlock(task.id, reservation.reservation.id, claim, {
         group: "lost-resource",
         kind: "allocation-failed",
         summary: "Tandem couldn't set up a working copy for this task.",
-        detail: noLeaseReason,
+        detail: "worktree allocation returned no lease",
       });
       return;
     }
@@ -1096,33 +1124,21 @@ export class WorkerWorkflow {
     }
     const currentRuntime = await this.#deps.runtimeFor(task.id);
     if (currentRuntime === undefined || currentRuntime.worktree === undefined) {
-      await this.#records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const reason = "runtime lost its acquired worktree before worker launch";
-      await this.#records.blockIfOperationClaim(task.id, reason, claim, {
+      await this.#records.releaseAndBlock(task.id, reservation.reservation.id, claim, {
         group: "lost-resource",
         kind: "resource-lost",
         summary: "The task's working copy is missing.",
-        detail: reason,
+        detail: "runtime lost its acquired worktree before worker launch",
       });
       return;
     }
     const writer = currentWriter(currentRuntime);
     if (writer === undefined) {
-      await this.#records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const reason = "runtime lost its worker endpoint before launch";
-      await this.#records.blockIfOperationClaim(task.id, reason, claim, {
+      await this.#records.releaseAndBlock(task.id, reservation.reservation.id, claim, {
         group: "lost-resource",
         kind: "resource-lost",
         summary: "The worker's terminal is gone.",
-        detail: reason,
+        detail: "runtime lost its worker endpoint before launch",
       });
       return;
     }
@@ -1241,17 +1257,11 @@ export class WorkerWorkflow {
       return;
     }
     if (operation.fixContext === undefined) {
-      await this.#records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const reason = "fix admission has no durable context snapshot";
-      await this.#records.blockIfOperationClaim(task.id, reason, claim, {
+      await this.#records.releaseAndBlock(task.id, reservation.reservation.id, claim, {
         group: "lost-resource",
         kind: "persistence-failed",
         summary: "The review findings weren't saved, so the fix couldn't start.",
-        detail: reason,
+        detail: "fix admission has no durable context snapshot",
       });
       return;
     }
@@ -1274,34 +1284,22 @@ export class WorkerWorkflow {
       );
       if (written !== true) return;
     } catch (error) {
-      await this.#records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const reason = `fix context could not be persisted: ${describeError(error)}`;
-      await this.#records.blockIfOperationClaim(task.id, reason, claim, {
+      await this.#records.releaseAndBlock(task.id, reservation.reservation.id, claim, {
         group: "lost-resource",
         kind: "persistence-failed",
         summary: "Tandem couldn't save the review findings, so the fix couldn't start.",
-        detail: reason,
+        detail: `fix context could not be persisted: ${describeError(error)}`,
       });
       return;
     }
     const nextTask = await this.#deps.getTask(task.id);
     const nextRuntime = await this.#deps.runtimeFor(task.id);
     if (nextRuntime === undefined) {
-      await this.#records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const reason = "fix round lost its durable runtime metadata before launch";
-      await this.#records.blockIfOperationClaim(task.id, reason, claim, {
+      await this.#records.releaseAndBlock(task.id, reservation.reservation.id, claim, {
         group: "safety-stop",
         kind: "runtime-metadata-missing",
         summary: "Tandem lost its saved record for this task, so the fix can't start.",
-        detail: reason,
+        detail: "fix round lost its durable runtime metadata before launch",
       });
       return;
     }
@@ -1369,15 +1367,7 @@ export class WorkerWorkflow {
   async relaunchWorker(
     task: TaskRecord,
     extraInstructions: readonly string[],
-  ): Promise<
-    Readonly<{
-      readonly relaunched: boolean;
-      readonly reason?: string;
-      readonly detail?: string;
-      readonly refusal?: ReservationRefusal["refusal"];
-      readonly sourceDriftNote?: string;
-    }>
-  > {
+  ): Promise<RelaunchOutcome> {
     const role = workerRoleForTask(task);
     const allowedStages: readonly TaskRecord["stage"][] = ["implementing", "scouting"];
     const reservation = await this.#reservations.reserveTask(task.id, role);
@@ -1390,9 +1380,10 @@ export class WorkerWorkflow {
       };
     }
     const runtime = reservation.runtime;
+    const reservationId = reservation.reservation.id;
     const operation = runtime.operation;
     if (operation === undefined) {
-      await this.#records.releaseUnlaunchedTaskReservation(task.id, reservation.reservation.id);
+      await this.#records.releaseUnlaunchedTaskReservation(task.id, reservationId);
       return {
         relaunched: false,
         reason: "Tandem couldn't record the new attempt.",
@@ -1404,25 +1395,21 @@ export class WorkerWorkflow {
       fencingRevision: operation.fencingRevision,
       claimOwner: operation.claimOwner,
     };
+    const refuse = async (reason: string, detail: string): Promise<RelaunchOutcome> => {
+      await this.#records.releaseUnlaunchedTaskReservation(task.id, reservationId, claim);
+      return { relaunched: false, reason, detail };
+    };
     const lease = runtime.worktree;
     if (lease === undefined) {
-      await this.#records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const reason = "relaunch requires an existing durable worktree";
-      await this.#records.blockIfOperationClaim(task.id, reason, claim, {
+      const summary = "The task's working copy is missing, so it can't be restarted.";
+      const detail = "relaunch requires an existing durable worktree";
+      await this.#records.releaseAndBlock(task.id, reservationId, claim, {
         group: "lost-resource",
         kind: "resource-lost",
-        summary: "The task's working copy is missing, so it can't be restarted.",
-        detail: reason,
+        summary,
+        detail,
       });
-      return {
-        relaunched: false,
-        reason: "The task's working copy is missing, so it can't be restarted.",
-        detail: reason,
-      };
+      return { relaunched: false, reason: summary, detail };
     }
     // Re-entry never refuses on a moved source repository HEAD (only first launch does, via
     // assertSourceUnchanged); it only records the observation durably and notes it in plain English.
@@ -1437,16 +1424,10 @@ export class WorkerWorkflow {
       allowedStages,
     );
     if (launch === undefined) {
-      await this.#records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
+      return refuse(
+        "Tandem couldn't open a terminal for the worker.",
+        "relaunch could not allocate a worker pane",
       );
-      return {
-        relaunched: false,
-        reason: "Tandem couldn't open a terminal for the worker.",
-        detail: "relaunch could not allocate a worker pane",
-      };
     }
     try {
       await this.#records.transitionIfOperationClaim(
@@ -1457,11 +1438,7 @@ export class WorkerWorkflow {
       );
     } catch (error) {
       if (launch.created) {
-        await this.#records.releaseUnlaunchedTaskReservation(
-          task.id,
-          reservation.reservation.id,
-          claim,
-        );
+        await this.#records.releaseUnlaunchedTaskReservation(task.id, reservationId, claim);
       }
       const reason = `relaunch transition failed: ${describeError(error)}`;
       await this.#records.blockIfOperationClaim(task.id, reason, claim, {
@@ -1475,11 +1452,7 @@ export class WorkerWorkflow {
     const currentTask = await this.#deps.getTask(task.id);
     if (currentTask.stage !== task.stage) {
       if (taskAtRest(currentTask)) {
-        await this.#records.releaseUnlaunchedTaskReservation(
-          task.id,
-          reservation.reservation.id,
-          claim,
-        );
+        await this.#records.releaseUnlaunchedTaskReservation(task.id, reservationId, claim);
       }
       return {
         relaunched: false,
@@ -1489,29 +1462,17 @@ export class WorkerWorkflow {
     }
     const currentRuntime = await this.#deps.runtimeFor(task.id);
     if (currentRuntime === undefined) {
-      await this.#records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
+      return refuse(
+        "Tandem lost its saved record for this task.",
+        "relaunch lost its durable runtime metadata",
       );
-      return {
-        relaunched: false,
-        reason: "Tandem lost its saved record for this task.",
-        detail: "relaunch lost its durable runtime metadata",
-      };
     }
     const writer = currentWriter(currentRuntime);
     if (writer === undefined) {
-      await this.#records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
+      return refuse(
+        "The worker's terminal closed before it could start.",
+        "relaunch lost its worker endpoint before launch",
       );
-      return {
-        relaunched: false,
-        reason: "The worker's terminal closed before it could start.",
-        detail: "relaunch lost its worker endpoint before launch",
-      };
     }
     await this.#launcher.launchAgent(currentTask, currentRuntime, writer, role, {
       extraInstructions,

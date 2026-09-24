@@ -137,17 +137,11 @@ export class WorktreeLeases {
           claim,
         );
       }
-      await this.#deps.records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const allocationFailedReason = `worktree allocation failed: ${describeError(error)}`;
-      await this.#deps.records.blockIfOperationClaim(task.id, allocationFailedReason, claim, {
+      await this.#deps.records.releaseAndBlock(task.id, reservation.reservation.id, claim, {
         group: "lost-resource",
         kind: "allocation-failed",
         summary: "Tandem couldn't set up a working copy for this task.",
-        detail: allocationFailedReason,
+        detail: `worktree allocation failed: ${describeError(error)}`,
       });
       const noLeaseReason = "worktree allocation returned no lease";
       await this.#deps.records.blockIfOperationClaim(task.id, noLeaseReason, claim, {
@@ -291,17 +285,11 @@ export class WorktreeLeases {
       );
       return "stopped";
     } catch (error) {
-      await this.#deps.records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const reason = `PR review checkout failed: ${describeError(error)}`;
-      await this.#deps.records.blockIfOperationClaim(task.id, reason, claim, {
+      await this.#deps.records.releaseAndBlock(task.id, reservation.reservation.id, claim, {
         group: "lost-resource",
         kind: "allocation-failed",
         summary: "Tandem couldn't set up a checkout of this pull request.",
-        detail: reason,
+        detail: `PR review checkout failed: ${describeError(error)}`,
       });
       return "stopped";
     }

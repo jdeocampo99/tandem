@@ -4,7 +4,7 @@
  * opposed to a genuine content failure (a completed run that reported its own failure, a stale
  * instruction, or a malformed result) that must keep blocking untouched.
  *
- * `advanceReview` (src/workers/workflow.ts) and `CentralRecoveryWorkflow.recoverStuckReviewer`
+ * `advanceReview` (src/workers/review-stage.ts) and `CentralRecoveryWorkflow.recoverStuckReviewer`
  * (src/recovery/central.ts) both read this same scoping so a lens a newer job already completed is
  * never mistaken for still being dead, and a genuine content failure is never silently relaunched.
  */

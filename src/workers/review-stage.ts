@@ -1,4 +1,4 @@
-import { readCheckpoint } from "../adapters/git.ts";
+import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
 import {
   createReviewerEndpoint,
   createTaskEndpoint,
@@ -54,6 +54,52 @@ import {
 import { workerDelegationStopped } from "./terminal.ts";
 import { workerJobForEndpoint } from "./terminal-control.ts";
 
+/** One review round the stage is about to run: the lens, and what the reviewer is shown. */
+type ReviewRound = Readonly<{
+  readonly head: string;
+  readonly cwd: string;
+  readonly lens: ReviewLens;
+  /** The task after this round's review level was recorded; the brief reads its ledger. */
+  readonly leveledTask: TaskRecord;
+  readonly facts: ReviewDiffFacts;
+  readonly classified: ClassifiedReviewRound;
+  /** The worktree's changed diff, shown when reviewing the changes rather than an existing HEAD. */
+  readonly changedDiff: string;
+}>;
+
+/** Writes the reviewer's brief, patches, and validation evidence for one round. */
+async function writeReviewArtifacts(
+  task: TaskRecord,
+  round: ReviewRound,
+  paths: ReturnType<typeof reviewRoundPaths>,
+  reviewMode: ReviewMode,
+): Promise<true> {
+  const { facts } = round;
+  const existingHead = reviewMode === "review_existing_head";
+  const brief = renderReviewBrief(
+    buildReviewBrief({
+      task: round.leveledTask,
+      head: round.head,
+      lens: round.lens,
+      observations: reviewBriefObservations(facts, {
+        cumulativePatchPath: existingHead ? paths.cumulativePatchPath : paths.diffPath,
+        incrementalPatchPath: paths.incrementalPatchPath,
+      }),
+      advisoryLeads: round.classified.leads,
+    }),
+  );
+  await writeTextAtomically(paths.diffPath, existingHead ? "" : round.changedDiff);
+  if (existingHead) {
+    await writeTextAtomically(paths.cumulativePatchPath, facts.cumulative.patch);
+  }
+  if (facts.sinceLastReview !== undefined) {
+    await writeTextAtomically(paths.incrementalPatchPath, facts.sinceLastReview.patch);
+  }
+  await writeTextAtomically(paths.briefPath, brief);
+  await writeJsonAtomically(paths.evidencePath, task.validationEvidence);
+  return true;
+}
+
 export type ReviewStageDependencies = ReviewClassificationDependencies &
   Readonly<{
     readonly home: string;
@@ -87,9 +133,136 @@ export class ReviewStage {
   }
 
   async advanceReview(task: TaskRecord, reserved?: ReservationResult): Promise<void> {
-    const reviewHead = task.reviewHead;
+    const round = await this.nextReviewRound(task);
+    if (round === undefined) return;
+    const reservation =
+      reserved ?? (await this.#deps.reservations.reserveTask(task.id, "reviewer"));
+    if ("refusal" in reservation) return;
+    const { runtime } = reservation;
+    const reservationId = reservation.reservation.id;
+    const claim = claimOf(runtime.operation);
+    const records = this.#deps.records;
+    if (claim === undefined) {
+      await records.releaseUnlaunchedTaskReservation(task.id, reservationId, claim);
+      return;
+    }
+    if (currentWriter(runtime) === undefined && runtime.reviewMode !== "review_existing_head") {
+      await records.releaseAndBlock(task.id, reservationId, claim, {
+        group: "lost-resource",
+        kind: "resource-lost",
+        summary: "The worker's terminal is gone, so the review can't run.",
+        detail: "review has no writer endpoint",
+      });
+      return;
+    }
+    let endpoint: Endpoint | undefined;
+    try {
+      endpoint = await records.withOperationEffect(
+        task.id,
+        claim,
+        task.generation,
+        ["reviewing"],
+        (current) => this.ensureReviewEndpoint(task, current.runtime, claim, round.lens),
+      );
+      if (endpoint === undefined) {
+        await records.releaseUnlaunchedTaskReservation(task.id, reservationId, claim);
+        return;
+      }
+    } catch (error) {
+      await records.releaseAndBlock(task.id, reservationId, claim, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: "Tandem couldn't open a terminal for the review.",
+        detail: `review pane allocation failed: ${describeError(error)}`,
+      });
+      return;
+    }
+    const reviewEndpoint = endpoint;
+    try {
+      await this.launchReviewer({ task, runtime, claim, endpoint: reviewEndpoint, round });
+    } catch (error) {
+      const currentRuntime = await this.#deps.runtimeFor(task.id);
+      if (
+        currentRuntime?.endpoints.some((candidate) => candidate.paneId === reviewEndpoint.paneId)
+      ) {
+        await records.releaseUnlaunchedTaskReservation(task.id, reservationId, claim);
+      }
+      const reason = `review job could not be prepared: ${describeError(error)}`;
+      await records.blockIfOperationClaim(task.id, reason, claim, {
+        group: "lost-resource",
+        kind: "persistence-failed",
+        summary: "Tandem couldn't set up the review.",
+        detail: reason,
+        paneId: reviewEndpoint.paneId,
+      });
+    }
+  }
+
+  /**
+   * The lens this review round runs next, after recording the round's review level. Returns
+   * undefined once the task was blocked, skipped review, or finished its review instead.
+   */
+  private async nextReviewRound(task: TaskRecord): Promise<ReviewRound | undefined> {
+    const reviewable = await this.reviewableCheckout(task);
+    if (reviewable === undefined) return undefined;
+    const { head, worktree, checkout } = reviewable;
+    const facts = await readReviewDiffFacts(this.#deps.run, {
+      task,
+      head,
+      repo: worktree.path,
+      baseHead: worktree.baseHead,
+    });
+    const classified = await classifyReviewRound(this.#deps, { task, head, facts });
+    const leveledTask = await this.recordReviewLevel(task, classified.record);
+    // The user's approved "no review" wins over the risk classification recorded just above.
+    if (task.requestId !== undefined && (await this.#deps.briefSkipsReview(task.requestId))) {
+      await this.#deps.transition(task.id, { type: "skip-review", head });
+      return undefined;
+    }
+    const lens = requiredReviewLenses(leveledTask, head).find(
+      (candidate) =>
+        !leveledTask.reviews.some(
+          (review) =>
+            review.lens === candidate &&
+            review.head === head &&
+            review.generation === leveledTask.generation,
+        ),
+    );
+    if (lens === undefined) {
+      await this.#deps.transition(task.id, {
+        type: "finish-review",
+        head,
+        generation: task.generation,
+      });
+      return undefined;
+    }
+    return {
+      head,
+      cwd: worktree.path,
+      lens,
+      leveledTask,
+      facts,
+      classified,
+      changedDiff: checkout.diff,
+    };
+  }
+
+  /**
+   * The task's worktree checkout when a review may start on it: runtime recorded, no unresolved
+   * failed lens, every earlier reviewer stopped, and the checkout clean at the reviewed HEAD.
+   * Returns undefined when the task was blocked or must wait for a reviewer pane.
+   */
+  private async reviewableCheckout(task: TaskRecord): Promise<
+    | Readonly<{
+        readonly head: string;
+        readonly worktree: NonNullable<TaskRecord["worktree"]>;
+        readonly checkout: GitCheckpoint;
+      }>
+    | undefined
+  > {
+    const head = task.reviewHead;
     const worktree = task.worktree;
-    if (reviewHead === undefined || worktree === undefined) {
+    if (head === undefined || worktree === undefined) {
       const reason = "review requires a task worktree and reviewed HEAD";
       await this.#deps.blockTask(task.id, reason, {
         group: "user-decision",
@@ -97,7 +270,7 @@ export class ReviewStage {
         summary: "There's no finished work to review yet.",
         detail: reason,
       });
-      return;
+      return undefined;
     }
     const runtime = await this.#deps.runtimeFor(task.id);
     if (runtime === undefined) {
@@ -108,14 +281,14 @@ export class ReviewStage {
         summary: "Tandem lost its saved record for this task, so the review can't run.",
         detail: reason,
       });
-      return;
+      return undefined;
     }
     // A lens whose most recent job failed and is still unresolved either blocks (a genuine content
     // failure the worker itself reported, a stale canonical instruction, or a malformed result) or,
     // when the job's own recorded reason is a durable-quarantine one (proven-unowned: the pane or its
     // result disappeared, never proof of a real outcome), is left for central recovery's `reviewing`
     // re-entry, which the caller runs before this method and which clears the dead lens so it is
-    // picked up as `nextLens` below instead.
+    // picked up as the next lens instead.
     const failedReview = unresolvedReviewFailure(task, runtime);
     if (failedReview !== undefined && !isQuarantinedReviewFailure(failedReview)) {
       const reason = failedReview.error ?? `review ${failedReview.reviewLens ?? "worker"} failed`;
@@ -125,14 +298,14 @@ export class ReviewStage {
         summary: "One of the reviews failed.",
         detail: reason,
       });
-      return;
+      return undefined;
     }
-    if (!(await this.reviewersStopped(task, runtime, worktree.path))) return;
-    const currentCheckout = await readCheckpoint(this.#deps.run, {
+    if (!(await this.reviewersStopped(task, runtime, worktree.path))) return undefined;
+    const checkout = await readCheckpoint(this.#deps.run, {
       repo: worktree.path,
       baseRef: worktree.baseHead,
     });
-    if (!isCleanAt(currentCheckout, reviewHead)) {
+    if (!isCleanAt(checkout, head)) {
       const reason = "review refused because the worktree is stale or dirty";
       await this.#deps.blockTask(task.id, reason, {
         group: "user-decision",
@@ -140,136 +313,9 @@ export class ReviewStage {
         summary: "The code changed after it was submitted, so the review didn't run.",
         detail: reason,
       });
-      return;
+      return undefined;
     }
-    const facts = await readReviewDiffFacts(this.#deps.run, {
-      task,
-      head: reviewHead,
-      repo: worktree.path,
-      baseHead: worktree.baseHead,
-    });
-    const classified = await classifyReviewRound(this.#deps, { task, head: reviewHead, facts });
-    const leveledTask = await this.recordReviewLevel(task, classified.record);
-    // The user's approved "no review" wins over the risk classification recorded just above.
-    if (task.requestId !== undefined && (await this.#deps.briefSkipsReview(task.requestId))) {
-      await this.#deps.transition(task.id, { type: "skip-review", head: reviewHead });
-      return;
-    }
-    const nextLens = requiredReviewLenses(leveledTask, reviewHead).find(
-      (lens) =>
-        !leveledTask.reviews.some(
-          (review) =>
-            review.lens === lens &&
-            review.head === reviewHead &&
-            review.generation === leveledTask.generation,
-        ),
-    );
-    if (nextLens === undefined) {
-      await this.#deps.transition(task.id, {
-        type: "finish-review",
-        head: reviewHead,
-        generation: task.generation,
-      });
-      return;
-    }
-    const reservation =
-      reserved ?? (await this.#deps.reservations.reserveTask(task.id, "reviewer"));
-    if ("refusal" in reservation) return;
-    const reservedRuntime = reservation.runtime;
-    const claim = claimOf(reservedRuntime.operation);
-    if (claim === undefined) {
-      await this.#deps.records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      return;
-    }
-    if (
-      currentWriter(reservedRuntime) === undefined &&
-      reservedRuntime.reviewMode !== "review_existing_head"
-    ) {
-      await this.#deps.records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const reason = "review has no writer endpoint";
-      await this.#deps.records.blockIfOperationClaim(task.id, reason, claim, {
-        group: "lost-resource",
-        kind: "resource-lost",
-        summary: "The worker's terminal is gone, so the review can't run.",
-        detail: reason,
-      });
-      return;
-    }
-    let endpoint: Endpoint | undefined;
-    try {
-      endpoint = await this.#deps.records.withOperationEffect(
-        task.id,
-        claim,
-        task.generation,
-        ["reviewing"],
-        (current) => this.ensureReviewEndpoint(task, current.runtime, claim, nextLens),
-      );
-      if (endpoint === undefined) {
-        await this.#deps.records.releaseUnlaunchedTaskReservation(
-          task.id,
-          reservation.reservation.id,
-          claim,
-        );
-        return;
-      }
-    } catch (error) {
-      await this.#deps.records.releaseUnlaunchedTaskReservation(
-        task.id,
-        reservation.reservation.id,
-        claim,
-      );
-      const reason = `review pane allocation failed: ${describeError(error)}`;
-      await this.#deps.records.blockIfOperationClaim(task.id, reason, claim, {
-        group: "lost-resource",
-        kind: "allocation-failed",
-        summary: "Tandem couldn't open a terminal for the review.",
-        detail: reason,
-      });
-      return;
-    }
-    const reviewEndpoint = endpoint;
-    try {
-      await this.launchReviewer({
-        task,
-        leveledTask,
-        runtime: reservedRuntime,
-        claim,
-        endpoint: reviewEndpoint,
-        head: reviewHead,
-        cwd: worktree.path,
-        lens: nextLens,
-        facts,
-        classified,
-        changedDiff: currentCheckout.diff,
-      });
-    } catch (error) {
-      const currentRuntime = await this.#deps.runtimeFor(task.id);
-      if (
-        currentRuntime?.endpoints.some((candidate) => candidate.paneId === reviewEndpoint.paneId)
-      ) {
-        await this.#deps.records.releaseUnlaunchedTaskReservation(
-          task.id,
-          reservation.reservation.id,
-          claim,
-        );
-      }
-      const reason = `review job could not be prepared: ${describeError(error)}`;
-      await this.#deps.records.blockIfOperationClaim(task.id, reason, claim, {
-        group: "lost-resource",
-        kind: "persistence-failed",
-        summary: "Tandem couldn't set up the review.",
-        detail: reason,
-        paneId: reviewEndpoint.paneId,
-      });
-    }
+    return { head, worktree, checkout };
   }
 
   /**
@@ -405,20 +451,13 @@ export class ReviewStage {
   private async launchReviewer(
     input: Readonly<{
       readonly task: TaskRecord;
-      /** The task after this round's review level was recorded; the brief reads its ledger. */
-      readonly leveledTask: TaskRecord;
       readonly runtime: RuntimeTaskState;
       readonly claim: OperationClaim;
       readonly endpoint: Endpoint;
-      readonly head: string;
-      readonly cwd: string;
-      readonly lens: ReviewLens;
-      readonly facts: ReviewDiffFacts;
-      readonly classified: ClassifiedReviewRound;
-      readonly changedDiff: string;
+      readonly round: ReviewRound;
     }>,
   ): Promise<void> {
-    const { task, runtime, claim, facts, head, lens } = input;
+    const { task, runtime, claim, round } = input;
     const role: WorkerRole = "reviewer";
     const operation = runtime.operation;
     const jobId = operation?.jobId ?? singleLine(this.#deps.idFactory(), "review job id");
@@ -426,36 +465,12 @@ export class ReviewStage {
     const jobFiles = jobPaths(directory);
     const paths = reviewRoundPaths(directory);
     const reviewMode: ReviewMode = runtime.reviewMode ?? "review_changed_diff";
-    const existingHead = reviewMode === "review_existing_head";
-    const brief = renderReviewBrief(
-      buildReviewBrief({
-        task: input.leveledTask,
-        head,
-        lens,
-        observations: reviewBriefObservations(facts, {
-          cumulativePatchPath: existingHead ? paths.cumulativePatchPath : paths.diffPath,
-          incrementalPatchPath: paths.incrementalPatchPath,
-        }),
-        advisoryLeads: input.classified.leads,
-      }),
-    );
     const artifactsWritten = await this.#deps.records.withOperationEffect(
       task.id,
       claim,
       task.generation,
       ["reviewing"],
-      async () => {
-        await writeTextAtomically(paths.diffPath, existingHead ? "" : input.changedDiff);
-        if (existingHead) {
-          await writeTextAtomically(paths.cumulativePatchPath, facts.cumulative.patch);
-        }
-        if (facts.sinceLastReview !== undefined) {
-          await writeTextAtomically(paths.incrementalPatchPath, facts.sinceLastReview.patch);
-        }
-        await writeTextAtomically(paths.briefPath, brief);
-        await writeJsonAtomically(paths.evidencePath, task.validationEvidence);
-        return true;
-      },
+      () => writeReviewArtifacts(task, round, paths, reviewMode),
     );
     if (artifactsWritten !== true) return;
     const instructionRevision = task.communication?.revision ?? 0;
@@ -464,15 +479,16 @@ export class ReviewStage {
       receiptPath: workerReceiptPath(jobFiles.jobPath),
       initialRevision: instructionRevision,
     };
+    const { head, lens } = round;
     const context = reviewerBriefContext({
       task,
       runtime,
       head,
       lens,
-      level: input.classified.record.level,
+      level: round.classified.record.level,
       reviewMode,
       paths,
-      hasIncrementalPatch: facts.sinceLastReview !== undefined,
+      hasIncrementalPatch: round.facts.sinceLastReview !== undefined,
     });
     const spec: WorkerJob = {
       schemaVersion: 1,
@@ -480,7 +496,7 @@ export class ReviewStage {
       taskId: task.id,
       generation: task.generation,
       role,
-      cwd: input.cwd,
+      cwd: round.cwd,
       model: resolvedExecutionModel(operation?.routing, task.policy.config.models[role]),
       prompt: buildPrompt(
         task,
@@ -516,7 +532,7 @@ export class ReviewStage {
       task.generation,
       role,
       "worker",
-      input.cwd,
+      round.cwd,
       jobFiles.jobPath,
       jobFiles.resultPath,
       1,
@@ -535,7 +551,7 @@ export class ReviewStage {
       task.id,
       durableJob.id,
       input.endpoint,
-      input.cwd,
+      round.cwd,
       workerCommand(this.#deps.workerPath, jobFiles.jobPath),
       claim,
     );

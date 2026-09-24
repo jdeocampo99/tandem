@@ -31,6 +31,14 @@ export function holdsClaim(
   );
 }
 
+/** Like `holdsClaim`, except that no claim owns exactly a runtime with no operation. */
+export function ownsOperation(
+  operation: DurableOperation | undefined,
+  claim: OperationClaim | undefined,
+): boolean {
+  return claim === undefined ? operation === undefined : holdsClaim(operation, claim);
+}
+
 const SETTLED_OPERATION_PHASES: readonly DurableOperation["phase"][] = [
   "completed",
   "failed",
