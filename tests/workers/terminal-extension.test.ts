@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { WorkerJob } from "../../src/workers/jobs.ts";
 import {
+  idleAfterResult,
   isBackgroundResultWake,
   planAbortWithReason,
   userInterruptedTurn,
@@ -102,4 +103,39 @@ test("only a finished background command's wake-up counts as a background wake",
   expect(isBackgroundResultWake([assistant, backgroundResult, typed])).toBe(false);
   expect(isBackgroundResultWake([assistant, inbox])).toBe(false);
   expect(isBackgroundResultWake([])).toBe(false);
+});
+
+test("a submitted worker OMP keeps idle for the grace period is done despite willContinue", () => {
+  // The settings stall: submit_report, then agent_end with willContinue because a backgrounded
+  // dev server was still running, then OMP idle with nothing queued from then on.
+  const stalled = {
+    completed: true,
+    phase: "busy" as const,
+    ompIdle: true,
+    pendingMessages: false,
+  };
+  const first = idleAfterResult({ ...stalled, idleSince: undefined, now: 0 });
+  expect(first).toEqual({ idleSince: 0, settle: false });
+  expect(idleAfterResult({ ...stalled, idleSince: 0, now: 29_999 }).settle).toBe(false);
+  expect(idleAfterResult({ ...stalled, idleSince: 0, now: 30_000 })).toEqual({
+    idleSince: undefined,
+    settle: true,
+  });
+});
+
+test("idle-after-result never settles an unsubmitted, working, or messaged worker", () => {
+  const base = { completed: true, phase: "busy" as const, ompIdle: true, pendingMessages: false };
+  const later = { idleSince: 0, now: 60_000 };
+  const cases = [
+    { ...base, completed: false },
+    { ...base, phase: "idle" as const },
+    { ...base, ompIdle: false },
+    { ...base, pendingMessages: true },
+  ];
+  for (const input of cases) {
+    expect(idleAfterResult({ ...input, ...later })).toEqual({
+      idleSince: undefined,
+      settle: false,
+    });
+  }
 });

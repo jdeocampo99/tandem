@@ -200,6 +200,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     SUBMIT_REPORT_INSTRUCTION,
     "Submit outcome implemented, needs-decision, or failed, with the report body in the report field.",
     "Create and report a commit checkpoint when implementation is complete; the checkpoint is expected before submitting implemented.",
+    "Stop every background process you started, such as a dev server or watcher, before calling submit_report.",
     "The controller persists the submitted report for the coordinator. Do not merge, deploy, perform destructive actions, or claim validation that the runner did not perform.",
     "For a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; never dump logs or transcript text.",
   ],

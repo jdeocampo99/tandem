@@ -42,6 +42,7 @@ import {
 const TERMINAL_HEARTBEAT_MS = 1_000;
 const TERMINAL_POLL_MS = 250;
 const BUSY_AFTER_RESULT_TRACE_MS = 60_000;
+const IDLE_AFTER_RESULT_GRACE_MS = 30_000;
 const READ_ONLY_TOOLS: Readonly<Record<string, true>> = {
   read: true,
   grep: true,
@@ -161,6 +162,32 @@ export function isBackgroundResultWake(messages: readonly AgentMessage[]): boole
   );
 }
 
+export type IdleAfterResultInput = Readonly<{
+  readonly completed: boolean;
+  readonly phase: WorkerTerminalState["phase"];
+  readonly ompIdle: boolean;
+  readonly pendingMessages: boolean;
+  /** When OMP was first seen idle in this stretch, or undefined when it was not. */
+  readonly idleSince: number | undefined;
+  readonly now: number;
+}>;
+
+/**
+ * After submit_report, OMP ends the turn with willContinue while a background command it started
+ * (such as a dev server) is still running, then waits for that command forever. A submitted worker
+ * that OMP itself reports idle, with nothing queued, for the whole grace period is done.
+ */
+export function idleAfterResult(
+  input: IdleAfterResultInput,
+): Readonly<{ readonly idleSince: number | undefined; readonly settle: boolean }> {
+  if (!input.completed || input.phase !== "busy" || !input.ompIdle || input.pendingMessages) {
+    return { idleSince: undefined, settle: false };
+  }
+  const idleSince = input.idleSince ?? input.now;
+  const settle = input.now - idleSince >= IDLE_AFTER_RESULT_GRACE_MS;
+  return { idleSince: settle ? undefined : idleSince, settle };
+}
+
 async function instructionRevision(job: WorkerJob, required: boolean): Promise<number | undefined> {
   if (job.communication === undefined) return undefined;
   try {
@@ -240,6 +267,24 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     return statusReporter?.report(
       agentActive ? "working" : settledStatus,
       agentActive ? undefined : statusMessage,
+    );
+  };
+  let ompIdleSince: number | undefined;
+  const settleIdleAfterResult = (ctx: ExtensionContext): void => {
+    const decision = idleAfterResult({
+      completed: currentState.completed,
+      phase: currentState.phase,
+      ompIdle: ctx.isIdle(),
+      pendingMessages: ctx.hasPendingMessages(),
+      idleSince: ompIdleSince,
+      now: Date.now(),
+    });
+    ompIdleSince = decision.idleSince;
+    if (!decision.settle) return;
+    traceWorkerTurn(jobPath, "idle_after_result");
+    agentActive = false;
+    void persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id).catch(
+      () => abort(ctx),
     );
   };
   let lastBusyTraceAt = 0;
@@ -539,6 +584,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     }, TERMINAL_POLL_MS);
     ctx.setInterval(() => {
       traceBusyAfterResult(ctx);
+      settleIdleAfterResult(ctx);
       void persistState(currentState.phase, currentState.completed).catch((error) => {
         void abortWithReason(
           ctx,
