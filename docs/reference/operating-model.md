@@ -1,0 +1,71 @@
+# Operating model
+
+What each Tandem role may do, what actually enforces the workflow, and the local-only limits of
+Tandem's state and locks.
+
+Code: src/contracts.ts, src/worker.ts, src/coordinator/launch.ts, src/extension/tool-guard.ts,
+src/config/policy.ts, src/tasks/lifecycle.ts, src/tasks/store.ts, src/coordinator/lock.ts
+
+## Roles and approvals
+
+The main OMP conversation is authoritative. Tandem records tasks, policy snapshots, worker jobs,
+review evidence, reports, worktree leases, notifications, task communication, and delivery state so
+a restart never has to rebuild workflow from chat.
+
+1. **Research is automatic when delegated.** A scout may start after task creation without
+   implementation approval. Queued or blocked delegation is not active or completed research;
+   blockers surface as actionable coordinator notifications. Direct research takeover by the
+   coordinator needs explicit user authorization.
+2. **Implementation needs approved scope.** The coordinator records concrete scope and waits for
+   explicit approval before dispatching an implementer.
+3. **Validation is runner-owned.** Configured argv commands run against the exact task HEAD and
+   produce durable evidence. A worker never claims a command ran unless the runner recorded it.
+4. **Review is independent.** The implementer is stopped while a fresh read-only reviewer examines
+   the same worktree. Results bind to an exact HEAD and generation.
+5. **Delivery is gated.** Publishing and merging are explicit approval-bearing actions. Tandem
+   never merges automatically.
+6. **Presentation writes outside the repository.** The worker writes HTML to a private artifact
+   directory; the controller, not the worker, opens Lavish and owns the feedback listener.
+
+## Worker capabilities
+
+Tool sets are fixed in code (`COORDINATOR_TOOLS` in launch.ts; `*_TOOLS` in worker.ts). Every
+child worker also gets `submit_report`.
+
+| Role | Workspace | Tools | Must not |
+| --- | --- | --- | --- |
+| Coordinator | OMP conversation in the clean source worktree | `read`, `ask`, `tandem`, plus MCP servers listed in the project's `coordinatorMcpServers` | Edit code, run shell commands, search the repo (scouts do that) |
+| Scout | Isolated Treehouse worktree, child Herdr workspace | `read`, `grep`, `glob`, `web_search` | Write files, run project-wide gates, invent findings when a tool fails (report the exact failure) |
+| Implementer | Assigned task worktree, child Herdr workspace | `read`, `grep`, `glob`, `edit`, `write`, `bash` | Exceed approved scope, merge, deploy, destructive cleanup, claim validation results |
+| Reviewer | Fresh read-only pane in the task worktree | `read`, `grep`, `glob` | Edit or write a report file; returns evidence-bound `ReviewResult` data |
+| Presentation | Private artifact directory | `read`, `grep`, `glob`, `write`, `edit` | Write anywhere but the supplied artifact path; no bash |
+
+Default policy: `maxWorkers: 3`, `maxFixRounds: 3` (src/config/policy.ts). These are policy
+limits, not a worktree cap. The `verifier` role was removed; it survives only as a legacy decode
+value in `LEGACY_ENDPOINT_ROLES` (src/contracts.ts) and is never assigned to new work.
+
+## What guards the workflow
+
+- Prompts are guidance, not a security boundary or policy engine. Runtime checks, Herdr/Treehouse
+  ownership proofs, filesystem checks, and Git/GitHub preconditions guard mutations.
+- Tool allowlists are not an OS or filesystem sandbox, and a private artifact directory is not
+  credential isolation: workers inherit the local environment.
+- Tandem has no login flow and copies no credentials. OMP, Herdr, Treehouse, `gh`, and Git use
+  their existing local configuration and authentication.
+
+## Local limits and source of truth
+
+- Everything runs on the local machine: orchestration, durable state, workers, Herdr workspaces,
+  Treehouse pool, Lavish control. No remote fleets, alternate terminal or harness backends, relays,
+  or hosted state. Only explicitly requested PR publish/merge touch the remote, through local `gh`
+  and Git.
+- macOS only. The task-store lock is a Darwin native `O_EXLOCK` lock on the task-store directory
+  with a 5-second default acquisition timeout (`DEFAULT_LOCK_TIMEOUT_MS`). Coordinator locks under
+  `<home>/coordinator-registry/` use the same primitive and timeout; see
+  [One coordinator per repository](coordinator.md#one-coordinator-per-repository).
+- Lock corruption or replacement, filesystem failures, ambiguous external identities, and unknown
+  disk capacity fail closed. These locks are local filesystem primitives, not distributed locks;
+  they do not protect multiple machines or network filesystems.
+- Authoritative contracts are in code: src/contracts.ts (types and roles), src/config/ (policy),
+  src/tasks/lifecycle.ts (transitions), src/adapters/ (native tools), src/service/controller.ts
+  (composition), src/extension.ts, src/extension/, src/instructions.ts (OMP integration).

@@ -1,0 +1,135 @@
+# Task lifecycle
+
+Task stages, approvals, fix rounds, post-research continuation, child terminals, and Herdr status.
+
+Code: src/tasks/lifecycle.ts, src/tasks/findings.ts, src/tasks/research-continuation.ts,
+src/tasks/research-continuation-classifier.ts, src/extension/research-follow-up.ts,
+src/service/source.ts, src/adapters/herdr.ts, src/adapters/herdr-status.ts,
+src/workers/terminal-extension.ts
+
+## Creation and source pinning
+
+- A clean-bound coordinator accepts the original repo path or its clean source checkout (distinct
+  worktrees of the same Git common directory; anything else is rejected) and records the original
+  canonical identity.
+- Creation captures policy and source revision atomically; workers start at that commit even if
+  `origin/main` moves. Refresh never repins existing tasks, leases, or checkouts. Fetch or
+  source-safety failures block new creation only. A lease without worker history must pass the same
+  captured-HEAD check on retry; an allocation failure never permits launch from the rejected checkout.
+- A scout is created `queued` and scope-approved. An implementation is created `awaiting-approval`
+  with `scopeApproved: false`; only an explicit `approve` approves it. If scout delegation is
+  blocked, the coordinator discloses the blocker; direct research needs explicit user authorization.
+
+- The CLI's `create --input` file has exactly `repoPath`, `kind`, `objective`,
+  `acceptanceCriteria`, and `surfaces`.
+- Ordinary worker briefs fail closed above 64 KiB of UTF-8 (`MAX_ORDINARY_BRIEF_BYTES` in
+  src/instructions.ts) with an error asking to shorten them; they are never silently truncated.
+  Presentation keeps its own 32,000-character prompt bound.
+
+## Stages
+
+| Stage | Meaning |
+| --- | --- |
+| `awaiting-approval` | Implementation scope not yet approved. |
+| `queued` | Approved, waiting for capacity. Not proof of a running worker or finished research. |
+| `scouting` / `implementing` | A worker is active in its owned workspace. |
+| `validating` | One named validation contract runs at that exact HEAD: iteration checks between fix rounds, or the full final manifest once otherwise ready. |
+| `reviewing` | Checks passed or were skipped ([Review and validation](review-and-validation.md)); fresh reviewers record lenses. |
+| `awaiting-fixes` | Validation or review failed; a bounded fix round may start. |
+| `ready` | Final manifest and all required lenses pass at the current HEAD, or the user chose [publish now](delivery.md) at that HEAD. |
+| `paused` | Stopped with a resumable previous stage. |
+| `blocked` | Cannot safely proceed; durable reason, surfaced as an actionable blocker. |
+| `cancelled` / `completed` / `merged` | Terminal. A scout is research-complete only when `completed` with its report; `merged` only after verified delivery. |
+
+## Fix rounds
+
+- Completion and fix cycles bind to the current generation and HEAD. A fix cycle increments the
+  generation, retires the old review round, returns to `implementing`, and keeps only passing checks
+  at the reported commit's exact HEAD.
+- Budget is pinned `maxFixRounds` (default 3) plus `fixRoundGrants`, stored beside the pinned policy,
+  which never changes.
+- `Keep fixing "<task>"?` is asked before a round when the budget is spent, or the latest review
+  repeats a blocker unchanged (same lens and id, file, and description ignoring case and spacing;
+  if HEAD did not move, every remaining blocker counts). The task blocks with `fix-rounds-exhausted`
+  and a durable question listing open blockers. Only exact `yes` or `no` is accepted:
+  - `yes` records a `user` grant and resumes in the same worktree: a full `maxFixRounds` if the
+    budget was spent, or no extra round if asked early (it only settles that generation's repeat).
+  - `no` clears the question; the task stays blocked. Never create a new task to bypass the limit.
+- A round ending on an already-reviewed HEAD records a one-round `no-commit` grant instead of
+  spending budget; the next review of that HEAD asks `Keep fixing?`, so it cannot loop.
+- Ready and exhaustion are distinct coordinator notifications; neither claims delivery. Ready fires
+  only once the final manifest is satisfied and names lenses, review level, accepted HEAD, any
+  P2/P3 known issues, and that ready is not publish/merge/deploy approval. Exhaustion names rounds
+  used and asks `Keep fixing?`.
+
+## Research continuation
+
+Each scout carries a durable `researchContinuation`: routing for the coordinator's follow-up turn,
+never permission. It does not set `scopeApproved` or create tasks. It is refused on non-scouts.
+
+| Field | Rule |
+| --- | --- |
+| `schemaVersion` | Always `1`; anything else is refused, not repaired. |
+| `disposition` | `report-only`, `ask-intent`, or `implementation-interview`. |
+| `selectedBy` | `explicit`, `deterministic`, `jev`, or `fallback`. |
+| `classifierVersion` | Required for `jev`, optional for `deterministic`, refused otherwise. |
+| `fallbackReason` | Required for `fallback`, refused otherwise. |
+
+- A scout record without the field loads as `ask-intent` / `deterministic`. Unknown fields,
+  selectors, dispositions, or malformed provenance fail closed as state corruption.
+- Summaries and the durable digest print disposition and provenance, so it survives compaction.
+- The completed-scout notification is the only wake. Its text is derived from the persisted record
+  after proving the report is readable, so it is identical after compaction, restart, or
+  replacement. An open `needs-decision` question is answered first (`answer-question`); a non-scout,
+  failed, blocked, cancelled, incomplete, stale-generation, or unreadable-report record gets
+  `disclose-blocker`. Otherwise the disposition picks the reply shape (see
+  src/extension/research-follow-up.ts); no path widens scope.
+- After the user answers, an implementation task citing the scout in `researchTaskIds` is created
+  `awaiting-approval`, passes repository and report-provenance handoff validation, and launches only
+  after explicit approval. Research on an older commit still hands off, recording the scout's HEAD.
+
+## Classifying the disposition
+
+Runs only when no explicit disposition was supplied, before the record is written. It is separate
+from the prompt router.
+
+1. A deterministic cue table decides first, no provider call. Imperative information-only wording
+   gives `report-only`; imperative fix/implement/patch wording gives `implementation-interview`;
+   both cues or an empty objective give `ask-intent`, so report-only is never upgraded. Descriptive
+   or hypothetical wording stays unresolved.
+2. Unresolved wording goes to Jev as one closed-set choice. Its input is only the sanitized,
+   single-line, bounded objective and task kind: never repo, report, credentials, or transcript.
+   Model and schema version are recorded in `classifierVersion`.
+3. No `TYPESAFE_API_KEY`, timeout, outage, malformed answer, or low confidence falls back to
+   `implementation-interview` with `selectedBy: "fallback"` and the real `fallbackReason`. Research
+   never waits past `TANDEM_JEV_TIMEOUT_MS`. Jev never creates tasks, approves scope, or relaxes policy.
+
+## Interactive child terminals
+
+- Workers run interactive OMP with inherited terminal I/O (no `-p`, no `--mode json`).
+- The only result path is the `submit_report` tool, which writes the private result file. A settled
+  `agent_end` without it is conversation, so human messages never become or overwrite the result;
+  it still fails the job on provider error, abort, model substitution, or requested timeout.
+- The scheduler may consume a result while OMP stays open after checking job identity, generation,
+  native PID, physical checkout, and a fresh terminal heartbeat. Terminal output is display only.
+- After completion or pause, follow-up turns are read-only (mutating tools blocked). Reviewer and
+  presentation conversations stay open after consumption.
+- A writer job reuses a pane only when the prior turn finished or paused and the session is idle with
+  no queued messages or draft. Cooperative close freezes input, requests exit, and verifies process
+  exit. Busy, foreign, stale, or unproven terminals are retained, never interrupted.
+
+## Herdr labels and status
+
+- Workspace label: `└ <role cue> <objective> · <short identity>` (cue `research`, `implement`, or
+  `task` for other roles), normalized, at most 96 UTF-16 units, never splitting graphemes. It is
+  persisted before creation and reused by recovery, never recomputed. Existing labels are never
+  renamed. A label is never ownership proof.
+- States: active turns `working`; question dialogs, paused workers, and failed or needs-decision
+  results `blocked`; completed turns `idle`. An idle coordinator aggregates its original project's
+  tasks: approval, pause, and blockers outrank queued/running work; ready and terminal tasks do not
+  count. Validation reports `working` while running and releases authority on exit.
+- Reporting runs only in an exact Herdr pane context, serialized and deduplicated; failed reports
+  retry on the next update; shutdown releases authority even if durable shutdown fails. Each
+  reporter uses a fresh source identity because Herdr keeps sequence watermarks after release.
+- Reporting failures never authorize or interrupt work. Status, labels, and terminal output are never
+  completion or ownership evidence.

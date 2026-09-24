@@ -13,7 +13,7 @@ current status, non-negotiable boundaries, and links to the focused documents.
 | Experiments and rollout evidence | Measurement plan for routing and future context reuse | [evaluation plan](jev-evaluation.md) |
 
 Operational instructions live in the [README](../README.md#jev-integration-and-prompt-routing)
-and [agent reference](agent-reference.md#typesafe-jev-prompt-routing).
+and [policy reference](reference/policy.md#jev-prompt-routing).
 
 ## Product goal
 

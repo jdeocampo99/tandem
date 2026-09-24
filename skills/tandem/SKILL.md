@@ -71,4 +71,4 @@ user approves the full recap. Model choices apply to all projects and take effec
 - "What's the state of my Tandem tasks?": use `tandem-status`.
 - "Launch Tandem for `/path/to/repo`.": run `tandem /path/to/repo` once the user asks for it.
 
-For every setting and safety rule, see `docs/agent-reference.md` in the Tandem checkout.
+For every setting and safety rule, see `docs/reference/` in the Tandem checkout.
