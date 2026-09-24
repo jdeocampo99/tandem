@@ -238,8 +238,9 @@ function readBoolean(value: unknown, field: string): boolean {
 
 /**
  * Reads the review-level opt-ins. Each one is off unless the repository names it, and each one
- * is documented in `docs/agent-reference.md` as requiring the end-to-end evaluation from issue
- * #20 before it is turned on, because turning one on changes what review actually runs.
+ * is documented in `docs/reference/review-and-validation.md` as requiring the end-to-end
+ * evaluation from issue #20 before it is turned on, because turning one on changes what review
+ * actually runs.
  */
 function readReviewLevels(value: unknown, base: ReviewLevelPolicy): ReviewLevelPolicy {
   if (!isRecord(value)) {

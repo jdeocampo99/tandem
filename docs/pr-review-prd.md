@@ -1,7 +1,7 @@
 # PR review PRD
 
 **Status: implemented.** The contract lives in
-[Reviewing someone else's pull request](agent-reference.md#reviewing-someone-elses-pull-request).
+[reference/pr-review.md](reference/pr-review.md).
 Where the build differs from this proposal:
 
 - Drafts and PRs with merge conflicts are reviewed, with a note, rather than refused.

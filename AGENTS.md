@@ -83,23 +83,22 @@ not the normal `tandem` front door.
 
 ## Read on demand
 
-Before changing behavior, read its contract:
+Before changing behavior, read its contract in [docs/reference/](docs/reference/):
 
-- Launch/reset/ownership: [Launching the coordinator](docs/agent-reference.md#launching-the-coordinator).
-- Policy/instructions: [Repository onboarding and central policy](docs/agent-reference.md#repository-onboarding-and-central-policy).
-- Approvals/validation/review/child results: [Task lifecycle](docs/agent-reference.md#task-lifecycle).
-- Request briefs/approval revisions/review pane: [Request briefs and approval revisions](docs/agent-reference.md#request-briefs-and-approval-revisions).
-- Usage/cost/quota/elapsed-time receipts: [Request usage receipts and the accounting ledger](docs/agent-reference.md#request-usage-receipts-and-the-accounting-ledger).
-- Model routing/premium approval: [Economical routing and premium-tier approval](docs/agent-reference.md#economical-routing-and-premium-tier-approval).
-- Messages/control: [Inspecting and controlling work](docs/agent-reference.md#inspecting-and-controlling-work).
-- Tools/notifications/compaction: [OMP extension](docs/agent-reference.md#omp-extension).
-- Capacity/disk admission: [Safe automatic maintenance](docs/agent-reference.md#safe-automatic-maintenance).
-- PRs/artifacts: [Pull-request delivery](docs/agent-reference.md#pull-request-delivery), [Presentations and Lavish](docs/agent-reference.md#presentations-and-lavish).
-- Reviewing someone else's PR: [Reviewing someone else's pull request](docs/agent-reference.md#reviewing-someone-elses-pull-request).
-- Persistence/restart/locking: [Recovery and durable state](docs/agent-reference.md#recovery-durable-state-and-compaction), [Local limits](docs/agent-reference.md#local-limits-and-source-of-truth).
-- Central recovery (stop/save/re-enter, stage re-entry table, restart budget): [Central recovery: stop, save, re-enter](docs/agent-reference.md#central-recovery-stop-save-re-enter).
-- Stale records/panes/leases: [Reconciling Tandem resources across sessions](docs/agent-reference.md#reconciling-tandem-resources-across-sessions).
+- Roles, approvals, worker tools, what guards what: [operating-model.md](docs/reference/operating-model.md).
+- Launch, reconnect, `update`, `reset`, coordinator ownership: [coordinator.md](docs/reference/coordinator.md).
+- Onboarding, settings file, model choices, Jev routing, instruction provenance: [policy.md](docs/reference/policy.md).
+- Task stages, fix rounds, research continuation, child terminals: [task-lifecycle.md](docs/reference/task-lifecycle.md).
+- Request briefs, approval revisions, review pane: [request-briefs.md](docs/reference/request-briefs.md).
+- Usage receipts, model routing, premium-tier approval: [usage-and-routing.md](docs/reference/usage-and-routing.md).
+- Validation, review, findings, review levels, child results: [review-and-validation.md](docs/reference/review-and-validation.md).
+- Inspect, steer, answer, messages, CLI consent: [control.md](docs/reference/control.md).
+- Tool actions, notifications, compaction, maintenance, disk admission: [omp-extension.md](docs/reference/omp-extension.md).
+- Draft and final PRs, merge, presentations: [delivery.md](docs/reference/delivery.md).
+- Reviewing someone else's PR (`pr-review` tasks): [pr-review.md](docs/reference/pr-review.md).
+- Durable state, locking, restart, central recovery and its re-entry table: [recovery.md](docs/reference/recovery.md).
+- Block causes, stale records, panes, leases, `tandem fix`: [reconciliation.md](docs/reference/reconciliation.md).
 
 Keep this file a routing map and cross-cutting rules. Update links when code moves; put detailed
-behavior in the reference instead of accumulating incident-specific instructions here. The README
-is written for users: describe benefits and everyday use there, and keep contracts in the reference.
+behavior in docs/reference/ instead of accumulating incident-specific instructions here. The README
+is written for users: describe benefits and everyday use there, and keep contracts in docs/reference/.
