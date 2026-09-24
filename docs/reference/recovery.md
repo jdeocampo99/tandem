@@ -6,7 +6,7 @@ stops, saves, and re-enters a stuck task.
 Code: src/recovery/central.ts, src/recovery/central-review.ts, src/runtime/database.ts,
 src/runtime/persistence.ts, src/runtime/schema.ts, src/workers/workflow.ts,
 src/workers/terminal-extension.ts, src/service/controller.ts, src/tasks/control.ts,
-src/config/environment.ts
+src/tasks/endpoint-launch.ts, src/config/environment.ts
 
 ## Durable home
 
