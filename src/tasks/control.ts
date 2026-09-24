@@ -486,6 +486,7 @@ export class TaskControlWorkflow {
     taskId: string,
     action: ControlAction,
     reason: string | undefined,
+    discard = false,
   ): Promise<TaskRecord> {
     return withStateLock(this.#deps.home, async () => {
       const prepared = await this.#deps.store.exclusive(async (store) => {
@@ -508,6 +509,7 @@ export class TaskControlWorkflow {
           action,
           generation: task.generation,
           requestedAt: this.#deps.clock(),
+          ...(action === "cancel" && discard ? { discard: true } : {}),
         };
         await writeRuntimeState(
           this.#deps.runtimePath,

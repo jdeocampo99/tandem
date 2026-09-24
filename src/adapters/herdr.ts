@@ -194,6 +194,8 @@ export type InterruptEndpointResult = Readonly<{
 export type CloseEndpointInput = Readonly<{
   endpoint: Endpoint;
   cwd: string;
+  /** The user approved discarding the pane's work, so a still-running process closes with it. */
+  force?: boolean;
 }>;
 
 export type CloseEndpointResult = Readonly<{
@@ -1131,7 +1133,7 @@ export async function closeEndpoint(
     }
     throw error;
   }
-  if (inspection.activeWorker) throw new EndpointBusyError(input.endpoint);
+  if (inspection.activeWorker && input.force !== true) throw new EndpointBusyError(input.endpoint);
   const request = herdrRequest(input.endpoint.sessionId, input.cwd, [
     "pane",
     "close",

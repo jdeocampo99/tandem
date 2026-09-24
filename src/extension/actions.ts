@@ -128,6 +128,7 @@ export type TandemAction =
       readonly action: "cancel";
       readonly taskId: string;
       readonly reason?: string | undefined;
+      readonly discard?: boolean | undefined;
     }>
   | Readonly<{
       readonly action: "present";
@@ -286,7 +287,12 @@ async function approvalPrompt(
       };
     }
     case "cancel":
-      return { title: `Stop ${name}?`, message: "Its work and reports are kept." };
+      return action.discard === true
+        ? {
+            title: `Stop ${name} and delete its worktree?`,
+            message: "This discards its changes. Reports are kept.",
+          }
+        : { title: `Stop ${name}?`, message: "Its work and reports are kept." };
     case "publish":
       return {
         title: `Open a PR for ${name}?`,
@@ -462,7 +468,11 @@ export async function executeTandemAction(
     case "resume":
       return textResult(await service.resume(action.taskId), action.action);
     case "cancel":
-      return textResult(await service.cancel(action.taskId, action.reason), action.action, true);
+      return textResult(
+        await service.cancel(action.taskId, action.reason, { discard: action.discard === true }),
+        action.action,
+        true,
+      );
     case "present":
       return textResult(
         await service.present(action.taskId, {

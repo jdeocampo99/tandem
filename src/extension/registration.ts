@@ -215,7 +215,12 @@ export function registerTandemOmp(
       .strict(),
     z.object({ action: z.literal("resume"), taskId: z.string() }).strict(),
     z
-      .object({ action: z.literal("cancel"), taskId: z.string(), reason: z.string().optional() })
+      .object({
+        action: z.literal("cancel"),
+        taskId: z.string(),
+        reason: z.string().optional(),
+        discard: z.boolean().optional(),
+      })
       .strict(),
     z
       .object({

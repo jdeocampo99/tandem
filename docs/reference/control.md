@@ -29,6 +29,11 @@ src/terminal/cli-arguments.ts, src/cli.ts
 
 - Pause and resume are non-destructive. Cancel needs explicit consent and preserves reports and
   unmerged work.
+- The extension's `cancel` with `discard` asks once to stop the task and delete its worktree. The
+  flag is saved on the durable stop request and handed to the cleanup that follows the cancel, which
+  discards the implementation worktree once its workers are proven stopped. A crash between settling
+  the stop and that cleanup keeps the worktree. On an already-cancelled task it runs
+  `cleanup --discard` directly.
 - Recovery resumes only from a valid paused or blocked previous stage; it never guesses a missing
   endpoint or job.
 
