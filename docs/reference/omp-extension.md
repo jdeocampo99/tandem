@@ -15,8 +15,8 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
 - Tool text is a bounded summary; structured details stay in the tool result and durable reports.
 - `/tandem` parses arguments with shell-style quoting only; nothing runs in a shell.
 - The tool is registered with OMP `write` approval. `requiresHumanApproval` covers `setup`,
-  `configure-models`, `approve`, `brief-approve`, `cancel`, `publish`, `publish-now`, `draft`,
-  `merge`, and `cleanup` with `discard`. Each needs a live TUI confirmation; without an
+  `configure-models`, `approve`, `brief-approve`, `cancel` (with or without `discard`), `publish`,
+  `publish-now`, `draft`, `merge`, and `cleanup` with `discard`. Each needs a live TUI confirmation; without an
   interactive TUI they fail closed.
 - `configure-models` does not change existing task snapshots.
 
@@ -153,5 +153,8 @@ A missing note loads unchanged; a present but malformed note fails the read as s
 ## Discard
 
 `cleanup --discard` needs `--yes` (CLI) or live TUI confirmation (extension), then uses Treehouse's
-force return. Never use it to resolve an ambiguous, dirty, ignored, or unmerged worktree unless the
+force return. The extension's `cancel` with `discard` covers the same deletion in its one confirmation.
+Discard also closes the task's own panes when their worker ignores the close request or keeps the
+foreground; pane ownership is still verified first. Any cleanup closes the panes of the task's
+finished or failed presentations, whose artifacts stay on disk; a running presentation is left alone. Never use it to resolve an ambiguous, dirty, ignored, or unmerged worktree unless the
 human explicitly accepts losing that work.

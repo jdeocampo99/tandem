@@ -181,7 +181,11 @@ import {
   validateModelAssignments,
   workerRoleForTask,
 } from "./records.ts";
-import { releaseTerminalTaskResources, runCleanupCommands } from "./scout-cleanup.ts";
+import {
+  releaseTerminalTaskResources,
+  runCleanupCommands,
+  type TerminalTaskCleanupOptions,
+} from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskSourcePath } from "./source.ts";
 
 export type CreateTaskRequest = Readonly<{
@@ -282,7 +286,11 @@ export type TandemService = Readonly<{
   readonly pause: (id: string, reason?: string) => Promise<TaskRecord>;
   readonly resume: (id: string) => Promise<TaskRecord>;
   readonly restart: (id: string) => Promise<TaskRecord>;
-  readonly cancel: (id: string, reason?: string) => Promise<TaskRecord>;
+  readonly cancel: (
+    id: string,
+    reason?: string,
+    input?: { readonly discard?: boolean },
+  ) => Promise<TaskRecord>;
   readonly describePr: (id: string, summary: PrSummary) => Promise<string>;
   readonly publish: (
     id: string,
@@ -791,7 +799,7 @@ class TandemController {
       pause: (id, reason) => this.pause(id, reason),
       resume: (id) => this.resume(id),
       restart: (id) => this.restart(id),
-      cancel: (id, reason) => this.cancel(id, reason),
+      cancel: (id, reason, input) => this.cancel(id, reason, input),
       describePr: (id, summary) => this.describePr(id, summary),
       publish: (id, input) => this.publish(id, input),
       publishNow: (id, input) => this.publishNow(id, input),
@@ -1117,12 +1125,26 @@ class TandemController {
     return this.#control.restartTask(taskId);
   }
 
-  async cancel(id: string, reason?: string): Promise<TaskRecord> {
-    return this.#control.controlTask(
-      assertTaskId(id),
+  /** With discard, the cleanup that follows the cancel deletes the worktree and its changes. */
+  async cancel(
+    id: string,
+    reason?: string,
+    input: { readonly discard?: boolean } = {},
+  ): Promise<TaskRecord> {
+    const taskId = assertTaskId(id);
+    const discard = input.discard === true;
+    const alreadyCancelled = discard && (await this.get(taskId)).stage === "cancelled";
+    const task = await this.#control.controlTask(
+      taskId,
       "cancel",
       reason === undefined ? undefined : text(reason, "reason"),
+      discard,
     );
+    // An earlier cancel already ran its cleanup and kept the worktree, so discard it directly.
+    if (alreadyCancelled) {
+      await this.cleanup(taskId, { discard: true, destructiveApproval: true });
+    }
+    return task;
   }
 
   async acknowledge(id: string, notificationId: string): Promise<TaskRecord> {
@@ -1409,15 +1431,25 @@ class TandemController {
           ...(job === undefined ? {} : { job }),
         });
       } catch (error) {
-        if (!isMissingEndpoint(error)) throw error;
+        // A discard closes the pane below even when its worker won't exit on request.
+        if (!isMissingEndpoint(error) && !discard) throw error;
       }
     }
-    for (const endpoint of runtime.endpoints) {
+    // A finished or failed mockup's pane holds nothing its artifact file doesn't, so it closes even
+    // with its process still running; a running mockup is left alone.
+    const presentationPanes = (await this.readState()).presentations.flatMap((presentation) =>
+      presentation.taskId === task.id &&
+      presentation.endpoint !== undefined &&
+      !activeRuntimeJob(presentation.job)
+        ? [{ endpoint: presentation.endpoint, cwd: presentation.job.cwd, force: true }]
+        : [],
+    );
+    for (const pane of [
+      ...runtime.endpoints.map((endpoint) => ({ endpoint, cwd, force: discard })),
+      ...presentationPanes,
+    ]) {
       try {
-        await closeEndpoint(this.#deps.run, {
-          endpoint,
-          cwd: taskSourcePath(task, runtime),
-        });
+        await closeEndpoint(this.#deps.run, pane);
       } catch (error) {
         if (!isMissingEndpoint(error)) throw error;
       }
@@ -2057,8 +2089,11 @@ class TandemController {
     }
     let runtime = loadedRuntime;
     if (runtime.stopRequest !== undefined) {
+      // Settling clears the stop request, so read the cancel's discard approval first. A crash in
+      // between loses it and keeps the worktree, which is the safe side.
+      const discard = runtime.stopRequest.discard === true;
       await this.#control.reconcileStopRequest(task, runtime);
-      await this.cleanupSettledTask(task.id);
+      await this.cleanupSettledTask(task.id, { discard });
       return;
     }
     if (isTerminalTask(task)) {
@@ -2319,7 +2354,10 @@ class TandemController {
     return result.canAllocate;
   }
 
-  private async cleanupTerminalTask(task: TaskRecord): Promise<void> {
+  private async cleanupTerminalTask(
+    task: TaskRecord,
+    options: TerminalTaskCleanupOptions = {},
+  ): Promise<void> {
     await releaseTerminalTaskResources(
       {
         home: this.#deps.home,
@@ -2330,6 +2368,7 @@ class TandemController {
         cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home: this.#deps.home }),
       },
       task,
+      options,
     );
   }
 
@@ -2337,10 +2376,13 @@ class TandemController {
    * Releases a task's child resources in the same pass that settled it, so a completed scout does
    * not hold its pane and worktree until a later coordinator turn.
    */
-  private async cleanupSettledTask(taskId: string): Promise<void> {
+  private async cleanupSettledTask(
+    taskId: string,
+    options: TerminalTaskCleanupOptions = {},
+  ): Promise<void> {
     const current = await this.#deps.store.read(taskId);
     if (current === undefined || !isTerminalTask(current)) return;
-    await this.cleanupTerminalTask(current);
+    await this.cleanupTerminalTask(current, options);
   }
 
   private async removeEndpoint(taskId: string, paneId: string): Promise<void> {
