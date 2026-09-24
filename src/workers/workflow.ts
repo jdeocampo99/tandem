@@ -3385,6 +3385,8 @@ export class WorkerWorkflow {
             },
           }),
       communication,
+      // One OMP conversation per task: a fix round continues where the implementer left off.
+      ...(sessionDirectory === undefined ? {} : { sessionDirectory }),
       ...(this.#deps.workerTimeoutMs === undefined
         ? {}
         : { timeoutMs: this.#deps.workerTimeoutMs }),
