@@ -55,8 +55,7 @@ reads them further and nothing acts on them.
 - The head commit's tree is read (`gh api repos/R/commits/SHA`) only when the head changes.
 - Extra reads happen only when the decision asks for them: the base branch's checks (one GraphQL
   call) when a check fails, the files both sides changed (two compare calls) on a conflict, and the issue events (label and auto-merge changes, with who made
-  them) when the pull request left the queue. Whether the repository has `.aviator/config.yml` is
-  read once per watch, and only when its settings do not name `mergeWith`.
+  them) when the pull request left the queue.
 - An unreadable pull request (missing SSO authorization, a GraphQL error, no rollup at all) shows
   `⚠ can't read` with GitHub's reason, never "no checks".
 - `gh` output naming a rate limit (or HTTP 429) stops the pass, records a 15-minute wait, and the
@@ -99,6 +98,7 @@ acting, the watcher checks the pull request is still watched. First match wins:
 | A check failed with a retry left for this code | Empty commit to rerun CI. Not on a fork (red instead), and not on a Tandem task's draft, whose task still pushes its own commits there: that waits, yellow, until it is published. |
 | A check failed again on the same code | 🔴 red, naming the check and linking its CI page. |
 | A draft | Nothing more: CI only. |
+| Published, and the repository's merging is not set up | Ask once how it merges (see [Setting up merging](#setting-up-merging)); never arm. |
 | Published and never put up for merging (not already queued, blocked, or on auto-merge) | Look up who last took it out of the queue; unless a person did, arm auto-merge or add `queueLabel`. Once per pull request, even while checks run. |
 | Checks running, or none reported yet on a head first seen under 5 minutes ago | Nothing. |
 | Behind its base, no conflicts, and GitHub requires up-to-date branches (`mergeStateStatus` `BEHIND`) | Update the branch, once per head. Not for a pull request from a fork. |
@@ -206,17 +206,56 @@ PR watch · 4 open · checked 5s ago
 
   ```toml
   [merging]
-  mergeWith = "queue-label"     # "auto-merge" (GitHub) or "queue-label"
+  mergeWith = "queue-label"     # "auto-merge" (GitHub), "queue-label", or "off"
   queueLabel = "mergequeue"     # added to put the pull request in the queue
   blockedLabel = "blocked"      # present when the queue kicked it out
   maxCiRetries = 1
   stuckAfterMinutes = 60
   ```
 
-- Defaults: `auto-merge`, one retry, 60 minutes. A repository with `.aviator/config.yml` defaults
-  to `queue-label` with `mergequeue` and `blocked`. Keys left out keep their default.
+- Merging is opt-in per repository. Until `mergeWith` is saved, and with `mergeWith = "off"`, the
+  watcher still retries CI and reports, but never arms auto-merge, adds or swaps labels, requeues,
+  or updates branches; the row says merging isn't set up (or is off). Other keys default to one
+  retry and 60 minutes; `queueLabel` defaults to `mergequeue`.
+- The user never has to know the section exists: onboarding asks (see
+  [Setting up merging](#setting-up-merging)), and so does PR watch the first time it watches a
+  pull request in a repository with no choice saved.
 - The settings come from the checkout the watch belongs to: the task's repository (or its target
   checkout), the directory or project it was named from when that is its repository, or else the
   registered Tandem project whose `origin` is its repository (looked up once, when the watch
   starts). With none of those, the defaults apply.
 - Setup writes the section commented out with descriptions, like the other settings.
+
+## Setting up merging
+
+- **The check** (`checkMerging`, src/pr-watch/merging-check.ts) is read-only: `gh api repos/R`
+  (readable at all, "Allow auto-merge", default branch), `.aviator/config.yml`, the default
+  branch's rulesets (`repos/R/rules/branches/B`) and, where this login may read it, its classic
+  protection. It reports:
+  - an unreadable repository (not signed in, SSO not authorized) as one plain sentence to act on;
+  - the method: Aviator config → `queue-label` with `mergequeue` and `blocked`; otherwise "Allow
+    auto-merge" on → `auto-merge`; otherwise unknown, which needs one question (which label
+    queues a pull request, or GitHub auto-merge once turned on);
+  - whether the base requires checks (`yes`, `none`, or `unknown` when GitHub won't say), with a
+    warning when none: a pull request could merge before CI finishes;
+  - whether a push dismisses approvals (`yes`, `no`, `unknown`), with a warning when it does:
+    every CI retry would cost the pull request its approvals.
+- `onboard --json` includes it as `merging`, plus `workerSkillOffer`: Claude Code plugin skills
+  not yet in `workerSkills`, empty once the user answered that offer. The onboarding skill asks
+  one optional question for each and never about retries or other knobs.
+- **First watch.** `tandem watch` / `pr-watch-start` on a pull request whose repository has a
+  Tandem project and no saved choice runs the check and raises the question at once; a published
+  Tandem task's pull request raises it on the next tick (the `offer-merging` action, once per pull
+  request). The question reaches the coordinator's chat with a hidden line saying how to save the
+  answer, like the conflict question.
+- **Saving.** The answer is saved by `pr-watch-merging` (the coordinator; needs the user's approval
+  in the TUI) or `configure-merging --input FILE --yes` (onboarding). "Not now" saves
+  `mergeWith = "off"`, so it isn't asked again. Onboarding saves the plugin-skill answer with
+  `configure-worker-skills --input FILE --yes` into `<home>/settings.toml`, an empty list for no.
+- **How it writes.** `saveMergingChoice` (src/config/repositories.ts) is the only edit Tandem makes
+  to a saved project's settings.toml: it adds `mergeWith` (and the labels) to `[merging]`, adding
+  the section at the end when there is none, never replaces a `mergeWith` already there, validates
+  the result, re-reads the file just before writing and writes nothing if it changed, and writes
+  atomically. The settings path goes through the same symlink checks as every policy read.
+  `saveWorkerSkills` does the same for `workerSkills` in the home settings, creating the file
+  exclusively when it is missing.

@@ -21,6 +21,7 @@ import {
   readCoordinatorMcpServers,
   readMergingSettings,
   resolveRepoPolicy,
+  saveMergingChoice,
 } from "../../src/config/repositories.ts";
 
 type PolicyFixture = Readonly<{
@@ -593,6 +594,38 @@ test("cleanup commands are read from settings.toml and kept out of task policy",
     );
     await expect(resolveRepoPolicy({ repoPath: repo, home })).rejects.toThrow(
       "cleanupCommands must be an array of commands",
+    );
+  });
+});
+
+test("saving how a project merges adds [merging] once and refuses stale or already-set settings", async () => {
+  await withFixture("merging-repo", async ({ repo, home }) => {
+    await expect(
+      saveMergingChoice({ repoPath: repo, home, choice: { mergeWith: "auto-merge" } }),
+    ).rejects.toThrow("save its settings first");
+    const written = await onboardRepo({ repoPath: repo, home, write: true });
+    const before = await readFile(written.configPath, "utf8");
+
+    const saved = await saveMergingChoice({
+      repoPath: repo,
+      home,
+      choice: { mergeWith: "queue-label", queueLabel: "ready-to-merge" },
+    });
+    expect(saved).toEqual({ mergeWith: "queue-label", queueLabel: "ready-to-merge" });
+    const after = await readFile(written.configPath, "utf8");
+    expect(after.startsWith(before.trimEnd())).toBe(true);
+    expect(await readMergingSettings({ repoPath: repo, home })).toEqual(saved);
+    await expect(resolveRepoPolicy({ repoPath: repo, home })).resolves.toBeDefined();
+    await expect(
+      saveMergingChoice({ repoPath: repo, home, choice: { mergeWith: "off" } }),
+    ).rejects.toThrow("already says how this project merges");
+
+    await writeFile(
+      written.configPath,
+      `repoPath = ${JSON.stringify(repo)}\n\n[merging]\nmaxCiRetries = 2\n`,
+    );
+    expect(await saveMergingChoice({ repoPath: repo, home, choice: { mergeWith: "off" } })).toEqual(
+      { mergeWith: "off", maxCiRetries: 2 },
     );
   });
 });

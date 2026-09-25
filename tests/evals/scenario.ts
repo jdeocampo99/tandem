@@ -118,6 +118,12 @@ export type ScenarioGitHub = Readonly<{
   readonly myPullRequests: Array<Readonly<{ repo: string; number: number }>>;
   /** Repositories whose default branch has `.aviator/config.yml`. */
   readonly aviatorRepositories: string[];
+  /** Repositories with GitHub's "Allow auto-merge" on. */
+  readonly autoMergeRepositories: string[];
+  /** Repositories the gh login can't read, as with missing SSO authorization. */
+  readonly unreadableRepositories: string[];
+  /** The rules on each `repo:branch`, as `repos/R/rules/branches/B` lists them. */
+  readonly branchRules: Map<string, unknown[]>;
   /** Someone else changes labels, like a merge queue kicking the pull request out. */
   readonly relabel: (
     pullRequest: ScenarioPullRequest,
@@ -298,6 +304,9 @@ function githubAction(argv: readonly string[]): string {
     [/\/contents\//u, "contents"],
     [/\/compare\//u, "compare"],
     [/\/merges$/u, "merges"],
+    [/\/rules\/branches\//u, "rules"],
+    [/\/protection$/u, "protection"],
+    [/^repos\/[^/]+\/[^/]+$/u, "repository"],
   ];
   const kind = kinds.find(([pattern]) => pattern.test(endpoint))?.[1] ?? endpoint;
   return `gh api ${argv.includes("-X") ? method : "GET"} ${kind}`;
@@ -697,6 +706,9 @@ export async function createScenarioWorld(
   const trees = new Map<string, string>();
   const myPullRequests: Array<Readonly<{ repo: string; number: number }>> = [];
   const aviatorRepositories: string[] = [];
+  const autoMergeRepositories: string[] = [];
+  const unreadableRepositories: string[] = [];
+  const branchRules = new Map<string, unknown[]>();
   const relabel: ScenarioGitHub["relabel"] = (pullRequest, change) => {
     const type = change.bot ? "Bot" : "User";
     if (change.remove !== undefined) {
@@ -757,6 +769,9 @@ export async function createScenarioWorld(
     },
     myPullRequests,
     aviatorRepositories,
+    autoMergeRepositories,
+    unreadableRepositories,
+    branchRules,
     relabel,
   };
   const pullRequestArgument = (argv: readonly string[]): ScenarioPullRequest =>
@@ -872,6 +887,29 @@ export async function createScenarioWorld(
           },
         }),
       );
+    }
+    const repository = /^repos\/([^/]+\/[^/]+)$/u.exec(endpoint)?.[1];
+    if (repository !== undefined) {
+      if (unreadableRepositories.includes(repository)) {
+        return commandResult(
+          "",
+          1,
+          "gh: Resource protected by organization SAML enforcement (HTTP 403)",
+        );
+      }
+      return commandResult(
+        JSON.stringify({
+          allow_auto_merge: autoMergeRepositories.includes(repository),
+          default_branch: "main",
+        }),
+      );
+    }
+    const rules = /^repos\/([^/]+\/[^/]+)\/rules\/branches\/(.+)$/u.exec(endpoint);
+    if (rules !== null) {
+      return commandResult(JSON.stringify(branchRules.get(`${rules[1]}:${rules[2]}`) ?? []));
+    }
+    if (/^repos\/[^/]+\/[^/]+\/branches\/.+\/protection$/u.test(endpoint)) {
+      return commandResult("", 1, "gh: Branch not protected (HTTP 404)");
     }
     const contents = /^repos\/([^/]+\/[^/]+)\/contents\//u.exec(endpoint);
     if (contents !== null) {

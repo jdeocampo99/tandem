@@ -11,6 +11,11 @@ import type { PrWatch } from "../../src/pr-watch/store.ts";
 import { pollDue, pollIntervalMinutes } from "../../src/pr-watch/watcher.ts";
 
 const NOW = "2030-01-01T12:00:00.000Z";
+const AVIATOR = mergingSettings({
+  mergeWith: "queue-label",
+  queueLabel: "mergequeue",
+  blockedLabel: "blocked",
+});
 
 type CheckInput = Omit<WatchedCheck, "required"> & { readonly required?: boolean };
 
@@ -46,10 +51,11 @@ function facts(overrides: Partial<PrWatchFacts> = {}): PrWatchFacts {
   return {
     observation: pr(),
     log: [],
-    settings: mergingSettings(undefined, false),
+    settings: mergingSettings({ mergeWith: "auto-merge" }),
     now: NOW,
     headSeenAt: NOW,
     watchedSince: NOW,
+    canSaveMerging: false,
     ...overrides,
   };
 }
@@ -157,21 +163,32 @@ test("checks run every minute while busy, every five otherwise, and not at all w
   ).toBe(false);
 });
 
-test("settings fall back to auto-merge, or Aviator's labels when the repository has its config", () => {
-  expect(mergingSettings(undefined, false)).toEqual({
-    mergeWith: "auto-merge",
+test("merging stays off until the user chose how the repository merges", () => {
+  expect(mergingSettings(undefined)).toEqual({
+    mergeWith: "not-set-up",
     queueLabel: "mergequeue",
     maxCiRetries: 1,
     stuckAfterMinutes: 60,
   });
-  expect(mergingSettings(undefined, true)).toMatchObject({
-    mergeWith: "queue-label",
-    queueLabel: "mergequeue",
-    blockedLabel: "blocked",
-  });
   expect(
-    mergingSettings({ mergeWith: "queue-label", queueLabel: "ready-to-merge" }, false),
+    mergingSettings({ mergeWith: "queue-label", queueLabel: "ready-to-merge" }),
   ).not.toHaveProperty("blockedLabel");
+  const green = pr({ checks: [{ name: "unit", state: "passed" }] });
+  const unset = facts({ observation: green, settings: mergingSettings(undefined) });
+  expect(decidePrWatch(unset)).toEqual({
+    kind: "decided",
+    row: { color: "yellow", status: "✅ approved", note: "merging isn't set up for this repo" },
+  });
+  expect(decidePrWatch({ ...unset, canSaveMerging: true })).toMatchObject({
+    action: { kind: "offer-merging" },
+  });
+  const offered = { at: NOW, kind: "offer-merging" as const, head: "head-1", tree: "tree-1" };
+  expect(decidePrWatch({ ...unset, canSaveMerging: true, log: [offered] })).not.toHaveProperty(
+    "action",
+  );
+  expect(
+    decidePrWatch({ ...unset, settings: mergingSettings({ mergeWith: "off" }) }),
+  ).toMatchObject({ row: { note: "merging is off for this repo" } });
 });
 
 test("a branch GitHub requires to be up to date is updated once per head, never a fork's", () => {
@@ -263,14 +280,14 @@ test("the watcher never pushes to a Tandem task's draft, a fork, or ahead of CI 
   );
   const noChecksYet = facts({
     observation: pr({ labels: ["blocked"] }),
-    settings: mergingSettings(undefined, true),
+    settings: AVIATOR,
     log: [{ at: NOW, kind: "queue", head: "head-0", tree: "tree-0" }],
   });
   expect(decidePrWatch(noChecksYet)).toMatchObject({ row: { note: "⏳ waiting for CI to start" } });
 });
 
 test("a dequeue by a person, or by no one GitHub names, is left alone and never re-armed", () => {
-  const queue = mergingSettings(undefined, true);
+  const queue = AVIATOR;
   const green = pr({ checks: [{ name: "unit", state: "passed" }] });
   const unarmed = facts({ observation: green, settings: queue });
   expect(decidePrWatch(unarmed)).toEqual({ kind: "look-up", lookup: "dequeued-by" });

@@ -1,4 +1,4 @@
-import { readFile, realpath } from "node:fs/promises";
+import { readdir, readFile, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { MAX_SKILL_NAME_CHARS, MAX_TASK_SKILLS_BYTES, type SkillInvocation } from "../contracts.ts";
 import { skillInstructionBytes } from "../tasks/skill-invocation.ts";
@@ -150,6 +150,32 @@ async function pluginSkillFolders(
     if (directory !== undefined) found.push(directory);
   }
   return found;
+}
+
+/**
+ * The skills the user's Claude Code plugins ship, by the name that finds each one: the folder
+ * name, or `plugin:name` when two plugins ship a skill with that name.
+ */
+export async function listPluginSkills(personalHome: string): Promise<readonly string[]> {
+  const found: Readonly<{ plugin: string; name: string }>[] = [];
+  for (const install of await installedPlugins(personalHome)) {
+    let entries: readonly string[];
+    try {
+      entries = await readdir(join(install.path, "skills"));
+    } catch (error) {
+      if (isNotFoundError(error)) continue;
+      throw error;
+    }
+    for (const name of entries) {
+      if ((await realSkillFolder(join(install.path, "skills", name))) !== undefined) {
+        found.push({ plugin: install.plugin, name });
+      }
+    }
+  }
+  const names = found.map(({ plugin, name }) =>
+    found.filter((other) => other.name === name).length > 1 ? `${plugin}:${name}` : name,
+  );
+  return [...new Set(names)].sort();
 }
 
 async function installedPlugins(

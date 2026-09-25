@@ -23,7 +23,8 @@ src/adapters/typesafe.ts, src/instructions.ts
 - Global model choices: `<home>/models.json`.
 - Home settings: `<home>/settings.toml`, optional and hand-written, read live on each use and
   never pinned (src/config/home-settings.ts). `workerSkills` lists personal skills every task
-  carries (see [Skills](#skills)). Unknown keys and bad TOML are refused.
+  carries (see [Skills](#skills)); onboarding offers the user's Claude Code plugin skills once and
+  saves the answer here, an empty list for no. Unknown keys and bad TOML are refused.
 - Any symlink in the policy namespace below the home (`inspectPolicyPath`) fails closed. New
   directories use `0700`; new files use `0600`.
 - A child-root `.tandem.json` from old builds is ignored: neither imported nor deleted.
@@ -45,6 +46,11 @@ src/adapters/typesafe.ts, src/instructions.ts
 - A later custom policy edit requires approval scoped to the project and fields, a re-read
   immediately before writing (stale-snapshot guard for an existing file, exclusive create for a
   missing one), and refusal if a path or symlink could escape the home. Do not add a CLI flag for it.
+- The one such edit Tandem makes is saving how PR watch merges (`[merging] mergeWith`), after the
+  user answered in onboarding or at the first watch: `configure-merging` or `pr-watch-merging`,
+  each with its own approval, through `saveMergingChoice`, which only adds fields and follows the
+  guard above (see [pr-watch.md](pr-watch.md#setting-up-merging)). `configure-worker-skills` saves
+  `workerSkills` into the home settings the same way.
 
 ### Proposed commands
 

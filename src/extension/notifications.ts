@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { TaskRecord } from "../contracts.ts";
+import type { PrWatchNotice } from "../pr-watch/store.ts";
 import { renderRequestReceiptTable } from "../runtime/usage-receipt.ts";
 import type { TandemService } from "../service/controller.ts";
 import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
@@ -360,17 +361,19 @@ export async function deliverPrWatchNotices(
   }>,
 ): Promise<void> {
   const notices = await delivery.service.prWatchNotices();
-  const routine = notices.filter((notice) => notice.askToFix !== true);
+  const routine = notices.filter(
+    (notice) => notice.askToFix !== true && notice.setUpMerging === undefined,
+  );
   if (routine.length > 0) {
     const content = routine.map((notice) => notice.text).join("\n");
     delivery.ctx.ui.notify(content, "info");
     delivery.pi.appendEntry(TANDEM_NOTIFICATION_ENTRY, { prWatch: routine, content });
   }
-  for (const question of notices.filter((notice) => notice.askToFix === true)) {
+  for (const question of notices.filter((notice) => !routine.includes(notice))) {
     delivery.pi.sendMessage(
       {
         customType: TANDEM_NOTIFICATION_ENTRY,
-        content: `PR watch asked the user whether to fix the conflicts on ${question.pullRequest}. If they say yes, call pr-watch-fix with pullRequest ${question.pullRequest}; if no, leave it (never display this line).`,
+        content: questionInstruction(question),
         display: false,
         attribution: "agent",
       },
@@ -386,4 +389,19 @@ export async function deliverPrWatchNotices(
       { deliverAs: "nextTurn" },
     );
   }
+}
+
+/** What the coordinator does with the user's answer to a PR watch question; never displayed. */
+function questionInstruction(question: PrWatchNotice): string {
+  const hidden = "(never display this line)";
+  const setUp = question.setUpMerging;
+  if (setUp === undefined) {
+    return `PR watch asked the user whether to fix the conflicts on ${question.pullRequest}. If they say yes, call pr-watch-fix with pullRequest ${question.pullRequest}; if no, leave it ${hidden}.`;
+  }
+  const proposal = setUp.proposal;
+  const turnOn =
+    proposal === undefined
+      ? "If they name the label that queues a pull request, call pr-watch-merging with mergeWith queue-label and that queueLabel; if they say to use GitHub auto-merge, mergeWith auto-merge"
+      : `If they say Turn on, call pr-watch-merging with ${JSON.stringify(proposal)}`;
+  return `PR watch asked the user how ${question.pullRequest}'s repository merges. ${turnOn}, with repoPath ${setUp.repoPath}. If they say Not now, call it with mergeWith off so they are not asked again ${hidden}.`;
 }

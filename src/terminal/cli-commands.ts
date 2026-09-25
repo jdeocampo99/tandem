@@ -22,6 +22,8 @@ import {
 } from "./cli-arguments.ts";
 import {
   createInputFromInvocation,
+  jsonObjectFromFile,
+  mergingChoiceFrom,
   modelAssignmentsFromFile,
   modelForPolicy,
   repoFor,
@@ -252,12 +254,47 @@ const CLI_COMMAND_HANDLERS: Readonly<Record<CliCommand, CliCommandHandler>> = {
     const models = await modelAssignmentsFromFile(capabilities.statPath, input);
     return { value: await service().configureModels({ repoPath, models }), approved: true };
   },
+  "configure-merging": async ({ invocation, environment, service, capabilities }) => {
+    requireYes(invocation, "saving how this project merges");
+    const input = await jsonObjectFromFile(
+      capabilities.statPath,
+      invocation.options.input,
+      "configure-merging",
+    );
+    const repoPath = repoFor(invocation, environment);
+    return {
+      value: await service().saveMerging({ repoPath, choice: mergingChoiceFrom(input) }),
+      approved: true,
+    };
+  },
+  "configure-worker-skills": async ({ invocation, service, capabilities }) => {
+    requireYes(invocation, "saving worker skills");
+    const input = await jsonObjectFromFile(
+      capabilities.statPath,
+      invocation.options.input,
+      "configure-worker-skills",
+    );
+    const skills = input.workerSkills;
+    if (!Array.isArray(skills) || !skills.every((skill) => typeof skill === "string")) {
+      throw new CliUsageError("input.workerSkills must be a list of skill names");
+    }
+    return { value: await service().saveWorkerSkills(skills), approved: true };
+  },
   doctor,
   setup: onboardWithConsent,
   onboard: async (context) => {
     if (context.invocation.options.write) return onboardWithConsent(context);
     const repoPath = repoFor(context.invocation, context.environment);
-    return { value: await context.service().onboard(repoPath, false) };
+    const service = context.service();
+    // Read-only extras for the onboarding conversation: how pull requests would merge, and
+    // plugin skills worth offering to every task.
+    return {
+      value: {
+        ...(await service.onboard(repoPath, false)),
+        merging: await service.mergingCheck(repoPath),
+        workerSkillOffer: await service.workerSkillOffer(),
+      },
+    };
   },
   create: async ({ invocation, environment, service }) => ({
     value: await service().create(createInputFromInvocation(invocation, environment)),

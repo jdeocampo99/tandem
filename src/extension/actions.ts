@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { MergingChoice } from "../config/repositories.ts";
 import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
@@ -165,6 +166,14 @@ export type TandemAction =
   | Readonly<{ readonly action: "review-close"; readonly taskId: string }>
   | Readonly<{ readonly action: "pr-watch" }>
   | Readonly<{
+      readonly action: "pr-watch-merging";
+      /** The Tandem project whose settings get the answer. */
+      readonly repoPath: string;
+      readonly mergeWith: "auto-merge" | "queue-label" | "off";
+      readonly queueLabel?: string | undefined;
+      readonly blockedLabel?: string | undefined;
+    }>
+  | Readonly<{
       readonly action: "pr-watch-start" | "pr-watch-stop" | "pr-watch-fix";
       /** A GitHub PR URL, `owner/repo#123`, or `#123` in `repoPath`. */
       readonly pullRequest: string;
@@ -205,7 +214,8 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "draft" ||
     action.action === "merge" ||
     action.action === "review-post" ||
-    action.action === "pr-watch-fix"
+    action.action === "pr-watch-fix" ||
+    action.action === "pr-watch-merging"
   );
 }
 function capitalize(value: string): string {
@@ -253,6 +263,15 @@ async function approvalPrompt(
           title: `Delete the worktrees for ${names.length} tasks?`,
           message: `${names.map((name) => `- ${name}`).join("\n")}\nThis discards their changes.`,
         };
+  }
+  if (action.action === "pr-watch-merging") {
+    const how =
+      action.mergeWith === "off"
+        ? "PR watch keeps retrying CI but never merges here."
+        : action.mergeWith === "auto-merge"
+          ? "PR watch turns on GitHub auto-merge for published pull requests."
+          : `PR watch adds the ${action.queueLabel ?? ""} label to published pull requests.`;
+    return { title: `Save how ${projectName(action.repoPath)} merges?`, message: how };
   }
   if (action.action === "pr-watch-fix") {
     return {
@@ -574,9 +593,27 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     textResult(await service.prWatchStart(pullRequestInput(action)), action.action),
   "pr-watch-stop": async (action, service) =>
     textResult(await service.prWatchStop(pullRequestInput(action)), action.action),
+  "pr-watch-merging": async (action, service) =>
+    textResult(
+      await service.saveMerging({ repoPath: action.repoPath, choice: mergingChoice(action) }),
+      action.action,
+      true,
+    ),
   "pr-watch-fix": async (action, service) =>
     textResult(await service.prWatchFix(pullRequestInput(action)), action.action, true),
 };
+
+function mergingChoice(
+  action: Extract<TandemAction, { readonly action: "pr-watch-merging" }>,
+): MergingChoice {
+  if (action.mergeWith !== "queue-label") return { mergeWith: action.mergeWith };
+  if (action.queueLabel === undefined) throw new TypeError("queue-label needs queueLabel");
+  return {
+    mergeWith: "queue-label",
+    queueLabel: action.queueLabel,
+    ...(action.blockedLabel === undefined ? {} : { blockedLabel: action.blockedLabel }),
+  };
+}
 
 function pullRequestInput(
   action: Extract<

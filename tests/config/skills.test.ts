@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findSkills } from "../../src/config/skills.ts";
+import { findSkills, listPluginSkills } from "../../src/config/skills.ts";
 import { MAX_TASK_SKILLS_BYTES } from "../../src/contracts.ts";
 
 async function withSkillFolders(
@@ -112,5 +112,21 @@ test("plugin skills count toward the size limit and a name given twice counts on
     await expect(findSkills(["big:big", "bigger"], search)).rejects.toThrow(
       "The skills big:big, bigger are 33 KB together",
     );
+  });
+});
+
+test("lists the skills plugins ship, qualified by plugin only when two share a name", async () => {
+  await withSkillFolders(async (search) => {
+    const codex = join(search.personalHome, "cache", "codex");
+    const other = join(search.personalHome, "cache", "other");
+    await writeSkill(join(codex, "skills", "rescue"), "Codex rescue.");
+    await writeSkill(join(codex, "skills", "buildkite"), "Read builds.");
+    await writeSkill(join(other, "skills", "rescue"), "Other rescue.");
+    await installPlugins(search.personalHome, { "codex@openai": codex, "other@market": other });
+    expect(await listPluginSkills(search.personalHome)).toEqual([
+      "buildkite",
+      "codex:rescue",
+      "other:rescue",
+    ]);
   });
 });

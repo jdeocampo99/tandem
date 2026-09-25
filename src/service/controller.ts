@@ -9,7 +9,7 @@ import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
-import { readHomeSettings } from "../config/home-settings.ts";
+import { type HomeSettings, readHomeSettings, saveWorkerSkills } from "../config/home-settings.ts";
 import {
   type ModelSettings,
   parseModelAssignments,
@@ -23,12 +23,15 @@ import {
 } from "../config/operating-profile.ts";
 import { parsePolicyOverride } from "../config/policy.ts";
 import {
+  type MergingChoice,
+  type MergingSettingsFile,
   type OnboardRepoResult,
   onboardRepo,
   readCleanupCommands,
   resolveRepoPolicy,
+  saveMergingChoice,
 } from "../config/repositories.ts";
-import { findSkills } from "../config/skills.ts";
+import { findSkills, listPluginSkills } from "../config/skills.ts";
 import type {
   AnswerTaskInput,
   BlockCause,
@@ -68,6 +71,7 @@ import {
 import type { PrReviewState } from "../pr-review/state.ts";
 import { removeReviewWorktree } from "../pr-review/worktree.ts";
 import type { PrObservation } from "../pr-watch/decide.ts";
+import { checkProjectMerging, type MergingCheck } from "../pr-watch/merging-check.ts";
 import type { PrWatchNotice } from "../pr-watch/store.ts";
 import type { PrWatchView } from "../pr-watch/view.ts";
 import {
@@ -368,6 +372,16 @@ export type TandemService = Readonly<{
    * its base into its branch and pushes, never force-pushing.
    */
   readonly prWatchFix: (input: PullRequestInput) => Promise<TaskRecord>;
+  /** Read-only: how this project's pull requests would merge, for onboarding and PR watch. */
+  readonly mergingCheck: (repoPath: string) => Promise<MergingCheck>;
+  /** Saves the user's answer about merging into the project's settings (see pr-watch.md). */
+  readonly saveMerging: (
+    input: Readonly<{ readonly repoPath: string; readonly choice: MergingChoice }>,
+  ) => Promise<MergingSettingsFile>;
+  /** Claude Code plugin skills to offer as worker skills; none once the user chose. */
+  readonly workerSkillOffer: () => Promise<readonly string[]>;
+  /** Saves the user's answer to that offer, an empty list for no. */
+  readonly saveWorkerSkills: (skills: readonly string[]) => Promise<HomeSettings>;
   readonly shutdown: () => Promise<void>;
 }>;
 
@@ -733,8 +747,29 @@ class TandemController {
           this.startConflictFix(named, pr, files),
         );
       },
+      mergingCheck: (repoPath) =>
+        checkProjectMerging(
+          this.#deps.run,
+          absoluteDirectory(repoPath, "repoPath"),
+          this.#deps.home,
+        ),
+      saveMerging: (input) =>
+        saveMergingChoice({
+          repoPath: input.repoPath,
+          home: this.#deps.home,
+          choice: input.choice,
+        }),
+      workerSkillOffer: () => this.workerSkillOffer(),
+      saveWorkerSkills: (skills) =>
+        saveWorkerSkills(this.#deps.home, readTextList(skills, "workerSkills")),
       shutdown: () => this.shutdown(),
     };
+  }
+
+  private async workerSkillOffer(): Promise<readonly string[]> {
+    const settings = await readHomeSettings(this.#deps.home);
+    if (settings.workerSkillsChosen) return [];
+    return listPluginSkills(this.#deps.personalSkillsHome);
   }
 
   async onboard(
