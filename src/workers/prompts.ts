@@ -59,7 +59,7 @@ export function workerBriefContext(
       ...(role === "implementer" && runtime.fixContextPath !== undefined
         ? [
             `This is a bounded fix round. Read findings and validation evidence from ${runtime.fixContextPath}.`,
-            "Preserve the original task scope and repair only evidence-backed findings.",
+            "Preserve the original task scope. Repair every evidence-backed finding, including P2 and P3 ones, since this round is happening anyway.",
           ]
         : []),
       ...taskMessageInstructions(task),

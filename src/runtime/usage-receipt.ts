@@ -209,9 +209,10 @@ const RECEIPT_STAGE_LABELS: Readonly<Record<RequestWorkKind, string>> = {
 };
 
 /**
- * The receipt as a boxed table: one row per stage with its working time, tokens, and OMP's
- * estimated list-price cost, the coordinator's shared row, and a total row for the request's own
- * work, followed by short notes. A figure that was never measured shows as a dash, never zero.
+ * The receipt as a boxed table: one row per stage with its working time, new tokens, and OMP's
+ * estimated list-price cost, and a total row for the request's own work, followed by short notes.
+ * The total time is time spent working; the wall-clock span and the coordinator's shared cost go in
+ * the notes. A figure that was never measured shows as a dash, never zero.
  */
 export function renderRequestReceiptTable(receipt: RequestUsageReceipt): string {
   const rows: ReceiptRow[] = [];
@@ -225,38 +226,35 @@ export function renderRequestReceiptTable(receipt: RequestUsageReceipt): string 
       cost: measuredCost(stage.charges),
     });
   }
-  const shared = receipt.coordinator !== undefined && receipt.coordinator.replies > 0;
-  if (receipt.coordinator !== undefined && shared) {
-    rows.push({
-      stage: "Coordinator *",
-      time: "shared",
-      tokens: formatTokens(receipt.coordinator.tokens),
-      cost: formatDollars(receipt.coordinator.costMicros),
-    });
-  }
   const { timing } = receipt;
+  const open = timing.elapsedMs === "unavailable";
+  const total: ReceiptRow = {
+    stage: open ? "So far" : "Total",
+    time: formatDuration(timing.activeMs),
+    tokens: measuredTokens(receipt.tokens),
+    cost: measuredCost(receipt.charges),
+  };
   const sinceIntake =
     receipt.asOf === undefined || timing.intakeAt === "unavailable"
       ? undefined
       : Date.parse(receipt.asOf) - Date.parse(timing.intakeAt);
-  const open = timing.elapsedMs === "unavailable";
-  const wallTime = open ? sinceIntake : timing.elapsedMs;
-  const total: ReceiptRow = {
-    stage: open ? "So far" : "Total",
-    time:
-      wallTime === undefined || typeof wallTime !== "number" || !Number.isFinite(wallTime)
-        ? "—"
-        : formatDuration(wallTime),
-    tokens: measuredTokens(receipt.tokens),
-    cost: measuredCost(receipt.charges),
-  };
+  const coordinator = receipt.coordinator;
 
   const notes = [
-    typeof timing.waitingMs === "number"
-      ? `${formatDuration(timing.activeMs)} working · ${formatDuration(timing.waitingMs)} waiting`
-      : `${formatDuration(timing.activeMs)} working so far`,
+    ...(typeof timing.elapsedMs === "number" && typeof timing.waitingMs === "number"
+      ? [
+          `${formatDuration(timing.elapsedMs)} from plan to finish, ${formatDuration(timing.waitingMs)} of it waiting on you or idle.`,
+        ]
+      : []),
+    ...(open && sinceIntake !== undefined && Number.isFinite(sinceIntake)
+      ? [`${formatDuration(sinceIntake)} since the plan was written.`]
+      : []),
     ...(open ? ["Still open: work running now is added when it finishes."] : []),
-    ...(shared ? ["* The coordinator also serves other requests, so it is not in the total."] : []),
+    ...(coordinator !== undefined && coordinator.replies > 0
+      ? [
+          `Our conversation over the same period cost about ${formatDollars(coordinator.costMicros)}, shared with other requests.`,
+        ]
+      : []),
     "Costs are OMP's list-price estimates, not what a subscription is billed.",
   ];
   return [
@@ -271,7 +269,7 @@ type ReceiptRow = Readonly<{ stage: string; time: string; tokens: string; cost: 
 const RECEIPT_HEADER: ReceiptRow = {
   stage: "Stage",
   time: "Time",
-  tokens: "Tokens",
+  tokens: "New tokens",
   cost: "Est. cost",
 };
 

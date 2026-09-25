@@ -80,10 +80,11 @@ export function requestIntakeEvent(
 }
 
 /**
- * The wall-clock end of a request: a scout's finished research, an implementation's published pull
- * request, or a cancellation, stamped at the task update that showed it. Implementation work never
- * reaches `completed`, so its delivery is the verified-PR handoff; the event is keyed without a
- * time, so a later human merge re-derives the same event and cannot move the delivery moment.
+ * The wall-clock end of a request: a scout's finished research, an implementation reaching ready
+ * (or a published pull request), or a cancellation, stamped at the task update that showed it.
+ * Implementation work never reaches `completed`, so its delivery is the ready handoff; the event is
+ * keyed without a time, so a later publish or human merge re-derives the same event and cannot move
+ * the delivery moment.
  */
 export function requestTerminalEvent(
   requestId: string,
@@ -190,6 +191,7 @@ const TERMINAL_STAGE_OUTCOMES: Readonly<
   Partial<Record<TaskRecord["stage"], RequestTerminalOutcome>>
 > = {
   completed: "delivered",
+  ready: "delivered",
   cancelled: "cancelled",
 };
 

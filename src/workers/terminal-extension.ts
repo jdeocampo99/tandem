@@ -7,7 +7,11 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { matchesKey } from "@oh-my-pi/pi-tui";
 import { runCommand } from "../adapters/commands.ts";
-import { createHerdrStatusReporter, type HerdrAgentState } from "../adapters/herdr-status.ts";
+import {
+  createHerdrStatusReporter,
+  type HerdrAgentState,
+  type HerdrStatusReporter,
+} from "../adapters/herdr-status.ts";
 import type { Finding, ReviewResult } from "../contracts.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
@@ -401,158 +405,362 @@ async function reviewAnchors(
   return commentableLines(await readFile(diffPath, "utf8"));
 }
 
-export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise<void> {
-  const jobPath = process.env[WORKER_JOB_PATH_ENV];
-  if (jobPath === undefined || jobPath.trim().length === 0) return;
-  const job = await readJob(jobPath);
-  const identity = workerIdentity(job, jobPath);
-  const statusReporter = createHerdrStatusReporter(runCommand, {
-    cwd: job.cwd,
-    agentLabel: `tandem-${job.role}-${job.taskId.slice(0, 8)}`,
-  });
-  await writeWorkerTerminal(jobPath, terminalState(identity, "starting", false));
+type Zod = ExtensionAPI["zod"];
+type ToolBlock = { block: true; reason: string };
+type SubmitReportToolResult = {
+  content: { type: "text"; text: string }[];
+  details: undefined;
+  isError?: true;
+};
 
-  let closed = false;
+function reviewResultSchema(z: Zod) {
+  return z
+    .object({
+      findings: z.array(
+        z
+          .object({
+            id: z.string(),
+            severity: z.enum(["P0", "P1", "P2", "P3"]),
+            verdict: z.enum(["confirmed", "plausible"]),
+            file: z.string().optional(),
+            line: z.number().int().positive().optional(),
+            description: z.string(),
+          })
+          .strict(),
+      ),
+      summary: z.string(),
+    })
+    .strict();
+}
+
+/** The `submit_report` parameters for one role: presentations add an artifact, reviewers a review. */
+function submitReportParameters(z: Zod, role: WorkerRole) {
+  const reviews = role === "reviewer";
+  return z
+    .object({
+      outcome: z.enum(outcomesFor(role)),
+      report: z
+        .string()
+        .optional()
+        .describe(
+          reviews
+            ? "Optional context for a needs-decision or failed outcome."
+            : "The full report body in Markdown.",
+        ),
+      question: z
+        .string()
+        .optional()
+        .describe("Required for needs-decision: one bounded single-line question."),
+      recommendation: z
+        .string()
+        .optional()
+        .describe("Optional for needs-decision: one bounded single-line recommendation."),
+      ...(role === "presentation"
+        ? {
+            artifactPath: z
+              .string()
+              .optional()
+              .describe("Required for completed: the absolute path of the written artifact."),
+          }
+        : {}),
+      ...(reviews
+        ? {
+            review: reviewResultSchema(z)
+              .optional()
+              .describe(
+                "Required for completed: your findings and summary. Tandem records the commit and whether the review passes.",
+              ),
+          }
+        : {}),
+    })
+    .strict();
+}
+
+function toolText(text: string): { type: "text"; text: string }[] {
+  return [{ type: "text", text }];
+}
+
+/** What `submit_report` tells the worker once its report is accepted. */
+export function submittedReportText(result: WorkerResult, reviewRound: number | undefined): string {
+  if (result.review !== undefined) {
+    return `${reviewSummary(result.review, reviewRound)}\n\nEnd your turn by replying with exactly this summary and nothing else.`;
+  }
+  return result.error === undefined
+    ? `Report submitted with status ${result.status}.`
+    : `Report submitted with status ${result.status}: ${result.error}`;
+}
+
+export type WorkerToolGuardState = Readonly<{
+  readonly delegatedSettled: boolean;
+  readonly timeoutRequested: boolean;
+  readonly pauseRequested: boolean;
+  readonly phase: WorkerTerminalState["phase"];
+  readonly completed: boolean;
+}>;
+
+/** Once the delegated work is settled, timed out, or paused, only read-only tools may run. */
+export function workerToolRefusal(
+  state: WorkerToolGuardState,
+  toolName: string,
+): ToolBlock | undefined {
+  const open =
+    !state.delegatedSettled &&
+    !state.timeoutRequested &&
+    !state.pauseRequested &&
+    state.phase !== "paused" &&
+    !state.completed;
+  if (open || READ_ONLY_TOOLS[toolName] === true) return undefined;
+  return {
+    block: true,
+    reason: "worker terminal is paused or completed; mutating tools are disabled",
+  };
+}
+
+/** A PR reviewer's shell may only read; anything else is refused with the reason. */
+export function reviewShellRefusal(
+  prReview: boolean,
+  event: Readonly<{ toolName: string; input: unknown }>,
+): ToolBlock | undefined {
+  if (!prReview || event.toolName !== "bash") return undefined;
+  const command =
+    typeof event.input === "object" && event.input !== null && "command" in event.input
+      ? event.input.command
+      : undefined;
+  const refusal =
+    typeof command === "string" ? readOnlyCommandRefusal(command) : "bash needs a command";
+  return refusal === undefined ? undefined : { block: true, reason: refusal };
+}
+
+export type WorkerPaneStatusInput = Readonly<{
+  readonly paused: boolean;
+  readonly waitingForAnswer: boolean;
+  readonly agentActive: boolean;
+  readonly settled: HerdrAgentState;
+  readonly settledMessage: string | undefined;
+}>;
+
+/** The Herdr status a worker pane shows: paused, waiting for an answer, working, or its outcome. */
+export function workerPaneStatus(
+  input: WorkerPaneStatusInput,
+): Readonly<{ state: HerdrAgentState; message: string | undefined }> {
+  if (input.paused) return { state: "blocked", message: "Worker paused" };
+  if (input.waitingForAnswer) return { state: "blocked", message: "Waiting for your answer" };
+  if (input.agentActive) return { state: "working", message: undefined };
+  return { state: input.settled, message: input.settledMessage };
+}
+
+/** The pane has something in flight: a turn, queued input, or an editor draft. */
+function paneBusy(ctx: ExtensionContext): boolean {
+  return !ctx.isIdle() || ctx.hasPendingMessages() || ctx.ui.getEditorText().trim().length > 0;
+}
+
+type WorkerTerminalDependencies = Readonly<{
+  readonly job: WorkerJob;
+  readonly jobPath: string;
+  readonly statusReporter: HerdrStatusReporter | undefined;
+  /** Queues the stall reminder as the worker's next turn. */
+  readonly sendStallReminder: () => void;
+  /** Sends text as the worker's next user message. */
+  readonly sendUserMessage: (text: string) => void;
+}>;
+
+/**
+ * One delegated worker pane: mirrors its lifecycle into the durable terminal state, delivers the
+ * result submitted through `submit_report`, and enforces pause, close, timeout, and stall control.
+ */
+class WorkerTerminalSession {
+  private readonly job: WorkerJob;
+  private readonly jobPath: string;
+  private readonly identity: NativeWorkerIdentity;
+  private readonly statusReporter: HerdrStatusReporter | undefined;
+  private readonly sendStallReminder: () => void;
+  private readonly sendUserMessage: (text: string) => void;
+  private closed = false;
+  private resultPublished = false;
+  private delegatedSettled = false;
+  private timeoutRequested = false;
+  private extensionAborted = false;
+  private pauseCommand: WorkerTerminalCommand | undefined;
+  private closingCommand: WorkerTerminalCommand | undefined;
   // The mockup turn in progress, and the last one that finished.
-  let mockupCommand: WorkerTerminalCommand | undefined;
-  let settledMockupId: string | undefined;
-  let resultPublished = false;
-  let delegatedSettled = false;
-  let timeoutRequested = false;
-  let extensionAborted = false;
-  let pauseCommand: WorkerTerminalCommand | undefined;
-  let closingCommand: WorkerTerminalCommand | undefined;
-  let writeQueue = Promise.resolve();
-  let currentState: WorkerTerminalState = terminalState(identity, "starting", false);
-  let timeoutTimer: Timer | undefined;
-  let agentActive = false;
-  let settledStatus: HerdrAgentState = "idle";
-  let statusMessage: string | undefined;
-  const waitingInputs = new Set<string>();
-  const runningTools = new Set<string>();
-  let turnActive = false;
-  let lastActivityAt = Date.now();
-  let stallReminded = false;
-  let stallAbortPending = false;
-  const abort = (ctx: ExtensionContext): void => {
-    extensionAborted = true;
+  private mockupCommand: WorkerTerminalCommand | undefined;
+  private settledMockupId: string | undefined;
+  private writeQueue = Promise.resolve();
+  private currentState: WorkerTerminalState;
+  private timeoutTimer: Timer | undefined;
+  private agentActive = false;
+  private settledStatus: HerdrAgentState = "idle";
+  private statusMessage: string | undefined;
+  private readonly waitingInputs = new Set<string>();
+  private readonly runningTools = new Set<string>();
+  private turnActive = false;
+  private lastActivityAt = Date.now();
+  private stallReminded = false;
+  private stallAbortPending = false;
+  private ompIdleSince: number | undefined;
+  private tokenTally: WorkerTokenTally | undefined;
+  private tallyWrites = Promise.resolve();
+  private lastBusyTraceAt = 0;
+
+  constructor(dependencies: WorkerTerminalDependencies) {
+    this.job = dependencies.job;
+    this.jobPath = dependencies.jobPath;
+    this.identity = workerIdentity(dependencies.job, dependencies.jobPath);
+    this.statusReporter = dependencies.statusReporter;
+    this.sendStallReminder = dependencies.sendStallReminder;
+    this.sendUserMessage = dependencies.sendUserMessage;
+    this.currentState = terminalState(this.identity, "starting", false);
+  }
+
+  async start(): Promise<void> {
+    await writeWorkerTerminal(this.jobPath, terminalState(this.identity, "starting", false));
+  }
+
+  private trace(event: string, detail?: Readonly<Record<string, unknown>>): void {
+    traceWorkerTurn(this.jobPath, event, detail);
+  }
+
+  private abort(ctx: ExtensionContext): void {
+    this.extensionAborted = true;
     ctx.abort();
-  };
-  const reportStatus = (): Promise<void> | undefined => {
-    if (pauseCommand !== undefined) return statusReporter?.report("blocked", "Worker paused");
-    if (waitingInputs.size > 0) return statusReporter?.report("blocked", "Waiting for your answer");
-    return statusReporter?.report(
-      agentActive ? "working" : settledStatus,
-      agentActive ? undefined : statusMessage,
-    );
-  };
-  let ompIdleSince: number | undefined;
-  let tokenTally: WorkerTokenTally | undefined;
-  let tallyWrites = Promise.resolve();
-  const settleIdleAfterResult = (ctx: ExtensionContext): void => {
+  }
+
+  private settledPhase(): WorkerTerminalState["phase"] {
+    return this.pauseCommand === undefined ? "idle" : "paused";
+  }
+
+  private reportStatus(): Promise<void> | undefined {
+    const status = workerPaneStatus({
+      paused: this.pauseCommand !== undefined,
+      waitingForAnswer: this.waitingInputs.size > 0,
+      agentActive: this.agentActive,
+      settled: this.settledStatus,
+      settledMessage: this.statusMessage,
+    });
+    return this.statusReporter?.report(status.state, status.message);
+  }
+
+  private async persistState(
+    phase: WorkerTerminalState["phase"],
+    completed = this.currentState.completed,
+    commandId = this.currentState.commandId,
+  ): Promise<void> {
+    if (this.closed && phase !== "closed") return;
+    const next = terminalState(this.identity, phase, completed, commandId, this.settledMockupId);
+    this.currentState = next;
+    const write = this.writeQueue.then(() => writeWorkerTerminal(this.jobPath, next));
+    this.writeQueue = write.catch(() => undefined);
+    await write;
+  }
+
+  /** Marks the pane busy; a failed state write aborts it. */
+  private markBusy(ctx: ExtensionContext): void {
+    void this.persistState("busy", this.currentState.completed).catch(() => this.abort(ctx));
+    this.agentActive = true;
+  }
+
+  private settleIdleAfterResult(ctx: ExtensionContext): void {
     const decision = idleAfterResult({
-      completed: currentState.completed,
-      phase: currentState.phase,
+      completed: this.currentState.completed,
+      phase: this.currentState.phase,
       ompIdle: ctx.isIdle(),
       pendingMessages: ctx.hasPendingMessages(),
-      idleSince: ompIdleSince,
+      idleSince: this.ompIdleSince,
       now: Date.now(),
     });
-    ompIdleSince = decision.idleSince;
+    this.ompIdleSince = decision.idleSince;
     if (!decision.settle) return;
-    traceWorkerTurn(jobPath, "idle_after_result");
-    agentActive = false;
+    this.trace("idle_after_result");
+    this.agentActive = false;
     // A mockup turn that never started or never ended cleanly still has to settle.
-    if (mockupCommand !== undefined) {
-      void settleMockupTurn().catch(() => abort(ctx));
+    if (this.mockupCommand !== undefined) {
+      void this.settleMockupTurn().catch(() => this.abort(ctx));
       return;
     }
-    void persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id).catch(
-      () => abort(ctx),
+    void this.persistState(this.settledPhase(), true, this.pauseCommand?.id).catch(() =>
+      this.abort(ctx),
     );
-  };
+  }
+
   // The first stall stops the turn and reminds the worker; a second fails the job so central
   // recovery restarts it or asks the user.
-  const checkStalledTurn = (ctx: ExtensionContext): void => {
-    if (resultPublished || timeoutRequested || pauseCommand !== undefined || stallAbortPending) {
+  private checkStalledTurn(ctx: ExtensionContext): void {
+    if (
+      this.resultPublished ||
+      this.timeoutRequested ||
+      this.pauseCommand !== undefined ||
+      this.stallAbortPending
+    ) {
       return;
     }
     const stalled = turnStalled({
-      turnActive,
-      toolsRunning: runningTools.size,
-      lastActivityAt,
+      turnActive: this.turnActive,
+      toolsRunning: this.runningTools.size,
+      lastActivityAt: this.lastActivityAt,
       now: Date.now(),
     });
     if (!stalled) return;
-    traceWorkerTurn(jobPath, "stalled_turn", { reminded: stallReminded });
-    if (stallReminded) {
-      void abortWithReason(
+    this.trace("stalled_turn", { reminded: this.stallReminded });
+    if (this.stallReminded) {
+      void this.abortWithReason(
         ctx,
         `worker stalled: no tool call for ${STALLED_TURN_MINUTES} minutes, again after a reminder`,
       );
       return;
     }
-    stallReminded = true;
-    stallAbortPending = true;
-    abort(ctx);
-  };
-  let lastBusyTraceAt = 0;
+    this.stallReminded = true;
+    this.stallAbortPending = true;
+    this.abort(ctx);
+  }
+
   // While a submitted worker still reads busy, record what OMP itself reports, at most once a minute.
-  const traceBusyAfterResult = (ctx: ExtensionContext): void => {
-    if (!currentState.completed || currentState.phase !== "busy") return;
-    if (Date.now() - lastBusyTraceAt < BUSY_AFTER_RESULT_TRACE_MS) return;
-    lastBusyTraceAt = Date.now();
-    traceWorkerTurn(jobPath, "busy_after_result", {
+  private traceBusyAfterResult(ctx: ExtensionContext): void {
+    if (!this.currentState.completed || this.currentState.phase !== "busy") return;
+    if (Date.now() - this.lastBusyTraceAt < BUSY_AFTER_RESULT_TRACE_MS) return;
+    this.lastBusyTraceAt = Date.now();
+    this.trace("busy_after_result", {
       ompIdle: ctx.isIdle(),
       pendingMessages: ctx.hasPendingMessages(),
-      agentActive,
+      agentActive: this.agentActive,
     });
-  };
-  const persistState = async (
-    phase: WorkerTerminalState["phase"],
-    completed = currentState.completed,
-    commandId = currentState.commandId,
-  ): Promise<void> => {
-    if (closed && phase !== "closed") return;
-    const next = terminalState(identity, phase, completed, commandId, settledMockupId);
-    currentState = next;
-    const write = writeQueue.then(() => writeWorkerTerminal(jobPath, next));
-    writeQueue = write.catch(() => undefined);
-    await write;
-  };
-  const persistResult = async (result: WorkerResult): Promise<void> => {
-    agentActive = false;
-    settledStatus = result.status === "completed" ? "idle" : "blocked";
-    statusMessage = result.error ?? result.question?.text;
+  }
+
+  private async persistResult(result: WorkerResult): Promise<void> {
+    this.agentActive = false;
+    this.settledStatus = result.status === "completed" ? "idle" : "blocked";
+    this.statusMessage = result.error ?? result.question?.text;
     try {
-      await persistWorkerResult(job.resultPath, result);
+      await persistWorkerResult(this.job.resultPath, result);
     } catch (error) {
-      settledStatus = "blocked";
-      statusMessage = error instanceof Error ? error.message : String(error);
+      this.settledStatus = "blocked";
+      this.statusMessage = error instanceof Error ? error.message : String(error);
       throw error;
     } finally {
       try {
-        await persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id);
+        await this.persistState(this.settledPhase(), true, this.pauseCommand?.id);
       } finally {
-        await reportStatus();
+        await this.reportStatus();
       }
     }
-  };
-  const settle = async (result: WorkerResult, ctx: ExtensionContext): Promise<void> => {
-    traceWorkerTurn(jobPath, "result_published", { status: result.status });
-    resultPublished = true;
-    delegatedSettled = true;
-    if (timeoutTimer !== undefined) {
-      ctx.clearTimer(timeoutTimer);
-      timeoutTimer = undefined;
+  }
+
+  private async settle(result: WorkerResult, ctx: ExtensionContext): Promise<void> {
+    this.trace("result_published", { status: result.status });
+    this.resultPublished = true;
+    this.delegatedSettled = true;
+    if (this.timeoutTimer !== undefined) {
+      ctx.clearTimer(this.timeoutTimer);
+      this.timeoutTimer = undefined;
     }
-    await persistResult(result);
-  };
+    await this.persistResult(result);
+  }
+
   // A ReportRejection goes back to the worker to fix; anything else is the job's result.
-  const submittedResult = async (
+  private async submittedResult(
     submission: SubmittedReport,
     ctx: ExtensionContext,
-  ): Promise<WorkerResult | ReportRejection> => {
+  ): Promise<WorkerResult | ReportRejection> {
+    const job = this.job;
     try {
       assertSelectedModel(expectedModelParts(job.model.model), ctx.model);
       if (job.role === "implementer" && submission.outcome === "implemented") {
@@ -573,276 +781,406 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       if (error instanceof ReportRejection) return error;
       return failureFor(job, error);
     }
-  };
+  }
+
+  async submitReport(
+    submission: SubmittedReport,
+    ctx: ExtensionContext,
+  ): Promise<SubmitReportToolResult> {
+    const result = await this.submittedResult(submission, ctx);
+    if (result instanceof ReportRejection) {
+      return {
+        content: toolText(
+          `Report rejected: ${result.message}. Fix it and call ${SUBMIT_REPORT_TOOL} again.`,
+        ),
+        details: undefined,
+        isError: true,
+      };
+    }
+    await this.settle(result, ctx);
+    return {
+      content: toolText(submittedReportText(result, this.job.review?.round)),
+      details: undefined,
+    };
+  }
+
   // The delegated result comes only from submit_report, so conversation turns never become it.
-  const settleTurn = async (event: unknown, ctx: ExtensionContext): Promise<void> => {
-    if (pauseCommand !== undefined) {
-      await persistState("paused", currentState.completed, pauseCommand.id);
-      await reportStatus();
+  private async settleTurn(event: unknown, ctx: ExtensionContext): Promise<void> {
+    if (this.pauseCommand !== undefined) {
+      await this.persistState("paused", this.currentState.completed, this.pauseCommand.id);
+      await this.reportStatus();
       return;
     }
-    if (timeoutRequested) {
-      await settle(failureFor(job, `worker timed out after ${job.timeoutMs}ms`), ctx);
+    if (this.timeoutRequested) {
+      await this.settle(
+        failureFor(this.job, `worker timed out after ${this.job.timeoutMs}ms`),
+        ctx,
+      );
       return;
     }
-    if (userInterruptedTurn(event, extensionAborted)) {
-      await persistState("idle", false);
-      await reportStatus();
+    if (userInterruptedTurn(event, this.extensionAborted)) {
+      await this.persistState("idle", false);
+      await this.reportStatus();
       return;
     }
     let failure: string | undefined;
     try {
-      failure = nativeAgentEndFailure(event, expectedModelParts(job.model.model));
+      failure = nativeAgentEndFailure(event, expectedModelParts(this.job.model.model));
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     }
     if (failure !== undefined) {
-      await settle(failureFor(job, failure), ctx);
+      await this.settle(failureFor(this.job, failure), ctx);
       return;
     }
-    await persistState("idle", false);
-    await reportStatus();
-  };
-
-  const z = pi.zod;
-  const reviews = job.role === "reviewer";
-  const reviewSchema = z
-    .object({
-      findings: z.array(
-        z
-          .object({
-            id: z.string(),
-            severity: z.enum(["P0", "P1", "P2", "P3"]),
-            verdict: z.enum(["confirmed", "plausible"]),
-            file: z.string().optional(),
-            line: z.number().int().positive().optional(),
-            description: z.string(),
-          })
-          .strict(),
-      ),
-      summary: z.string(),
-    })
-    .strict();
-  pi.registerTool({
-    name: SUBMIT_REPORT_TOOL,
-    label: "Submit report",
-    description:
-      "Submit your final report to the Tandem coordinator once the delegated work is done. Only this call delivers the report; ordinary replies are conversation. A rejected submission explains what to fix; correct it and call again.",
-    parameters: z
-      .object({
-        outcome: z.enum(outcomesFor(job.role)),
-        report: z
-          .string()
-          .optional()
-          .describe(
-            reviews
-              ? "Optional context for a needs-decision or failed outcome."
-              : "The full report body in Markdown.",
-          ),
-        question: z
-          .string()
-          .optional()
-          .describe("Required for needs-decision: one bounded single-line question."),
-        recommendation: z
-          .string()
-          .optional()
-          .describe("Optional for needs-decision: one bounded single-line recommendation."),
-        ...(job.role === "presentation"
-          ? {
-              artifactPath: z
-                .string()
-                .optional()
-                .describe("Required for completed: the absolute path of the written artifact."),
-            }
-          : {}),
-        ...(reviews
-          ? {
-              review: reviewSchema
-                .optional()
-                .describe(
-                  "Required for completed: your findings and summary. Tandem records the commit and whether the review passes.",
-                ),
-            }
-          : {}),
-      })
-      .strict(),
-    strict: true,
-    loadMode: "essential",
-    approval: "read",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const result = await submittedResult(params, ctx);
-      if (result instanceof ReportRejection) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Report rejected: ${result.message}. Fix it and call ${SUBMIT_REPORT_TOOL} again.`,
-            },
-          ],
-          details: undefined,
-          isError: true,
-        };
-      }
-      await settle(result, ctx);
-      const summary =
-        result.review !== undefined
-          ? `${reviewSummary(result.review, job.review?.round)}\n\nEnd your turn by replying with exactly this summary and nothing else.`
-          : result.error === undefined
-            ? `Report submitted with status ${result.status}.`
-            : `Report submitted with status ${result.status}: ${result.error}`;
-      return { content: [{ type: "text", text: summary }], details: undefined };
-    },
-  });
+    await this.persistState("idle", false);
+    await this.reportStatus();
+  }
 
   /**
    * Applies `planAbortWithReason`'s decision and then aborts. Best-effort: if the write that just
    * failed (heartbeat/control polling) keeps failing here too, the pane still aborts rather than
    * hanging.
    */
-  const abortWithReason = async (ctx: ExtensionContext, reason: string): Promise<void> => {
-    const plan = planAbortWithReason(job, { resultPublished, delegatedSettled }, reason);
+  private async abortWithReason(ctx: ExtensionContext, reason: string): Promise<void> {
+    const plan = planAbortWithReason(
+      this.job,
+      { resultPublished: this.resultPublished, delegatedSettled: this.delegatedSettled },
+      reason,
+    );
     if (plan.shouldPersistResult && plan.result !== undefined) {
-      resultPublished = true;
-      delegatedSettled = true;
+      this.resultPublished = true;
+      this.delegatedSettled = true;
       try {
-        await persistResult(plan.result);
+        await this.persistResult(plan.result);
       } catch {
         // Best effort only; the durable write already failed once for this pane.
       }
     }
-    abort(ctx);
-  };
+    this.abort(ctx);
+  }
 
-  const timeout = async (ctx: ExtensionContext): Promise<void> => {
-    if (delegatedSettled || resultPublished || timeoutRequested) return;
-    timeoutRequested = true;
+  private async timeout(ctx: ExtensionContext): Promise<void> {
+    if (this.delegatedSettled || this.resultPublished || this.timeoutRequested) return;
+    this.timeoutRequested = true;
     const wasIdle = ctx.isIdle();
-    abort(ctx);
+    this.abort(ctx);
     if (!wasIdle) return;
-    await settle(failureFor(job, `worker timed out after ${job.timeoutMs}ms`), ctx);
-  };
+    await this.settle(failureFor(this.job, `worker timed out after ${this.job.timeoutMs}ms`), ctx);
+  }
 
-  const finishPause = async (): Promise<void> => {
-    if (pauseCommand === undefined || closed) return;
-    await persistState("paused", currentState.completed, pauseCommand.id);
-  };
+  private async pause(command: WorkerTerminalCommand, ctx: ExtensionContext): Promise<void> {
+    this.pauseCommand = command;
+    if (this.timeoutTimer !== undefined) {
+      ctx.clearTimer(this.timeoutTimer);
+      this.timeoutTimer = undefined;
+    }
+    if (!ctx.isIdle()) {
+      this.abort(ctx);
+      return;
+    }
+    if (!this.closed) {
+      await this.persistState("paused", this.currentState.completed, command.id);
+    }
+    await this.reportStatus();
+  }
+
+  /** A close request is honored only for a paused or completed pane with nothing in flight. */
+  private async acceptClose(command: WorkerTerminalCommand, ctx: ExtensionContext): Promise<void> {
+    if (this.currentState.phase !== "paused" && !this.currentState.completed) return;
+    if (paneBusy(ctx)) return;
+    const confirmed = await readWorkerTerminalCommand(this.jobPath, this.identity);
+    if (confirmed?.id !== command.id || confirmed.action !== "close") return;
+    if (paneBusy(ctx)) return;
+    this.closingCommand = confirmed;
+    await this.persistState("closing", true, confirmed.id);
+  }
 
   // A finished scout takes a mockup request only while nothing else is happening in its pane,
   // so it never interrupts the person typing there.
-  const startMockupTurn = async (
+  private async startMockupTurn(
     command: WorkerTerminalCommand,
     ctx: ExtensionContext,
-  ): Promise<void> => {
+  ): Promise<void> {
     const request = command.mockup;
     if (
       request === undefined ||
-      job.role !== "scout" ||
-      command.id === settledMockupId ||
-      mockupCommand !== undefined ||
-      pauseCommand !== undefined ||
-      closingCommand !== undefined ||
-      !currentState.completed ||
-      !ctx.isIdle() ||
-      ctx.hasPendingMessages() ||
-      ctx.ui.getEditorText().trim().length > 0
+      this.job.role !== "scout" ||
+      command.id === this.settledMockupId ||
+      this.mockupCommand !== undefined ||
+      this.pauseCommand !== undefined ||
+      this.closingCommand !== undefined ||
+      !this.currentState.completed ||
+      paneBusy(ctx)
     ) {
       return;
     }
     const brief = await readFile(request.briefPath, "utf8");
-    traceWorkerTurn(jobPath, "control", { action: "mockup", phase: currentState.phase });
-    mockupCommand = command;
-    agentActive = true;
-    await persistState("busy", true, command.id);
-    await reportStatus();
-    pi.sendUserMessage(brief);
-  };
+    this.trace("control", { action: "mockup", phase: this.currentState.phase });
+    this.mockupCommand = command;
+    this.agentActive = true;
+    await this.persistState("busy", true, command.id);
+    await this.reportStatus();
+    this.sendUserMessage(brief);
+  }
 
-  const settleMockupTurn = async (): Promise<void> => {
-    if (mockupCommand === undefined) return;
-    settledMockupId = mockupCommand.id;
-    mockupCommand = undefined;
-    await persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id);
-  };
+  private async settleMockupTurn(): Promise<void> {
+    if (this.mockupCommand === undefined) return;
+    this.settledMockupId = this.mockupCommand.id;
+    this.mockupCommand = undefined;
+    await this.persistState(this.settledPhase(), true, this.pauseCommand?.id);
+  }
 
-  const pollControl = async (ctx: ExtensionContext): Promise<void> => {
-    if (closed) return;
-    if (closingCommand !== undefined && Date.parse(closingCommand.expiresAt) <= Date.now()) {
-      closingCommand = undefined;
-      await persistState(pauseCommand === undefined ? "idle" : "paused", currentState.completed);
-    }
-    const command = await readWorkerTerminalCommand(jobPath, identity);
-    if (command === undefined) return;
-    if (command.id === currentState.commandId || command.id === pauseCommand?.id) return;
-    if (command.action === "mockup") {
-      await startMockupTurn(command, ctx);
-      return;
-    }
-    traceWorkerTurn(jobPath, "control", { action: command.action, phase: currentState.phase });
-    if (command.action === "pause") {
-      pauseCommand = command;
-      if (timeoutTimer !== undefined) {
-        ctx.clearTimer(timeoutTimer);
-        timeoutTimer = undefined;
-      }
-      if (!ctx.isIdle()) abort(ctx);
-      else {
-        await finishPause();
-        await reportStatus();
-      }
-      return;
-    }
-    if (currentState.phase !== "paused" && !currentState.completed) return;
-    if (!ctx.isIdle() || ctx.hasPendingMessages() || ctx.ui.getEditorText().trim().length > 0)
-      return;
-    const confirmed = await readWorkerTerminalCommand(jobPath, identity);
-    if (confirmed?.id !== command.id || confirmed.action !== "close") return;
-    if (!ctx.isIdle() || ctx.hasPendingMessages() || ctx.ui.getEditorText().trim().length > 0)
-      return;
-    closingCommand = confirmed;
-    await persistState("closing", true, confirmed.id);
-  };
-
-  /** A PR reviewer's shell may only read; anything else is refused with the reason. */
-  const guardReviewShell = (
-    event: Readonly<{ toolName: string; input: unknown }>,
-  ): { block: true; reason: string } | undefined => {
-    if (job.prReview === undefined || event.toolName !== "bash") return undefined;
-    const command =
-      typeof event.input === "object" && event.input !== null && "command" in event.input
-        ? event.input.command
-        : undefined;
-    const refusal =
-      typeof command === "string" ? readOnlyCommandRefusal(command) : "bash needs a command";
-    return refusal === undefined ? undefined : { block: true, reason: refusal };
-  };
-
-  const guardTool = (toolName: string): { block: true; reason: string } | undefined => {
+  private async pollControl(ctx: ExtensionContext): Promise<void> {
+    if (this.closed) return;
     if (
-      !delegatedSettled &&
-      !timeoutRequested &&
-      pauseCommand === undefined &&
-      currentState.phase !== "paused" &&
-      !currentState.completed
+      this.closingCommand !== undefined &&
+      Date.parse(this.closingCommand.expiresAt) <= Date.now()
     ) {
-      return undefined;
+      this.closingCommand = undefined;
+      await this.persistState(this.settledPhase(), this.currentState.completed);
     }
-    if (READ_ONLY_TOOLS[toolName] === true) return undefined;
-    return {
-      block: true,
-      reason: "worker terminal is paused or completed; mutating tools are disabled",
-    };
-  };
+    const command = await readWorkerTerminalCommand(this.jobPath, this.identity);
+    if (command === undefined) return;
+    if (command.id === this.currentState.commandId || command.id === this.pauseCommand?.id) return;
+    if (command.action === "mockup") {
+      await this.startMockupTurn(command, ctx);
+      return;
+    }
+    this.trace("control", { action: command.action, phase: this.currentState.phase });
+    if (command.action === "pause") await this.pause(command, ctx);
+    else await this.acceptClose(command, ctx);
+  }
 
-  pi.on("tool_call", (event) => {
+  /** The folder the scout is drawing a mockup in right now, if it is. */
+  mockupArtifactDir(): string | undefined {
+    return this.mockupCommand?.mockup?.artifactDir;
+  }
+
+  guardToolCall(event: Readonly<{ toolName: string; input: unknown }>): ToolBlock | undefined {
     const write = mockupWriteDecision({
-      role: job.role,
+      role: this.job.role,
       toolName: event.toolName,
       toolInput: event.input,
-      cwd: job.cwd,
-      artifactDir: mockupCommand?.mockup?.artifactDir,
+      cwd: this.job.cwd,
+      artifactDir: this.mockupArtifactDir(),
     });
     if (write !== undefined) return write === "allow" ? undefined : write;
-    return guardTool(event.toolName) ?? guardReviewShell(event);
+    return (
+      workerToolRefusal(
+        {
+          delegatedSettled: this.delegatedSettled,
+          timeoutRequested: this.timeoutRequested,
+          pauseRequested: this.pauseCommand !== undefined,
+          phase: this.currentState.phase,
+          completed: this.currentState.completed,
+        },
+        event.toolName,
+      ) ?? reviewShellRefusal(this.job.prReview !== undefined, event)
+    );
+  }
+
+  private recordUsage(usage: ReplyUsage | undefined): void {
+    if (usage === undefined) return;
+    this.tokenTally = addReplyUsage(this.tokenTally, usage);
+    const tally = this.tokenTally;
+    this.tallyWrites = this.tallyWrites
+      .then(() => writeWorkerTokenTally(this.jobPath, tally))
+      // Token accounting is informational; a failed write must not disturb the worker.
+      .catch(() => undefined);
+  }
+
+  private heartbeat(ctx: ExtensionContext): void {
+    this.traceBusyAfterResult(ctx);
+    this.settleIdleAfterResult(ctx);
+    this.checkStalledTurn(ctx);
+    void this.persistState(this.currentState.phase, this.currentState.completed).catch((error) => {
+      void this.abortWithReason(
+        ctx,
+        `interactive worker heartbeat could not be persisted: ${describeExtensionError(error)}`,
+      );
+    });
+    void this.reportStatus();
+  }
+
+  async onSessionStart(ctx: ExtensionContext): Promise<void> {
+    this.trace("session_start");
+    // Freeze an empty editor before the controller sends the native exit key.
+    // ctx.shutdown() alone does not wake OMP's idle interactive input loop.
+    ctx.ui.onTerminalInput((data) =>
+      this.closingCommand !== undefined && !matchesKey(data, "ctrl+d")
+        ? { consume: true }
+        : undefined,
+    );
+    await this.persistState("busy", false);
+    this.agentActive = true;
+    void this.reportStatus();
+    ctx.setInterval(() => {
+      void this.pollControl(ctx).catch((error) => {
+        void this.abortWithReason(
+          ctx,
+          `interactive worker control polling failed: ${describeExtensionError(error)}`,
+        );
+      });
+    }, TERMINAL_POLL_MS);
+    ctx.setInterval(() => this.heartbeat(ctx), TERMINAL_HEARTBEAT_MS);
+    if (this.job.timeoutMs !== undefined) {
+      this.timeoutTimer = ctx.setTimeout(() => {
+        void this.timeout(ctx).catch(() => this.abort(ctx));
+      }, this.job.timeoutMs);
+    }
+  }
+
+  onAgentStart(ctx: ExtensionContext): void {
+    this.trace("agent_start", { resultPublished: this.resultPublished });
+    this.markBusy(ctx);
+    void this.reportStatus();
+  }
+
+  onTurnStart(ctx: ExtensionContext): void {
+    this.trace("turn_start");
+    this.turnActive = true;
+    this.lastActivityAt = Date.now();
+    this.markBusy(ctx);
+    void this.reportStatus();
+  }
+
+  // A long reply, such as a whole artifact written in one tool call, streams for minutes before
+  // the tool starts; streaming is progress.
+  onMessageUpdate(): void {
+    this.lastActivityAt = Date.now();
+  }
+
+  onToolStart(
+    event: Readonly<{ toolName: string; toolCallId: string }>,
+    ctx: ExtensionContext,
+  ): void {
+    this.trace("tool_start", { tool: event.toolName });
+    this.runningTools.add(event.toolCallId);
+    this.lastActivityAt = Date.now();
+    this.markBusy(ctx);
+    if (event.toolName === "ask") this.waitingInputs.add(event.toolCallId);
+    void this.reportStatus();
+  }
+
+  onToolEnd(
+    event: Readonly<{ toolName: string; toolCallId: string; result: unknown }>,
+    ctx: ExtensionContext,
+  ): void {
+    this.trace("tool_end", { tool: event.toolName });
+    if (event.toolName === "task") this.recordUsage(taskUsage(event.result, this.tokenTally));
+    this.runningTools.delete(event.toolCallId);
+    this.lastActivityAt = Date.now();
+    void this.persistState("busy", this.currentState.completed).catch(() => this.abort(ctx));
+    this.waitingInputs.delete(event.toolCallId);
+    void this.reportStatus();
+  }
+
+  onTurnEnd(message: unknown, ctx: ExtensionContext): void {
+    this.trace("turn_end");
+    this.turnActive = false;
+    this.runningTools.clear();
+    this.recordUsage(replyUsage(message));
+    void this.persistState("idle", this.currentState.completed).catch(() => this.abort(ctx));
+  }
+
+  onContext(messages: readonly AgentMessage[], ctx: ExtensionContext): void {
+    const latest = messages.at(-1);
+    this.trace("context", {
+      messages: messages.length,
+      latest: latest === undefined ? undefined : latest.role,
+    });
+    if (this.resultPublished && isBackgroundResultWake(messages)) ctx.abort();
+  }
+
+  /** The watchdog's own abort: the worker keeps going with the reminder, not a failure. */
+  private remindAfterStall(): void {
+    this.stallAbortPending = false;
+    this.extensionAborted = false;
+    this.sendStallReminder();
+  }
+
+  private async persistBusy(): Promise<void> {
+    await this.persistState("busy", this.currentState.completed);
+    await this.reportStatus();
+  }
+
+  async onAgentEnd(
+    event: Readonly<{ willContinue?: boolean }>,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    this.trace("agent_end", {
+      willContinue: event.willContinue,
+      resultPublished: this.resultPublished,
+    });
+    this.agentActive = event.willContinue === true;
+    const resumingAfterStall = this.stallAbortPending;
+    if (resumingAfterStall) {
+      this.remindAfterStall();
+      this.agentActive = true;
+    }
+    if (event.willContinue === true || resumingAfterStall) {
+      await this.persistBusy();
+    } else if (this.mockupCommand !== undefined) {
+      await this.settleMockupTurn();
+      await this.reportStatus();
+    } else if (this.resultPublished) {
+      await this.persistState(this.settledPhase(), true, this.pauseCommand?.id);
+      this.trace("agent_end_persisted", { phase: this.currentState.phase });
+      await this.reportStatus();
+    } else {
+      await this.settleTurn(event, ctx);
+    }
+    this.trace("agent_end_done", { phase: this.currentState.phase });
+  }
+
+  async onShutdown(): Promise<void> {
+    this.trace("session_shutdown");
+    this.closed = true;
+    this.timeoutTimer = undefined;
+    try {
+      await this.persistState("closed", this.currentState.completed, this.closingCommand?.id);
+    } finally {
+      await this.statusReporter?.release();
+    }
+  }
+}
+
+export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise<void> {
+  const jobPath = process.env[WORKER_JOB_PATH_ENV];
+  if (jobPath === undefined || jobPath.trim().length === 0) return;
+  const job = await readJob(jobPath);
+  const session = new WorkerTerminalSession({
+    job,
+    jobPath,
+    statusReporter: createHerdrStatusReporter(runCommand, {
+      cwd: job.cwd,
+      agentLabel: `tandem-${job.role}-${job.taskId.slice(0, 8)}`,
+    }),
+    sendStallReminder: () =>
+      pi.sendMessage(
+        {
+          customType: STALL_REMINDER_ENTRY,
+          content: STALL_REMINDER,
+          display: true,
+          attribution: "agent",
+        },
+        { deliverAs: "nextTurn", triggerTurn: true },
+      ),
+    sendUserMessage: (text) => pi.sendUserMessage(text),
+  });
+  await session.start();
+
+  pi.registerTool({
+    name: SUBMIT_REPORT_TOOL,
+    label: "Submit report",
+    description:
+      "Submit your final report to the Tandem coordinator once the delegated work is done. Only this call delivers the report; ordinary replies are conversation. A rejected submission explains what to fix; correct it and call again.",
+    parameters: submitReportParameters(pi.zod, job.role),
+    strict: true,
+    loadMode: "essential",
+    approval: "read",
+    execute: (_toolCallId, params, _signal, _onUpdate, ctx) => session.submitReport(params, ctx),
   });
 
   if (job.role === "scout") {
@@ -851,16 +1189,16 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       label: "Copy asset",
       description:
         "Copy an image, font, or other file from the repository checkout into the mockup folder, byte for byte, so the mockup can load it by relative path (for example ./jr-thinking.webp). Only works while drawing a mockup.",
-      parameters: z
+      parameters: pi.zod
         .object({
-          from: z.string().describe("Path of the file in the repository checkout."),
-          name: z.string().describe("Plain file name to save it as in the mockup folder."),
+          from: pi.zod.string().describe("Path of the file in the repository checkout."),
+          name: pi.zod.string().describe("Plain file name to save it as in the mockup folder."),
         })
         .strict(),
       strict: true,
       approval: "read",
       async execute(_toolCallId, params) {
-        const artifactDir = mockupCommand?.mockup?.artifactDir;
+        const artifactDir = session.mockupArtifactDir();
         if (artifactDir === undefined) {
           return {
             content: [{ type: "text", text: "copy_asset only works while drawing a mockup." }],
@@ -893,159 +1231,15 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       },
     });
   }
-
-  const recordUsage = (usage: ReplyUsage | undefined): void => {
-    if (usage === undefined) return;
-    tokenTally = addReplyUsage(tokenTally, usage);
-    const tally = tokenTally;
-    tallyWrites = tallyWrites
-      .then(() => writeWorkerTokenTally(jobPath, tally))
-      // Token accounting is informational; a failed write must not disturb the worker.
-      .catch(() => undefined);
-  };
-
-  pi.on("session_start", async (_event, ctx) => {
-    traceWorkerTurn(jobPath, "session_start");
-    // Freeze an empty editor before the controller sends the native exit key.
-    // ctx.shutdown() alone does not wake OMP's idle interactive input loop.
-    ctx.ui.onTerminalInput((data) =>
-      closingCommand !== undefined && !matchesKey(data, "ctrl+d") ? { consume: true } : undefined,
-    );
-    await persistState("busy", false);
-    agentActive = true;
-    void reportStatus();
-    ctx.setInterval(() => {
-      void pollControl(ctx).catch((error) => {
-        void abortWithReason(
-          ctx,
-          `interactive worker control polling failed: ${describeExtensionError(error)}`,
-        );
-      });
-    }, TERMINAL_POLL_MS);
-    ctx.setInterval(() => {
-      traceBusyAfterResult(ctx);
-      settleIdleAfterResult(ctx);
-      checkStalledTurn(ctx);
-      void persistState(currentState.phase, currentState.completed).catch((error) => {
-        void abortWithReason(
-          ctx,
-          `interactive worker heartbeat could not be persisted: ${describeExtensionError(error)}`,
-        );
-      });
-      void reportStatus();
-    }, TERMINAL_HEARTBEAT_MS);
-    if (job.timeoutMs !== undefined) {
-      timeoutTimer = ctx.setTimeout(() => {
-        void timeout(ctx).catch(() => abort(ctx));
-      }, job.timeoutMs);
-    }
-  });
-  pi.on("agent_start", (_event, ctx) => {
-    traceWorkerTurn(jobPath, "agent_start", { resultPublished });
-    void persistState("busy", currentState.completed).catch(() => abort(ctx));
-    agentActive = true;
-    void reportStatus();
-  });
-  pi.on("turn_start", (_event, ctx) => {
-    traceWorkerTurn(jobPath, "turn_start");
-    turnActive = true;
-    lastActivityAt = Date.now();
-    void persistState("busy", currentState.completed).catch(() => abort(ctx));
-    agentActive = true;
-    void reportStatus();
-  });
-  // A long reply, such as a whole artifact written in one tool call, streams for minutes before
-  // the tool starts; streaming is progress.
-  pi.on("message_update", () => {
-    lastActivityAt = Date.now();
-  });
-  pi.on("tool_execution_start", (event, ctx) => {
-    traceWorkerTurn(jobPath, "tool_start", { tool: event.toolName });
-    runningTools.add(event.toolCallId);
-    lastActivityAt = Date.now();
-    void persistState("busy", currentState.completed).catch(() => abort(ctx));
-    agentActive = true;
-    if (event.toolName === "ask") waitingInputs.add(event.toolCallId);
-    void reportStatus();
-  });
-  pi.on("tool_execution_end", (event, ctx) => {
-    traceWorkerTurn(jobPath, "tool_end", { tool: event.toolName });
-    if (event.toolName === "task") recordUsage(taskUsage(event.result, tokenTally));
-    runningTools.delete(event.toolCallId);
-    lastActivityAt = Date.now();
-    void persistState("busy", currentState.completed).catch(() => abort(ctx));
-    waitingInputs.delete(event.toolCallId);
-    void reportStatus();
-  });
-  pi.on("turn_end", (event, ctx) => {
-    traceWorkerTurn(jobPath, "turn_end");
-    turnActive = false;
-    runningTools.clear();
-    recordUsage(replyUsage(event.message));
-    void persistState("idle", currentState.completed).catch(() => abort(ctx));
-  });
-  pi.on("context", (event, ctx) => {
-    const latest = event.messages.at(-1);
-    traceWorkerTurn(jobPath, "context", {
-      messages: event.messages.length,
-      latest: latest === undefined ? undefined : latest.role,
-    });
-    if (resultPublished && isBackgroundResultWake(event.messages)) ctx.abort();
-  });
-  pi.on("agent_end", async (event, ctx) => {
-    traceWorkerTurn(jobPath, "agent_end", { willContinue: event.willContinue, resultPublished });
-    agentActive = event.willContinue === true;
-    if (stallAbortPending) {
-      // The watchdog's own abort: the worker keeps going with the reminder, not a failure.
-      stallAbortPending = false;
-      extensionAborted = false;
-      pi.sendMessage(
-        {
-          customType: STALL_REMINDER_ENTRY,
-          content: STALL_REMINDER,
-          display: true,
-          attribution: "agent",
-        },
-        { deliverAs: "nextTurn", triggerTurn: true },
-      );
-      if (event.willContinue !== true) {
-        agentActive = true;
-        await persistState("busy", currentState.completed);
-        await reportStatus();
-        traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
-        return;
-      }
-    }
-    if (event.willContinue === true) {
-      await persistState("busy", currentState.completed);
-      await reportStatus();
-      traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
-      return;
-    }
-    if (mockupCommand !== undefined) {
-      await settleMockupTurn();
-      await reportStatus();
-      traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
-      return;
-    }
-    if (resultPublished) {
-      await persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id);
-      traceWorkerTurn(jobPath, "agent_end_persisted", { phase: currentState.phase });
-      await reportStatus();
-      traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
-      return;
-    }
-    await settleTurn(event, ctx);
-    traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
-  });
-  pi.on("session_shutdown", async () => {
-    traceWorkerTurn(jobPath, "session_shutdown");
-    closed = true;
-    if (timeoutTimer !== undefined) timeoutTimer = undefined;
-    try {
-      await persistState("closed", currentState.completed, closingCommand?.id);
-    } finally {
-      await statusReporter?.release();
-    }
-  });
+  pi.on("tool_call", (event) => session.guardToolCall(event));
+  pi.on("session_start", (_event, ctx) => session.onSessionStart(ctx));
+  pi.on("agent_start", (_event, ctx) => session.onAgentStart(ctx));
+  pi.on("turn_start", (_event, ctx) => session.onTurnStart(ctx));
+  pi.on("message_update", () => session.onMessageUpdate());
+  pi.on("tool_execution_start", (event, ctx) => session.onToolStart(event, ctx));
+  pi.on("tool_execution_end", (event, ctx) => session.onToolEnd(event, ctx));
+  pi.on("turn_end", (event, ctx) => session.onTurnEnd(event.message, ctx));
+  pi.on("context", (event, ctx) => session.onContext(event.messages, ctx));
+  pi.on("agent_end", (event, ctx) => session.onAgentEnd(event, ctx));
+  pi.on("session_shutdown", () => session.onShutdown());
 }

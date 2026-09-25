@@ -32,7 +32,7 @@ import {
 import { taskSourcePath } from "../service/source.ts";
 import { readValidationResult } from "../validation-worker.ts";
 import { readWorkerResult } from "../workers/jobs.ts";
-import type { OperationClaim } from "../workers/operation-claim.ts";
+import { claimOf, type OperationClaim, ownsOperation } from "../workers/operation-claim.ts";
 import { workerDelegationStopped } from "../workers/terminal.ts";
 import {
   pauseWorkerTerminal,
@@ -112,6 +112,10 @@ export type TaskControlDependencies = Readonly<{
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
 }>;
 
+/** Added to a direction for a task whose pull request is open, since no one else pushes it. */
+const OPEN_PR_FOLLOW_UP =
+  "This task's pull request is already open. If you change code, commit it and push the branch to origin (never force-push) before you submit.";
+
 const REDIRECT_STAGES: readonly TaskRecord["stage"][] = [
   "validating",
   "reviewing",
@@ -123,29 +127,6 @@ function workerCwd(task: TaskRecord, runtime: RuntimeTaskState): string {
   return runtime.worktree?.path ?? taskSourcePath(task, runtime);
 }
 
-function operationClaim(runtime: RuntimeTaskState): OperationClaim | undefined {
-  const operation = runtime.operation;
-  return operation === undefined
-    ? undefined
-    : {
-        id: operation.id,
-        fencingRevision: operation.fencingRevision,
-        claimOwner: operation.claimOwner,
-      };
-}
-
-/** With no claim, only a runtime with no operation is owned; otherwise the claim must match it. */
-function claimOwnsOperation(
-  operation: RuntimeTaskState["operation"],
-  claim: OperationClaim | undefined,
-): boolean {
-  return claim === undefined
-    ? operation === undefined
-    : operation?.id === claim.id &&
-        operation.claimOwner === claim.claimOwner &&
-        operation.fencingRevision === claim.fencingRevision;
-}
-
 /** The runtime still holds exactly this launch, under this claim, with no stop requested. */
 function launchStillClaimed(
   current: RuntimeTaskState | undefined,
@@ -155,7 +136,7 @@ function launchStillClaimed(
   return (
     current !== undefined &&
     current.stopRequest === undefined &&
-    claimOwnsOperation(current.operation, claim) &&
+    ownsOperation(current.operation, claim) &&
     current.reservation?.id === launch.reservationId &&
     current.reservation?.operationId === launch.operationId &&
     sameEndpointLaunch(current.endpointLaunch, launch)
@@ -338,7 +319,7 @@ export class TaskControlWorkflow {
   ): Promise<RuntimeTaskState | undefined> {
     const launch = runtime.endpointLaunch;
     if (launch === undefined) return runtime;
-    const claim = operationClaim(runtime);
+    const claim = claimOf(runtime.operation);
     if (runtime.stopRequest !== undefined) return runtime;
     if (runtime.reservation?.ownerSessionId !== this.#deps.sessionId) {
       await this.recordLaunchFailure(task, {
@@ -933,7 +914,10 @@ export class TaskControlWorkflow {
           : appendTaskMessage(task.communication, {
               id: singleLine(this.#deps.idFactory(), "message id"),
               kind: "instruction",
-              text: instruction.text,
+              text:
+                task.pullRequest?.state === "open"
+                  ? `${instruction.text} ${OPEN_PR_FOLLOW_UP}`
+                  : instruction.text,
               createdAt: this.#deps.clock(),
               ...(instruction.supersedes === undefined
                 ? {}

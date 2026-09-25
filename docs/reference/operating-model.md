@@ -22,8 +22,8 @@ a restart never has to rebuild workflow from chat.
    produce durable evidence. A worker never claims a command ran unless the runner recorded it.
 4. **Review is independent.** The implementer is stopped while a fresh read-only reviewer examines
    the same worktree. Results bind to an exact HEAD and generation.
-5. **Delivery is gated.** Publishing and merging are explicit approval-bearing actions. Tandem
-   never merges automatically.
+5. **Delivery is gated.** A ready task opens its own draft PR. Final publishing and merging are
+   explicit approval-bearing actions. Tandem never merges automatically.
 6. **Visuals are drawn outside the repository.** A research task's own scout writes HTML to a
    private artifact directory when asked; the controller, not the scout, opens Lavish and owns the
    feedback listener, and routes the user's comments back to that scout.
@@ -40,7 +40,7 @@ child worker also gets `submit_report`.
 | Implementer | Assigned task worktree, child Herdr workspace | `read`, `grep`, `glob`, `edit`, `write`, `bash` | Exceed approved scope, merge, deploy, destructive cleanup, claim validation results |
 | Reviewer | Fresh read-only pane in the task worktree | `read`, `grep`, `glob` | Edit or write a report file; submits findings and a summary; Tandem binds them to the reviewed HEAD and derives the verdict |
 
-Default policy: `maxWorkers: 3`, `maxFixRounds: 3` (src/config/policy.ts). These are policy
+Default policy: `maxWorkers: 3`, `maxFixRounds: 2` (src/config/policy.ts). These are policy
 limits, not a worktree cap. The `verifier` role was removed; it survives only as a legacy decode
 value in `LEGACY_ENDPOINT_ROLES` (src/contracts.ts) and is never assigned to new work.
 
@@ -57,8 +57,8 @@ value in `LEGACY_ENDPOINT_ROLES` (src/contracts.ts) and is never assigned to new
 
 - Everything runs on the local machine: orchestration, durable state, workers, Herdr workspaces,
   Treehouse pool, Lavish control. No remote fleets, alternate terminal or harness backends, relays,
-  or hosted state. Only explicitly requested PR publish/merge touch the remote, through local `gh`
-  and Git.
+  or hosted state. Only the automatic draft at ready, explicitly requested PR publish/merge, and an
+  implementer's follow-up push to its own open PR touch the remote, through local `gh` and Git.
 - macOS only. The task-store lock is a Darwin native `O_EXLOCK` lock on the task-store directory
   with a 5-second default acquisition timeout (`DEFAULT_LOCK_TIMEOUT_MS`). Coordinator locks under
   `<home>/coordinator-registry/` use the same primitive and timeout; see

@@ -40,6 +40,9 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   owned temporary pane, an unfocused split right of the coordinator's pane. Without an active Herdr
   context (`HERDR_ENV`, `HERDR_PANE_ID`) in the Tandem session, it opens a separate
   `Tandem request brief · <repo>` workspace. Tiny fixes use an in-chat brief and no pane.
+- The Markdown leads with what approval needs: goal, decisions required (omitted when there are
+  none), in scope, out of scope, automated checks, manual verification, key decisions. Approach,
+  constraints, references, and the record's id, revision, and digest follow under Details.
 - The coordinator's pane is only the split anchor; a record naming it is quarantined, never written
   or closed. Users edit by replying, never in the pane.
 - Every pane operation proves ownership with the coordinator-pane checks (session snapshot, endpoint

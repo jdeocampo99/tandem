@@ -254,7 +254,9 @@ async function jobTokenTallies(
     const tally = await readWorkerTokenTally(job.jobPath);
     if (tally === undefined) continue;
     tallies.set(job.id, {
-      inputTokens: tally.inputTokens + tally.cacheReadTokens + tally.cacheWriteTokens,
+      // Cache reads are the same context re-sent each reply; counting them would make a long
+      // conversation look like tens of millions of new tokens. Their cost is already in costUsd.
+      inputTokens: tally.inputTokens + tally.cacheWriteTokens,
       outputTokens: tally.outputTokens,
       costUsd: tally.costUsd,
     });

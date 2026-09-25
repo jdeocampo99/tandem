@@ -31,7 +31,7 @@ export type DurableOperationKind =
   | "validation"
   | "review"
   // ponytail: an operation admitted before the verifier role was removed may still carry this
-  // kind; no new operation is ever admitted with it (see workers/workflow.ts's reserveTask).
+  // kind; no new operation is ever admitted with it (see workers/reservation.ts's reserveTask).
   | "verification"
   | "presentation";
 export type DurableOperationPhase =

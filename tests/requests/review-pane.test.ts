@@ -103,10 +103,10 @@ test("the projection opens one owned pane and refreshes it in place for later re
     expect(workspaceCreateCount(world)).toBe(1);
 
     expect(opened.renderedPath).toBe(join(world.home, "request-briefs", "req-1.md"));
-    expect(firstRender).toContain("Draft revision: 1");
-    expect(firstRender).toContain("Read-only view.");
+    expect(firstRender).toContain("Revision 1,");
+    expect(firstRender).toContain("editing here changes nothing");
     expect(firstRender).toContain("not approved");
-    expect(await readFile(opened.renderedPath, "utf8")).toContain("Draft revision: 2");
+    expect(await readFile(opened.renderedPath, "utf8")).toContain("Revision 2,");
   });
 });
 
@@ -239,7 +239,7 @@ test("a failed render is reported without losing the durable brief", async () =>
 
     expect(projected.status).toBe("quarantined");
     expect(projected.reason).toContain("could not render revision 1");
-    expect(await readFile(projected.renderedPath, "utf8")).toContain("Draft revision: 1");
+    expect(await readFile(projected.renderedPath, "utf8")).toContain("Revision 1,");
   });
 });
 

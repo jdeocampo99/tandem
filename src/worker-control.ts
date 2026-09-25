@@ -5,17 +5,16 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import type { TaskInbox, WorkerReceipt } from "./contracts.ts";
 import { readTaskInbox, writeWorkerReceipt } from "./tasks/communication-persistence.ts";
+import { formatTaskMessages, type TaskMessageBatch } from "./tasks/communication-protocol.ts";
 import {
-  formatTaskMessages,
-  parseTaskMessageBatch,
-  type TaskMessageBatch,
-} from "./tasks/communication-protocol.ts";
-import {
-  collapseMessageMarkers,
-  type MarkerInsertion,
-  markersFromMessages,
+  atLeastAsNewBatch,
+  contextWithTaskMessages,
+  inboxMessageBatch,
+  newestTaskMarker,
   parseWorkerControlConfig,
+  type ReceiptActivity,
   toolName,
+  touchedReceipt,
   type WorkerControlConfig,
 } from "./workers/control-protocol.ts";
 import { traceWorkerTurn, WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
@@ -25,6 +24,9 @@ export const WORKER_CONTROL_ENV = "TANDEM_WORKER_CONTROL";
 const POLL_INTERVAL_MS = 250;
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const RECEIPT_WRITE_INTERVAL_MS = 1_000;
+
+type Trace = (event: string, detail?: Readonly<Record<string, unknown>>) => void;
+type SessionStopResult = Readonly<{ continue: true; additionalContext: string }>;
 
 function readNow(): string {
   return new Date().toISOString();
@@ -55,6 +57,13 @@ function initialReceipt(config: WorkerControlConfig): WorkerReceipt {
     phase: "starting",
   };
 }
+
+function jobTrace(jobPath: string | undefined): Trace {
+  return (event, detail) => {
+    if (jobPath !== undefined && jobPath.trim().length > 0) traceWorkerTurn(jobPath, event, detail);
+  };
+}
+
 function failClosed(pi: ExtensionAPI, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   pi.on("tool_call", () => ({ block: true, reason: `Worker initialization failed: ${message}` }));
@@ -75,210 +84,142 @@ export default async function workerControlExtension(pi: ExtensionAPI): Promise<
   }
 }
 
-async function registerWorkerCommunication(pi: ExtensionAPI): Promise<void> {
-  const config = parseWorkerControlConfig(process.env[WORKER_CONTROL_ENV]);
-  if (config === undefined) return;
-  await inboxFor(config);
-  let receipt = initialReceipt(config);
-  await writeWorkerReceipt(config.receiptPath, receipt);
+/**
+ * Keeps the worker's communication receipt current and shows the worker the newest steering batch
+ * from its task inbox exactly once in its context. Any receipt or inbox failure aborts the worker.
+ */
+class WorkerCommunication {
+  private closed = false;
+  private fatalError: unknown;
+  private timersStarted = false;
+  private lastWriteAt = Date.now();
+  private writeQueue = Promise.resolve();
+  private pollInFlight = false;
+  private latestContext: ExtensionContext | undefined;
+  private retainedBatch: TaskMessageBatch | undefined;
 
-  let closed = false;
-  let fatalError: unknown;
-  let timersStarted = false;
-  let lastWriteAt = Date.now();
-  let writeQueue = Promise.resolve();
-  let pollInFlight = false;
-  let latestContext: ExtensionContext | undefined;
-  let retainedBatch: TaskMessageBatch | undefined;
-  const tracedJobPath = process.env[WORKER_JOB_PATH_ENV];
-  const trace = (event: string, detail?: Readonly<Record<string, unknown>>): void => {
-    if (tracedJobPath !== undefined && tracedJobPath.trim().length > 0) {
-      traceWorkerTurn(tracedJobPath, event, detail);
-    }
-  };
+  constructor(
+    private readonly config: WorkerControlConfig,
+    private receipt: WorkerReceipt,
+    readonly trace: Trace,
+  ) {}
 
-  const fail = (ctx: ExtensionContext, error: unknown): void => {
-    if (fatalError === undefined) fatalError = error;
+  private get stopped(): boolean {
+    return this.closed || this.fatalError !== undefined;
+  }
+
+  private fail(ctx: ExtensionContext, error: unknown): void {
+    if (this.fatalError === undefined) this.fatalError = error;
     ctx.abort();
-  };
+  }
 
-  const persist = async (
-    ctx: ExtensionContext,
-    next: WorkerReceipt,
-    force: boolean,
-  ): Promise<void> => {
-    if (closed) return;
-    receipt = next;
-    if (!force && Date.now() - lastWriteAt < RECEIPT_WRITE_INTERVAL_MS) return;
-    const write = writeQueue.then(async () => {
-      if (closed) return;
-      await writeWorkerReceipt(config.receiptPath, receipt);
-      lastWriteAt = Date.now();
+  private async persist(ctx: ExtensionContext, next: WorkerReceipt, force: boolean): Promise<void> {
+    if (this.closed) return;
+    this.receipt = next;
+    if (!force && Date.now() - this.lastWriteAt < RECEIPT_WRITE_INTERVAL_MS) return;
+    const write = this.writeQueue.then(async () => {
+      if (this.closed) return;
+      await writeWorkerReceipt(this.config.receiptPath, this.receipt);
+      this.lastWriteAt = Date.now();
     });
-    writeQueue = write.catch(() => {});
+    this.writeQueue = write.catch(() => {});
     try {
       await write;
     } catch (error) {
-      fail(ctx, error);
+      this.fail(ctx, error);
       throw error;
     }
-  };
+  }
 
-  const touch = async (
+  private async touch(
     ctx: ExtensionContext,
-    phase: WorkerReceipt["phase"],
-    tool: string | undefined,
-    meaningful: boolean,
+    activity: ReceiptActivity,
     force = false,
-  ): Promise<void> => {
-    const now = readNow();
-    const phaseChanged = receipt.phase !== phase;
-    const toolChanged = phase === "tool" && receipt.tool !== tool;
-    const { tool: _previousTool, ...withoutTool } = receipt;
-    await persist(
-      ctx,
-      {
-        ...withoutTool,
-        heartbeatAt: now,
-        progressAt: meaningful ? now : receipt.progressAt,
-        phase,
-        ...(phase === "tool" && tool !== undefined ? { tool } : {}),
-      },
-      force || phaseChanged || toolChanged,
-    );
-  };
-  const retainInboxBatch = (inbox: TaskInbox | undefined): void => {
-    if (inbox === undefined || inbox.revision === 0 || inbox.messages.length === 0) return;
-    const candidate = parseTaskMessageBatch({
-      taskId: config.taskId,
-      revision: inbox.revision,
-      messages: inbox.messages,
-    });
-    if (retainedBatch === undefined || candidate.revision >= retainedBatch.revision) {
-      retainedBatch = candidate;
-    }
-  };
+  ): Promise<void> {
+    const touched = touchedReceipt(this.receipt, activity, readNow());
+    await this.persist(ctx, touched.receipt, force || touched.changed);
+  }
 
-  const observeInbox = async (ctx: ExtensionContext): Promise<void> => {
-    if (closed || fatalError !== undefined) return;
-    const inbox = await inboxFor(config);
-    retainInboxBatch(inbox);
-    if (inbox === undefined || inbox.revision <= receipt.receivedRevision) return;
-    await persist(
+  /** Records activity from an OMP event; a failed receipt write aborts the worker. */
+  recordActivity(ctx: ExtensionContext, phase: WorkerReceipt["phase"], tool?: string): void {
+    void this.touch(ctx, { phase, tool, meaningful: true }).catch((error) => this.fail(ctx, error));
+  }
+
+  private async observeInbox(ctx: ExtensionContext): Promise<void> {
+    if (this.stopped) return;
+    const inbox = await inboxFor(this.config);
+    this.retainInbox(inbox, undefined);
+    if (inbox === undefined || inbox.revision <= this.receipt.receivedRevision) return;
+    await this.persist(
       ctx,
-      {
-        ...receipt,
-        receivedRevision: inbox.revision,
-        heartbeatAt: readNow(),
-      },
+      { ...this.receipt, receivedRevision: inbox.revision, heartbeatAt: readNow() },
       true,
     );
-  };
+  }
 
-  const poll = async (ctx: ExtensionContext): Promise<void> => {
-    if (pollInFlight || closed || fatalError !== undefined) return;
-    pollInFlight = true;
+  private async poll(ctx: ExtensionContext): Promise<void> {
+    if (this.pollInFlight || this.stopped) return;
+    this.pollInFlight = true;
     try {
-      await observeInbox(ctx);
+      await this.observeInbox(ctx);
     } catch (error) {
-      fail(ctx, error);
+      this.fail(ctx, error);
     } finally {
-      pollInFlight = false;
+      this.pollInFlight = false;
     }
-  };
-  const heartbeat = async (): Promise<void> => {
-    if (latestContext === undefined || closed || fatalError !== undefined) return;
+  }
+
+  private async heartbeat(): Promise<void> {
+    if (this.latestContext === undefined || this.stopped) return;
+    const { phase } = this.receipt;
     try {
-      await touch(
-        latestContext,
-        receipt.phase,
-        receipt.phase === "tool" ? receipt.tool : undefined,
-        false,
-      );
+      await this.touch(this.latestContext, {
+        phase,
+        tool: phase === "tool" ? this.receipt.tool : undefined,
+        meaningful: false,
+      });
     } catch {
       // touch aborts the worker when a receipt write fails.
     }
-  };
-  const applyContext = async (
+  }
+
+  /** Keeps the inbox batch when it is at least as new as `floor` and as the retained batch. */
+  private retainInbox(inbox: TaskInbox | undefined, floor: number | undefined): void {
+    if (inbox === undefined || (floor !== undefined && inbox.revision < floor)) return;
+    this.retainedBatch = atLeastAsNewBatch(
+      inboxMessageBatch(this.config.taskId, inbox),
+      this.retainedBatch,
+    );
+  }
+
+  private async applyContext(
     ctx: ExtensionContext,
     messages: AgentMessage[],
-  ): Promise<AgentMessage[]> => {
-    if (closed || fatalError !== undefined) return messages;
-    const markers = markersFromMessages(messages).filter(
-      (marker) => marker.batch.taskId === config.taskId && marker.batch.revision > 0,
-    );
-    const selected =
-      markers.length === 0
-        ? undefined
-        : markers.reduce((best, marker) =>
-            marker.batch.revision > best.batch.revision ? marker : best,
-          );
-    const inbox = await inboxFor(config);
-    const selectedBatch = selected?.batch;
-    let inboxBatch: TaskMessageBatch | undefined;
+  ): Promise<AgentMessage[]> {
+    if (this.stopped) return messages;
+    const selected = newestTaskMarker(messages, this.config.taskId);
+    this.retainInbox(await inboxFor(this.config), selected?.batch.revision);
     if (
-      inbox !== undefined &&
-      inbox.revision > 0 &&
-      inbox.messages.length > 0 &&
-      (selectedBatch === undefined || inbox.revision >= selectedBatch.revision)
+      selected !== undefined &&
+      (this.retainedBatch === undefined || selected.batch.revision > this.retainedBatch.revision)
     ) {
-      inboxBatch = parseTaskMessageBatch({
-        taskId: config.taskId,
-        revision: inbox.revision,
-        messages: inbox.messages,
-      });
+      this.retainedBatch = selected.batch;
     }
-    if (
-      inboxBatch !== undefined &&
-      (retainedBatch === undefined || inboxBatch.revision >= retainedBatch.revision)
-    ) {
-      retainedBatch = inboxBatch;
-    }
-    if (
-      selectedBatch !== undefined &&
-      (retainedBatch === undefined || selectedBatch.revision > retainedBatch.revision)
-    ) {
-      retainedBatch = selectedBatch;
-    }
-    const materialized = retainedBatch;
+    const materialized = this.retainedBatch;
     if (materialized === undefined || materialized.revision === 0) return messages;
-    const replacement = formatTaskMessages(
-      config.taskId,
-      materialized.revision,
-      materialized.messages,
+    const updated = contextWithTaskMessages(
+      messages,
+      this.config.taskId,
+      materialized,
+      selected !== undefined,
+      Date.now(),
     );
-    const insertion: MarkerInsertion = { inserted: false };
-    const updated: AgentMessage[] = [];
-    if (selected === undefined) {
-      updated.push(...messages);
-      updated.push({
-        role: "user",
-        content: replacement,
-        synthetic: true,
-        attribution: "agent",
-        timestamp: Date.now(),
-      } as AgentMessage);
-    } else {
-      for (const message of messages) {
-        const collapsed = collapseMessageMarkers(message, config.taskId, replacement, insertion);
-        if (collapsed.message !== undefined) updated.push(collapsed.message);
-      }
-      if (!insertion.inserted) {
-        updated.push({
-          role: "user",
-          content: replacement,
-          synthetic: true,
-          attribution: "agent",
-          timestamp: Date.now(),
-        } as AgentMessage);
-      }
-    }
-    if (materialized.revision > receipt.appliedRevision) {
-      await persist(
+    if (materialized.revision > this.receipt.appliedRevision) {
+      await this.persist(
         ctx,
         {
-          ...receipt,
-          receivedRevision: Math.max(receipt.receivedRevision, materialized.revision),
+          ...this.receipt,
+          receivedRevision: Math.max(this.receipt.receivedRevision, materialized.revision),
           appliedRevision: materialized.revision,
           heartbeatAt: readNow(),
           progressAt: readNow(),
@@ -287,49 +228,45 @@ async function registerWorkerCommunication(pi: ExtensionAPI): Promise<void> {
       );
     }
     return updated;
-  };
+  }
 
-  pi.on("context", async (event, ctx) => {
+  async onContext(
+    ctx: ExtensionContext,
+    messages: AgentMessage[],
+  ): Promise<{ messages: AgentMessage[] } | undefined> {
     try {
-      return { messages: await applyContext(ctx, event.messages) };
+      return { messages: await this.applyContext(ctx, messages) };
     } catch (error) {
-      fail(ctx, error);
+      this.fail(ctx, error);
       return undefined;
     }
-  });
+  }
 
-  pi.on("session_stop", async (event, ctx) => {
-    trace("session_stop", { aborted: event.signal.aborted, closed });
-    if (closed || fatalError !== undefined || event.signal.aborted) return undefined;
+  /** Continues the session with any steering that arrived after the worker last saw its context. */
+  async onSessionStop(
+    ctx: ExtensionContext,
+    aborted: boolean,
+  ): Promise<SessionStopResult | undefined> {
+    this.trace("session_stop", { aborted, closed: this.closed });
+    if (this.stopped || aborted) return undefined;
     try {
-      const inbox = await inboxFor(config);
-      if (
-        inbox !== undefined &&
-        inbox.revision > 0 &&
-        inbox.messages.length > 0 &&
-        (retainedBatch === undefined || inbox.revision >= retainedBatch.revision)
-      ) {
-        retainedBatch = parseTaskMessageBatch({
-          taskId: config.taskId,
-          revision: inbox.revision,
-          messages: inbox.messages,
-        });
-      }
+      this.retainInbox(await inboxFor(this.config), this.retainedBatch?.revision);
       const pendingBatch =
-        retainedBatch !== undefined && retainedBatch.revision > receipt.appliedRevision
-          ? retainedBatch
+        this.retainedBatch !== undefined &&
+        this.retainedBatch.revision > this.receipt.appliedRevision
+          ? this.retainedBatch
           : undefined;
       if (pendingBatch === undefined) {
-        await touch(ctx, "finished", undefined, false, true);
-        trace("session_stop_done", { continuing: false });
+        await this.touch(ctx, { phase: "finished", meaningful: false }, true);
+        this.trace("session_stop_done", { continuing: false });
         return undefined;
       }
-      trace("session_stop_done", { continuing: true, revision: pendingBatch.revision });
-      await persist(
+      this.trace("session_stop_done", { continuing: true, revision: pendingBatch.revision });
+      await this.persist(
         ctx,
         {
-          ...receipt,
-          receivedRevision: Math.max(receipt.receivedRevision, pendingBatch.revision),
+          ...this.receipt,
+          receivedRevision: Math.max(this.receipt.receivedRevision, pendingBatch.revision),
           heartbeatAt: readNow(),
           phase: "model",
         },
@@ -338,73 +275,76 @@ async function registerWorkerCommunication(pi: ExtensionAPI): Promise<void> {
       return {
         continue: true,
         additionalContext: formatTaskMessages(
-          config.taskId,
+          this.config.taskId,
           pendingBatch.revision,
           pendingBatch.messages,
         ),
       };
     } catch (error) {
-      fail(ctx, error);
+      this.fail(ctx, error);
       return undefined;
     }
-  });
+  }
 
-  pi.on("session_shutdown", () => {
-    closed = true;
-  });
+  close(): void {
+    this.closed = true;
+  }
 
-  pi.on("agent_start", (_event, ctx) => {
-    void touch(ctx, "model", undefined, true).catch((error) => fail(ctx, error));
-  });
-  pi.on("turn_start", (_event, ctx) => {
-    void touch(ctx, "model", undefined, true).catch((error) => fail(ctx, error));
-  });
-  pi.on("turn_end", (_event, ctx) => {
-    void touch(ctx, "idle", undefined, true).catch((error) => fail(ctx, error));
-  });
-  pi.on("message_start", (_event, ctx) => {
-    void touch(ctx, "model", undefined, true).catch((error) => fail(ctx, error));
-  });
-  pi.on("message_end", (_event, ctx) => {
-    void touch(ctx, "model", undefined, true).catch((error) => fail(ctx, error));
-  });
-  pi.on("message_update", (_event, ctx) => {
-    void touch(ctx, "model", undefined, true).catch((error) => fail(ctx, error));
-  });
-  pi.on("tool_execution_start", (event, ctx) => {
-    void touch(ctx, "tool", toolName(event.toolName), true).catch((error) => fail(ctx, error));
-  });
-  pi.on("tool_execution_update", (event, ctx) => {
-    void touch(ctx, "tool", toolName(event.toolName), true).catch((error) => fail(ctx, error));
-  });
-  pi.on("tool_execution_end", (event, ctx) => {
-    void touch(ctx, "idle", toolName(event.toolName), true).catch((error) => fail(ctx, error));
-  });
-  pi.on("agent_end", (event, ctx) => {
-    trace("communication_agent_end", { willContinue: event.willContinue });
-    void touch(ctx, event.willContinue === true ? "model" : "idle", undefined, true).catch(
-      (error) => fail(ctx, error),
-    );
-  });
-
-  pi.on("session_start", async (_event, ctx) => {
-    latestContext = ctx;
-    if (!timersStarted) {
-      timersStarted = true;
+  async onSessionStart(ctx: ExtensionContext): Promise<void> {
+    this.latestContext = ctx;
+    if (!this.timersStarted) {
+      this.timersStarted = true;
       ctx.setInterval(() => {
-        const current = latestContext;
+        const current = this.latestContext;
         if (current === undefined) return;
-        void poll(current).catch((error) => fail(current, error));
+        void this.poll(current).catch((error) => this.fail(current, error));
       }, POLL_INTERVAL_MS);
       ctx.setInterval(() => {
-        void heartbeat();
+        void this.heartbeat();
       }, HEARTBEAT_INTERVAL_MS);
     }
     try {
-      await touch(ctx, "model", undefined, true, true);
-      await poll(ctx);
+      await this.touch(ctx, { phase: "model", meaningful: true }, true);
+      await this.poll(ctx);
     } catch (error) {
-      fail(ctx, error);
+      this.fail(ctx, error);
     }
+  }
+}
+
+async function registerWorkerCommunication(pi: ExtensionAPI): Promise<void> {
+  const config = parseWorkerControlConfig(process.env[WORKER_CONTROL_ENV]);
+  if (config === undefined) return;
+  await inboxFor(config);
+  const receipt = initialReceipt(config);
+  await writeWorkerReceipt(config.receiptPath, receipt);
+  const communication = new WorkerCommunication(
+    config,
+    receipt,
+    jobTrace(process.env[WORKER_JOB_PATH_ENV]),
+  );
+
+  pi.on("context", (event, ctx) => communication.onContext(ctx, event.messages));
+  pi.on("session_stop", (event, ctx) => communication.onSessionStop(ctx, event.signal.aborted));
+  pi.on("session_shutdown", () => communication.close());
+  pi.on("agent_start", (_event, ctx) => communication.recordActivity(ctx, "model"));
+  pi.on("turn_start", (_event, ctx) => communication.recordActivity(ctx, "model"));
+  pi.on("turn_end", (_event, ctx) => communication.recordActivity(ctx, "idle"));
+  pi.on("message_start", (_event, ctx) => communication.recordActivity(ctx, "model"));
+  pi.on("message_end", (_event, ctx) => communication.recordActivity(ctx, "model"));
+  pi.on("message_update", (_event, ctx) => communication.recordActivity(ctx, "model"));
+  pi.on("tool_execution_start", (event, ctx) =>
+    communication.recordActivity(ctx, "tool", toolName(event.toolName)),
+  );
+  pi.on("tool_execution_update", (event, ctx) =>
+    communication.recordActivity(ctx, "tool", toolName(event.toolName)),
+  );
+  pi.on("tool_execution_end", (event, ctx) =>
+    communication.recordActivity(ctx, "idle", toolName(event.toolName)),
+  );
+  pi.on("agent_end", (event, ctx) => {
+    communication.trace("communication_agent_end", { willContinue: event.willContinue });
+    communication.recordActivity(ctx, event.willContinue === true ? "model" : "idle");
   });
+  pi.on("session_start", (_event, ctx) => communication.onSessionStart(ctx));
 }

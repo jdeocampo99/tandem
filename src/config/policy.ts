@@ -383,7 +383,7 @@ function buildDefaultPolicy(): RepoPolicy {
     validationCommands: [],
     setupCommands: [],
     maxWorkers: 3,
-    maxFixRounds: 3,
+    maxFixRounds: 2,
     reviewLevels: { ...DEFAULT_REVIEW_LEVEL_POLICY },
   };
 }

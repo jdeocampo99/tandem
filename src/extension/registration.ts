@@ -83,31 +83,20 @@ function toolError(
   };
 }
 
-export function registerTandemOmp(
-  pi: ExtensionAPI,
-  dependencies: TandemOmpRegistrationDependencies,
-): void {
-  const z = pi.zod;
-  const confirmation: ChoiceConfirmation = {};
-  pi.on("input", (event, ctx) =>
-    handlePromptInput(event, ctx, {
-      confirmation,
-      config: dependencies.promptRouting,
-      getService: dependencies.getService,
-      getHome: dependencies.getHome,
-      ...(dependencies.getRepo === undefined ? {} : { getRepo: dependencies.getRepo }),
-      sendMessage: pi.sendMessage.bind(pi),
-    }),
-  );
-  pi.on("tool_call", async (event, ctx) => {
-    const reason = await coordinatorToolRefusal(event.toolName, event.input, {
-      allowedServers: () => dependencies.coordinatorMcpServers(ctx),
-      researchRunning: () => dependencies.researchRunning(ctx),
-      home: dependencies.getHome(ctx),
-      cwd: ctx.cwd,
-    });
-    return reason === undefined ? undefined : { block: true, reason };
-  });
+type Zod = ExtensionAPI["zod"];
+
+function pullRequestSummarySchema(z: Zod) {
+  return z
+    .object({
+      tldr: z.array(z.string()),
+      what: z.array(z.string()),
+      why: z.array(z.string()),
+    })
+    .strict();
+}
+
+/** The strict `{ request: { action, ... } }` parameters of the `tandem` tool; see `TandemAction`. */
+function tandemRequestSchema(z: Zod) {
   const modelSpecSchema = z
     .object({
       model: z.string(),
@@ -263,13 +252,7 @@ export function registerTandemOmp(
       .object({
         action: z.literal("describe"),
         taskId: z.string(),
-        summary: z
-          .object({
-            tldr: z.array(z.string()),
-            what: z.array(z.string()),
-            why: z.array(z.string()),
-          })
-          .strict(),
+        summary: pullRequestSummarySchema(z),
       })
       .strict(),
     z
@@ -278,13 +261,7 @@ export function registerTandemOmp(
         taskId: z.string(),
         title: z.string(),
         base: z.string(),
-        summary: z
-          .object({
-            tldr: z.array(z.string()),
-            what: z.array(z.string()),
-            why: z.array(z.string()),
-          })
-          .strict(),
+        summary: pullRequestSummarySchema(z),
       })
       .strict(),
     z
@@ -294,13 +271,7 @@ export function registerTandemOmp(
         repository: z.string(),
         title: z.string(),
         base: z.string(),
-        summary: z
-          .object({
-            tldr: z.array(z.string()),
-            what: z.array(z.string()),
-            why: z.array(z.string()),
-          })
-          .strict(),
+        summary: pullRequestSummarySchema(z),
       })
       .strict(),
     z
@@ -377,14 +348,58 @@ export function registerTandemOmp(
     z.object({ action: z.literal("review-close"), taskId: z.string() }).strict(),
   ]);
 
-  const requestSchema = z.object({ request: actionSchema }).strict();
+  return z.object({ request: actionSchema }).strict();
+}
 
+/** `/tandem models .` means the coordinator's own checkout. */
+export function resolveCommandAction(action: TandemAction, cwd: string): TandemAction {
+  return action.action === "models" && action.repoPath === "."
+    ? { ...action, repoPath: cwd }
+    : action;
+}
+
+function registerPromptRouting(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
+  const confirmation: ChoiceConfirmation = {};
+  pi.on("input", (event, ctx) =>
+    handlePromptInput(event, ctx, {
+      confirmation,
+      config: dependencies.promptRouting,
+      getService: dependencies.getService,
+      getHome: dependencies.getHome,
+      ...(dependencies.getRepo === undefined ? {} : { getRepo: dependencies.getRepo }),
+      sendMessage: pi.sendMessage.bind(pi),
+    }),
+  );
+}
+
+function registerCoordinatorToolGuard(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
+  pi.on("tool_call", async (event, ctx) => {
+    const reason = await coordinatorToolRefusal(event.toolName, event.input, {
+      allowedServers: () => dependencies.coordinatorMcpServers(ctx),
+      researchRunning: () => dependencies.researchRunning(ctx),
+      home: dependencies.getHome(ctx),
+      cwd: ctx.cwd,
+    });
+    return reason === undefined ? undefined : { block: true, reason };
+  });
+}
+
+function registerTandemTool(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
   pi.registerTool({
     name: "tandem",
     label: "Tandem",
     description:
       "Start, inspect, steer, and control Tandem work with {request:{action:...}}. Actions that need approval ask the user to confirm. A delivered message does not mean the work is done.",
-    parameters: requestSchema,
+    parameters: tandemRequestSchema(pi.zod),
     strict: true,
     approval: "write",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -404,16 +419,18 @@ export function registerTandemOmp(
       }
     },
   });
+}
+
+function registerTandemCommand(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
   pi.registerCommand("tandem", {
     description:
       "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
     handler: async (args, ctx) => {
       try {
-        const parsedAction = parseTandemCommand(args);
-        const action =
-          parsedAction.action === "models" && parsedAction.repoPath === "."
-            ? { ...parsedAction, repoPath: ctx.cwd }
-            : parsedAction;
+        const action = resolveCommandAction(parseTandemCommand(args), ctx.cwd);
         const result = await executeTandemAction(action, dependencies.getService(ctx), ctx);
         ctx.ui.notify(renderActionResult(result), "info");
         await dependencies.postAction(ctx);
@@ -423,4 +440,14 @@ export function registerTandemOmp(
       }
     },
   });
+}
+
+export function registerTandemOmp(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
+  registerPromptRouting(pi, dependencies);
+  registerCoordinatorToolGuard(pi, dependencies);
+  registerTandemTool(pi, dependencies);
+  registerTandemCommand(pi, dependencies);
 }

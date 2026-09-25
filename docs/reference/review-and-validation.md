@@ -6,7 +6,8 @@ rounds, and how review depth is classified.
 Code: src/tasks/acceptance.ts, src/tasks/findings.ts, src/tasks/review-brief.ts,
 src/tasks/review-levels.ts, src/tasks/review-assistance.ts, src/tasks/lifecycle.ts,
 src/validation-worker.ts, src/workers/validation.ts, src/workers/protocol.ts, src/workers/review-round.ts,
-src/workers/prompts.ts, src/instructions.ts
+src/workers/prompts.ts, src/workers/validation-stage.ts, src/workers/review-stage.ts,
+src/instructions.ts
 
 ## Review
 
@@ -100,7 +101,7 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   including legacy); only a new report reopens it as `regressed`; contradicting verdicts are
   `disputed`.
 - `record-review` stores `pass` as "no P0 or P1 stands", ignoring the reviewer's flag. P0/P1
-  (confirmed or plausible) blocks; P2/P3 is a known issue that never costs a fix round and is listed
+  (confirmed or plausible) blocks; P2/P3 never costs a fix round on its own (a round that a P0/P1 triggers also fixes them) and is listed
   in the ready message and the PR's `# Known issues`. A violated mandatory design rule is P1.
 - A spent fix-round budget asks `Keep fixing?` ([Task lifecycle](task-lifecycle.md#fix-rounds)).
   Nothing retries without `yes`, auto-passes, or downgrades a blocker.

@@ -3,7 +3,7 @@
 What inspection, scheduler control, two-way task messages, and CLI consent must guarantee.
 
 Code: src/tasks/control.ts, src/tasks/inspection.ts, src/tasks/communication-protocol.ts,
-src/tasks/communication-persistence.ts, src/terminal/cli-application.ts,
+src/tasks/communication-persistence.ts, src/terminal/cli-application.ts, src/terminal/cli-commands.ts,
 src/terminal/cli-arguments.ts, src/cli.ts
 
 ## Inspection
@@ -82,7 +82,9 @@ src/terminal/cli-arguments.ts, src/cli.ts
 - A running primary worker receives directions at the next provider-context boundary without
   interrupting an active tool. A terminal response continues only if an unapplied direction remains.
 - A task in validation, review, or `ready` instead stops through the ownership checks and
-  invalidates old evidence in a new generation, without charging a repair round.
+  invalidates old evidence in a new generation, without charging a repair round. When the task's
+  PR is open, Tandem adds a line telling the agent to commit and push (see
+  [delivery.md](delivery.md#follow-ups-on-an-open-pr)).
 - Paused, infrastructure-blocked, merged, or cancelled tasks may retain or explicitly reject
   directions; a direction never bypasses approval, auto-resumes work, publishes, or merges.
 - Workers load the control extension at launch; running workers are not hot-upgraded.
@@ -96,7 +98,7 @@ lives in `approvalPrompt` in src/extension/actions.ts.
 ## CLI consent and output
 
 - `--yes` is explicit automation consent. It is not an interactive prompt; the CLI checks it and
-  proceeds or raises a consent error (`requireYes` in src/terminal/cli-application.ts).
+  proceeds or raises a consent error (`requireYes` in src/terminal/cli-commands.ts).
 - Commands that need `--yes`: `configure-models`, `setup`, `onboard --write`, `approve`, `cancel`,
   `pr draft`, `pr publish`, `pr merge`/`merge`, and `cleanup --discard`. Safe cleanup does not.
 - `steer`, `answer`, and `messages` are not approval-bearing and get no extra consent prompt. All

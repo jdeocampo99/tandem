@@ -9,9 +9,20 @@ src/service/draft-refresh.ts, src/presentations/, src/adapters/lavish.ts
 
 ## Approval boundaries
 
-- Scope approval is never publication approval. Draft, publish, publish-now, and merge each need
-  their own explicit approval (`--yes` or live TUI confirmation). Tandem never merges on its own.
+- Scope approval is never publication approval. Publish, publish-now, and merge each need their own
+  explicit approval (`--yes` or live TUI confirmation). Tandem never merges on its own.
 - A draft PR is never an approval, and never satisfies any acceptance gate.
+
+## Automatic draft at ready
+
+- When an implementation task reaches `ready` with a worktree lease and no recorded PR, the
+  scheduler opens a draft for it (`DraftRefreshWorkflow.openWhenReady`, src/service/draft-refresh.ts)
+  in the same tick, so `show` has its link by the time the coordinator reads the delivery notice.
+- Title is the objective's first line, cut to 72 characters. Base is the task target's branch, else
+  the worktree's `origin/HEAD`. The final publish retitles it.
+- Each task revision is attempted once. A failure appends a `draft-refresh-failed` diagnostic with
+  step `open` and never blocks the task; a PR opened but not recorded is adopted on the next
+  attempt. The user can still ask for `draft` by hand.
 
 ## Draft eligibility
 
@@ -41,7 +52,7 @@ src/service/draft-refresh.ts, src/presentations/, src/adapters/lavish.ts
 ## Draft refresh
 
 - When durable task state changes, the scheduler recomputes the body from the task record and
-  updates the existing PR in place. Refresh never creates a PR, changes draft state, asks for
+  updates the existing PR in place. Refresh never creates a PR (only the draft at ready does), changes draft state, asks for
   approval, or blocks durable work when the remote is unavailable.
 - The branch advances by pushing the exact task HEAD without force. A refused push leaves the
   published commit alone and the body discloses the lag.
@@ -107,6 +118,16 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
 - `# Validation` says review was skipped, names any safety floors the diff tripped, and lists the
   validation that passed before the skip. If publication fails after the skip, the task stays
   `ready` and a normal `publish` can retry. Merge stays separate.
+
+## Follow-ups on an open PR
+
+- Once a task's PR is open (not a draft), the user's questions and changes about that work go to
+  the same task with `steer`, in the same worktree; the coordinator never starts a new task for them.
+- The direction gets one added line: if the agent changes code, it commits and pushes the task
+  branch to `origin` itself, never force-pushing (`OPEN_PR_FOLLOW_UP` in src/tasks/control.ts).
+- When the agent submits, `implementation-complete` returns the task straight to `ready` with
+  `reviewSkippedHead` at the new HEAD: no Tandem validation or review. The PR's own CI is the
+  check, and merge still verifies it. The receipt is not repeated.
 
 ## Merge
 

@@ -36,7 +36,7 @@ src/workers/terminal-extension.ts
 | `validating` | One named validation contract runs at that exact HEAD: iteration checks between fix rounds, or the full final manifest once otherwise ready. |
 | `reviewing` | Checks passed or were skipped ([Review and validation](review-and-validation.md)); fresh reviewers record lenses. |
 | `awaiting-fixes` | Validation or review failed; a bounded fix round may start. |
-| `ready` | Final manifest and all required lenses pass at the current HEAD, or the user chose [publish now](delivery.md) at that HEAD. |
+| `ready` | Final manifest and all required lenses pass at the current HEAD, or the user chose [publish now](delivery.md) at that HEAD, or a [follow-up on an open PR](delivery.md#follow-ups-on-an-open-pr) finished there. |
 | `paused` | Stopped with a resumable previous stage. |
 | `blocked` | Cannot safely proceed; durable reason, surfaced as an actionable blocker. |
 | `cancelled` / `completed` / `merged` | Terminal. A scout is research-complete only when `completed` with its report; `merged` only after verified delivery. |
@@ -46,7 +46,7 @@ src/workers/terminal-extension.ts
 - Completion and fix cycles bind to the current generation and HEAD. A fix cycle increments the
   generation, retires the old review round, returns to `implementing`, and keeps only passing checks
   at the reported commit's exact HEAD.
-- Budget is pinned `maxFixRounds` (default 3) plus `fixRoundGrants`, stored beside the pinned policy,
+- Budget is pinned `maxFixRounds` (default 2) plus `fixRoundGrants`, stored beside the pinned policy,
   which never changes.
 - `Keep fixing "<task>"?` is asked before a round when the budget is spent, or the latest review
   repeats a blocker unchanged (same lens and id, file, and description ignoring case and spacing;
