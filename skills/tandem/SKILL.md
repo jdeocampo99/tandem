@@ -69,8 +69,9 @@ user approves the full recap. Model choices apply to all projects and take effec
 With `TYPESAFE_API_KEY` in the shell profile, Tandem answers simple lookups without waking the
 coordinator model. A company Portkey gateway also needs `PORTKEY_BASE_URL`, `PORTKEY_API_KEY`,
 `PORTKEY_PROVIDER`, `PORTKEY_CUSTOM_HOST`, and `PORTKEY_JEV_MODEL` (details in
-`docs/reference/policy.md`). Ask the user for every value; never guess a key or URL. Relaunch
-Tandem from a new terminal afterward. A wrong value just skips Jev.
+`docs/reference/policy.md`). Never ask for or handle a key: show the `export` lines and have the
+user paste their keys into the profile themselves. Ask for the other values; never guess them.
+Relaunch Tandem from a new terminal afterward. A wrong value just skips Jev.
 
 ## Starter requests
 
