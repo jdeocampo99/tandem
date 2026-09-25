@@ -38,10 +38,15 @@ src/workers/execution-routing.ts, src/service/request-accounting.ts
 - Each worker's extension sums OMP's per-reply usage (tokens and price-table cost), plus each
   `task` call's aggregated subagent usage (`details.usage`), into `<job>.usage.json`; the settled work span carries `actual` tokens and an `estimated` charge from
   `omp-model-price-table`, a list price rather than a subscription bill.
+- Span tokens are new tokens: input, cache writes, and output. Cache reads are the same context
+  re-sent each reply, so they are left out of the count; their cost is still in the charge. Spans
+  recorded before this rule keep the cache reads they were recorded with.
 - Research is credited through the implementation that cites it in `researchTaskIds`, without joining
   the request.
 - Coordinator replies go to `<home>/coordinator-usage.jsonl`. The coordinator serves every request,
-  so a receipt shows them as a separate shared line, never in the request total.
+  so a receipt shows only its cost, in a note under the table, never in the request total.
+- The receipt table's total time is working time (the union of work intervals). The wall-clock span
+  and waiting time go in a note under it.
 - An implementation task created without `requestId` joins the repository's one open request (approved
   brief, governed work not all finished; an approved request with no task after 3 days no longer
   counts). With none it stands alone; with several, create is refused unless `requestId` names one.
