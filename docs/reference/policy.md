@@ -70,7 +70,7 @@ The coordinator delegates research and does judgement itself.
 
 ## Global model preferences
 
-- `models.json` is `{ schemaVersion: 1, models, enabledProviders? }`. `models` must name all five
+- `models.json` is `{ schemaVersion: 1, models, enabledProviders?, jev? }`. `models` must name all five
   roles (`coordinator`, `scout`, `implementer`, `reviewer`, `presentation`), each with exactly
   `model` (exact `provider/model`) and `thinking` (a supported level). A partial or hand-edited
   file never becomes implicit defaults. A legacy `verifier` entry is accepted and ignored.
@@ -167,7 +167,10 @@ Jev optionally classifies unmatched natural-language coordinator prompts so simp
 lookups, and short replies to Tandem's fixed-choice questions, skip the model.
 
 - Enabled only when `TYPESAFE_API_KEY` is set at launch; otherwise the coordinator path is
-  unchanged. Model `jev-1.13.0` at `https://api.typesafe.ai/v1/systemone`.
+  unchanged. Jev is on by default: onboarding and `tandem configure` say whether a key is set,
+  show the lines to add if not, and offer to turn it off. Keys stay in the shell profile; Tandem
+  never asks for or stores them. `"jev": "off"` in `<home>/models.json` launches coordinators
+  with an empty `TYPESAFE_API_KEY`, so neither they nor their tasks call Jev. Model `jev-1.13.0` at `https://api.typesafe.ai/v1/systemone`.
   With `PORTKEY_BASE_URL` set, the same request goes to `$PORTKEY_BASE_URL/proxy/decisions`
   instead, adding `x-portkey-api-key`, `x-portkey-provider`, and `x-portkey-custom-host` from
   `PORTKEY_API_KEY`, `PORTKEY_PROVIDER`, and `PORTKEY_CUSTOM_HOST`. `PORTKEY_JEV_MODEL` is the

@@ -115,3 +115,12 @@ test("rejects a non-string entry in enabledProviders", async () => {
     ).rejects.toThrow(TypeError);
   });
 });
+
+test("Jev is on until turned off, and a rewrite that omits it keeps the saved choice", async () => {
+  await withFixture(async ({ repo, home }) => {
+    expect((await readModelSettings({ repoPath: repo, home })).jev).toBe("on");
+    await writeModelSettings({ repoPath: repo, home, models: MODELS, jev: "off" });
+    const rewritten = await writeModelSettings({ repoPath: repo, home, models: MODELS });
+    expect(rewritten.jev).toBe("off");
+  });
+});

@@ -31,7 +31,11 @@ const MODEL_SETTINGS_ENVELOPE_KEYS: Readonly<Record<string, true>> = {
   schemaVersion: true,
   models: true,
   enabledProviders: true,
+  jev: true,
 };
+
+/** Whether coordinators may use Jev when a key is set; absent means on, so Jev is opt-out. */
+export type JevSetting = "on" | "off";
 
 export type ModelSettings = Readonly<{
   configPath: string;
@@ -39,6 +43,7 @@ export type ModelSettings = Readonly<{
   models?: RepoPolicy["models"];
   /** Providers explicitly approved for spending; catalogue discovery alone never adds one here. */
   enabledProviders: readonly string[];
+  jev: JevSetting;
 }>;
 type ModelSettingsPaths = Readonly<{
   home: string;
@@ -103,9 +108,16 @@ function readEnabledProviders(value: unknown, field: string): readonly string[] 
   return [...deduplicateStrings(providers)].sort();
 }
 
+function readJevSetting(value: unknown, field: string): JevSetting {
+  if (value === undefined || value === "on") return "on";
+  if (value === "off") return "off";
+  throw new TypeError(`${field} must be "on" or "off"`);
+}
+
 type StoredModelSettings = Readonly<{
   models: RepoPolicy["models"];
   enabledProviders: readonly string[];
+  jev: JevSetting;
 }>;
 
 function parseStoredModelSettings(text: string, source: string): StoredModelSettings {
@@ -123,6 +135,7 @@ function parseStoredModelSettings(text: string, source: string): StoredModelSett
   return {
     models: parseModelAssignments(envelope.models),
     enabledProviders: readEnabledProviders(envelope.enabledProviders, `${source}.enabledProviders`),
+    jev: readJevSetting(envelope.jev, `${source}.jev`),
   };
 }
 
@@ -144,7 +157,7 @@ export async function readModelSettingsAt(
     }
   }
   if (text === undefined) {
-    return { configPath: paths.config, configured: false, enabledProviders: [] };
+    return { configPath: paths.config, configured: false, enabledProviders: [], jev: "on" };
   }
   const stored = parseStoredModelSettings(text, paths.config);
   return {
@@ -152,6 +165,7 @@ export async function readModelSettingsAt(
     configured: true,
     models: stored.models,
     enabledProviders: stored.enabledProviders,
+    jev: stored.jev,
   };
 }
 
@@ -174,6 +188,8 @@ export async function writeModelSettings(
     models: RepoPolicy["models"];
     /** Omit to preserve the previously saved provider enablement; never defaults to "all discovered". */
     enabledProviders?: readonly string[] | undefined;
+    /** Omit to preserve the previously saved Jev setting. */
+    jev?: JevSetting | undefined;
   }>,
 ): Promise<ModelSettings> {
   const root = await repositoryRoot(options.repoPath);
@@ -188,6 +204,8 @@ export async function writeModelSettings(
     options.enabledProviders === undefined
       ? (priorSettings?.enabledProviders ?? [])
       : readEnabledProviders(options.enabledProviders, "enabledProviders");
+  const jev =
+    options.jev === undefined ? (priorSettings?.jev ?? "on") : readJevSetting(options.jev, "jev");
 
   await ensurePrivateDirectoryTree(paths.home, "Tandem home");
   const beforeWrite = await inspectPolicyPath(paths);
@@ -196,6 +214,7 @@ export async function writeModelSettings(
     schemaVersion: MODEL_SETTINGS_SCHEMA_VERSION,
     models,
     enabledProviders,
+    jev,
   });
   const afterWrite = await inspectPolicyPath(paths);
   if (!afterWrite.exists) throw new Error(`model settings write did not create ${paths.config}`);

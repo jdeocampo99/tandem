@@ -86,6 +86,8 @@ export async function runConfigure(
     availableModels: modelOptions.availableModels,
     ...(modelSettings.models === undefined ? {} : { currentModels: modelSettings.models }),
     enabledProviders: modelSettings.enabledProviders,
+    jev: modelSettings.jev,
+    environment: environment.source,
     prompter,
     home: environment.home,
   });
@@ -97,13 +99,18 @@ export async function runConfigure(
       sessionId: environment.sessionId,
     };
   }
-  if (decision.action === "save" || decision.action === "change") {
+  if (
+    decision.action === "save" ||
+    decision.action === "change" ||
+    decision.jev !== modelSettings.jev
+  ) {
     await service.configureModels({
       repoPath: anchor,
       models: decision.models,
       ...(decision.enabledProviders === undefined
         ? {}
         : { enabledProviders: decision.enabledProviders }),
+      ...(decision.jev === undefined ? {} : { jev: decision.jev }),
     });
   }
   output(
@@ -182,17 +189,24 @@ export async function prepareProjects(
       availableModels: modelOptions.availableModels,
       ...(settings.models === undefined ? {} : { currentModels: settings.models }),
       enabledProviders: modelOptions.modelSettings.enabledProviders,
+      jev: modelOptions.modelSettings.jev,
+      environment: environment.source,
       prompter,
       home: environment.home,
     });
     if (decision.status === "cancelled" || decision.models === undefined) return undefined;
-    if (decision.action === "save" || decision.action === "change") {
+    if (
+      decision.action === "save" ||
+      decision.action === "change" ||
+      decision.jev !== modelOptions.modelSettings.jev
+    ) {
       await service.configureModels({
         repoPath: anchor.repoPath,
         models: decision.models,
         ...(decision.enabledProviders === undefined
           ? {}
           : { enabledProviders: decision.enabledProviders }),
+        ...(decision.jev === undefined ? {} : { jev: decision.jev }),
       });
     }
   }

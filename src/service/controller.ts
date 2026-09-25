@@ -9,6 +9,7 @@ import { listOmpModels } from "../adapters/omp.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
 import {
+  type JevSetting,
   type ModelSettings,
   parseModelAssignments,
   readModelSettings,
@@ -251,6 +252,8 @@ export type TandemService = Readonly<{
       readonly models: RepoPolicy["models"];
       /** Omit to preserve the previously saved provider enablement. */
       readonly enabledProviders?: readonly string[] | undefined;
+      /** Omit to preserve the previously saved Jev setting. */
+      readonly jev?: JevSetting | undefined;
     }>,
   ) => Promise<ModelSettings>;
   readonly create: (input: CreateTaskRequest) => Promise<TaskRecord>;
@@ -783,6 +786,7 @@ class TandemController {
       readonly repoPath: string;
       readonly models: RepoPolicy["models"];
       readonly enabledProviders?: readonly string[] | undefined;
+      readonly jev?: JevSetting | undefined;
     }>,
   ): Promise<ModelSettings> {
     if (!isRecord(input)) throw new TypeError("configureModels input must be an object");
@@ -796,6 +800,7 @@ class TandemController {
       home: this.#deps.home,
       models,
       ...(input.enabledProviders === undefined ? {} : { enabledProviders: input.enabledProviders }),
+      ...(input.jev === undefined ? {} : { jev: input.jev }),
     });
   }
   /**

@@ -56,11 +56,13 @@ function onboardingService(
   readonly providerCalls: (readonly string[] | undefined)[];
   readonly writeCalls: string[];
   readonly coordinatorMcpCalls: (readonly string[] | undefined)[];
+  readonly jevCalls: ("on" | "off" | undefined)[];
 } {
   const configureCalls: ModelSpec[][] = [];
   const providerCalls: (readonly string[] | undefined)[] = [];
   const writeCalls: string[] = [];
   const coordinatorMcpCalls: (readonly string[] | undefined)[] = [];
+  const jevCalls: ("on" | "off" | undefined)[] = [];
   const models = options.configured
     ? {
         coordinator: { model: "test/model", thinking: "low" },
@@ -87,6 +89,7 @@ function onboardingService(
           configPath: "/private/tandem/models.json",
           configured: options.configured,
           enabledProviders,
+          jev: "on" as const,
           ...(models === undefined ? {} : { models }),
         },
         policy: {} as never,
@@ -100,6 +103,7 @@ function onboardingService(
         configPath: "/private/tandem/models.json",
         configured: options.configured,
         enabledProviders,
+        jev: "on" as const,
         ...(models === undefined ? {} : { models }),
       },
       availableModels: options.catalogue ?? catalogue(),
@@ -107,9 +111,11 @@ function onboardingService(
     configureModels: async (input: {
       readonly models: RepoPolicy["models"];
       readonly enabledProviders?: readonly string[];
+      readonly jev?: "on" | "off";
     }) => {
       configureCalls.push(Object.values(input.models));
       providerCalls.push(input.enabledProviders);
+      jevCalls.push(input.jev);
       return {
         configPath: "/private/tandem/models.json",
         configured: true,
@@ -119,7 +125,7 @@ function onboardingService(
     },
     shutdown: async () => undefined,
   } as unknown as TandemService;
-  return { service, configureCalls, providerCalls, writeCalls, coordinatorMcpCalls };
+  return { service, configureCalls, providerCalls, writeCalls, coordinatorMcpCalls, jevCalls };
 }
 
 function fakeApplication(invocations: CliInvocation[]): CliApplication {
@@ -411,8 +417,12 @@ test("declining project settings through the keyboard menu performs no write or 
   const { input, output } = ttyStreams();
   const fake = onboardingService({ existingConfig: false, configured: true });
   const invocations: CliInvocation[] = [];
-  const prompts = ["Choose Keep all, Change roles, or Not now", "Save project settings?"];
-  const keys = ["\r", "\u001b[B\r"];
+  const prompts = [
+    "Choose Keep all, Change roles, or Not now",
+    "Use Jev?",
+    "Save project settings?",
+  ];
+  const keys = ["\r", "\r", "\u001b[B\r"];
   let rendered = "";
   let nextPrompt = 0;
   output.on("data", (chunk: Buffer | string) => {
@@ -682,7 +692,7 @@ test("configure keeps one current-project anchor when several projects are saved
   expect(result.projects).toEqual([second]);
   expect(fake.configureCalls).toHaveLength(0);
   expect(invocations).toHaveLength(0);
-  expect(promptCalls).toHaveLength(1);
+  expect(promptCalls).toHaveLength(2);
   await rm(join(first, ".."), { recursive: true, force: true });
 });
 
@@ -793,6 +803,30 @@ test("saved interactive launch keeps terminal replies out of visible output", as
   }
 });
 
+test("configure explains how to add a missing Jev key and saves turning Jev off", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const home = join(repo, "..", "home");
+  const fake = onboardingService({ existingConfig: true, configured: true });
+  const answers = ["keep all", "off"];
+  const output: string[] = [];
+  const result = await runTerminal(["configure", "--home", home], {
+    cwd: repo,
+    run: runCommand,
+    service: fake.service,
+    application: fakeApplication([]),
+    prompt: async () => answers.shift() ?? "not now",
+    processEnvironment: {},
+    isTTY: true,
+    stdout: (text) => output.push(text),
+    stderr: (text) => output.push(text),
+  });
+  expect(result.status).toBe("configured");
+  expect(output.join("")).toContain("export TYPESAFE_API_KEY=<your key>");
+  expect(fake.jevCalls).toEqual(["off"]);
+  await rm(join(repo, ".."), { recursive: true, force: true });
+});
+
 test("keyboard onboarding releases terminal input before Herdr attachment", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
@@ -814,6 +848,7 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
     "Presentations model selector",
     "Presentations thinking level",
     "Save these role choices?",
+    "Use Jev?",
     "Save project settings?",
     "Let the coordinator use linear?",
   ] as const;
@@ -832,6 +867,7 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
     "\r",
     "l\r",
     "\u001b[A\r",
+    "\r",
     "\r",
     "\u001b[B\r",
   ] as const;
