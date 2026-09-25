@@ -53,12 +53,19 @@ src/
 commands from one `LaunchSpec`, match a live process against a saved record (fails closed), list
 models, declare capabilities.
 
-**Session port** (used inside the agent process):
+**Session port** (used inside the agent process, types in `src/session/events.ts`):
 
-- Events: `sessionStart`, `userPrompt`, `toolCall`, `turnEnd(usage)`, `idle`, `compacting`,
-  `shutdown`.
-- Effects: `block(reason)`, `addContext(text)`, `deliver({ text, meta, triggerTurn })`,
-  `compact()`, `abort()`.
+- Events: `sessionStart`, `userPrompt`, `agentStart`, `turnStart`, `streaming`, `toolCall`,
+  `toolStart`, `toolEnd`, `turnEnd(usage)`, `agentEnd(willContinue, interrupted, failure)`,
+  `contextBuild`, `stopRequested`, `compacting`, `compacted`, `shutdown`.
+- Hook replies, returned from the same hook: tool decision (`block`), `{ handled }` for a prompt,
+  system context, task-message placement, `continueWith` on stop, compaction context.
+- Effects, awaited through `host.perform` so a failed send can roll back: `deliver({ text, hidden,
+  timing, triggerTurn })`, `promptAsUser`, `notify`, `recordEntry`, `compact` (not awaited, it
+  re-enters the session), `abort`, `shutdown`.
+- Host queries: `confirm`, `contextTokens`, `paneState`, `assertSelectedModel`, `mcpToolPrefix`.
+- Tools are classified into a `ToolKind` (`read`, `write`, `edit`, `shell`, `mcp`, `ask`, ...) by
+  the adapter. Guards match on kinds, never on native names like `read`, `Bash` or `xd://mcp__`.
 
 | Core effect | OMP | Claude Code |
 | --- | --- | --- |
@@ -72,9 +79,11 @@ models, declare capabilities.
 
 All new and moved code follows `~/.claude/skills/refactor-functions/SKILL.md`:
 
-- **Honesty.** Core functions take state and an event and return the next state plus effects. The
-  clock, ids, store and Herdr runner come in as one `SessionDeps` object built at the boundary.
-  Only the adapters perform effects.
+- **Honesty.** One session class per role (`CoordinatorSession`, `WorkerSession`,
+  `WorkerSteering`) holds its state, with `SessionDeps` (host, clock, timers, status, logError,
+  plus role deps) injected at the boundary. Pure decisions stay plain functions. A reducer was
+  rejected because handlers run concurrently today, and queueing events would change timing.
+  Only the adapters touch the harness.
 - **Empathic signatures.** One `LaunchSpec` instead of long flag lists. Branded `TaskId`,
   `SessionId` and `HarnessName` where they are already validated. Names say what they return.
 - **Uniform abstraction.** Protocol details (channel payloads, hook JSON, argv quirks) stay in the
@@ -88,10 +97,18 @@ These do not override "prefer simple": no wrapping short signatures or extractin
 ## Scope
 
 1. **Extract the core.** Move Tandem logic out of the OMP handlers into `src/session/`. This is a
-   pure refactor, and OMP behavior does not change.
+   pure refactor, and OMP behavior does not change. Packages:
+   - **P0** (first, alone): move the pure `src/extension/*` modules to `src/session/`, add a
+     direct `zod` dependency (`pi.zod` is OMP's shim, not zod), `session/events.ts`,
+     `session/tools.ts` with a schema parity test, and a recording host in `tests/evals/scenario.ts`.
+   - Then in parallel, with no shared files: **A1** coordinator tools and prompt routing, **A2**
+     coordinator lifecycle (`CoordinatorSession`), **B** worker (`WorkerSession`,
+     `WorkerSteering`).
 2. **Add the seam.** Add `src/harness/contract.ts`, move the OMP code under `src/harness/omp/`, and
    make `ownership.ts`, `launch.ts` and `worker.ts` go through the launch port. Biome
-   `noRestrictedImports` bans `@oh-my-pi/*` outside `src/harness/omp/`.
+   `noRestrictedImports` bans `@oh-my-pi/*` outside `src/harness/omp/` and its tests. The extension
+   path is part of coordinator ownership (`COORDINATOR_EXTENSION_PATH`), so the move must still
+   recognize coordinators launched from the old path, or require `tandem update`.
 3. **Record the harness.** Add a harness setting to onboarding and settings, pin it in the task
    policy and the coordinator record, and fail closed on an unknown value.
 4. **Claude Code coordinator.** Plugin, MCP host with the `tandem` tool and channel, hooks,
@@ -121,6 +138,9 @@ These do not override "prefer simple": no wrapping short signatures or extractin
   reply through the channel. Needs a spike before step 4.
 - **Worker pane keys and editor text** (`ctx.ui.onTerminalInput`, `getEditorText`) have no Claude
   Code equivalent. Move them to `tandem` commands or drop them on Claude Code.
+- **Worker steering.** On OMP it rewrites the conversation history (the `context` event plus
+  marker collapse). Claude Code has no equivalent, so steering there goes through a channel push
+  or the Stop hook's continue.
 - **Per-action approval.** One MCP tool gets one permission prompt. We may split `tandem` into
   read and write tools.
 - **Channel risks.** Research preview. Resume can silently drop the channel grant
@@ -140,8 +160,9 @@ These do not override "prefer simple": no wrapping short signatures or extractin
 ## Acceptance criteria
 
 - After steps 1 and 2, `bun run check`, `bun test` and `bun run lint` pass, and no file outside
-  `src/harness/omp/` imports `@oh-my-pi/*`.
-- `src/session/` has no imports from `src/harness/` and performs no I/O.
+  `src/harness/omp/` and its tests imports `@oh-my-pi/*`.
+- `src/session/` has no imports from `src/harness/` or `@oh-my-pi/*` and no direct I/O imports.
+  The service, store and filesystem arrive through deps.
 - A coordinator record saved before step 3 still reconnects on OMP. A record with an unknown
   harness fails closed.
 - On Claude Code, a child finishing wakes an idle coordinator with a message carrying the task id,
