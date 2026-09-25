@@ -1,12 +1,14 @@
 import type { IsoTimestamp } from "../contracts.ts";
 import type { PrWatchColor } from "./decide.ts";
-import type { PrWatch, PrWatchPoll } from "./store.ts";
+import type { AuthoredPullRequest } from "./github.ts";
+import { type PrWatch, type PrWatchPoll, sameRef } from "./store.ts";
 
 /** What `tandem watch`, `tandem status`, and the coordinator show about watched pull requests. */
 export type PrWatchView = Readonly<{
   /** When this view was made; the header says how old the data is from here. */
   readonly now: IsoTimestamp;
-  readonly polledAt?: IsoTimestamp;
+  /** When GitHub was last read. */
+  readonly readAt?: IsoTimestamp;
   readonly rateLimitedUntil?: IsoTimestamp;
   readonly rows: readonly PrWatchViewRow[];
 }>;
@@ -16,7 +18,8 @@ export type PrWatchViewRow = Readonly<{
   readonly number: number;
   readonly branch: string;
   readonly url: string;
-  readonly color: PrWatchColor;
+  /** `unwatched` is one of the user's pull requests the watcher leaves alone. */
+  readonly color: PrWatchColor | "unwatched";
   /** Like `✅ 16/16`: passed checks out of all of them, marked by the worst. */
   readonly checks: string;
   readonly status: string;
@@ -24,36 +27,48 @@ export type PrWatchViewRow = Readonly<{
   readonly link?: string;
 }>;
 
-const COLOR_MARKS: Readonly<Record<PrWatchColor, string>> = {
+const COLOR_MARKS: Readonly<Record<PrWatchViewRow["color"], string>> = {
   red: "🔴",
   yellow: "🟡",
   green: "🟢",
   done: "⚪",
+  unwatched: "⚪",
 };
-const COLOR_ORDER: readonly PrWatchColor[] = ["red", "yellow", "green", "done"];
+const COLOR_ORDER: readonly PrWatchViewRow["color"][] = [
+  "red",
+  "yellow",
+  "green",
+  "done",
+  "unwatched",
+];
+const TITLE_CHARS = 30;
 
 /**
- * The rows worth showing: every watch still running, and ones that merged or closed today. Rows
- * that need the user come first.
+ * The rows worth showing: every watch still running, ones that merged or closed today, then the
+ * user's other open pull requests, which the watcher leaves alone. Rows that need the user come
+ * first.
  */
 export function prWatchView(
   watches: readonly PrWatch[],
   poll: PrWatchPoll,
   now: IsoTimestamp,
+  authored: readonly AuthoredPullRequest[],
 ): PrWatchView {
-  const rows = watches
+  const watched = watches
     .filter((watch) => watch.stoppedAt === undefined)
-    .filter((watch) => watch.finishedAt === undefined || sameDay(watch.finishedAt, now))
-    .map(viewRow)
-    .toSorted(
-      (left, right) =>
-        COLOR_ORDER.indexOf(left.color) - COLOR_ORDER.indexOf(right.color) ||
-        left.repo.localeCompare(right.repo) ||
-        left.number - right.number,
-    );
+    .filter((watch) => watch.finishedAt === undefined || sameDay(watch.finishedAt, now));
+  const unwatched = authored
+    .filter((mine) => !watched.some((watch) => sameRef(watch.ref, mine.ref)))
+    .map(unwatchedRow);
+  const rows = [...watched.map(viewRow), ...unwatched].toSorted(
+    (left, right) =>
+      COLOR_ORDER.indexOf(left.color) - COLOR_ORDER.indexOf(right.color) ||
+      left.repo.localeCompare(right.repo) ||
+      left.number - right.number,
+  );
   return {
     now,
-    ...(poll.polledAt === undefined ? {} : { polledAt: poll.polledAt }),
+    ...(poll.readAt === undefined ? {} : { readAt: poll.readAt }),
     ...(poll.rateLimitedUntil === undefined || poll.rateLimitedUntil <= now
       ? {}
       : { rateLimitedUntil: poll.rateLimitedUntil }),
@@ -62,11 +77,11 @@ export function prWatchView(
 }
 
 export function renderPrWatchView(view: PrWatchView): string {
-  const open = view.rows.filter((row) => row.color !== "done").length;
+  const open = view.rows.filter((row) => row.color !== "done" && row.color !== "unwatched").length;
   const header = [
     "PR watch",
     `${open} open`,
-    view.polledAt === undefined ? "not checked yet" : `checked ${ago(view.polledAt, view.now)}`,
+    view.readAt === undefined ? "not checked yet" : `checked ${ago(view.readAt, view.now)}`,
     ...(view.rateLimitedUntil === undefined
       ? []
       : [`GitHub rate limit, next check after ${clockTime(view.rateLimitedUntil)}`]),
@@ -95,6 +110,21 @@ export function renderPrWatchView(view: PrWatchView): string {
       .trimEnd(),
   );
   return `${header}\n\n${lines.join("\n")}\n`;
+}
+
+function unwatchedRow(mine: AuthoredPullRequest): PrWatchViewRow {
+  const title =
+    mine.title.length <= TITLE_CHARS ? mine.title : `${mine.title.slice(0, TITLE_CHARS - 1)}…`;
+  return {
+    repo: mine.ref.repo,
+    number: mine.ref.number,
+    branch: title,
+    url: mine.url,
+    color: "unwatched",
+    checks: "",
+    status: mine.draft ? "📝 draft" : "🟢 open",
+    note: `not watched; "watch #${mine.ref.number}" hands it over`,
+  };
 }
 
 function viewRow(watch: PrWatch): PrWatchViewRow {

@@ -52,7 +52,7 @@ test("status shows watched pull requests, the ones that need you first", () => {
     tasks: [],
     pullRequests: {
       now: "2030-01-01T00:00:05.000Z",
-      polledAt: "2030-01-01T00:00:00.000Z",
+      readAt: "2030-01-01T00:00:00.000Z",
       rows: [
         {
           repo: "acme/app",

@@ -9,24 +9,28 @@ import {
   writePrWatchPayload,
 } from "../runtime/database.ts";
 import type { PrWatchLogEntry, PrWatchRow } from "./decide.ts";
+import type { RequiredChecks } from "./github.ts";
 
 /** One watched pull request, kept in `state.sqlite` so any Tandem open on this home picks it up. */
 export type PrWatch = Readonly<{
   readonly ref: PullRequestRef;
-  /** A Tandem task's pull request, `tandem watch`, or `watchAllMyPrs`. */
-  readonly origin: "task" | "user" | "all-my-prs";
+  /** A Tandem task's pull request, or one the user asked to watch. */
+  readonly origin: "task" | "user";
   /** The Tandem task whose pull request this is. */
   readonly taskId?: string;
   /** A checkout of its repository, whose settings.toml `[merging]` applies; defaults without one. */
   readonly repoPath?: string;
   /** Whether its repository has an Aviator config, looked up once when settings do not say. */
   readonly aviator?: boolean;
+  /** When watching started, or the user last asked to watch it again. */
   readonly startedAt: IsoTimestamp;
   /** When the user stopped watching; a stopped pull request is never picked up again on its own. */
   readonly stoppedAt?: IsoTimestamp;
   /** When it merged or closed; the view keeps it for the rest of that day. */
   readonly finishedAt?: IsoTimestamp;
   readonly checkedAt?: IsoTimestamp;
+  /** Which of the head's checks are required, as last read. */
+  readonly required?: RequiredChecks;
   /** The head last seen, its tree, and when the watcher first saw it. */
   readonly head?: Readonly<{ oid: string; tree: string; seenAt: IsoTimestamp }>;
   /** What the last read found, for the view. */
@@ -56,9 +60,12 @@ export type PrWatchSummary = Readonly<{
   readonly checks: Readonly<{ passed: number; failed: number; pending: number }>;
 }>;
 
-/** When GitHub was last read for every watch, who is reading it now, and any rate-limit wait. */
+/** When GitHub was last read and checked, who is reading it now, and any rate-limit wait. */
 export type PrWatchPoll = Readonly<{
+  /** The last check that could act; the schedule counts from here. */
   readonly polledAt?: IsoTimestamp;
+  /** The last read of any kind, including opening the view; the header's age counts from here. */
+  readonly readAt?: IsoTimestamp;
   /** Another Tandem is checking until then; the next check waits for it. */
   readonly leaseUntil?: IsoTimestamp;
   readonly rateLimitedUntil?: IsoTimestamp;
@@ -108,7 +115,7 @@ function decodeWatch(value: unknown): PrWatch {
     !isRecord(value.ref) ||
     typeof value.ref.repo !== "string" ||
     typeof value.ref.number !== "number" ||
-    (value.origin !== "task" && value.origin !== "user" && value.origin !== "all-my-prs") ||
+    (value.origin !== "task" && value.origin !== "user") ||
     typeof value.startedAt !== "string" ||
     !Array.isArray(value.log) ||
     !value.log.every((entry) => isRecord(entry) && typeof entry.kind === "string")
@@ -122,5 +129,10 @@ function decodeWatch(value: unknown): PrWatch {
 function decodePoll(value: Readonly<Record<string, unknown>>): PrWatchPoll {
   const time = (field: string): Partial<Record<string, IsoTimestamp>> =>
     typeof value[field] === "string" ? { [field]: value[field] } : {};
-  return { ...time("polledAt"), ...time("leaseUntil"), ...time("rateLimitedUntil") };
+  return {
+    ...time("polledAt"),
+    ...time("readAt"),
+    ...time("leaseUntil"),
+    ...time("rateLimitedUntil"),
+  };
 }

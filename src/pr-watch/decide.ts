@@ -7,6 +7,8 @@ export type CheckState = "passed" | "failed" | "pending";
 export type WatchedCheck = Readonly<{
   readonly name: string;
   readonly state: CheckState;
+  /** Branch protection requires it; only required checks drive what the watcher does. */
+  readonly required: boolean;
   /** The CI page for this check, when GitHub has one. */
   readonly url?: string;
   readonly startedAt?: IsoTimestamp;
@@ -26,7 +28,7 @@ export type PrObservation = Readonly<{
   /** The head commit's tree: the version of the code, which an empty commit keeps. */
   readonly tree: string;
   readonly base: string;
-  /** The base branch's commit; conflicts get one fix attempt per base commit. */
+  /** The base branch's commit, which a conflict fix attempt is recorded against. */
   readonly baseHead: string;
   readonly mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   /** GitHub requires the branch to be up to date with its base and it is not. */
@@ -125,6 +127,8 @@ export type PrWatchFacts = Readonly<{
   readonly conflictFiles?: readonly string[];
   /** The Tandem task this pull request belongs to, when it can still take directions. */
   readonly task?: Readonly<{ readonly working: boolean }>;
+  /** When the user last asked for this pull request to be watched; a declined fix counts from here. */
+  readonly watchedSince: IsoTimestamp;
 }>;
 
 const DEFAULT_RETRIES = { maxCiRetries: 1, stuckAfterMinutes: 60 } as const;
@@ -181,9 +185,11 @@ export function decidePrWatch(facts: PrWatchFacts): PrWatchDecision {
 }
 
 /**
- * One fix attempt per base commit: a Tandem task's pull request steers the task; anyone else's
+ * One fix attempt per pull request: a Tandem task's pull request steers the task; anyone else's
  * asks the user first, since a fix pushes to a branch they may have local commits on. Still
- * conflicting once that attempt is over, or declined, is red.
+ * conflicting once that attempt is over, or declined, is red. A declined question is not asked
+ * again until the user watches the pull request again; a fix attempt stands until someone pushes
+ * and the base moves on too, so a new episode of conflicts gets a new attempt.
  */
 function decideConflicts(facts: PrWatchFacts): PrWatchDecision {
   const pr = facts.observation;
@@ -191,9 +197,8 @@ function decideConflicts(facts: PrWatchFacts): PrWatchDecision {
   const files = fileList(facts.conflictFiles);
   // A fix pushes to origin, which is not where a fork's branch lives.
   if (pr.fork) return decided(row("red", "⚔️ conflict", `🙋 fix conflicts in ${files}`));
-  const attempt = (kind: "fix-conflicts" | "ask-conflicts") =>
-    facts.log.some((entry) => entry.kind === kind && entry.base === pr.baseHead);
-  if (attempt("fix-conflicts")) {
+  const fix = facts.log.findLast((entry) => entry.kind === "fix-conflicts");
+  if (fix?.kind === "fix-conflicts" && (fix.head === pr.head || fix.base === pr.baseHead)) {
     return facts.task?.working === true
       ? decided(row("green", "🔀 conflict", `🔀 resolving conflicts in ${files}`))
       : decided(row("red", "⚔️ conflict", `🙋 conflicts in ${files} are still there after a fix`));
@@ -205,7 +210,11 @@ function decideConflicts(facts: PrWatchFacts): PrWatchDecision {
     });
   }
   const ask = row("red", "⚔️ conflict", `🙋 fix conflicts in ${files}?`);
-  if (attempt("ask-conflicts")) return decided(ask);
+  const asked = facts.log.some(
+    (entry) =>
+      entry.kind === "ask-conflicts" && Date.parse(entry.at) >= Date.parse(facts.watchedSince),
+  );
+  if (asked) return decided(ask);
   return decided(ask, { kind: "ask-conflicts", files: facts.conflictFiles });
 }
 
@@ -222,7 +231,8 @@ export function retriesUsed(log: readonly PrWatchLogEntry[], tree: string, check
  */
 function decideChecks(facts: PrWatchFacts): PrWatchDecision | undefined {
   const { observation: pr, settings } = facts;
-  const stuck = pr.checks.find(
+  const checks = gatingChecks(pr);
+  const stuck = checks.find(
     (check) =>
       check.state === "pending" &&
       minutesBetween(check.startedAt ?? facts.headSeenAt, facts.now) >= settings.stuckAfterMinutes,
@@ -237,8 +247,8 @@ function decideChecks(facts: PrWatchFacts): PrWatchDecision | undefined {
       ),
     );
   }
-  if (pr.checks.some((check) => check.state === "pending")) return undefined;
-  const failed = pr.checks.filter((check) => check.state === "failed");
+  if (checks.some((check) => check.state === "pending")) return undefined;
+  const failed = checks.filter((check) => check.state === "failed");
   if (failed.length === 0) return undefined;
   if (facts.baseFailing === undefined) return { kind: "look-up", lookup: "base-checks" };
   const baseFailing = facts.baseFailing;
@@ -366,9 +376,18 @@ function mergeStatus(facts: PrWatchFacts): string {
   return pr.reviewDecision === "APPROVED" ? "✅ approved" : "🟢 open";
 }
 
+/**
+ * The checks that decide what the watcher does: the required ones, or every check when the
+ * repository requires none. Optional checks still show in the view.
+ */
+export function gatingChecks(pr: PrObservation): readonly WatchedCheck[] {
+  const required = pr.checks.filter((check) => check.required);
+  return required.length === 0 ? pr.checks : required;
+}
+
 /** Checks are running, or none have shown up yet on a head seen only moments ago. */
 function ciRunning(facts: PrWatchFacts): boolean {
-  const { checks } = facts.observation;
+  const checks = gatingChecks(facts.observation);
   return (
     checks.some((check) => check.state === "pending") ||
     (checks.length === 0 && minutesBetween(facts.headSeenAt, facts.now) < CI_START_MINUTES)

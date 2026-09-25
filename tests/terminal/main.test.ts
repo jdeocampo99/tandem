@@ -1146,7 +1146,7 @@ test("tandem watch starts watching a pull request named from this directory and 
   const service = {
     prWatchStart: async (input: unknown) => {
       started.push(input);
-      return { now: "2030-01-01T00:00:05.000Z", polledAt: "2030-01-01T00:00:00.000Z", rows: [] };
+      return { now: "2030-01-01T00:00:05.000Z", readAt: "2030-01-01T00:00:00.000Z", rows: [] };
     },
     shutdown: async () => undefined,
   } as unknown as TandemService;

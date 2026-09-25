@@ -5,13 +5,20 @@ import {
   type PrObservation,
   type PrWatchFacts,
   type PrWatchLogEntry,
+  type WatchedCheck,
 } from "../../src/pr-watch/decide.ts";
 import type { PrWatch } from "../../src/pr-watch/store.ts";
 import { pollDue, pollIntervalMinutes } from "../../src/pr-watch/watcher.ts";
 
 const NOW = "2030-01-01T12:00:00.000Z";
 
-function pr(overrides: Partial<PrObservation> = {}): PrObservation {
+type CheckInput = Omit<WatchedCheck, "required"> & { readonly required?: boolean };
+
+/** An observation; checks are optional unless a test marks them required. */
+function pr(
+  overrides: Partial<Omit<PrObservation, "checks">> & { checks?: readonly CheckInput[] } = {},
+): PrObservation {
+  const { checks = [], ...rest } = overrides;
   return {
     state: "open",
     draft: false,
@@ -30,8 +37,8 @@ function pr(overrides: Partial<PrObservation> = {}): PrObservation {
     reviewers: [],
     labels: [],
     autoMerge: false,
-    checks: [],
-    ...overrides,
+    ...rest,
+    checks: checks.map((check) => ({ required: false, ...check })),
   };
 }
 
@@ -42,6 +49,7 @@ function facts(overrides: Partial<PrWatchFacts> = {}): PrWatchFacts {
     settings: mergingSettings(undefined, false),
     now: NOW,
     headSeenAt: NOW,
+    watchedSince: NOW,
     ...overrides,
   };
 }
@@ -131,21 +139,19 @@ test("checks run every minute while busy, every five otherwise, and not at all w
     url: "",
     checks: { passed: 0, failed: 0, pending: 1 },
   };
-  expect(pollIntervalMinutes([], false, NOW)).toBeUndefined();
-  expect(pollIntervalMinutes([], true, NOW)).toBe(5);
-  expect(pollIntervalMinutes([watch({ stoppedAt: NOW })], false, NOW)).toBeUndefined();
-  expect(pollIntervalMinutes([watch()], false, NOW)).toBe(5);
-  expect(pollIntervalMinutes([watch({ summary: running })], false, NOW)).toBe(1);
-  expect(pollIntervalMinutes([watch({ log: [retried("tree-1", ["e2e"])] })], false, NOW)).toBe(1);
+  expect(pollIntervalMinutes([], NOW)).toBeUndefined();
+  expect(pollIntervalMinutes([watch({ stoppedAt: NOW })], NOW)).toBeUndefined();
+  expect(pollIntervalMinutes([watch()], NOW)).toBe(5);
+  expect(pollIntervalMinutes([watch({ summary: running })], NOW)).toBe(1);
+  expect(pollIntervalMinutes([watch({ log: [retried("tree-1", ["e2e"])] })], NOW)).toBe(1);
 
   const later = "2030-01-01T12:03:00.000Z";
-  expect(pollDue({ polledAt: NOW }, [watch()], false, later)).toBe(false);
-  expect(pollDue({ polledAt: NOW }, [watch({ summary: running })], false, later)).toBe(true);
+  expect(pollDue({ polledAt: NOW }, [watch()], later)).toBe(false);
+  expect(pollDue({ polledAt: NOW }, [watch({ summary: running })], later)).toBe(true);
   expect(
     pollDue(
       { polledAt: NOW, leaseUntil: "2030-01-01T12:05:00.000Z" },
       [watch({ summary: running })],
-      false,
       later,
     ),
   ).toBe(false);
@@ -196,7 +202,7 @@ test("a branch GitHub requires to be up to date is updated once per head, never 
   ).not.toHaveProperty("action");
 });
 
-test("conflicts get one fix attempt per base commit: a task is steered, anyone else is asked", () => {
+test("conflicts get one fix attempt per pull request: a task is steered, anyone else is asked", () => {
   const conflicting = facts({
     observation: pr({ mergeable: "CONFLICTING" }),
     conflictFiles: ["auth/session.ts"],
@@ -214,9 +220,12 @@ test("conflicts get one fix attempt per base commit: a task is steered, anyone e
     row: { color: "red", status: "⚔️ conflict", note: "🙋 fix conflicts in auth/session.ts?" },
     action: { kind: "ask-conflicts", files: ["auth/session.ts"] },
   });
-  expect(
-    decidePrWatch({ ...conflicting, log: [attempt("ask-conflicts", "base-1")] }),
-  ).not.toHaveProperty("action");
+  const declined = { ...conflicting, log: [attempt("ask-conflicts", "base-0")] };
+  const onNewBase = { ...declined.observation, baseHead: "base-9" };
+  expect(decidePrWatch({ ...declined, observation: onNewBase })).not.toHaveProperty("action");
+  expect(decidePrWatch({ ...declined, watchedSince: "2030-01-01T13:00:00.000Z" })).toMatchObject({
+    action: { kind: "ask-conflicts" },
+  });
 
   const tasked = { ...conflicting, task: { working: false } };
   expect(decidePrWatch(tasked)).toMatchObject({ action: { kind: "fix-conflicts" } });
@@ -225,9 +234,12 @@ test("conflicts get one fix attempt per base commit: a task is steered, anyone e
     row: { color: "green", note: "🔀 resolving conflicts in auth/session.ts" },
   });
   expect(decidePrWatch(fixing)).toMatchObject({ row: { color: "red" } });
-  expect(decidePrWatch({ ...tasked, log: [attempt("fix-conflicts", "base-0")] })).toMatchObject({
-    action: { kind: "fix-conflicts" },
-  });
+  // A failed fix stays red while the base moves on; a push and a new base start a new episode.
+  const movedBase = { ...fixing.observation, baseHead: "base-9" };
+  expect(decidePrWatch({ ...fixing, observation: movedBase })).not.toHaveProperty("action");
+  expect(decidePrWatch({ ...fixing, observation: { ...movedBase, head: "head-2" } })).toMatchObject(
+    { action: { kind: "fix-conflicts" } },
+  );
 });
 
 test("the watcher never pushes to a Tandem task's draft, a fork, or ahead of CI starting", () => {
@@ -276,5 +288,26 @@ test("a dequeue by a person, or by no one GitHub names, is left alone and never 
   });
   expect(decidePrWatch(kickedOut)).toMatchObject({
     row: { color: "yellow", note: "✋ someone took it out of the queue; leaving it" },
+  });
+});
+
+test("only required checks drive retries and waiting, unless the repository requires none", () => {
+  const optionalFailing = pr({
+    autoMerge: true,
+    checks: [
+      { name: "unit", state: "passed", required: true },
+      { name: "preview", state: "failed" },
+      { name: "lighthouse", state: "pending", startedAt: "2030-01-01T10:00:00.000Z" },
+    ],
+  });
+  expect(decidePrWatch(facts({ observation: optionalFailing }))).toMatchObject({
+    kind: "decided",
+    row: { color: "green" },
+  });
+  expect(decidePrWatch(facts({ observation: optionalFailing }))).not.toHaveProperty("action");
+  const noneRequired = pr({ checks: [{ name: "preview", state: "failed" }] });
+  expect(decidePrWatch(facts({ observation: noneRequired }))).toEqual({
+    kind: "look-up",
+    lookup: "base-checks",
   });
 });

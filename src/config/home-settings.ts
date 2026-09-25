@@ -8,15 +8,12 @@ import { assertKnownKeys, deduplicateStrings, isRecord, readNonEmptyString } fro
  * each use and never pinned to a task; an absent file means every default.
  */
 export type HomeSettings = Readonly<{
-  /** PR watch picks up every open pull request the signed-in GitHub user authored. */
-  readonly watchAllMyPrs: boolean;
   /** Personal skills every task carries, looked up and pinned like skills named at create. */
   readonly workerSkills: readonly string[];
 }>;
 
 const HOME_SETTINGS_FILE = "settings.toml";
 const HOME_SETTINGS_KEYS: Readonly<Record<string, true>> = {
-  watchAllMyPrs: true,
   workerSkills: true,
 };
 
@@ -26,7 +23,7 @@ export async function readHomeSettings(home: string): Promise<HomeSettings> {
   try {
     text = await readFile(file, "utf8");
   } catch (error) {
-    if (isNotFoundError(error)) return { watchAllMyPrs: false, workerSkills: [] };
+    if (isNotFoundError(error)) return { workerSkills: [] };
     throw error;
   }
   return parseHomeSettings(text, file);
@@ -43,14 +40,7 @@ function parseHomeSettings(text: string, source: string): HomeSettings {
   }
   if (!isRecord(parsed)) throw new TypeError(`${source} must be a TOML table`);
   assertKnownKeys(parsed, HOME_SETTINGS_KEYS, source);
-  const watchAllMyPrs = parsed.watchAllMyPrs ?? false;
-  if (typeof watchAllMyPrs !== "boolean") {
-    throw new TypeError(`${source} watchAllMyPrs must be true or false`);
-  }
-  return {
-    watchAllMyPrs,
-    workerSkills: readNameList(parsed.workerSkills, `${source} workerSkills`),
-  };
+  return { workerSkills: readNameList(parsed.workerSkills, `${source} workerSkills`) };
 }
 
 function readNameList(value: unknown, field: string): readonly string[] {

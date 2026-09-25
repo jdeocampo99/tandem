@@ -1,4 +1,3 @@
-import { readHomeSettings } from "../config/home-settings.ts";
 import { readMergingSettings } from "../config/repositories.ts";
 import type { Clock, CommandRunner, IsoTimestamp, TaskRecord } from "../contracts.ts";
 import { repositoryFromRemote } from "../delivery/pull-requests.ts";
@@ -17,6 +16,7 @@ import {
   type PrWatchRow,
 } from "./decide.ts";
 import {
+  type AuthoredPullRequest,
   editLabels,
   enableAutoMerge,
   GitHubRateLimitError,
@@ -98,7 +98,7 @@ export class PrWatcher {
     if (this.#checking !== undefined) return this.#checking;
     if (now < this.#nextLookAt) return Promise.resolve();
     this.#nextLookAt = now + LOOK_EVERY_MS;
-    this.#checking = this.check(false).finally(() => {
+    this.#checking = this.check("act").finally(() => {
       this.#checking = undefined;
     });
     return this.#checking;
@@ -109,15 +109,26 @@ export class PrWatcher {
     await this.#checking?.catch(() => undefined);
   }
 
-  /** The view, after fresh data unless another Tandem is checking right now. */
+  /**
+   * The view, after reading GitHub unless another Tandem is checking right now. Opening it never
+   * acts: empty commits, labels, auto-merge, branch updates, and steers happen only on the tick.
+   * The user's other open pull requests are listed too, as ones the watcher leaves alone.
+   */
   async view(): Promise<PrWatchView> {
-    await this.check(true);
-    return this.storedView();
+    await this.check("read");
+    const authored = await listMyOpenPullRequests(this.#deps.run, this.#deps.home).catch(
+      (): readonly AuthoredPullRequest[] => [],
+    );
+    const now = this.#deps.clock();
+    return withPrWatches(this.#deps.home, (transaction) =>
+      prWatchView(transaction.watches, transaction.poll, now, authored),
+    );
   }
 
   /**
-   * Watches a pull request the user named; one they stopped is watched again. `repoPath`, a
-   * checkout of its repository, is where its `[merging]` settings come from.
+   * Watches a pull request the user named; one they stopped is watched again, and naming one
+   * already watched starts it over, so a conflict fix they declined may be offered again.
+   * `repoPath`, a checkout of its repository, is where its `[merging]` settings come from.
    */
   async start(named: NamedPullRequest): Promise<PrWatchView> {
     const now = this.#deps.clock();
@@ -127,7 +138,7 @@ export class PrWatcher {
       const existing = transaction.watches.find((watch) => sameRef(watch.ref, ref));
       if (existing === undefined) {
         transaction.put(newWatch(ref, "user", now, repoPath));
-      } else if (existing.stoppedAt !== undefined) {
+      } else {
         const { stoppedAt: _stopped, finishedAt: _finished, ...rest } = existing;
         transaction.put({ ...rest, origin: "user", startedAt: now });
       }
@@ -135,7 +146,7 @@ export class PrWatcher {
     return this.view();
   }
 
-  /** Stops watching; the record stays so neither a task nor `watchAllMyPrs` restarts it. */
+  /** Stops watching; the record stays so its task never restarts it on its own. */
   async stop(ref: PullRequestRef): Promise<PrWatchView> {
     const now = this.#deps.clock();
     await withPrWatches(this.#deps.home, (transaction) => {
@@ -203,31 +214,37 @@ export class PrWatcher {
   private async storedView(): Promise<PrWatchView> {
     const now = this.#deps.clock();
     return withPrWatches(this.#deps.home, (transaction) =>
-      prWatchView(transaction.watches, transaction.poll, now),
+      prWatchView(transaction.watches, transaction.poll, now, []),
     );
   }
 
-  /** Claims the poll, checks every active watch, and records when it did, or GitHub's rate limit. */
-  private async check(force: boolean): Promise<void> {
+  /**
+   * Claims the poll and checks every active watch. `act` (the tick) runs when due and applies what
+   * it decides; `read` (opening the view) runs now and only records what it found. Either way it
+   * records when GitHub was read, or GitHub's rate limit.
+   */
+  private async check(mode: "act" | "read"): Promise<void> {
     const { home } = this.#deps;
     const now = this.#deps.clock();
-    const [tasks, settings] = await Promise.all([this.#deps.listTasks(), readHomeSettings(home)]);
+    const tasks = await this.#deps.listTasks();
     const leaseUntil = plusMinutes(now, LEASE_MINUTES);
     const claimed = await withPrWatches(home, (transaction) => {
       const started = taskWatches(tasks, transaction.watches, now);
       for (const watch of started) transaction.put(watch);
       const watches = [...transaction.watches, ...started];
-      const allowed = force
-        ? pollAllowed(transaction.poll, now)
-        : pollDue(transaction.poll, watches, settings.watchAllMyPrs, now);
+      const allowed =
+        mode === "read"
+          ? pollAllowed(transaction.poll, now)
+          : pollDue(transaction.poll, watches, now);
       if (allowed) transaction.putPoll({ ...transaction.poll, leaseUntil });
       return allowed;
     });
     if (!claimed) return;
     let rateLimitedUntil: IsoTimestamp | undefined;
     try {
-      if (settings.watchAllMyPrs) await this.watchMyPullRequests(now);
-      for (const watch of await this.activeWatches()) await this.checkWatch(watch, tasks, now);
+      for (const watch of await this.activeWatches()) {
+        await this.checkWatch(watch, tasks, mode, now);
+      }
     } catch (error) {
       if (!(error instanceof GitHubRateLimitError)) throw error;
       rateLimitedUntil = plusMinutes(now, RATE_LIMIT_BACKOFF_MINUTES);
@@ -235,37 +252,16 @@ export class PrWatcher {
       await withPrWatches(home, (transaction) => {
         // A check that outlived its lease leaves the schedule to whoever claimed it next.
         if (transaction.poll.leaseUntil !== leaseUntil) return;
+        const { leaseUntil: _lease, rateLimitedUntil: _limit, ...poll } = transaction.poll;
         transaction.putPoll({
-          polledAt: now,
+          ...poll,
+          readAt: now,
+          // Only a check that could act moves the schedule, so opening the view never delays one.
+          ...(mode === "act" ? { polledAt: now } : {}),
           ...(rateLimitedUntil === undefined ? {} : { rateLimitedUntil }),
         });
       });
     }
-  }
-
-  /** Adds the user's new open pull requests; failing to list them never stops the checks. */
-  private async watchMyPullRequests(now: IsoTimestamp): Promise<void> {
-    let mine: readonly PullRequestRef[];
-    try {
-      mine = await listMyOpenPullRequests(this.#deps.run, this.#deps.home);
-    } catch (error) {
-      if (error instanceof GitHubRateLimitError) throw error;
-      return;
-    }
-    const known = await withPrWatches(this.#deps.home, (transaction) =>
-      transaction.watches.map((watch) => watch.ref),
-    );
-    const added: PrWatch[] = [];
-    for (const ref of mine.filter((candidate) => !known.some((seen) => sameRef(seen, candidate)))) {
-      added.push(newWatch(ref, "all-my-prs", now, await this.projectFor(ref)));
-    }
-    await withPrWatches(this.#deps.home, (transaction) => {
-      for (const watch of added) {
-        if (!transaction.watches.some((existing) => sameRef(existing.ref, watch.ref))) {
-          transaction.put(watch);
-        }
-      }
-    });
   }
 
   /**
@@ -287,11 +283,12 @@ export class PrWatcher {
   private async checkWatch(
     watch: PrWatch,
     tasks: readonly TaskRecord[],
+    mode: "act" | "read",
     now: IsoTimestamp,
   ): Promise<void> {
     let update: (current: PrWatch) => PrWatch;
     try {
-      update = await this.observeAndAct(watch, tasks, now);
+      update = await this.observeAndAct(watch, tasks, mode, now);
     } catch (error) {
       if (error instanceof GitHubRateLimitError) throw error;
       const reason = error instanceof Error ? error.message : String(error);
@@ -307,6 +304,7 @@ export class PrWatcher {
   private async observeAndAct(
     watch: PrWatch,
     tasks: readonly TaskRecord[],
+    mode: "act" | "read",
     now: IsoTimestamp,
   ): Promise<(current: PrWatch) => PrWatch> {
     const read = await readWatchedPullRequest(this.#deps.run, watch.ref, {
@@ -314,6 +312,7 @@ export class PrWatcher {
       ...(watch.head === undefined
         ? {}
         : { knownTree: { head: watch.head.oid, tree: watch.head.tree } }),
+      ...(watch.required === undefined ? {} : { knownRequired: watch.required }),
     });
     if (read.kind === "unreadable") {
       return (current) => ({
@@ -334,6 +333,7 @@ export class PrWatcher {
         settings: merging.settings,
         now,
         headSeenAt: head.seenAt,
+        watchedSince: watch.startedAt,
         ...(task === undefined || CLOSED_STAGES.includes(task.stage)
           ? {}
           : { task: { working: WORKING_STAGES.includes(task.stage) } }),
@@ -341,7 +341,7 @@ export class PrWatcher {
       watch.ref,
     );
     const outcome =
-      decision.action === undefined
+      decision.action === undefined || mode === "read"
         ? { row: decision.row }
         : await this.apply(decision.action, {
             watch,
@@ -355,6 +355,7 @@ export class PrWatcher {
       ...(merging.aviator === undefined ? {} : { aviator: merging.aviator }),
       checkedAt: now,
       head,
+      required: read.required,
       summary: summaryOf(pr),
       log: outcome.entry === undefined ? current.log : [...current.log, outcome.entry],
       ...(outcome.row.color === "done" && current.finishedAt === undefined
@@ -584,23 +585,21 @@ async function originRepository(run: CommandRunner, repoPath: string): Promise<s
 export function pollDue(
   poll: PrWatchPoll,
   watches: readonly PrWatch[],
-  watchAllMyPrs: boolean,
   now: IsoTimestamp,
 ): boolean {
   if (!pollAllowed(poll, now)) return false;
-  const interval = pollIntervalMinutes(watches, watchAllMyPrs, now);
+  const interval = pollIntervalMinutes(watches, now);
   if (interval === undefined) return false;
   return poll.polledAt === undefined || minutesBetween(poll.polledAt, now) >= interval;
 }
 
-/** Nothing watched means no checks at all; `watchAllMyPrs` still looks for new pull requests. */
+/** Nothing watched means no checks at all. */
 export function pollIntervalMinutes(
   watches: readonly PrWatch[],
-  watchAllMyPrs: boolean,
   now: IsoTimestamp,
 ): number | undefined {
   const active = watches.filter(isActive);
-  if (active.length === 0 && !watchAllMyPrs) return undefined;
+  if (active.length === 0) return undefined;
   const busy = active.some(
     (watch) =>
       (watch.summary?.checks.pending ?? 0) > 0 ||

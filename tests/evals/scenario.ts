@@ -65,6 +65,8 @@ export type ScenarioBoundary = "herdr" | "treehouse" | "git" | "omp" | "ps" | "t
 export type ScenarioCheck = Readonly<{
   readonly name: string;
   readonly state: "pass" | "fail" | "pending";
+  /** Branch protection requires it; with none required, every check counts. */
+  readonly required?: boolean;
   readonly startedAt?: IsoTimestamp;
 }>;
 
@@ -112,7 +114,7 @@ export type ScenarioGitHub = Readonly<{
   readonly setBranchChecks: (repo: string, branch: string, checks: ScenarioCheck[]) => void;
   /** Someone pushes to the pull request: a new head, with a new tree unless `sameTree`. */
   readonly push: (pullRequest: ScenarioPullRequest, options?: { sameTree?: boolean }) => string;
-  /** The pull requests `gh search prs --author @me` finds. */
+  /** The pull requests `gh search prs --author @me` finds (opened with `openPullRequest`). */
   readonly myPullRequests: Array<Readonly<{ repo: string; number: number }>>;
   /** Repositories whose default branch has `.aviator/config.yml`. */
   readonly aviatorRepositories: string[];
@@ -760,7 +762,11 @@ export async function createScenarioWorld(
   const pullRequestArgument = (argv: readonly string[]): ScenarioPullRequest =>
     findPullRequest(argv[argv.indexOf("--repo") + 1] ?? "", Number(argv[3]));
   const restartChecks = (pr: ScenarioPullRequest): void => {
-    pr.checks = pr.checks.map((check) => ({ name: check.name, state: "pending" }));
+    pr.checks = pr.checks.map((check) => ({
+      name: check.name,
+      state: "pending",
+      ...(check.required === undefined ? {} : { required: check.required }),
+    }));
   };
 
   const gh = async (request: CommandRequest): Promise<CommandResult> => {
@@ -822,15 +828,33 @@ export async function createScenarioWorld(
     if (argv[1] === "search" && argv[2] === "prs") {
       return commandResult(
         JSON.stringify(
-          myPullRequests.map((ref) => ({
-            number: ref.number,
-            repository: { nameWithOwner: ref.repo },
-          })),
+          myPullRequests.map((ref) => {
+            const pr = findPullRequest(ref.repo, ref.number);
+            return {
+              number: ref.number,
+              repository: { nameWithOwner: ref.repo },
+              title: pr.title,
+              url: `https://github.com/${ref.repo}/pull/${ref.number}`,
+              isDraft: pr.draft,
+            };
+          }),
         ),
       );
     }
     if (argv[1] !== "api") throw new Error(`unexpected gh command ${JSON.stringify(argv)}`);
     const endpoint = githubEndpoint(argv);
+    if (endpoint === "graphql" && githubField(argv, "number") !== undefined) {
+      const pr = findPullRequest(
+        `${githubField(argv, "owner")}/${githubField(argv, "name")}`,
+        Number(githubField(argv, "number")),
+      );
+      return commandResult(
+        pr.checks
+          .filter((check) => check.required === true)
+          .map((check) => `${check.name}\n`)
+          .join(""),
+      );
+    }
     if (endpoint === "graphql") {
       const repo = `${githubField(argv, "owner")}/${githubField(argv, "name")}`;
       const branch = (githubField(argv, "ref") ?? "").replace(/^refs\/heads\//u, "");

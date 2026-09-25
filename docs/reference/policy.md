@@ -23,8 +23,7 @@ src/adapters/typesafe.ts, src/instructions.ts
 - Global model choices: `<home>/models.json`.
 - Home settings: `<home>/settings.toml`, optional and hand-written, read live on each use and
   never pinned (src/config/home-settings.ts). `workerSkills` lists personal skills every task
-  carries (see [Skills](#skills)); `watchAllMyPrs = true` has PR watch pick up every open pull
-  request you authored (see [pr-watch.md](pr-watch.md)). Unknown keys and bad TOML are refused.
+  carries (see [Skills](#skills)). Unknown keys and bad TOML are refused.
 - Any symlink in the policy namespace below the home (`inspectPolicyPath`) fails closed. New
   directories use `0700`; new files use `0600`.
 - A child-root `.tandem.json` from old builds is ignored: neither imported nor deleted.

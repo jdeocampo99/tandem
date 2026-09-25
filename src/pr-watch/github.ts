@@ -12,8 +12,30 @@ export class GitHubRateLimitError extends Error {
   }
 }
 
+/**
+ * Which of a head's reported checks branch protection requires. Kept per head and read again only
+ * when a check GitHub had not reported before shows up.
+ */
+export type RequiredChecks = Readonly<{
+  readonly head: string;
+  readonly checks: readonly string[];
+  readonly required: readonly string[];
+}>;
+
+/** A user's open pull request as GitHub's search reports it. */
+export type AuthoredPullRequest = Readonly<{
+  readonly ref: PullRequestRef;
+  readonly title: string;
+  readonly url: string;
+  readonly draft: boolean;
+}>;
+
 export type PullRequestRead =
-  | Readonly<{ readonly kind: "read"; readonly observation: PrObservation }>
+  | Readonly<{
+      readonly kind: "read";
+      readonly observation: PrObservation;
+      readonly required: RequiredChecks;
+    }>
   /** Why GitHub would not show it, such as a missing SSO authorization. Never "no checks". */
   | Readonly<{ readonly kind: "unreadable"; readonly reason: string }>;
 
@@ -66,15 +88,44 @@ const BASE_CHECKS_QUERY = `query($owner: String!, $name: String!, $ref: String!)
     }
   }
 }`;
+const REQUIRED_CHECKS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      commits(last: 1) {
+        nodes {
+          commit {
+            statusCheckRollup {
+              contexts(first: 100, after: $endCursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  __typename
+                  ... on CheckRun { name isRequired(pullRequestNumber: $number) }
+                  ... on StatusContext { context isRequired(pullRequestNumber: $number) }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+type UnflaggedCheck = Omit<WatchedCheck, "required">;
 
 /**
  * Reads one pull request for the watcher: one `gh pr view`, every page of checks when there are
- * more than fit in it, and the head commit's tree when the head is new.
+ * more than fit in it, the head commit's tree when the head is new, and which checks are required
+ * when a check shows up that was not known yet.
  */
 export async function readWatchedPullRequest(
   run: CommandRunner,
   ref: PullRequestRef,
-  input: Readonly<{ cwd: string; knownTree?: Readonly<{ head: string; tree: string }> }>,
+  input: Readonly<{
+    cwd: string;
+    knownTree?: Readonly<{ head: string; tree: string }>;
+    knownRequired?: RequiredChecks;
+  }>,
 ): Promise<PullRequestRead> {
   const viewed = await gh(run, input.cwd, [
     "pr",
@@ -100,7 +151,56 @@ export async function readWatchedPullRequest(
     input.knownTree?.head === head
       ? input.knownTree.tree
       : await readTree(run, ref.repo, head, input.cwd);
-  return { kind: "read", observation: observation(view, ref, { head, tree, checks }) };
+  const names = checks.map((check) => check.name);
+  const known = input.knownRequired;
+  const required: RequiredChecks =
+    known?.head === head && names.every((name) => known.checks.includes(name))
+      ? known
+      : {
+          head,
+          checks: names,
+          required: names.length === 0 ? [] : await readRequiredChecks(run, ref, input.cwd),
+        };
+  const flagged = checks.map((check) => ({
+    ...check,
+    required: required.required.includes(check.name),
+  }));
+  return {
+    kind: "read",
+    observation: observation(view, ref, { head, tree, checks: flagged }),
+    required,
+  };
+}
+
+/**
+ * The names of the checks branch protection requires on this pull request. `gh pr view` does
+ * not say, so this asks GraphQL, every page.
+ */
+async function readRequiredChecks(
+  run: CommandRunner,
+  ref: PullRequestRef,
+  cwd: string,
+): Promise<readonly string[]> {
+  const [owner, name] = ref.repo.split("/");
+  const result = await ghChecked(run, cwd, [
+    "api",
+    "graphql",
+    "--paginate",
+    "-f",
+    `query=${REQUIRED_CHECKS_QUERY}`,
+    "-f",
+    `owner=${owner ?? ""}`,
+    "-f",
+    `name=${name ?? ""}`,
+    "-F",
+    `number=${ref.number}`,
+    "--jq",
+    ".data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes[] | select(.isRequired) | (.name // .context)",
+  ]);
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
 }
 
 /**
@@ -347,7 +447,7 @@ export async function readConflictFiles(
 export async function listMyOpenPullRequests(
   run: CommandRunner,
   cwd: string,
-): Promise<readonly PullRequestRef[]> {
+): Promise<readonly AuthoredPullRequest[]> {
   const result = await ghChecked(run, cwd, [
     "search",
     "prs",
@@ -356,7 +456,7 @@ export async function listMyOpenPullRequests(
     "--state",
     "open",
     "--json",
-    "number,repository",
+    "number,repository,title,url,isDraft",
     "--limit",
     "100",
   ]);
@@ -367,7 +467,15 @@ export async function listMyOpenPullRequests(
       return [];
     }
     const repo = text(entry.repository.nameWithOwner).toLowerCase();
-    return repo.length === 0 ? [] : [{ repo, number: entry.number }];
+    if (repo.length === 0) return [];
+    return [
+      {
+        ref: { repo, number: entry.number },
+        title: text(entry.title),
+        url: text(entry.url),
+        draft: entry.isDraft === true,
+      },
+    ];
   });
 }
 
@@ -375,7 +483,7 @@ async function readAllChecks(
   run: CommandRunner,
   ref: PullRequestRef,
   cwd: string,
-): Promise<readonly WatchedCheck[]> {
+): Promise<readonly UnflaggedCheck[]> {
   const result = await ghChecked(run, cwd, [
     "pr",
     "checks",
@@ -405,7 +513,7 @@ async function readTree(
   return result.stdout.trim();
 }
 
-function watchedChecks(values: readonly unknown[], response: string): readonly WatchedCheck[] {
+function watchedChecks(values: readonly unknown[], response: string): readonly UnflaggedCheck[] {
   return values.map((value, index) => {
     const check = parseRemoteCheck(value, index, response);
     return {

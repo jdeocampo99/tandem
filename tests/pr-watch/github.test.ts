@@ -35,6 +35,9 @@ test("a pull request with a full page of checks has every page read", async () =
     if (command === "pr" && verb === "checks") {
       return { code: 0, stderr: "", stdout: JSON.stringify(allChecks) };
     }
+    if (command === "api" && verb === "graphql") {
+      return { code: 0, stderr: "", stdout: "shard-100\n" };
+    }
     throw new Error(`unexpected ${request.argv.join(" ")}`);
   };
   const read = await readWatchedPullRequest(
@@ -47,11 +50,23 @@ test("a pull request with a full page of checks has every page read", async () =
   expect(read.observation.checks.at(-1)).toEqual({
     name: "shard-100",
     state: "failed",
+    required: true,
     url: "https://ci/100",
   });
+  expect(read.observation.checks[0]?.required).toBe(false);
   expect(read.observation.tree).toBe("tree-1");
   expect(calls.map((call) => call.argv.slice(0, 3).join(" "))).toEqual([
     "gh pr view",
     "gh pr checks",
+    "gh api graphql",
   ]);
+  expect(read.required).toMatchObject({ head: "head-1", required: ["shard-100"] });
+
+  const again = await readWatchedPullRequest(
+    run,
+    { repo: "acme/app", number: 7 },
+    { cwd: "/tmp", knownTree: { head: "head-1", tree: "tree-1" }, knownRequired: read.required },
+  );
+  expect(again.kind).toBe("read");
+  expect(calls.filter((call) => call.argv[2] === "graphql")).toHaveLength(1);
 });

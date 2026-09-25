@@ -15,13 +15,17 @@ tests/evals/pr-watch-scenarios.test.ts.
 | --- | --- |
 | A Tandem task records a pull request (its draft at ready, or a publish) | Watched, tied to the task. A draft is watched for CI only and never queued. |
 | It is published (draft to ready; Tandem's `publish` marks its draft ready) | Also merged: auto-merge is armed or the queue label added. |
-| `tandem watch <link, owner/repo#N, or N>` or the `pr-watch-start` action | Watched. `N` means a pull request in the current directory's repository (the coordinator's project for the action). |
-| `watchAllMyPrs = true` in `<home>/settings.toml` | Every open pull request the signed-in `gh` user authored, across repositories, found with `gh search prs --author @me`. |
-| `tandem watch --stop PR`, the `pr-watch-stop` action ("hands off #N") | Stopped. The record stays, so neither its task nor `watchAllMyPrs` picks it up again; watching it by name starts it again. |
+| `tandem watch <link, owner/repo#N, or N>` or the `pr-watch-start` action ("watch #N") | Watched. `N` means a pull request in the current directory's repository (the coordinator's project for the action). Naming one already watched starts it over (see [Conflicts](#conflicts)). |
+| `tandem watch --stop PR`, the `pr-watch-stop` action ("hands off #N") | Stopped. The record stays, so its task never picks it up again; watching it by name starts it again. |
 | GitHub reports it merged or closed | Done. It stays in the view as ⚪ for the rest of that day. |
 
 A cancelled task's pull request is not picked up. Whether to merge follows GitHub's draft flag on
 every read, so a pull request watched by name merges once it is not a draft.
+
+The watcher acts only on these. The view also lists every other open pull request the signed-in
+`gh` user authored, across repositories (`gh search prs --author @me`, read when the view opens),
+as ⚪ rows with their draft or open status and a hint that "watch #N" hands one over. Nothing
+reads them further and nothing acts on them.
 
 ## Durable state
 
@@ -29,8 +33,9 @@ every read, so a pull request watched by name merges once it is not a draft.
   `owner/repo#N`: why watching started, the task it belongs to, the head last seen with its tree
   and when it was first seen, what the last read found, the current row, the action log, and a
   notification no Tandem has shown yet. A row in an unknown shape fails loudly.
-- The poll schedule is one `pr_watch_poll` entry in the metadata table: when GitHub was last read,
-  a lease while one Tandem reads it, and a rate-limit wait.
+- The poll schedule is one `pr_watch_poll` entry in the metadata table: when the tick last checked
+  (the schedule counts from it), when GitHub was last read by anything (the header's age), a lease
+  while one Tandem reads it, and a rate-limit wait.
 - The records belong to the Tandem home, not a session or coordinator, so any open Tandem picks
   them up. Never edit them by hand.
 
@@ -40,7 +45,12 @@ every read, so a pull request watched by name merges once it is not a draft.
   merge state, review decision and requested reviewers, labels, auto-merge, and the status check
   rollup. Checks go through the delivery parser (`parseRemoteCheck` in
   src/delivery/pull-requests.ts), so check runs and commit statuses both count. A skipped or
-  neutral check counts as passed; every check is treated as required (the rollup does not say).
+  neutral check counts as passed.
+- **Required checks.** The rollup does not say which checks branch protection requires, so one
+  GraphQL call reads `isRequired(pullRequestNumber:)` for the reported checks, every page. It is
+  kept per head and read again only when a check shows up that was not reported before. Only
+  required checks drive retries, red rows, "stuck", and waiting before merging; optional ones
+  still show in the checks column. A repository that requires none counts every check.
 - A full page of 100 checks means there may be more: `gh pr checks --json` reads them all.
 - The head commit's tree is read (`gh api repos/R/commits/SHA`) only when the head changes.
 - Extra reads happen only when the decision asks for them: the base branch's checks (one GraphQL
@@ -57,14 +67,15 @@ every read, so a pull request watched by name merges once it is not a draft.
 - Checks run from the coordinator scheduler tick while any Tandem is open, without holding the tick
   up (a check already running in the process is joined, and shutdown waits for it): every minute while a
   watched pull request has CI running or the watcher acted in the last 5 minutes, every 5 minutes
-  otherwise, and not at all when nothing is watched (with `watchAllMyPrs`, every 5 minutes to find
-  new pull requests). Each process looks at the shared schedule at most every 30 seconds.
+  otherwise, and not at all when nothing is watched. Each process looks at the shared schedule at
+  most every 30 seconds. The tick is the only place the watcher acts.
 - A pass takes a 5-minute lease first; while another Tandem holds it, the others wait. A pass that
-  outlives its lease leaves the schedule to whoever claimed it next. Failing to list the user's
-  pull requests for `watchAllMyPrs` skips only that step. After the
-  laptop sleeps, the next tick catches up and the header shows how old the data is.
-- Opening the view (`tandem watch`, `tandem status`, or the coordinator's `pr-watch`) runs a pass
-  first unless another Tandem holds the lease or GitHub's rate limit is in effect.
+  outlives its lease leaves the schedule to whoever claimed it next. After the laptop sleeps, the
+  next tick catches up and the header shows how old the data is.
+- Opening the view (`tandem watch`, `tandem status`, the coordinator's `pr-watch`, or the Jev
+  shortcut) reads GitHub first, unless another Tandem holds the lease or GitHub's rate limit is in
+  effect, and records rows but never acts: no empty commits, labels, auto-merge, branch updates,
+  steers, or fix questions. It does not move the tick's schedule.
 - A failed pass never holds up task work: the scheduler records a `pr-watch-failed` diagnostic
   and the next due tick tries again. A failure on one pull request only marks its own row.
 
@@ -82,7 +93,7 @@ acting, the watcher checks the pull request is still watched. First match wins:
 | Merge conflict | See [Conflicts](#conflicts): steer the task, or ask the user. |
 | Changes requested | 🔴 red. |
 | The watcher's own push is the head, the pull request was approved before it, and is not now | 🔴 red: the push dismissed the approval. |
-| A check pending longer than `stuckAfterMinutes` (from its start, or from when the watcher first saw the head) | 🔴 red, `⏰ stuck`. |
+| A required check pending longer than `stuckAfterMinutes` (from its start, or from when the watcher first saw the head) | 🔴 red, `⏰ stuck`. |
 | Checks still running | The failed-check rows below wait until every check finishes. |
 | A check failed, and fails or is still running on the base branch too | Wait, `🧱 main is red`. Once the base passes, the rules below apply. |
 | A check failed with a retry left for this code | Empty commit to rerun CI. Not on a fork (red instead), and not on a Tandem task's draft, whose task still pushes its own commits there: that waits, yellow, until it is published. |
@@ -144,10 +155,12 @@ acting, the watcher checks the pull request is still watched. First match wins:
   task becomes the pull request's task. It runs in the coordinator's project when that is the pull
   request's repository, otherwise as a task in that repository (see
   [other-repositories.md](other-repositories.md)). A declined or unanswered question leaves the
-  row red and is not asked again for that base commit.
-- One attempt per base commit. Still conflicting after the task stops working (ready, blocked,
-  paused), or conflicting again at the same base commit, is 🔴 red. A new base commit gets a new
-  attempt.
+  row red and is asked once per pull request: not again, even as the base moves on, until the user
+  asks to fix it or watches it again ("watch #N").
+- One fix attempt per pull request. Still conflicting after the task stops working (ready,
+  blocked, paused), or conflicting again, is 🔴 red, and the task is not steered again as the base
+  moves on. A new attempt needs a new episode: someone pushed since the attempt and the base moved
+  on too, such as conflicts coming back weeks after a fix that worked.
 
 ## The view
 
@@ -163,16 +176,16 @@ PR watch · 4 open · checked 5s ago
 - A red row names the failing check and links its CI page, so the user can decide without opening
   GitHub. Rows name `owner/repo#N` when more than one repository is watched.
 - `tandem watch` prints it (`--json` for the structure); `tandem status` adds it below the tasks
-  when anything is watched; the coordinator's `pr-watch` action returns it for the coordinator to
-  show as-is.
+  when it has any rows; the coordinator's `pr-watch` action returns it for the coordinator to
+  show as-is. The header counts watched pull requests still open; the user's unwatched ones come
+  last.
 
 ## Coordinator shortcut
 
 - With Jev prompt routing on, a coordinator message Jev confidently classifies as asking how the
   user's pull requests are doing ("how are my PRs?", "did #409 merge?") prints the PR watch view
   and skips the coordinator turn (`pr-watch` in the lookup list of src/extension/prompt-routing.ts,
-  question schema version 3). Opening the view is the same check a tick would run, so a wrong
-  guess only shows a table.
+  question schema version 3). Opening the view only reads, so a wrong guess only shows a table.
 - Messages that change something ("hands off #409", "watch #412") stay with the coordinator, which
   uses `pr-watch-stop` and `pr-watch-start`. A message with a PR link or `owner/repo#N` goes to the
   PR review route first, as before (see [policy.md](policy.md#jev-prompt-routing)).
@@ -188,7 +201,6 @@ PR watch · 4 open · checked 5s ago
 
 ## Settings
 
-- `watchAllMyPrs` lives in `<home>/settings.toml` (see [policy.md](policy.md#where-settings-live)).
 - Per repository, `[merging]` in the project's settings.toml, read live on every check like
   `cleanupCommands` and never pinned to a task:
 

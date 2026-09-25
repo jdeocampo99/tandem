@@ -166,15 +166,16 @@ it looks only at what changed and tells you which of your comments were addresse
 ### Keeping pull requests moving
 
 CI takes a while and sometimes flakes. PR watch keeps an eye on every pull request Tandem opens, and
-any other you name with `tandem watch <link>` (or `watchAllMyPrs = true` in `~/.tandem/settings.toml`
-for all of yours). When a check fails, it reruns CI once with an empty commit, and waits instead
-when the same check is failing on `main` too. Once a pull request is published (not a draft), it
-turns on GitHub auto-merge, or adds your merge queue's label (set `[merging]` in the project's
-settings; Aviator repositories work without it), and puts it back in the queue after a flaky
-kick-out. When a pull request Tandem opened has conflicts, its task merges the base branch in and pushes;
-for one of yours, Tandem asks first ("fix it?") and starts a task only on yes. It only interrupts
-you when a pull request needs you: a check failing twice on the same code, a stuck check,
-conflicts it could not fix, requested changes, or a lost approval.
+any other you name with `tandem watch <link>`. When a required check fails, it reruns CI once with
+an empty commit, and waits instead when the same check is failing on `main` too. Once a pull
+request is published (not a draft), it turns on GitHub auto-merge, or adds your merge queue's label
+(set `[merging]` in the project's settings; Aviator repositories work without it), and puts it back
+in the queue after a flaky kick-out. When a pull request Tandem opened has conflicts, its task
+merges the base branch in and pushes; for one of yours, Tandem asks once ("fix it?") and starts a
+task only on yes. It only interrupts you when a pull request needs you: a check failing twice on the
+same code, a stuck check, conflicts it could not fix, requested changes, or a lost approval. It
+acts only on its scheduled checks while Tandem is open; opening the view just reads. The view also
+lists your other open pull requests across repositories, untouched until you hand one over.
 
 ```
 PR watch · 3 open · checked 5s ago
@@ -182,6 +183,7 @@ PR watch · 3 open · checked 5s ago
 🔴 #409 refactor-cache   ❌ 15/16   ❌ failing    🙋 test_cache_evict failed twice → https://ci/…
 🟡 #412 fix-auth         ✅ 16/16   👀 review     ⏳ waiting on @reviewer
 🟢 #420 add-cache        ⏳ 12/16   ✅ approved   🔁 retried e2e/login (flaky?)
+⚪ #431 Bump parser               🟢 open       not watched; "watch #431" hands it over
 ```
 
 Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #409" or run
