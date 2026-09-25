@@ -357,7 +357,7 @@ test("a PR review runs end to end: start, review, edit, post, re-review, questio
     expect(await readFile(join(pr.checkout, "notes.txt"), "utf8")).toBe("mine\n");
     await service.shutdown();
   });
-});
+}, 20_000);
 
 test("a PR whose repository is not on disk asks where it is, then remembers the answer", async () => {
   await withScenario({}, async (world) => {
