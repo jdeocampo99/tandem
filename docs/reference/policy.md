@@ -21,6 +21,9 @@ src/adapters/typesafe.ts, src/instructions.ts
 - `repoPath` in the record equals that canonical root. Treat it as a known project-index entry,
   never as a reason to crawl a home directory, guess a basename, clone, or create a checkout.
 - Global model choices: `<home>/models.json`.
+- Home settings: `<home>/settings.toml`, optional and hand-written, read live on each use and
+  never pinned (src/config/home-settings.ts). `workerSkills` lists personal skills every task
+  carries (see [Skills](#skills)). Unknown keys and bad TOML are refused.
 - Any symlink in the policy namespace below the home (`inspectPolicyPath`) fails closed. New
   directories use `0700`; new files use `0600`.
 - A child-root `.tandem.json` from old builds is ignored: neither imported nor deleted.
@@ -169,11 +172,18 @@ user-level skill folders. The coordinator does not load it and keeps the user's 
 
 - `create` takes `skills`, the names the user asked the work to use; `/skill:` prefixes are
   dropped. Owner: `src/config/skills.ts`.
+- Every task also gets the home's `workerSkills`, since tasks Tandem starts on its own (like PR
+  watch fixes) have no one to name skills. They are looked up and pinned exactly like `skills`,
+  after them; a name given in both, or two names reaching the same folder, counts once, and the
+  32 KB limit covers them all. Turning on every personal skill for workers was rejected: that is
+  about 70 skills, including mail and file actions and some that conflict with worker rules.
 - Each name is looked up under the repository's committed checkout (`.omp/skills`,
   `.claude/skills`, `.agents/skills`, `.agent/skills`, `.codex/skills`), then under the user's home
-  (`.omp/agent/skills`, `.claude/skills`, `.agents/skills`, `.agent/skills`, `.codex/skills`). A
-  repository skill wins over a personal one with the same name; linked copies of one folder count
-  once. Matching is by folder name.
+  (`.omp/agent/skills`, `.claude/skills`, `.agents/skills`, `.agent/skills`, `.codex/skills`) and
+  in Claude Code plugins: each install in `~/.claude/plugins/installed_plugins.json`, at
+  `<installPath>/skills/<name>/SKILL.md`. `plugin:name` looks only in that plugin (the install
+  key without `@marketplace`). A repository skill wins over a personal one with the same name;
+  linked copies of one folder count once. Matching is by folder name.
 - Create fails, with a message the coordinator puts to the user, when a name is not a plain folder
   name, matches nothing, matches two different folders in the same place, has an empty SKILL.md,
   or the skills together pass 32 KB (`MAX_TASK_SKILLS_BYTES`).

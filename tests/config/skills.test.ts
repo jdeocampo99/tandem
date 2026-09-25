@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findSkills } from "../../src/config/skills.ts";
@@ -47,6 +47,70 @@ test("refuses skills that together pass the size limit and names them", async ()
     expect(await findSkills(["big"], search)).toHaveLength(1);
     await expect(findSkills(["big", "bigger"], search)).rejects.toThrow(
       "The skills big, bigger are 33 KB together",
+    );
+  });
+});
+
+/** Records one installed Claude Code plugin per key, the way Claude Code's install file does. */
+async function installPlugins(
+  personalHome: string,
+  plugins: Readonly<Record<string, string>>,
+): Promise<void> {
+  const record = Object.fromEntries(
+    Object.entries(plugins).map(([key, installPath]) => [key, [{ scope: "user", installPath }]]),
+  );
+  await mkdir(join(personalHome, ".claude", "plugins"), { recursive: true });
+  await writeFile(
+    join(personalHome, ".claude", "plugins", "installed_plugins.json"),
+    JSON.stringify({ version: 2, plugins: record }),
+  );
+}
+
+test("finds a skill a Claude Code plugin ships and pins its folder", async () => {
+  await withSkillFolders(async (search) => {
+    const install = join(search.personalHome, "cache", "buildkite", "1.0.0");
+    await writeSkill(join(install, "skills", "logs"), "---\nname: logs\n---\nRead the build log.");
+    await installPlugins(search.personalHome, { "buildkite@market": install });
+    const [skill] = await findSkills(["logs"], search);
+    expect(skill).toEqual({
+      name: "logs",
+      origin: "personal",
+      directory: await realpath(join(install, "skills", "logs")),
+      instructions: "Read the build log.",
+    });
+  });
+});
+
+test("plugin:name picks that plugin's skill and a bare name matching two plugins is refused", async () => {
+  await withSkillFolders(async (search) => {
+    const first = join(search.personalHome, "cache", "codex");
+    const second = join(search.personalHome, "cache", "other");
+    await writeSkill(join(first, "skills", "rescue"), "Codex rescue.");
+    await writeSkill(join(second, "skills", "rescue"), "Other rescue.");
+    await installPlugins(search.personalHome, { "codex@openai": first, "other@market": second });
+
+    const [skill] = await findSkills(["codex:rescue"], search);
+    expect(skill?.name).toBe("codex:rescue");
+    expect(skill?.instructions).toBe("Codex rescue.");
+    await expect(findSkills(["rescue"], search)).rejects.toThrow(
+      "Different skills are named rescue",
+    );
+    await expect(findSkills(["codex:missing"], search)).rejects.toThrow(
+      "No skill named missing in the user's codex plugin",
+    );
+  });
+});
+
+test("plugin skills count toward the size limit and a name given twice counts once", async () => {
+  await withSkillFolders(async (search) => {
+    const install = join(search.personalHome, "cache", "big");
+    const half = "x".repeat(MAX_TASK_SKILLS_BYTES / 2 + 1);
+    await writeSkill(join(install, "skills", "big"), half);
+    await writeSkill(join(search.personalHome, ".claude", "skills", "bigger"), half);
+    await installPlugins(search.personalHome, { "big@market": install });
+    expect(await findSkills(["big", "big:big", "/skill:big"], search)).toHaveLength(1);
+    await expect(findSkills(["big:big", "bigger"], search)).rejects.toThrow(
+      "The skills big:big, bigger are 33 KB together",
     );
   });
 });

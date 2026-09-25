@@ -9,6 +9,7 @@ import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
+import { readHomeSettings } from "../config/home-settings.ts";
 import {
   type ModelSettings,
   parseModelAssignments,
@@ -856,10 +857,15 @@ class TandemController {
                 : { checkoutPath: source.sourceRepoPath }),
             })
           : pinned.policy;
+      // Skills named for this task, then the ones every task carries.
+      const skillNames = [
+        ...(input.skills === undefined ? [] : readTextList(input.skills, "skills")),
+        ...(await readHomeSettings(this.#deps.home)).workerSkills,
+      ];
       const skills =
-        input.skills === undefined
+        skillNames.length === 0
           ? []
-          : await findSkills(readTextList(input.skills, "skills"), {
+          : await findSkills(skillNames, {
               repositoryCheckout: pinned?.target.checkout ?? source.checkoutPath,
               personalHome: this.#deps.personalSkillsHome,
             });
