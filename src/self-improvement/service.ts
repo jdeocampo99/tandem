@@ -23,6 +23,7 @@ import type { CreateTaskRequest } from "../service/controller.ts";
 import { isTerminalTask } from "../service/records.ts";
 import { taskName } from "../tasks/question.ts";
 import { readTimeline } from "../tasks/timeline-store.ts";
+import type { TaskTrace } from "../tasks/trace.ts";
 import {
   type DraftCheck,
   type IssueDraft,
@@ -55,6 +56,8 @@ export type SelfImprovementDependencies = Readonly<{
   readonly clock: Clock;
   readonly checkDraft: IssueDraftChecker;
   readonly getTask: (taskId: string) => Promise<TaskRecord>;
+  /** What `tandem trace TASK_ID --json` prints. */
+  readonly traceTask: (taskId: string) => Promise<TaskTrace>;
   readonly createTask: (input: CreateTaskRequest) => Promise<TaskRecord>;
 }>;
 
@@ -98,7 +101,7 @@ export class SelfImprovement {
 
   /**
    * Starts research in the Tandem repository into why a task went the way it did. It writes the
-   * task's record and timeline to a file first, because research agents can read files but not run
+   * task's record and trace to a file first, because research agents can read files but not run
    * commands.
    */
   async investigate(input: InvestigateInput): Promise<TaskRecord> {
@@ -107,8 +110,8 @@ export class SelfImprovement {
     const directory = join(this.deps.home, "investigations");
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const tracePath = join(directory, `${task.id}.json`);
-    const timeline = await readTimeline(this.deps.home, task.id);
-    await writeTextAtomically(tracePath, `${JSON.stringify({ task, timeline }, null, 2)}\n`);
+    const trace = await this.deps.traceTask(task.id);
+    await writeTextAtomically(tracePath, `${JSON.stringify({ task, trace }, null, 2)}\n`);
     const inTandem =
       (await matchingRemote(task.repoPath, TANDEM_REPOSITORY, this.deps.run)) !== undefined;
     return this.deps.createTask({
@@ -209,7 +212,7 @@ export function investigationObjective(
   const lines = [
     `Investigate why Tandem task ${input.task.id} went the way it did. ${asked} Find the cause in Tandem itself and the smallest change to Tandem that would prevent it.`,
     "Read:",
-    `- ${input.tracePath}: the task's record and its timeline, the events tandem trace ${input.task.id} --json prints.`,
+    `- ${input.tracePath}: the task's record and its trace, what tandem trace ${input.task.id} --json prints.`,
     `- ${input.sessionsPath}: its agents' conversations. Timeline events point at entries in them.`,
     `- ${input.jobsPath}: its agents' job files and reports.`,
     "- Tandem's source in this checkout.",

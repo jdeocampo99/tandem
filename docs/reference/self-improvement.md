@@ -36,14 +36,14 @@ task id is recorded under `self_improvement_asked` in the metadata table in the 
 so each task is asked about once per home, even with several coordinators open. On yes the
 coordinator calls `investigate`; on no nothing happens.
 
-Recurring finding categories are not triggers yet; they come with the #189 rollups.
+Recurring finding categories are not a trigger yet.
 
 ## Investigations
 
 `investigate` takes the task and, when the user asked, their question. It:
 
-1. writes the task's record and timeline to `<home>/investigations/<taskId>.json`, the events
-   `tandem trace TASK_ID --json` prints, because research agents read files but run no commands;
+1. writes the task's record and its trace (what `tandem trace TASK_ID --json` prints) to
+   `<home>/investigations/<taskId>.json`, because research agents read files but run no commands;
 2. creates a research task under the task's own project with `targetRepo: jdeocampo99/tandem`,
    or without a target when that project is the Tandem checkout;
 3. points the objective at that file, the task's conversations (`<home>/sessions/<taskId>`), its job

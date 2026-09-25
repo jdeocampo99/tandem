@@ -563,6 +563,7 @@ class TandemController {
       clock: deps.clock,
       checkDraft: deps.checkIssueDraft,
       getTask: (taskId) => this.get(taskId),
+      traceTask: (taskId) => this.trace(taskId),
       createTask: (input) => this.create(input),
     });
     this.#prWatch = new PrWatcher({

@@ -6,7 +6,7 @@ import type { CommandRequest, TaskRecord } from "../../src/contracts.ts";
 import type { IssueDraft } from "../../src/self-improvement/issue-draft.ts";
 import { SelfImprovement } from "../../src/self-improvement/service.ts";
 import type { CreateTaskRequest } from "../../src/service/controller.ts";
-import { recordTimelineEvents } from "../../src/tasks/timeline-store.ts";
+import { readTimeline, recordTimelineEvents } from "../../src/tasks/timeline-store.ts";
 import { task } from "../session/fixtures.ts";
 
 const NOW = "2030-01-02T12:00:00.000Z";
@@ -53,6 +53,10 @@ function selfImprovement(
       if (found === undefined) throw new Error(`Task ${taskId} was not found`);
       return found;
     },
+    traceTask: async (taskId) => ({
+      ...(await readTimeline(home, taskId)),
+      rollup: { taskId, fixRounds: 0, blockedMs: 0 },
+    }),
     createTask: async (input) => {
       effects.created?.push(input);
       return task({ id: "task-investigation", kind: "scout", stage: "queued" });
@@ -92,7 +96,7 @@ test("a task that restarted twice is asked about once, and never while the mode 
   });
 });
 
-test("investigating writes the task's timeline to a file and starts research in Tandem", async () => {
+test("investigating writes the task's trace to a file and starts research in Tandem", async () => {
   const investigated = task({ id: "task-open", objective: "Fix the login page" });
   await withHome("report", async (home) => {
     await restartTwice(home, investigated.id);
@@ -115,7 +119,7 @@ test("investigating writes the task's timeline to a file and starts research in 
     expect(research?.objective).toContain('"## Draft issue"');
     const trace = JSON.parse(await readFile(tracePath, "utf8"));
     expect(trace.task.id).toBe("task-open");
-    expect(trace.timeline.events.map((event: { type: string }) => event.type)).toEqual([
+    expect(trace.trace.events.map((event: { type: string }) => event.type)).toEqual([
       "restarted",
       "restarted",
     ]);
