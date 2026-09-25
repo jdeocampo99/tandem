@@ -447,6 +447,72 @@ test("asking what the request has cost so far routes straight to its receipt", a
   expect(actionForPromptDecision(result.decision)).toEqual({ action: "request-receipt" });
 });
 
+test("asking how your pull requests are doing shows the PR watch view without a coordinator turn", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-pr-watch-"));
+  const sent: string[] = [];
+  const prWatchFacts = response(
+    { choice: "pr-watch" },
+    { choice: "repository" },
+    { choice: "read-only" },
+    { choice: "within" },
+    { choice: "single" },
+  );
+  const service = {
+    list: async () => [],
+    prWatch: async () => ({
+      now: "2030-01-01T00:00:05.000Z",
+      readAt: "2030-01-01T00:00:00.000Z",
+      rows: [
+        {
+          repo: "acme/app",
+          number: 409,
+          branch: "refactor-cache",
+          url: "https://github.com/acme/app/pull/409",
+          color: "done",
+          checks: "✅",
+          status: "🎉 merged 11:02",
+          note: "",
+        },
+      ],
+    }),
+  } as unknown as TandemService;
+  try {
+    const result = await handlePromptInput(
+      { source: "interactive", text: "did #409 merge?" } as InputEvent,
+      context,
+      {
+        config: { apiKey: "key", timeoutMs: 1_500 },
+        getService: () => service,
+        getHome: () => home,
+        sendMessage: ((message: string | { readonly content?: string }) => {
+          sent.push(typeof message === "string" ? message : (message.content ?? ""));
+        }) as never,
+        evaluate: async () => prWatchFacts,
+      },
+    );
+    expect(result).toEqual({ handled: true });
+    expect(sent).toEqual([
+      "PR watch · 0 open · checked 5s ago\n\n⚪ #409 refactor-cache ✅ 🎉 merged 11:02\n",
+    ]);
+
+    const hands = await classifyPrompt(
+      "hands off #409",
+      { apiKey: "key", timeoutMs: 1_500 },
+      async () =>
+        response(
+          { choice: "pr-watch" },
+          { choice: "repository" },
+          { choice: "state-change" },
+          { choice: "within" },
+          { choice: "single" },
+        ),
+    );
+    expect(hands.reason).toBe("normal-coordinator");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("a pasted PR link starts a review under the project, and anything else goes to the coordinator", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-pr-"));
   const started: unknown[] = [];

@@ -12,7 +12,10 @@ import type {
   TaskRecord,
 } from "../../src/contracts.ts";
 import { executeTandemAction, parseTandemCommand } from "../../src/extension/actions.ts";
-import { deliverPendingNotifications } from "../../src/extension/notifications.ts";
+import {
+  deliverPendingNotifications,
+  deliverPrWatchNotices,
+} from "../../src/extension/notifications.ts";
 import { resolveCommandAction } from "../../src/extension/registration.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/extension/summary.ts";
 import { createTandemExtension, reviewStatus, sourceRefreshStatus } from "../../src/extension.ts";
@@ -318,6 +321,7 @@ test("extension binds services to a clean source while preserving original ident
     shutdown: async () => {
       shutdownCalls += 1;
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const pi = {
     zod,
@@ -376,6 +380,7 @@ test("before_agent_start exposes a blocked source refresh instead of silently pl
       throw new Error("origin/main fetch failed");
     },
     shutdown: async () => undefined,
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const pi = {
     zod,
@@ -456,6 +461,7 @@ test("create forwards the named request so work can join one of several open req
       createCalls.push(input);
       return task({});
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const noUiContext = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
 
@@ -498,6 +504,7 @@ test("create forwards skill names and the created task summary names each skill"
       createCalls.push(input);
       return created;
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const noUiContext = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
 
@@ -655,6 +662,7 @@ test("approve confirmation exposes active non-superseded communication deltas an
   const service = {
     get: async () => pending,
     approve: async () => pending,
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const context = {
     hasUI: true,
@@ -701,6 +709,7 @@ test("extension setup approval preserves the write boundary and metadata", async
         unresolved: [],
       };
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const context = {
     hasUI: true,
@@ -768,6 +777,7 @@ test("model listing is read-only and model changes require approval", async () =
       configureCalls.push(input);
       return savedSettings;
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const noUiContext = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
 
@@ -840,6 +850,7 @@ test("configure-models forwards explicit provider enablement and recaps it in th
         enabledProviders: ["openai-codex"],
       };
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const uiContext = {
     hasUI: true,
@@ -1161,6 +1172,7 @@ test("draft publication needs interactive human approval and never runs without 
       published.push({ taskId, input });
       return unfinished;
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const parsed = parseTandemCommand("pr-draft task-1 Draft-title main");
   expect(parsed).toEqual({
@@ -1217,6 +1229,7 @@ test("publish now needs interactive human approval and never runs without it", a
       published.push({ taskId, input });
       return reviewing;
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const summary = { tldr: ["Adds retries."], what: ["Retry loop."], why: ["Flaky calls."] };
   const action = {
@@ -2086,6 +2099,7 @@ test("session shutdown waits for an interval reconciliation already in flight", 
     shutdown: async () => {
       shutdownCalls += 1;
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const pi = {
     zod,
@@ -2146,6 +2160,7 @@ test("extension cleanup skips confirmation for safe release and shows scope for 
       cleanupInputs.push(input);
       return cleanupTask;
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const context = {
     hasUI: true,
@@ -2192,6 +2207,7 @@ test("extension cleanup asks once for a batch and keeps going past a failure", a
       cleaned.push(taskId);
       return found(taskId);
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const context = {
     hasUI: true,
@@ -2346,6 +2362,7 @@ test("the brief-approve prompt names the request by its goal, never its id or re
       approveCalls.push(intent);
       return { record, approvalState: "current", markdown: "", pausedTaskIds: [] };
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const context = {
     hasUI: true,
@@ -2434,4 +2451,46 @@ test("a tick that only waited out the state lock leaves the Herdr status alone; 
 
     expect(states.includes("blocked"), failure.error.message).toBe(failure.reportsBlocked);
   }
+});
+
+test("PR watch notices show without a turn, and a question to fix conflicts waits for the reply", async () => {
+  const notified: string[] = [];
+  const sent: { content: unknown; display: unknown; triggerTurn: unknown }[] = [];
+  await deliverPrWatchNotices({
+    pi: {
+      appendEntry: () => undefined,
+      sendMessage: (message, options) => {
+        if (typeof message === "string") throw new Error("expected a custom message");
+        sent.push({
+          content: message.content,
+          display: message.display,
+          triggerTurn: options?.triggerTurn,
+        });
+      },
+    },
+    service: {
+      prWatchNotices: async () => [
+        { pullRequest: "acme/app#7", text: "🎉 acme/app#7 merged" },
+        {
+          pullRequest: "acme/app#9",
+          text: "acme/app#9 has merge conflicts in a.ts. Fix them?",
+          askToFix: true,
+        },
+      ],
+    },
+    ctx: { ui: { notify: (message: string) => notified.push(message) } },
+  });
+  expect(notified).toEqual(["🎉 acme/app#7 merged"]);
+  expect(sent).toEqual([
+    {
+      content: expect.stringContaining("call pr-watch-fix with pullRequest acme/app#9"),
+      display: false,
+      triggerTurn: undefined,
+    },
+    {
+      content: "acme/app#9 has merge conflicts in a.ts. Fix them?",
+      display: true,
+      triggerTurn: undefined,
+    },
+  ]);
 });

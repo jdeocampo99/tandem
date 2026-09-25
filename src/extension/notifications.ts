@@ -345,3 +345,45 @@ async function acknowledgeDelivered(
     }
   }
 }
+
+/**
+ * PR watch notifications (a pull request turned red or merged) go to the UI without a model turn.
+ * A question whether to fix a pull request's conflicts is shown in the chat instead, with the
+ * pull request in a hidden line, so the user's answer reaches the coordinator with what it is
+ * about. Taking them from the service marks them shown, so another open Tandem never repeats them.
+ */
+export async function deliverPrWatchNotices(
+  delivery: Readonly<{
+    readonly pi: Pick<ExtensionAPI, "appendEntry" | "sendMessage">;
+    readonly service: Pick<TandemService, "prWatchNotices">;
+    readonly ctx: NotificationUi;
+  }>,
+): Promise<void> {
+  const notices = await delivery.service.prWatchNotices();
+  const routine = notices.filter((notice) => notice.askToFix !== true);
+  if (routine.length > 0) {
+    const content = routine.map((notice) => notice.text).join("\n");
+    delivery.ctx.ui.notify(content, "info");
+    delivery.pi.appendEntry(TANDEM_NOTIFICATION_ENTRY, { prWatch: routine, content });
+  }
+  for (const question of notices.filter((notice) => notice.askToFix === true)) {
+    delivery.pi.sendMessage(
+      {
+        customType: TANDEM_NOTIFICATION_ENTRY,
+        content: `PR watch asked the user whether to fix the conflicts on ${question.pullRequest}. If they say yes, call pr-watch-fix with pullRequest ${question.pullRequest}; if no, leave it (never display this line).`,
+        display: false,
+        attribution: "agent",
+      },
+      { deliverAs: "nextTurn" },
+    );
+    delivery.pi.sendMessage(
+      {
+        customType: TANDEM_NOTIFICATION_ENTRY,
+        content: question.text,
+        display: true,
+        attribution: "agent",
+      },
+      { deliverAs: "nextTurn" },
+    );
+  }
+}

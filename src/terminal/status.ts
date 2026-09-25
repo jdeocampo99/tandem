@@ -1,5 +1,6 @@
 import type { CommandRunner, TaskRecord, TaskStage } from "../contracts.ts";
 import { listCoordinatorRecords } from "../coordinator/registry.ts";
+import { type PrWatchView, renderPrWatchView } from "../pr-watch/view.ts";
 import type { TandemService } from "../service/controller.ts";
 
 const NEEDS_YOU: readonly TaskStage[] = ["awaiting-approval", "blocked", "paused", "ready"];
@@ -16,6 +17,7 @@ export type TandemStatus = Readonly<{
   readonly code: string;
   readonly coordinators: readonly string[];
   readonly tasks: readonly TaskRecord[];
+  readonly pullRequests: PrWatchView;
 }>;
 
 /** The commit the `tandem` command runs from; `tandem update` loads this into coordinators. */
@@ -43,6 +45,7 @@ export async function readTandemStatus(
       (record) => record.repoPath,
     ),
     tasks: await input.service.list(),
+    pullRequests: await input.service.prWatch(),
   };
 }
 
@@ -69,6 +72,9 @@ export function renderTandemStatus(status: TandemStatus): string {
     ...(finished === 0
       ? []
       : ["", `${finished} finished task${finished === 1 ? "" : "s"} hidden.`]),
+    ...(status.pullRequests.rows.length === 0
+      ? []
+      : ["", renderPrWatchView(status.pullRequests).trimEnd()]),
     "",
     "Details for one task: tandem status TASK_ID",
   ];
