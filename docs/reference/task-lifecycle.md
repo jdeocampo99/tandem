@@ -104,6 +104,23 @@ from the prompt router.
    `implementation-interview` with `selectedBy: "fallback"` and the real `fallbackReason`. Research
    never waits past `TANDEM_JEV_TIMEOUT_MS`. Jev never creates tasks, approves scope, or relaxes policy.
 
+## Playbooks
+
+Code: src/playbooks/ (`catalog.ts` steps, `selection.ts` choice, `classify.ts` the Jev call,
+`progress.ts` the submit gate, `brief.ts` the brief section).
+
+- An implementation task pins a playbook at creation: `bug-fix`, `feature`, `refactor`, `perf`, or
+  `general`. The coordinator passes `playbook` when the user chose one; otherwise Jev classifies the
+  brief's goal (or the objective). A pick below 0.80 confidence, `other`, any Jev failure, or no
+  `TYPESAFE_API_KEY` pins `general`. Jev picks the playbook and nothing else. The task summary shows
+  it as `Type:`.
+- The implementer brief lists the steps and asks the worker to load them verbatim into OMP's `todo`
+  tool. A fix round always uses the `fix-round` playbook. Tasks created before playbooks have none.
+- The worker extension remembers the list from the latest `todo` result. An `implemented` report is
+  rejected while any step is not completed or abandoned (missing counts as open); the rejection
+  names the steps. A dropped step's reason goes in the report.
+- The to-do list is the worker's scratch state and a submit-time gate only. It is never task state.
+
 ## Interactive child terminals
 
 - Workers run interactive OMP with inherited terminal I/O (no `-p`, no `--mode json`).

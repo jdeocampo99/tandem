@@ -29,6 +29,7 @@ import {
 } from "./extension/registration.ts";
 import { buildDurableDigest } from "./extension/summary.ts";
 import { COORDINATOR_INSTRUCTIONS, COORDINATOR_TOOL_GUIDANCE } from "./instructions.ts";
+import { type PlaybookClassifier, playbookClassifier } from "./playbooks/classify.ts";
 import { appendCoordinatorUsage } from "./runtime/usage-ledger.ts";
 import {
   createTandemService,
@@ -62,6 +63,7 @@ function serviceForContext(
   options: TandemExtensionOptions,
   environment: TandemBoundaryEnvironment,
   classifyResearchContinuation: ResearchContinuationClassifier,
+  classifyPlaybook: PlaybookClassifier,
 ): TandemService {
   if (options.service !== undefined) return options.service;
   const sourceRepo = environment.sourceRepo;
@@ -77,6 +79,7 @@ function serviceForContext(
       : { coordinatorPaneId: environment.coordinatorPaneId }),
     poolRoot: environment.poolRoot,
     classifyResearchContinuation,
+    classifyPlaybook,
     ...(sourceRepo === undefined
       ? {}
       : {
@@ -284,6 +287,7 @@ class EarlyCompaction {
 class TandemCoordinator {
   private readonly promptRouting: PromptRoutingConfig;
   private readonly classifyResearchContinuation: ResearchContinuationClassifier;
+  private readonly classifyPlaybook: PlaybookClassifier;
   private readonly compaction: EarlyCompaction;
   private readonly status = new CoordinatorStatus();
   private readonly deliveredNotifications = new Set<string>();
@@ -301,9 +305,9 @@ class TandemCoordinator {
   ) {
     const environmentSnapshot = processEnvironmentSnapshot(options.processEnvironment);
     this.promptRouting = promptRoutingConfig(environmentSnapshot);
-    this.classifyResearchContinuation = researchContinuationClassifier(
-      researchContinuationClassifierConfig(environmentSnapshot),
-    );
+    const jevConfig = researchContinuationClassifierConfig(environmentSnapshot);
+    this.classifyResearchContinuation = researchContinuationClassifier(jevConfig);
+    this.classifyPlaybook = playbookClassifier(jevConfig);
     this.compaction = new EarlyCompaction(coordinatorCompactTokens(environmentSnapshot), (error) =>
       logExtensionError(pi, error),
     );
@@ -319,6 +323,7 @@ class TandemCoordinator {
       this.options,
       this.environment(ctx),
       this.classifyResearchContinuation,
+      this.classifyPlaybook,
     );
     return this.service;
   }

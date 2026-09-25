@@ -1,4 +1,6 @@
 import type { SkillInvocation } from "./contracts.ts";
+import { playbookSection } from "./playbooks/brief.ts";
+import type { PlaybookId } from "./playbooks/catalog.ts";
 import { checkSkillInvocations } from "./tasks/skill-invocation.ts";
 import { isWorkerRole, type WorkerRole } from "./workers/jobs.ts";
 
@@ -21,6 +23,8 @@ export type AgentBriefInput = Readonly<{
   readonly artifacts?: readonly string[];
   /** Skills the user asked the task to use, pinned when it was created. */
   readonly skills?: readonly SkillInvocation[];
+  /** The playbook an implementer loads into its to-do list. */
+  readonly playbook?: PlaybookId;
 }>;
 
 export type ReviewLensId = "review";
@@ -414,6 +418,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
         ]),
     ...(instructions.length === 0 ? [] : ["## Instructions", ...formatBullets(instructions), ""]),
     ...(skills === undefined ? [] : [...skillSection(input.role, skills), ""]),
+    ...(input.playbook === undefined ? [] : [playbookSection(input.playbook), ""]),
     "## Report",
     ...formatBullets(reportInstructions),
     ...formatBullets(REPORT_INSTRUCTIONS),

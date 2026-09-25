@@ -14,6 +14,7 @@ import type {
 } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import { type AgentBriefReview, buildAgentBrief } from "../instructions.ts";
+import type { PlaybookId } from "../playbooks/catalog.ts";
 import { activeRuntimeJob } from "../runtime/activity.ts";
 import { taskJobsDirectory } from "../runtime/persistence.ts";
 import {
@@ -44,6 +45,7 @@ export type TaskCreationRequest = Readonly<{
   readonly researchHandoffs?: TaskRecord["researchHandoffs"];
   readonly researchContinuation?: TaskRecord["researchContinuation"];
   readonly skills?: TaskRecord["skills"];
+  readonly playbook?: TaskRecord["playbook"];
   readonly prReview?: TaskRecord["prReview"];
   readonly target?: TaskRecord["target"];
 }>;
@@ -335,6 +337,7 @@ export function buildPrompt(
   artifacts: readonly string[],
   review: AgentBriefReview | undefined,
   extraInstructions: readonly string[] = [],
+  playbook?: PlaybookId,
 ): string {
   const guidance = task.policy.guidance[roleChannel(role)].map((entry) => entry.text);
   // Reviewers get the skills too, to check the work followed them; a visual never needs them.
@@ -351,6 +354,7 @@ export function buildPrompt(
     ...(review === undefined ? {} : { review }),
     ...(artifacts.length === 0 ? {} : { artifacts }),
     ...(skills === undefined ? {} : { skills }),
+    ...(playbook === undefined ? {} : { playbook }),
   });
 }
 
@@ -561,6 +565,7 @@ export function taskInputFor(
     ...(request.skills === undefined || request.skills.length === 0
       ? {}
       : { skills: request.skills }),
+    ...(request.playbook === undefined ? {} : { playbook: request.playbook }),
     ...(request.prReview === undefined ? {} : { prReview: request.prReview }),
     ...(request.target === undefined ? {} : { target: request.target }),
   };

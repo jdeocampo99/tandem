@@ -13,6 +13,7 @@ import {
   type HerdrStatusReporter,
 } from "../adapters/herdr-status.ts";
 import type { Finding, ReviewResult } from "../contracts.ts";
+import { openSteps, type TodoItem, todoItems } from "../playbooks/progress.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
@@ -601,6 +602,8 @@ class WorkerTerminalSession {
   private tokenTally: WorkerTokenTally | undefined;
   private tallyWrites = Promise.resolve();
   private lastBusyTraceAt = 0;
+  // The worker's own to-do list as its latest `todo` call left it; scratch state, never task state.
+  private todoItems: readonly TodoItem[] | undefined;
 
   constructor(dependencies: WorkerTerminalDependencies) {
     this.job = dependencies.job;
@@ -767,6 +770,12 @@ class WorkerTerminalSession {
         const status = await worktreeStatus(job.cwd);
         const uncommitted = status === undefined ? undefined : uncommittedWorkRejection(status);
         if (uncommitted !== undefined) return uncommitted;
+        const open = openSteps(job.playbookSteps ?? [], this.todoItems);
+        if (open.length > 0) {
+          return new ReportRejection(
+            `these playbook steps are still open in your to-do list: ${open.join("; ")}. Finish them, or drop any that do not apply with the todo tool and give the reason in your report`,
+          );
+        }
       }
       const report = resolveSubmittedReport(job, submission, await reviewAnchors(job));
       const revision = await instructionRevision(job, report.status !== "failed");
@@ -1069,6 +1078,7 @@ class WorkerTerminalSession {
   ): void {
     this.trace("tool_end", { tool: event.toolName });
     if (event.toolName === "task") this.recordUsage(taskUsage(event.result, this.tokenTally));
+    if (event.toolName === "todo") this.todoItems = todoItems(event.result) ?? this.todoItems;
     this.runningTools.delete(event.toolCallId);
     this.lastActivityAt = Date.now();
     void this.persistState("busy", this.currentState.completed).catch(() => this.abort(ctx));

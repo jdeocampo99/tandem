@@ -477,6 +477,49 @@ test("an implementer cannot report implemented while its worktree has uncommitte
   }
 });
 
+test("an implementer cannot report implemented while a playbook step is open in its to-do list", async () => {
+  const previous = process.env.TANDEM_WORKER_JOB_PATH;
+  const root = await mkdtemp(join(tmpdir(), "tandem-playbook-"));
+  try {
+    const job = { ...makeJob(root), playbookSteps: ["Measure a baseline", "Measure again"] };
+    const { fixture: f } = await startExtension(root, job);
+    const todo = (status: string) => ({
+      toolName: "todo",
+      toolCallId: `todo-${status}`,
+      result: {
+        details: {
+          op: "done",
+          phases: [
+            {
+              name: "Playbook",
+              tasks: [
+                { content: "Measure a baseline", status: "completed" },
+                { content: "Measure again", status },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const beforeTodo = await submitReport(f, IMPLEMENTED);
+    expect(beforeTodo.content[0]?.text).toContain("Measure a baseline; Measure again");
+
+    await f.handlers.get("tool_execution_end")?.(todo("in_progress"), f.context);
+    const open = await submitReport(f, IMPLEMENTED);
+    expect(open.isError).toBe(true);
+    expect(open.content[0]?.text).toContain("still open in your to-do list: Measure again.");
+    expect(await Bun.file(job.resultPath).exists()).toBe(false);
+
+    await f.handlers.get("tool_execution_end")?.(todo("abandoned"), f.context);
+    expect((await submitReport(f, IMPLEMENTED)).isError).toBeUndefined();
+  } finally {
+    if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
+    else process.env.TANDEM_WORKER_JOB_PATH = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a reported failure and a native model substitution both settle the job as failed", async () => {
   const previous = process.env.TANDEM_WORKER_JOB_PATH;
   const substituted = { provider: MODEL.provider, id: "substituted-model" };

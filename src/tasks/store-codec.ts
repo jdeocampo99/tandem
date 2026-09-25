@@ -55,6 +55,7 @@ import {
   type ValidationEvidence,
   type WorktreeLease,
 } from "../contracts.ts";
+import { PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import { type PrReviewState, parsePrReviewState } from "../pr-review/state.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
 import { FINDING_STATUSES } from "./findings.ts";
@@ -135,6 +136,7 @@ const TOP_LEVEL_KEYS = [
   "researchHandoffs",
   "researchContinuation",
   "skills",
+  "playbook",
   // Tasks created before Tandem looked skills up itself recorded one coordinator-written skill.
   "skill",
   "reportPath",
@@ -1109,6 +1111,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
         }),
     ...(researchContinuation === undefined ? {} : { researchContinuation }),
     ...(skills === undefined ? {} : { skills }),
+    ...(Object.hasOwn(value, "playbook")
+      ? { playbook: requiredEnum(value, "playbook", PLAYBOOK_IDS, source) }
+      : {}),
   };
   return {
     ...taskBase,

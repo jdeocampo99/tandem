@@ -418,6 +418,21 @@ test("round-trips pinned skills and refuses a malformed one at creation", async 
   });
 });
 
+test("round-trips a pinned playbook, loads older tasks without one, and rejects an unknown one", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const older = await store.create({ ...input, id: "older" });
+    const pinned = await store.create({ ...input, id: "pinned", playbook: "bug-fix" });
+    expect((await store.read(older.id))?.playbook).toBeUndefined();
+    expect((await makeStore(directory, "reloaded").read(pinned.id))?.playbook).toBe("bug-fix");
+
+    rewritePayload(directory, pinned.id, (payload) => {
+      payload.playbook = "yolo";
+    });
+    await expect(store.read(pinned.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
 test("fails closed on a persisted skill with an unexpected field or both skill fields", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
