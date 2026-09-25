@@ -395,35 +395,56 @@ test("round-trips handoff snapshots and rejects oversized persisted excerpts", a
 
 const skill = {
   name: "refactor-functions",
-  context: "Apply the five function-review principles.",
+  origin: "personal",
+  directory: "/Users/me/.claude/skills/refactor-functions",
+  instructions: "Apply the five function-review principles.",
 } as const;
 
-test("round-trips a pinned skill invocation and refuses a malformed one at creation", async () => {
+test("round-trips pinned skills and refuses a malformed one at creation", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
     const without = await store.create({ ...input, id: "without-skill" });
-    const withSkill = await store.create({ ...input, id: "with-skill", skill });
-    expect(without.skill).toBeUndefined();
-    expect((await store.read(without.id))?.skill).toBeUndefined();
-    expect((await store.read(withSkill.id))?.skill).toEqual(skill);
+    const withSkill = await store.create({ ...input, id: "with-skill", skills: [skill] });
+    expect(without.skills).toBeUndefined();
+    expect((await store.read(without.id))?.skills).toBeUndefined();
+    expect((await store.read(withSkill.id))?.skills).toEqual([skill]);
 
     const reloaded = makeStore(directory, "reloaded");
-    expect((await reloaded.read(withSkill.id))?.skill).toEqual(skill);
+    expect((await reloaded.read(withSkill.id))?.skills).toEqual([skill]);
 
     await expect(
-      store.create({ ...input, id: "invalid-skill", skill: { ...skill, name: "" } }),
+      store.create({ ...input, id: "invalid-skill", skills: [{ ...skill, name: "" }] }),
     ).rejects.toThrow(TypeError);
   });
 });
 
-test("fails closed on a persisted skill record with an unexpected field", async () => {
+test("fails closed on a persisted skill with an unexpected field or both skill fields", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
-    const created = await store.create({ ...input, id: "with-skill", skill });
+    const created = await store.create({ ...input, id: "with-skill", skills: [skill] });
     rewritePayload(directory, created.id, (payload) => {
-      payload.skill = { ...skill, scope: "everything" };
+      payload.skills = [{ ...skill, scope: "everything" }];
     });
     await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+
+    const both = await store.create({ ...input, id: "both-skill-fields", skills: [skill] });
+    rewritePayload(directory, both.id, (payload) => {
+      payload.skill = { name: "refactor-functions", context: "Summary." };
+    });
+    await expect(store.read(both.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("reads the single skill an older task recorded as the coordinator's summary", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-skill" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.skill = { name: "refactor-functions", context: "Apply the principles." };
+    });
+    expect((await store.read(created.id))?.skills).toEqual([
+      { name: "refactor-functions", origin: "summary", instructions: "Apply the principles." },
+    ]);
   });
 });
 

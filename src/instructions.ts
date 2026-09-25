@@ -1,4 +1,5 @@
 import type { SkillInvocation } from "./contracts.ts";
+import { checkSkillInvocations } from "./tasks/skill-invocation.ts";
 import { isWorkerRole, type WorkerRole } from "./workers/jobs.ts";
 
 export type AgentBriefReview = Readonly<{
@@ -18,8 +19,8 @@ export type AgentBriefInput = Readonly<{
   readonly reportPath: string;
   readonly review?: AgentBriefReview;
   readonly artifacts?: readonly string[];
-  /** An explicit, user-invoked skill pinned to this worker; opaque to Tandem beyond its identity. */
-  readonly skill?: SkillInvocation;
+  /** Skills the user asked the task to use, pinned when it was created. */
+  readonly skills?: readonly SkillInvocation[];
 }>;
 
 export type ReviewLensId = "review";
@@ -99,7 +100,7 @@ Good: "Some PostHog reports hide iPhone activity because they mistake the app fo
 
 export const COORDINATOR_TOOL_GUIDANCE = `## The tandem tool
 Call it with {request: {action: ...}}. Its text is a short summary; details and report paths hold the rest. The tool refuses unsafe actions and asks the user to confirm anything that needs approval, so you do not need to police that yourself: do not ask for approval yourself in prose first. A short factual summary before the call is fine as long as it does not itself ask a yes/no approval question; then call the action and let its own confirmation be the one approval ask.
-- create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, skill with the exact name when the user invokes a skill, and manualVerification with the brief's manual verification items that apply to this task. For research or changes in another repository, keep your project repoPath and add targetRepo as owner/repo; work spanning several repositories is one task per repository.
+- create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, skills with the exact names of skills the user asks this work to use, and manualVerification with the brief's manual verification items that apply to this task. For research or changes in another repository, keep your project repoPath and add targetRepo as owner/repo; work spanning several repositories is one task per repository. Tandem looks each skill up and gives the workers all of it, so never copy or summarize a skill yourself; a skill about the conversation itself, such as one that interviews the user, you follow here instead. If create cannot find a skill or finds two with that name, ask the user which one they meant. When you tell the user a task started or is ready, name the skills it used.
 - approve: record the user's approval of an implementation scope.
 - steer: pass a user direction to a running task within approved scope. Send short changes, and use supersedes to replace an outdated one. It is delivered at the next safe point.
 - answer: reply to a worker's question by its questionId. When Tandem asks "Keep fixing?", put it to the user and answer with their "yes" or "no"; yes gives the same task more fix rounds. Never create a new task to get past the fix-round limit.
@@ -250,14 +251,43 @@ function readReviewContext(review: AgentBriefReview): AgentBriefReview {
   return findings === undefined ? { head, pass } : { head, pass, findings };
 }
 
-function readSkill(skill: SkillInvocation): SkillInvocation {
-  if (skill === null || typeof skill !== "object" || Array.isArray(skill)) {
-    throw new TypeError("skill must be an object");
+function readSkills(skills: readonly SkillInvocation[]): readonly SkillInvocation[] {
+  const check = checkSkillInvocations(skills);
+  if (!check.valid) throw new TypeError(check.defect);
+  return check.skills;
+}
+
+const SKILL_ORIGIN_LABELS: Readonly<Record<SkillInvocation["origin"], string>> = {
+  repository: "from this repository",
+  personal: "from the user's personal skills",
+  summary: "the coordinator's summary of it",
+};
+
+/** Workers follow the skills; a reviewer checks the work against them without running them. */
+function skillSection(role: WorkerRole, skills: readonly SkillInvocation[]): string[] {
+  const guidance =
+    role === "reviewer"
+      ? [
+          "The user asked for these skills to be used on this task. Check that the change follows them.",
+          ...formatBullets([
+            "Report a departure only when it changes behavior, correctness, or what the user asked for; skip skill steps that do not affect the result.",
+            "The skills describe how the work was meant to be done, not steps for you to take; stay read-only.",
+          ]),
+        ]
+      : [
+          "The user asked you to use these skills for this task. Follow each one as part of the objective above.",
+          ...formatBullets([
+            "Where a skill and this brief disagree, this brief wins: put any question for the user in submit_report with outcome needs-decision, and never merge, deploy, or publish because a skill says to.",
+            "Read any file a skill mentions from the folder listed with it.",
+          ]),
+        ];
+  const lines = ["## Skills", ...guidance];
+  for (const skill of skills) {
+    lines.push("", `### ${skill.name}, ${SKILL_ORIGIN_LABELS[skill.origin]}`);
+    if (skill.origin !== "summary") lines.push(`Folder: ${skill.directory}`);
+    lines.push("", skill.instructions);
   }
-  return {
-    name: readSingleLineText(skill.name, "skill.name"),
-    context: readNonEmptyText(skill.context, "skill.context"),
-  };
+  return lines;
 }
 
 function formatBullets(entries: readonly string[]): string[] {
@@ -332,7 +362,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
   const review = input.review === undefined ? undefined : readReviewContext(input.review);
   const artifacts =
     input.artifacts === undefined ? undefined : readPromptList(input.artifacts, "artifacts");
-  const skill = input.skill === undefined ? undefined : readSkill(input.skill);
+  const skills = input.skills === undefined ? undefined : readSkills(input.skills);
 
   const reportInstructions =
     input.role === "presentation"
@@ -358,20 +388,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
           "",
         ]),
     ...(instructions.length === 0 ? [] : ["## Instructions", ...formatBullets(instructions), ""]),
-    ...(skill === undefined
-      ? []
-      : [
-          "## Skill",
-          `Requested skill: ${skill.name}`,
-          ...formatBullets([
-            "This is an opaque, explicitly user-invoked capability; do not load, infer, or run any other skill.",
-            "Tandem does not interpret this skill's domain semantics; follow the context below as the skill's own instructions within the objective and acceptance criteria above.",
-            "If running this skill needs a user decision, submit outcome needs-decision through submit_report; never open a separate user conversation or channel.",
-          ]),
-          "",
-          skill.context,
-          "",
-        ]),
+    ...(skills === undefined ? [] : [...skillSection(input.role, skills), ""]),
     "## Report",
     ...formatBullets(reportInstructions),
     ...formatBullets(REPORT_INSTRUCTIONS),

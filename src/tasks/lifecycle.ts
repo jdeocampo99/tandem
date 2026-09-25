@@ -39,7 +39,7 @@ import {
 } from "./findings.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
-import { checkSkillInvocation } from "./skill-invocation.ts";
+import { checkSkillInvocations } from "./skill-invocation.ts";
 
 export type TaskInput = Readonly<{
   readonly id: string;
@@ -56,8 +56,8 @@ export type TaskInput = Readonly<{
   readonly researchHandoffs?: readonly ResearchHandoff[];
   /** Explicit post-research disposition; scouts fall back to the conservative default. */
   readonly researchContinuation?: ResearchContinuation;
-  /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
-  readonly skill?: SkillInvocation;
+  /** Skills the user asked this task to use, already looked up and pinned. */
+  readonly skills?: readonly SkillInvocation[];
   /** Required for, and only for, a `pr-review` task. */
   readonly prReview?: PrReviewState;
   readonly target?: TaskTarget;
@@ -333,9 +333,9 @@ function assertResearchContinuationInput(input: TaskInput): void {
 }
 
 function assertSkillInput(input: TaskInput): void {
-  if (input.skill === undefined) return;
-  const check = checkSkillInvocation(input.skill);
-  if (!check.valid) throw new TypeError(`Task skill is invalid: ${check.defect}`);
+  if (input.skills === undefined) return;
+  const check = checkSkillInvocations(input.skills);
+  if (!check.valid) throw new TypeError(`Task skills are invalid: ${check.defect}`);
 }
 
 function assertTextList(values: readonly string[], field: string): void {
@@ -828,7 +828,7 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     ...(input.researchHandoffs === undefined
       ? {}
       : { researchHandoffs: [...input.researchHandoffs] }),
-    ...(input.skill === undefined ? {} : { skill: { ...input.skill } }),
+    ...(input.skills === undefined ? {} : { skills: input.skills.map((skill) => ({ ...skill })) }),
     ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
     ...(input.target === undefined ? {} : { target: { ...input.target } }),
     ...(input.kind === "scout"

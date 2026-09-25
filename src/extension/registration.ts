@@ -149,7 +149,10 @@ function tandemRequestSchema(z: Zod) {
         manualVerification: z.array(z.string()).optional(),
         surfaces: z.array(z.string()),
         researchTaskIds: z.array(z.string()).optional(),
-        skill: z.object({ name: z.string(), context: z.string() }).strict().optional(),
+        skills: z
+          .array(z.string())
+          .optional()
+          .describe("Skills the user asked this work to use, by exact name. Tandem loads them."),
         targetRepo: z
           .string()
           .optional()

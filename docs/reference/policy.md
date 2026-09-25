@@ -161,6 +161,32 @@ Policy resolution builds a guidance snapshot per channel (`implementation`, `val
   channel is retained in the snapshot, but validation decisions come from the pinned command specs
   and runner evidence.
 
+## Skills
+
+Workers discover the target repository's own skills, the way OMP does in any session. Personal
+skills stay out: `src/worker-skills.yml`, a second `--config` only workers load, turns off OMP's
+user-level skill folders. The coordinator does not load it and keeps the user's skills.
+
+- `create` takes `skills`, the names the user asked the work to use; `/skill:` prefixes are
+  dropped. Owner: `src/config/skills.ts`.
+- Each name is looked up under the repository's committed checkout (`.omp/skills`,
+  `.claude/skills`, `.agents/skills`, `.agent/skills`, `.codex/skills`), then under the user's home
+  (`.omp/agent/skills`, `.claude/skills`, `.agents/skills`, `.agent/skills`, `.codex/skills`). A
+  repository skill wins over a personal one with the same name; linked copies of one folder count
+  once. Matching is by folder name.
+- Create fails, with a message the coordinator puts to the user, when a name is not a plain folder
+  name, matches nothing, matches two different folders in the same place, has an empty SKILL.md,
+  or the skills together pass 32 KB (`MAX_TASK_SKILLS_BYTES`).
+- The task pins each skill's name, origin, real folder path, and SKILL.md body without frontmatter.
+  Later edits to the skill never change the task; fix rounds and restarts use the pinned copy.
+- Scout, implementer, and reviewer briefs carry every pinned skill in full with its folder.
+  Workers follow them and the brief wins where they conflict; the reviewer checks the change
+  against them and reports a departure only when it affects the result. Presentation briefs carry
+  none.
+- Tasks created before this recorded one `skill` with the coordinator's own summary; they load as a
+  single `summary`-origin skill without a folder. A record with both `skill` and `skills` is
+  corrupt.
+
 ## Jev prompt routing
 
 Jev optionally classifies unmatched natural-language coordinator prompts so simple read-only
