@@ -5,7 +5,7 @@ scout release must guarantee.
 
 Code: src/extension.ts, src/extension/registration.ts, src/extension/actions.ts,
 src/extension/notifications.ts, src/pool/maintenance.ts, src/pool/policy.ts,
-src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
+src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts, src/workers/worktree-lease.ts
 
 ## Tool and command contract
 

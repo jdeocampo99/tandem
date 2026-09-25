@@ -134,7 +134,7 @@ import {
 import { createTaskStore, type TaskStore, transitionStoredTask } from "../tasks/store.ts";
 import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
-import type { OperationClaim } from "../workers/operation-claim.ts";
+import { claimOf, ownsOperation } from "../workers/operation-claim.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { WorkerWorkflow } from "../workers/workflow.ts";
 import { DraftRefreshWorkflow } from "./draft-refresh.ts";
@@ -380,27 +380,6 @@ function assertTaskId(id: unknown): string {
 
 function assertArtifacts(artifacts: unknown): readonly string[] {
   return readTextList(artifacts, "artifacts");
-}
-
-function operationClaim(operation: RuntimeTaskState["operation"]): OperationClaim | undefined {
-  return operation === undefined
-    ? undefined
-    : {
-        id: operation.id,
-        claimOwner: operation.claimOwner,
-        fencingRevision: operation.fencingRevision,
-      };
-}
-
-function sameOperationClaim(
-  operation: RuntimeTaskState["operation"],
-  claim: OperationClaim | undefined,
-): boolean {
-  return claim === undefined
-    ? operation === undefined
-    : operation?.id === claim.id &&
-        operation.claimOwner === claim.claimOwner &&
-        operation.fencingRevision === claim.fencingRevision;
 }
 
 function sameReservationIdentity(
@@ -1583,14 +1562,14 @@ class TandemController {
       readonly cause?: BlockCause;
     }> = {},
   ): Promise<void> {
-    const claim = operationClaim(capturedRuntime?.operation);
+    const claim = claimOf(capturedRuntime?.operation);
     const { reservation } = options;
     await this.blockUnchangedTask(
       capturedTask,
       { reason, cause: options.cause },
       {
         matches: (current) =>
-          sameOperationClaim(current?.operation, claim) &&
+          ownsOperation(current?.operation, claim) &&
           (reservation === undefined || sameReservationIdentity(current?.reservation, reservation)),
         ...(options.runtimeError === true
           ? { update: (current) => ({ ...current, lastError: reason }) }
