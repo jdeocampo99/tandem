@@ -306,14 +306,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     approval: "read",
     execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       pane.enter(ctx);
-      // The schema's role-specific spread types artifactPath as unknown; it parsed as a string.
-      const { artifactPath, ...report } = reportSchema.parse(params);
-      return ompToolResult(
-        await session.submitReport({
-          ...report,
-          ...(typeof artifactPath === "string" ? { artifactPath } : {}),
-        }),
-      );
+      return ompToolResult(await session.submitReport(reportSchema.parse(params)));
     },
   });
 

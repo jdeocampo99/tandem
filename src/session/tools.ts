@@ -241,7 +241,16 @@ export const reviewResultSchema = z.strictObject({
   summary: z.string(),
 });
 
-/** The `submit_report` parameters for one role: presentations add an artifact, reviewers a review. */
+/**
+ * The `submit_report` parameters for one role: presentations add an artifact, reviewers a review.
+ *
+ * `artifactPath` and `review` are typed per role with `z.never().optional()` rather than spread
+ * into the shape conditionally: a spread here makes zod infer the property as `unknown` instead
+ * of its real type, because TypeScript loses the property's type across an object-literal spread
+ * inside a generic call. Assigning the property directly keeps `z.infer` honest (`string
+ * | undefined`, `ReviewResult | undefined`) while `z.never()` still rejects the field for roles
+ * that cannot submit it, same as the field being absent from the shape.
+ */
 export function submitReportSchema(role: WorkerRole) {
   const reviews = role === "reviewer";
   return z.strictObject({
@@ -262,23 +271,20 @@ export function submitReportSchema(role: WorkerRole) {
       .string()
       .optional()
       .describe("Optional for needs-decision: one bounded single-line recommendation."),
-    ...(role === "presentation"
-      ? {
-          artifactPath: z
+    artifactPath:
+      role === "presentation"
+        ? z
             .string()
             .optional()
-            .describe("Required for completed: the absolute path of the written artifact."),
-        }
-      : {}),
-    ...(reviews
-      ? {
-          review: reviewResultSchema
-            .optional()
-            .describe(
-              "Required for completed: your findings and summary. Tandem records the commit and whether the review passes.",
-            ),
-        }
-      : {}),
+            .describe("Required for completed: the absolute path of the written artifact.")
+        : z.never().optional(),
+    review: reviews
+      ? reviewResultSchema
+          .optional()
+          .describe(
+            "Required for completed: your findings and summary. Tandem records the commit and whether the review passes.",
+          )
+      : z.never().optional(),
   });
 }
 
