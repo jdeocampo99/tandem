@@ -14,7 +14,7 @@ import {
   type TandemEnvironmentSource,
 } from "./config/environment.ts";
 import { readCoordinatorMcpServers } from "./config/repositories.ts";
-import type { TaskRecord } from "./contracts.ts";
+import type { CommandRunner, TaskRecord } from "./contracts.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import {
   atCompactionBoundary,
@@ -43,6 +43,7 @@ import {
   researchContinuationClassifier,
   researchContinuationClassifierConfig,
 } from "./tasks/research-continuation-classifier.ts";
+import { StoreLockTimeoutError } from "./tasks/store-errors.ts";
 import { replyUsage } from "./workers/terminal.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
@@ -53,6 +54,8 @@ export type TandemExtensionOptions = Readonly<{
   readonly environment?: Partial<TandemBoundaryEnvironment>;
   readonly processEnvironment?: TandemEnvironmentSource;
   readonly tickIntervalMs?: number;
+  /** Runs the Herdr status commands; the real command runner when absent. */
+  readonly run?: CommandRunner;
 }>;
 
 function serviceForContext(
@@ -387,8 +390,12 @@ class TandemCoordinator {
         this.unacknowledgedNotifications.size === 0;
       this.compaction.compactIfAtBoundary(ctx, tasks, idle);
     } catch (error) {
-      this.status.block(errorMessage(error));
-      this.status.report();
+      // Another process holding the state lock is routine contention the next tick retries, not
+      // something for the user to act on.
+      if (!(error instanceof StoreLockTimeoutError)) {
+        this.status.block(errorMessage(error));
+        this.status.report();
+      }
       throw error;
     }
   }
@@ -418,7 +425,7 @@ class TandemCoordinator {
 
   async onSessionStart(ctx: ExtensionContext): Promise<void> {
     if (this.shuttingDown) return;
-    this.status.reporter ??= createHerdrStatusReporter(runCommand, {
+    this.status.reporter ??= createHerdrStatusReporter(this.options.run ?? runCommand, {
       cwd: ctx.cwd,
       agentLabel: "tandem-coordinator",
       ...(this.options.processEnvironment === undefined

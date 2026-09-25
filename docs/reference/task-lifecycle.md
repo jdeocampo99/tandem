@@ -129,7 +129,9 @@ from the prompt router.
 - States: active turns `working`; question dialogs, paused workers, and failed or needs-decision
   results `blocked`; completed turns `idle`. An idle coordinator aggregates its original project's
   tasks: approval, pause, and blockers outrank queued/running work; ready and terminal tasks do not
-  count. Validation reports `working` while running and releases authority on exit.
+  count. A coordinator tick that fails reports `blocked`, except one that only timed out waiting for
+  the state lock: that leaves the status as it was for the next tick to retry. Validation reports
+  `working` while running and releases authority on exit.
 - Reporting runs only in an exact Herdr pane context, serialized and deduplicated; failed reports
   retry on the next update; shutdown releases authority even if durable shutdown fails. Each
   reporter uses a fresh source identity because Herdr keeps sequence watermarks after release.

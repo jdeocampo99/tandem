@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-coding-agent";
 import { resolveTandemEnvironment } from "../../src/config/environment.ts";
-import type { ModelSpec, RepoPolicy, ResolvedPolicy, TaskRecord } from "../../src/contracts.ts";
+import type {
+  CommandRunner,
+  ModelSpec,
+  RepoPolicy,
+  ResolvedPolicy,
+  TaskRecord,
+} from "../../src/contracts.ts";
 import { executeTandemAction, parseTandemCommand } from "../../src/extension/actions.ts";
 import { deliverPendingNotifications } from "../../src/extension/notifications.ts";
 import { resolveCommandAction } from "../../src/extension/registration.ts";
@@ -2369,4 +2375,63 @@ test("the brief-approve prompt names the request by its goal, never its id or re
   expect(approveCalls).toEqual([
     { briefRevision: record.draft.revision, contentDigest: record.draft.contentDigest },
   ]);
+});
+
+test("a tick that only waited out the state lock leaves the Herdr status alone; other failures block it", async () => {
+  type LifecycleHandler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
+  const failures = [
+    { error: new StoreLockTimeoutError("/home", 5_000), reportsBlocked: false },
+    { error: new Error("state database unreadable"), reportsBlocked: true },
+  ];
+  for (const failure of failures) {
+    const handlers = new Map<string, LifecycleHandler>();
+    const states: string[] = [];
+    const run: CommandRunner = async (request) => {
+      const state = request.argv[request.argv.indexOf("--state") + 1];
+      if (request.argv.includes("report-agent") && state !== undefined) states.push(state);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const context = {
+      ui: { notify: () => undefined },
+      mode: "tui",
+      cwd: "/repo",
+      sessionManager: { getSessionId: () => "session-1" },
+      setInterval: () => ({}) as Timer,
+      clearTimer: () => undefined,
+    } as unknown as ExtensionContext;
+    const service = {
+      tick: async () => {
+        throw failure.error;
+      },
+      list: async () => [],
+      shutdown: async () => undefined,
+    } as unknown as TandemService;
+    const pi = {
+      zod,
+      on: (event: string, handler: LifecycleHandler) => {
+        handlers.set(event, handler);
+      },
+      registerTool: () => undefined,
+      registerCommand: () => undefined,
+      logger: { error: () => undefined },
+      sendMessage: () => undefined,
+      appendEntry: () => undefined,
+    } as unknown as ExtensionAPI;
+
+    createTandemExtension({
+      service,
+      run,
+      processEnvironment: {
+        HERDR_ENV: "1",
+        HERDR_SESSION: "tandem-session",
+        HERDR_PANE_ID: "pane-coordinator",
+      },
+    })(pi);
+    const sessionStart = handlers.get("session_start");
+    if (sessionStart === undefined) throw new Error("session_start was not registered");
+    await Promise.resolve(sessionStart({}, context)).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(states.includes("blocked"), failure.error.message).toBe(failure.reportsBlocked);
+  }
 });
