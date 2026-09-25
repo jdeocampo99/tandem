@@ -21,6 +21,7 @@ import type {
   ToolCall,
 } from "./events.ts";
 import {
+  deliverInvestigationQuestions,
   deliverPendingNotifications,
   deliverPrWatchNotices,
   type ResearchReportReader,
@@ -388,6 +389,7 @@ export class CoordinatorSession {
         readReport: this.deps.readReport,
       });
       await deliverPrWatchNotices({ host: this.deps.host, service });
+      await deliverInvestigationQuestions({ host: this.deps.host, service });
       const idle =
         !this.status.agentActive &&
         !this.status.waitingForInput &&

@@ -1401,6 +1401,11 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     saveMerging: unused,
     workerSkillOffer: unused,
     saveWorkerSkills: unused,
+    selfImprovementMode: unused,
+    investigationQuestions: unused,
+    investigate: unused,
+    reviewIssue: unused,
+    fileIssue: unused,
     shutdown: async () => undefined,
   };
   const stdout: string[] = [];

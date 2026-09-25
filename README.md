@@ -196,6 +196,22 @@ PR watch · 3 open · checked 5s ago
 Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #409" or run
 `tandem watch --stop 409` to stop watching one. It works while Tandem is open.
 
+### Looking into Tandem's own problems
+
+When a task restarts twice, needs three or more rounds of fixes, or stays stuck for over an hour,
+Tandem can ask whether you want it to look into why. You can also ask any time: "why did that task
+take so long?". On yes, a research agent reads what happened to the task and Tandem's own source,
+and the coordinator tells you the cause and what it would change.
+
+This is off until you turn it on for the machine in `~/.tandem/settings.toml`:
+
+- `selfImprovement = "fix"` offers to fix Tandem through the usual plan, approval, review, and draft
+  pull request on the Tandem repository. Run `tandem update` after it merges.
+- `selfImprovement = "report"` is for machines that must not push code, such as a work laptop. It
+  drafts a GitHub issue instead, with paths, code, and your task's text taken out, and shows it to
+  you with a warning if a check thinks something from your work is still in it. Nothing is filed
+  until you approve it.
+
 ## Terminal commands
 
 | Command | What it does |

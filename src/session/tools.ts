@@ -246,6 +246,19 @@ export const tandemRequestSchema = z.strictObject({
         repoPath: z.string().optional().describe("Where #123 is; defaults to this project."),
       }),
     ),
+    z.strictObject({
+      action: z.literal("investigate"),
+      taskId: z.string(),
+      question: z.string().optional().describe("The user's question, in their words."),
+      targetCheckout: z.string().optional().describe("Where the user said Tandem is checked out."),
+      targetClone: z.boolean().optional().describe("True when the user said to clone Tandem."),
+    }),
+    z.strictObject({
+      action: z.literal("report-issue"),
+      taskId: z.string().describe("The task the investigation was about."),
+      title: z.string(),
+      body: z.string(),
+    }),
   ]),
 });
 

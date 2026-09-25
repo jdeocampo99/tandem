@@ -24,7 +24,8 @@ src/adapters/typesafe.ts, src/instructions.ts
 - Home settings: `<home>/settings.toml`, optional and hand-written, read live on each use and
   never pinned (src/config/home-settings.ts). `workerSkills` lists personal skills every task
   carries (see [Skills](#skills)); onboarding offers the user's Claude Code plugin skills once and
-  saves the answer here, an empty list for no. Unknown keys and bad TOML are refused.
+  saves the answer here, an empty list for no. `selfImprovement` is `"off"` (default), `"fix"`, or
+  `"report"`; see [self-improvement.md](self-improvement.md). Unknown keys and bad TOML are refused.
 - Any symlink in the policy namespace below the home (`inspectPolicyPath`) fails closed. New
   directories use `0700`; new files use `0600`.
 - A child-root `.tandem.json` from old builds is ignored: neither imported nor deleted.
@@ -245,6 +246,11 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
   briefs and openable presentations (15 newest of each), described by goal or objective. Only a
   confident `open` request that matches one listed item runs `brief-review` or
   `presentation-open`; anything else continues to the lookup routing above.
+- Investigate: with self-improvement on, a prompt that says "why" and names task trouble (took long,
+  restarted, stuck, fix rounds) gets one Jev call (src/session/investigate-route.ts) listing the
+  15 most recently changed tasks by objective. Only a confident `investigate` request that matches
+  one listed task runs `investigate` with the prompt as its question; anything else continues to
+  the lookup routing above. See [self-improvement.md](self-improvement.md#on-demand).
 - Everything else goes to normal coordinator handling: incomplete or invalid output, target
   mismatch, non-read-only effect, mixed or multi-part requests, provider errors, missing task ID.
   Jev never generates commands, authorizes actions, mutates state, or picks a model; it only picks

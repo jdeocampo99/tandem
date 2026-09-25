@@ -13,11 +13,24 @@ export type HomeSettings = Readonly<{
   readonly workerSkills: readonly string[];
   /** Whether `workerSkills` is written at all, even empty: the user already chose, so don't offer. */
   readonly workerSkillsChosen: boolean;
+  /** What Tandem does when it looks into its own problems; see {@link SelfImprovementMode}. */
+  readonly selfImprovement: SelfImprovementMode;
 }>;
+
+/**
+ * `off` never looks into Tandem's own problems. `fix` investigates, then fixes Tandem through the
+ * normal brief, approval, and pull request loop. `report` investigates, then drafts a GitHub issue
+ * for the user to approve, for machines that must not push code. Set by hand only: push rights on
+ * GitHub say nothing about whether this machine may push.
+ */
+export type SelfImprovementMode = "off" | "fix" | "report";
+
+const SELF_IMPROVEMENT_MODES: readonly SelfImprovementMode[] = ["off", "fix", "report"];
 
 const HOME_SETTINGS_FILE = "settings.toml";
 const HOME_SETTINGS_KEYS: Readonly<Record<string, true>> = {
   workerSkills: true,
+  selfImprovement: true,
 };
 
 export async function readHomeSettings(home: string): Promise<HomeSettings> {
@@ -26,7 +39,9 @@ export async function readHomeSettings(home: string): Promise<HomeSettings> {
   try {
     text = await readFile(file, "utf8");
   } catch (error) {
-    if (isNotFoundError(error)) return { workerSkills: [], workerSkillsChosen: false };
+    if (isNotFoundError(error)) {
+      return { workerSkills: [], workerSkillsChosen: false, selfImprovement: "off" };
+    }
     throw error;
   }
   return parseHomeSettings(text, file);
@@ -46,6 +61,7 @@ function parseHomeSettings(text: string, source: string): HomeSettings {
   return {
     workerSkills: readNameList(parsed.workerSkills, `${source} workerSkills`),
     workerSkillsChosen: parsed.workerSkills !== undefined,
+    selfImprovement: readSelfImprovement(parsed.selfImprovement, `${source} selfImprovement`),
   };
 }
 
@@ -90,4 +106,11 @@ function readNameList(value: unknown, field: string): readonly string[] {
   return deduplicateStrings(
     value.map((entry: unknown, index) => readNonEmptyString(entry, `${field}[${index}]`)),
   );
+}
+
+function readSelfImprovement(value: unknown, field: string): SelfImprovementMode {
+  if (value === undefined) return "off";
+  const mode = SELF_IMPROVEMENT_MODES.find((candidate) => candidate === value);
+  if (mode === undefined) throw new TypeError(`${field} must be "off", "fix", or "report"`);
+  return mode;
 }

@@ -29,7 +29,12 @@ function coordinatorDeps(
       poolRoot: "/tmp/tandem-pool",
       repo: "/repo",
     },
-    createService: () => ({ prWatchNotices: async () => [], ...service }) as TandemService,
+    createService: () =>
+      ({
+        prWatchNotices: async () => [],
+        investigationQuestions: async () => [],
+        ...service,
+      }) as TandemService,
     realpath: async (path) => path,
     readReport: async () => undefined,
     appendUsage: async () => undefined,
