@@ -1436,13 +1436,6 @@ export class WorkerWorkflow {
         summary: "Tandem couldn't set up a working copy for this task.",
         detail: allocationFailedReason,
       });
-      const noLeaseReason = "worktree allocation returned no lease";
-      await this.blockIfOperationClaim(task.id, noLeaseReason, claim, {
-        group: "lost-resource",
-        kind: "allocation-failed",
-        summary: "Tandem couldn't set up a working copy for this task.",
-        detail: noLeaseReason,
-      });
       return "stopped";
     }
     return lease;
