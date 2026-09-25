@@ -345,7 +345,8 @@ export type RuntimePresentation = Readonly<{
   readonly operationHistory?: readonly DurableOperation[];
   readonly reservation?: DurableReservation;
   readonly endpointLaunch?: DurableEndpointLaunch;
-  readonly job: DurableJob;
+  /** Only presentations drawn by the retired presentation worker carry its job and pane. */
+  readonly job?: DurableJob;
   readonly endpoint?: Endpoint;
   readonly lastError?: string;
 }>;
@@ -1095,8 +1096,8 @@ function parsePresentation(value: unknown, field: string): RuntimePresentation {
     value.endpoint === undefined ? undefined : endpoint(value.endpoint, `${field}.endpoint`);
   const lastError =
     value.lastError === undefined ? undefined : text(value.lastError, `${field}.lastError`);
-  const job = parseJob(value.job, `${field}.job`);
-  if (job.kind !== "worker" || job.role !== "presentation") {
+  const job = value.job === undefined ? undefined : parseJob(value.job, `${field}.job`);
+  if (job !== undefined && (job.kind !== "worker" || job.role !== "presentation")) {
     throw new TypeError(`${field}.job must be a presentation worker job`);
   }
   return {
@@ -1108,7 +1109,7 @@ function parsePresentation(value: unknown, field: string): RuntimePresentation {
     ...(operationHistory === undefined ? {} : { operationHistory }),
     ...(reservation === undefined ? {} : { reservation }),
     ...(endpointLaunch === undefined ? {} : { endpointLaunch }),
-    job,
+    ...(job === undefined ? {} : { job }),
     ...(endpointValue === undefined ? {} : { endpoint: endpointValue }),
     ...(lastError === undefined ? {} : { lastError }),
   };

@@ -423,12 +423,89 @@ function deferred(taskId: string, reason: string): TaskCleanupOutcome {
   return { taskId, status: "deferred", reason };
 }
 
+// ponytail: only the retired presentation worker ran its own job; agent-drawn pages hold nothing.
 function hasBusyPresentation(state: RuntimeState, taskId: string): boolean {
   return state.presentations.some(
     (presentation) =>
       presentation.taskId === taskId &&
-      (activeRuntimeJob(presentation.job) || unreleasedReservation(presentation.reservation)),
+      ((presentation.job !== undefined && activeRuntimeJob(presentation.job)) ||
+        unreleasedReservation(presentation.reservation)),
   );
+}
+
+/**
+ * Keeps a finished scout that leads to implementation fully alive: its pane stays open, so the
+ * user's mockup requests and Lavish comments reach the agent that did the research, and its clean
+ * worktree waits for the implementation to adopt. `undefined` means clean up as usual.
+ */
+async function keepResearchAgent(
+  deps: TaskCleanupDependencies,
+  task: TaskRecord,
+  runtime: RuntimeTaskState,
+): Promise<TaskCleanupOutcome | undefined> {
+  const lease = runtime.worktree;
+  if (!scoutLeadsToImplementation(task) || lease === undefined) return undefined;
+  const checkout = await observeScoutCheckout(deps.run, lease.path);
+  if (checkout.status !== "observed") return undefined;
+  if (decideScoutWorktreeRelease({ lease, checkout }).kind !== "release") return undefined;
+  return recordCleanupAttempt(deps, task, {
+    closedPaneIds: [],
+    leaseReleased: false,
+    status: "retained",
+    reason:
+      "the research agent and its worktree stay for mockups and the implementation that follows",
+  });
+}
+
+/**
+ * Closes a finished scout's pane once the implementation that follows it starts, so that
+ * implementation can adopt the worktree. The worktree lease and cleanup record are unchanged.
+ */
+export async function closeFinishedScoutPanes(
+  deps: Pick<TaskCleanupDependencies, "store" | "runtimePath" | "run">,
+  scoutId: string,
+): Promise<void> {
+  const [task, state] = await Promise.all([
+    deps.store.read(scoutId),
+    deps.store.exclusive(() => readRuntimeState(deps.runtimePath)),
+  ]);
+  const runtime = state === undefined ? undefined : taskRuntime(state, scoutId);
+  if (
+    task?.kind !== "scout" ||
+    task.stage !== "completed" ||
+    runtime === undefined ||
+    runtime.endpoints.length === 0 ||
+    runtime.endpointLaunch !== undefined ||
+    runtime.jobs.some(activeRuntimeJob) ||
+    unreleasedReservation(runtime.reservation)
+  ) {
+    return;
+  }
+  const panes = await closeOwnedPanes(
+    deps.run,
+    runtime,
+    runtime.worktree?.path ?? taskSourcePath(task, runtime),
+  );
+  const closed = new Set(panes.closedPaneIds);
+  if (closed.size === 0) return;
+  await deps.store.exclusive(async (store) => {
+    const current = await store.read(scoutId);
+    if (current !== undefined) {
+      await store.update(scoutId, current.revision, (latest) => ({
+        ...latest,
+        revision: latest.revision + 1,
+        endpoints: (latest.endpoints ?? []).filter((endpoint) => !closed.has(endpoint.paneId)),
+      }));
+    }
+    const latestState = await readRuntimeState(deps.runtimePath);
+    await writeRuntimeState(
+      deps.runtimePath,
+      replaceRuntimeTask(latestState, scoutId, (entry) => ({
+        ...entry,
+        endpoints: entry.endpoints.filter((endpoint) => !closed.has(endpoint.paneId)),
+      })),
+    );
+  });
 }
 
 const CLEANUP_COMMAND_TIMEOUT_MS = 120_000;
@@ -518,6 +595,10 @@ export async function releaseTerminalTaskResources(
         status: "retained",
         reason: eligibility.reason,
       });
+    }
+    if (task.kind === "scout" && options.free === undefined) {
+      const kept = await keepResearchAgent(deps, task, runtime);
+      if (kept !== undefined) return kept;
     }
 
     const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);

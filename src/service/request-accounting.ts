@@ -238,7 +238,9 @@ async function settledWorkEventsFor(
     presentations,
     tallies: await jobTokenTallies([
       ...runtime.jobs,
-      ...presentations.map((presentation) => presentation.job),
+      ...presentations.flatMap((presentation) =>
+        presentation.job === undefined ? [] : [presentation.job],
+      ),
     ]),
   });
 }

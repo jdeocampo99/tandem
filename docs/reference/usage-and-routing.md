@@ -41,7 +41,8 @@ src/workers/execution-routing.ts, src/service/request-accounting.ts
 - Coordinator replies go to `<home>/coordinator-usage.jsonl`. The coordinator serves every request,
   so a receipt shows them as a separate shared line, never in the request total.
 - An implementation task created without `requestId` joins the repository's one open request (approved
-  brief, governed work not all finished). With none it stands alone; with several, create is refused.
+  brief, governed work not all finished; an approved request with no task after 3 days no longer
+  counts). With none it stands alone; with several, create is refused unless `requestId` names one.
 
 ## Provenance and privacy
 

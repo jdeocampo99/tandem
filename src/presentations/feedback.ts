@@ -1,5 +1,11 @@
 import { openPresentation } from "../adapters/lavish.ts";
-import type { Clock, CommandRunner, IdFactory, TaskRecord } from "../contracts.ts";
+import type {
+  Clock,
+  CommandRunner,
+  IdFactory,
+  NotificationKind,
+  TaskRecord,
+} from "../contracts.ts";
 import { presentationRuntime } from "../runtime/activity.ts";
 import { readRuntimeState, writeJsonAtomically } from "../runtime/persistence.ts";
 import type { RuntimePresentation, RuntimeState } from "../runtime/schema.ts";
@@ -26,7 +32,7 @@ import {
   samePresentationRecord,
   statusForObservation,
 } from "./records.ts";
-import { readPresentationFeedback } from "./session.ts";
+import { readPresentationFeedback, writeRevisionBrief } from "./session.ts";
 
 export type PresentationFeedbackDependencies = Readonly<{
   readonly store: TaskStore;
@@ -39,6 +45,28 @@ export type PresentationFeedbackDependencies = Readonly<{
 }>;
 
 const MANUAL_SHARED_FEEDBACK_WAIT_MS = 1_000;
+const MAX_EXCERPT_CHARS = 300;
+
+function excerpt(text: string): string {
+  const line = text.trim().replace(/\s+/gu, " ");
+  return line.length <= MAX_EXCERPT_CHARS ? line : `${line.slice(0, MAX_EXCERPT_CHARS - 1)}…`;
+}
+
+/** The listener's observation laid over the record as it is now, not as it was when polling began. */
+function withObservation(
+  current: PresentationRecord,
+  observed: PresentationRecord,
+): PresentationRecord {
+  const base = clearRecordError(current);
+  return {
+    ...base,
+    status: observed.status,
+    updatedAt: observed.updatedAt,
+    ...(observed.sessionUrl === undefined ? {} : { sessionUrl: observed.sessionUrl }),
+    ...(observed.observation === undefined ? {} : { observation: observed.observation }),
+    ...(observed.error === undefined ? {} : { error: observed.error }),
+  };
+}
 
 type PresentationPollState = Readonly<{
   readonly promise: Promise<PresentationRecord>;
@@ -121,6 +149,57 @@ export class PresentationFeedbackWorkflow {
       };
     }
     return { ...next, pendingNotification: pending };
+  }
+
+  /** Queues one notification with this exact message, after any already pending. */
+  withRevisionNotification(
+    record: PresentationRecord,
+    message: string,
+    kind: NotificationKind,
+  ): PresentationRecord {
+    const pending: PendingPresentationNotification = {
+      id: singleLine(this.#deps.idFactory(), "presentation notification id"),
+      message,
+      kind,
+    };
+    return hasPendingPresentationNotification(record)
+      ? {
+          ...record,
+          pendingNotificationQueue: [...(record.pendingNotificationQueue ?? []), pending],
+        }
+      : { ...record, pendingNotification: pending };
+  }
+
+  /**
+   * Sends a Lavish comment to the agent that drew the page as its next request, or holds it until
+   * the agent finishes the one it is on.
+   */
+  async requestRevision(record: PresentationRecord, feedback: string): Promise<PresentationRecord> {
+    if (record.request !== undefined) {
+      return this.withRevisionNotification(
+        { ...record, pendingFeedback: [...(record.pendingFeedback ?? []), feedback] },
+        `Queued a Lavish comment for presentation ${record.id} until the research agent finishes its current change: ${excerpt(feedback)}`,
+        "routine",
+      );
+    }
+    const id = singleLine(this.#deps.idFactory(), "presentation request id");
+    const briefPath = await writeRevisionBrief(record, id, feedback);
+    return this.withRevisionNotification(
+      {
+        ...record,
+        request: { id, kind: "revise", briefPath, requestedAt: this.#deps.clock() },
+      },
+      `The research agent is revising presentation ${record.id} from a Lavish comment: ${excerpt(feedback)}`,
+      "routine",
+    );
+  }
+
+  /** Turns comments held during the last request into the next one. */
+  async nextQueuedRevision(record: PresentationRecord): Promise<PresentationRecord> {
+    const { pendingFeedback, ...rest } = record;
+    if (pendingFeedback === undefined || pendingFeedback.length === 0) return record;
+    if (record.agent === undefined || record.status === "failed") return rest;
+    return this.requestRevision(rest, pendingFeedback.join("\n\n"));
   }
 
   async flushPresentationNotification(
@@ -230,40 +309,53 @@ export class PresentationFeedbackWorkflow {
           signal,
           continuous,
         });
-        if (observed !== previous) {
-          const observation = observed.observation;
-          const options =
-            observation?.status === "feedback"
-              ? (() => {
-                  const notificationId = singleLine(
-                    this.#deps.idFactory(),
-                    "presentation notification id",
-                  );
-                  return writePresentationFeedbackEvidence({
-                    record: previous,
-                    eventId: notificationId,
-                    observedAt: observed.updatedAt,
-                    observation,
-                  }).then((feedbackEvidencePath) => ({
-                    notificationId,
-                    feedbackEvidencePath,
-                  }));
-                })()
-              : Promise.resolve({});
-          const notificationOptions = await options;
-          const updated = this.withPresentationNotification(
-            previous,
-            observed,
-            notificationOptions,
-          );
-          await writeJsonAtomically(runtime.recordPath, updated);
-        }
+        if (observed !== previous) await this.recordObservation(runtime, previous, observed);
       }
     } finally {
       await release();
     }
     return this.flushPresentationNotification(runtime, signal);
   }
+  /**
+   * Stores what the listener saw. A comment on a page the research agent drew becomes its next
+   * request; any other observation notifies the coordinator as before.
+   */
+  private async recordObservation(
+    runtime: Pick<RuntimePresentation, "recordPath">,
+    previous: PresentationRecord,
+    observed: PresentationRecord,
+  ): Promise<void> {
+    await withPresentationLock(runtime.recordPath, undefined, async () => {
+      const current = await readPresentationRecord(runtime.recordPath);
+      // A failure or end recorded while the listener waited wins over what it saw.
+      if (!samePresentationRecord(previous, current) && current.status !== "open") return;
+      const next = withObservation(current, observed);
+      const observation = observed.observation;
+      if (observation?.status !== "feedback") {
+        await writeJsonAtomically(
+          runtime.recordPath,
+          this.withPresentationNotification(current, next),
+        );
+        return;
+      }
+      const notificationId = singleLine(this.#deps.idFactory(), "presentation notification id");
+      const feedbackEvidencePath = await writePresentationFeedbackEvidence({
+        record: current,
+        eventId: notificationId,
+        observedAt: observed.updatedAt,
+        observation,
+      });
+      const updated =
+        current.agent !== undefined && observation.rawFeedback.trim().length > 0
+          ? await this.requestRevision(next, observation.rawFeedback)
+          : this.withPresentationNotification(current, next, {
+              notificationId,
+              feedbackEvidencePath,
+            });
+      await writeJsonAtomically(runtime.recordPath, updated);
+    });
+  }
+
   private beginPresentationFeedback(
     runtime: RuntimePresentation,
     record: PresentationRecord,
@@ -321,31 +413,19 @@ export class PresentationFeedbackWorkflow {
     const reason = `presentation feedback poll failed: ${describeError(error)}`;
     let shouldFlush = false;
     await withPresentationLock(runtime.recordPath, undefined, async () => {
-      await this.#deps.store.exclusive(async () => {
-        const state = await readRuntimeState(this.#deps.runtimePath);
-        const current = presentationRuntime(state, runtime.id);
-        if (
-          current === undefined ||
-          current.job.id !== runtime.job.id ||
-          current.job.operationId !== runtime.job.operationId ||
-          current.job.phase !== "consumed" ||
-          current.operation?.id !== runtime.operation?.id ||
-          current.operation?.fencingRevision !== runtime.operation?.fencingRevision ||
-          current.operation?.claimOwner !== runtime.operation?.claimOwner
-        )
-          return;
-        const record = await readPresentationRecord(current.recordPath);
-        if (record.status === "ended") return;
-        const failed: PresentationRecord = {
-          ...record,
-          status: "failed",
-          error: reason,
-          updatedAt: this.#deps.clock(),
-        };
-        const failedWithNotification = this.withPresentationNotification(record, failed);
-        await writeJsonAtomically(current.recordPath, failedWithNotification);
-        shouldFlush = hasPendingPresentationNotification(failedWithNotification);
-      });
+      const state = await this.readState();
+      if (presentationRuntime(state, runtime.id) === undefined) return;
+      const record = await readPresentationRecord(runtime.recordPath);
+      if (record.status === "ended" || record.status === "failed") return;
+      const failed: PresentationRecord = {
+        ...record,
+        status: "failed",
+        error: reason,
+        updatedAt: this.#deps.clock(),
+      };
+      const failedWithNotification = this.withPresentationNotification(record, failed);
+      await writeJsonAtomically(runtime.recordPath, failedWithNotification);
+      shouldFlush = hasPendingPresentationNotification(failedWithNotification);
     });
     if (shouldFlush) await this.flushPresentationNotification(runtime);
   }

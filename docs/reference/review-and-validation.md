@@ -66,8 +66,7 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   role fields. `needs-decision` carries one single-line `question` and optional `recommendation`, each
   at most 1,000 characters; questions wake the coordinator, not the user. A reviewer's `review` holds
   only `findings` and `summary`: the worker extension fills in the job's lens, HEAD, and generation,
-  and sets `pass` exactly when no P0 or P1 finding stands. A presentation submits an absolute
-  `artifactPath`.
+  and sets `pass` exactly when no P0 or P1 finding stands.
 - An implementer's `implemented` is refused while `git status` in its worktree shows changes, so it
   commits before the job settles instead of blocking the task with `no-clean-checkpoint`. When git
   cannot report a status, the submission goes through and the settle-time checkpoint check decides.

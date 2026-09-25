@@ -283,10 +283,36 @@ test("new implementation work joins the one open approved request in its reposit
   const finishedTask = { requestId: "req-done", stage: "completed" as const };
 
   expect(
-    openRequestForNewWork([unapproved, delivered, settings, elsewhere], [finishedTask], "/repo"),
+    openRequestForNewWork(
+      [unapproved, delivered, settings, elsewhere],
+      [finishedTask],
+      "/repo",
+      NOW,
+    ),
   ).toBe("req-settings");
-  expect(openRequestForNewWork([unapproved, delivered], [finishedTask], "/repo")).toBeUndefined();
+  expect(
+    openRequestForNewWork([unapproved, delivered], [finishedTask], "/repo", NOW),
+  ).toBeUndefined();
   expect(() =>
-    openRequestForNewWork([settings, approve("req-onboarding")], [finishedTask], "/repo"),
+    openRequestForNewWork([settings, approve("req-onboarding")], [finishedTask], "/repo", NOW),
   ).toThrow(RequestBriefError);
+});
+
+test("an approved request with no task after three days no longer counts as open", () => {
+  const record = createRequestBriefRecord(
+    { id: "req-old", repoPath: "/repo", content: content() },
+    NOW,
+  );
+  const approved = approveRequestBriefRecord(
+    record,
+    { requestId: "req-old", briefRevision: 1, contentDigest: record.draft.contentDigest },
+    NOW,
+  );
+  const day = 24 * 60 * 60 * 1000;
+  const at = (days: number): string => new Date(Date.parse(NOW) + days * day).toISOString();
+
+  expect(openRequestForNewWork([approved], [], "/repo", at(3))).toBe("req-old");
+  expect(openRequestForNewWork([approved], [], "/repo", at(3.01))).toBeUndefined();
+  const started = [{ requestId: "req-old", stage: "ready" as const }];
+  expect(openRequestForNewWork([approved], started, "/repo", at(10))).toBe("req-old");
 });

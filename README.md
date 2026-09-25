@@ -202,8 +202,10 @@ data folder and session name are remembered in `~/.config/tandem/config.json`.
   way; approving a brief this way still asks you to type `y` first. Anything else that changes
   state goes through the coordinator. See
   [Jev prompt routing](docs/reference/policy.md#jev-prompt-routing).
-- **Visual presentations.** With `lavish-axi` installed, the coordinator can produce an HTML page
-  explaining a change and collect your feedback on it.
+- **Visual presentations.** With `lavish-axi` installed, a research task's agent can draw a mockup
+  or explainer page in its own pane, and Tandem opens it in Lavish. Your comments there go straight
+  back to that agent, which updates the same page while the tab reloads. The research agent stays
+  open after its research until you start building, so you can keep iterating.
 - **Conversational skills.** Three skills let any agent session explain Tandem, onboard a
   repository, or report status. See
   [installing the skills](skills/README.md).
