@@ -251,7 +251,7 @@ test("the coordinator's shared line counts only its replies in this repository a
   expect(share).toEqual({ replies: 2, tokens: 3_000, costMicros: 20_000 });
 });
 
-test("the receipt table lists each stage, the coordinator apart, and the wall time", () => {
+test("the receipt table totals working time and notes the wall time and coordinator cost", () => {
   const measured = (tokens: number, costMicros: number) => ({
     tokens: { provenance: "actual" as const, inputTokens: tokens, outputTokens: 0 },
     charge: {
@@ -278,19 +278,18 @@ test("the receipt table lists each stage, the coordinator apart, and the wall ti
   });
 
   expect(table.split("\n")).toEqual([
-    "╭───────────────────┬────────┬────────┬───────────╮",
-    "│ Stage             │   Time │ Tokens │ Est. cost │",
-    "├───────────────────┼────────┼────────┼───────────┤",
-    "│ Research          │    12m │   180k │     $0.40 │",
-    "│ Implementation ×2 │    41m │   1.2M │     $2.10 │",
-    "│ Review            │     8m │   300k │     $0.55 │",
-    "│ Validation        │     6m │      — │         — │",
-    "│ Coordinator *     │ shared │    90k │     $0.30 │",
-    "├───────────────────┼────────┼────────┼───────────┤",
-    "│ Total             │  2h10m │   1.7M │     $3.05 │",
-    "╰───────────────────┴────────┴────────┴───────────╯",
-    "1h07m working · 1h03m waiting",
-    "* The coordinator also serves other requests, so it is not in the total.",
+    "╭───────────────────┬───────┬────────────┬───────────╮",
+    "│ Stage             │  Time │ New tokens │ Est. cost │",
+    "├───────────────────┼───────┼────────────┼───────────┤",
+    "│ Research          │   12m │       180k │     $0.40 │",
+    "│ Implementation ×2 │   41m │       1.2M │     $2.10 │",
+    "│ Review            │    8m │       300k │     $0.55 │",
+    "│ Validation        │    6m │          — │         — │",
+    "├───────────────────┼───────┼────────────┼───────────┤",
+    "│ Total             │ 1h07m │       1.7M │     $3.05 │",
+    "╰───────────────────┴───────┴────────────┴───────────╯",
+    "2h10m from plan to finish, 1h03m of it waiting on you or idle.",
+    "Our conversation over the same period cost about $0.30, shared with other requests.",
     "Costs are OMP's list-price estimates, not what a subscription is billed.",
   ]);
 });
@@ -307,14 +306,14 @@ test("an open request's receipt names its goal and measures up to now", () => {
   expect(table.split("\n")).toEqual([
     "Make Settings familiar and consistent",
     "",
-    "╭──────────┬───────┬────────┬───────────╮",
-    "│ Stage    │  Time │ Tokens │ Est. cost │",
-    "├──────────┼───────┼────────┼───────────┤",
-    "│ Research │   12m │      — │         — │",
-    "├──────────┼───────┼────────┼───────────┤",
-    "│ So far   │ 1h20m │      — │         — │",
-    "╰──────────┴───────┴────────┴───────────╯",
-    "12m working so far",
+    "╭──────────┬──────┬────────────┬───────────╮",
+    "│ Stage    │ Time │ New tokens │ Est. cost │",
+    "├──────────┼──────┼────────────┼───────────┤",
+    "│ Research │  12m │          — │         — │",
+    "├──────────┼──────┼────────────┼───────────┤",
+    "│ So far   │  12m │          — │         — │",
+    "╰──────────┴──────┴────────────┴───────────╯",
+    "1h20m since the plan was written.",
     "Still open: work running now is added when it finishes.",
     "Costs are OMP's list-price estimates, not what a subscription is billed.",
   ]);
