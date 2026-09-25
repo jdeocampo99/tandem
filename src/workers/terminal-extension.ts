@@ -1146,9 +1146,17 @@ class WorkerTerminalSession {
   }
 }
 
+/**
+ * Jobs whose worker copy this process already loaded. OMP loads a fresh copy of this extension into
+ * each subagent, in the same process and with the same job; the first copy is the worker's.
+ */
+const loadedJobs = new Set<string>();
+
 export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise<void> {
   const jobPath = process.env[WORKER_JOB_PATH_ENV];
   if (jobPath === undefined || jobPath.trim().length === 0) return;
+  const subagent = loadedJobs.has(jobPath);
+  loadedJobs.add(jobPath);
   const job = await readJob(jobPath);
   const session = new WorkerTerminalSession({
     job,
@@ -1169,6 +1177,12 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       ),
     sendUserMessage: (text) => pi.sendUserMessage(text),
   });
+  if (subagent) {
+    // A subagent keeps the worker's role limits but never drives the job: its turns, idle time,
+    // model, and reports are not the worker's.
+    pi.on("tool_call", (event) => session.guardToolCall(event));
+    return;
+  }
   await session.start();
 
   pi.registerTool({
