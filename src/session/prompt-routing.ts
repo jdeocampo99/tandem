@@ -41,7 +41,14 @@ const MAX_ROUTABLE_PROMPT_CHARS = 16_000;
 const TASK_ID_PATTERN =
   /\b(?:task-[A-Za-z0-9][A-Za-z0-9._-]{0,127}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/giu;
 
-type ReadOnlyAction = "list" | "presentations" | "show" | "messages" | "inspect" | "receipt";
+type ReadOnlyAction =
+  | "list"
+  | "presentations"
+  | "show"
+  | "messages"
+  | "inspect"
+  | "receipt"
+  | "pr-watch";
 type RouteTarget = "repository" | "task" | "conversation" | "unresolved";
 type RouteEffect = "read-only" | "state-change" | "sensitive" | "unknown";
 type RouteScope = "within" | "changes" | "unclear";
@@ -104,7 +111,7 @@ export type PromptRoutingDependencies = Readonly<{
 export type ChoiceConfirmation = { pending?: OpenChoice | undefined };
 
 /** Bumped whenever the shape or meaning of {@link ROUTING_QUESTIONS} changes. */
-export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 2;
+export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 3;
 
 const ROUTING_QUESTIONS: JevQuestions = {
   action: {
@@ -119,6 +126,8 @@ const ROUTING_QUESTIONS: JevQuestions = {
       inspect: "The user asks to inspect one task's runtime state.",
       receipt:
         "The user asks how much time, how many tokens, or how much money the current request has used so far.",
+      "pr-watch":
+        "The user asks how their pull requests are doing: CI, review, merge status, or whether one merged.",
       none: "The request is not exactly one supported read-only lookup.",
     },
   },
@@ -126,7 +135,8 @@ const ROUTING_QUESTIONS: JevQuestions = {
     type: "choice",
     instructions: "Identify what the lookup is about.",
     criteria: {
-      repository: "The lookup concerns the current repository or its task collection.",
+      repository:
+        "The lookup concerns the current repository, its task collection, or the user's watched pull requests.",
       task: "The lookup concerns one explicitly identified Tandem task.",
       conversation:
         "The request concerns the chat or a general answer rather than durable Tandem state.",
@@ -149,7 +159,8 @@ const ROUTING_QUESTIONS: JevQuestions = {
     type: "choice",
     instructions: "Identify whether the lookup stays within the current Tandem repository scope.",
     criteria: {
-      within: "The lookup stays within the current Tandem repository and task scope.",
+      within:
+        "The lookup stays within the current Tandem repository, its tasks, and the user's watched pull requests.",
       changes: "The request asks to modify files, repositories, or external state.",
       unclear: "The scope is unclear or potentially outside the current repository.",
     },
@@ -214,6 +225,7 @@ function knownAction(choice: string): choice is ReadOnlyAction | "none" {
     choice === "messages" ||
     choice === "inspect" ||
     choice === "receipt" ||
+    choice === "pr-watch" ||
     choice === "none"
   );
 }
@@ -284,7 +296,7 @@ export async function classifyPrompt(
     state: {
       prompt: normalized,
       explicitTaskId: taskId ?? null,
-      supportedLookups: ["list", "presentations", "show", "messages", "inspect"],
+      supportedLookups: ["list", "presentations", "show", "messages", "inspect", "pr-watch"],
     },
     questions: ROUTING_QUESTIONS,
   };
@@ -344,7 +356,8 @@ export async function classifyPrompt(
   const repositoryWide =
     actionAnswer.choice === "list" ||
     actionAnswer.choice === "presentations" ||
-    actionAnswer.choice === "receipt";
+    actionAnswer.choice === "receipt" ||
+    actionAnswer.choice === "pr-watch";
   const targetMatchesAction = repositoryWide
     ? targetAnswer.choice === "repository"
     : targetAnswer.choice === "task";
@@ -379,7 +392,12 @@ export async function classifyPrompt(
 export function actionForPromptDecision(
   decision: PromptRoutingDecision,
 ): Extract<TandemAction, { readonly action: ReadOnlyAction | "request-receipt" }> | undefined {
-  if (decision.action === "list" || decision.action === "presentations") {
+  // The PR watch view reads GitHub first, so the answer is current.
+  if (
+    decision.action === "list" ||
+    decision.action === "presentations" ||
+    decision.action === "pr-watch"
+  ) {
     return { action: decision.action };
   }
   // The receipt for the request in progress, measured up to now.

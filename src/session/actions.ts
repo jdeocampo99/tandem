@@ -1,9 +1,10 @@
+import type { MergingChoice } from "../config/repositories.ts";
 import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
 import type { CommentEdit } from "../pr-review/service.ts";
-import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
+import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
 import type { SessionHost, ToolOutcome } from "./events.ts";
@@ -170,7 +171,22 @@ export type TandemAction =
       readonly verdict: ReviewVerdict;
     }>
   | Readonly<{ readonly action: "review-again"; readonly taskId: string }>
-  | Readonly<{ readonly action: "review-close"; readonly taskId: string }>;
+  | Readonly<{ readonly action: "review-close"; readonly taskId: string }>
+  | Readonly<{ readonly action: "pr-watch" }>
+  | Readonly<{
+      readonly action: "pr-watch-merging";
+      /** The Tandem project whose settings get the answer. */
+      readonly repoPath: string;
+      readonly mergeWith: "auto-merge" | "queue-label" | "off";
+      readonly queueLabel?: string | undefined;
+      readonly blockedLabel?: string | undefined;
+    }>
+  | Readonly<{
+      readonly action: "pr-watch-start" | "pr-watch-stop" | "pr-watch-fix";
+      /** A GitHub PR URL, `owner/repo#123`, or `#123` in `repoPath`. */
+      readonly pullRequest: string;
+      readonly repoPath?: string | undefined;
+    }>;
 
 export type TandemActionResult = Readonly<{
   readonly action: TandemAction["action"];
@@ -210,7 +226,9 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "publish-now" ||
     action.action === "draft" ||
     action.action === "merge" ||
-    action.action === "review-post"
+    action.action === "review-post" ||
+    action.action === "pr-watch-fix" ||
+    action.action === "pr-watch-merging"
   );
 }
 function capitalize(value: string): string {
@@ -259,6 +277,21 @@ async function approvalPrompt(
           message: `${names.map((name) => `- ${name}`).join("\n")}\nThis discards their changes.`,
         };
   }
+  if (action.action === "pr-watch-merging") {
+    const how =
+      action.mergeWith === "off"
+        ? "PR watch keeps retrying CI but never merges here."
+        : action.mergeWith === "auto-merge"
+          ? "PR watch turns on GitHub auto-merge for published pull requests."
+          : `PR watch adds the ${action.queueLabel ?? ""} label to published pull requests.`;
+    return { title: `Save how ${projectName(action.repoPath)} merges?`, message: how };
+  }
+  if (action.action === "pr-watch-fix") {
+    return {
+      title: `Fix the merge conflicts on ${action.pullRequest}?`,
+      message: "Starts a task that merges the base into its branch and pushes. Never force-pushes.",
+    };
+  }
   if (!("taskId" in action)) return { title: "Allow this Tandem action?", message: "" };
   const task = await service.get(action.taskId);
   const name = taskName(task.objective);
@@ -285,12 +318,12 @@ async function approvalPrompt(
     case "publish":
       return {
         title: `Open a PR for ${name}?`,
-        message: `Into ${action.base}. Nothing is merged.`,
+        message: `Into ${action.base}. PR watch merges it once its checks pass.`,
       };
     case "publish-now":
       return {
         title: `Skip review and open a PR for ${name}?`,
-        message: `Into ${action.base}. Open findings are listed in the PR. Nothing is merged.`,
+        message: `Into ${action.base}. Open findings are listed in the PR. PR watch merges it once its checks pass.`,
       };
     case "draft":
       return {
@@ -573,7 +606,46 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.reviewAgain(action.taskId), action.action),
   "review-close": async (action, service) =>
     actionResult(await service.reviewClose(action.taskId), action.action),
+  "pr-watch": async (action, service) => actionResult(await service.prWatch(), action.action),
+  "pr-watch-start": async (action, service) =>
+    actionResult(await service.prWatchStart(pullRequestInput(action)), action.action),
+  "pr-watch-stop": async (action, service) =>
+    actionResult(await service.prWatchStop(pullRequestInput(action)), action.action),
+  "pr-watch-merging": async (action, service) =>
+    actionResult(
+      await service.saveMerging({ repoPath: action.repoPath, choice: mergingChoice(action) }),
+      action.action,
+      { approved: true },
+    ),
+  "pr-watch-fix": async (action, service) =>
+    actionResult(await service.prWatchFix(pullRequestInput(action)), action.action, {
+      approved: true,
+    }),
 };
+
+function mergingChoice(
+  action: Extract<TandemAction, { readonly action: "pr-watch-merging" }>,
+): MergingChoice {
+  if (action.mergeWith !== "queue-label") return { mergeWith: action.mergeWith };
+  if (action.queueLabel === undefined) throw new TypeError("queue-label needs queueLabel");
+  return {
+    mergeWith: "queue-label",
+    queueLabel: action.queueLabel,
+    ...(action.blockedLabel === undefined ? {} : { blockedLabel: action.blockedLabel }),
+  };
+}
+
+function pullRequestInput(
+  action: Extract<
+    TandemAction,
+    { readonly action: "pr-watch-start" | "pr-watch-stop" | "pr-watch-fix" }
+  >,
+): PullRequestInput {
+  return {
+    pullRequest: action.pullRequest,
+    ...(action.repoPath === undefined ? {} : { repoPath: action.repoPath }),
+  };
+}
 
 function runTandemAction<Name extends TandemActionName>(
   name: Name,
@@ -856,6 +928,22 @@ const mergeParser: TandemCommandParser = {
   },
 };
 
+/** `/tandem watch` shows the view, `watch PR` watches it, and `watch --stop PR` stops. */
+const watchParser: TandemCommandParser = {
+  arity: { min: 1, max: 3 },
+  parse: (words, value) => {
+    if (words.length === 1) return { action: "pr-watch" };
+    const stop = words[1] === "--stop";
+    if (words.length !== (stop ? 3 : 2)) {
+      throw new TypeError("watch takes a pull request, or --stop and a pull request");
+    }
+    return {
+      action: stop ? "pr-watch-stop" : "pr-watch-start",
+      pullRequest: value(stop ? 2 : 1, "watch pull request"),
+    };
+  },
+};
+
 const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
   restart: {
     arity: { min: 2, max: 2 },
@@ -1031,6 +1119,7 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
   "pr-draft": draftParser,
   merge: mergeParser,
   "pr-merge": mergeParser,
+  watch: watchParser,
   cleanup: {
     arity: { min: 2, max: Number.POSITIVE_INFINITY },
     parse: (words) => {

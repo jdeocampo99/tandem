@@ -17,7 +17,7 @@ change anything.
 
 Tandem runs a small team of AI agents on a repository, locally on macOS. The user describes what
 they want and approves the plan; Tandem hands the work to agents that research, write the code, run
-the project's checks, and review the result, and it asks before anything is published or merged. It
+the project's checks, and review the result, and it asks before anything is published. It
 saves every task to disk, so the user can close the terminal and come back later to see what's
 finished, what's running, and what needs them.
 
@@ -34,8 +34,9 @@ the user starts with the `tandem` command; mentioning Tandem here does not start
 4. **Build, check, review.** A coding agent works in its own clean copy of the repository. Tandem
    runs the project's checks, then a fresh reviewer reads the change. Fixes loop until both pass;
    after three rounds Tandem asks whether to keep going.
-5. **Deliver.** Opening a pull request and merging each need their own approval. Tandem never
-   merges on its own.
+5. **Deliver.** Opening a pull request needs its own approval. Once the user publishes it, PR watch
+   retries flaky CI and merges it through GitHub auto-merge or the repository's merge queue when
+   its checks pass. A draft is never merged.
 
 The user's own checkout is never edited, so it can stay dirty. When a worker needs a decision, the
 coordinator relays the question with a recommendation.
@@ -47,6 +48,7 @@ coordinator relays the question with a recommendation.
 | `tandem` | Open or reconnect every saved project; with none saved, onboard the current repository |
 | `tandem PATH ...` | Open or add specific projects |
 | `tandem status [TASK_ID]` | What's running and what needs the user; read-only |
+| `tandem watch [PR]` | The user's pull requests and what PR watch is doing; with a PR, watch it (`--stop` to stop) |
 | `tandem update` | Reload every coordinator with the latest local Tandem code, keeping chats and tasks |
 | `tandem fix` | Find leftovers from a crash or failed launch and offer to clean them (asks first) |
 | `tandem configure [PATH]` | Change the model for each role |

@@ -17,7 +17,7 @@ home is a separate namespace and never changes the remembered setup.
 
 | Path under home | Contents |
 | --- | --- |
-| `state.sqlite` | The only canonical store: tasks, policy snapshots, lifecycle/evidence/review/delivery metadata, reservations, endpoint identities, jobs, operations, stop requests, presentations. |
+| `state.sqlite` | The only canonical store: tasks, policy snapshots, lifecycle/evidence/review/delivery metadata, reservations, endpoint identities, jobs, operations, stop requests, presentations, PR watch records ([pr-watch.md](pr-watch.md#durable-state)). |
 | `.state.lock` | Darwin `O_EXLOCK` fence guarding state ownership and external-effect decisions. |
 | `models.json` | Global five-role model preferences, replaced atomically (`0600`). |
 | `repositories/<key>/settings.toml` | Central repository settings (legacy `config.json`); `<key>` = first 24 hex of SHA-256 of the realpath. |

@@ -1,6 +1,7 @@
 export type TerminalCommand =
   | "launch"
   | "status"
+  | "watch"
   | "update"
   | "fix"
   | "reset"
@@ -23,6 +24,7 @@ export type TerminalInvocation = Readonly<{
   readonly json: boolean;
   readonly verbose: boolean;
   readonly freeSuperseded: boolean;
+  readonly stop: boolean;
 }>;
 
 export type TerminalRunResult = Readonly<{
@@ -32,6 +34,7 @@ export type TerminalRunResult = Readonly<{
     | "launched"
     | "configured"
     | "status"
+    | "watch"
     | "fixed"
     | "reset"
     | "cancelled"
@@ -64,6 +67,7 @@ function optionValue(
 
 const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
   status: "status",
+  watch: "watch",
   update: "update",
   fix: "fix",
   reset: "reset",
@@ -95,6 +99,7 @@ const FLAGS = {
   "--logs": "logs",
   "--headless": "headless",
   "--no-attach": "noAttach",
+  "--stop": "stop",
 } as const;
 type Flag = (typeof FLAGS)[keyof typeof FLAGS];
 
@@ -104,6 +109,7 @@ const ALLOWED: Readonly<
 > = {
   launch: { flags: ["fresh", "headless", "noAttach"], maxPaths: Number.POSITIVE_INFINITY },
   status: { flags: ["json", "logs"], maxPaths: 1 },
+  watch: { flags: ["json", "stop"], maxPaths: 1 },
   update: { flags: ["fresh", "headless", "noAttach"], maxPaths: 0 },
   fix: { flags: ["yes", "json", "verbose", "freeSuperseded"], maxPaths: 0 },
   reset: { flags: ["yes", "hard", "headless", "noAttach"], maxPaths: 0 },
@@ -188,6 +194,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     json: flags.has("json"),
     verbose: flags.has("verbose"),
     freeSuperseded: flags.has("freeSuperseded"),
+    stop: flags.has("stop"),
     ...(home === undefined ? {} : { home }),
     ...(sessionId === undefined ? {} : { sessionId }),
     ...(poolRoot === undefined ? {} : { poolRoot }),

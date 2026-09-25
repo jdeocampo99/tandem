@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { TandemBoundaryEnvironment } from "../config/environment.ts";
 import { parseModelAssignments } from "../config/models.ts";
+import type { MergingChoice } from "../config/repositories.ts";
 import type { ModelSpec, RepoPolicy } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import type { CreateTaskRequest } from "../service/controller.ts";
@@ -58,6 +59,46 @@ export async function modelAssignmentsFromFile(
       `input must contain a complete model assignment map: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+/** A JSON object from `--input`, checked to be a regular file first. */
+export async function jsonObjectFromFile(
+  statPath: (path: string) => Promise<PathStat>,
+  file: string | undefined,
+  command: string,
+): Promise<Readonly<Record<string, unknown>>> {
+  if (file === undefined) throw new CliUsageError(`${command} requires --input FILE`);
+  const inputPath = resolve(pathText(file, "input"));
+  await verifyRegularPath(statPath, inputPath, "input");
+  let source: string;
+  try {
+    source = await readFile(inputPath, "utf8");
+  } catch (error) {
+    throw new CliUsageError(
+      `input is unavailable at ${inputPath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return parseJsonObject(source, "input");
+}
+
+/** `{"mergeWith": ..., "queueLabel"?: ..., "blockedLabel"?: ...}` from `configure-merging`. */
+export function mergingChoiceFrom(input: Readonly<Record<string, unknown>>): MergingChoice {
+  const { mergeWith, queueLabel, blockedLabel } = input;
+  const keys = Object.keys(input).filter(
+    (key) => key !== "mergeWith" && key !== "queueLabel" && key !== "blockedLabel",
+  );
+  if (keys.length > 0) throw new CliUsageError(`input has unknown keys: ${keys.join(", ")}`);
+  if (mergeWith === "auto-merge" || mergeWith === "off") return { mergeWith };
+  if (mergeWith !== "queue-label" || typeof queueLabel !== "string") {
+    throw new CliUsageError(
+      'input.mergeWith must be "auto-merge", "off", or "queue-label" with a queueLabel',
+    );
+  }
+  return {
+    mergeWith,
+    queueLabel,
+    ...(typeof blockedLabel === "string" ? { blockedLabel } : {}),
+  };
 }
 
 export function summaryFromValue(value: string, field = "summary"): PrSummary {

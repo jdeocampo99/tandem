@@ -20,7 +20,11 @@ import type {
   SessionHost,
   ToolCall,
 } from "./events.ts";
-import { deliverPendingNotifications, type ResearchReportReader } from "./notifications.ts";
+import {
+  deliverPendingNotifications,
+  deliverPrWatchNotices,
+  type ResearchReportReader,
+} from "./notifications.ts";
 import { buildDurableDigest } from "./summary.ts";
 
 export type CoordinatorDeps = SessionDeps &
@@ -383,6 +387,7 @@ export class CoordinatorSession {
         unacknowledged: this.unacknowledgedNotifications,
         readReport: this.deps.readReport,
       });
+      await deliverPrWatchNotices({ host: this.deps.host, service });
       const idle =
         !this.status.agentActive &&
         !this.status.waitingForInput &&
