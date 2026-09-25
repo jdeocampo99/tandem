@@ -49,8 +49,9 @@ src/terminal/cli-arguments.ts, src/cli.ts
   for the serialized active payload with metadata. At a bound, supersede obsolete directions.
 - If directions arrive before initial approval, the approval confirmation states how many
   effective, non-superseded directions the worker will also receive.
-- PR watch steers a task itself when the task's pull request has merge conflicts: "Merge
-  `origin/<base>` into this branch, resolve the conflicts, commit, and push. Never force-push."
+- PR watch steers a task itself when the task's pull request has merge conflicts: "Pull this
+  branch from origin, merge `origin/<base>` into it, resolve the conflicts, commit, and push. Never
+  force-push."
   Only the coordinator whose project the task belongs to sends it, so the worker starts where it
   always does; any other Tandem leaves it for a later check ([pr-watch.md](pr-watch.md#conflicts)).
 

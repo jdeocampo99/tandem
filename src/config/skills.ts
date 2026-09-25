@@ -164,13 +164,17 @@ async function installedPlugins(
   }
   const record: unknown = JSON.parse(text);
   const plugins = isRecord(record) && isRecord(record.plugins) ? record.plugins : {};
-  return Object.entries(plugins).flatMap(([key, installs]) =>
-    (Array.isArray(installs) ? installs : []).flatMap((install: unknown) =>
-      isRecord(install) && typeof install.installPath === "string"
-        ? [{ plugin: key.split("@")[0] ?? key, path: install.installPath }]
-        : [],
-    ),
-  );
+  // One install per plugin: the user-scope one when a plugin is also installed for a project.
+  return Object.entries(plugins).flatMap(([key, installs]) => {
+    const paths = (Array.isArray(installs) ? installs : []).filter(
+      (install: unknown): install is Readonly<Record<string, unknown>> =>
+        isRecord(install) && typeof install.installPath === "string",
+    );
+    const chosen = paths.find((install) => install.scope === "user") ?? paths[0];
+    return chosen === undefined
+      ? []
+      : [{ plugin: key.split("@")[0] ?? key, path: String(chosen.installPath) }];
+  });
 }
 
 async function realSkillFolder(folder: string): Promise<string | undefined> {

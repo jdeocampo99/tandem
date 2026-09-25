@@ -1556,7 +1556,8 @@ class TandemController {
     if (this.#shutdownPromise !== undefined) return this.#shutdownPromise;
     const tick = this.#tickPromise;
     const presentation = this.#presentationFeedback.shutdown();
-    const inFlight = [...(tick === undefined ? [] : [tick]), presentation];
+    const prWatch = this.#prWatch.settle();
+    const inFlight = [...(tick === undefined ? [] : [tick]), presentation, prWatch];
     const shutdown = Promise.allSettled(inFlight).then(() => undefined);
     this.#shutdownPromise = shutdown;
     await shutdown;
@@ -1575,7 +1576,8 @@ class TandemController {
     }
     const current = draftRecorded ? await this.#source.scopedTasks() : settled;
     await this.#accounting.recordSettledTasks(current);
-    await this.#prWatch.tick().catch((error: unknown) => this.recordPrWatchFailure(error));
+    // Not awaited: reading GitHub takes seconds and must not hold up task work.
+    void this.#prWatch.tick().catch((error: unknown) => this.recordPrWatchFailure(error));
     return current;
   }
 

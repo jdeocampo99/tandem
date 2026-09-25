@@ -36,6 +36,8 @@ export type PrWatch = Readonly<{
   readonly log: readonly PrWatchLogEntry[];
   /** A notification no coordinator has shown yet. */
   readonly notice?: PrWatchNotice;
+  /** The last red row the user was told about, so the same reason is told once. */
+  readonly redNotified?: string;
 }>;
 
 /** A pull request turned red or merged, or the watcher asks whether to fix its conflicts. */

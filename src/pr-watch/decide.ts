@@ -117,7 +117,7 @@ export type PrWatchFacts = Readonly<{
   readonly now: IsoTimestamp;
   /** When the watcher first saw this head; a check without a start time counts from here. */
   readonly headSeenAt: IsoTimestamp;
-  /** The checks failing on the base branch, once looked up. */
+  /** The checks failing or still running on the base branch, once looked up. */
   readonly baseFailing?: ReadonlySet<string>;
   /** Who dequeued it, once looked up. */
   readonly dequeuedBy?: Dequeuer;
@@ -128,6 +128,8 @@ export type PrWatchFacts = Readonly<{
 }>;
 
 const DEFAULT_RETRIES = { maxCiRetries: 1, stuckAfterMinutes: 60 } as const;
+/** A head with no checks yet counts as CI starting for this long, so nothing acts before it does. */
+const CI_START_MINUTES = 5;
 const AVIATOR_QUEUE = { queueLabel: "mergequeue", blockedLabel: "blocked" } as const;
 
 /**
@@ -174,7 +176,7 @@ export function decidePrWatch(facts: PrWatchFacts): PrWatchDecision {
   if (pr.draft) return decided(settledRow(facts));
   const arm = decideArming(facts);
   if (arm !== undefined) return arm;
-  if (pr.checks.some((check) => check.state === "pending")) return decided(settledRow(facts));
+  if (ciRunning(facts)) return decided(settledRow(facts));
   return decideMerging(facts) ?? decided(settledRow(facts));
 }
 
@@ -187,6 +189,8 @@ function decideConflicts(facts: PrWatchFacts): PrWatchDecision {
   const pr = facts.observation;
   if (facts.conflictFiles === undefined) return { kind: "look-up", lookup: "conflict-files" };
   const files = fileList(facts.conflictFiles);
+  // A fix pushes to origin, which is not where a fork's branch lives.
+  if (pr.fork) return decided(row("red", "⚔️ conflict", `🙋 fix conflicts in ${files}`));
   const attempt = (kind: "fix-conflicts" | "ask-conflicts") =>
     facts.log.some((entry) => entry.kind === kind && entry.base === pr.baseHead);
   if (attempt("fix-conflicts")) {
@@ -244,7 +248,7 @@ function decideChecks(facts: PrWatchFacts): PrWatchDecision | undefined {
       row(
         "yellow",
         `🧱 ${pr.base} is red`,
-        `⏳ ${names(failed)} fails on ${pr.base} too; retrying once it passes`,
+        `⏳ ${names(failed)} isn't passing on ${pr.base} either; retrying once it does`,
       ),
     );
   }
@@ -262,16 +266,30 @@ function decideChecks(facts: PrWatchFacts): PrWatchDecision | undefined {
       ),
     );
   }
+  if (pr.fork) {
+    return decided(row("red", "❌ failing", `🙋 ${names(own)} failed; a fork's CI is rerun there`));
+  }
+  // Tandem still pushes the task's own commits to its draft, which an extra commit would block.
+  if (pr.draft && facts.task !== undefined) {
+    return decided(
+      row("yellow", "📝 draft", `⏳ ${names(own)} failed; rerunning once it's published`),
+    );
+  }
   return decided(row("green", mergeStatus(facts), `🔁 retrying ${names(own)}`), {
     kind: "retry",
     checks: own.map((check) => check.name),
   });
 }
 
-/** A published pull request the watcher never put up for merging gets armed once. */
+/**
+ * A published pull request the watcher never put up for merging gets armed once, unless a person
+ * already took it out of the queue or turned auto-merge off.
+ */
 function decideArming(facts: PrWatchFacts): PrWatchDecision | undefined {
   const { settings } = facts;
   if (armed(facts.log) || inQueue(facts) || blocked(facts)) return undefined;
+  if (facts.dequeuedBy === undefined) return { kind: "look-up", lookup: "dequeued-by" };
+  if (facts.dequeuedBy !== null && !facts.dequeuedBy.bot) return undefined;
   return settings.mergeWith === "queue-label"
     ? decided(row("green", "🚂 queued", `🚂 added ${settings.queueLabel}`), { kind: "queue" })
     : decided(row("green", "🤖 auto-merge", "🤖 turned on auto-merge"), { kind: "auto-merge" });
@@ -290,14 +308,14 @@ function decideMerging(facts: PrWatchFacts): PrWatchDecision | undefined {
   }
   if (!dequeued(facts)) return undefined;
   if (facts.dequeuedBy === undefined) return { kind: "look-up", lookup: "dequeued-by" };
-  if (facts.dequeuedBy?.bot === false) {
+  // Someone other than the queue, or no one GitHub names, took it out: leave it to them.
+  if (facts.dequeuedBy === null || !facts.dequeuedBy.bot) {
     const what =
       facts.settings.mergeWith === "queue-label"
         ? "took it out of the queue"
         : "turned auto-merge off";
-    return decided(
-      row("yellow", mergeStatus(facts), `✋ @${facts.dequeuedBy.login} ${what}; leaving it`),
-    );
+    const who = facts.dequeuedBy === null ? "someone" : `@${facts.dequeuedBy.login}`;
+    return decided(row("yellow", mergeStatus(facts), `✋ ${who} ${what}; leaving it`));
   }
   if (actedOnHead(facts, "requeue")) {
     return decided(row("red", "⛔ blocked", "🙋 the queue took it out again after a requeue"));
@@ -310,7 +328,7 @@ function decideMerging(facts: PrWatchFacts): PrWatchDecision | undefined {
 /** Nothing to do: say what the pull request is waiting on. */
 function settledRow(facts: PrWatchFacts): PrWatchRow {
   const pr = facts.observation;
-  const running = pr.checks.some((check) => check.state === "pending");
+  const running = ciRunning(facts);
   const recent = facts.log.findLast(
     (entry) =>
       (entry.kind === "retry" && entry.pushed === pr.head) ||
@@ -331,7 +349,9 @@ function settledRow(facts: PrWatchFacts): PrWatchRow {
       : recent?.kind === "fix-conflicts"
         ? `🔀 resolved conflicts in ${fileList(recent.files)}${running ? " · CI running" : ""}`
         : running
-          ? "⏳ CI running"
+          ? pr.checks.length === 0
+            ? "⏳ waiting for CI to start"
+            : "⏳ CI running"
           : (waiting ?? "");
   return row(running || waiting === undefined ? "green" : "yellow", mergeStatus(facts), note);
 }
@@ -344,6 +364,15 @@ function mergeStatus(facts: PrWatchFacts): string {
     return facts.settings.mergeWith === "queue-label" ? "🚂 queued" : "🤖 auto-merge";
   if (pr.reviewDecision === "REVIEW_REQUIRED") return "👀 review";
   return pr.reviewDecision === "APPROVED" ? "✅ approved" : "🟢 open";
+}
+
+/** Checks are running, or none have shown up yet on a head seen only moments ago. */
+function ciRunning(facts: PrWatchFacts): boolean {
+  const { checks } = facts.observation;
+  return (
+    checks.some((check) => check.state === "pending") ||
+    (checks.length === 0 && minutesBetween(facts.headSeenAt, facts.now) < CI_START_MINUTES)
+  );
 }
 
 /** The watcher's own push left the head it pushed, and the approval that was there is gone. */

@@ -3,6 +3,7 @@ import { readMergingSettings } from "../config/repositories.ts";
 import type { Clock, CommandRunner, IsoTimestamp, TaskRecord } from "../contracts.ts";
 import { repositoryFromRemote } from "../delivery/pull-requests.ts";
 import { type PullRequestRef, parsePullRequestRef } from "../pr-review/pull-request.ts";
+import { readRegisteredProjects } from "../terminal/projects.ts";
 import {
   decidePrWatch,
   type MergingSettings,
@@ -23,9 +24,9 @@ import {
   listMyOpenPullRequests,
   mergeBaseIntoBranch,
   pushEmptyCommit,
+  readChecksNotPassing,
   readConflictFiles,
   readDequeuer,
-  readFailingChecks,
   readWatchedPullRequest,
 } from "./github.ts";
 import {
@@ -82,17 +83,30 @@ type Outcome = Readonly<{ row: PrWatchRow; entry?: PrWatchLogEntry; notice?: PrW
 export class PrWatcher {
   readonly #deps: PrWatcherDependencies;
   #nextLookAt = 0;
+  #checking: Promise<void> | undefined;
 
   constructor(deps: PrWatcherDependencies) {
     this.#deps = deps;
   }
 
-  /** A scheduler tick: checks GitHub when a check is due and no other Tandem is checking. */
-  async tick(): Promise<void> {
+  /**
+   * A scheduler tick: checks GitHub when a check is due and no other Tandem is checking. A check
+   * already running in this process is joined rather than started again.
+   */
+  tick(): Promise<void> {
     const now = Date.parse(this.#deps.clock());
-    if (now < this.#nextLookAt) return;
+    if (this.#checking !== undefined) return this.#checking;
+    if (now < this.#nextLookAt) return Promise.resolve();
     this.#nextLookAt = now + LOOK_EVERY_MS;
-    await this.check(false);
+    this.#checking = this.check(false).finally(() => {
+      this.#checking = undefined;
+    });
+    return this.#checking;
+  }
+
+  /** Waits for a check this process started, such as before shutting down. */
+  async settle(): Promise<void> {
+    await this.#checking?.catch(() => undefined);
   }
 
   /** The view, after fresh data unless another Tandem is checking right now. */
@@ -107,7 +121,8 @@ export class PrWatcher {
    */
   async start(named: NamedPullRequest): Promise<PrWatchView> {
     const now = this.#deps.clock();
-    const { ref, repoPath } = named;
+    const { ref } = named;
+    const repoPath = named.repoPath ?? (await this.projectFor(ref));
     await withPrWatches(this.#deps.home, (transaction) => {
       const existing = transaction.watches.find((watch) => sameRef(watch.ref, ref));
       if (existing === undefined) {
@@ -197,6 +212,7 @@ export class PrWatcher {
     const { home } = this.#deps;
     const now = this.#deps.clock();
     const [tasks, settings] = await Promise.all([this.#deps.listTasks(), readHomeSettings(home)]);
+    const leaseUntil = plusMinutes(now, LEASE_MINUTES);
     const claimed = await withPrWatches(home, (transaction) => {
       const started = taskWatches(tasks, transaction.watches, now);
       for (const watch of started) transaction.put(watch);
@@ -204,8 +220,7 @@ export class PrWatcher {
       const allowed = force
         ? pollAllowed(transaction.poll, now)
         : pollDue(transaction.poll, watches, settings.watchAllMyPrs, now);
-      if (allowed)
-        transaction.putPoll({ ...transaction.poll, leaseUntil: plusMinutes(now, LEASE_MINUTES) });
+      if (allowed) transaction.putPoll({ ...transaction.poll, leaseUntil });
       return allowed;
     });
     if (!claimed) return;
@@ -217,24 +232,51 @@ export class PrWatcher {
       if (!(error instanceof GitHubRateLimitError)) throw error;
       rateLimitedUntil = plusMinutes(now, RATE_LIMIT_BACKOFF_MINUTES);
     } finally {
-      await withPrWatches(home, (transaction) =>
+      await withPrWatches(home, (transaction) => {
+        // A check that outlived its lease leaves the schedule to whoever claimed it next.
+        if (transaction.poll.leaseUntil !== leaseUntil) return;
         transaction.putPoll({
           polledAt: now,
           ...(rateLimitedUntil === undefined ? {} : { rateLimitedUntil }),
-        }),
-      );
+        });
+      });
     }
   }
 
+  /** Adds the user's new open pull requests; failing to list them never stops the checks. */
   private async watchMyPullRequests(now: IsoTimestamp): Promise<void> {
-    const mine = await listMyOpenPullRequests(this.#deps.run, this.#deps.home);
+    let mine: readonly PullRequestRef[];
+    try {
+      mine = await listMyOpenPullRequests(this.#deps.run, this.#deps.home);
+    } catch (error) {
+      if (error instanceof GitHubRateLimitError) throw error;
+      return;
+    }
+    const known = await withPrWatches(this.#deps.home, (transaction) =>
+      transaction.watches.map((watch) => watch.ref),
+    );
+    const added: PrWatch[] = [];
+    for (const ref of mine.filter((candidate) => !known.some((seen) => sameRef(seen, candidate)))) {
+      added.push(newWatch(ref, "all-my-prs", now, await this.projectFor(ref)));
+    }
     await withPrWatches(this.#deps.home, (transaction) => {
-      for (const ref of mine) {
-        if (!transaction.watches.some((watch) => sameRef(watch.ref, ref))) {
-          transaction.put(newWatch(ref, "all-my-prs", now));
+      for (const watch of added) {
+        if (!transaction.watches.some((existing) => sameRef(existing.ref, watch.ref))) {
+          transaction.put(watch);
         }
       }
     });
+  }
+
+  /**
+   * The Tandem project checked out from this pull request's repository, whose `[merging]`
+   * settings then apply; undefined when no project is.
+   */
+  private async projectFor(ref: PullRequestRef): Promise<string | undefined> {
+    for (const project of await readRegisteredProjects(this.#deps.home)) {
+      if ((await originRepository(this.#deps.run, project)) === ref.repo) return project;
+    }
+    return undefined;
   }
 
   private activeWatches(): Promise<readonly PrWatch[]> {
@@ -358,7 +400,7 @@ export class PrWatcher {
       case "base-checks":
         return {
           ...facts,
-          baseFailing: await readFailingChecks(
+          baseFailing: await readChecksNotPassing(
             this.#deps.run,
             ref.repo,
             facts.observation.base,
@@ -467,7 +509,7 @@ export class PrWatcher {
         return { row, entry: { ...logged, kind: "requeue" } };
       case "fix-conflicts": {
         const taskId = context.watch.taskId;
-        const text = `Merge origin/${pr.base} into this branch, resolve the conflicts, commit, and push. Never force-push.`;
+        const text = `Pull this branch from origin, merge origin/${pr.base} into it, resolve the conflicts, commit, and push. Never force-push.`;
         if (taskId === undefined || !(await this.#deps.steerTask(taskId, text))) {
           return {
             row: {
@@ -613,17 +655,24 @@ function withRow(
   current: PrWatch,
   row: PrWatchRow,
   raised?: PrWatchNotice,
-): Pick<PrWatch, "row" | "notice"> {
+): Pick<PrWatch, "row" | "notice" | "redNotified"> {
   const pullRequest = `${current.ref.repo}#${current.ref.number}`;
-  const turnedRed = row.color === "red" && current.row?.color !== "red";
-  const merged = row.status.startsWith("🎉") && current.row?.color !== "done";
-  const text = turnedRed
-    ? `🔴 ${pullRequest} ${row.status}: ${row.note}${row.link === undefined ? "" : ` → ${row.link}`}`
-    : merged
-      ? `🎉 ${pullRequest} merged`
+  const red =
+    row.color === "red"
+      ? `🔴 ${pullRequest} ${row.status}: ${row.note}${row.link === undefined ? "" : ` → ${row.link}`}`
       : undefined;
+  // The same red reason is told once, even when a brief green read (GitHub recomputing
+  // mergeability after a push to the base) comes between.
+  const turnedRed = red !== undefined && red !== current.redNotified;
+  const merged = row.status.startsWith("🎉") && current.row?.color !== "done";
+  const text = turnedRed ? red : merged ? `🎉 ${pullRequest} merged` : undefined;
   const notice = raised ?? (text === undefined ? current.notice : { pullRequest, text });
-  return { row, ...(notice === undefined ? {} : { notice }) };
+  const redNotified = turnedRed ? red : current.redNotified;
+  return {
+    row,
+    ...(notice === undefined ? {} : { notice }),
+    ...(redNotified === undefined ? {} : { redNotified }),
+  };
 }
 
 /** What a task that fixes someone's conflicts is told to do, starting from their branch. */

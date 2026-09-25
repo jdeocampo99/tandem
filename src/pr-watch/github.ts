@@ -103,8 +103,11 @@ export async function readWatchedPullRequest(
   return { kind: "read", observation: observation(view, ref, { head, tree, checks }) };
 }
 
-/** The names of the checks failing on the tip of a branch, such as the pull request's base. */
-export async function readFailingChecks(
+/**
+ * The names of the checks not passing on the tip of a branch, such as the pull request's base:
+ * failed, or still running and so not yet known to pass.
+ */
+export async function readChecksNotPassing(
   run: CommandRunner,
   repository: string,
   branch: string,
@@ -133,7 +136,7 @@ export async function readFailingChecks(
     "nodes",
   ]);
   const checks = Array.isArray(nodes) ? watchedChecks(nodes, result.stdout) : [];
-  return new Set(checks.filter((check) => check.state === "failed").map((check) => check.name));
+  return new Set(checks.filter((check) => check.state !== "passed").map((check) => check.name));
 }
 
 /**

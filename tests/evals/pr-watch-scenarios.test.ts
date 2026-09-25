@@ -270,7 +270,7 @@ test("GitHub's rate limit pauses checks and says so in the header", async () => 
     await nextCheck(world, service);
     expect(reads()).toBe(1);
     world.advanceClock(10);
-    await service.tick();
+    await service.prWatch();
     expect(reads()).toBe(2);
   });
 });
@@ -482,7 +482,7 @@ test("a Tandem task resolves its pull request's conflicts, then it merges", asyn
       note: "🔀 resolving conflicts in auth/session.ts",
     });
     expect(steered).toEqual([
-      `${task.id}: Merge origin/main into this branch, resolve the conflicts, commit, and push. Never force-push.`,
+      `${task.id}: Pull this branch from origin, merge origin/main into it, resolve the conflicts, commit, and push. Never force-push.`,
     ]);
 
     world.github.push(pr);
@@ -585,5 +585,22 @@ test("a yes to fixing your own pull request's conflicts starts an approved task 
     expect((await nextCheck(world, service)).note).toBe(
       "🔀 resolving conflicts in auth/session.ts",
     );
+  });
+});
+
+test("a red row is told once, even when GitHub recomputing mergeability shows it green between", async () => {
+  await watching(async (world, service) => {
+    const pr = world.github.openPullRequest({
+      repo: REPO,
+      number: 7,
+      reviewDecision: "CHANGES_REQUESTED",
+    });
+    await service.prWatchStart({ pullRequest: PR });
+    expect(await service.prWatchNotices()).toHaveLength(1);
+    pr.mergeable = "UNKNOWN";
+    expect((await nextCheck(world, service)).color).toBe("green");
+    pr.mergeable = "MERGEABLE";
+    expect((await nextCheck(world, service)).color).toBe("red");
+    expect(await service.prWatchNotices()).toEqual([]);
   });
 });

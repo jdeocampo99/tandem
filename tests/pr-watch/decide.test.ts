@@ -229,3 +229,52 @@ test("conflicts get one fix attempt per base commit: a task is steered, anyone e
     action: { kind: "fix-conflicts" },
   });
 });
+
+test("the watcher never pushes to a Tandem task's draft, a fork, or ahead of CI starting", () => {
+  const failing = pr({ checks: [{ name: "e2e", state: "failed" }] });
+  const base = facts({ observation: failing, baseFailing: new Set() });
+  expect(decidePrWatch({ ...base, observation: { ...failing, draft: true } })).toMatchObject({
+    action: { kind: "retry" },
+  });
+  expect(
+    decidePrWatch({ ...base, observation: { ...failing, draft: true }, task: { working: false } }),
+  ).toEqual({
+    kind: "decided",
+    row: {
+      color: "yellow",
+      status: "📝 draft",
+      note: "⏳ e2e failed; rerunning once it's published",
+    },
+  });
+  expect(decidePrWatch({ ...base, observation: { ...failing, fork: true } })).not.toHaveProperty(
+    "action",
+  );
+  const noChecksYet = facts({
+    observation: pr({ labels: ["blocked"] }),
+    settings: mergingSettings(undefined, true),
+    log: [{ at: NOW, kind: "queue", head: "head-0", tree: "tree-0" }],
+  });
+  expect(decidePrWatch(noChecksYet)).toMatchObject({ row: { note: "⏳ waiting for CI to start" } });
+});
+
+test("a dequeue by a person, or by no one GitHub names, is left alone and never re-armed", () => {
+  const queue = mergingSettings(undefined, true);
+  const green = pr({ checks: [{ name: "unit", state: "passed" }] });
+  const unarmed = facts({ observation: green, settings: queue });
+  expect(decidePrWatch(unarmed)).toEqual({ kind: "look-up", lookup: "dequeued-by" });
+  expect(
+    decidePrWatch({ ...unarmed, dequeuedBy: { login: "sam", bot: false } }),
+  ).not.toHaveProperty("action");
+  expect(decidePrWatch({ ...unarmed, dequeuedBy: null })).toMatchObject({
+    action: { kind: "queue" },
+  });
+  const kickedOut = facts({
+    observation: green,
+    settings: queue,
+    log: [{ at: NOW, kind: "queue", head: "head-1", tree: "tree-1" }],
+    dequeuedBy: null,
+  });
+  expect(decidePrWatch(kickedOut)).toMatchObject({
+    row: { color: "yellow", note: "✋ someone took it out of the queue; leaving it" },
+  });
+});

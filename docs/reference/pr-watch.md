@@ -54,11 +54,14 @@ every read, so a pull request watched by name merges once it is not a draft.
 
 ## Schedule
 
-- Checks run on the coordinator scheduler tick while any Tandem is open: every minute while a
+- Checks run from the coordinator scheduler tick while any Tandem is open, without holding the tick
+  up (a check already running in the process is joined, and shutdown waits for it): every minute while a
   watched pull request has CI running or the watcher acted in the last 5 minutes, every 5 minutes
   otherwise, and not at all when nothing is watched (with `watchAllMyPrs`, every 5 minutes to find
   new pull requests). Each process looks at the shared schedule at most every 30 seconds.
-- A pass takes a 5-minute lease first; while another Tandem holds it, the others wait. After the
+- A pass takes a 5-minute lease first; while another Tandem holds it, the others wait. A pass that
+  outlives its lease leaves the schedule to whoever claimed it next. Failing to list the user's
+  pull requests for `watchAllMyPrs` skips only that step. After the
   laptop sleeps, the next tick catches up and the header shows how old the data is.
 - Opening the view (`tandem watch`, `tandem status`, or the coordinator's `pr-watch`) runs a pass
   first unless another Tandem holds the lease or GitHub's rate limit is in effect.
@@ -81,14 +84,14 @@ acting, the watcher checks the pull request is still watched. First match wins:
 | The watcher's own push is the head, the pull request was approved before it, and is not now | 🔴 red: the push dismissed the approval. |
 | A check pending longer than `stuckAfterMinutes` (from its start, or from when the watcher first saw the head) | 🔴 red, `⏰ stuck`. |
 | Checks still running | The failed-check rows below wait until every check finishes. |
-| A check failed, and fails on the base branch too | Wait, `🧱 main is red`. Once the base passes, the rules below apply. |
-| A check failed with a retry left for this code | Empty commit to rerun CI. |
+| A check failed, and fails or is still running on the base branch too | Wait, `🧱 main is red`. Once the base passes, the rules below apply. |
+| A check failed with a retry left for this code | Empty commit to rerun CI. Not on a fork (red instead), and not on a Tandem task's draft, whose task still pushes its own commits there: that waits, yellow, until it is published. |
 | A check failed again on the same code | 🔴 red, naming the check and linking its CI page. |
 | A draft | Nothing more: CI only. |
-| Published and never put up for merging (not already queued, blocked, or on auto-merge) | Arm auto-merge, or add `queueLabel`. Once per pull request, even while checks run. |
-| Checks running | Nothing. |
+| Published and never put up for merging (not already queued, blocked, or on auto-merge) | Look up who last took it out of the queue; unless a person did, arm auto-merge or add `queueLabel`. Once per pull request, even while checks run. |
+| Checks running, or none reported yet on a head first seen under 5 minutes ago | Nothing. |
 | Behind its base, no conflicts, and GitHub requires up-to-date branches (`mergeStateStatus` `BEHIND`) | Update the branch, once per head. Not for a pull request from a fork. |
-| Out of the queue: `blockedLabel` present, or the queue label or auto-merge gone after the watcher set it | Look up who did it. A person: leave it alone and show who. The queue (a bot or app): requeue, once per head commit; a second kick-out at the same head goes 🔴 red. |
+| Out of the queue: `blockedLabel` present, or the queue label or auto-merge gone after the watcher set it | Look up who did it. A person, or no event naming anyone: leave it alone and show who. The queue (a bot or app): requeue, once per head commit; a second kick-out at the same head goes 🔴 red. |
 | Otherwise | A row saying what it waits on: queued, auto-merge, review (naming requested reviewers), or approved. |
 
 - **Retry budget:** `maxCiRetries` (default 1) per check, per version of the code: the head
@@ -123,8 +126,9 @@ acting, the watcher checks the pull request is still watched. First match wins:
 
 - GitHub does not name conflicting files, so the row names the files both the pull request and its
   base changed since they split (`compare` both ways), the closest guess without a checkout.
-- **A Tandem task's pull request:** the task is steered: "Merge `origin/<base>` into this branch,
-  resolve the conflicts, commit, and push. Never force-push." Merge instead of rebase, because
+- **A Tandem task's pull request:** the task is steered: "Pull this branch from origin, merge
+  `origin/<base>` into it, resolve the conflicts, commit, and push. Never force-push." (It pulls
+  first because the watcher's own commits may be on the branch.) Merge instead of rebase, because
   open-PR follow-ups never force-push (`OPEN_PR_FOLLOW_UP` in src/tasks/control.ts). CI checks
   the result. The row shows `🔀 resolving conflicts in <files>` while the task works, then
   `🔀 resolved conflicts in <files> · CI running`. Only the coordinator whose project the task
@@ -175,7 +179,9 @@ PR watch · 4 open · checked 5s ago
 
 ## Notifications
 
-- Only when a row turns red or a pull request merges, plus the question whether to fix someone's
+- Only when a row turns red for a reason not told before (a brief green read, such as GitHub
+  recomputing mergeability after a push to the base, does not repeat it) or a pull request merges,
+  plus the question whether to fix someone's
   conflicts. The notice is stored on the record, and the first coordinator to take it shows it:
   a routine one with `ctx.ui.notify`, the question in the chat as described above, neither with a
   model turn. Taking it clears it, so another open Tandem never repeats it.
@@ -198,6 +204,7 @@ PR watch · 4 open · checked 5s ago
 - Defaults: `auto-merge`, one retry, 60 minutes. A repository with `.aviator/config.yml` defaults
   to `queue-label` with `mergequeue` and `blocked`. Keys left out keep their default.
 - The settings come from the checkout the watch belongs to: the task's repository (or its target
-  checkout), or the directory or project it was named from when that is its repository. A pull
-  request watched through `watchAllMyPrs`, or named from elsewhere, uses the defaults.
+  checkout), the directory or project it was named from when that is its repository, or else the
+  registered Tandem project whose `origin` is its repository (looked up once, when the watch
+  starts). With none of those, the defaults apply.
 - Setup writes the section commented out with descriptions, like the other settings.
