@@ -6,8 +6,10 @@ import {
   type JevEvaluationOptions,
   type JevEvaluationResponse,
   type JevFetch,
+  type JevGateway,
   type JevQuestions,
   type JevUsage,
+  jevGateway,
 } from "../adapters/typesafe.ts";
 import {
   RESEARCH_CONTINUATION_SCHEMA_VERSION,
@@ -75,6 +77,7 @@ export type ResearchContinuationClassifier = (
 
 export type ResearchContinuationClassifierConfig = Readonly<{
   readonly apiKey?: string;
+  readonly gateway?: JevGateway;
   readonly timeoutMs: number;
   readonly fetch?: JevFetch;
 }>;
@@ -176,9 +179,11 @@ export function researchContinuationClassifierConfig(
   source: Readonly<Record<string, string | undefined>>,
 ): ResearchContinuationClassifierConfig {
   const apiKey = source.TYPESAFE_API_KEY?.trim();
+  const gateway = jevGateway(source);
   return {
     timeoutMs: parseTimeout(source.TANDEM_JEV_TIMEOUT_MS),
     ...(apiKey === undefined || apiKey.length === 0 ? {} : { apiKey }),
+    ...(gateway === undefined ? {} : { gateway }),
   };
 }
 
@@ -286,6 +291,7 @@ export async function classifyResearchContinuation(
   const options: JevEvaluationOptions = {
     apiKey: config.apiKey,
     timeoutMs: config.timeoutMs,
+    ...(config.gateway === undefined ? {} : { gateway: config.gateway }),
     ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
   };
 

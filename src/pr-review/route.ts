@@ -7,6 +7,7 @@ import {
   type JevEvaluationInput,
   type JevEvaluationOptions,
   type JevEvaluationResponse,
+  type JevGateway,
   type JevQuestions,
   jevUsageRecord,
 } from "../adapters/typesafe.ts";
@@ -18,7 +19,11 @@ import type { ReviewLens } from "./review.ts";
 export const PR_REVIEW_ROUTE_QUESTION_VERSION = "pr-review-route/1";
 export const PR_REVIEW_ROUTE_CONFIDENCE_THRESHOLD = 0.8;
 
-export type PrReviewRouteConfig = Readonly<{ apiKey?: string; timeoutMs: number }>;
+export type PrReviewRouteConfig = Readonly<{
+  apiKey?: string;
+  gateway?: JevGateway;
+  timeoutMs: number;
+}>;
 
 export type PrReviewEvaluator = (
   input: JevEvaluationInput,
@@ -89,7 +94,11 @@ export async function classifyPrReviewPrompt(
   try {
     response = await evaluate(
       { model: JEV_MODEL, state: { message: prompt.slice(0, 2_000) }, questions: QUESTIONS },
-      { apiKey: config.apiKey, timeoutMs: config.timeoutMs },
+      {
+        apiKey: config.apiKey,
+        timeoutMs: config.timeoutMs,
+        ...(config.gateway === undefined ? {} : { gateway: config.gateway }),
+      },
     );
   } catch (error) {
     const code = error instanceof JevEvaluationError ? error.code : "unavailable";

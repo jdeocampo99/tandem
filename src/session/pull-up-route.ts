@@ -8,6 +8,7 @@ import {
   type JevEvaluationOptions,
   type JevEvaluationResponse,
   type JevFetch,
+  type JevGateway,
   type JevQuestions,
   jevUsageRecord,
 } from "../adapters/typesafe.ts";
@@ -30,7 +31,12 @@ export type PullUpCandidate = Readonly<{
   readonly about: string;
 }>;
 
-export type PullUpRouteConfig = Readonly<{ apiKey?: string; timeoutMs: number; fetch?: JevFetch }>;
+export type PullUpRouteConfig = Readonly<{
+  apiKey?: string;
+  gateway?: JevGateway;
+  timeoutMs: number;
+  fetch?: JevFetch;
+}>;
 
 export type PullUpEvaluator = (
   input: JevEvaluationInput,
@@ -121,6 +127,7 @@ export async function classifyPullUpPrompt(
         apiKey: config.apiKey,
         timeoutMs: config.timeoutMs,
         ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
+        ...(config.gateway === undefined ? {} : { gateway: config.gateway }),
       },
     );
   } catch (error) {

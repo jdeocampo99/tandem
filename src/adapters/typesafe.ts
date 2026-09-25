@@ -65,11 +65,47 @@ export type JevEvaluationResponse = Readonly<{
 
 export type JevFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+/**
+ * A Portkey gateway in front of TypeSafe. It forwards the same request and response bodies, so
+ * only the URL, the extra headers, and the gateway's name for Jev differ from a direct call.
+ */
+export type JevGateway = Readonly<{
+  readonly url: string;
+  readonly model: string;
+  readonly headers: Readonly<Record<string, string>>;
+}>;
+
 export type JevEvaluationOptions = Readonly<{
   readonly apiKey: string;
   readonly timeoutMs: number;
+  readonly gateway?: JevGateway;
   readonly fetch?: JevFetch;
 }>;
+
+const GATEWAY_HEADERS = [
+  ["x-portkey-api-key", "PORTKEY_API_KEY"],
+  ["x-portkey-provider", "PORTKEY_PROVIDER"],
+  ["x-portkey-custom-host", "PORTKEY_CUSTOM_HOST"],
+] as const;
+
+/** Reads a Portkey gateway from an environment-shaped record; none unless `PORTKEY_BASE_URL` is set. */
+export function jevGateway(
+  source: Readonly<Record<string, string | undefined>>,
+): JevGateway | undefined {
+  const baseUrl = source.PORTKEY_BASE_URL?.trim();
+  if (baseUrl === undefined || baseUrl.length === 0) return undefined;
+  const headers: Record<string, string> = {};
+  for (const [header, name] of GATEWAY_HEADERS) {
+    const value = source[name]?.trim();
+    if (value !== undefined && value.length > 0) headers[header] = value;
+  }
+  const model = source.PORTKEY_JEV_MODEL?.trim();
+  return {
+    url: `${baseUrl.replace(/\/+$/u, "")}/proxy/decisions`,
+    model: model === undefined || model.length === 0 ? JEV_MODEL : model,
+    headers,
+  };
+}
 
 export class JevEvaluationError extends Error {
   readonly code: "invalid-request" | "unavailable" | "invalid-response" | "timeout";
@@ -199,7 +235,7 @@ function validateQuestion(question: unknown, id: string): asserts question is Je
   fail("invalid-request", `question ${id} type is invalid`);
 }
 
-function validateInput(input: JevEvaluationInput): string {
+function validateInput(input: JevEvaluationInput, wireModel: string): string {
   if (!isRecord(input) || input.model !== JEV_MODEL) {
     fail("invalid-request", "evaluation input is invalid");
   }
@@ -214,7 +250,7 @@ function validateInput(input: JevEvaluationInput): string {
   }
   let body: string;
   try {
-    body = JSON.stringify(input);
+    body = JSON.stringify({ ...input, model: wireModel });
   } catch {
     fail("invalid-request", "evaluation input is invalid");
   }
@@ -285,8 +321,12 @@ function validateAnswer(value: unknown, question: JevQuestion, id: string): JevA
   return { type: "choice", choice: value.choice, probabilities, confidence: value.confidence };
 }
 
-function validateResponse(value: unknown, questions: JevQuestions): JevEvaluationResponse {
-  if (!isRecord(value) || value.model !== JEV_MODEL || !isRecord(value.answers)) {
+function validateResponse(
+  value: unknown,
+  questions: JevQuestions,
+  wireModel: string,
+): JevEvaluationResponse {
+  if (!isRecord(value) || value.model !== wireModel || !isRecord(value.answers)) {
     fail("invalid-response", "Jev response is invalid");
   }
   const ids = Object.keys(questions);
@@ -355,7 +395,9 @@ export async function evaluateJev(
   input: JevEvaluationInput,
   options: JevEvaluationOptions,
 ): Promise<JevEvaluationResponse> {
-  const requestBody = validateInput(input);
+  // The gateway may name the same Jev model differently; results still report JEV_MODEL.
+  const wireModel = options.gateway?.model ?? JEV_MODEL;
+  const requestBody = validateInput(input, wireModel);
   if (
     !isRecord(options) ||
     typeof options.apiKey !== "string" ||
@@ -379,13 +421,14 @@ export async function evaluateJev(
     let response: Response;
     try {
       response = await Promise.race([
-        fetchImpl(TYPESAFE_ENDPOINT, {
+        fetchImpl(options.gateway?.url ?? TYPESAFE_ENDPOINT, {
           method: "POST",
           redirect: "error",
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${options.apiKey}`,
             "Content-Type": "application/json",
+            ...options.gateway?.headers,
           },
           body: requestBody,
         }),
@@ -411,7 +454,7 @@ export async function evaluateJev(
     } catch {
       fail("invalid-response", "Jev response is invalid");
     }
-    return validateResponse(parsed, input.questions);
+    return validateResponse(parsed, input.questions, wireModel);
   } finally {
     clearTimeout(timer);
     controller.abort();
