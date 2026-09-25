@@ -104,6 +104,7 @@ export function opensBoard(row: BoardRow): boolean {
     row.cause === "brief" ||
     row.cause === "question" ||
     row.cause === "pull-request" ||
+    row.cause === "awaiting-approval" ||
     row.cause === "ready"
   );
 }

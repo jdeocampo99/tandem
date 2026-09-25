@@ -153,7 +153,7 @@ test("an approved brief leaves the board, and a blocked task says why", () => {
   expect(view.needsYou.map((row) => row.text)).toEqual(["blocked: validation failed twice"]);
 });
 
-test("a paused task shows under Running, and only briefs, questions, red PRs, and ready tasks open the board", () => {
+test("a paused task shows under Running, and a blocked task is the only row that does not open the board", () => {
   const view = boardView(
     state({
       briefs: [
@@ -183,7 +183,7 @@ test("a paused task shows under Running, and only briefs, questions, red PRs, an
   expect(view.needsYou.map((row) => [row.key, opensBoard(row)])).toEqual([
     ["brief:req-1", true],
     ["task:task-blocked:blocked", false],
-    ["task:task-approval:awaiting-approval", false],
+    ["task:task-approval:awaiting-approval", true],
     ["task:task-ready:ready", true],
     ["question:q-1", true],
     ["pr:acme/app#409", true],

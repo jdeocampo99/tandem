@@ -56,9 +56,9 @@ PRs
 - On each scheduler reconcile, a coordinator reads the board and keeps the keys of the "Needs you"
   rows that belong to its own project (a pull request belongs to its task's project, or to the
   checkout it was watched from) and that `opensBoard` accepts: briefs awaiting approval, task
-  questions, red pull requests, and ready tasks. When such a key appears that was not there on the
+  questions, red pull requests, and tasks awaiting approval or ready. When such a key appears that was not there on the
   last reconcile, it opens the board.
-- Blocked tasks and tasks awaiting approval stay listed but never open the board: recovery
+- Blocked tasks stay listed but never open the board: recovery
   restarts most blocks on its own, so the pane would pop for blocks that clear themselves.
 - Rows already there when the coordinator started count as seen, so a relaunch or `tandem update`
   opens nothing.
