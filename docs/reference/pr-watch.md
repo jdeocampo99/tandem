@@ -162,6 +162,17 @@ PR watch · 4 open · checked 5s ago
   when anything is watched; the coordinator's `pr-watch` action returns it for the coordinator to
   show as-is.
 
+## Coordinator shortcut
+
+- With Jev prompt routing on, a coordinator message Jev confidently classifies as asking how the
+  user's pull requests are doing ("how are my PRs?", "did #409 merge?") prints the PR watch view
+  and skips the coordinator turn (`pr-watch` in the lookup list of src/extension/prompt-routing.ts,
+  question schema version 3). Opening the view is the same check a tick would run, so a wrong
+  guess only shows a table.
+- Messages that change something ("hands off #409", "watch #412") stay with the coordinator, which
+  uses `pr-watch-stop` and `pr-watch-start`. A message with a PR link or `owner/repo#N` goes to the
+  PR review route first, as before (see [policy.md](policy.md#jev-prompt-routing)).
+
 ## Notifications
 
 - Only when a row turns red or a pull request merges, plus the question whether to fix someone's

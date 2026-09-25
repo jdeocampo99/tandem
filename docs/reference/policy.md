@@ -210,9 +210,10 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
   explicit task ID if present, and the lookup list.
 - Jev returns action, target, effect, scope, and composition. Confidence is the minimum across
   the five; below 0.80 goes to the coordinator.
-- Direct dispatch is read-only through the existing service: `list`, `presentations`, and
-  `receipt` (repository-wide), plus `show`, `messages`, `inspect`, which need an explicit
-  `task-...` ID or UUID in the prompt.
+- Direct dispatch is read-only through the existing service: `list`, `presentations`, `receipt`,
+  and `pr-watch` (repository-wide; questions like "how are my PRs?" or "did #409 merge?" print the
+  PR watch view, see [pr-watch.md](pr-watch.md#coordinator-shortcut)), plus `show`, `messages`,
+  `inspect`, which need an explicit `task-...` ID or UUID in the prompt.
 - Choice replies (src/extension/choice-reply-route.ts): a prompt of at most 160 characters, while
   Tandem is waiting on a fixed-choice answer, first gets one Jev call listing those choices plus
   `other`. The choices are read from durable state: each open recovery restart (`restart`/`stop`),

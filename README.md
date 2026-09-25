@@ -233,7 +233,8 @@ data folder and session name are remembered in `~/.config/tandem/config.json`.
 ## Optional extras
 
 - **Faster answers to simple questions.** With a `TYPESAFE_API_KEY` set, Tandem uses the TypeSafe
-  Jev classifier to answer read-only lookups ("list my tasks") instantly without a full model turn.
+  Jev classifier to answer read-only lookups ("list my tasks", "how are my PRs?") instantly without
+  a full model turn.
   A short reply to one of Tandem's fixed-choice questions ("yeah restart it") is answered the same
   way; approving a brief this way still asks you to type `y` first. Anything else that changes
   state goes through the coordinator. See
