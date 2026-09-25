@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { type AgentRole, MODEL_ROLE_ORDER } from "../contracts.ts";
+import { PINNABLE_PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import type { TandemService } from "../service/controller.ts";
 import {
   executeTandemAction,
@@ -153,6 +154,12 @@ function tandemRequestSchema(z: Zod) {
           .array(z.string())
           .optional()
           .describe("Skills the user asked this work to use, by exact name. Tandem loads them."),
+        playbook: z
+          .enum(PINNABLE_PLAYBOOK_IDS)
+          .optional()
+          .describe(
+            "The job type the user chose for implementation work. Leave out and Tandem picks one.",
+          ),
         targetRepo: z
           .string()
           .optional()

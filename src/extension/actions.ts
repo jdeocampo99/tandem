@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
+import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
 import type { CommentEdit } from "../pr-review/service.ts";
@@ -32,6 +33,7 @@ export type TandemAction =
       readonly researchTaskIds?: readonly string[] | undefined;
       /** Names of skills the user asked this work to use. */
       readonly skills?: readonly string[] | undefined;
+      readonly playbook?: PinnablePlaybookId | undefined;
       readonly targetRepo?: string | undefined;
       readonly targetCheckout?: string | undefined;
       readonly targetClone?: boolean | undefined;
@@ -336,6 +338,7 @@ function serviceCreateInput(
     surfaces: action.surfaces,
     ...(action.researchTaskIds === undefined ? {} : { researchTaskIds: action.researchTaskIds }),
     ...(action.skills === undefined ? {} : { skills: action.skills }),
+    ...(action.playbook === undefined ? {} : { playbook: action.playbook }),
     ...(action.targetRepo === undefined ? {} : { targetRepo: action.targetRepo }),
     ...(action.targetCheckout === undefined ? {} : { targetCheckout: action.targetCheckout }),
     ...(action.targetClone === undefined ? {} : { targetClone: action.targetClone }),
