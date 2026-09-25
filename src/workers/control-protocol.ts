@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { TaskInbox, WorkerReceipt } from "../contracts.ts";
+import type { TaskMessagesPlacement } from "../session/events.ts";
 import {
   formatTaskMessages,
   parseTaskMessageBatch,
@@ -236,18 +237,17 @@ function taskMessagesEntry(content: string, timestamp: number): AgentMessage {
 }
 
 /**
- * The conversation with every marker for this task collapsed into one copy of `batch`, placed where
- * the first marker was, or appended when the conversation has none.
+ * The conversation with the placement applied: every marker for its task collapsed into one copy
+ * of its batch, placed where the first marker was, or appended when there is none to replace.
  */
 export function contextWithTaskMessages(
   messages: readonly AgentMessage[],
-  taskId: string,
-  batch: TaskMessageBatch,
-  hasMarker: boolean,
+  placement: TaskMessagesPlacement,
   timestamp: number,
 ): AgentMessage[] {
+  const { taskId, batch } = placement;
   const replacement = formatTaskMessages(taskId, batch.revision, batch.messages);
-  if (!hasMarker) return [...messages, taskMessagesEntry(replacement, timestamp)];
+  if (!placement.replaceExisting) return [...messages, taskMessagesEntry(replacement, timestamp)];
   const insertion: MarkerInsertion = { inserted: false };
   const updated: AgentMessage[] = [];
   for (const message of messages) {
