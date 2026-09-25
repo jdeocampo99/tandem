@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import type { HerdrAgentState } from "../adapters/herdr-status.ts";
 import type { Finding, ReviewResult, WorkerReceipt } from "../contracts.ts";
+import { openSteps, type TodoItem } from "../playbooks/progress.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { findingHeadline, isBlockingFinding } from "../tasks/findings.ts";
@@ -282,6 +283,8 @@ export class WorkerSession {
   private tokenTally: WorkerTokenTally | undefined;
   private tallyWrites = Promise.resolve();
   private lastBusyTraceAt = 0;
+  // The worker's own to-do list as its latest `todo` call left it; scratch state, never task state.
+  private todos: readonly TodoItem[] | undefined;
 
   constructor(private readonly deps: WorkerDeps) {
     this.job = deps.job;
@@ -394,10 +397,11 @@ export class WorkerSession {
     void this.reportStatus();
   }
 
-  onToolEnd(event: Pick<ToolEnd, "call" | "subagentUsage">): void {
+  onToolEnd(event: Pick<ToolEnd, "call" | "subagentUsage" | "todos">): void {
     this.deps.trace("tool_end", { tool: event.call.name });
     if (event.subagentUsage !== undefined)
       this.recordUsage(this.subagentReply(event.subagentUsage));
+    if (event.todos !== undefined) this.todos = event.todos;
     this.runningTools.delete(event.call.id);
     this.lastActivityAt = this.deps.clock.now();
     void this.persistState("busy", this.currentState.completed).catch(() => this.abort());
@@ -680,6 +684,12 @@ export class WorkerSession {
         const status = await this.deps.gitStatus(job.cwd);
         const uncommitted = status === undefined ? undefined : uncommittedWorkRejection(status);
         if (uncommitted !== undefined) return uncommitted;
+        const open = openSteps(job.playbookSteps ?? [], this.todos);
+        if (open.length > 0) {
+          return new ReportRejection(
+            `these playbook steps are still open in your to-do list: ${open.join("; ")}. Finish them, or drop any that do not apply with the todo tool and give the reason in your report`,
+          );
+        }
       }
       const report = resolveSubmittedReport(job, submission, await this.reviewAnchors());
       const revision = await this.instructionRevision(report.status !== "failed");

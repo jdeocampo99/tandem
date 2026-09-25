@@ -10,7 +10,7 @@ import { recordingSessionHost, type ScenarioWorld, withScenario } from "./scenar
 
 const PROMPT = "list my tandem tasks";
 const ROUTING_CRITERIA: Readonly<Record<string, readonly string[]>> = {
-  action: ["list", "presentations", "show", "messages", "inspect", "receipt", "none"],
+  action: ["list", "presentations", "show", "messages", "inspect", "receipt", "pr-watch", "none"],
   target: ["repository", "task", "conversation", "unresolved"],
   effect: ["read-only", "state-change", "sensitive", "unknown"],
   scope: ["within", "changes", "unclear"],

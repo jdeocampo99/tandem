@@ -88,6 +88,7 @@ const validRequests: readonly Record<string, unknown>[] = [
     surfaces: ["src"],
     researchTaskIds: ["t0"],
     skills: ["tdd"],
+    playbook: "bug-fix",
     targetRepo: "owner/repo",
     targetCheckout: "/elsewhere",
     targetClone: true,
@@ -153,6 +154,18 @@ const validRequests: readonly Record<string, unknown>[] = [
   { action: "review-post", taskId: "t", verdict: "request-changes" },
   { action: "review-again", taskId: "t" },
   { action: "review-close", taskId: "t" },
+  { action: "pr-watch" },
+  { action: "pr-watch-merging", repoPath: "/r", mergeWith: "auto-merge" },
+  {
+    action: "pr-watch-merging",
+    repoPath: "/r",
+    mergeWith: "queue-label",
+    queueLabel: "ready",
+    blockedLabel: "blocked",
+  },
+  { action: "pr-watch-start", pullRequest: "o/r#1" },
+  { action: "pr-watch-stop", pullRequest: "#1", repoPath: "/r" },
+  { action: "pr-watch-fix", pullRequest: "https://github.com/o/r/pull/1" },
 ];
 
 const invalidRequests: readonly [string, unknown][] = [
@@ -235,6 +248,26 @@ const invalidRequests: readonly [string, unknown][] = [
     "review comment with an extra field",
     { request: { action: "review-edit", taskId: "t", comments: [{ id: "c", line: 3 }] } },
   ],
+  [
+    "fix-round is not a playbook the user can pin",
+    {
+      request: {
+        action: "create",
+        repoPath: "/r",
+        kind: "implementation",
+        objective: "o",
+        acceptanceCriteria: [],
+        surfaces: [],
+        playbook: "fix-round",
+      },
+    },
+  ],
+  ["pr-watch with a field", { request: { action: "pr-watch", pullRequest: "o/r#1" } }],
+  [
+    "bad merge setting",
+    { request: { action: "pr-watch-merging", repoPath: "/r", mergeWith: "rebase" } },
+  ],
+  ["pr-watch-start without a pull request", { request: { action: "pr-watch-start" } }],
   ["request as a string", { request: "list" }],
 ];
 

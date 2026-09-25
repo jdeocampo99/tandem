@@ -188,6 +188,7 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
         ? {}
         : { researchContinuation: input.researchContinuation }),
       ...(input.skills === undefined ? {} : { skills: input.skills }),
+      ...(input.playbook === undefined ? {} : { playbook: input.playbook }),
       ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
       ...(input.target === undefined ? {} : { target: input.target }),
     };

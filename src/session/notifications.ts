@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { TaskRecord } from "../contracts.ts";
+import type { PrWatchNotice } from "../pr-watch/store.ts";
 import { renderRequestReceiptTable } from "../runtime/usage-receipt.ts";
 import type { TandemService } from "../service/controller.ts";
 import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
@@ -338,4 +339,57 @@ async function acknowledgeDelivered(
       return;
     }
   }
+}
+
+/**
+ * PR watch notifications (a pull request turned red or merged) go to the UI without a model turn.
+ * A question whether to fix a pull request's conflicts is shown in the chat instead, with the
+ * pull request in a hidden line, so the user's answer reaches the coordinator with what it is
+ * about. Taking them from the service marks them shown, so another open Tandem never repeats them.
+ */
+export async function deliverPrWatchNotices(
+  delivery: Readonly<{
+    readonly host: SessionHost;
+    readonly service: Pick<TandemService, "prWatchNotices">;
+  }>,
+): Promise<void> {
+  const { host } = delivery;
+  const notices = await delivery.service.prWatchNotices();
+  const routine = notices.filter(
+    (notice) => notice.askToFix !== true && notice.setUpMerging === undefined,
+  );
+  if (routine.length > 0) {
+    const content = routine.map((notice) => notice.text).join("\n");
+    await host.perform({ type: "notify", text: content, level: "info" });
+    await host.perform({
+      type: "recordEntry",
+      entryType: TANDEM_NOTIFICATION_ENTRY,
+      data: { prWatch: routine, content },
+    });
+  }
+  for (const question of notices.filter((notice) => !routine.includes(notice))) {
+    await host.perform({
+      type: "deliver",
+      source: "notification",
+      text: question.text,
+      hidden: { text: questionInstruction(question) },
+      timing: "nextTurn",
+      triggerTurn: false,
+    });
+  }
+}
+
+/** What the coordinator does with the user's answer to a PR watch question; never displayed. */
+function questionInstruction(question: PrWatchNotice): string {
+  const hidden = "(never display this line)";
+  const setUp = question.setUpMerging;
+  if (setUp === undefined) {
+    return `PR watch asked the user whether to fix the conflicts on ${question.pullRequest}. If they say yes, call pr-watch-fix with pullRequest ${question.pullRequest}; if no, leave it ${hidden}.`;
+  }
+  const proposal = setUp.proposal;
+  const turnOn =
+    proposal === undefined
+      ? "If they name the label that queues a pull request, call pr-watch-merging with mergeWith queue-label and that queueLabel; if they say to use GitHub auto-merge, mergeWith auto-merge"
+      : `If they say Turn on, call pr-watch-merging with ${JSON.stringify(proposal)}`;
+  return `PR watch asked the user how ${question.pullRequest}'s repository merges. ${turnOn}, with repoPath ${setUp.repoPath}. If they say Not now, call it with mergeWith off so they are not asked again ${hidden}.`;
 }

@@ -327,6 +327,25 @@ export async function editPullRequestBody(
   return readPullRequest(run, cwd, repository, selector, "github pull request observe");
 }
 
+/** Marks a draft pull request ready for review, which is what makes PR watch start merging it. */
+export async function markPullRequestReady(
+  run: CommandRunner,
+  input: Readonly<{ cwd: string; repository: string; number: number }>,
+): Promise<PullRequestMetadata> {
+  const cwd = checkedPath(input.cwd, "cwd");
+  const repository = checkedText(input.repository, "repository");
+  if (!Number.isSafeInteger(input.number) || input.number < 1) {
+    throw new TypeError("pull request number must be a positive integer");
+  }
+  const selector = String(input.number);
+  await runChecked(
+    run,
+    { argv: ["gh", "pr", "ready", selector, "--repo", repository], cwd },
+    "github pull request ready",
+  );
+  return readPullRequest(run, cwd, repository, selector, "github pull request observe");
+}
+
 export async function mergePullRequest(
   run: CommandRunner,
   input: MergePullRequestInput,

@@ -22,8 +22,9 @@ Tandem runs locally on your Mac.
   models while coding gets a stronger one. Tandem never switches to a pricier model on its own, and
   it can show what each request cost. When a task finishes and the coordinator's chat has grown
   long, it compacts that chat so later turns don't keep paying for old history.
-- **You approve what matters.** Research starts on its own, but code changes, pull requests, and
-  merges each wait for your yes. Tandem never merges by itself.
+- **You approve what matters.** Research starts on its own, but code changes and pull requests
+  each wait for your yes. Once you publish a pull request, Tandem merges it when its checks pass;
+  a draft is never merged.
 - **Several projects at once.** Open multiple repositories in one session; each gets its own
   coordinator and agents.
 
@@ -39,8 +40,8 @@ Tandem runs locally on your Mac.
 4. **Agents do the work.** A coding agent makes the change in its own worktree. Tandem runs your
    checks, then a separate reviewer looks at the change. Fixes loop until both pass.
 5. **You deliver.** When the task is ready, the coordinator offers to open a pull request with a
-   summary, the check results, and a checklist of things to verify by hand. Merging is a separate
-   approval.
+   summary, the check results, and a checklist of things to verify by hand. Once you publish it,
+   PR watch merges it when its checks pass, retrying flaky CI along the way.
 
 You can watch any agent in its own terminal pane, or chat with it directly.
 
@@ -139,6 +140,24 @@ hear about it before any work starts. A task keeps the version it started with, 
 lists the skills it uses. Workers also pick up the repository's own skills without being asked;
 your personal skills reach a worker only when you name one.
 
+### Playbooks
+
+Every coding task follows a short playbook for its kind of job, so the agent doesn't skip the
+steps that catch the usual mistakes. You don't invoke anything: Tandem picks the playbook, the task
+status shows it (`Type: bug fix`), and you can say "treat this as a refactor" to change it.
+
+| Playbook | Good for | What it makes the agent do |
+| --- | --- | --- |
+| Bug fix | Something behaves wrongly | Reproduce it in a failing test first, fix it where it starts, and commit the test before the fix |
+| Feature | New behavior | Reuse existing code, test through the public entry point, and check what happens if it runs twice or fails halfway |
+| Refactor | Same behavior, new structure | Confirm tests cover it first, move every caller, and delete the old version |
+| Perf | Making something faster | Measure before and after, and fix the cause |
+| General | Anything else | The feature steps, without naming the data first |
+| Fix round | Review found problems | Fix every finding, confirm each is gone, and question the first fix if one comes back |
+
+The agent works through the steps as its to-do list. It can skip a step that doesn't apply, but it
+has to say why, and it can't finish with a step left open.
+
 ### Working in another repository
 
 Ask for research or a change in another repository ("how does acme/api handle retries?", "add the
@@ -162,12 +181,40 @@ code, and when you're happy, say whether to comment, approve, or request changes
 review under your name only after you confirm. When the author pushes again, ask for a re-review:
 it looks only at what changed and tells you which of your comments were addressed.
 
+### Keeping pull requests moving
+
+CI takes a while and sometimes flakes. PR watch keeps an eye on every pull request Tandem opens, and
+any other you name with `tandem watch <link>`. When a required check fails, it reruns CI once with
+an empty commit, and waits instead when the same check is failing on `main` too. Once a pull
+request is published (not a draft), it turns on GitHub auto-merge, or adds your merge queue's label,
+and puts it back in the queue after a flaky kick-out. Merging is off for a repository until you say
+how it merges: onboarding asks, or Tandem asks the first time it watches one of your pull requests
+there, and "Not now" sticks. When a pull request Tandem opened has conflicts, its task
+merges the base branch in and pushes; for one of yours, Tandem asks once ("fix it?") and starts a
+task only on yes. It only interrupts you when a pull request needs you: a check failing twice on the
+same code, a stuck check, conflicts it could not fix, requested changes, or a lost approval. It
+acts only on its scheduled checks while Tandem is open; opening the view just reads. The view also
+lists your other open pull requests across repositories, untouched until you hand one over.
+
+```
+PR watch · 3 open · checked 5s ago
+
+🔴 #409 refactor-cache   ❌ 15/16   ❌ failing    🙋 test_cache_evict failed twice → https://ci/…
+🟡 #412 fix-auth         ✅ 16/16   👀 review     ⏳ waiting on @reviewer
+🟢 #420 add-cache        ⏳ 12/16   ✅ approved   🔁 retried e2e/login (flaky?)
+⚪ #431 Bump parser               🟢 open       not watched; "watch #431" hands it over
+```
+
+Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #409" or run
+`tandem watch --stop 409` to stop watching one. It works while Tandem is open.
+
 ## Terminal commands
 
 | Command | What it does |
 | --- | --- |
 | `tandem [PATH ...]` | Open or reconnect your projects |
 | `tandem status [TASK_ID]` | What's running and what needs you; with a task ID, that task's full history |
+| `tandem watch [PR]` | Your watched pull requests; with a PR link or number, start watching it (`--stop` to stop) |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Find and clean up leftovers from a crash or failed launch (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |
@@ -176,7 +223,7 @@ it looks only at what changed and tells you which of your comments were addresse
 | `tandem reset --hard` | Delete all Tandem state and start over |
 
 Common options: `--yes` skips confirmation (`fix`, `reset`), `--json` prints machine-readable
-output (`status`, `fix`), and `--home PATH` uses a different Tandem data folder. Run
+output (`status`, `watch`, `fix`), and `--home PATH` uses a different Tandem data folder. Run
 `tandem --help` for the full list.
 
 ## When something goes wrong
@@ -207,11 +254,13 @@ data folder and session name are remembered in `~/.config/tandem/config.json`.
 ## Optional extras
 
 - **Faster answers to simple questions.** With a `TYPESAFE_API_KEY` set, Tandem uses the TypeSafe
-  Jev classifier to answer read-only lookups ("list my tasks") instantly without a full model turn.
+  Jev classifier to answer read-only lookups ("list my tasks", "how are my PRs?") instantly without
+  a full model turn.
   A short reply to one of Tandem's fixed-choice questions ("yeah restart it") is answered the same
   way; approving a brief this way still asks you to type `y` first. Anything else that changes
   state goes through the coordinator. See
-  [Jev prompt routing](docs/reference/policy.md#jev-prompt-routing).
+  [Jev prompt routing](docs/reference/policy.md#jev-prompt-routing). The same key lets Tandem
+  pick each coding task's [playbook](#playbooks); without it, tasks use General.
 - **Visual presentations.** With `lavish-axi` installed, a research task's agent can draw a mockup
   or explainer page in its own pane, and Tandem opens it in Lavish. Your comments there go straight
   back to that agent, which updates the same page while the tab reloads. The research agent stays
@@ -219,6 +268,11 @@ data folder and session name are remembered in `~/.config/tandem/config.json`.
 - **Conversational skills.** Three skills let any agent session explain Tandem, onboard a
   repository, or report status. See
   [installing the skills](skills/README.md).
+
+## Credits
+
+Tandem's playbooks and the principle rules its coding and review agents follow are adapted from
+[pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT).
 
 ## Learn more
 

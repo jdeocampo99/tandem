@@ -9,6 +9,7 @@ import { matchesKey } from "@oh-my-pi/pi-tui";
 import { runCommand } from "../adapters/commands.ts";
 import { createHerdrStatusReporter } from "../adapters/herdr-status.ts";
 import { ompToolParameters } from "../adapters/omp-tool-schema.ts";
+import { todoItems } from "../playbooks/progress.ts";
 import type {
   SessionDeps,
   SessionEffect,
@@ -70,6 +71,7 @@ const OMP_TOOL_KINDS: ReadonlyMap<string, ToolKind> = new Map([
   ["bash", "shell"],
   ["ask", "ask"],
   ["task", "subagent"],
+  ["todo", "todo"],
   [COPY_ASSET_TOOL, "copy-asset"],
 ]);
 
@@ -359,7 +361,12 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     pane.enter(ctx);
     const call = ompWorkerToolCall(event.toolCallId, event.toolName);
     const usage = call.kind === "subagent" ? subagentUsage(event.result) : undefined;
-    session.onToolEnd({ call, ...(usage === undefined ? {} : { subagentUsage: usage }) });
+    const todos = call.kind === "todo" ? todoItems(event.result) : undefined;
+    session.onToolEnd({
+      call,
+      ...(usage === undefined ? {} : { subagentUsage: usage }),
+      ...(todos === undefined ? {} : { todos }),
+    });
   });
   pi.on("turn_end", (event, ctx) => {
     pane.enter(ctx);

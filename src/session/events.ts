@@ -1,4 +1,5 @@
 import type { HerdrStatusReporter } from "../adapters/herdr-status.ts";
+import type { TodoItem } from "../playbooks/progress.ts";
 import type { TaskMessageBatch } from "../tasks/communication-protocol.ts";
 import type { ReplyUsage } from "../workers/terminal.ts";
 
@@ -26,6 +27,7 @@ export type ToolKind =
   | "ask"
   | "subagent"
   | "copy-asset"
+  | "todo"
   | "other";
 
 export type ToolCall = Readonly<{
@@ -49,7 +51,13 @@ export type SessionEvent =
   | Readonly<{ type: "streaming" }>
   | Readonly<{ type: "toolCall"; call: ToolCall }>
   | Readonly<{ type: "toolStart"; call: ToolCall }>
-  | Readonly<{ type: "toolEnd"; call: ToolCall; subagentUsage?: UsageCounts }>
+  | Readonly<{
+      type: "toolEnd";
+      call: ToolCall;
+      subagentUsage?: UsageCounts;
+      /** For kind "todo": the worker's to-do list as the call left it. */
+      todos?: readonly TodoItem[];
+    }>
   | Readonly<{ type: "turnEnd"; usage?: ReplyUsage }>
   | Readonly<{ type: "agentEnd"; willContinue: boolean; interrupted: boolean; failure?: string }>
   | Readonly<{

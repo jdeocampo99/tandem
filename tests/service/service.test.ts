@@ -887,6 +887,53 @@ test("looks skills up at creation, repository first, and pins them across a rest
   }
 });
 
+test("every task carries the home's worker skills, and a skill named twice counts once", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-service-worker-skills-"));
+  const home = join(root, "home");
+  const repoPath = join(root, "repo");
+  const personalHome = join(root, "personal");
+  const common = join(root, "git-common");
+  await Promise.all([
+    mkdir(repoPath, { recursive: true }),
+    mkdir(common, { recursive: true }),
+    mkdir(home, { recursive: true }),
+  ]);
+  const buildkite = await writeSkill(
+    join(personalHome, ".claude", "skills", "buildkite"),
+    "Read Buildkite logs.",
+  );
+  const tdd = await writeSkill(join(personalHome, ".claude", "skills", "tdd"), "Test first.");
+  await writeFile(join(home, "settings.toml"), 'workerSkills = ["buildkite", "tdd"]\n');
+  const service = createTandemService({
+    home,
+    sessionId: "session-a",
+    poolRoot: join(root, "pool"),
+    run: fakeRunner({ commonDirectory: common }).run,
+    clock: () => TIMESTAMP,
+    idFactory: () => "task-worker-skills",
+    personalSkillsHome: personalHome,
+  });
+  try {
+    const created = await service.create({
+      repoPath,
+      kind: "scout",
+      objective: "Find the flaky test",
+      acceptanceCriteria: ["Name the cause."],
+      surfaces: ["src"],
+      skills: ["tdd"],
+    });
+    expect(
+      created.skills?.map((skill) => ["directory" in skill && skill.directory, skill.name]),
+    ).toEqual([
+      [tdd, "tdd"],
+      [buildkite, "buildkite"],
+    ]);
+  } finally {
+    await service.shutdown();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 /** Writes a SKILL.md with frontmatter and returns the folder's real path. */
 async function writeSkill(directory: string, body: string): Promise<string> {
   await mkdir(directory, { recursive: true });
@@ -905,6 +952,7 @@ test("new scouts persist a classified continuation and an explicit disposition s
   await Promise.all([mkdir(original), mkdir(source), mkdir(common)]);
   const runner = fakeRunner({ commonDirectory: common });
   const requests: ResearchContinuationRequest[] = [];
+  const goals: string[] = [];
   let sequence = 0;
   const serviceOptions = {
     home,
@@ -932,6 +980,10 @@ test("new scouts persist a classified continuation and an explicit disposition s
         reason: "jev-classified",
         durationMs: 4,
       };
+    },
+    classifyPlaybook: async (goal) => {
+      goals.push(goal);
+      return "refactor";
     },
   });
   try {
@@ -980,6 +1032,20 @@ test("new scouts persist a classified continuation and an explicit disposition s
     });
     expect(implementation.researchContinuation).toBeUndefined();
     expect(requests.length).toBe(1);
+    expect(implementation.playbook).toBe("refactor");
+    expect(scout.playbook).toBeUndefined();
+    expect(goals).toEqual(["Apply the approved scheduler change"]);
+
+    const chosen = await classified.create({
+      repoPath: source,
+      kind: "implementation",
+      objective: "Speed up the scheduler",
+      acceptanceCriteria: ["It is faster"],
+      surfaces: ["src"],
+      playbook: "perf",
+    });
+    expect(chosen.playbook).toBe("perf");
+    expect(goals.length).toBe(1);
   } finally {
     await classified.shutdown();
   }
@@ -5057,8 +5123,11 @@ async function draftRefreshFailures(home: string): Promise<readonly Record<strin
   return events;
 }
 
+/** GitHub calls for the task's own draft; PR watch reading the draft on its own schedule is left out. */
 function githubCalls(calls: readonly CommandRequest[]): readonly CommandRequest[] {
-  return calls.filter((call) => call.argv[0] === "gh");
+  return calls.filter(
+    (call) => call.argv[0] === "gh" && !call.argv.some((word) => word.includes("mergeStateStatus")),
+  );
 }
 
 test("a ready task opens its own draft pull request once, against the default branch", async () => {

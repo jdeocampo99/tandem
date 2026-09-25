@@ -1,5 +1,6 @@
 import {
   editPullRequestBody,
+  markPullRequestReady,
   mergePullRequest,
   publishPullRequest,
   readCheckpoint,
@@ -25,12 +26,16 @@ import {
   readSingleLine,
 } from "./evidence.ts";
 
-type RemoteCheck = Readonly<{
+/** One check run or commit status, as `gh pr view` or `gh pr checks` reports it. */
+export type RemoteCheck = Readonly<{
   readonly name: string;
   readonly required: boolean;
   readonly passed: boolean;
   readonly state: string;
   readonly conclusion: string;
+  /** The CI page for this check, when GitHub has one. */
+  readonly url?: string;
+  readonly startedAt?: string;
 }>;
 
 type RemotePullRequest = PullRequestMetadata &
@@ -70,6 +75,21 @@ const BLOCKING_CHECK_VALUES: Readonly<Record<string, true>> = {
   CANCELED: true,
   SKIPPED: true,
   TIMED_OUT: true,
+};
+/** Values that mean a check has not finished, whichever field GitHub put them in. */
+const PENDING_CHECK_VALUES: Readonly<Record<string, true>> = {
+  PENDING: true,
+  QUEUED: true,
+  IN_PROGRESS: true,
+  EXPECTED: true,
+  WAITING: true,
+  REQUESTED: true,
+};
+/** A finished check that neither passed nor failed, such as one skipped by its workflow. */
+const NEUTRAL_CHECK_VALUES: Readonly<Record<string, true>> = {
+  NEUTRAL: true,
+  SKIPPED: true,
+  SKIPPING: true,
 };
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -528,13 +548,25 @@ export async function publishReviewedTask(input: {
   const title = readSingleLine(input.title, "title");
   const base = readSingleLine(input.base, "base");
   const ready = await assertReadyCheckout(run, input.task);
-  return publishCheckout(run, {
+  const published = await publishCheckout(run, {
     ready,
     repository: publishRepository(input.task, ready.remote),
     title,
     base,
     body: describeTaskPr(input.task, input.summary),
   });
+  // The task's own draft becomes the finished pull request, which PR watch then merges.
+  if (published.state !== "draft") return published;
+  return assertPublishedMetadata(
+    await markPullRequestReady(run, {
+      cwd: ready.cwd,
+      repository: published.repository,
+      number: published.number,
+    }),
+    published.repository,
+    base,
+    ready.head,
+  );
 }
 
 type DraftCheckout = Readonly<{
@@ -786,7 +818,18 @@ export async function refreshTaskDraft(input: {
   };
 }
 
-function parseRemoteCheck(value: unknown, index: number, response: string): RemoteCheck {
+/**
+ * Whether a check passed, failed, or is still running. Unlike the merge gate, which only accepts a
+ * success, a skipped or neutral check counts as passed here: it will never turn green.
+ */
+export function checkOutcome(check: RemoteCheck): "passed" | "failed" | "pending" {
+  const values = [check.state, check.conclusion];
+  if (check.passed || values.some((value) => NEUTRAL_CHECK_VALUES[value] === true)) return "passed";
+  if (values.some((value) => PENDING_CHECK_VALUES[value] === true)) return "pending";
+  return "failed";
+}
+
+export function parseRemoteCheck(value: unknown, index: number, response: string): RemoteCheck {
   if (!isRecord(value)) {
     throw new AdapterProtocolError(
       "delivery CI observation",
@@ -823,12 +866,19 @@ function parseRemoteCheck(value: unknown, index: number, response: string): Remo
     BLOCKING_CHECK_VALUES[status] === true ||
     BLOCKING_CHECK_VALUES[conclusion] === true ||
     BLOCKING_CHECK_VALUES[bucket] === true;
+  const url = [value.detailsUrl, value.targetUrl, value.link].find(
+    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+  );
   return {
     name,
     required,
     passed: passedIndicator && !blockedIndicator,
     state: state || status,
     conclusion: conclusion || bucket,
+    ...(url === undefined ? {} : { url }),
+    ...(typeof value.startedAt === "string" && value.startedAt.length > 0
+      ? { startedAt: value.startedAt }
+      : {}),
   };
 }
 

@@ -13,6 +13,7 @@ import type { CommandRunner } from "./contracts.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import { ompSessionHost, ompToolCall } from "./extension/omp-host.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
+import { type PlaybookClassifier, playbookClassifier } from "./playbooks/classify.ts";
 import { appendCoordinatorUsage } from "./runtime/usage-ledger.ts";
 import {
   createTandemService,
@@ -46,6 +47,7 @@ function createCoordinatorService(
   options: TandemExtensionOptions,
   environment: TandemBoundaryEnvironment,
   classifyResearchContinuation: ResearchContinuationClassifier,
+  classifyPlaybook: PlaybookClassifier,
 ): TandemService {
   if (options.service !== undefined) return options.service;
   const sourceRepo = environment.sourceRepo;
@@ -61,6 +63,7 @@ function createCoordinatorService(
       : { coordinatorPaneId: environment.coordinatorPaneId }),
     poolRoot: environment.poolRoot,
     classifyResearchContinuation,
+    classifyPlaybook,
     ...(sourceRepo === undefined
       ? {}
       : {
@@ -98,9 +101,9 @@ type BoundCoordinator = Readonly<{
 export function createTandemExtension(options: TandemExtensionOptions = {}): ExtensionFactory {
   return (pi: ExtensionAPI): void => {
     const environmentSnapshot = processEnvironmentSnapshot(options.processEnvironment);
-    const classifyResearchContinuation = researchContinuationClassifier(
-      researchContinuationClassifierConfig(environmentSnapshot),
-    );
+    const jevConfig = researchContinuationClassifierConfig(environmentSnapshot);
+    const classifyResearchContinuation = researchContinuationClassifier(jevConfig);
+    const classifyPlaybook = playbookClassifier(jevConfig);
     let latestContext: ExtensionContext;
     let bound: BoundCoordinator | undefined;
 
@@ -136,7 +139,12 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
         logError: (message, error) => pi.logger.error(message, { error: errorMessage(error) }),
         environment,
         createService: () =>
-          createCoordinatorService(options, environment, classifyResearchContinuation),
+          createCoordinatorService(
+            options,
+            environment,
+            classifyResearchContinuation,
+            classifyPlaybook,
+          ),
         realpath: (path) => realpath(path),
         readReport: readResearchReport,
         appendUsage: (entry) => appendCoordinatorUsage(environment.home, entry),

@@ -33,6 +33,8 @@ const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
   restart: "restart",
   models: "models",
   "configure-models": "configure-models",
+  "configure-merging": "configure-merging",
+  "configure-worker-skills": "configure-worker-skills",
   doctor: "doctor",
   setup: "setup",
   onboard: "onboard",
@@ -70,6 +72,8 @@ const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
   restart: 1,
   models: 0,
   "configure-models": 0,
+  "configure-merging": 0,
+  "configure-worker-skills": 0,
   doctor: 0,
   setup: 1,
   onboard: 1,
@@ -104,6 +108,8 @@ export type CliCommand =
   | "restart"
   | "models"
   | "configure-models"
+  | "configure-merging"
+  | "configure-worker-skills"
   | "doctor"
   | "setup"
   | "onboard"

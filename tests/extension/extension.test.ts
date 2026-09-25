@@ -127,6 +127,7 @@ test("extension binds services to a clean source while preserving original ident
     shutdown: async () => {
       shutdownCalls += 1;
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const pi = {
     zod,
@@ -185,6 +186,7 @@ test("before_agent_start exposes a blocked source refresh instead of silently pl
       throw new Error("origin/main fetch failed");
     },
     shutdown: async () => undefined,
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const pi = {
     zod,
@@ -246,6 +248,7 @@ test("session shutdown waits for an interval reconciliation already in flight", 
     shutdown: async () => {
       shutdownCalls += 1;
     },
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const pi = {
     zod,
@@ -297,6 +300,7 @@ test("OMP delivers a wake's hidden identifiers first, then the shown prompt that
   const service = {
     list: async () => [blocked],
     acknowledge: async () => blocked,
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const pi = {
     zod,

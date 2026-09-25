@@ -23,6 +23,7 @@ import {
   type ValidationEvidence,
   type WorktreeLease,
 } from "../contracts.ts";
+import type { PlaybookId } from "../playbooks/catalog.ts";
 import type { PrReviewRound, PrReviewState } from "../pr-review/state.ts";
 import {
   canSkipValidation,
@@ -58,6 +59,7 @@ export type TaskInput = Readonly<{
   readonly researchContinuation?: ResearchContinuation;
   /** Skills the user asked this task to use, already looked up and pinned. */
   readonly skills?: readonly SkillInvocation[];
+  readonly playbook?: PlaybookId;
   /** Required for, and only for, a `pr-review` task. */
   readonly prReview?: PrReviewState;
   readonly target?: TaskTarget;
@@ -829,6 +831,7 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
       ? {}
       : { researchHandoffs: [...input.researchHandoffs] }),
     ...(input.skills === undefined ? {} : { skills: input.skills.map((skill) => ({ ...skill })) }),
+    ...(input.playbook === undefined ? {} : { playbook: input.playbook }),
     ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
     ...(input.target === undefined ? {} : { target: { ...input.target } }),
     ...(input.kind === "scout"

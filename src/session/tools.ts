@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import { type AgentRole, MODEL_ROLE_ORDER } from "../contracts.ts";
+import { PINNABLE_PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 import { outcomesFor } from "../workers/protocol.ts";
 
@@ -65,6 +66,12 @@ export const tandemRequestSchema = z.strictObject({
         .array(z.string())
         .optional()
         .describe("Skills the user asked this work to use, by exact name. Tandem loads them."),
+      playbook: z
+        .enum(PINNABLE_PLAYBOOK_IDS)
+        .optional()
+        .describe(
+          "The job type the user chose for implementation work. Leave out and Tandem picks one.",
+        ),
       targetRepo: z
         .string()
         .optional()
@@ -224,6 +231,21 @@ export const tandemRequestSchema = z.strictObject({
     }),
     z.strictObject({ action: z.literal("review-again"), taskId: z.string() }),
     z.strictObject({ action: z.literal("review-close"), taskId: z.string() }),
+    z.strictObject({ action: z.literal("pr-watch") }),
+    z.strictObject({
+      action: z.literal("pr-watch-merging"),
+      repoPath: z.string(),
+      mergeWith: z.enum(["auto-merge", "queue-label", "off"]),
+      queueLabel: z.string().optional(),
+      blockedLabel: z.string().optional(),
+    }),
+    ...(["pr-watch-start", "pr-watch-stop", "pr-watch-fix"] as const).map((action) =>
+      z.strictObject({
+        action: z.literal(action),
+        pullRequest: z.string().describe("A GitHub PR URL, owner/repo#123, or #123 here."),
+        repoPath: z.string().optional().describe("Where #123 is; defaults to this project."),
+      }),
+    ),
   ]),
 });
 

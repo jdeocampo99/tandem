@@ -553,3 +553,28 @@ test("copy_asset works only while a scout draws a mockup", async () => {
     block: true,
   });
 });
+
+test("an implementer cannot report done while a playbook step is open in its to-do list", async () => {
+  const worker = workerSession({ playbookSteps: ["Reproduce the bug", "Add a regression test"] });
+  worker.session.onToolEnd({
+    call: call("todo"),
+    todos: [
+      { content: "Reproduce the bug", status: "completed" },
+      { content: "Add a regression test", status: "in_progress" },
+    ],
+  });
+  const rejected = await worker.session.submitReport({ outcome: "implemented", report: "Done." });
+  expect(rejected.isError).toBe(true);
+  expect(rejected.text).toContain("still open in your to-do list: Add a regression test.");
+  expect(worker.results).toHaveLength(0);
+
+  worker.session.onToolEnd({
+    call: call("todo"),
+    todos: [
+      { content: "Reproduce the bug", status: "completed" },
+      { content: "Add a regression test", status: "abandoned" },
+    ],
+  });
+  const accepted = await worker.session.submitReport({ outcome: "implemented", report: "Done." });
+  expect(accepted.isError).toBe(false);
+});

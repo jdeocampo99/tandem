@@ -55,6 +55,8 @@ export type WorkerJob = Readonly<{
   readonly timeoutMs?: number;
   /** The pinned worktree setup commands an implementer runs before OMP starts. */
   readonly setup?: readonly SetupCommand[];
+  /** The implementer's playbook steps; its report is rejected while any is open in its to-do list. */
+  readonly playbookSteps?: readonly string[];
   /**
    * A scout job reviewing a pull request: it gets a read-only git/gh shell, and when
    * `structuredReport` is set its report must be one PrReview JSON object.
@@ -398,6 +400,11 @@ export function parseWorkerJob(value: unknown): WorkerJob {
   if (setup !== undefined && role !== "implementer") {
     throw new TypeError("setup is only permitted for implementer jobs");
   }
+  const playbookSteps =
+    value.playbookSteps === undefined ? undefined : readPlaybookSteps(value.playbookSteps);
+  if (playbookSteps !== undefined && role !== "implementer") {
+    throw new TypeError("playbookSteps is only permitted for implementer jobs");
+  }
   const prReview = value.prReview === undefined ? undefined : readPrReviewJob(value.prReview);
   if (prReview !== undefined && role !== "scout") {
     throw new TypeError("prReview is only permitted for scout jobs");
@@ -419,8 +426,16 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     ...(communication === undefined ? {} : { communication }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(setup === undefined ? {} : { setup }),
+    ...(playbookSteps === undefined ? {} : { playbookSteps }),
     ...(prReview === undefined ? {} : { prReview }),
   };
+}
+
+function readPlaybookSteps(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError("playbookSteps must be a non-empty array");
+  }
+  return value.map((step, index) => readSingleLineText(step, `playbookSteps[${index}]`));
 }
 
 function readPrReviewJob(value: unknown): NonNullable<WorkerJob["prReview"]> {

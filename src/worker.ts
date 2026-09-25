@@ -52,6 +52,7 @@ const IMPLEMENTER_TOOLS = [
   "edit",
   "write",
   "bash",
+  "todo",
   SUBMIT_REPORT_TOOL,
 ] as const;
 const PRESENTATION_TOOLS = ["read", "grep", "glob", "write", "edit", SUBMIT_REPORT_TOOL] as const;

@@ -1,4 +1,6 @@
 import type { SkillInvocation } from "./contracts.ts";
+import { playbookSection } from "./playbooks/brief.ts";
+import type { PlaybookId } from "./playbooks/catalog.ts";
 import { checkSkillInvocations } from "./tasks/skill-invocation.ts";
 import { isWorkerRole, type WorkerRole } from "./workers/jobs.ts";
 
@@ -21,6 +23,8 @@ export type AgentBriefInput = Readonly<{
   readonly artifacts?: readonly string[];
   /** Skills the user asked the task to use, pinned when it was created. */
   readonly skills?: readonly SkillInvocation[];
+  /** The playbook an implementer loads into its to-do list. */
+  readonly playbook?: PlaybookId;
 }>;
 
 export type ReviewLensId = "review";
@@ -56,10 +60,13 @@ export const DRAFT_PR_BANNER =
 export const DRAFT_PR_FINAL_ACCEPTANCE: readonly string[] = [
   "Final acceptance stays pinned to the delivered code: successful pinned validation evidence bound to the current HEAD, one passing fresh independent read-only review at that same HEAD, and runner-owned required checks.",
   "Unknown, stale, or failed evidence does not pass, and a targeted fix-time check never substitutes for the final gate.",
-  "Publishing this draft as a finished pull request, merging, and deploying each remain separate explicit approvals. Tandem never merges or deploys automatically.",
+  "Publishing this draft as a finished pull request and deploying each remain separate explicit approvals. Tandem never merges a draft; once published, PR watch merges it after its checks pass.",
 ];
 
 const MAX_ORDINARY_BRIEF_BYTES = 64 * 1024;
+
+/** The coordinator's chat and the Plain Prose code standard ban the same writing tells. */
+const PROSE_BANS = `No preambles ("the key point is"), no "not X, it's Y", no lists of three for rhythm, no em dashes, no closing summary. Avoid delve, crucial, robust, seamless, leverage, utilize, comprehensive, notably, furthermore.`;
 
 export const COORDINATOR_INSTRUCTIONS = `You are Tandem's coordinator. You talk with the user and get their repository work done by driving workers through the tandem tool.
 
@@ -69,7 +76,7 @@ The user does not know how Tandem works inside, and may not know the repository'
 - Describe things by what the user sees or does in the product. Leave out file paths, field names, settings keys, package names, and code terms unless the user must act on one: "some reports hide iPhone activity", not "the $host=localhost filter excludes Capacitor events".
 - Say each fact once. Leave out caveats that do not change the decision.
 - Use numbers, not adjectives: "3 of 5 checks fail", not "several checks fail".
-- No preambles ("the key point is"), no "not X, it's Y", no lists of three for rhythm, no em dashes, no closing summary. Avoid delve, crucial, robust, seamless, leverage, utilize, comprehensive, notably, furthermore.
+- ${PROSE_BANS}
 - If the user asks what you mean, your last reply was too dense: say it again in fewer, plainer words.
 - Do not use Tandem's internal words with the user: durable, job, owns, runner, evidence, receipt, queued, enqueue, steer, heartbeat, bridge, child, worker, scout, baseline, generation, reservation, quarantine, stage names, P0/P1. Say what they mean instead ("the check is still running", "I passed that along").
 - Leave out commit hashes and ids unless the user asks for them.
@@ -108,8 +115,9 @@ Call it with {request: {action: ...}}. Its text is a short summary; details and 
 - pause, resume, cancel, restart, tick: control tasks. When the user asks to kill or throw away a task, cancel it with discard true: one approval stops it and deletes its worktree. Plain cancel keeps the worktree. When a task is stuck, use restart: Tandem stops what is left, keeps the work, and relaunches it in the same task. Never start a new task to get around a stuck one.
 - delivery-preflight, cleanup: housekeeping; cleanup needs the user's approval. Pass every task to clean up in one cleanup call's taskIds so the user approves once. With discard it closes the task's windows even when a worker will not exit. When delivery-preflight or publish refuses, tell the user the one-line reason and stop. Never create a new task or worktree to work around a delivery refusal.
 - brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, automated checks, manual verification, approach, decisions, open questions). Split what must be true into two lists: acceptanceCriteria holds automated checks, anything a validation command or code review can prove (tests, types, lint, build, code behavior), written as observable behavior; for how to check them, name the repository's own validation procedure from its AGENTS.md or CLAUDE.md. manualVerification holds hands-on checks only a person can make (browser smoke tests, "looks right", device checks); reviewers never judge these, and they become a checklist in the pull request. Write the brief for someone skimming: the goal in one or two sentences; each fact once, in the section where it belongs; at most six items per list, one claim each, under about 25 words; plain words, leaving paths, field names, and commands to the task objective; anything already decided goes in keyDecisions, never openQuestions. If a request needs more than that, split it into smaller requests. Show both lists in your summary; the user can move an item between them by replying, and you revise the brief. The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. Set skipReview only when the user says this work needs no code review, never on your own; once the brief is approved, validated work becomes ready without a reviewer, and publishing still needs its own approval. After brief-draft, give a short summary of the drafted brief then call brief-approve with the exact briefRevision and contentDigest shown. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
-- draft, publish, merge: pull requests. Tandem opens a draft by itself when a task becomes ready; asking for draft is only for showing progress earlier. Publish and merge each need the user's explicit approval. Before publishing, check whether the work already has a pull request (on this task or another task for the same work); if it does, give the user its link instead. Never publish a cancelled task. For a task in another repository, use the default branch its show output names as base. Whenever a pull request exists or was just opened, give the user its link in the chat.
+- draft, publish, merge: pull requests. Tandem opens a draft by itself when a task becomes ready; asking for draft is only for showing progress earlier. Publish needs the user's explicit approval; once published, PR watch merges the pull request by itself when its checks pass, so use merge only when the user asks to merge right now, which also needs their approval. Before publishing, check whether the work already has a pull request (on this task or another task for the same work); if it does, give the user its link instead. Never publish a cancelled task. For a task in another repository, use the default branch its show output names as base. Whenever a pull request exists or was just opened, give the user its link in the chat.
 - review-pr, review-show, review-edit, review-post, review-again, review-close, review-notes: reviewing someone else's pull request. When the user shares a PR to review, call review-pr with the link and your project repoPath; pick lens intent when they only want the idea or approach, focus with their own words when they name an area, otherwise leave it out for a full review. It starts on its own and replies with a one-line summary; pass that line on. When the review is ready, call review-show and pass its text on, and the page link when there is one. Turn the user's edits, including notes from review-notes, into review-edit calls by comment id. Questions about the PR go to the reviewer with steer. review-post needs the user's approval and the user picks the verdict (comment, approve, request-changes); never pick it for them, and give them the posted link. review-again re-reviews new pushes and checks their earlier comments. review-close when they are done.
+- pr-watch, pr-watch-start, pr-watch-stop: PR watch keeps open pull requests moving until they merge; it retries flaky CI on its own and tells the user when one needs them. When the user asks how their pull requests are doing, call pr-watch and show its table exactly as returned in a code block. pr-watch-start when they ask you to watch a pull request; pr-watch-stop when they say hands off or stop watching one. When PR watch asks whether to fix a pull request's conflicts and the user says yes, call pr-watch-fix with that pull request (it needs their approval and starts the fix task); if they say no, leave it. When PR watch asks how a repository merges (it does once, the first time it watches a published pull request there), pass the user's answer to pr-watch-merging as its hidden line says; "Not now" saves mergeWith off so it is not asked again. Never ask about retries or other settings.
 - publish-now: only when the user explicitly asks to skip review or publish now, never on your own. It stops the reviewer, marks the task ready, and opens the PR with open findings listed. Merging stays separate.
 - request-receipt: when the user asks what a request took, its working time, new tokens, and estimated cost as a table, one line per stage, with the wall-clock span and your own shared cost in notes under it. Omit requestId for the request in progress. Show the table exactly as returned in a code block. A delivered request's table is shown to the user without you.
 - models, configure-models, onboard, setup: onboarding. Propose the Balanced model profile one line per role, let the user accept, change roles, or choose Not now, then recap the full configuration before configure-models. If a role cannot be resolved, say which and why; never substitute a fallback.
@@ -126,6 +134,7 @@ export const CODE_STANDARD_NAMES: readonly string[] = [
   "Reader-Oriented Declaration Order: public entry points precede private supporting detail",
   "Reuse Before Adding: existing helpers, types, and modules are extended rather than duplicated",
   "Plain, Conventional Names: names use full words for domain meaning, without jargon or abbreviations",
+  "Plain Prose: comments, docs, commit messages, and user-facing text are direct, without filler or AI writing tells",
 ];
 
 /** Implementers write to these standards and design reviewers grade against the same text. */
@@ -152,7 +161,34 @@ Before writing a new helper, type, or module, search the repository for an exist
 ## 7. Plain, Conventional Names
 Name things with full words for what they mean in the domain. Avoid abbreviations, internal jargon, and names that describe mechanics rather than meaning. Follow the language's conventional short names where they are idiomatic, such as i, err, or id.
 
-Review protocol: preserve observable semantics, ordering, mutation timing, boundary behavior, and error behavior. Update every affected caller transitively. For every changed function, method, callback, closure, and affected caller, record an explicit disposition: changed, intentionally unchanged with a rationale, or blocked with the exact reason. Apply the same review to newly introduced functions. Report only evidence-backed findings and keep the change focused; do not broaden the review into unrelated cleanup.`;
+## 8. Plain Prose
+Write comments, docs, commit messages, and user-facing text such as errors, CLI output, and UI copy in plain, direct words. Lead with the point, use numbers instead of vague adjectives, and say each fact once. ${PROSE_BANS}
+
+Review protocol: preserve observable semantics, ordering, mutation timing, boundary behavior, and error behavior. Update every affected caller transitively. For every changed function, method, callback, closure, and affected caller, record an explicit disposition: changed, intentionally unchanged with a rationale, or blocked with the exact reason. Apply the same review to newly introduced functions. Report only evidence-backed findings. Outside the files the change edits and the callers of anything it replaces, leave code alone.`;
+
+/**
+ * Principles adapted from pstack (MIT, github.com/cursor/plugins/tree/main/pstack), written as
+ * concrete rules: agents followed these, while the full principle texts only got cited after the fact.
+ */
+const PRINCIPLE_RULES = `- Dead code in a file you're adding to: delete it first.
+- The same condition or rule written in more than one place: define it once and use that.
+- A bug: fix it where it starts, not where it shows up.
+- Replacing a function or API: move every caller to the new one and delete the old one.
+- A wrapper, layer, or option that would have one caller: don't add it.
+- An operation that may run more than once, through retries or reruns: make running it twice safe.
+- Data from outside the program: check it where it enters, then trust it.
+- The same edit in many places: write a script that makes it.
+- A choice that is easy to undo: decide, do it, and say why in your report instead of asking.`;
+
+export const IMPLEMENTER_PRINCIPLES = `# Principles
+
+These rules apply to the files you edit and to the callers of anything you replace, even when that makes the change bigger than the brief describes. Don't change behavior unrelated to the task.
+${PRINCIPLE_RULES}`;
+
+export const REVIEWER_PRINCIPLES = `# Principles
+
+The implementer follows these rules in the files it edits and in the callers of anything it replaces, even beyond what the brief describes. Report each violation there as a P1 finding that names the rule and the fix; leave other files alone.
+${PRINCIPLE_RULES}`;
 
 /**
  * One reviewer session per round covers behavior, design, and coverage together, from a fresh
@@ -163,7 +199,7 @@ export const REVIEW_LENSES = [
     id: "review",
     title: "Behavior, design, and coverage",
     instructions:
-      "Inspect observable behavior, error behavior, security, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply the code standards below to every changed function, method, callback, closure, and affected caller, and record each review disposition. Check the changed behavior, affected callers, relevant tests, reports, and the task's automated checks, never its manual verification items, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, distinguish confirmed from plausible findings, never invent findings, avoid broad cleanup, and rely only on validation the runner performed; do not claim results it did not produce.",
+      "Inspect observable behavior, error behavior, security, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply the code standards below to every changed function, method, callback, closure, and affected caller, and record each review disposition. Check the change against the Principles rules below. Check the changed behavior, affected callers, relevant tests, reports, and the task's automated checks, never its manual verification items, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, distinguish confirmed from plausible findings, never invent findings, avoid broad cleanup, and rely only on validation the runner performed; do not claim results it did not produce.",
   },
 ] as const satisfies readonly ReviewLens[];
 
@@ -191,13 +227,14 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "When the scope spans several independent areas, split it across scout subagents in one task call and merge their findings into your single report.",
   ],
   implementer: [
-    "Implement only the explicitly approved scope in the assigned worktree and preserve affected callers.",
+    "Deliver the approved objective in the assigned worktree and preserve affected callers.",
     "Commit your work before submitting outcome implemented, and name the commit in the report.",
     "Stop every background process you started, such as a dev server or watcher, before calling submit_report.",
     "Do not merge, deploy, perform destructive actions, or claim validation that the runner did not perform.",
   ],
   reviewer: [
     "You are a fresh reviewer with no implementer conversation. Stay read-only: use only read, grep, and glob, and do not write files.",
+    "Work the Principles rules call for beyond what the brief describes is in scope; judge it like the rest of the change, and report it only if it changes behavior unrelated to the task.",
     "A user decision listed in the review brief settles its question; do not ask it again. If the user accepted a criterion no runner evidence can prove, treat it as satisfied by the user and do not fail the lens for missing runner evidence on it.",
   ],
   presentation: [
@@ -208,7 +245,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
 /** Tandem fills in the lens, HEAD, generation, and pass itself, so the reviewer reports findings only. */
 const REVIEW_RESULT_SCHEMA = `Set the submit_report review field to:
 {"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>"}],"summary":"<evidence-backed summary>"}
-Tandem records the commit and whether the review passes. Severity: P0 = data loss, security hole, or broken build; P1 = wrong behavior a user or caller would hit, or a violated mandatory requirement from the brief; P2 = minor edge case or inconsistency; P3 = style or nit. Only P0 and P1 need a fix round; P2 and P3 never cost a fix round on their own; they go to the user as known issues unless a P0 or P1 already triggers a fix round, where the implementer fixes them too. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
+Tandem records the commit and whether the review passes. Severity: P0 = data loss, security hole, or broken build; P1 = wrong behavior a user or caller would hit, a violated mandatory requirement from the brief, or a Principles rule violation; P2 = minor edge case or inconsistency; P3 = style or nit. Only P0 and P1 need a fix round; P2 and P3 never cost a fix round on their own; they go to the user as known issues unless a P0 or P1 already triggers a fix round, where the implementer fixes them too. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
 
 function readNonEmptyText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -389,6 +426,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
         ]),
     ...(instructions.length === 0 ? [] : ["## Instructions", ...formatBullets(instructions), ""]),
     ...(skills === undefined ? [] : [...skillSection(input.role, skills), ""]),
+    ...(input.playbook === undefined ? [] : [playbookSection(input.playbook), ""]),
     "## Report",
     ...formatBullets(reportInstructions),
     ...formatBullets(REPORT_INSTRUCTIONS),
@@ -407,7 +445,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
   lines.push("", "## Role requirements", ...formatBullets(ROLE_INSTRUCTIONS[input.role]));
 
   if (input.role === "implementer") {
-    lines.push("", CODE_STANDARDS);
+    lines.push("", CODE_STANDARDS, "", IMPLEMENTER_PRINCIPLES);
   }
 
   if (input.role === "reviewer") {
@@ -424,7 +462,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
         );
       } else {
         lines.push(`## Selected lens: ${selectedLens.title}`, selectedLens.instructions);
-        lines.push("", CODE_STANDARDS);
+        lines.push("", CODE_STANDARDS, "", REVIEWER_PRINCIPLES);
       }
     }
   }

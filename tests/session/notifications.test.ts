@@ -8,7 +8,10 @@ import {
 } from "../../src/runtime/usage-receipt.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import type { SessionEffect } from "../../src/session/events.ts";
-import { deliverPendingNotifications } from "../../src/session/notifications.ts";
+import {
+  deliverPendingNotifications,
+  deliverPrWatchNotices,
+} from "../../src/session/notifications.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";
@@ -692,4 +695,32 @@ test("a recovery question wakes the coordinator once with its recommendation and
   expect(sent[0]?.triggerTurn).toBe(true);
   expect(notices(effects)).toHaveLength(0);
   expect(acknowledged).toEqual(["task-1:recovery-notification"]);
+});
+
+test("PR watch notices show without a turn, and a question to fix conflicts waits for the reply", async () => {
+  const recording = recordingSessionHost();
+  await deliverPrWatchNotices({
+    host: recording.host,
+    service: {
+      prWatchNotices: async () => [
+        { pullRequest: "acme/app#7", text: "🎉 acme/app#7 merged" },
+        {
+          pullRequest: "acme/app#9",
+          text: "acme/app#9 has merge conflicts in a.ts. Fix them?",
+          askToFix: true,
+        },
+      ],
+    },
+  });
+  expect(notices(recording.effects)).toEqual(["🎉 acme/app#7 merged"]);
+  expect(deliveries(recording.effects)).toEqual([
+    {
+      type: "deliver",
+      source: "notification",
+      text: "acme/app#9 has merge conflicts in a.ts. Fix them?",
+      hidden: { text: expect.stringContaining("call pr-watch-fix with pullRequest acme/app#9") },
+      timing: "nextTurn",
+      triggerTurn: false,
+    },
+  ]);
 });

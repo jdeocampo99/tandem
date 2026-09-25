@@ -7,6 +7,8 @@ import {
   type SkillOrigin,
   type TaskRecord,
 } from "../contracts.ts";
+import { PLAYBOOKS } from "../playbooks/catalog.ts";
+import { type PrWatchView, renderPrWatchView } from "../pr-watch/view.ts";
 import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import {
   REQUEST_RECEIPT_SCHEMA_VERSION,
@@ -195,6 +197,7 @@ function summarizeTask(task: TaskRecord): string {
       : [
           `Skills: ${task.skills.map((skill) => `${skill.name} (${SKILL_SOURCES[skill.origin]})`).join(", ")}`,
         ]),
+    ...(task.playbook === undefined ? [] : [`Type: ${PLAYBOOKS[task.playbook].title}`]),
   ];
   if (heads.length > 0) lines.push(`Commits: ${heads.join(", ")}`);
   if (task.worktree !== undefined) {
@@ -807,6 +810,11 @@ function isTaskRecord(value: unknown): value is TaskRecord {
   );
 }
 
+function isPrWatchView(value: unknown): value is PrWatchView {
+  const record = summaryRecord(value);
+  return record !== undefined && typeof record.now === "string" && Array.isArray(record.rows);
+}
+
 function isTaskArray(value: unknown): value is readonly TaskRecord[] {
   return Array.isArray(value) && value.every(isTaskRecord);
 }
@@ -907,6 +915,7 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   }
   if (
     action === "create" ||
+    action === "pr-watch-fix" ||
     action === "show" ||
     action === "approve" ||
     action === "pause" ||
@@ -947,6 +956,11 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     action === "presentation-open"
   ) {
     return summarizePresentations(action, value);
+  }
+  if (action === "pr-watch" || action === "pr-watch-start" || action === "pr-watch-stop") {
+    return isPrWatchView(value)
+      ? boundedOutput(renderPrWatchView(value), ACTION_RESULT_MAX_CHARS)
+      : boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
   if (typeof value === "string")
     return boundedOutput(compactText(value, ACTION_RESULT_MAX_CHARS), ACTION_RESULT_MAX_CHARS);

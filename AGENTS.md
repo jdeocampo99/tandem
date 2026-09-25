@@ -26,6 +26,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `central.ts` (stop/save/re-enter effects), `central-reentry.ts` (pure re-entry table and decisions), `central-review.ts` |
 | Request usage, cost, quota, elapsed-time receipts | [runtime/](src/runtime/): `usage.ts`, `usage-events.ts`, `usage-ledger.ts`, `usage-codec.ts`, `usage-receipt.ts` |
 | Model tier evidence and economical routing | [config/model-tier.ts](src/config/model-tier.ts), [workers/execution-routing.ts](src/workers/execution-routing.ts) |
+| Implementer playbooks (per-job-type to-do steps, submit gate) | [playbooks/](src/playbooks/) |
 | Worker execution, results, control, validation | Harness-neutral session logic: [session/worker.ts](src/session/worker.ts) (`WorkerSession`), [session/worker-steering.ts](src/session/worker-steering.ts) (`WorkerSteering`). [workers/](src/workers/) is the domain layer (jobs, protocol, terminal I/O); entry points and OMP adapters: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [workers/terminal-extension.ts](src/workers/terminal-extension.ts), [validation-worker.ts](src/validation-worker.ts) |
 | OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) (OMP adapter) → [extension/registration.ts](src/extension/registration.ts) (OMP wiring), [extension/omp-host.ts](src/extension/omp-host.ts) (shared OMP coordinator host) and [session/](src/session/) (harness-neutral logic; `tools.ts` has the tool schemas; `coordinator.ts` runs the coordinator's scheduler, status, and compaction; `tool-guard.ts` limits coordinator tools; `prompt-routing.ts` routes user input); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
 | Worktree capacity and maintenance | [pool/](src/pool/) |
@@ -33,13 +34,15 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Artifacts, feedback, Lavish | [presentations/](src/presentations/) |
 | Research and changes in another repository, finding a repository's checkout | [repos/locate.ts](src/repos/locate.ts); `target` on tasks |
 | Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
+| PR watch: keeping open PRs moving until they merge, `tandem watch` | [pr-watch/](src/pr-watch/): `decide.ts` (pure decision table), `github.ts`, `watcher.ts`, `store.ts`, `view.ts` |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |
 
 ## Safety boundaries
 
 - The main conversation owns approvals. Delegated research is automatic; implementation needs approved
-  scope. A ready task opens its own draft PR; final publishing, merging, deploying, and destructive
-  actions need specific approval. Never auto-merge.
+  scope. A ready task opens its own draft PR; final publishing, deploying, and destructive actions
+  need specific approval. Only PR watch merges on its own, and only a published (non-draft) pull
+  request, through GitHub auto-merge or the repository's queue label. Never force-push.
 - Separate original repository identity from the coordinator's clean, commit-pinned worktree.
   Preserve the original checkout, unmerged work, reports, and history.
 - Fail closed on ambiguous ownership. Labels alone never authorize terminal closure; force reset
@@ -90,7 +93,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - Roles, approvals, worker tools, what guards what: [operating-model.md](docs/reference/operating-model.md).
 - Launch, reconnect, `update`, `reset`, coordinator ownership: [coordinator.md](docs/reference/coordinator.md).
 - Onboarding, settings file, model choices, Jev routing, instruction provenance, skills: [policy.md](docs/reference/policy.md).
-- Task stages, fix rounds, research continuation, child terminals: [task-lifecycle.md](docs/reference/task-lifecycle.md).
+- Task stages, fix rounds, research continuation, playbooks, child terminals: [task-lifecycle.md](docs/reference/task-lifecycle.md).
 - Request briefs, approval revisions, review pane: [request-briefs.md](docs/reference/request-briefs.md).
 - Usage receipts, model routing, premium-tier approval: [usage-and-routing.md](docs/reference/usage-and-routing.md).
 - Validation, review, findings, review levels, child results: [review-and-validation.md](docs/reference/review-and-validation.md).
@@ -99,6 +102,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - Draft and final PRs, merge, presentations: [delivery.md](docs/reference/delivery.md).
 - Tasks in another repository (`targetRepo`), finding checkouts: [other-repositories.md](docs/reference/other-repositories.md).
 - Reviewing someone else's PR (`pr-review` tasks): [pr-review.md](docs/reference/pr-review.md).
+- PR watch, its decision table, and `tandem watch`: [pr-watch.md](docs/reference/pr-watch.md).
 - Durable state, locking, restart, central recovery and its re-entry table: [recovery.md](docs/reference/recovery.md).
 - Block causes, stale records, panes, leases, `tandem fix`: [reconciliation.md](docs/reference/reconciliation.md).
 

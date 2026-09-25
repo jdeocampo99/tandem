@@ -1,10 +1,14 @@
 import { expect, test } from "bun:test";
 import {
   buildAgentBrief,
+  CODE_STANDARD_NAMES,
   CODE_STANDARDS,
+  COORDINATOR_INSTRUCTIONS,
+  IMPLEMENTER_PRINCIPLES,
   MANUAL_VERIFICATION_REVIEWER,
   MANUAL_VERIFICATION_WORKER,
   type PrDescriptionInput,
+  REVIEWER_PRINCIPLES,
   renderPrDescription,
 } from "../../src/instructions.ts";
 
@@ -192,6 +196,37 @@ test("gives implementers the same code standards the reviewer grades against", (
     }),
   ).toContain(CODE_STANDARDS);
   expect(buildAgentBrief({ ...input, role: "scout" })).not.toContain(CODE_STANDARDS);
+});
+
+test("holds worker prose to the coordinator's writing bans as a blocking standard", () => {
+  const bans = "no em dashes, no closing summary";
+  expect(COORDINATOR_INSTRUCTIONS).toContain(bans);
+  expect(CODE_STANDARDS).toContain("## 8. Plain Prose");
+  expect(CODE_STANDARDS).toContain(bans);
+  expect(CODE_STANDARD_NAMES.some((name) => name.startsWith("Plain Prose:"))).toBe(true);
+});
+
+test("implementers follow the principle rules and reviewers grade the same rules as blocking", () => {
+  const input = {
+    objective: "Change the parser",
+    acceptanceCriteria: ["Keep behavior identical."],
+    instructions: ["Follow the guidance channel."],
+    reportPath: "/tmp/report.txt",
+  };
+  const rule = "- Dead code in a file you're adding to: delete it first.";
+
+  const implementer = buildAgentBrief({ ...input, role: "implementer" });
+  expect(implementer).toContain(IMPLEMENTER_PRINCIPLES);
+  expect(implementer).toContain(rule);
+  const reviewer = buildAgentBrief({
+    ...input,
+    role: "reviewer",
+    review: { head: "abc123", pass: "review" },
+  });
+  expect(reviewer).toContain(REVIEWER_PRINCIPLES);
+  expect(reviewer).toContain(rule);
+  expect(reviewer).toContain("P1 finding that names the rule");
+  expect(buildAgentBrief({ ...input, role: "scout" })).not.toContain(rule);
 });
 
 test("each worker brief states the report rules once and leaves out coordinator-only rules", () => {

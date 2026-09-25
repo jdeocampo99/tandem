@@ -102,6 +102,19 @@ function ensureRepoLocationsTable(db: StateDatabase): void {
   `);
 }
 
+/**
+ * PR watch records, one row per watched pull request keyed by `owner/repo#number`. Like the other
+ * later tables it is created on every open, so an older database gains it empty.
+ */
+function ensurePrWatchTable(db: StateDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pr_watches (
+      key TEXT PRIMARY KEY NOT NULL,
+      payload TEXT NOT NULL
+    );
+  `);
+}
+
 function assertSchema(db: StateDatabase): void {
   const rows = db
     .query(
@@ -142,6 +155,7 @@ async function openDatabase(home: string): Promise<StateDatabase> {
     ensureRequestTables(db);
     ensureRequestUsageTable(db);
     ensureRepoLocationsTable(db);
+    ensurePrWatchTable(db);
     await chmod(path, 0o600);
   } catch (error) {
     try {
@@ -378,6 +392,37 @@ export function writeRepoLocation(
 
 export function deleteRepoLocation(db: StateDatabase, repo: string): void {
   db.query("DELETE FROM repo_locations WHERE repo = ?").run(repo);
+}
+
+export function readPrWatchPayloads(db: StateDatabase): readonly unknown[] {
+  const rows = db.query("SELECT payload FROM pr_watches ORDER BY key").all() as readonly {
+    payload?: unknown;
+  }[];
+  return rows.map((row) => {
+    if (typeof row.payload !== "string") throw new Error("PR watch payload is not text");
+    return JSON.parse(row.payload) as unknown;
+  });
+}
+
+export function writePrWatchPayload(db: StateDatabase, key: string, payload: unknown): void {
+  db.query(
+    "INSERT INTO pr_watches(key, payload) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET payload = excluded.payload",
+  ).run(key, JSON.stringify(payload));
+}
+
+/** A value kept in the metadata table by its own key, such as the PR watch poll schedule. */
+export function readMetadataPayload(db: StateDatabase, key: string): unknown | undefined {
+  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(key) as
+    | { value?: unknown }
+    | null
+    | undefined;
+  return typeof row?.value === "string" ? (JSON.parse(row.value) as unknown) : undefined;
+}
+
+export function writeMetadataPayload(db: StateDatabase, key: string, payload: unknown): void {
+  db.query(
+    "INSERT INTO metadata(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  ).run(key, JSON.stringify(payload));
 }
 
 export function readRuntimePayload(db: StateDatabase): unknown | undefined {

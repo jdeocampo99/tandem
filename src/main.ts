@@ -10,6 +10,7 @@ import { type ReconcileReport, reconcileTandemResources } from "./coordinator/re
 import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { type RenestReport, renestWorkspaces } from "./coordinator/renest.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
+import { renderPrWatchView } from "./pr-watch/view.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
 import type { TandemService, TandemServiceOptions } from "./service/controller.ts";
 import {
@@ -64,6 +65,8 @@ const HELP_TEXT = `Tandem
 Usage:
   tandem [PATH ...]        Open your projects; resumes coordinator chats (--fresh starts new ones)
   tandem status [TASK_ID]  What's running and what needs you; --logs shows prompt routing
+  tandem watch [PR]        Your watched pull requests; with a PR link or number, watch it
+                           --stop PR stops watching it
   tandem update            Load your latest local Tandem code into every coordinator
                            Keeps chats and tasks; --fresh starts new chats
   tandem fix               Find stale Tandem resources and offer the repair
@@ -75,7 +78,7 @@ Usage:
 
 Options:
   --yes                    Skip the confirmation (fix, reset)
-  --json                   Machine-readable output (status, fix)
+  --json                   Machine-readable output (status, watch, fix)
   --verbose                Full paths and reasons (fix)
   --free-superseded        With --yes, also free worktrees whose work is in other tasks (fix)
   --home PATH              Use a different Tandem home
@@ -248,6 +251,43 @@ async function handleStatus({
     });
     stdout(invocation.json ? `${JSON.stringify(status)}\n` : renderTandemStatus(status));
     return result;
+  } finally {
+    await service.shutdown();
+  }
+}
+
+/**
+ * `tandem watch` shows the PR watch view after reading GitHub; with a pull request it starts
+ * watching it, or with --stop stops. `#N` means a pull request in the current directory's repo.
+ */
+async function handleWatch({
+  invocation,
+  environment,
+  dependencies,
+  run,
+  stdout,
+}: Readonly<{
+  readonly invocation: TerminalInvocation;
+  readonly environment: TerminalEnvironment;
+  readonly dependencies: TerminalMainDependencies;
+  readonly run: CommandRunner;
+  readonly stdout: (text: string) => void;
+}>): Promise<TerminalRunResult> {
+  const [pullRequest] = invocation.paths;
+  if (invocation.stop && pullRequest === undefined) {
+    throw new Error("tandem watch --stop needs the pull request to stop watching");
+  }
+  const service = createServiceFor(environment, run, dependencies);
+  try {
+    const input = { pullRequest: pullRequest ?? "", repoPath: environment.cwd };
+    const view =
+      pullRequest === undefined
+        ? await service.prWatch()
+        : invocation.stop
+          ? await service.prWatchStop(input)
+          : await service.prWatchStart(input);
+    stdout(invocation.json ? `${JSON.stringify(view)}\n` : renderPrWatchView(view));
+    return { exitCode: 0, status: "watch" };
   } finally {
     await service.shutdown();
   }
@@ -505,6 +545,9 @@ export async function runTerminal(
     const run = dependencies.run ?? runCommand;
     if (invocation.command === "status") {
       return await handleStatus({ invocation, environment, dependencies, run, stdout });
+    }
+    if (invocation.command === "watch") {
+      return await handleWatch({ invocation, environment, dependencies, run, stdout });
     }
     await assertNotInCoordinatorPane(invocation, environment);
     const interaction = createTerminalInteraction(dependencies, stdout);
