@@ -56,6 +56,12 @@ import {
   publishReviewedTask,
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
+import {
+  PINNABLE_PLAYBOOK_IDS,
+  type PinnablePlaybookId,
+  type PlaybookId,
+} from "../playbooks/catalog.ts";
+import type { PlaybookClassifier } from "../playbooks/classify.ts";
 import { maintainPool } from "../pool/maintenance.ts";
 import type { PoolMaintenanceResult } from "../pool/policy.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
@@ -203,6 +209,8 @@ export type CreateTaskRequest = Readonly<{
   readonly researchContinuation?: ResearchContinuation;
   /** Names of skills the user asked this work to use; Tandem looks each one up and pins it. */
   readonly skills?: readonly string[];
+  /** The job playbook the user chose for implementation work; Jev picks one when absent. */
+  readonly playbook?: PinnablePlaybookId;
   /** Another repository to work in, as GitHub `owner/repo`; absent works in this project. */
   readonly targetRepo?: string;
   /** Where the user said the target repository is checked out. */
@@ -248,6 +256,8 @@ export type TandemServiceOptions = Readonly<{
   readonly idFactory?: IdFactory;
   /** Chooses a new scout's post-research disposition; defaults to deterministic cues alone. */
   readonly classifyResearchContinuation?: ResearchContinuationClassifier;
+  /** Picks a new implementation task's playbook; defaults to the general playbook. */
+  readonly classifyPlaybook?: PlaybookClassifier;
   /** The Jev transport, cache, and diagnostics sink review-level assistance is allowed to use. */
   readonly reviewAssistance?: ReviewAssistanceRuntime;
   /** Folders crawled for another repository's checkout; see `defaultProjectRoots`. */
@@ -408,6 +418,7 @@ type ServiceDependencies = Readonly<{
   clock: Clock;
   idFactory: IdFactory;
   classifyResearchContinuation: ResearchContinuationClassifier;
+  classifyPlaybook: PlaybookClassifier;
   store: TaskStore;
   requestStore: RequestBriefStore;
   usageLedger: RequestUsageLedger;
@@ -907,6 +918,23 @@ class TandemController {
     return classified.continuation;
   }
 
+  /** Pinned once at creation, outside the store lock, so restarts and fix rounds reuse it. */
+  private async playbookFor(
+    input: CreateTaskRequest | PrReviewTaskRequest,
+    brief: RequestBriefRecord | undefined,
+  ): Promise<PlaybookId | undefined> {
+    if (input.kind !== "implementation") return undefined;
+    if (input.playbook !== undefined) {
+      if (!(PINNABLE_PLAYBOOK_IDS as readonly string[]).includes(input.playbook)) {
+        throw new TypeError(`playbook must be one of ${PINNABLE_PLAYBOOK_IDS.join(", ")}`);
+      }
+      return input.playbook;
+    }
+    return this.#deps.classifyPlaybook(
+      brief === undefined ? input.objective : brief.draft.content.goal,
+    );
+  }
+
   async create(input: CreateTaskRequest | PrReviewTaskRequest): Promise<TaskRecord> {
     await this.ensureSourceReady();
     if (!isRecord(input)) throw new TypeError("create input must be an object");
@@ -920,6 +948,7 @@ class TandemController {
     const brief =
       requestId === undefined ? undefined : await this.#requests.requireRequest(requestId);
     const classifiedContinuation = await this.continuationFor(input, brief);
+    const playbook = await this.playbookFor(input, brief);
     const pinned = input.kind === "pr-review" ? undefined : await this.pinTarget(input);
     return this.#deps.store.exclusive(async (store) => {
       const source = await mapTaskSource(
@@ -980,6 +1009,7 @@ class TandemController {
             ? {}
             : { researchContinuation: classifiedContinuation }),
           ...(pinned === undefined ? {} : { target: pinned.target }),
+          ...(playbook === undefined ? {} : { playbook }),
           skills,
         },
         source.repoPath,
@@ -2264,6 +2294,10 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
   if (typeof classifyResearchContinuation !== "function") {
     throw new TypeError("classifyResearchContinuation must be a function");
   }
+  const classifyPlaybook = options.classifyPlaybook ?? (async () => "general" as const);
+  if (typeof classifyPlaybook !== "function") {
+    throw new TypeError("classifyPlaybook must be a function");
+  }
   return {
     home,
     sessionId,
@@ -2283,6 +2317,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     clock,
     idFactory,
     classifyResearchContinuation,
+    classifyPlaybook,
     store: createTaskStore({ directory: join(home, "tasks"), clock, idFactory }),
     requestStore: createRequestBriefStore({ home, clock, idFactory }),
     usageLedger: createRequestUsageLedger({ home, clock }),

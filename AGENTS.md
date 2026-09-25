@@ -26,6 +26,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `central.ts` (stop/save/re-enter effects), `central-reentry.ts` (pure re-entry table and decisions), `central-review.ts` |
 | Request usage, cost, quota, elapsed-time receipts | [runtime/](src/runtime/): `usage.ts`, `usage-events.ts`, `usage-ledger.ts`, `usage-codec.ts`, `usage-receipt.ts` |
 | Model tier evidence and economical routing | [config/model-tier.ts](src/config/model-tier.ts), [workers/execution-routing.ts](src/workers/execution-routing.ts) |
+| Implementer playbooks (per-job-type to-do steps, submit gate) | [playbooks/](src/playbooks/) |
 | Worker execution, results, control, validation | [workers/](src/workers/); entry points: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [validation-worker.ts](src/validation-worker.ts) |
 | OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/) (`tool-guard.ts` limits coordinator tools); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
 | Worktree capacity and maintenance | [pool/](src/pool/) |
@@ -92,7 +93,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - Roles, approvals, worker tools, what guards what: [operating-model.md](docs/reference/operating-model.md).
 - Launch, reconnect, `update`, `reset`, coordinator ownership: [coordinator.md](docs/reference/coordinator.md).
 - Onboarding, settings file, model choices, Jev routing, instruction provenance, skills: [policy.md](docs/reference/policy.md).
-- Task stages, fix rounds, research continuation, child terminals: [task-lifecycle.md](docs/reference/task-lifecycle.md).
+- Task stages, fix rounds, research continuation, playbooks, child terminals: [task-lifecycle.md](docs/reference/task-lifecycle.md).
 - Request briefs, approval revisions, review pane: [request-briefs.md](docs/reference/request-briefs.md).
 - Usage receipts, model routing, premium-tier approval: [usage-and-routing.md](docs/reference/usage-and-routing.md).
 - Validation, review, findings, review levels, child results: [review-and-validation.md](docs/reference/review-and-validation.md).

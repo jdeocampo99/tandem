@@ -952,6 +952,7 @@ test("new scouts persist a classified continuation and an explicit disposition s
   await Promise.all([mkdir(original), mkdir(source), mkdir(common)]);
   const runner = fakeRunner({ commonDirectory: common });
   const requests: ResearchContinuationRequest[] = [];
+  const goals: string[] = [];
   let sequence = 0;
   const serviceOptions = {
     home,
@@ -979,6 +980,10 @@ test("new scouts persist a classified continuation and an explicit disposition s
         reason: "jev-classified",
         durationMs: 4,
       };
+    },
+    classifyPlaybook: async (goal) => {
+      goals.push(goal);
+      return "refactor";
     },
   });
   try {
@@ -1027,6 +1032,20 @@ test("new scouts persist a classified continuation and an explicit disposition s
     });
     expect(implementation.researchContinuation).toBeUndefined();
     expect(requests.length).toBe(1);
+    expect(implementation.playbook).toBe("refactor");
+    expect(scout.playbook).toBeUndefined();
+    expect(goals).toEqual(["Apply the approved scheduler change"]);
+
+    const chosen = await classified.create({
+      repoPath: source,
+      kind: "implementation",
+      objective: "Speed up the scheduler",
+      acceptanceCriteria: ["It is faster"],
+      surfaces: ["src"],
+      playbook: "perf",
+    });
+    expect(chosen.playbook).toBe("perf");
+    expect(goals.length).toBe(1);
   } finally {
     await classified.shutdown();
   }

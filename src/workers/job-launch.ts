@@ -9,6 +9,8 @@ import type {
   IdFactory,
   TaskRecord,
 } from "../contracts.ts";
+import { PLAYBOOKS, type PlaybookId } from "../playbooks/catalog.ts";
+import { playbookForRun } from "../playbooks/selection.ts";
 import { buildPrReviewBrief } from "../pr-review/brief.ts";
 import { readRunFiles } from "../pr-review/run.ts";
 import { prReviewRunDiffPath } from "../pr-review/state.ts";
@@ -86,6 +88,7 @@ function workerJobSpec(
     readonly communication: NonNullable<WorkerJob["communication"]>;
     readonly sessionDirectory: string | undefined;
     readonly timeoutMs: number | undefined;
+    readonly playbook: PlaybookId | undefined;
   }>,
 ): WorkerJob {
   const { home, task, runtime, role, sessionDirectory, timeoutMs } = input;
@@ -113,6 +116,7 @@ function workerJobSpec(
     ...(role === "implementer" && task.policy.config.setupCommands.length > 0
       ? { setup: task.policy.config.setupCommands }
       : {}),
+    ...(input.playbook === undefined ? {} : { playbookSteps: PLAYBOOKS[input.playbook].steps }),
     ...(prReview === undefined
       ? {}
       : {
@@ -167,6 +171,10 @@ export class JobLauncher {
     const jobId = runtime.operation?.jobId ?? singleLine(this.#deps.idFactory(), "worker job id");
     const paths = jobPaths(jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId));
     const context = workerBriefContext(task, runtime, role, options.extraInstructions ?? []);
+    const playbook =
+      role === "implementer"
+        ? playbookForRun(task.playbook, runtime.fixContextPath !== undefined)
+        : undefined;
     const sessionDirectory =
       role === "implementer" || role === "scout" ? runtime.sessionDirectory : undefined;
     const claim = claimOf(runtime.operation);
@@ -196,11 +204,12 @@ export class JobLauncher {
       runtime,
       role,
       jobId,
-      prompt: await this.workerPrompt(task, role, paths.jobPath, context),
+      prompt: await this.workerPrompt(task, role, paths.jobPath, context, playbook),
       resultPath: paths.resultPath,
       communication,
       sessionDirectory,
       timeoutMs: this.#deps.workerTimeoutMs,
+      playbook,
     });
     const specWritten = await this.#deps.records.withOperationEffect(
       task.id,
@@ -254,6 +263,7 @@ export class JobLauncher {
     role: WorkerRole,
     jobPath: string,
     context: ReturnType<typeof workerBriefContext>,
+    playbook: PlaybookId | undefined,
   ): Promise<string> {
     const prReview = task.prReview;
     if (prReview === undefined) {
@@ -264,6 +274,7 @@ export class JobLauncher {
         context.artifacts,
         undefined,
         context.instructions,
+        playbook,
       );
     }
     const files = await readRunFiles(this.#deps.home, task.id, task.generation);

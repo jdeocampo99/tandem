@@ -1,4 +1,6 @@
 import type { SkillInvocation } from "./contracts.ts";
+import { playbookSection } from "./playbooks/brief.ts";
+import type { PlaybookId } from "./playbooks/catalog.ts";
 import { checkSkillInvocations } from "./tasks/skill-invocation.ts";
 import { isWorkerRole, type WorkerRole } from "./workers/jobs.ts";
 
@@ -21,6 +23,8 @@ export type AgentBriefInput = Readonly<{
   readonly artifacts?: readonly string[];
   /** Skills the user asked the task to use, pinned when it was created. */
   readonly skills?: readonly SkillInvocation[];
+  /** The playbook an implementer loads into its to-do list. */
+  readonly playbook?: PlaybookId;
 }>;
 
 export type ReviewLensId = "review";
@@ -153,7 +157,31 @@ Before writing a new helper, type, or module, search the repository for an exist
 ## 7. Plain, Conventional Names
 Name things with full words for what they mean in the domain. Avoid abbreviations, internal jargon, and names that describe mechanics rather than meaning. Follow the language's conventional short names where they are idiomatic, such as i, err, or id.
 
-Review protocol: preserve observable semantics, ordering, mutation timing, boundary behavior, and error behavior. Update every affected caller transitively. For every changed function, method, callback, closure, and affected caller, record an explicit disposition: changed, intentionally unchanged with a rationale, or blocked with the exact reason. Apply the same review to newly introduced functions. Report only evidence-backed findings and keep the change focused; do not broaden the review into unrelated cleanup.`;
+Review protocol: preserve observable semantics, ordering, mutation timing, boundary behavior, and error behavior. Update every affected caller transitively. For every changed function, method, callback, closure, and affected caller, record an explicit disposition: changed, intentionally unchanged with a rationale, or blocked with the exact reason. Apply the same review to newly introduced functions. Report only evidence-backed findings. Outside the files the change edits and the callers of anything it replaces, leave code alone.`;
+
+/**
+ * Principles adapted from pstack (MIT, github.com/cursor/plugins/tree/main/pstack), written as
+ * concrete rules: agents followed these, while the full principle texts only got cited after the fact.
+ */
+const PRINCIPLE_RULES = `- Dead code in a file you're adding to: delete it first.
+- The same condition or rule written in more than one place: define it once and use that.
+- A bug: fix it where it starts, not where it shows up.
+- Replacing a function or API: move every caller to the new one and delete the old one.
+- A wrapper, layer, or option that would have one caller: don't add it.
+- An operation that may run more than once, through retries or reruns: make running it twice safe.
+- Data from outside the program: check it where it enters, then trust it.
+- The same edit in many places: write a script that makes it.
+- A choice that is easy to undo: decide, do it, and say why in your report instead of asking.`;
+
+export const IMPLEMENTER_PRINCIPLES = `# Principles
+
+These rules apply to the files you edit and to the callers of anything you replace, even when that makes the change bigger than the brief describes. Don't change behavior unrelated to the task.
+${PRINCIPLE_RULES}`;
+
+export const REVIEWER_PRINCIPLES = `# Principles
+
+The implementer follows these rules in the files it edits and in the callers of anything it replaces, even beyond what the brief describes. Report each violation there as a P1 finding that names the rule and the fix; leave other files alone.
+${PRINCIPLE_RULES}`;
 
 /**
  * One reviewer session per round covers behavior, design, and coverage together, from a fresh
@@ -164,7 +192,7 @@ export const REVIEW_LENSES = [
     id: "review",
     title: "Behavior, design, and coverage",
     instructions:
-      "Inspect observable behavior, error behavior, security, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply the code standards below to every changed function, method, callback, closure, and affected caller, and record each review disposition. Check the changed behavior, affected callers, relevant tests, reports, and the task's automated checks, never its manual verification items, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, distinguish confirmed from plausible findings, never invent findings, avoid broad cleanup, and rely only on validation the runner performed; do not claim results it did not produce.",
+      "Inspect observable behavior, error behavior, security, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply the code standards below to every changed function, method, callback, closure, and affected caller, and record each review disposition. Check the change against the Principles rules below. Check the changed behavior, affected callers, relevant tests, reports, and the task's automated checks, never its manual verification items, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, distinguish confirmed from plausible findings, never invent findings, avoid broad cleanup, and rely only on validation the runner performed; do not claim results it did not produce.",
   },
 ] as const satisfies readonly ReviewLens[];
 
@@ -192,13 +220,14 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "When the scope spans several independent areas, split it across scout subagents in one task call and merge their findings into your single report.",
   ],
   implementer: [
-    "Implement only the explicitly approved scope in the assigned worktree and preserve affected callers.",
+    "Deliver the approved objective in the assigned worktree and preserve affected callers.",
     "Commit your work before submitting outcome implemented, and name the commit in the report.",
     "Stop every background process you started, such as a dev server or watcher, before calling submit_report.",
     "Do not merge, deploy, perform destructive actions, or claim validation that the runner did not perform.",
   ],
   reviewer: [
     "You are a fresh reviewer with no implementer conversation. Stay read-only: use only read, grep, and glob, and do not write files.",
+    "Work the Principles rules call for beyond what the brief describes is in scope; judge it like the rest of the change, and report it only if it changes behavior unrelated to the task.",
     "A user decision listed in the review brief settles its question; do not ask it again. If the user accepted a criterion no runner evidence can prove, treat it as satisfied by the user and do not fail the lens for missing runner evidence on it.",
   ],
   presentation: [
@@ -209,7 +238,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
 /** Tandem fills in the lens, HEAD, generation, and pass itself, so the reviewer reports findings only. */
 const REVIEW_RESULT_SCHEMA = `Set the submit_report review field to:
 {"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>"}],"summary":"<evidence-backed summary>"}
-Tandem records the commit and whether the review passes. Severity: P0 = data loss, security hole, or broken build; P1 = wrong behavior a user or caller would hit, or a violated mandatory requirement from the brief; P2 = minor edge case or inconsistency; P3 = style or nit. Only P0 and P1 need a fix round; P2 and P3 never cost a fix round on their own; they go to the user as known issues unless a P0 or P1 already triggers a fix round, where the implementer fixes them too. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
+Tandem records the commit and whether the review passes. Severity: P0 = data loss, security hole, or broken build; P1 = wrong behavior a user or caller would hit, a violated mandatory requirement from the brief, or a Principles rule violation; P2 = minor edge case or inconsistency; P3 = style or nit. Only P0 and P1 need a fix round; P2 and P3 never cost a fix round on their own; they go to the user as known issues unless a P0 or P1 already triggers a fix round, where the implementer fixes them too. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
 
 function readNonEmptyText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -390,6 +419,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
         ]),
     ...(instructions.length === 0 ? [] : ["## Instructions", ...formatBullets(instructions), ""]),
     ...(skills === undefined ? [] : [...skillSection(input.role, skills), ""]),
+    ...(input.playbook === undefined ? [] : [playbookSection(input.playbook), ""]),
     "## Report",
     ...formatBullets(reportInstructions),
     ...formatBullets(REPORT_INSTRUCTIONS),
@@ -408,7 +438,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
   lines.push("", "## Role requirements", ...formatBullets(ROLE_INSTRUCTIONS[input.role]));
 
   if (input.role === "implementer") {
-    lines.push("", CODE_STANDARDS);
+    lines.push("", CODE_STANDARDS, "", IMPLEMENTER_PRINCIPLES);
   }
 
   if (input.role === "reviewer") {
@@ -425,7 +455,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
         );
       } else {
         lines.push(`## Selected lens: ${selectedLens.title}`, selectedLens.instructions);
-        lines.push("", CODE_STANDARDS);
+        lines.push("", CODE_STANDARDS, "", REVIEWER_PRINCIPLES);
       }
     }
   }

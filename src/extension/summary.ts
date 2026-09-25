@@ -7,6 +7,7 @@ import {
   type SkillOrigin,
   type TaskRecord,
 } from "../contracts.ts";
+import { PLAYBOOKS } from "../playbooks/catalog.ts";
 import { type PrWatchView, renderPrWatchView } from "../pr-watch/view.ts";
 import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import {
@@ -196,6 +197,7 @@ function summarizeTask(task: TaskRecord): string {
       : [
           `Skills: ${task.skills.map((skill) => `${skill.name} (${SKILL_SOURCES[skill.origin]})`).join(", ")}`,
         ]),
+    ...(task.playbook === undefined ? [] : [`Type: ${PLAYBOOKS[task.playbook].title}`]),
   ];
   if (heads.length > 0) lines.push(`Commits: ${heads.join(", ")}`);
   if (task.worktree !== undefined) {

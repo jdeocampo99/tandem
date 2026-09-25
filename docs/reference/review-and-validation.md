@@ -71,6 +71,8 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
 - An implementer's `implemented` is refused while `git status` in its worktree shows changes, so it
   commits before the job settles instead of blocking the task with `no-clean-checkpoint`. When git
   cannot report a status, the submission goes through and the settle-time checkpoint check decides.
+- An implementer's `implemented` is also refused while any of its
+  [playbook](task-lifecycle.md#playbooks) steps is not completed or abandoned in its `todo` list.
 - An invalid submission is a tool error naming the fix and never settles the job.
 
 ## Review briefs
@@ -81,6 +83,13 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
 - Fix rounds point the reviewer at the diff since the last reviewed HEAD and the open findings.
 - The seven code standards are mandatory blocking requirements, and implementer claims are never
   proof: every claim is confirmed against source, diff, or runner evidence.
+- Principles (`src/instructions.ts`): nine one-line rules adapted from pstack (delete dead code
+  first, define a repeated rule once, fix where a bug starts, migrate callers then delete, no
+  one-caller layers, safe reruns, check outside data where it enters, script repeated edits,
+  decide easy-to-undo choices). The implementer applies them to the files it edits and the callers
+  of anything it replaces, even past the brief, without changing unrelated behavior. The reviewer
+  gets the same rules and reports a violation there as P1. In evaluations, one-line rules changed
+  the code, while pstack's full principle texts only got cited after the fact.
 - Impact is `contained`, `expanded`, or `unknown`, reusing `EscalationReason`: outside the authorized
   surface is `broad-impact`; an unboundable surface, truncated patch, or missing prior reviewed HEAD is
   `unknown-impact`. Anything but `contained` requires reading the cumulative diff and callers in full.
