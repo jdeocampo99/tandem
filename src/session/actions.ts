@@ -1,4 +1,3 @@
-import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type {
   CreatableTaskKind,
   RepoPolicy,
@@ -12,7 +11,16 @@ import type { CommentEdit } from "../pr-review/service.ts";
 import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
-import { projectName, summarizeModelAssignments } from "./summary.ts";
+import type { SessionHost, ToolOutcome } from "./events.ts";
+import {
+  ACTION_FULL_RESULT_MAX_CHARS,
+  ACTION_RESULT_MAX_CHARS,
+  boundedJson,
+  compactText,
+  projectName,
+  summarizeModelAssignments,
+  summarizeTandemActionValue,
+} from "./summary.ts";
 
 export type TandemAction =
   | Readonly<{ readonly action: "restart"; readonly taskId: string }>
@@ -176,17 +184,22 @@ export type TandemActionResult = Readonly<{
   readonly detail?: "summary" | "full";
 }>;
 
-function textResult(
+/** Asks the person to approve an action. Pass undefined when nobody can answer: approval fails closed. */
+export type ApprovalDialog = SessionHost["confirm"];
+
+function actionResult(
   value: unknown,
   action: TandemAction["action"],
-  approved?: boolean,
-  detail?: "summary" | "full",
+  marks: Readonly<{
+    readonly approved?: boolean;
+    readonly detail?: "summary" | "full" | undefined;
+  }> = {},
 ): TandemActionResult {
   return {
     action,
     value,
-    ...(approved === undefined ? {} : { approved }),
-    ...(detail === undefined ? {} : { detail }),
+    ...(marks.approved === undefined ? {} : { approved: marks.approved }),
+    ...(marks.detail === undefined ? {} : { detail: marks.detail }),
   };
 }
 
@@ -317,13 +330,13 @@ async function approvalPrompt(
 async function confirmAction(
   action: TandemAction,
   service: TandemService,
-  ctx: ExtensionContext,
+  confirm: ApprovalDialog | undefined,
   confirmedInConversation: boolean,
 ): Promise<boolean> {
   if (!requiresHumanApproval(action) || confirmedInConversation) return true;
-  if (!ctx.hasUI || ctx.mode !== "tui") return false;
+  if (confirm === undefined) return false;
   const prompt = await approvalPrompt(action, service);
-  return ctx.ui.confirm(prompt.title, prompt.message);
+  return confirm(prompt.title, prompt.message);
 }
 
 function serviceCreateInput(
@@ -362,15 +375,15 @@ type TandemActionHandlers = {
 
 const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   restart: async (action, service) =>
-    textResult(await service.restart(action.taskId), action.action),
+    actionResult(await service.restart(action.taskId), action.action),
   onboard: async (action, service) =>
-    textResult(await service.onboard(action.repoPath, false), action.action),
+    actionResult(await service.onboard(action.repoPath, false), action.action),
   setup: async (action, service) =>
-    textResult(await service.onboard(action.repoPath, true), action.action, true),
+    actionResult(await service.onboard(action.repoPath, true), action.action, { approved: true }),
   models: async (action, service) =>
-    textResult(await service.models(action.repoPath), action.action),
+    actionResult(await service.models(action.repoPath), action.action),
   "configure-models": async (action, service) =>
-    textResult(
+    actionResult(
       await service.configureModels({
         repoPath: action.repoPath,
         models: action.models,
@@ -379,17 +392,17 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
           : { enabledProviders: action.enabledProviders }),
       }),
       action.action,
-      true,
+      { approved: true },
     ),
   create: async (action, service) =>
-    textResult(await service.create(serviceCreateInput(action)), action.action),
-  list: async (action, service) => textResult(await service.list(), action.action),
+    actionResult(await service.create(serviceCreateInput(action)), action.action),
+  list: async (action, service) => actionResult(await service.list(), action.action),
   presentations: async (action, service) =>
-    textResult(await service.presentations(), action.action),
+    actionResult(await service.presentations(), action.action),
   show: async (action, service) =>
-    textResult(await service.get(action.taskId), action.action, undefined, action.detail),
+    actionResult(await service.get(action.taskId), action.action, { detail: action.detail }),
   steer: async (action, service) =>
-    textResult(
+    actionResult(
       await service.steer({
         taskId: action.taskId,
         text: action.text,
@@ -398,14 +411,14 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       action.action,
     ),
   inspect: async (action, service) =>
-    textResult(await service.inspect(action.taskId), action.action),
+    actionResult(await service.inspect(action.taskId), action.action),
   "delivery-preflight": async (action, service) =>
-    textResult(
+    actionResult(
       await service.deliveryPreflight(action.taskId, { base: action.base }),
       action.action,
     ),
   answer: async (action, service) =>
-    textResult(
+    actionResult(
       await service.answer({
         taskId: action.taskId,
         questionId: action.questionId,
@@ -414,11 +427,11 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       action.action,
     ),
   messages: async (action, service) =>
-    textResult(await service.messages(action.taskId), action.action),
+    actionResult(await service.messages(action.taskId), action.action),
   approve: async (action, service) =>
-    textResult(await service.approve(action.taskId), action.action, true),
+    actionResult(await service.approve(action.taskId), action.action, { approved: true }),
   "brief-draft": async (action, service) =>
-    textResult(
+    actionResult(
       await service.draftRequestBrief({
         repoPath: action.repoPath,
         content: action.content,
@@ -428,33 +441,34 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       action.action,
     ),
   "brief-review": async (action, service) =>
-    textResult(await service.reviewRequestBrief(action.requestId), action.action),
+    actionResult(await service.reviewRequestBrief(action.requestId), action.action),
   "brief-show": async (action, service) =>
-    textResult(await service.requestBrief(action.requestId), action.action),
+    actionResult(await service.requestBrief(action.requestId), action.action),
   "request-receipt": async (action, service) =>
-    textResult(await service.requestReceipt(action.requestId), action.action),
+    actionResult(await service.requestReceipt(action.requestId), action.action),
   "brief-approve": async (action, service) =>
-    textResult(
+    actionResult(
       await service.approveRequestBrief({
         ...(action.requestId === undefined ? {} : { requestId: action.requestId }),
         briefRevision: action.briefRevision,
         contentDigest: action.contentDigest,
       }),
       action.action,
-      true,
+      { approved: true },
     ),
-  tick: async (action, service) => textResult(await service.tick(), action.action),
+  tick: async (action, service) => actionResult(await service.tick(), action.action),
   pause: async (action, service) =>
-    textResult(await service.pause(action.taskId, action.reason), action.action),
-  resume: async (action, service) => textResult(await service.resume(action.taskId), action.action),
+    actionResult(await service.pause(action.taskId, action.reason), action.action),
+  resume: async (action, service) =>
+    actionResult(await service.resume(action.taskId), action.action),
   cancel: async (action, service) =>
-    textResult(
+    actionResult(
       await service.cancel(action.taskId, action.reason, { discard: action.discard === true }),
       action.action,
-      true,
+      { approved: true },
     ),
   present: async (action, service) =>
-    textResult(
+    actionResult(
       await service.present(action.taskId, {
         objective: action.objective,
         artifacts: action.artifacts,
@@ -462,13 +476,13 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       action.action,
     ),
   feedback: async (action, service, signal) =>
-    textResult(await service.feedback(action.presentationId, signal), action.action),
+    actionResult(await service.feedback(action.presentationId, signal), action.action),
   "presentation-open": async (action, service) =>
-    textResult(await service.openPresentation(action.presentationId), action.action),
+    actionResult(await service.openPresentation(action.presentationId), action.action),
   describe: async (action, service) =>
-    textResult(await service.describePr(action.taskId, action.summary), action.action),
+    actionResult(await service.describePr(action.taskId, action.summary), action.action),
   publish: async (action, service) =>
-    textResult(
+    actionResult(
       await service.publish(action.taskId, {
         title: action.title,
         base: action.base,
@@ -476,10 +490,10 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
         approved: true,
       }),
       action.action,
-      true,
+      { approved: true },
     ),
   "publish-now": async (action, service) =>
-    textResult(
+    actionResult(
       await service.publishNow(action.taskId, {
         repository: action.repository,
         title: action.title,
@@ -488,23 +502,23 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
         approved: true,
       }),
       action.action,
-      true,
+      { approved: true },
     ),
   draft: async (action, service) =>
-    textResult(
+    actionResult(
       await service.publishDraft(action.taskId, {
         title: action.title,
         base: action.base,
         approved: true,
       }),
       action.action,
-      true,
+      { approved: true },
     ),
   merge: async (action, service) =>
-    textResult(
+    actionResult(
       await service.merge(action.taskId, { approved: true, method: action.method }),
       action.action,
-      true,
+      { approved: true },
     ),
   cleanup: async (action, service) => {
     const input = action.discard === true ? { discard: true, destructiveApproval: true } : {};
@@ -519,10 +533,14 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
         lines.push(`- ${taskId}: not cleaned up: ${reason}`);
       }
     }
-    return textResult(lines.join("\n"), action.action, action.discard === true ? true : undefined);
+    return actionResult(
+      lines.join("\n"),
+      action.action,
+      action.discard === true ? { approved: true } : {},
+    );
   },
   "review-pr": async (action, service) =>
-    textResult(
+    actionResult(
       await service.reviewPr({
         pullRequest: action.pullRequest,
         repoPath: action.repoPath,
@@ -533,7 +551,7 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       action.action,
     ),
   "review-show": async (action, service) =>
-    textResult(
+    actionResult(
       await service.reviewShow(
         action.taskId,
         action.page === undefined ? {} : { page: action.page },
@@ -541,9 +559,9 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       action.action,
     ),
   "review-notes": async (action, service) =>
-    textResult(await service.reviewNotes(action.taskId), action.action),
+    actionResult(await service.reviewNotes(action.taskId), action.action),
   "review-edit": async (action, service) =>
-    textResult(
+    actionResult(
       await service.reviewEdit(action.taskId, {
         ...(action.comments === undefined ? {} : { comments: action.comments }),
         ...(action.summaryComment === undefined ? {} : { summaryComment: action.summaryComment }),
@@ -551,15 +569,15 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       action.action,
     ),
   "review-post": async (action, service) =>
-    textResult(
+    actionResult(
       await service.reviewPost(action.taskId, { verdict: action.verdict, approved: true }),
       action.action,
-      true,
+      { approved: true },
     ),
   "review-again": async (action, service) =>
-    textResult(await service.reviewAgain(action.taskId), action.action),
+    actionResult(await service.reviewAgain(action.taskId), action.action),
   "review-close": async (action, service) =>
-    textResult(await service.reviewClose(action.taskId), action.action),
+    actionResult(await service.reviewClose(action.taskId), action.action),
 };
 
 function runTandemAction<Name extends TandemActionName>(
@@ -578,21 +596,107 @@ function runTandemAction<Name extends TandemActionName>(
 export async function executeTandemAction(
   action: TandemAction,
   service: TandemService,
-  ctx: ExtensionContext,
   options: Readonly<{
+    readonly confirm: ApprovalDialog | undefined;
     readonly signal?: AbortSignal | undefined;
     readonly confirmedInConversation?: boolean;
-  }> = {},
+  }>,
 ): Promise<TandemActionResult> {
-  const { signal, confirmedInConversation = false } = options;
-  const approved = await confirmAction(action, service, ctx, confirmedInConversation);
+  const { confirm, signal, confirmedInConversation = false } = options;
+  const approved = await confirmAction(action, service, confirm, confirmedInConversation);
   if (!approved)
-    return textResult(
-      "Action refused: interactive human approval is required.",
-      action.action,
-      false,
-    );
+    return actionResult("Action refused: interactive human approval is required.", action.action, {
+      approved: false,
+    });
   return runTandemAction(action.action, action, service, signal);
+}
+
+/** What the `tandem` tool and `/tandem` command need from the running coordinator. */
+export type TandemCallDependencies = Readonly<{
+  /** Read lazily, so a service that cannot start fails the call instead of the hook. */
+  readonly service: () => TandemService;
+  readonly confirm: ApprovalDialog | undefined;
+  /** Reconciles without running another tick; follows a `tick` action. */
+  readonly reconcile: () => Promise<void>;
+  /** Follows every other action. */
+  readonly postAction: () => Promise<void>;
+}>;
+
+/** Runs one `tandem` tool request; a failure becomes an error outcome, never a throw. */
+export async function runTandemTool(
+  action: TandemAction,
+  dependencies: TandemCallDependencies,
+  signal: AbortSignal | undefined,
+): Promise<ToolOutcome> {
+  try {
+    const result = await executeTandemAction(action, dependencies.service(), {
+      confirm: dependencies.confirm,
+      signal,
+    });
+    if (action.action === "tick") {
+      await dependencies.reconcile();
+    } else {
+      await dependencies.postAction();
+    }
+    return {
+      text: renderActionResult(result),
+      isError: false,
+      details: {
+        action: result.action,
+        ...(result.value === undefined ? {} : { value: result.value }),
+        ...(result.approved === undefined ? {} : { approved: result.approved }),
+        ...(result.detail === undefined ? {} : { detail: result.detail }),
+      },
+    };
+  } catch (error) {
+    return {
+      text: `Tandem ${action.action} failed: ${compactText(errorText(error), ACTION_RESULT_MAX_CHARS)}`,
+      isError: true,
+      details: { action: action.action },
+    };
+  }
+}
+
+/**
+ * Runs one `/tandem` command line from the coordinator's `cwd`. The result is shown before the
+ * post-action reconcile, so notifications it delivers follow the result.
+ */
+export async function runTandemCommand(
+  args: string,
+  cwd: string,
+  dependencies: Omit<TandemCallDependencies, "reconcile">,
+  host: Pick<SessionHost, "perform">,
+): Promise<void> {
+  try {
+    const action = resolveCommandAction(parseTandemCommand(args), cwd);
+    const result = await executeTandemAction(action, dependencies.service(), {
+      confirm: dependencies.confirm,
+    });
+    await host.perform({ type: "notify", text: renderActionResult(result), level: "info" });
+    await dependencies.postAction();
+  } catch (error) {
+    await host.perform({
+      type: "notify",
+      text: `Tandem command failed: ${errorText(error)}`,
+      level: "error",
+    });
+  }
+}
+
+/** `/tandem models .` means the coordinator's own checkout. */
+export function resolveCommandAction(action: TandemAction, cwd: string): TandemAction {
+  return action.action === "models" && action.repoPath === "."
+    ? { ...action, repoPath: cwd }
+    : action;
+}
+
+export function renderActionResult(result: TandemActionResult): string {
+  if (result.detail === "full") return boundedJson(result.value, ACTION_FULL_RESULT_MAX_CHARS);
+  return summarizeTandemActionValue(result.action, result.value);
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 const VERDICT_LABELS: Readonly<Record<ReviewVerdict, string>> = {

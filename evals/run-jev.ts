@@ -2,7 +2,7 @@
  * Fixture-driven Jev routing evaluation runner.
  *
  * This module exercises the production routing policy in `src/session/prompt-routing.ts`
- * (`classifyPrompt` for classification fixtures, `handlePromptInput` for bypass fixtures) against
+ * (`classifyPrompt` for classification fixtures, `routeUserPrompt` for bypass fixtures) against
  * either recorded typed Jev responses (fake mode, deterministic, no network) or the pinned live
  * `jev-1.13.0` model (live mode, opt-in only). It never reimplements the routing policy itself,
  * and it never touches a production Tandem home: bypass fixtures run against an ephemeral
@@ -16,7 +16,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionContext, InputEvent } from "@oh-my-pi/pi-coding-agent";
 import {
   choiceConfidence,
   evaluateJev,
@@ -24,17 +23,17 @@ import {
   JevEvaluationError,
   type JevEvaluationResponse,
 } from "../src/adapters/typesafe.ts";
-import { readPromptRoutingLog } from "../src/runtime/diagnostics.ts";
+import { appendDiagnosticEvent, readPromptRoutingLog } from "../src/runtime/diagnostics.ts";
 import { JEV_PRICING_SNAPSHOT } from "../src/runtime/usage.ts";
 import {
   classifyPrompt,
   extractPromptTaskId,
-  handlePromptInput,
   PROMPT_ROUTING_QUESTION_SCHEMA_VERSION,
   type PromptRoutingClock,
   type PromptRoutingConfig,
   type PromptRoutingDependencies,
   type PromptRoutingEvaluation,
+  routeUserPrompt,
 } from "../src/session/prompt-routing.ts";
 import {
   loadPromptRoutingFixtures,
@@ -99,7 +98,6 @@ export type PromptRoutingRunOptions = Readonly<{
   readonly now?: PromptRoutingClock;
 }>;
 
-const FAKE_CONTEXT = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
 const DEFAULT_FAKE_TIMEOUT_MS = 1_500;
 
 export const FAKE_FIXTURE_CONFIG: PromptRoutingConfig = {
@@ -251,28 +249,30 @@ async function runBypassFixture(
   const startedAt = now();
   let evaluateCalls = 0;
   try {
-    const event = {
-      source: "interactive",
-      text: fixture.prompt,
-      ...(fixture.bypass === "image"
-        ? { images: [{ type: "image", mimeType: "image/png", data: "" }] }
-        : {}),
-    } as InputEvent;
-    await handlePromptInput(event, FAKE_CONTEXT, {
-      config: { apiKey: "fixture-key", timeoutMs: DEFAULT_FAKE_TIMEOUT_MS },
-      getService: () => {
-        throw new Error(
-          `fixture ${fixture.id}: a bypassed prompt must never reach the Tandem service`,
-        );
+    await routeUserPrompt(
+      {
+        type: "userPrompt",
+        text: fixture.prompt,
+        interactive: true,
+        attachments: fixture.bypass === "image" ? 1 : 0,
       },
-      getHome: () => home,
-      sendMessage: (() => undefined) as never,
-      evaluate: async () => {
-        evaluateCalls += 1;
-        throw new Error(`fixture ${fixture.id}: a bypassed prompt must never call Jev`);
+      {
+        config: { apiKey: "fixture-key", timeoutMs: DEFAULT_FAKE_TIMEOUT_MS },
+        service: () => {
+          throw new Error(
+            `fixture ${fixture.id}: a bypassed prompt must never reach the Tandem service`,
+          );
+        },
+        host: { perform: async () => undefined },
+        confirm: undefined,
+        diagnostics: (entry) => appendDiagnosticEvent(home, entry),
+        evaluate: async () => {
+          evaluateCalls += 1;
+          throw new Error(`fixture ${fixture.id}: a bypassed prompt must never call Jev`);
+        },
+        now,
       },
-      now,
-    });
+    );
     if (evaluateCalls > 0) {
       throw new Error(`fixture ${fixture.id}: bypass leaked into Jev evaluation`);
     }

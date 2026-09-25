@@ -1,10 +1,18 @@
 import { expect, test } from "bun:test";
-import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { RepoPolicy } from "../../src/contracts.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
 import type { TandemService } from "../../src/service/controller.ts";
-import { executeTandemAction, parseTandemCommand } from "../../src/session/actions.ts";
+import {
+  executeTandemAction,
+  parseTandemCommand,
+  resolveCommandAction,
+  runTandemCommand,
+  runTandemTool,
+  type TandemCallDependencies,
+} from "../../src/session/actions.ts";
+import type { SessionEffect } from "../../src/session/events.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/session/summary.ts";
+import { recordingSessionHost } from "../evals/scenario.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
 import { models, policyConfig, task } from "./fixtures.ts";
 
@@ -62,7 +70,7 @@ test("create forwards the named request so work can join one of several open req
       return task({});
     },
   } as unknown as TandemService;
-  const noUiContext = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
+  const noDialog = { confirm: undefined };
 
   await executeTandemAction(
     {
@@ -75,7 +83,7 @@ test("create forwards the named request so work can join one of several open req
       surfaces: ["src"],
     },
     service,
-    noUiContext,
+    noDialog,
   );
 
   expect(createCalls).toMatchObject([{ requestId: "req-2" }]);
@@ -90,7 +98,7 @@ test("create forwards an explicit skill invocation to task creation untouched", 
       return created;
     },
   } as unknown as TandemService;
-  const noUiContext = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
+  const noDialog = { confirm: undefined };
 
   const result = await executeTandemAction(
     {
@@ -103,7 +111,7 @@ test("create forwards an explicit skill invocation to task creation untouched", 
       skill: { name: "refactor-functions", context: "Refactor foo.ts" },
     },
     service,
-    noUiContext,
+    noDialog,
   );
 
   expect(createCalls).toEqual([
@@ -246,15 +254,11 @@ test("approve confirmation exposes active non-superseded communication deltas an
     approve: async () => pending,
   } as unknown as TandemService;
   const context = {
-    hasUI: true,
-    mode: "tui",
-    ui: {
-      confirm: async (_title: string, message: string) => {
-        prompts.push(message);
-        return false;
-      },
+    confirm: async (_title: string, message: string) => {
+      prompts.push(message);
+      return false;
     },
-  } as unknown as ExtensionContext;
+  };
 
   const result = await executeTandemAction(
     { action: "approve", taskId: "task-1" },
@@ -292,16 +296,11 @@ test("extension setup approval preserves the write boundary and metadata", async
     },
   } as unknown as TandemService;
   const context = {
-    hasUI: true,
-    mode: "tui",
-    ui: {
-      confirm: async (title: string, message: string) => {
-        prompts.push({ title, message });
-        return allow;
-      },
-      notify: () => undefined,
+    confirm: async (title: string, message: string) => {
+      prompts.push({ title, message });
+      return allow;
     },
-  } as unknown as ExtensionContext;
+  };
 
   const refused = await executeTandemAction(
     { action: "setup", repoPath: "/repo" },
@@ -359,12 +358,12 @@ test("model listing is read-only and model changes require approval", async () =
       return savedSettings;
     },
   } as unknown as TandemService;
-  const noUiContext = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
+  const noDialog = { confirm: undefined };
 
   const listing = await executeTandemAction(
     { action: "models", repoPath: "/repo" },
     service,
-    noUiContext,
+    noDialog,
   );
 
   expect(listing.approved).toBeUndefined();
@@ -384,24 +383,17 @@ test("model listing is read-only and model changes require approval", async () =
   const denied = await executeTandemAction(
     { action: "configure-models", repoPath: "/repo", models },
     service,
-    noUiContext,
+    noDialog,
   );
 
   expect(denied.approved).toBe(false);
   expect(configureCalls).toEqual([]);
 
-  const uiContext = (allow: boolean) =>
-    ({
-      hasUI: true,
-      mode: "tui",
-      ui: {
-        confirm: async () => allow,
-      },
-    }) as unknown as ExtensionContext;
+  const withDialog = (allow: boolean) => ({ confirm: async () => allow });
   const refused = await executeTandemAction(
     { action: "configure-models", repoPath: "/repo", models },
     service,
-    uiContext(false),
+    withDialog(false),
   );
 
   expect(refused.approved).toBe(false);
@@ -410,7 +402,7 @@ test("model listing is read-only and model changes require approval", async () =
   const configured = await executeTandemAction(
     { action: "configure-models", repoPath: "/repo", models },
     service,
-    uiContext(true),
+    withDialog(true),
   );
 
   expect(configured.approved).toBe(true);
@@ -432,21 +424,17 @@ test("configure-models forwards explicit provider enablement and recaps it in th
       };
     },
   } as unknown as TandemService;
-  const uiContext = {
-    hasUI: true,
-    mode: "tui",
-    ui: {
-      confirm: async (_title: string, message: string) => {
-        prompts.push(message);
-        return true;
-      },
+  const withDialog = {
+    confirm: async (_title: string, message: string) => {
+      prompts.push(message);
+      return true;
     },
-  } as unknown as ExtensionContext;
+  };
 
   const result = await executeTandemAction(
     { action: "configure-models", repoPath: "/repo", models, enabledProviders: ["openai-codex"] },
     service,
-    uiContext,
+    withDialog,
   );
 
   expect(result.approved).toBe(true);
@@ -764,34 +752,23 @@ test("draft publication needs interactive human approval and never runs without 
     base: "main",
   });
 
-  const refusingContext = {
-    hasUI: true,
-    mode: "tui",
-    ui: {
-      confirm: async (_title: string, message: string) => {
-        prompts.push(message);
-        return false;
-      },
+  const refusing = {
+    confirm: async (_title: string, message: string) => {
+      prompts.push(message);
+      return false;
     },
-  } as unknown as ExtensionContext;
-  const refused = await executeTandemAction(parsed, service, refusingContext);
+  };
+  const refused = await executeTandemAction(parsed, service, refusing);
   expect(refused.approved).toBe(false);
   expect(published).toHaveLength(0);
   expect(prompts[0]).toBe("Shows progress only. Nothing is merged.");
 
-  const headless = await executeTandemAction(parsed, service, {
-    hasUI: false,
-    mode: "rpc",
-  } as unknown as ExtensionContext);
+  const headless = await executeTandemAction(parsed, service, { confirm: undefined });
   expect(headless.approved).toBe(false);
   expect(published).toHaveLength(0);
 
-  const approvingContext = {
-    hasUI: true,
-    mode: "tui",
-    ui: { confirm: async () => true },
-  } as unknown as ExtensionContext;
-  const accepted = await executeTandemAction(parsed, service, approvingContext);
+  const approving = { confirm: async () => true };
+  const accepted = await executeTandemAction(parsed, service, approving);
   expect(accepted.approved).toBe(true);
   expect(published).toEqual([
     {
@@ -823,31 +800,20 @@ test("publish now needs interactive human approval and never runs without it", a
   };
 
   const refused = await executeTandemAction(action, service, {
-    hasUI: true,
-    mode: "tui",
-    ui: {
-      confirm: async (title: string, message: string) => {
-        prompts.push(`${title} ${message}`);
-        return false;
-      },
+    confirm: async (title: string, message: string) => {
+      prompts.push(`${title} ${message}`);
+      return false;
     },
-  } as unknown as ExtensionContext);
+  });
   expect(refused.approved).toBe(false);
   expect(published).toHaveLength(0);
   expect(prompts[0]).toContain("Skip review and open a PR");
 
-  const headless = await executeTandemAction(action, service, {
-    hasUI: false,
-    mode: "rpc",
-  } as unknown as ExtensionContext);
+  const headless = await executeTandemAction(action, service, { confirm: undefined });
   expect(headless.approved).toBe(false);
   expect(published).toHaveLength(0);
 
-  const accepted = await executeTandemAction(action, service, {
-    hasUI: true,
-    mode: "tui",
-    ui: { confirm: async () => true },
-  } as unknown as ExtensionContext);
+  const accepted = await executeTandemAction(action, service, { confirm: async () => true });
   expect(accepted.approved).toBe(true);
   expect(published).toEqual([
     {
@@ -926,16 +892,11 @@ test("extension cleanup skips confirmation for safe release and shows scope for 
     },
   } as unknown as TandemService;
   const context = {
-    hasUI: true,
-    mode: "tui",
-    ui: {
-      confirm: async (_title: string, message: string) => {
-        prompts.push(message);
-        return false;
-      },
-      notify: () => undefined,
+    confirm: async (_title: string, message: string) => {
+      prompts.push(message);
+      return false;
     },
-  } as unknown as ExtensionContext;
+  };
 
   await executeTandemAction({ action: "cleanup", taskIds: [cleanupTask.id] }, service, context);
   const refused = await executeTandemAction(
@@ -972,16 +933,11 @@ test("extension cleanup asks once for a batch and keeps going past a failure", a
     },
   } as unknown as TandemService;
   const context = {
-    hasUI: true,
-    mode: "tui",
-    ui: {
-      confirm: async (title: string, message: string) => {
-        prompts.push({ title, message });
-        return true;
-      },
-      notify: () => undefined,
+    confirm: async (title: string, message: string) => {
+      prompts.push({ title, message });
+      return true;
     },
-  } as unknown as ExtensionContext;
+  };
 
   const result = await executeTandemAction(
     { action: "cleanup", taskIds: ["task-1", "task-2", "task-3"], discard: true },
@@ -1057,15 +1013,11 @@ test("the brief-approve prompt names the request by its goal, never its id or re
     },
   } as unknown as TandemService;
   const context = {
-    hasUI: true,
-    mode: "tui",
-    ui: {
-      confirm: async (_title: string, message: string) => {
-        prompts.push(message);
-        return true;
-      },
+    confirm: async (_title: string, message: string) => {
+      prompts.push(message);
+      return true;
     },
-  } as unknown as ExtensionContext;
+  };
 
   const result = await executeTandemAction(
     {
@@ -1084,4 +1036,130 @@ test("the brief-approve prompt names the request by its goal, never its id or re
   expect(approveCalls).toEqual([
     { briefRevision: record.draft.revision, contentDigest: record.draft.contentDigest },
   ]);
+});
+
+function callDependencies(service: TandemService, followUps: string[]): TandemCallDependencies {
+  return {
+    service: () => service,
+    confirm: undefined,
+    reconcile: async () => {
+      followUps.push("reconcile");
+    },
+    postAction: async () => {
+      followUps.push("postAction");
+    },
+  };
+}
+
+test("the tandem tool reconciles after a tick and runs the post-action step after anything else", async () => {
+  const followUps: string[] = [];
+  const service = {
+    tick: async () => [],
+    list: async () => [task()],
+  } as unknown as TandemService;
+
+  const ticked = await runTandemTool(
+    { action: "tick" },
+    callDependencies(service, followUps),
+    undefined,
+  );
+  const listed = await runTandemTool(
+    { action: "list" },
+    callDependencies(service, followUps),
+    undefined,
+  );
+
+  expect(followUps).toEqual(["reconcile", "postAction"]);
+  expect(ticked).toEqual({
+    text: summarizeTandemActionValue("tick", []),
+    isError: false,
+    details: { action: "tick", value: [] },
+  });
+  expect(listed).toMatchObject({ isError: false, details: { action: "list" } });
+  expect(listed.text).toContain("task-1");
+});
+
+test("a tool approval that nobody can answer is refused and reported, not thrown", async () => {
+  const followUps: string[] = [];
+  const service = {
+    get: async () => task(),
+    approve: async () => task(),
+  } as unknown as TandemService;
+
+  const outcome = await runTandemTool(
+    { action: "approve", taskId: "task-1" },
+    callDependencies(service, followUps),
+    undefined,
+  );
+
+  expect(outcome).toMatchObject({
+    isError: false,
+    details: { action: "approve", approved: false },
+  });
+  expect(outcome.text).toContain("Action refused");
+  expect(followUps).toEqual(["postAction"]);
+});
+
+test("a failed tool call becomes an error outcome naming the action", async () => {
+  const followUps: string[] = [];
+  const service = {
+    list: async () => {
+      throw new Error("the task store is locked");
+    },
+  } as unknown as TandemService;
+
+  expect(
+    await runTandemTool({ action: "list" }, callDependencies(service, followUps), undefined),
+  ).toEqual({
+    text: "Tandem list failed: the task store is locked",
+    isError: true,
+    details: { action: "list" },
+  });
+  expect(followUps).toEqual([]);
+});
+
+test("a /tandem command shows its result before the post-action step, and failures as errors", async () => {
+  const order: string[] = [];
+  const modelsFor: string[] = [];
+  const service = {
+    models: async (repoPath: string) => {
+      modelsFor.push(repoPath);
+      return { modelSettings: { configPath: "/m.json", configured: false }, availableModels: [] };
+    },
+  } as unknown as TandemService;
+  const recording = recordingSessionHost();
+  const host = {
+    perform: async (effect: SessionEffect) => {
+      order.push(effect.type);
+      await recording.host.perform(effect);
+    },
+  };
+  const dependencies = callDependencies(service, order);
+
+  await runTandemCommand("models .", "/repo", dependencies, host);
+  await runTandemCommand("unknown-command", "/repo", dependencies, host);
+
+  // `.` is the coordinator's own checkout.
+  expect(modelsFor).toEqual(["/repo"]);
+  expect(order).toEqual(["notify", "postAction", "notify"]);
+  expect(recording.effects[0]).toMatchObject({ type: "notify", level: "info" });
+  expect(recording.effects[1]).toMatchObject({ type: "notify", level: "error" });
+  expect(recording.effects[1]?.type === "notify" ? recording.effects[1].text : "").toStartWith(
+    "Tandem command failed: ",
+  );
+});
+
+test("/tandem models . resolves to the coordinator's own checkout, and nothing else does", () => {
+  expect(resolveCommandAction({ action: "models", repoPath: "." }, "/repo")).toEqual({
+    action: "models",
+    repoPath: "/repo",
+  });
+  expect(resolveCommandAction({ action: "models", repoPath: "/other" }, "/repo")).toEqual({
+    action: "models",
+    repoPath: "/other",
+  });
+  expect(resolveCommandAction({ action: "setup", repoPath: "." }, "/repo")).toEqual({
+    action: "setup",
+    repoPath: ".",
+  });
 });

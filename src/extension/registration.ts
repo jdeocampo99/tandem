@@ -1,25 +1,27 @@
+import { realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { ompToolParameters } from "../adapters/omp-tool-schema.ts";
 import { type AgentRole, MODEL_ROLE_ORDER } from "../contracts.ts";
+import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import type { TandemService } from "../service/controller.ts";
 import {
-  executeTandemAction,
-  parseTandemCommand,
-  type TandemAction,
-  type TandemActionResult,
+  type ApprovalDialog,
+  runTandemCommand,
+  runTandemTool,
+  type TandemCallDependencies,
 } from "../session/actions.ts";
+import type { SessionEffect, SessionHost, ToolCall, ToolKind } from "../session/events.ts";
 import {
   type ChoiceConfirmation,
-  handlePromptInput,
   type PromptRoutingConfig,
+  routeUserPrompt,
 } from "../session/prompt-routing.ts";
-import {
-  ACTION_FULL_RESULT_MAX_CHARS,
-  ACTION_RESULT_MAX_CHARS,
-  boundedJson,
-  compactText,
-  summarizeTandemActionValue,
-} from "../session/summary.ts";
 import { coordinatorToolRefusal } from "../session/tool-guard.ts";
+import { tandemRequestSchema as tandemToolSchema } from "../session/tools.ts";
+
+// Kept for tests/extension/extension.test.ts until its import moves to session/actions.ts.
+export { resolveCommandAction } from "../session/actions.ts";
 
 export type TandemOmpRegistrationDependencies = Readonly<{
   readonly getService: (ctx: ExtensionContext) => TandemService;
@@ -35,54 +37,190 @@ export type TandemOmpRegistrationDependencies = Readonly<{
   readonly researchRunning: (ctx: ExtensionContext) => Promise<boolean>;
 }>;
 
-type TandemToolDetails = Readonly<{
-  readonly action: TandemAction["action"];
-  readonly value?: unknown;
-  readonly approved?: boolean;
-  readonly detail?: "summary" | "full";
-}>;
+const OMP_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
+  read: "read",
+  grep: "search",
+  glob: "search",
+  web_search: "web-search",
+  write: "write",
+  edit: "edit",
+  bash: "shell",
+  ask: "ask",
+  task: "subagent",
+};
 
-function renderActionResult(result: TandemActionResult): string {
-  if (result.detail === "full") return boundedJson(result.value, ACTION_FULL_RESULT_MAX_CHARS);
-  return summarizeTandemActionValue(result.action, result.value);
+/**
+ * Classifies an OMP tool call. MCP tools arrive either under their own `mcp__` name or, through
+ * OMP's discovery shim, as a `write` to an `xd://mcp__` path.
+ */
+export function ompToolCall(
+  event: Readonly<{ toolCallId: string; toolName: string; input: object }>,
+): ToolCall {
+  const path = "path" in event.input ? event.input.path : undefined;
+  const command = "command" in event.input ? event.input.command : undefined;
+  const base = {
+    id: event.toolCallId,
+    name: event.toolName,
+    ...(typeof path === "string" ? { path } : {}),
+    ...(typeof command === "string" ? { command } : {}),
+  };
+  if (event.toolName.startsWith("mcp__")) {
+    return { ...base, kind: "mcp", mcpTool: event.toolName };
+  }
+  if (event.toolName === "write" && typeof path === "string" && path.startsWith("xd://mcp__")) {
+    return { ...base, kind: "mcp", mcpTool: path.slice("xd://".length) };
+  }
+  return { ...base, kind: OMP_TOOL_KINDS[event.toolName] ?? "other" };
 }
 
-function toolResult(result: TandemActionResult): {
-  content: { type: "text"; text: string }[];
-  details: TandemToolDetails;
-} {
+/** ponytail: mirrors OMP's private sanitizeMCPToolNamePart; tool names are `mcp__<server>_<tool>`. */
+export function ompMcpToolPrefix(server: string): string {
+  const sanitized = server
+    .toLowerCase()
+    .replace(/[^a-z_]+/gu, "_")
+    .replace(/_+/gu, "_")
+    .replace(/^_+|_+$/gu, "");
+  return `mcp__${sanitized.length > 0 ? sanitized : "server"}_`;
+}
+
+export function registerTandemOmp(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
+  registerPromptRouting(pi, dependencies);
+  registerCoordinatorToolGuard(pi, dependencies);
+  registerTandemTool(pi, dependencies);
+  registerTandemCommand(pi, dependencies);
+}
+
+/** Only the TUI can show an approval dialog; elsewhere approval fails closed. */
+function ompApprovalDialog(ctx: ExtensionContext): ApprovalDialog | undefined {
+  return ctx.hasUI && ctx.mode === "tui"
+    ? (title, message) => ctx.ui.confirm(title, message)
+    : undefined;
+}
+
+/** Carries out the effects the tool, command, and prompt routes emit. */
+function ompEffects(pi: ExtensionAPI, ctx: ExtensionContext): Pick<SessionHost, "perform"> {
   return {
-    content: [{ type: "text", text: renderActionResult(result) }],
-    details: {
-      action: result.action,
-      ...(result.value === undefined ? {} : { value: result.value }),
-      ...(result.approved === undefined ? {} : { approved: result.approved }),
-      ...(result.detail === undefined ? {} : { detail: result.detail }),
+    perform: async (effect: SessionEffect) => {
+      if (effect.type === "notify") {
+        ctx.ui.notify(effect.text, effect.level);
+        return;
+      }
+      if (effect.type === "deliver" && effect.source === "prompt-route") {
+        pi.sendMessage(
+          {
+            customType: "tandem-prompt-route",
+            content: effect.text,
+            display: true,
+            attribution: "agent",
+            ...(effect.details === undefined ? {} : { details: effect.details }),
+          },
+          { deliverAs: effect.timing, ...(effect.triggerTurn ? { triggerTurn: true } : {}) },
+        );
+        return;
+      }
+      throw new Error(`Tandem registration cannot perform a ${effect.type} effect`);
     },
   };
 }
 
-function toolError(
-  action: TandemAction["action"],
-  error: unknown,
-): {
-  content: { type: "text"; text: string }[];
-  details: TandemToolDetails;
-  isError: true;
-} {
-  const message = error instanceof Error ? error.message : String(error);
+function callDependencies(
+  ctx: ExtensionContext,
+  dependencies: TandemOmpRegistrationDependencies,
+): TandemCallDependencies {
   return {
-    content: [
-      {
-        type: "text",
-        text: `Tandem ${action} failed: ${compactText(message, ACTION_RESULT_MAX_CHARS)}`,
-      },
-    ],
-    details: { action },
-    isError: true,
+    service: () => dependencies.getService(ctx),
+    confirm: ompApprovalDialog(ctx),
+    reconcile: () => dependencies.reconcile(ctx, false),
+    postAction: () => dependencies.postAction(ctx),
   };
 }
 
+function registerPromptRouting(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
+  const confirmation: ChoiceConfirmation = {};
+  pi.on("input", async (event, ctx) => {
+    const { getRepo } = dependencies;
+    const reply = await routeUserPrompt(
+      {
+        type: "userPrompt",
+        text: event.text,
+        interactive: event.source === "interactive",
+        attachments: event.images?.length ?? 0,
+      },
+      {
+        confirmation,
+        config: dependencies.promptRouting,
+        service: () => dependencies.getService(ctx),
+        ...(getRepo === undefined ? {} : { repoPath: () => getRepo(ctx) }),
+        host: ompEffects(pi, ctx),
+        confirm: ompApprovalDialog(ctx),
+        diagnostics: (entry) => appendDiagnosticEvent(dependencies.getHome(ctx), entry),
+      },
+    );
+    return reply.handled ? { handled: true } : undefined;
+  });
+}
+
+function registerCoordinatorToolGuard(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
+  pi.on("tool_call", async (event, ctx) => {
+    const reason = await coordinatorToolRefusal(ompToolCall(event), {
+      allowedServers: () => dependencies.coordinatorMcpServers(ctx),
+      researchRunning: () => dependencies.researchRunning(ctx),
+      mcpToolPrefix: ompMcpToolPrefix,
+      home: dependencies.getHome(ctx),
+      cwd: ctx.cwd,
+      userHome: homedir(),
+      realpath: (path) => realpath(path),
+    });
+    return reason === undefined ? undefined : { block: true, reason };
+  });
+}
+
+function registerTandemTool(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
+  pi.registerTool({
+    name: "tandem",
+    label: "Tandem",
+    description:
+      "Start, inspect, steer, and control Tandem work with {request:{action:...}}. Actions that need approval ask the user to confirm. A delivered message does not mean the work is done.",
+    parameters: ompToolParameters(tandemToolSchema),
+    strict: true,
+    approval: "write",
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const { request } = tandemToolSchema.parse(params);
+      const outcome = await runTandemTool(request, callDependencies(ctx, dependencies), signal);
+      return {
+        content: [{ type: "text", text: outcome.text }],
+        details: outcome.details,
+        ...(outcome.isError ? { isError: true } : {}),
+      };
+    },
+  });
+}
+
+function registerTandemCommand(
+  pi: ExtensionAPI,
+  dependencies: TandemOmpRegistrationDependencies,
+): void {
+  pi.registerCommand("tandem", {
+    description:
+      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
+    handler: (args, ctx) =>
+      runTandemCommand(args, ctx.cwd, callDependencies(ctx, dependencies), ompEffects(pi, ctx)),
+  });
+}
+
+// The old pi.zod builder, kept only for the schema parity test in tests/session/tools.test.ts.
 type Zod = ExtensionAPI["zod"];
 
 function pullRequestSummarySchema(z: Zod) {
@@ -349,105 +487,4 @@ export function tandemRequestSchema(z: Zod) {
   ]);
 
   return z.object({ request: actionSchema }).strict();
-}
-
-/** `/tandem models .` means the coordinator's own checkout. */
-export function resolveCommandAction(action: TandemAction, cwd: string): TandemAction {
-  return action.action === "models" && action.repoPath === "."
-    ? { ...action, repoPath: cwd }
-    : action;
-}
-
-function registerPromptRouting(
-  pi: ExtensionAPI,
-  dependencies: TandemOmpRegistrationDependencies,
-): void {
-  const confirmation: ChoiceConfirmation = {};
-  pi.on("input", (event, ctx) =>
-    handlePromptInput(event, ctx, {
-      confirmation,
-      config: dependencies.promptRouting,
-      getService: dependencies.getService,
-      getHome: dependencies.getHome,
-      ...(dependencies.getRepo === undefined ? {} : { getRepo: dependencies.getRepo }),
-      sendMessage: pi.sendMessage.bind(pi),
-    }),
-  );
-}
-
-function registerCoordinatorToolGuard(
-  pi: ExtensionAPI,
-  dependencies: TandemOmpRegistrationDependencies,
-): void {
-  pi.on("tool_call", async (event, ctx) => {
-    const reason = await coordinatorToolRefusal(event.toolName, event.input, {
-      allowedServers: () => dependencies.coordinatorMcpServers(ctx),
-      researchRunning: () => dependencies.researchRunning(ctx),
-      home: dependencies.getHome(ctx),
-      cwd: ctx.cwd,
-    });
-    return reason === undefined ? undefined : { block: true, reason };
-  });
-}
-
-function registerTandemTool(
-  pi: ExtensionAPI,
-  dependencies: TandemOmpRegistrationDependencies,
-): void {
-  pi.registerTool({
-    name: "tandem",
-    label: "Tandem",
-    description:
-      "Start, inspect, steer, and control Tandem work with {request:{action:...}}. Actions that need approval ask the user to confirm. A delivered message does not mean the work is done.",
-    parameters: tandemRequestSchema(pi.zod),
-    strict: true,
-    approval: "write",
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const request = params.request;
-      try {
-        const result = await executeTandemAction(request, dependencies.getService(ctx), ctx, {
-          signal,
-        });
-        if (request.action === "tick") {
-          await dependencies.reconcile(ctx, false);
-        } else {
-          await dependencies.postAction(ctx);
-        }
-        return toolResult(result);
-      } catch (error) {
-        return toolError(request.action, error);
-      }
-    },
-  });
-}
-
-function registerTandemCommand(
-  pi: ExtensionAPI,
-  dependencies: TandemOmpRegistrationDependencies,
-): void {
-  pi.registerCommand("tandem", {
-    description:
-      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
-    handler: async (args, ctx) => {
-      try {
-        const action = resolveCommandAction(parseTandemCommand(args), ctx.cwd);
-        const result = await executeTandemAction(action, dependencies.getService(ctx), ctx);
-        ctx.ui.notify(renderActionResult(result), "info");
-        await dependencies.postAction(ctx);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        ctx.ui.notify(`Tandem command failed: ${message}`, "error");
-      }
-    },
-  });
-}
-
-export function registerTandemOmp(
-  pi: ExtensionAPI,
-  dependencies: TandemOmpRegistrationDependencies,
-): void {
-  registerPromptRouting(pi, dependencies);
-  registerCoordinatorToolGuard(pi, dependencies);
-  registerTandemTool(pi, dependencies);
-  registerTandemCommand(pi, dependencies);
 }
