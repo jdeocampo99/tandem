@@ -187,7 +187,7 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
       ...(input.researchContinuation === undefined
         ? {}
         : { researchContinuation: input.researchContinuation }),
-      ...(input.skill === undefined ? {} : { skill: input.skill }),
+      ...(input.skills === undefined ? {} : { skills: input.skills }),
       ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
       ...(input.target === undefined ? {} : { target: input.target }),
     };

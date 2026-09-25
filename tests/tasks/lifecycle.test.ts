@@ -266,43 +266,40 @@ test("pins a complete resolved policy snapshot when creating a task", () => {
   expect(task.policy.guidance.validation[0]?.text).toBe("validation guidance");
 });
 
-test("pins an explicit skill invocation and rejects a malformed one", () => {
-  const withoutSkill = createTask(implementationInput, "2026-09-15T00:00:00.000Z");
-  expect(withoutSkill.skill).toBeUndefined();
+const pinnedSkill = {
+  name: "refactor-functions",
+  origin: "repository",
+  directory: "/repo/.claude/skills/refactor-functions",
+  instructions: "Apply the five function-review principles.",
+} as const;
 
-  const withSkill = createTask(
-    {
-      ...implementationInput,
-      id: "skill-task",
-      skill: { name: "refactor-functions", context: "Apply the five function-review principles." },
-    },
+test("pins the skills a task was created with and rejects malformed ones", () => {
+  const withoutSkills = createTask(implementationInput, "2026-09-15T00:00:00.000Z");
+  expect(withoutSkills.skills).toBeUndefined();
+
+  const withSkills = createTask(
+    { ...implementationInput, id: "skill-task", skills: [pinnedSkill] },
     "2026-09-15T00:00:00.000Z",
   );
-  expect(withSkill.skill).toEqual({
-    name: "refactor-functions",
-    context: "Apply the five function-review principles.",
-  });
+  expect(withSkills.skills).toEqual([pinnedSkill]);
 
   const invalidSkill = {
     ...implementationInput,
-    skill: { name: "", context: "Apply the five function-review principles." },
+    skills: [{ ...pinnedSkill, name: "" }],
   } as unknown as TaskInput;
   expect(() => createTask(invalidSkill, "2026-09-15T00:00:00.000Z")).toThrow(TypeError);
 
   const unexpectedField = {
     ...implementationInput,
-    skill: { name: "refactor-functions", context: "context", scope: "everything" },
+    skills: [{ ...pinnedSkill, scope: "everything" }],
   } as unknown as TaskInput;
   expect(() => createTask(unexpectedField, "2026-09-15T00:00:00.000Z")).toThrow(TypeError);
 });
 
-test("a pinned skill invocation survives approval, a fix round, and evidence invalidation", () => {
-  const skill = {
-    name: "refactor-functions",
-    context: "Apply the five function-review principles.",
-  };
+test("pinned skills survive approval, a fix round, and evidence invalidation", () => {
+  const skills = [pinnedSkill];
   const created = createTask(
-    { ...implementationInput, id: "skill-lifecycle", skill },
+    { ...implementationInput, id: "skill-lifecycle", skills },
     "2026-09-15T00:00:00.000Z",
   );
   const approved = transitionTask(created, { type: "approve" }, context());
@@ -311,7 +308,7 @@ test("a pinned skill invocation survives approval, a fix round, and evidence inv
     { type: "start", worktree, endpoints: [endpoint(approved.generation)] },
     context(),
   );
-  expect(started.skill).toEqual(skill);
+  expect(started.skills).toEqual(skills);
 
   const afterImplementation = transitionTask(
     started,
@@ -330,14 +327,14 @@ test("a pinned skill invocation survives approval, a fix round, and evidence inv
     },
     context(),
   );
-  expect(awaitingFixes.skill).toEqual(skill);
+  expect(awaitingFixes.skills).toEqual(skills);
 
   const fixing = transitionTask(
     awaitingFixes,
     { type: "begin-fixes", head: "head-1", generation: started.generation },
     context(),
   );
-  expect(fixing.skill).toEqual(skill);
+  expect(fixing.skills).toEqual(skills);
   expect(fixing.generation).toBe(started.generation + 1);
 
   const afterSecondImplementation = transitionTask(
@@ -362,7 +359,7 @@ test("a pinned skill invocation survives approval, a fix round, and evidence inv
     { type: "invalidate-evidence", head: "head-2", generation: fixing.generation },
     context(),
   );
-  expect(invalidated.skill).toEqual(skill);
+  expect(invalidated.skills).toEqual(skills);
 });
 
 test("keeps implementation behind explicit approval and binds starts to a worktree generation", () => {

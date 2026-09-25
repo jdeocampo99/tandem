@@ -1,4 +1,5 @@
 import { readFile, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
@@ -26,6 +27,7 @@ import {
   readCleanupCommands,
   resolveRepoPolicy,
 } from "../config/repositories.ts";
+import { findSkills } from "../config/skills.ts";
 import type {
   AnswerTaskInput,
   BlockCause,
@@ -37,7 +39,6 @@ import type {
   RepoPolicy,
   RequestBriefRecord,
   ResearchContinuation,
-  SkillInvocation,
   SteerTaskInput,
   TaskCommunicationView,
   TaskRecord,
@@ -186,8 +187,8 @@ export type CreateTaskRequest = Readonly<{
   readonly researchTaskIds?: readonly string[];
   /** Explicitly selected post-research disposition; scouts otherwise take the safe default. */
   readonly researchContinuation?: ResearchContinuation;
-  /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
-  readonly skill?: SkillInvocation;
+  /** Names of skills the user asked this work to use; Tandem looks each one up and pins it. */
+  readonly skills?: readonly string[];
   /** Another repository to work in, as GitHub `owner/repo`; absent works in this project. */
   readonly targetRepo?: string;
   /** Where the user said the target repository is checked out. */
@@ -237,6 +238,8 @@ export type TandemServiceOptions = Readonly<{
   readonly reviewAssistance?: ReviewAssistanceRuntime;
   /** Folders crawled for another repository's checkout; see `defaultProjectRoots`. */
   readonly projectRoots?: readonly string[];
+  /** The home folder whose skill folders hold the user's personal skills; defaults to the OS home. */
+  readonly personalSkillsHome?: string;
 }>;
 export type TandemService = Readonly<{
   readonly onboard: (
@@ -372,6 +375,7 @@ type ServiceDependencies = Readonly<{
   validationWorkerPath: string;
   reviewAssistance: ReviewAssistanceRuntime;
   projectRoots: readonly string[];
+  personalSkillsHome: string;
 }>;
 
 function assertTaskId(id: unknown): string {
@@ -853,6 +857,13 @@ class TandemController {
                 : { checkoutPath: source.sourceRepoPath }),
             })
           : pinned.policy;
+      const skills =
+        input.skills === undefined
+          ? []
+          : await findSkills(readTextList(input.skills, "skills"), {
+              repositoryCheckout: pinned?.target.checkout ?? source.checkoutPath,
+              personalHome: this.#deps.personalSkillsHome,
+            });
       const researchTaskIds =
         input.researchTaskIds === undefined
           ? undefined
@@ -884,6 +895,7 @@ class TandemController {
             ? {}
             : { researchContinuation: classifiedContinuation }),
           ...(pinned === undefined ? {} : { target: pinned.target }),
+          skills,
         },
         source.repoPath,
         policy,
@@ -2135,6 +2147,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
         },
       }),
     projectRoots: options.projectRoots ?? defaultProjectRoots(process.env),
+    personalSkillsHome: options.personalSkillsHome ?? homedir(),
   };
 }
 
