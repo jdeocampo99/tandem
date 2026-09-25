@@ -17,6 +17,10 @@ export type PrWatch = Readonly<{
   readonly origin: "task" | "user" | "all-my-prs";
   /** The Tandem task whose pull request this is. */
   readonly taskId?: string;
+  /** A checkout of its repository, whose settings.toml `[merging]` applies; defaults without one. */
+  readonly repoPath?: string;
+  /** Whether its repository has an Aviator config, looked up once when settings do not say. */
+  readonly aviator?: boolean;
   readonly startedAt: IsoTimestamp;
   /** When the user stopped watching; a stopped pull request is never picked up again on its own. */
   readonly stoppedAt?: IsoTimestamp;

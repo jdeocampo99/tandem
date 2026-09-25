@@ -88,7 +88,16 @@ export type ScenarioPullRequest = {
   autoMerge: boolean;
   checks: ScenarioCheck[];
   mergedAt?: IsoTimestamp;
+  /** Label and auto-merge events in order, as `issues/N/events` lists them. */
+  events: ScenarioIssueEvent[];
 };
+
+export type ScenarioIssueEvent = Readonly<{
+  readonly event: "labeled" | "unlabeled" | "auto_merge_disabled";
+  readonly label?: string;
+  readonly login: string;
+  readonly type: "User" | "Bot";
+}>;
 
 /** Scripted GitHub: pull requests, branch checks, commits and their trees, and your open PRs. */
 export type ScenarioGitHub = Readonly<{
@@ -101,6 +110,13 @@ export type ScenarioGitHub = Readonly<{
   readonly push: (pullRequest: ScenarioPullRequest, options?: { sameTree?: boolean }) => string;
   /** The pull requests `gh search prs --author @me` finds. */
   readonly myPullRequests: Array<Readonly<{ repo: string; number: number }>>;
+  /** Repositories whose default branch has `.aviator/config.yml`. */
+  readonly aviatorRepositories: string[];
+  /** Someone else changes labels, like a merge queue kicking the pull request out. */
+  readonly relabel: (
+    pullRequest: ScenarioPullRequest,
+    change: Readonly<{ add?: string; remove?: string; by: string; bot: boolean }>,
+  ) => void;
 }>;
 
 /** Scripted TypeSafe provider behavior; no scenario ever reaches the real endpoint. */
@@ -275,6 +291,7 @@ function githubAction(argv: readonly string[]): string {
     [/\/pulls\/\d+\/update-branch$/u, "pulls/update-branch"],
     [/\/contents\//u, "contents"],
     [/\/compare\//u, "compare"],
+    [/\/merges$/u, "merges"],
   ];
   const kind = kinds.find(([pattern]) => pattern.test(endpoint))?.[1] ?? endpoint;
   return `gh api ${argv.includes("-X") ? method : "GET"} ${kind}`;
@@ -356,6 +373,8 @@ async function bootstrapProcessArgv(command: string): Promise<readonly string[]>
 
 export type ScenarioWorldOptions = Readonly<{
   readonly sessionId?: string;
+  /** What `git remote get-url origin` prints in every checkout; empty when unset. */
+  readonly origin?: string;
   readonly ompModels?: readonly unknown[];
 }>;
 
@@ -639,7 +658,7 @@ export async function createScenarioWorld(
     const rest = argv.slice(3);
     const checkout = checkoutFor(target);
     const verb = rest[0];
-    if (verb === "remote") return commandResult("");
+    if (verb === "remote") return commandResult(options.origin ?? "");
     if (verb === "fetch") return commandResult();
     if (verb === "cat-file") return commandResult();
     if (verb === "rev-parse") {
@@ -671,6 +690,18 @@ export async function createScenarioWorld(
   const branchChecks = new Map<string, ScenarioCheck[]>();
   const trees = new Map<string, string>();
   const myPullRequests: Array<Readonly<{ repo: string; number: number }>> = [];
+  const aviatorRepositories: string[] = [];
+  const relabel: ScenarioGitHub["relabel"] = (pullRequest, change) => {
+    const type = change.bot ? "Bot" : "User";
+    if (change.remove !== undefined) {
+      pullRequest.labels = pullRequest.labels.filter((label) => label !== change.remove);
+      pullRequest.events.push({ event: "unlabeled", label: change.remove, login: change.by, type });
+    }
+    if (change.add !== undefined && !pullRequest.labels.includes(change.add)) {
+      pullRequest.labels.push(change.add);
+      pullRequest.events.push({ event: "labeled", label: change.add, login: change.by, type });
+    }
+  };
   let nextCommit = 0;
   const newCommit = (tree: string): string => {
     nextCommit += 1;
@@ -700,6 +731,7 @@ export async function createScenarioWorld(
         labels: [],
         autoMerge: false,
         checks: [],
+        events: [],
         ...input,
       };
       if (!trees.has(created.head)) trees.set(created.head, `tree-${input.number}`);
@@ -716,6 +748,13 @@ export async function createScenarioWorld(
       return pullRequest.head;
     },
     myPullRequests,
+    aviatorRepositories,
+    relabel,
+  };
+  const pullRequestArgument = (argv: readonly string[]): ScenarioPullRequest =>
+    findPullRequest(argv[argv.indexOf("--repo") + 1] ?? "", Number(argv[3]));
+  const restartChecks = (pr: ScenarioPullRequest): void => {
+    pr.checks = pr.checks.map((check) => ({ name: check.name, state: "pending" }));
   };
 
   const gh = async (request: CommandRequest): Promise<CommandResult> => {
@@ -733,6 +772,7 @@ export async function createScenarioWorld(
           headRefOid: pr.head,
           headRepository: { name },
           headRepositoryOwner: { login: owner },
+          isCrossRepository: false,
           baseRefName: pr.base,
           mergeable: pr.mergeable,
           mergeStateStatus: pr.mergeStateStatus,
@@ -742,6 +782,33 @@ export async function createScenarioWorld(
           autoMergeRequest: pr.autoMerge ? { enabledAt: SCENARIO_NOW } : null,
           mergedAt: pr.mergedAt ?? null,
           statusCheckRollup: pr.checks.map(scenarioCheckRun),
+        }),
+      );
+    }
+    if (argv[1] === "pr" && argv[2] === "edit") {
+      const pr = pullRequestArgument(argv);
+      const option = (name: string) =>
+        argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined;
+      const add = option("--add-label");
+      const remove = option("--remove-label");
+      relabel(pr, {
+        ...(add === undefined ? {} : { add }),
+        ...(remove === undefined ? {} : { remove }),
+        by: "you",
+        bot: false,
+      });
+      return commandResult(`https://github.com/${pr.repo}/pull/${pr.number}`);
+    }
+    if (argv[1] === "pr" && argv[2] === "merge" && argv.includes("--auto")) {
+      pullRequestArgument(argv).autoMerge = true;
+      return commandResult();
+    }
+    if (argv[1] === "repo" && argv[2] === "view") {
+      return commandResult(
+        JSON.stringify({
+          squashMergeAllowed: true,
+          mergeCommitAllowed: true,
+          rebaseMergeAllowed: true,
         }),
       );
     }
@@ -775,6 +842,29 @@ export async function createScenarioWorld(
         }),
       );
     }
+    const contents = /^repos\/([^/]+\/[^/]+)\/contents\//u.exec(endpoint);
+    if (contents !== null) {
+      return aviatorRepositories.includes(contents[1] ?? "")
+        ? commandResult(".aviator/config.yml")
+        : commandResult("", 1, "gh: Not Found (HTTP 404)");
+    }
+    const events = /^repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/events/u.exec(endpoint);
+    if (events !== null) {
+      const pr = findPullRequest(events[1] ?? "", Number(events[2]));
+      return commandResult(pr.events.map((event) => JSON.stringify(event)).join("\n"));
+    }
+    const merges = /^repos\/([^/]+\/[^/]+)\/merges$/u.exec(endpoint);
+    if (merges !== null) {
+      const pr = pullRequests.find(
+        (candidate) =>
+          candidate.repo === merges[1] && candidate.branch === githubField(argv, "base"),
+      );
+      if (pr === undefined) return commandResult("", 1, "gh: Not Found (HTTP 404)");
+      pr.head = newCommit(`tree-${nextCommit + 1}`);
+      pr.mergeStateStatus = "CLEAN";
+      restartChecks(pr);
+      return commandResult(pr.head);
+    }
     const commit = /^repos\/[^/]+\/[^/]+\/commits\/([^/]+)$/u.exec(endpoint)?.[1];
     if (commit !== undefined) return commandResult(trees.get(commit) ?? "");
     if (/\/git\/commits$/u.test(endpoint)) {
@@ -793,7 +883,7 @@ export async function createScenarioWorld(
         return commandResult("", 1, "gh: Update is not a fast forward (HTTP 422)");
       }
       pr.head = sha;
-      pr.checks = pr.checks.map((check) => ({ name: check.name, state: "pending" }));
+      restartChecks(pr);
       return commandResult(JSON.stringify({ object: { sha } }));
     }
     throw new Error(`unexpected gh command ${JSON.stringify(argv)}`);

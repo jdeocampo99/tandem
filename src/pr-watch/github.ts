@@ -2,7 +2,7 @@ import { isRecord } from "../adapters/primitives.ts";
 import type { CommandResult, CommandRunner } from "../contracts.ts";
 import { checkOutcome, parseRemoteCheck } from "../delivery/pull-requests.ts";
 import type { PullRequestRef } from "../pr-review/pull-request.ts";
-import type { PrObservation, WatchedCheck } from "./decide.ts";
+import type { Dequeuer, MergingSettings, PrObservation, WatchedCheck } from "./decide.ts";
 
 /** GitHub refused because of its rate limit; the watcher backs off instead of reading on. */
 export class GitHubRateLimitError extends Error {
@@ -31,6 +31,7 @@ const VIEW_FIELDS = [
   "headRefOid",
   "headRepository",
   "headRepositoryOwner",
+  "isCrossRepository",
   "baseRefName",
   "mergeable",
   "mergeStateStatus",
@@ -180,6 +181,139 @@ export async function pushEmptyCommit(
   throw new Error(`GitHub did not move ${input.branch}: ${firstLine(moved.stderr)}`);
 }
 
+/** Whether the repository's default branch has an Aviator merge queue config. */
+export async function hasAviatorConfig(
+  run: CommandRunner,
+  repository: string,
+  cwd: string,
+): Promise<boolean> {
+  const result = await gh(run, cwd, [
+    "api",
+    `repos/${repository}/contents/.aviator/config.yml`,
+    "--jq",
+    ".path",
+  ]);
+  if (result.code === 0) return true;
+  if (/HTTP 404/u.test(result.stderr)) return false;
+  throw new Error(`gh could not look for an Aviator config: ${firstLine(result.stderr)}`);
+}
+
+/**
+ * Who last took the pull request out of the queue: added the blocked label or removed the queue
+ * label, or turned auto-merge off. A bot or GitHub app counts as the queue itself.
+ */
+export async function readDequeuer(
+  run: CommandRunner,
+  ref: PullRequestRef,
+  settings: MergingSettings,
+  cwd: string,
+): Promise<Dequeuer> {
+  const result = await ghChecked(run, cwd, [
+    "api",
+    `repos/${ref.repo}/issues/${ref.number}/events?per_page=100`,
+    "--paginate",
+    "--jq",
+    ".[] | {event, label: .label.name, login: .actor.login, type: .actor.type}",
+  ]);
+  const dequeues = result.stdout
+    .split("\n")
+    .flatMap((line) => (line.trim().length === 0 ? [] : [parseObject(line)]))
+    .filter((event): event is Readonly<Record<string, unknown>> => {
+      if (event === undefined) return false;
+      if (settings.mergeWith === "auto-merge") return event.event === "auto_merge_disabled";
+      return (
+        (event.event === "labeled" && event.label === settings.blockedLabel) ||
+        (event.event === "unlabeled" && event.label === settings.queueLabel)
+      );
+    });
+  const last = dequeues.at(-1);
+  if (last === undefined) return null;
+  const login = text(last.login);
+  return { login, bot: last.type === "Bot" || login.endsWith("[bot]") };
+}
+
+/** Adds and removes labels in one edit, such as swapping the blocked label for the queue label. */
+export async function editLabels(
+  run: CommandRunner,
+  ref: PullRequestRef,
+  labels: Readonly<{ add: string; remove?: string }>,
+  cwd: string,
+): Promise<void> {
+  await ghChecked(run, cwd, [
+    "pr",
+    "edit",
+    String(ref.number),
+    "--repo",
+    ref.repo,
+    "--add-label",
+    labels.add,
+    ...(labels.remove === undefined ? [] : ["--remove-label", labels.remove]),
+  ]);
+}
+
+/**
+ * Turns on GitHub auto-merge for this exact head, with the first merge method the repository
+ * allows of squash, merge commit, and rebase.
+ */
+export async function enableAutoMerge(
+  run: CommandRunner,
+  ref: PullRequestRef,
+  head: string,
+  cwd: string,
+): Promise<void> {
+  const allowed = await ghChecked(run, cwd, [
+    "repo",
+    "view",
+    ref.repo,
+    "--json",
+    "squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed",
+  ]);
+  const methods = parseObject(allowed.stdout) ?? {};
+  const method =
+    methods.squashMergeAllowed === true
+      ? "--squash"
+      : methods.mergeCommitAllowed === true
+        ? "--merge"
+        : "--rebase";
+  await ghChecked(run, cwd, [
+    "pr",
+    "merge",
+    String(ref.number),
+    "--repo",
+    ref.repo,
+    "--auto",
+    method,
+    "--match-head-commit",
+    head,
+  ]);
+}
+
+/**
+ * Brings a branch up to date by merging its base into it through the GitHub API, which only ever
+ * adds a commit on top. Returns the merge commit, or undefined when there was nothing to merge.
+ */
+export async function mergeBaseIntoBranch(
+  run: CommandRunner,
+  input: Readonly<{ repository: string; branch: string; base: string; cwd: string }>,
+): Promise<string | undefined> {
+  const result = await ghChecked(run, input.cwd, [
+    "api",
+    "-X",
+    "POST",
+    `repos/${input.repository}/merges`,
+    "-f",
+    `base=${input.branch}`,
+    "-f",
+    `head=${input.base}`,
+    "-f",
+    `commit_message=Merge ${input.base} into ${input.branch}`,
+    "--jq",
+    ".sha",
+  ]);
+  const sha = result.stdout.trim();
+  return sha.length === 0 ? undefined : sha;
+}
+
 /** Every open pull request the signed-in GitHub user authored, across repositories. */
 export async function listMyOpenPullRequests(
   run: CommandRunner,
@@ -273,6 +407,7 @@ function observation(
     branch: text(view.headRefName),
     headRepository:
       headOwner.length > 0 && headName.length > 0 ? `${headOwner}/${headName}` : ref.repo,
+    fork: view.isCrossRepository === true,
     head: read.head,
     tree: read.tree,
     base: text(view.baseRefName),

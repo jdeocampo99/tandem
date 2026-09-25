@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { centralConfigPath } from "../../src/config/repositories.ts";
 import type { PrWatchViewRow } from "../../src/pr-watch/view.ts";
 import { PrWatcher } from "../../src/pr-watch/watcher.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
@@ -20,10 +21,9 @@ function serviceFor(world: ScenarioWorld): TandemService {
   });
 }
 
-/** Lets the watcher's next scheduled check come due, then runs one scheduler tick. */
+/** Five minutes later, opens the view, which checks GitHub first. */
 async function nextCheck(world: ScenarioWorld, service: TandemService): Promise<PrWatchViewRow> {
   world.advanceClock(5);
-  await service.tick();
   return onlyRow(service);
 }
 
@@ -267,5 +267,155 @@ test("GitHub's rate limit pauses checks and says so in the header", async () => 
     world.advanceClock(10);
     await service.tick();
     expect(reads()).toBe(2);
+  });
+});
+
+async function watchingWithOrigin(
+  body: (world: ScenarioWorld, service: TandemService) => Promise<void>,
+): Promise<void> {
+  await withScenario({ origin: `https://github.com/${REPO}.git` }, async (world) => {
+    const service = serviceFor(world);
+    try {
+      await body(world, service);
+    } finally {
+      await service.shutdown();
+    }
+  });
+}
+
+/** Saves the project's settings.toml with a `[merging]` section. */
+async function saveMergingSettings(world: ScenarioWorld, merging: string): Promise<void> {
+  const path = await centralConfigPath(world.repoPath, world.home);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `repoPath = ${JSON.stringify(world.repoPath)}\n\n[merging]\n${merging}\n`);
+}
+
+function labelEdits(world: ScenarioWorld): number {
+  return world.trace().filter((event) => event.action === "gh pr edit").length;
+}
+
+test("a published pull request gets auto-merge once, and a draft never does", async () => {
+  await watching(async (world, service) => {
+    const pr = world.github.openPullRequest({
+      repo: REPO,
+      number: 7,
+      draft: true,
+      checks: [{ name: "unit", state: "pass" }],
+    });
+    const draft = await service.prWatchStart({ pullRequest: PR });
+    expect(draft.rows[0]?.status).toBe("📝 draft");
+    expect(pr.autoMerge).toBe(false);
+
+    pr.draft = false;
+    expect(await nextCheck(world, service)).toMatchObject({
+      color: "green",
+      status: "🤖 auto-merge",
+      note: "🤖 turned on auto-merge",
+    });
+    expect(pr.autoMerge).toBe(true);
+    await nextCheck(world, service);
+    expect(world.trace().filter((event) => event.action === "gh pr merge")).toHaveLength(1);
+  });
+});
+
+test("with an Aviator queue: queued, kicked out by the queue, requeued once, merged", async () => {
+  await watching(async (world, service) => {
+    world.github.aviatorRepositories.push(REPO);
+    const pr = world.github.openPullRequest({
+      repo: REPO,
+      number: 7,
+      checks: [{ name: "unit", state: "pass" }],
+    });
+    expect((await service.prWatchStart({ pullRequest: PR })).rows[0]?.status).toBe("🚂 queued");
+    expect(pr.labels).toEqual(["mergequeue"]);
+
+    world.github.relabel(pr, {
+      add: "blocked",
+      remove: "mergequeue",
+      by: "aviator-app[bot]",
+      bot: true,
+    });
+    expect(await nextCheck(world, service)).toMatchObject({
+      color: "green",
+      note: "🚂 requeued after the queue took it out",
+    });
+    expect(pr.labels).toEqual(["mergequeue"]);
+
+    world.github.relabel(pr, {
+      add: "blocked",
+      remove: "mergequeue",
+      by: "aviator-app[bot]",
+      bot: true,
+    });
+    expect(await nextCheck(world, service)).toMatchObject({ color: "red", status: "⛔ blocked" });
+    expect(labelEdits(world)).toBe(2);
+    await service.prWatchNotices();
+
+    world.github.relabel(pr, { add: "mergequeue", remove: "blocked", by: "you", bot: false });
+    pr.state = "MERGED";
+    pr.mergedAt = world.clock();
+    expect((await nextCheck(world, service)).color).toBe("done");
+    expect(await service.prWatchNotices()).toEqual(["🎉 acme/app#7 merged"]);
+  });
+});
+
+test("a person who takes a pull request out of the queue is left alone", async () => {
+  await watching(async (world, service) => {
+    world.github.aviatorRepositories.push(REPO);
+    const pr = world.github.openPullRequest({
+      repo: REPO,
+      number: 7,
+      checks: [{ name: "unit", state: "pass" }],
+    });
+    await service.prWatchStart({ pullRequest: PR });
+    world.github.relabel(pr, { remove: "mergequeue", by: "sam", bot: false });
+    expect(await nextCheck(world, service)).toMatchObject({
+      color: "yellow",
+      note: "✋ @sam took it out of the queue; leaving it",
+    });
+    world.github.push(pr);
+    await nextCheck(world, service);
+    expect(labelEdits(world)).toBe(1);
+    expect(pr.labels).toEqual([]);
+  });
+});
+
+test("a queue label with no blocked label: a flaky kick-out is retried and requeued", async () => {
+  await watchingWithOrigin(async (world, service) => {
+    await saveMergingSettings(world, 'mergeWith = "queue-label"\nqueueLabel = "ready-to-merge"');
+    const pr = world.github.openPullRequest({
+      repo: REPO,
+      number: 7,
+      checks: [{ name: "e2e", state: "pass" }],
+    });
+    await service.prWatchStart({ pullRequest: "7", repoPath: world.repoPath });
+    expect(pr.labels).toEqual(["ready-to-merge"]);
+
+    world.github.relabel(pr, { remove: "ready-to-merge", by: "github-actions[bot]", bot: true });
+    pr.checks = [{ name: "e2e", state: "fail" }];
+    expect((await nextCheck(world, service)).note).toBe("🔁 retried e2e (flaky?)");
+
+    pr.checks = [{ name: "e2e", state: "pass" }];
+    expect((await nextCheck(world, service)).note).toBe("🚂 requeued after the queue took it out");
+    expect(pr.labels).toEqual(["ready-to-merge"]);
+    expect(world.trace().some((event) => event.action === "gh api GET contents")).toBe(false);
+  });
+});
+
+test("an approval dismissed by the watcher's empty commit goes red", async () => {
+  await watching(async (world, service) => {
+    const pr = world.github.openPullRequest({
+      repo: REPO,
+      number: 7,
+      checks: [{ name: "e2e", state: "fail" }],
+    });
+    await service.prWatchStart({ pullRequest: PR });
+    pr.reviewDecision = "REVIEW_REQUIRED";
+    pr.checks = [{ name: "e2e", state: "pass" }];
+    expect(await nextCheck(world, service)).toMatchObject({
+      color: "red",
+      status: "✋ approval",
+      note: "🙋 the watcher's push dismissed the approval",
+    });
   });
 });

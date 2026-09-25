@@ -31,6 +31,8 @@ import {
   INSTRUCTION_CHANNELS,
   isRecord,
   parseJson,
+  readNonEmptyString,
+  readPositiveInteger,
 } from "./values.ts";
 
 const ROOT_GUIDANCE_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
@@ -204,9 +206,61 @@ function readCleanupCommandList(value: unknown, source: string): readonly string
 }
 
 /**
+ * How PR watch merges this repository's pull requests, as written in `[merging]`; each key left
+ * out falls back to PR watch's default.
+ */
+export type MergingSettingsFile = Readonly<{
+  readonly mergeWith?: "auto-merge" | "queue-label";
+  readonly queueLabel?: string;
+  readonly blockedLabel?: string;
+  readonly maxCiRetries?: number;
+  readonly stuckAfterMinutes?: number;
+}>;
+
+const MERGING_KEYS: Readonly<Record<string, true>> = {
+  mergeWith: true,
+  queueLabel: true,
+  blockedLabel: true,
+  maxCiRetries: true,
+  stuckAfterMinutes: true,
+};
+
+function readMergingTable(value: unknown, source: string): MergingSettingsFile | undefined {
+  if (value === undefined) return undefined;
+  const field = `${source} merging`;
+  if (!isRecord(value)) throw new TypeError(`${field} must be a table`);
+  assertKnownKeys(value, MERGING_KEYS, field);
+  const { mergeWith, queueLabel, blockedLabel, maxCiRetries, stuckAfterMinutes } = value;
+  if (mergeWith !== undefined && mergeWith !== "auto-merge" && mergeWith !== "queue-label") {
+    throw new TypeError(`${field}.mergeWith must be "auto-merge" or "queue-label"`);
+  }
+  if (
+    maxCiRetries !== undefined &&
+    (!Number.isSafeInteger(maxCiRetries) || Number(maxCiRetries) < 0)
+  ) {
+    throw new TypeError(`${field}.maxCiRetries must be a whole number of retries`);
+  }
+  return {
+    ...(mergeWith === undefined ? {} : { mergeWith }),
+    ...(queueLabel === undefined
+      ? {}
+      : { queueLabel: readNonEmptyString(queueLabel, `${field}.queueLabel`) }),
+    ...(blockedLabel === undefined
+      ? {}
+      : { blockedLabel: readNonEmptyString(blockedLabel, `${field}.blockedLabel`) }),
+    ...(maxCiRetries === undefined ? {} : { maxCiRetries: Number(maxCiRetries) }),
+    ...(stuckAfterMinutes === undefined
+      ? {}
+      : {
+          stuckAfterMinutes: readPositiveInteger(stuckAfterMinutes, `${field}.stuckAfterMinutes`),
+        }),
+  };
+}
+
+/**
  * settings.toml is the policy itself plus the `repoPath` it belongs to, the coordinator's MCP
- * servers, and the cleanup commands. Those two are machine settings read live, not task policy, so
- * they stay out of the policy.
+ * servers, the cleanup commands, and `[merging]`. Those are machine settings read live, not task
+ * policy, so they stay out of the policy.
  */
 function readSettingsToml(text: string, source: string, root: string): Record<string, unknown> {
   let parsed: unknown;
@@ -223,6 +277,7 @@ function readSettingsToml(text: string, source: string, root: string): Record<st
   }
   readCoordinatorMcpServerList(parsed.coordinatorMcpServers, source);
   readCleanupCommandList(parsed.cleanupCommands, source);
+  readMergingTable(parsed.merging, source);
   return parsed;
 }
 
@@ -231,6 +286,7 @@ function parseSettingsToml(text: string, source: string, root: string): unknown 
     repoPath: _repoPath,
     coordinatorMcpServers: _servers,
     cleanupCommands: _cleanup,
+    merging: _merging,
     ...policy
   } = readSettingsToml(text, source, root);
   return policy;
@@ -396,6 +452,17 @@ export async function readCleanupCommands(
   const text = (await options.readText?.(file)) ?? (await readFile(file, "utf8"));
   const settings = readSettingsToml(text, file, root);
   return readCleanupCommandList(settings.cleanupCommands, file);
+}
+
+/** How PR watch merges this repository's pull requests; undefined when unset or not onboarded. */
+export async function readMergingSettings(
+  options: Readonly<{ repoPath: string; home: string; readText?: PolicyTextReader }>,
+): Promise<MergingSettingsFile | undefined> {
+  const root = await repositoryRoot(options.repoPath);
+  const file = await existingCentralFile(centralPaths(root, await configuredHome(options.home)));
+  if (file === undefined || !file.endsWith(".toml")) return undefined;
+  const text = (await options.readText?.(file)) ?? (await readFile(file, "utf8"));
+  return readMergingTable(readSettingsToml(text, file, root).merging, file);
 }
 
 /** Resolves central policy by canonical repository identity and pins guidance from the requested checkout. */
@@ -588,6 +655,17 @@ ${setting(coordinatorMcpServers, "coordinatorMcpServers", '["linear"]')}
 # deepScrutiny = false
 # jevAssistance = "off"
 # sourceTransmission = false
+
+# How PR watch merges published pull requests and how patient it is with CI. mergeWith is
+# "auto-merge" (GitHub's own) or "queue-label" (add queueLabel; blockedLabel is the label the
+# queue adds when it kicks a pull request out). Without this section, auto-merge, unless the
+# repository has .aviator/config.yml: then queue-label with "mergequeue" and "blocked".
+# [merging]
+# mergeWith = "queue-label"
+# queueLabel = "mergequeue"
+# blockedLabel = "blocked"
+# maxCiRetries = 1
+# stuckAfterMinutes = 60
 
 # Use a different model for one role in this project only. Roles: coordinator, scout,
 # implementer, reviewer, presentation. Other roles keep your saved choices.

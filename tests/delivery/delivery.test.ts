@@ -395,6 +395,53 @@ test("publishes the exact task branch only after identity checks and avoids dupl
   expect(runner.calls.some((call) => call.argv.includes("--force"))).toBe(false);
 });
 
+test("publishing a task whose draft is open marks that draft ready instead of opening another", async () => {
+  const calls: CommandRequest[] = [];
+  let draft = true;
+  const pullRequest = {
+    number: 7,
+    url: "https://github.com/acme/repo/pull/7",
+    headRefName: "tandem/delivery-task",
+    headRefOid: "head-1",
+    baseRefName: "main",
+    title: "Reviewed delivery",
+  };
+  const run: CommandRunner = async (request) => {
+    calls.push(request);
+    const argv = request.argv;
+    if (argv[0] === "git" && argv.includes("rev-parse")) return result("head-1\n");
+    if (argv[0] === "git" && argv.includes("symbolic-ref")) return result("tandem/delivery-task\n");
+    if (argv[0] === "git" && argv.includes("remote"))
+      return result("git@github.com:acme/repo.git\n");
+    if (argv[0] === "git") return result();
+    if (argv[1] === "pr" && argv[2] === "list") {
+      return result(JSON.stringify([{ ...pullRequest, state: "OPEN", isDraft: draft }]));
+    }
+    if (argv[1] === "pr" && argv[2] === "ready") {
+      draft = false;
+      return result();
+    }
+    if (argv[1] === "pr" && argv[2] === "view") {
+      return result(JSON.stringify({ ...pullRequest, state: "OPEN", isDraft: draft }));
+    }
+    throw new Error(`unexpected command ${JSON.stringify(argv)}`);
+  };
+  const published = await publishReviewedTask({
+    task: task(),
+    summary,
+    title: "Reviewed delivery",
+    base: "main",
+    approved: true,
+    run,
+  });
+  expect(published.state).toBe("open");
+  expect(calls.filter((call) => call.argv[0] === "gh").map((call) => call.argv[2])).toEqual([
+    "list",
+    "ready",
+    "view",
+  ]);
+});
+
 test("publishes only the reviewed SHA when the local task branch advances during PR lookup", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-delivery-race-"));
   try {
@@ -762,7 +809,7 @@ test("a ready task's draft still refuses to claim acceptance", () => {
 
   expect(body).toContain("Delivery acceptance is still a separate explicit step.");
   expect(body).toContain("Runner-owned required GitHub checks on the delivered commit.");
-  expect(body).toContain("Tandem never merges or deploys automatically.");
+  expect(body).toContain("Tandem never merges a draft");
   expect(body).toContain("- None recorded in durable task state.");
   expect(body).not.toContain("A passing behavior review");
 });

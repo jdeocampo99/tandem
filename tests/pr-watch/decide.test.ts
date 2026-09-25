@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import {
-  DEFAULT_MERGING_SETTINGS,
   decidePrWatch,
+  mergingSettings,
   type PrObservation,
   type PrWatchFacts,
   type PrWatchLogEntry,
@@ -19,6 +19,7 @@ function pr(overrides: Partial<PrObservation> = {}): PrObservation {
     url: "https://github.com/acme/app/pull/7",
     branch: "add-cache",
     headRepository: "acme/app",
+    fork: false,
     head: "head-1",
     tree: "tree-1",
     base: "main",
@@ -37,7 +38,7 @@ function facts(overrides: Partial<PrWatchFacts> = {}): PrWatchFacts {
   return {
     observation: pr(),
     log: [],
-    settings: DEFAULT_MERGING_SETTINGS,
+    settings: mergingSettings(undefined, false),
     now: NOW,
     headSeenAt: NOW,
     ...overrides,
@@ -85,7 +86,10 @@ test("the retry budget is per check and per version of the code", () => {
 });
 
 test("running checks wait, and one past the limit is stuck", () => {
-  const running = pr({ checks: [{ name: "build", state: "pending", startedAt: NOW }] });
+  const running = pr({
+    autoMerge: true,
+    checks: [{ name: "build", state: "pending", startedAt: NOW }],
+  });
   expect(decidePrWatch(facts({ observation: running }))).toMatchObject({
     row: { color: "green", note: "⏳ CI running" },
   });
@@ -144,4 +148,49 @@ test("checks run every minute while busy, every five otherwise, and not at all w
       later,
     ),
   ).toBe(false);
+});
+
+test("settings fall back to auto-merge, or Aviator's labels when the repository has its config", () => {
+  expect(mergingSettings(undefined, false)).toEqual({
+    mergeWith: "auto-merge",
+    queueLabel: "mergequeue",
+    maxCiRetries: 1,
+    stuckAfterMinutes: 60,
+  });
+  expect(mergingSettings(undefined, true)).toMatchObject({
+    mergeWith: "queue-label",
+    queueLabel: "mergequeue",
+    blockedLabel: "blocked",
+  });
+  expect(
+    mergingSettings({ mergeWith: "queue-label", queueLabel: "ready-to-merge" }, false),
+  ).not.toHaveProperty("blockedLabel");
+});
+
+test("a branch GitHub requires to be up to date is updated once per head, never a fork's", () => {
+  const behind = facts({
+    observation: pr({ behind: true, autoMerge: true, checks: [{ name: "unit", state: "passed" }] }),
+    log: [{ at: NOW, kind: "auto-merge", head: "head-0", tree: "tree-0" }],
+  });
+  expect(decidePrWatch(behind)).toMatchObject({ action: { kind: "update-branch" } });
+  expect(
+    decidePrWatch({
+      ...behind,
+      log: [
+        ...behind.log,
+        {
+          at: NOW,
+          kind: "update-branch",
+          head: "head-1",
+          tree: "tree-1",
+          checks: [],
+          pushed: "head-2",
+          approved: true,
+        },
+      ],
+    }),
+  ).not.toHaveProperty("action");
+  expect(
+    decidePrWatch({ ...behind, observation: { ...behind.observation, fork: true } }),
+  ).not.toHaveProperty("action");
 });

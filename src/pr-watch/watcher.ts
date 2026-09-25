@@ -1,10 +1,12 @@
 import { readHomeSettings } from "../config/home-settings.ts";
+import { readMergingSettings } from "../config/repositories.ts";
 import type { Clock, CommandRunner, IsoTimestamp, TaskRecord } from "../contracts.ts";
-import { readGitText, repositoryFromRemote } from "../delivery/pull-requests.ts";
+import { repositoryFromRemote } from "../delivery/pull-requests.ts";
 import { type PullRequestRef, parsePullRequestRef } from "../pr-review/pull-request.ts";
 import {
-  DEFAULT_MERGING_SETTINGS,
   decidePrWatch,
+  type MergingSettings,
+  mergingSettings,
   type PrObservation,
   type PrWatchAction,
   type PrWatchDecision,
@@ -14,9 +16,14 @@ import {
   type PrWatchRow,
 } from "./decide.ts";
 import {
+  editLabels,
+  enableAutoMerge,
   GitHubRateLimitError,
+  hasAviatorConfig,
   listMyOpenPullRequests,
+  mergeBaseIntoBranch,
   pushEmptyCommit,
+  readDequeuer,
   readFailingChecks,
   readWatchedPullRequest,
 } from "./github.ts";
@@ -75,13 +82,17 @@ export class PrWatcher {
     return this.storedView();
   }
 
-  /** Watches a pull request the user named; one they stopped is watched again. */
-  async start(ref: PullRequestRef): Promise<PrWatchView> {
+  /**
+   * Watches a pull request the user named; one they stopped is watched again. `repoPath`, a
+   * checkout of its repository, is where its `[merging]` settings come from.
+   */
+  async start(named: NamedPullRequest): Promise<PrWatchView> {
     const now = this.#deps.clock();
+    const { ref, repoPath } = named;
     await withPrWatches(this.#deps.home, (transaction) => {
       const existing = transaction.watches.find((watch) => sameRef(watch.ref, ref));
       if (existing === undefined) {
-        transaction.put(newWatch(ref, "user", now));
+        transaction.put(newWatch(ref, "user", now, repoPath));
       } else if (existing.stoppedAt !== undefined) {
         const { stoppedAt: _stopped, finishedAt: _finished, ...rest } = existing;
         transaction.put({ ...rest, origin: "user", startedAt: now });
@@ -207,11 +218,12 @@ export class PrWatcher {
     const pr = read.observation;
     const head =
       watch.head?.oid === pr.head ? watch.head : { oid: pr.head, tree: pr.tree, seenAt: now };
+    const merging = await this.mergingFor(watch);
     const decision = await this.decide(
       {
         observation: pr,
         log: watch.log,
-        settings: DEFAULT_MERGING_SETTINGS,
+        settings: merging.settings,
         now,
         headSeenAt: head.seenAt,
       },
@@ -220,9 +232,16 @@ export class PrWatcher {
     const outcome =
       decision.action === undefined
         ? { row: decision.row }
-        : await this.apply(decision.action, { watch, pr, row: decision.row, now });
+        : await this.apply(decision.action, {
+            watch,
+            pr,
+            settings: merging.settings,
+            row: decision.row,
+            now,
+          });
     return (current) => ({
       ...current,
+      ...(merging.aviator === undefined ? {} : { aviator: merging.aviator }),
       checkedAt: now,
       head,
       summary: summaryOf(pr),
@@ -232,6 +251,23 @@ export class PrWatcher {
         : {}),
       ...withRow(current, outcome.row),
     });
+  }
+
+  /**
+   * The repository's `[merging]` settings, read live from the checkout the watch belongs to. Only
+   * without an explicit `mergeWith` does it look for an Aviator config, once per watch.
+   */
+  private async mergingFor(
+    watch: PrWatch,
+  ): Promise<Readonly<{ settings: MergingSettings; aviator?: boolean }>> {
+    const file =
+      watch.repoPath === undefined
+        ? undefined
+        : await readMergingSettings({ repoPath: watch.repoPath, home: this.#deps.home });
+    if (file?.mergeWith !== undefined) return { settings: mergingSettings(file, false) };
+    const aviator =
+      watch.aviator ?? (await hasAviatorConfig(this.#deps.run, watch.ref.repo, this.#deps.home));
+    return { settings: mergingSettings(file, aviator), aviator };
   }
 
   /** Decides, making each extra GitHub read the decision asks for first. */
@@ -260,16 +296,30 @@ export class PrWatcher {
             this.#deps.home,
           ),
         };
+      case "dequeued-by":
+        return {
+          ...facts,
+          dequeuedBy: await readDequeuer(this.#deps.run, ref, facts.settings, this.#deps.home),
+        };
     }
   }
 
   /** Applies one decided action, unless the user stopped watching while GitHub was being read. */
   private async apply(
     action: PrWatchAction,
-    context: Readonly<{ watch: PrWatch; pr: PrObservation; row: PrWatchRow; now: IsoTimestamp }>,
+    context: Readonly<{
+      watch: PrWatch;
+      pr: PrObservation;
+      settings: MergingSettings;
+      row: PrWatchRow;
+      now: IsoTimestamp;
+    }>,
   ): Promise<Outcome> {
-    const { pr, row, now } = context;
-    if (!(await this.stillWatched(context.watch.ref))) return { row };
+    const { pr, row, now, settings } = context;
+    const ref = context.watch.ref;
+    const { run, home } = this.#deps;
+    if (!(await this.stillWatched(ref))) return { row };
+    const logged = { at: now, head: pr.head, tree: pr.tree };
     switch (action.kind) {
       case "retry": {
         const pushed = await pushEmptyCommit(this.#deps.run, {
@@ -286,16 +336,56 @@ export class PrWatcher {
         return {
           row: { ...row, note: `🔁 retried ${action.checks.join(", ")} (flaky?)` },
           entry: {
-            at: now,
+            ...logged,
             kind: "retry",
-            head: pr.head,
-            tree: pr.tree,
             checks: action.checks,
             pushed: pushed.commit,
             approved: pr.reviewDecision === "APPROVED",
           },
         };
       }
+      case "update-branch": {
+        const merged = await mergeBaseIntoBranch(run, {
+          repository: pr.headRepository,
+          branch: pr.branch,
+          base: pr.base,
+          cwd: home,
+        });
+        if (merged === undefined) return { row };
+        return {
+          row,
+          entry: {
+            ...logged,
+            kind: "update-branch",
+            checks: [],
+            pushed: merged,
+            approved: pr.reviewDecision === "APPROVED",
+          },
+        };
+      }
+      case "queue":
+        await editLabels(run, ref, { add: settings.queueLabel }, home);
+        return { row, entry: { ...logged, kind: "queue" } };
+      case "auto-merge":
+        await enableAutoMerge(run, ref, pr.head, home);
+        return { row, entry: { ...logged, kind: "auto-merge" } };
+      case "requeue":
+        if (settings.mergeWith === "auto-merge") {
+          await enableAutoMerge(run, ref, pr.head, home);
+        } else {
+          await editLabels(
+            run,
+            ref,
+            {
+              add: settings.queueLabel,
+              ...(settings.blockedLabel !== undefined && pr.labels.includes(settings.blockedLabel)
+                ? { remove: settings.blockedLabel }
+                : {}),
+            },
+            home,
+          );
+        }
+        return { row, entry: { ...logged, kind: "requeue" } };
     }
   }
 
@@ -306,23 +396,42 @@ export class PrWatcher {
   }
 }
 
+/** A pull request the user named, with the checkout of its repository when they named it from one. */
+export type NamedPullRequest = Readonly<{ ref: PullRequestRef; repoPath?: string }>;
+
 /**
- * The pull request a user named: a GitHub link, `owner/repo#N`, or `#N` in the repository checked
- * out at `repoPath`.
+ * The pull request a user named: a GitHub link, `owner/repo#N`, or `N` / `#N` in the repository
+ * checked out at `repoPath`. The checkout is kept only when it is that pull request's repository.
  */
-export async function resolvePullRequestRef(
+export async function resolvePullRequest(
   run: CommandRunner,
   text: string,
   repoPath: string | undefined,
-): Promise<PullRequestRef> {
-  const named = parsePullRequestRef(text);
-  if (named !== undefined) return named;
+): Promise<NamedPullRequest> {
+  const origin = repoPath === undefined ? undefined : await originRepository(run, repoPath);
   const number = /^#?(\d+)$/u.exec(text.trim())?.[1];
-  if (number === undefined || repoPath === undefined) {
+  const ref =
+    parsePullRequestRef(text) ??
+    (number === undefined || origin === undefined
+      ? undefined
+      : { repo: origin, number: Number(number) });
+  if (ref === undefined) {
     throw new Error(`"${text}" is not a pull request; use its link, owner/repo#N, or #N here`);
   }
-  const remote = await readGitText(run, repoPath, ["remote", "get-url", "origin"], "origin");
-  return { repo: repositoryFromRemote(remote).toLowerCase(), number: Number(number) };
+  return { ref, ...(repoPath !== undefined && origin === ref.repo ? { repoPath } : {}) };
+}
+
+async function originRepository(run: CommandRunner, repoPath: string): Promise<string | undefined> {
+  const result = await run({
+    argv: ["git", "-C", repoPath, "remote", "get-url", "origin"],
+    cwd: repoPath,
+  });
+  if (result.code !== 0) return undefined;
+  try {
+    return repositoryFromRemote(result.stdout).toLowerCase();
+  } catch {
+    return undefined;
+  }
 }
 
 /** Checks run when due: every 1 or 5 minutes, never while another Tandem holds the poll. */
@@ -373,13 +482,19 @@ function taskWatches(
     if (pullRequest.state !== "draft" && pullRequest.state !== "open") continue;
     const ref = { repo: pullRequest.repository.toLowerCase(), number: pullRequest.number };
     if ([...watches, ...started].some((watch) => sameRef(watch.ref, ref))) continue;
-    started.push({ ...newWatch(ref, "task", now), taskId: task.id });
+    const repoPath = task.target?.checkout ?? task.repoPath;
+    started.push({ ...newWatch(ref, "task", now, repoPath), taskId: task.id });
   }
   return started;
 }
 
-function newWatch(ref: PullRequestRef, origin: PrWatch["origin"], now: IsoTimestamp): PrWatch {
-  return { ref, origin, startedAt: now, log: [] };
+function newWatch(
+  ref: PullRequestRef,
+  origin: PrWatch["origin"],
+  now: IsoTimestamp,
+  repoPath?: string,
+): PrWatch {
+  return { ref, origin, startedAt: now, ...(repoPath === undefined ? {} : { repoPath }), log: [] };
 }
 
 function isActive(watch: PrWatch): boolean {

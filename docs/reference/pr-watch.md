@@ -13,13 +13,15 @@ tests/evals/pr-watch-scenarios.test.ts.
 
 | Moment | What happens |
 | --- | --- |
-| A Tandem task records a pull request (its draft at ready, or a publish) | Watched, tied to the task. |
+| A Tandem task records a pull request (its draft at ready, or a publish) | Watched, tied to the task. A draft is watched for CI only and never queued. |
+| It is published (draft to ready; Tandem's `publish` marks its draft ready) | Also merged: auto-merge is armed or the queue label added. |
 | `tandem watch <link, owner/repo#N, or N>` or the `pr-watch-start` action | Watched. `N` means a pull request in the current directory's repository (the coordinator's project for the action). |
 | `watchAllMyPrs = true` in `<home>/settings.toml` | Every open pull request the signed-in `gh` user authored, across repositories, found with `gh search prs --author @me`. |
 | `tandem watch --stop PR`, the `pr-watch-stop` action ("hands off #N") | Stopped. The record stays, so neither its task nor `watchAllMyPrs` picks it up again; watching it by name starts it again. |
 | GitHub reports it merged or closed | Done. It stays in the view as ⚪ for the rest of that day. |
 
-A cancelled task's pull request is not picked up. A draft is watched for CI only.
+A cancelled task's pull request is not picked up. Whether to merge follows GitHub's draft flag on
+every read, so a pull request watched by name merges once it is not a draft.
 
 ## Durable state
 
@@ -42,7 +44,9 @@ A cancelled task's pull request is not picked up. A draft is watched for CI only
 - A full page of 100 checks means there may be more: `gh pr checks --json` reads them all.
 - The head commit's tree is read (`gh api repos/R/commits/SHA`) only when the head changes.
 - Extra reads happen only when the decision asks for them: the base branch's checks (one GraphQL
-  call) when a check fails.
+  call) when a check fails, and the issue events (label and auto-merge changes, with who made
+  them) when the pull request left the queue. Whether the repository has `.aviator/config.yml` is
+  read once per watch, and only when its settings do not name `mergeWith`.
 - An unreadable pull request (missing SSO authorization, a GraphQL error, no rollup at all) shows
   `⚠ can't read` with GitHub's reason, never "no checks".
 - `gh` output naming a rate limit (or HTTP 429) stops the pass, records a 15-minute wait, and the
@@ -74,12 +78,18 @@ acting, the watcher checks the pull request is still watched. First match wins:
 | `mergeable` is `UNKNOWN` | Nothing; GitHub is still computing it. |
 | Merge conflict | 🔴 red. |
 | Changes requested | 🔴 red. |
+| The watcher's own push is the head, the pull request was approved before it, and is not now | 🔴 red: the push dismissed the approval. |
 | A check pending longer than `stuckAfterMinutes` (from its start, or from when the watcher first saw the head) | 🔴 red, `⏰ stuck`. |
-| Checks running | Nothing. |
+| Checks still running | The failed-check rows below wait until every check finishes. |
 | A check failed, and fails on the base branch too | Wait, `🧱 main is red`. Once the base passes, the rules below apply. |
 | A check failed with a retry left for this code | Empty commit to rerun CI. |
 | A check failed again on the same code | 🔴 red, naming the check and linking its CI page. |
-| Otherwise | A row saying what it waits on: draft, review (naming requested reviewers), or approved. |
+| A draft | Nothing more: CI only. |
+| Published and never put up for merging (not already queued, blocked, or on auto-merge) | Arm auto-merge, or add `queueLabel`. Once per pull request, even while checks run. |
+| Checks running | Nothing. |
+| Behind its base, no conflicts, and GitHub requires up-to-date branches (`mergeStateStatus` `BEHIND`) | Update the branch, once per head. Not for a pull request from a fork. |
+| Out of the queue: `blockedLabel` present, or the queue label or auto-merge gone after the watcher set it | Look up who did it. A person: leave it alone and show who. The queue (a bot or app): requeue, once per head commit; a second kick-out at the same head goes 🔴 red. |
+| Otherwise | A row saying what it waits on: queued, auto-merge, review (naming requested reviewers), or approved. |
 
 - **Retry budget:** `maxCiRetries` (default 1) per check, per version of the code: the head
   commit's tree. An empty commit keeps the tree, so it spends the budget; a real push changes the
@@ -89,8 +99,25 @@ acting, the watcher checks the pull request is still watched. First match wins:
   someone pushed in between, GitHub refuses the move, the branch keeps their push, nothing is
   logged, and the next check sees the new head. It works with any CI that runs on push. A pull
   request from a fork is pushed to the fork, which needs write access there.
-- The action log records each empty commit: the head and tree it answered, the checks it reran,
-  the commit it pushed, and whether the pull request was approved just before.
+- The action log records every action with the head and tree it answered: each empty commit and
+  branch update with the commit it pushed and whether the pull request was approved just before
+  (that is how a lost approval is noticed), and each queue, auto-merge, and requeue.
+
+## Merging
+
+- **Auto-merge** (`mergeWith = "auto-merge"`, the default): `gh pr merge --auto` with the first
+  method the repository allows of squash, merge commit, and rebase, pinned with
+  `--match-head-commit` to the head it saw. Turned off after the watcher armed it: a person's
+  `auto_merge_disabled` is left alone; otherwise it is armed again, once per head.
+- **Queue label** (`mergeWith = "queue-label"`): `gh pr edit --add-label queueLabel`. A requeue
+  removes `blockedLabel` (when present) in the same edit. Tagalingo-style queues with no
+  `blockedLabel` count the queue label disappearing as the kick-out.
+- **Updating a branch** merges the base into it through the GitHub API (`POST repos/R/merges`),
+  which only adds a commit on top, and records the merge commit.
+- A person is any actor that is not a GitHub `Bot` and whose login does not end in `[bot]`; the
+  signed-in user's own label changes count as a person's.
+- These are the only merges Tandem makes without asking. The `merge` action still merges right
+  away when the user asks and approves it.
 
 ## The view
 
@@ -118,5 +145,21 @@ PR watch · 4 open · checked 5s ago
 ## Settings
 
 - `watchAllMyPrs` lives in `<home>/settings.toml` (see [policy.md](policy.md#where-settings-live)).
-- Until `[merging]` settings exist, every repository uses `maxCiRetries = 1` and
-  `stuckAfterMinutes = 60`.
+- Per repository, `[merging]` in the project's settings.toml, read live on every check like
+  `cleanupCommands` and never pinned to a task:
+
+  ```toml
+  [merging]
+  mergeWith = "queue-label"     # "auto-merge" (GitHub) or "queue-label"
+  queueLabel = "mergequeue"     # added to put the pull request in the queue
+  blockedLabel = "blocked"      # present when the queue kicked it out
+  maxCiRetries = 1
+  stuckAfterMinutes = 60
+  ```
+
+- Defaults: `auto-merge`, one retry, 60 minutes. A repository with `.aviator/config.yml` defaults
+  to `queue-label` with `mergequeue` and `blocked`. Keys left out keep their default.
+- The settings come from the checkout the watch belongs to: the task's repository (or its target
+  checkout), or the directory or project it was named from when that is its repository. A pull
+  request watched through `watchAllMyPrs`, or named from elsewhere, uses the defaults.
+- Setup writes the section commented out with descriptions, like the other settings.

@@ -19,6 +19,7 @@ import {
   onboardRepo,
   readCleanupCommands,
   readCoordinatorMcpServers,
+  readMergingSettings,
   resolveRepoPolicy,
 } from "../../src/config/repositories.ts";
 
@@ -510,14 +511,26 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
       "instructionFiles",
       "instructions",
       "maxFixRounds",
+      "merging",
       "models",
       "repoPath",
       "reviewLevels",
       "setupCommands",
       "validationCommands",
     ]);
-    const { repoPath, coordinatorMcpServers, cleanupCommands, ...policy } = settings;
+    const { repoPath, coordinatorMcpServers, cleanupCommands, merging, ...policy } = settings;
     expect(repoPath).toBe(repo);
+    expect(merging).toEqual({
+      mergeWith: "queue-label",
+      queueLabel: "mergequeue",
+      blockedLabel: "blocked",
+      maxCiRetries: 1,
+      stuckAfterMinutes: 60,
+    });
+    await writeFile(written.configPath, enabled, "utf8");
+    expect(await readMergingSettings({ repoPath: repo, home })).toEqual(
+      merging as Awaited<ReturnType<typeof readMergingSettings>>,
+    );
     expect(coordinatorMcpServers).toEqual(["linear"]);
     expect(cleanupCommands).toEqual(["docker compose down"]);
     expect(() => parsePolicy(policy)).not.toThrow();

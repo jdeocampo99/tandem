@@ -22,8 +22,9 @@ Tandem runs locally on your Mac.
   models while coding gets a stronger one. Tandem never switches to a pricier model on its own, and
   it can show what each request cost. When a task finishes and the coordinator's chat has grown
   long, it compacts that chat so later turns don't keep paying for old history.
-- **You approve what matters.** Research starts on its own, but code changes, pull requests, and
-  merges each wait for your yes. Tandem never merges by itself.
+- **You approve what matters.** Research starts on its own, but code changes and pull requests
+  each wait for your yes. Once you publish a pull request, Tandem merges it when its checks pass;
+  a draft is never merged.
 - **Several projects at once.** Open multiple repositories in one session; each gets its own
   coordinator and agents.
 
@@ -39,8 +40,8 @@ Tandem runs locally on your Mac.
 4. **Agents do the work.** A coding agent makes the change in its own worktree. Tandem runs your
    checks, then a separate reviewer looks at the change. Fixes loop until both pass.
 5. **You deliver.** When the task is ready, the coordinator offers to open a pull request with a
-   summary, the check results, and a checklist of things to verify by hand. Merging is a separate
-   approval.
+   summary, the check results, and a checklist of things to verify by hand. Once you publish it,
+   PR watch merges it when its checks pass, retrying flaky CI along the way.
 
 You can watch any agent in its own terminal pane, or chat with it directly.
 
@@ -167,8 +168,11 @@ it looks only at what changed and tells you which of your comments were addresse
 CI takes a while and sometimes flakes. PR watch keeps an eye on every pull request Tandem opens, and
 any other you name with `tandem watch <link>` (or `watchAllMyPrs = true` in `~/.tandem/settings.toml`
 for all of yours). When a check fails, it reruns CI once with an empty commit, and waits instead
-when the same check is failing on `main` too. It only interrupts you when a pull request needs
-you: a check failing twice on the same code, a stuck check, a conflict, or requested changes.
+when the same check is failing on `main` too. Once a pull request is published (not a draft), it
+turns on GitHub auto-merge, or adds your merge queue's label (set `[merging]` in the project's
+settings; Aviator repositories work without it), and puts it back in the queue after a flaky
+kick-out. It only interrupts you when a pull request needs you: a check failing twice on the same
+code, a stuck check, a conflict, requested changes, or a lost approval.
 
 ```
 PR watch · 3 open · checked 5s ago

@@ -279,12 +279,12 @@ async function approvalPrompt(
     case "publish":
       return {
         title: `Open a PR for ${name}?`,
-        message: `Into ${action.base}. Nothing is merged.`,
+        message: `Into ${action.base}. PR watch merges it once its checks pass.`,
       };
     case "publish-now":
       return {
         title: `Skip review and open a PR for ${name}?`,
-        message: `Into ${action.base}. Open findings are listed in the PR. Nothing is merged.`,
+        message: `Into ${action.base}. Open findings are listed in the PR. PR watch merges it once its checks pass.`,
       };
     case "draft":
       return {

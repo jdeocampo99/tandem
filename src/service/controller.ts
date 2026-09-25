@@ -56,7 +56,6 @@ import {
 import { maintainPool } from "../pool/maintenance.ts";
 import type { PoolMaintenanceResult } from "../pool/policy.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
-import type { PullRequestRef } from "../pr-review/pull-request.ts";
 import {
   createPrReviewWorkflow,
   type PostPrReviewResult,
@@ -69,7 +68,7 @@ import {
 import type { PrReviewState } from "../pr-review/state.ts";
 import { removeReviewWorktree } from "../pr-review/worktree.ts";
 import type { PrWatchView } from "../pr-watch/view.ts";
-import { PrWatcher, resolvePullRequestRef } from "../pr-watch/watcher.ts";
+import { type NamedPullRequest, PrWatcher, resolvePullRequest } from "../pr-watch/watcher.ts";
 import { PresentationFeedbackWorkflow } from "../presentations/feedback.ts";
 import { type PresentationRecord, readPresentationRecord } from "../presentations/records.ts";
 import { preparePresentation } from "../presentations/session.ts";
@@ -712,8 +711,8 @@ class TandemController {
       reviewAgain: (id) => this.#prReviews.again(assertTaskId(id)),
       reviewClose: (id) => this.#prReviews.close(assertTaskId(id)),
       prWatch: () => this.#prWatch.view(),
-      prWatchStart: async (input) => this.#prWatch.start(await this.pullRequestRef(input)),
-      prWatchStop: async (input) => this.#prWatch.stop(await this.pullRequestRef(input)),
+      prWatchStart: async (input) => this.#prWatch.start(await this.namedPullRequest(input)),
+      prWatchStop: async (input) => this.#prWatch.stop((await this.namedPullRequest(input)).ref),
       prWatchNotices: () => this.#prWatch.takeNotices(),
       shutdown: () => this.shutdown(),
     };
@@ -1570,9 +1569,9 @@ class TandemController {
     );
   }
 
-  private pullRequestRef(input: PullRequestInput): Promise<PullRequestRef> {
+  private namedPullRequest(input: PullRequestInput): Promise<NamedPullRequest> {
     if (!isRecord(input)) throw new TypeError("pull request input must be an object");
-    return resolvePullRequestRef(
+    return resolvePullRequest(
       this.#deps.run,
       singleLine(input.pullRequest, "pullRequest"),
       input.repoPath ?? this.#deps.sourceWorkspace?.repoPath,

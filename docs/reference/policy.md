@@ -114,9 +114,9 @@ differs from resolved policy is rejected.
 `parsePolicyOverride` in `src/config/policy.ts` is the full schema; unknown keys are rejected.
 Contracts the parser does not make obvious:
 
-- `repoPath` must equal the canonical root. `coordinatorMcpServers` and `cleanupCommands` are
-  machine settings read live from `settings.toml`; they are stripped out of task policy and never
-  pinned. Everything else is policy, pinned with the task at creation, so edits apply to new tasks.
+- `repoPath` must equal the canonical root. `coordinatorMcpServers`, `cleanupCommands`, and
+  `[merging]` (PR watch; see [pr-watch.md](pr-watch.md#settings)) are machine settings read live
+  from `settings.toml`; they are stripped out of task policy and never pinned. Everything else is policy, pinned with the task at creation, so edits apply to new tasks.
 - Setup writes the file once with discovered commands filled in and every other setting commented
   out with a description and example. A test uncomments them all and checks the result parses;
   keep that true when adding a setting.

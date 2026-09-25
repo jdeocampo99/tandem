@@ -39,8 +39,9 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 ## Safety boundaries
 
 - The main conversation owns approvals. Delegated research is automatic; implementation needs approved
-  scope. A ready task opens its own draft PR; final publishing, merging, deploying, and destructive
-  actions need specific approval. Never auto-merge.
+  scope. A ready task opens its own draft PR; final publishing, deploying, and destructive actions
+  need specific approval. Only PR watch merges on its own, and only a published (non-draft) pull
+  request, through GitHub auto-merge or the repository's queue label. Never force-push.
 - Separate original repository identity from the coordinator's clean, commit-pinned worktree.
   Preserve the original checkout, unmerged work, reports, and history.
 - Fail closed on ambiguous ownership. Labels alone never authorize terminal closure; force reset

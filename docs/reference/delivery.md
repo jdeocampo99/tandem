@@ -10,7 +10,9 @@ src/service/draft-refresh.ts, src/presentations/, src/adapters/lavish.ts
 ## Approval boundaries
 
 - Scope approval is never publication approval. Publish, publish-now, and merge each need their own
-  explicit approval (`--yes` or live TUI confirmation). Tandem never merges on its own.
+  explicit approval (`--yes` or live TUI confirmation). Once a pull request is published (not a
+  draft), PR watch merges it on its own through GitHub auto-merge or the repository's queue label
+  (see [pr-watch.md](pr-watch.md#merging)); that is the only merging Tandem does without asking.
 - A draft PR is never an approval, and never satisfies any acceptance gate.
 
 ## Automatic draft at ready
@@ -99,6 +101,8 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
   reviewed HEAD.
 - It pushes that exact SHA to the task branch of the GitHub repository named by the worktree's
   `origin`. `publish` takes no repository argument.
+- When the task's own draft is the pull request, publishing marks it ready for review
+  (`gh pr ready`), which is what lets PR watch start merging it.
 - Existing PRs are re-observed and must match repository, base, branch, and SHA; closed or merged
   duplicates are refused.
 
@@ -131,6 +135,8 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
 
 ## Merge
 
+- PR watch merges published pull requests on its own ([pr-watch.md](pr-watch.md#merging)). The
+  `merge` action is for merging right now at the user's request.
 - Method is explicit (`merge`, `squash`, `rebase`); the CLI defaults to `squash` only when none is
   given.
 - Before `gh pr merge`, Tandem re-observes the PR and requires the same task, repository, base, and

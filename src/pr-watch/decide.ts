@@ -1,3 +1,4 @@
+import type { MergingSettingsFile } from "../config/repositories.ts";
 import type { IsoTimestamp } from "../contracts.ts";
 import { clockTime } from "./view.ts";
 
@@ -20,6 +21,7 @@ export type PrObservation = Readonly<{
   readonly branch: string;
   /** The repository the branch lives in; another owner's fork for a PR from a fork. */
   readonly headRepository: string;
+  readonly fork: boolean;
   readonly head: string;
   /** The head commit's tree: the version of the code, which an empty commit keeps. */
   readonly tree: string;
@@ -45,32 +47,30 @@ export type MergingSettings = Readonly<{
   readonly stuckAfterMinutes: number;
 }>;
 
-export const DEFAULT_MERGING_SETTINGS: MergingSettings = {
-  mergeWith: "auto-merge",
-  queueLabel: "mergequeue",
-  maxCiRetries: 1,
-  stuckAfterMinutes: 60,
-};
-
 /** Something the watcher did to a pull request, kept so it is never repeated beyond its budget. */
 export type PrWatchLogEntry = Readonly<{
   readonly at: IsoTimestamp;
-  readonly kind: "retry";
   /** The head and tree the watcher acted on. */
   readonly head: string;
   readonly tree: string;
-  /** The failed checks an empty commit reran. */
-  readonly checks: readonly string[];
-  /** The commit the watcher pushed. */
-  readonly pushed: string;
-  /** Whether the pull request was approved just before the watcher pushed. */
-  readonly approved: boolean;
-}>;
+}> &
+  (
+    | Readonly<{
+        readonly kind: "retry" | "update-branch";
+        /** The failed checks an empty commit reran; none for a branch update. */
+        readonly checks: readonly string[];
+        /** The commit the watcher pushed. */
+        readonly pushed: string;
+        /** Whether the pull request was approved just before the watcher pushed. */
+        readonly approved: boolean;
+      }>
+    /** Put it in the queue or armed auto-merge; `requeue` does either again after a dequeue. */
+    | Readonly<{ readonly kind: "queue" | "auto-merge" | "requeue" }>
+  );
 
-export type PrWatchAction = Readonly<{
-  readonly kind: "retry";
-  readonly checks: readonly string[];
-}>;
+export type PrWatchAction =
+  | Readonly<{ readonly kind: "retry"; readonly checks: readonly string[] }>
+  | Readonly<{ readonly kind: "update-branch" | "queue" | "auto-merge" | "requeue" }>;
 
 export type PrWatchColor = "red" | "yellow" | "green" | "done";
 
@@ -85,7 +85,10 @@ export type PrWatchRow = Readonly<{
 }>;
 
 /** An extra GitHub read the decision needs before it can choose. */
-export type PrWatchLookup = "base-checks";
+export type PrWatchLookup = "base-checks" | "dequeued-by";
+
+/** Who last took the pull request out of the queue or turned auto-merge off; null when unknown. */
+export type Dequeuer = Readonly<{ readonly login: string; readonly bot: boolean }> | null;
 
 export type PrWatchDecision =
   | Readonly<{ readonly kind: "look-up"; readonly lookup: PrWatchLookup }>
@@ -104,7 +107,31 @@ export type PrWatchFacts = Readonly<{
   readonly headSeenAt: IsoTimestamp;
   /** The checks failing on the base branch, once looked up. */
   readonly baseFailing?: ReadonlySet<string>;
+  /** Who dequeued it, once looked up. */
+  readonly dequeuedBy?: Dequeuer;
 }>;
+
+const DEFAULT_RETRIES = { maxCiRetries: 1, stuckAfterMinutes: 60 } as const;
+const AVIATOR_QUEUE = { queueLabel: "mergequeue", blockedLabel: "blocked" } as const;
+
+/**
+ * The repository's settings over the defaults: GitHub auto-merge, or the Aviator queue labels
+ * when the repository has an Aviator config and its settings do not say otherwise.
+ */
+export function mergingSettings(
+  file: MergingSettingsFile | undefined,
+  aviator: boolean,
+): MergingSettings {
+  const mergeWith = file?.mergeWith ?? (aviator ? "queue-label" : "auto-merge");
+  const blockedLabel = file?.blockedLabel ?? (aviator ? AVIATOR_QUEUE.blockedLabel : undefined);
+  return {
+    mergeWith,
+    queueLabel: file?.queueLabel ?? AVIATOR_QUEUE.queueLabel,
+    ...(blockedLabel === undefined ? {} : { blockedLabel }),
+    maxCiRetries: file?.maxCiRetries ?? DEFAULT_RETRIES.maxCiRetries,
+    stuckAfterMinutes: file?.stuckAfterMinutes ?? DEFAULT_RETRIES.stuckAfterMinutes,
+  };
+}
 
 /**
  * What to do about one pull request, from what GitHub reports, what the watcher already did, and
@@ -117,7 +144,7 @@ export function decidePrWatch(facts: PrWatchFacts): PrWatchDecision {
   }
   if (pr.state === "closed") return decided(row("done", "🚪 closed", ""));
   if (pr.mergeable === "UNKNOWN") {
-    return decided(row("green", mergeStatus(pr), "⏳ GitHub is still checking for conflicts"));
+    return decided(row("green", mergeStatus(facts), "⏳ GitHub is still checking for conflicts"));
   }
   if (pr.mergeable === "CONFLICTING") {
     return decided(row("red", "⚔️ conflict", "🙋 fix the merge conflicts"));
@@ -125,7 +152,16 @@ export function decidePrWatch(facts: PrWatchFacts): PrWatchDecision {
   if (pr.reviewDecision === "CHANGES_REQUESTED") {
     return decided(row("red", "✋ changes", "🙋 a reviewer asked for changes"));
   }
-  return decideChecks(facts) ?? decided(settledRow(facts));
+  if (approvalLost(facts)) {
+    return decided(row("red", "✋ approval", "🙋 the watcher's push dismissed the approval"));
+  }
+  const checks = decideChecks(facts);
+  if (checks !== undefined) return checks;
+  if (pr.draft) return decided(settledRow(facts));
+  const arm = decideArming(facts);
+  if (arm !== undefined) return arm;
+  if (pr.checks.some((check) => check.state === "pending")) return decided(settledRow(facts));
+  return decideMerging(facts) ?? decided(settledRow(facts));
 }
 
 /** How many empty commits already reran this check on this version of the code. */
@@ -136,19 +172,17 @@ export function retriesUsed(log: readonly PrWatchLogEntry[], tree: string, check
 }
 
 /**
- * Running checks wait unless one is stuck. Failed checks wait out a red base branch, then get an
- * empty commit while this version of the code has retries left, and go red when it has none.
+ * A stuck check goes red. Failed checks wait out a red base branch, then get an empty commit while
+ * this version of the code has retries left, and go red when it has none.
  */
 function decideChecks(facts: PrWatchFacts): PrWatchDecision | undefined {
   const { observation: pr, settings } = facts;
-  const pending = pr.checks.filter((check) => check.state === "pending");
-  if (pending.length > 0) {
-    const stuck = pending.find(
-      (check) =>
-        minutesBetween(check.startedAt ?? facts.headSeenAt, facts.now) >=
-        settings.stuckAfterMinutes,
-    );
-    if (stuck === undefined) return undefined;
+  const stuck = pr.checks.find(
+    (check) =>
+      check.state === "pending" &&
+      minutesBetween(check.startedAt ?? facts.headSeenAt, facts.now) >= settings.stuckAfterMinutes,
+  );
+  if (stuck !== undefined) {
     return decided(
       row(
         "red",
@@ -158,6 +192,7 @@ function decideChecks(facts: PrWatchFacts): PrWatchDecision | undefined {
       ),
     );
   }
+  if (pr.checks.some((check) => check.state === "pending")) return undefined;
   const failed = pr.checks.filter((check) => check.state === "failed");
   if (failed.length === 0) return undefined;
   if (facts.baseFailing === undefined) return { kind: "look-up", lookup: "base-checks" };
@@ -186,9 +221,48 @@ function decideChecks(facts: PrWatchFacts): PrWatchDecision | undefined {
       ),
     );
   }
-  return decided(row("green", mergeStatus(pr), `🔁 retrying ${names(own)}`), {
+  return decided(row("green", mergeStatus(facts), `🔁 retrying ${names(own)}`), {
     kind: "retry",
     checks: own.map((check) => check.name),
+  });
+}
+
+/** A published pull request the watcher never put up for merging gets armed once. */
+function decideArming(facts: PrWatchFacts): PrWatchDecision | undefined {
+  const { settings } = facts;
+  if (armed(facts.log) || inQueue(facts) || blocked(facts)) return undefined;
+  return settings.mergeWith === "queue-label"
+    ? decided(row("green", "🚂 queued", `🚂 added ${settings.queueLabel}`), { kind: "queue" })
+    : decided(row("green", "🤖 auto-merge", "🤖 turned on auto-merge"), { kind: "auto-merge" });
+}
+
+/**
+ * With checks green: bring the branch up to date when GitHub requires it, and put a pull request
+ * the queue kicked out back in, once per head commit. A person who took it out is left alone.
+ */
+function decideMerging(facts: PrWatchFacts): PrWatchDecision | undefined {
+  const pr = facts.observation;
+  if (pr.behind && !pr.fork && !actedOnHead(facts, "update-branch")) {
+    return decided(row("green", mergeStatus(facts), `🔄 updating from ${pr.base}`), {
+      kind: "update-branch",
+    });
+  }
+  if (!dequeued(facts)) return undefined;
+  if (facts.dequeuedBy === undefined) return { kind: "look-up", lookup: "dequeued-by" };
+  if (facts.dequeuedBy?.bot === false) {
+    const what =
+      facts.settings.mergeWith === "queue-label"
+        ? "took it out of the queue"
+        : "turned auto-merge off";
+    return decided(
+      row("yellow", mergeStatus(facts), `✋ @${facts.dequeuedBy.login} ${what}; leaving it`),
+    );
+  }
+  if (actedOnHead(facts, "requeue")) {
+    return decided(row("red", "⛔ blocked", "🙋 the queue took it out again after a requeue"));
+  }
+  return decided(row("green", mergeStatus(facts), "🚂 requeued after the queue took it out"), {
+    kind: "requeue",
   });
 }
 
@@ -197,32 +271,78 @@ function settledRow(facts: PrWatchFacts): PrWatchRow {
   const pr = facts.observation;
   const running = pr.checks.some((check) => check.state === "pending");
   const retried = facts.log.findLast((entry) => entry.kind === "retry" && entry.pushed === pr.head);
+  const reviewNote =
+    pr.reviewers.length === 0
+      ? "⏳ waiting for a review"
+      : `⏳ waiting on ${pr.reviewers.map((reviewer) => `@${reviewer}`).join(", ")}`;
+  const waiting = pr.draft
+    ? "⏳ waiting for you to publish it"
+    : pr.reviewDecision === "REVIEW_REQUIRED"
+      ? reviewNote
+      : undefined;
   const note =
-    retried !== undefined
+    retried?.kind === "retry"
       ? `🔁 retried ${retried.checks.join(", ")} (flaky?)`
       : running
         ? "⏳ CI running"
-        : "";
-  if (pr.draft)
-    return row(
-      running ? "green" : "yellow",
-      "📝 draft",
-      note || "⏳ waiting for you to publish it",
-    );
-  if (pr.reviewDecision === "REVIEW_REQUIRED") {
-    const waitingOn =
-      pr.reviewers.length === 0
-        ? "⏳ waiting for a review"
-        : `⏳ waiting on ${pr.reviewers.map((reviewer) => `@${reviewer}`).join(", ")}`;
-    return row(running ? "green" : "yellow", "👀 review", note || waitingOn);
-  }
-  return row("green", mergeStatus(pr), note);
+        : (waiting ?? "");
+  return row(running || waiting === undefined ? "green" : "yellow", mergeStatus(facts), note);
 }
 
-function mergeStatus(pr: PrObservation): string {
+function mergeStatus(facts: PrWatchFacts): string {
+  const pr = facts.observation;
   if (pr.draft) return "📝 draft";
+  if (blocked(facts)) return "⛔ blocked";
+  if (inQueue(facts))
+    return facts.settings.mergeWith === "queue-label" ? "🚂 queued" : "🤖 auto-merge";
   if (pr.reviewDecision === "REVIEW_REQUIRED") return "👀 review";
   return pr.reviewDecision === "APPROVED" ? "✅ approved" : "🟢 open";
+}
+
+/** The watcher's own push left the head it pushed, and the approval that was there is gone. */
+function approvalLost(facts: PrWatchFacts): boolean {
+  const pr = facts.observation;
+  const pushed = facts.log.findLast(
+    (entry) =>
+      (entry.kind === "retry" || entry.kind === "update-branch") && entry.pushed === pr.head,
+  );
+  return (
+    pushed !== undefined &&
+    (pushed.kind === "retry" || pushed.kind === "update-branch") &&
+    pushed.approved &&
+    pr.reviewDecision !== "APPROVED"
+  );
+}
+
+function armed(log: readonly PrWatchLogEntry[]): boolean {
+  return log.some(
+    (entry) => entry.kind === "queue" || entry.kind === "auto-merge" || entry.kind === "requeue",
+  );
+}
+
+function inQueue(facts: PrWatchFacts): boolean {
+  const { observation: pr, settings } = facts;
+  return settings.mergeWith === "queue-label"
+    ? pr.labels.includes(settings.queueLabel)
+    : pr.autoMerge;
+}
+
+function blocked(facts: PrWatchFacts): boolean {
+  const { blockedLabel } = facts.settings;
+  return (
+    facts.settings.mergeWith === "queue-label" &&
+    blockedLabel !== undefined &&
+    facts.observation.labels.includes(blockedLabel)
+  );
+}
+
+/** The queue kicked it out, or it left the queue or auto-merge after the watcher put it there. */
+function dequeued(facts: PrWatchFacts): boolean {
+  return blocked(facts) || (armed(facts.log) && !inQueue(facts));
+}
+
+function actedOnHead(facts: PrWatchFacts, kind: PrWatchLogEntry["kind"]): boolean {
+  return facts.log.some((entry) => entry.kind === kind && entry.head === facts.observation.head);
 }
 
 function decided(rowValue: PrWatchRow, action?: PrWatchAction): PrWatchDecision {

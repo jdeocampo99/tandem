@@ -1,5 +1,6 @@
 import {
   editPullRequestBody,
+  markPullRequestReady,
   mergePullRequest,
   publishPullRequest,
   readCheckpoint,
@@ -547,13 +548,25 @@ export async function publishReviewedTask(input: {
   const title = readSingleLine(input.title, "title");
   const base = readSingleLine(input.base, "base");
   const ready = await assertReadyCheckout(run, input.task);
-  return publishCheckout(run, {
+  const published = await publishCheckout(run, {
     ready,
     repository: publishRepository(input.task, ready.remote),
     title,
     base,
     body: describeTaskPr(input.task, input.summary),
   });
+  // The task's own draft becomes the finished pull request, which PR watch then merges.
+  if (published.state !== "draft") return published;
+  return assertPublishedMetadata(
+    await markPullRequestReady(run, {
+      cwd: ready.cwd,
+      repository: published.repository,
+      number: published.number,
+    }),
+    published.repository,
+    base,
+    ready.head,
+  );
 }
 
 type DraftCheckout = Readonly<{
