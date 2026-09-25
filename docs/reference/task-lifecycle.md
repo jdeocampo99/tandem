@@ -36,7 +36,7 @@ src/workers/terminal-extension.ts
 | `validating` | One named validation contract runs at that exact HEAD: iteration checks between fix rounds, or the full final manifest once otherwise ready. |
 | `reviewing` | Checks passed or were skipped ([Review and validation](review-and-validation.md)); fresh reviewers record lenses. |
 | `awaiting-fixes` | Validation or review failed; a bounded fix round may start. |
-| `ready` | Final manifest and all required lenses pass at the current HEAD, or the user chose [publish now](delivery.md) at that HEAD. |
+| `ready` | Final manifest and all required lenses pass at the current HEAD, or the user chose [publish now](delivery.md) at that HEAD, or a [follow-up on an open PR](delivery.md#follow-ups-on-an-open-pr) finished there. |
 | `paused` | Stopped with a resumable previous stage. |
 | `blocked` | Cannot safely proceed; durable reason, surfaced as an actionable blocker. |
 | `cancelled` / `completed` / `merged` | Terminal. A scout is research-complete only when `completed` with its report; `merged` only after verified delivery. |

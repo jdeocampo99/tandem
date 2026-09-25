@@ -961,6 +961,22 @@ function completeImplementation(
       "Implementation reportPath must be non-empty when supplied",
     );
   }
+  // Once the pull request is open, a follow-up the user asked for goes straight back to ready:
+  // the implementer pushed it to the pull request, whose own CI checks it.
+  if (task.pullRequest?.state === "open") {
+    return commitWithNotification(
+      task,
+      context,
+      {
+        stage: "ready",
+        reviewHead: event.head,
+        reviewSkippedHead: event.head,
+        ...(event.reportPath === undefined ? {} : { reportPath: event.reportPath }),
+      },
+      `Task ${task.id} finished a follow-up on its open pull request and pushed it. Follow-ups skip Tandem's checks and review; the pull request's own CI checks them.`,
+      "coordinator",
+    );
+  }
   // A fix round that ends on an already-reviewed HEAD made no new commit, so it hands its
   // round back; the unchanged review that follows asks "Keep fixing?" instead of looping.
   const noCommit =

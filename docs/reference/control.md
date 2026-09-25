@@ -82,7 +82,9 @@ src/terminal/cli-arguments.ts, src/cli.ts
 - A running primary worker receives directions at the next provider-context boundary without
   interrupting an active tool. A terminal response continues only if an unapplied direction remains.
 - A task in validation, review, or `ready` instead stops through the ownership checks and
-  invalidates old evidence in a new generation, without charging a repair round.
+  invalidates old evidence in a new generation, without charging a repair round. When the task's
+  PR is open, Tandem adds a line telling the agent to commit and push (see
+  [delivery.md](delivery.md#follow-ups-on-an-open-pr)).
 - Paused, infrastructure-blocked, merged, or cancelled tasks may retain or explicitly reject
   directions; a direction never bypasses approval, auto-resumes work, publishes, or merges.
 - Workers load the control extension at launch; running workers are not hot-upgraded.

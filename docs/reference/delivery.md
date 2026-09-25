@@ -119,6 +119,16 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
   validation that passed before the skip. If publication fails after the skip, the task stays
   `ready` and a normal `publish` can retry. Merge stays separate.
 
+## Follow-ups on an open PR
+
+- Once a task's PR is open (not a draft), the user's questions and changes about that work go to
+  the same task with `steer`, in the same worktree; the coordinator never starts a new task for them.
+- The direction gets one added line: if the agent changes code, it commits and pushes the task
+  branch to `origin` itself, never force-pushing (`OPEN_PR_FOLLOW_UP` in src/tasks/control.ts).
+- When the agent submits, `implementation-complete` returns the task straight to `ready` with
+  `reviewSkippedHead` at the new HEAD: no Tandem validation or review. The PR's own CI is the
+  check, and merge still verifies it. The receipt is not repeated.
+
 ## Merge
 
 - Method is explicit (`merge`, `squash`, `rebase`); the CLI defaults to `squash` only when none is
