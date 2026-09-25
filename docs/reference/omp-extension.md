@@ -13,6 +13,9 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   union in src/extension/registration.ts. Unknown fields are rejected. That schema is the action
   list; keep it, `TandemAction`, and `parseTandemCommand` in src/extension/actions.ts in step.
 - Tool text is a bounded summary; structured details stay in the tool result and durable reports.
+- A refusal the coordinator recovers from by asking the user carries its own next step, so the
+  per-turn prompt does not: `create` and `review-pr` asking where a repository is, and `create`
+  finding no saved validation commands for another repository.
 - `/tandem` parses arguments with shell-style quoting only; nothing runs in a shell.
 - The tool is registered with OMP `write` approval. `requiresHumanApproval` covers `setup`,
   `configure-models`, `approve`, `brief-approve`, `cancel` (with or without `discard`), `publish`,
@@ -25,18 +28,23 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
 - The scheduler starts at session start (2,000 ms default) and reconciles once immediately. It
   refreshes the durable digest before an agent turn, during OMP-native compaction, and after it.
 - Routine notices, receipts, heartbeats, and passive progress go to `ctx.ui.notify` and the durable
-  UI log, with no model turn.
+  UI log, with no model turn. A delivered request's `receipt`-kind notice is shown with its receipt
+  table, rendered by the extension at delivery; an unreadable receipt is named, never guessed.
 - Judgment-needed notices are coordinator-kind notifications: current blocked tasks, completed
   scout reports, and PR-ready notices. The newest ones in a delivery batch coalesce into at most
   one model wake; routine backlog is excluded, and a delivered wake is never repeated.
 - A judgment-needed scout notice carries that scout's post-research follow-up, rebuilt from the
-  durable record on every delivery (see [task lifecycle](task-lifecycle.md)).
+  durable record on every delivery (see [task lifecycle](task-lifecycle.md)). When the follow-up
+  asks for a summary and the report is at most 16,000 characters, its full text rides along in the
+  hidden identifiers message, so the coordinator answers without a separate `read` call. The
+  session entry's `details` keep the identifiers only, not the report.
 - A scout is completed research only when durable state records `completed` and its report.
 
 ## Compaction and the durable digest
 
 - The durable digest is bounded to 8,000 characters and may omit older task detail; `state.sqlite`
-  and durable reports stay authoritative. Action summaries are bounded separately; `show --full`
+  and durable reports stay authoritative. It carries no commit hashes, and finished tasks with
+  nothing unread, no blocker, and no open question collapse to one line of ids and objectives. Action summaries are bounded separately; `show --full`
   keeps more structured detail.
 - Early compaction (src/extension/compaction.ts) cuts the cost of resending a long history. On a
   reconcile where a non-scout task newly reached `completed`, `merged`, or `cancelled`, it calls

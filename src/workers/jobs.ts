@@ -205,7 +205,7 @@ function readExecutionIdentity(value: unknown): ExecutionIdentity {
   };
 }
 
-function isWorkerRole(value: unknown): value is WorkerRole {
+export function isWorkerRole(value: unknown): value is WorkerRole {
   return isAgentRole(value) && value !== "coordinator";
 }
 

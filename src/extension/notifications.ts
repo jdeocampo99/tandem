@@ -1,7 +1,7 @@
-import { constants } from "node:fs";
-import { access } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { TaskRecord } from "../contracts.ts";
+import { renderRequestReceiptTable } from "../runtime/usage-receipt.ts";
 import type { TandemService } from "../service/controller.ts";
 import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
 import { buildResearchFollowUpContent } from "./research-follow-up.ts";
@@ -9,9 +9,14 @@ import { ACTION_SUMMARY_MAX_TEXT, compactText, prioritizeTasks } from "./summary
 
 const MAX_NOTIFICATION_BATCH = 8;
 const TANDEM_NOTIFICATION_ENTRY = "tandem-notification";
+/** A finished research report up to this size rides along with its wake, saving a read call. */
+export const INLINE_RESEARCH_REPORT_MAX_CHARS = 16_000;
 
-/** Proof that a recorded report is still readable, so the follow-up decision may trust it. */
-export type ResearchReportProbe = (reportPath: string) => Promise<boolean>;
+/**
+ * The text of a recorded report, or undefined when it cannot be read. Reading it is also the proof
+ * the follow-up decision needs that the report is still there.
+ */
+export type ResearchReportReader = (reportPath: string) => Promise<string | undefined>;
 
 type NotificationRef = Readonly<{
   readonly taskId: string;
@@ -23,14 +28,19 @@ type NotificationRef = Readonly<{
   readonly recommendation?: string;
   readonly reportPath?: string;
   readonly followUp?: string;
+  /** The research report's full text, when the follow-up asks for a summary and it is short enough. */
+  readonly reportText?: string;
+  /** The delivered request whose receipt table this notification shows. */
+  readonly receiptRequestId?: string;
 }>;
 
-export async function isResearchReportReadable(reportPath: string): Promise<boolean> {
+type ResearchWake = Readonly<{ readonly followUp: string; readonly reportText?: string }>;
+
+export async function readResearchReport(reportPath: string): Promise<string | undefined> {
   try {
-    await access(reportPath, constants.R_OK);
-    return true;
+    return await readFile(reportPath, "utf8");
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -39,18 +49,29 @@ function taskNeedsCoordinatorJudgment(task: Pick<TaskRecord, "kind" | "stage">):
   return task.kind === "scout" && task.stage === "completed";
 }
 
-async function researchFollowUpContent(
+/** A finished scout's follow-up, with its report attached when the coordinator must summarize it. */
+async function researchWake(
   task: TaskRecord,
-  reportReadable: ResearchReportProbe,
-): Promise<string | undefined> {
+  readReport: ResearchReportReader,
+): Promise<ResearchWake | undefined> {
   if (task.kind !== "scout") return undefined;
-  const readable = task.reportPath !== undefined && (await reportReadable(task.reportPath));
-  return buildResearchFollowUpContent(decideResearchFollowUp({ task, reportReadable: readable }));
+  const reportText = task.reportPath === undefined ? undefined : await readReport(task.reportPath);
+  const decision = decideResearchFollowUp({ task, reportReadable: reportText !== undefined });
+  const followUp = buildResearchFollowUpContent(decision);
+  const summarizes =
+    decision.followUp === "report-only" ||
+    decision.followUp === "ask-intent" ||
+    decision.followUp === "implementation-interview";
+  return summarizes &&
+    reportText !== undefined &&
+    reportText.length <= INLINE_RESEARCH_REPORT_MAX_CHARS
+    ? { followUp, reportText }
+    : { followUp };
 }
 
 async function allPendingNotifications(
   tasks: readonly TaskRecord[],
-  reportReadable: ResearchReportProbe,
+  readReport: ResearchReportReader,
 ): Promise<readonly NotificationRef[]> {
   const result: NotificationRef[] = [];
   for (const task of prioritizeTasks(tasks)) {
@@ -64,7 +85,7 @@ async function allPendingNotifications(
         break;
       }
     }
-    let followUp: string | undefined;
+    let wake: ResearchWake | undefined;
     for (const notification of pending) {
       const judgmentNeeded =
         notification.kind === "coordinator" ||
@@ -72,7 +93,7 @@ async function allPendingNotifications(
           taskNeedsCoordinatorJudgment(task) &&
           notification.id === latestLegacyId);
       const question = judgmentNeeded ? task.communication?.question : undefined;
-      if (judgmentNeeded) followUp ??= await researchFollowUpContent(task, reportReadable);
+      if (judgmentNeeded) wake ??= await researchWake(task, readReport);
       result.push({
         taskId: task.id,
         notificationId: notification.id,
@@ -88,7 +109,13 @@ async function allPendingNotifications(
                 : { recommendation: question.recommendation }),
             }),
         ...(judgmentNeeded && task.reportPath !== undefined ? { reportPath: task.reportPath } : {}),
-        ...(judgmentNeeded && followUp !== undefined ? { followUp } : {}),
+        ...(judgmentNeeded && wake !== undefined ? { followUp: wake.followUp } : {}),
+        ...(judgmentNeeded && wake?.reportText !== undefined
+          ? { reportText: wake.reportText }
+          : {}),
+        ...(notification.kind === "receipt" && task.requestId !== undefined
+          ? { receiptRequestId: task.requestId }
+          : {}),
       });
     }
   }
@@ -103,9 +130,7 @@ function deliveryKey(notification: NotificationRef): string {
 function notificationContent(notifications: readonly NotificationRef[]): string {
   return notifications
     .map((notification) => {
-      const lines = [
-        `[${notification.taskId}] ${compactText(notification.message, ACTION_SUMMARY_MAX_TEXT)}`,
-      ];
+      const lines = [`[${notification.taskId}] ${routineLine(notification)}`];
       if (notification.questionId !== undefined) {
         lines.push(
           `Question ${compactText(notification.questionId, 100)}: ${compactText(notification.questionText ?? "text unavailable", ACTION_SUMMARY_MAX_TEXT)}`,
@@ -160,10 +185,63 @@ function judgmentIdentifiers(notifications: readonly NotificationRef[]): string 
       ? ref
       : `${ref}, question ${notification.questionId}`;
   });
+  const reports = notifications.flatMap((notification) =>
+    notification.reportText === undefined
+      ? []
+      : [
+          "",
+          `Full report for task ${notification.taskId}; it is already here, so do not read the file:`,
+          notification.reportText,
+        ],
+  );
   return [
     "Identifiers for the item(s) above, in the same order (never display or repeat these to the user):",
     ...lines,
+    ...reports,
   ].join("\n");
+}
+
+/**
+ * A delivered request's notification with its receipt table, rendered here so showing it takes no
+ * coordinator turn. A receipt that cannot be read leaves the table out rather than guessing it.
+ */
+async function withReceiptTables(
+  notifications: readonly NotificationRef[],
+  service: Pick<TandemService, "requestReceipt">,
+): Promise<readonly NotificationRef[]> {
+  const result: NotificationRef[] = [];
+  for (const notification of notifications) {
+    const requestId = notification.receiptRequestId;
+    if (requestId === undefined) {
+      result.push(notification);
+      continue;
+    }
+    const table = await service
+      .requestReceipt(requestId)
+      .then(renderRequestReceiptTable)
+      .catch(() => undefined);
+    result.push({
+      ...notification,
+      message:
+        table === undefined
+          ? `${notification.message} Its receipt could not be read yet; ask for it any time.`
+          : `${notification.message}\n${table}`,
+    });
+  }
+  return result;
+}
+
+/** Routine lines are compacted to one line each; a receipt keeps its table's rows. */
+function routineLine(notification: NotificationRef): string {
+  return notification.receiptRequestId === undefined
+    ? compactText(notification.message, ACTION_SUMMARY_MAX_TEXT)
+    : notification.message;
+}
+
+/** The session entry keeps ids, not the attached report, so session files stay small. */
+function withoutReportText(notification: NotificationRef): NotificationRef {
+  const { reportText: _reportText, ...rest } = notification;
+  return rest;
 }
 
 type NotificationMessageSink = Pick<ExtensionAPI, "sendMessage" | "appendEntry">;
@@ -171,7 +249,7 @@ type NotificationUi = Readonly<{ readonly ui: Pick<ExtensionContext["ui"], "noti
 
 export type PendingNotificationDelivery = Readonly<{
   readonly pi: NotificationMessageSink;
-  readonly service: Pick<TandemService, "acknowledge">;
+  readonly service: Pick<TandemService, "acknowledge" | "requestReceipt">;
   readonly tasks: readonly TaskRecord[];
   /** Task/notification pairs already sent in this process, so one wake is not repeated. */
   readonly delivered: Set<string>;
@@ -181,7 +259,7 @@ export type PendingNotificationDelivery = Readonly<{
    */
   readonly unacknowledged: Set<string>;
   readonly ctx: NotificationUi;
-  readonly reportReadable: ResearchReportProbe;
+  readonly readReport: ResearchReportReader;
 }>;
 
 /** Deliver pending notifications without turning routine scheduler work into model input. */
@@ -189,13 +267,16 @@ export async function deliverPendingNotifications(
   delivery: PendingNotificationDelivery,
 ): Promise<void> {
   const { pi, tasks, delivered, unacknowledged, ctx } = delivery;
-  const pending = await allPendingNotifications(tasks, delivery.reportReadable);
+  const pending = await allPendingNotifications(tasks, delivery.readReport);
   if (pending.length === 0) return;
   const batch = pending
     .filter((notification) => !delivered.has(deliveryKey(notification)))
     .slice(0, MAX_NOTIFICATION_BATCH);
   const actionable = batch.filter((notification) => notification.judgmentNeeded);
-  const routine = batch.filter((notification) => !notification.judgmentNeeded);
+  const routine = await withReceiptTables(
+    batch.filter((notification) => !notification.judgmentNeeded),
+    delivery.service,
+  );
   for (const notification of batch) {
     delivered.add(deliveryKey(notification));
     unacknowledged.add(deliveryKey(notification));
@@ -214,7 +295,7 @@ export async function deliverPendingNotifications(
           customType: TANDEM_NOTIFICATION_ENTRY,
           content: judgmentIdentifiers(actionable),
           display: false,
-          details: { notifications: actionable },
+          details: { notifications: actionable.map(withoutReportText) },
           attribution: "agent",
         },
         { deliverAs: "followUp" },

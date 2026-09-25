@@ -377,6 +377,7 @@ test("a PR whose repository is not on disk asks where it is, then remembers the 
       repo: "acme/api",
       paths: [],
       message: `Where's acme/api on your machine? Or say "clone it".`,
+      nextStep: expect.stringContaining("call review-pr again with checkout"),
     });
     expect(
       await service.reviewPr({ pullRequest: URL, repoPath: world.repoPath, checkout: pr.author }),

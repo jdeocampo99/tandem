@@ -951,7 +951,9 @@ class TandemController {
       },
     );
     if (location.kind !== "found") {
-      throw new Error(checkoutQuestion(repo, location, input.targetCheckout));
+      throw new Error(
+        `${checkoutQuestion(repo, location, input.targetCheckout)} Ask the user this, then create again with targetCheckout set to their path, or targetClone true if they say to clone it.`,
+      );
     }
     if ((await realpath(location.path)) === (await realpath(input.repoPath))) {
       throw new Error(`${repo} is this project; create the task without targetRepo`);
@@ -980,7 +982,7 @@ class TandemController {
         : parsePolicyOverride({ validationCommands: input.validationCommands }, saved.config);
     if (input.kind === "implementation" && config.validationCommands.length === 0) {
       throw new Error(
-        `${target.repo} has no saved validation commands. Ask the user how to check work there (for example "bun test"), add it to the brief, and pass it as validationCommands.`,
+        `${target.repo} has no saved validation commands. Ask the user how to check work there (for example "bun test"), add their answer to the brief's automated checks, and create again with it as validationCommands.`,
       );
     }
     return { ...saved, config };

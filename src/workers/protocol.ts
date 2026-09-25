@@ -7,6 +7,7 @@ import {
   parsePrReview,
 } from "../pr-review/review.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
+import { isBlockingFinding } from "../tasks/findings.ts";
 import {
   parseReviewResult,
   type WorkerJob,
@@ -226,6 +227,29 @@ export class ReportRejection extends Error {
   }
 }
 
+const MAX_LISTED_UNCOMMITTED_PATHS = 5;
+
+/**
+ * An implementer that reports `implemented` with changes still uncommitted would block the task
+ * once it settles, so the report is sent back while the worker can still commit. Takes
+ * `git status --porcelain=v1` output; an empty status passes.
+ */
+export function uncommittedWorkRejection(porcelainStatus: string): ReportRejection | undefined {
+  const paths = porcelainStatus
+    .split("\n")
+    .map((line) => line.slice(3).trim())
+    .filter((path) => path.length > 0);
+  if (paths.length === 0) return undefined;
+  const listed = paths.slice(0, MAX_LISTED_UNCOMMITTED_PATHS).join(", ");
+  const more =
+    paths.length > MAX_LISTED_UNCOMMITTED_PATHS
+      ? ` and ${paths.length - MAX_LISTED_UNCOMMITTED_PATHS} more`
+      : "";
+  return new ReportRejection(
+    `the worktree has uncommitted changes (${listed}${more}); commit your work, or remove files you did not mean to keep, before submitting implemented`,
+  );
+}
+
 export const IMPLEMENTER_OUTCOMES = ["implemented", "needs-decision", "failed"] as const;
 export const WORKER_OUTCOMES = ["completed", "needs-decision", "failed"] as const;
 
@@ -369,27 +393,32 @@ function boundedLine(value: string | undefined, field: string): string | undefin
   return text;
 }
 
+/**
+ * The reviewer submits only its findings and summary. The lens, HEAD, and generation come from the
+ * job, and the review passes exactly when no P0 or P1 finding stands, so none of them can be
+ * mistyped or disagree with the findings.
+ */
 function submittedReview(job: WorkerJob, value: unknown): ReviewResult {
   if (job.review === undefined) {
     throw new WorkerOutputError("review worker job is missing review identity");
   }
-  if (value === undefined) throw new ReportRejection("a completed review must include review");
+  if (!isJsonObject(value)) {
+    throw new ReportRejection("a completed review must include review with findings and summary");
+  }
   let review: ReviewResult;
   try {
-    review = parseReviewResult(value);
+    review = parseReviewResult({
+      lens: job.review.lens,
+      head: job.review.head,
+      generation: job.generation,
+      pass: false,
+      findings: value.findings,
+      summary: value.summary,
+    });
   } catch (error) {
     throw new ReportRejection(error instanceof Error ? error.message : "review is invalid");
   }
-  if (
-    review.head !== job.review.head ||
-    review.lens !== job.review.lens ||
-    review.generation !== job.generation
-  ) {
-    throw new ReportRejection(
-      `review must be bound to lens ${job.review.lens}, head ${job.review.head}, generation ${job.generation}`,
-    );
-  }
-  return review;
+  return { ...review, pass: !review.findings.some(isBlockingFinding) };
 }
 
 /** Human-readable report file text; structured fields stay authoritative on the result. */

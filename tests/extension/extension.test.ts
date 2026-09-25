@@ -11,6 +11,10 @@ import { resolveCommandAction } from "../../src/extension/registration.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/extension/summary.ts";
 import { createTandemExtension, reviewStatus, sourceRefreshStatus } from "../../src/extension.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
+import {
+  buildRequestUsageReceipt,
+  renderRequestReceiptTable,
+} from "../../src/runtime/usage-receipt.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
@@ -47,6 +51,11 @@ const policy: ResolvedPolicy = {
   config: policyConfig,
   guidance: { implementation: [], validation: [], review: [] },
 };
+
+/** Notification tests that deliver no request receipt. */
+async function noReceipt(): Promise<never> {
+  throw new Error("no receipt in this test");
+}
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -1011,7 +1020,9 @@ test("durable digest prioritizes current blockers and preserves acceptance, revi
   expect(digest).toContain("Should the existing API remain unchanged?");
   expect(digest).toContain("Keep the existing API unchanged.");
   expect(digest).toContain("P1");
-  expect(digest).toContain("head-active");
+  expect(digest).not.toContain("head-active");
+  expect(digest).toContain("Finished, nothing new (12): old-0 (old history 0)");
+  expect(digest).not.toContain("- old-0:");
 });
 
 test("durable digest stays bounded with adversarial identifiers", () => {
@@ -1084,10 +1095,12 @@ test("model-facing action summaries are bounded and retain current task evidence
 });
 
 test("scout summaries and the durable digest carry the post-research disposition", () => {
+  const unread = [{ id: "done", message: "Research finished.", acknowledged: false }];
   const scout = task({
     id: "scout-continuation",
     kind: "scout",
     stage: "completed",
+    notifications: unread,
     objective: "Investigate the reported defect",
     reportPath: "/reports/scout.md",
     researchContinuation: {
@@ -1103,8 +1116,15 @@ test("scout summaries and the durable digest carry the post-research disposition
   const digest = buildDurableDigest([scout]);
   expect(digest).toContain("after research: implementation-interview");
 
-  const legacyScout = task({ id: "legacy-scout", kind: "scout", stage: "completed" });
+  const legacyScout = task({
+    id: "legacy-scout",
+    kind: "scout",
+    stage: "completed",
+    notifications: unread,
+  });
   expect(buildDurableDigest([legacyScout])).toContain("after research: ask-intent");
+  const quietScout = { ...legacyScout, notifications: [] };
+  expect(buildDurableDigest([quietScout])).not.toContain("after research");
   expect(buildDurableDigest([task({ id: "implementation-task" })])).not.toContain("continuation:");
 });
 
@@ -1226,11 +1246,71 @@ test("publish now needs interactive human approval and never runs without it", a
   ]);
 });
 
+test("a delivered request shows its receipt table without a coordinator turn", async () => {
+  const receipt = buildRequestUsageReceipt("req-1", { events: [], malformedEvents: 0 });
+  const table = renderRequestReceiptTable(receipt);
+  const sent: string[] = [];
+  const shown: string[] = [];
+  const acknowledged: string[] = [];
+  let receiptReadable = true;
+  const service: Pick<TandemService, "acknowledge" | "requestReceipt"> = {
+    requestReceipt: async (requestId) => {
+      if (!receiptReadable) throw new Error("ledger unavailable");
+      expect(requestId).toBe("req-1");
+      return receipt;
+    },
+    acknowledge: async (taskId, notificationId) => {
+      acknowledged.push(`${taskId}:${notificationId}`);
+      return task({ id: taskId });
+    },
+  };
+  const delivered = task({
+    id: "task-delivered",
+    stage: "completed",
+    requestId: "req-1",
+    notifications: [
+      {
+        id: "receipt-1",
+        message: "The request is delivered. Where its time and tokens went:",
+        acknowledged: false,
+        kind: "receipt",
+      },
+    ],
+  });
+  const deliver = (): Promise<void> =>
+    deliverPendingNotifications({
+      pi: notificationSink(
+        (content) => sent.push(content),
+        () => undefined,
+      ),
+      service,
+      tasks: [delivered],
+      delivered: new Set<string>(),
+      unacknowledged: new Set<string>(),
+      ctx: notificationContext((content) => shown.push(content)),
+      readReport: async () => undefined,
+    });
+
+  await deliver();
+  expect(sent).toEqual([]);
+  expect(shown).toEqual([
+    `[task-delivered] The request is delivered. Where its time and tokens went:\n${table}`,
+  ]);
+  expect(acknowledged).toEqual(["task-delivered:receipt-1"]);
+
+  receiptReadable = false;
+  await deliver();
+  expect(sent).toEqual([]);
+  expect(shown[1]).toContain("Its receipt could not be read yet");
+  expect(shown[1]).not.toContain("Stage");
+});
+
 test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct messages", async () => {
   const sent: string[] = [];
   const turns: unknown[] = [];
   const acknowledged: string[] = [];
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "requestReceipt"> = {
+    requestReceipt: noReceipt,
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1274,7 +1354,7 @@ test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct
     delivered: new Set<string>(),
     unacknowledged: new Set<string>(),
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
 
   expect(sent).toHaveLength(2);
@@ -1335,7 +1415,8 @@ test("a failed acknowledgement retries on the next tick without waking the coord
   const sent: Array<{ readonly content: string; readonly options: unknown }> = [];
   const acknowledged: string[] = [];
   let acknowledgementsFail = true;
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "requestReceipt"> = {
+    requestReceipt: noReceipt,
     acknowledge: async (taskId, notificationId) => {
       if (acknowledgementsFail) {
         throw new StoreLockTimeoutError("/tmp/tandem/home", 5_000);
@@ -1364,7 +1445,7 @@ test("a failed acknowledgement retries on the next tick without waking the coord
       delivered,
       unacknowledged: unacknowledgedKeys,
       ctx: context,
-      reportReadable: async () => true,
+      readReport: async () => "Findings.",
     });
 
   // The wake reaches the coordinator (a hidden identifiers message, then the displayed prompt),
@@ -1395,7 +1476,8 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
   const notices: string[] = [];
   const acknowledged: string[] = [];
   let modelTurns = 0;
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "requestReceipt"> = {
+    requestReceipt: noReceipt,
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1443,7 +1525,7 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
     delivered: delivered,
     unacknowledged: unacknowledgedKeys,
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
   await deliverPendingNotifications({
     pi: sink,
@@ -1452,7 +1534,7 @@ test("fresh block transitions wake the coordinator once through the bridge", asy
     delivered: delivered,
     unacknowledged: unacknowledgedKeys,
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
 
   expect(blocked.stage).toBe("blocked");
@@ -1533,7 +1615,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         delivered: delivered,
         unacknowledged: unacknowledgedKeys,
         ctx: context,
-        reportReadable: async () => true,
+        readReport: async () => "Findings.",
       });
       await deliverPendingNotifications({
         pi: sink,
@@ -1542,7 +1624,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         delivered: delivered,
         unacknowledged: unacknowledgedKeys,
         ctx: context,
-        reportReadable: async () => true,
+        readReport: async () => "Findings.",
       });
       expect(sent).toHaveLength(2);
       expect(sent[0]?.content).toContain("task scout-task");
@@ -1570,7 +1652,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         delivered: new Set<string>(),
         unacknowledged: new Set<string>(),
         ctx: context,
-        reportReadable: async () => true,
+        readReport: async () => "Findings.",
       });
       expect(sent).toHaveLength(2);
 
@@ -1622,7 +1704,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
           delivered: retryDelivered,
           unacknowledged: retryUnacknowledged,
           ctx: context,
-          reportReadable: async () => true,
+          readReport: async () => "Findings.",
         }),
       ).rejects.toThrow("coordinator bridge unavailable");
       const pendingRetry = await reopened.get("scout-retry");
@@ -1635,7 +1717,7 @@ test("scout report completion wakes once, survives durable reconnect, and retrie
         delivered: retryDelivered,
         unacknowledged: retryUnacknowledged,
         ctx: context,
-        reportReadable: async () => true,
+        readReport: async () => "Findings.",
       });
       expect(retrySent).toHaveLength(2);
       expect(retrySent[1]).toContain("/tmp/tandem/scout-retry-report.txt");
@@ -1653,7 +1735,8 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
   const entries: Array<{ readonly type: string; readonly data: unknown }> = [];
   const notices: string[] = [];
   const acknowledged: string[] = [];
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "requestReceipt"> = {
+    requestReceipt: noReceipt,
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1684,7 +1767,7 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
     delivered: delivered,
     unacknowledged: unacknowledgedKeys,
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
   await deliverPendingNotifications({
     pi: sink,
@@ -1693,7 +1776,7 @@ test("automatic review-fix handoffs stay visible without waking the coordinator"
     delivered: delivered,
     unacknowledged: unacknowledgedKeys,
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
 
   expect(sent).toHaveLength(0);
@@ -1708,7 +1791,8 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
   const notices: string[] = [];
   const acknowledged: string[] = [];
   let modelTurns = 0;
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "requestReceipt"> = {
+    requestReceipt: noReceipt,
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1754,7 +1838,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     delivered: delivered,
     unacknowledged: unacknowledgedKeys,
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
   await deliverPendingNotifications({
     pi: sink,
@@ -1763,7 +1847,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     delivered: delivered,
     unacknowledged: unacknowledgedKeys,
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
 
   expect(sent).toHaveLength(2);
@@ -1794,7 +1878,7 @@ test("actionable notifications coalesce one wake across tasks and exclude routin
     delivered: new Set<string>(),
     unacknowledged: new Set<string>(),
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
   expect(sent).toHaveLength(2);
   expect(modelTurns).toBe(1);
@@ -1806,7 +1890,8 @@ test("notification kind controls whether presentation bookkeeping wakes the coor
   const sent: string[] = [];
   const notices: string[] = [];
   const acknowledged: string[] = [];
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "requestReceipt"> = {
+    requestReceipt: noReceipt,
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1847,7 +1932,7 @@ test("notification kind controls whether presentation bookkeeping wakes the coor
     delivered: new Set<string>(),
     unacknowledged: new Set<string>(),
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
   expect(sent).toHaveLength(2);
   expect(sent[0]).toContain("task task-coordinator");
@@ -1863,7 +1948,8 @@ test("legacy scout recovery survives a later routine presentation notice", async
   const notices: string[] = [];
   const acknowledged: string[] = [];
   let modelTurns = 0;
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "requestReceipt"> = {
+    requestReceipt: noReceipt,
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -1909,7 +1995,7 @@ test("legacy scout recovery survives a later routine presentation notice", async
     delivered: new Set<string>(),
     unacknowledged: new Set<string>(),
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
 
   expect(sent).toHaveLength(2);
@@ -1937,7 +2023,7 @@ test("legacy scout recovery survives a later routine presentation notice", async
     delivered: new Set<string>(),
     unacknowledged: new Set<string>(),
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
 
   expect(sent).toHaveLength(2);
@@ -2117,7 +2203,8 @@ test("a recovery question wakes the coordinator once with its recommendation and
   const sent: Array<{ readonly content: string; readonly options: unknown }> = [];
   const notices: string[] = [];
   const acknowledged: string[] = [];
-  const service: Pick<TandemService, "acknowledge"> = {
+  const service: Pick<TandemService, "acknowledge" | "requestReceipt"> = {
+    requestReceipt: noReceipt,
     acknowledge: async (taskId, notificationId) => {
       acknowledged.push(`${taskId}:${notificationId}`);
       return task({ id: taskId });
@@ -2158,7 +2245,7 @@ test("a recovery question wakes the coordinator once with its recommendation and
     delivered,
     unacknowledged: unacknowledgedKeys,
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
   await deliverPendingNotifications({
     pi: sink,
@@ -2167,7 +2254,7 @@ test("a recovery question wakes the coordinator once with its recommendation and
     delivered,
     unacknowledged: unacknowledgedKeys,
     ctx: context,
-    reportReadable: async () => true,
+    readReport: async () => "Findings.",
   });
 
   expect(sent).toHaveLength(2);
