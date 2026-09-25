@@ -118,6 +118,7 @@ export async function saveCoordinator(
 export async function seedTasks(
   home: string,
   tasks: readonly Readonly<{ id: string; repoPath: string; workspaceId: string }>[],
+  presentations: readonly Readonly<{ id: string; taskId: string; workspaceId: string }>[] = [],
 ): Promise<void> {
   const runtimeTasks = [];
   for (const [index, task] of tasks.entries()) {
@@ -155,6 +156,19 @@ export async function seedTasks(
   await writeRuntimeState(runtimeFile(home), {
     schemaVersion: 1,
     tasks: runtimeTasks,
-    presentations: [],
+    presentations: presentations.map((presentation) => ({
+      schemaVersion: 1 as const,
+      id: presentation.id,
+      taskId: presentation.taskId,
+      recordPath: join(home, "presentations", presentation.id, "record.json"),
+      endpoint: {
+        sessionId: SESSION,
+        workspaceId: presentation.workspaceId,
+        tabId: `tab-${presentation.id}`,
+        paneId: `pane-${presentation.id}`,
+        role: "presentation" as const,
+        generation: 0,
+      },
+    })),
   });
 }
