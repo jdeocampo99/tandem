@@ -253,7 +253,7 @@ export const reviewResultSchema = z.strictObject({
  */
 export function submitReportSchema(role: WorkerRole) {
   const reviews = role === "reviewer";
-  return z.strictObject({
+  const base = z.strictObject({
     outcome: z.enum(outcomesFor(role)),
     report: z
       .string()
@@ -271,21 +271,25 @@ export function submitReportSchema(role: WorkerRole) {
       .string()
       .optional()
       .describe("Optional for needs-decision: one bounded single-line recommendation."),
-    artifactPath:
-      role === "presentation"
-        ? z
-            .string()
-            .optional()
-            .describe("Required for completed: the absolute path of the written artifact.")
-        : z.never().optional(),
-    review: reviews
-      ? reviewResultSchema
-          .optional()
-          .describe(
-            "Required for completed: your findings and summary. Tandem records the commit and whether the review passes.",
-          )
-      : z.never().optional(),
   });
+  if (role === "presentation") {
+    return base.extend({
+      artifactPath: z
+        .string()
+        .optional()
+        .describe("Required for completed: the absolute path of the written artifact."),
+    });
+  }
+  if (reviews) {
+    return base.extend({
+      review: reviewResultSchema
+        .optional()
+        .describe(
+          "Required for completed: your findings and summary. Tandem records the commit and whether the review passes.",
+        ),
+    });
+  }
+  return base;
 }
 
 export const copyAssetSchema = z.strictObject({

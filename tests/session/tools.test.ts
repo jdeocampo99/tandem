@@ -361,3 +361,14 @@ test("OMP tool parameters are plain JSON Schema without a dialect marker", () =>
     additionalProperties: false,
   });
 });
+
+test("submit_report shows each role only the fields it can fill", () => {
+  const fields = (role: WorkerRole) =>
+    Object.keys((ompToolParameters(submitReportSchema(role)) as { properties: object }).properties);
+  const common = ["outcome", "report", "question", "recommendation"];
+
+  expect(fields("scout")).toEqual(common);
+  expect(fields("implementer")).toEqual(common);
+  expect(fields("reviewer")).toEqual([...common, "review"]);
+  expect(fields("presentation")).toEqual([...common, "artifactPath"]);
+});
