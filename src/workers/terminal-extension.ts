@@ -434,7 +434,7 @@ function reviewResultSchema(z: Zod) {
 }
 
 /** The `submit_report` parameters for one role: presentations add an artifact, reviewers a review. */
-function submitReportParameters(z: Zod, role: WorkerRole) {
+export function submitReportParameters(z: Zod, role: WorkerRole) {
   const reviews = role === "reviewer";
   return z
     .object({
@@ -472,6 +472,15 @@ function submitReportParameters(z: Zod, role: WorkerRole) {
               ),
           }
         : {}),
+    })
+    .strict();
+}
+
+export function copyAssetParameters(z: Zod) {
+  return z
+    .object({
+      from: z.string().describe("Path of the file in the repository checkout."),
+      name: z.string().describe("Plain file name to save it as in the mockup folder."),
     })
     .strict();
 }
@@ -1189,12 +1198,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       label: "Copy asset",
       description:
         "Copy an image, font, or other file from the repository checkout into the mockup folder, byte for byte, so the mockup can load it by relative path (for example ./jr-thinking.webp). Only works while drawing a mockup.",
-      parameters: pi.zod
-        .object({
-          from: pi.zod.string().describe("Path of the file in the repository checkout."),
-          name: pi.zod.string().describe("Plain file name to save it as in the mockup folder."),
-        })
-        .strict(),
+      parameters: copyAssetParameters(pi.zod),
       strict: true,
       approval: "read",
       async execute(_toolCallId, params) {

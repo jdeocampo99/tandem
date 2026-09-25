@@ -96,7 +96,7 @@ function pullRequestSummarySchema(z: Zod) {
 }
 
 /** The strict `{ request: { action, ... } }` parameters of the `tandem` tool; see `TandemAction`. */
-function tandemRequestSchema(z: Zod) {
+export function tandemRequestSchema(z: Zod) {
   const modelSpecSchema = z
     .object({
       model: z.string(),
