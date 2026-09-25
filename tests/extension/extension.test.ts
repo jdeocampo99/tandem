@@ -6,86 +6,9 @@ import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-codi
 import { resolveTandemEnvironment } from "../../src/config/environment.ts";
 import type { TaskRecord } from "../../src/contracts.ts";
 import { resolveCommandAction } from "../../src/extension/registration.ts";
-import { createTandemExtension, reviewStatus, sourceRefreshStatus } from "../../src/extension.ts";
+import { createTandemExtension } from "../../src/extension.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import { task } from "../session/fixtures.ts";
-
-test("review status renders round, failed lenses, and blocker count for the status line", () => {
-  const reviewing = task({
-    stage: "reviewing",
-    reviewRound: 2,
-    reviewHead: "head-1",
-    reviews: [
-      {
-        lens: "behavior",
-        head: "head-1",
-        generation: 0,
-        pass: false,
-        findings: [],
-        summary: "Needs another look.",
-      },
-      {
-        lens: "design",
-        head: "head-1",
-        generation: 0,
-        pass: true,
-        findings: [],
-        summary: "Looks good.",
-      },
-    ],
-    findingLedger: [
-      {
-        id: "finding-1",
-        lens: "behavior",
-        severity: "P1",
-        verdict: "confirmed",
-        description: "Missing error handling.",
-        status: "unresolved",
-        raisedAt: { head: "head-1", generation: 0, reviewRound: 2 },
-        statusAt: { head: "head-1", generation: 0, reviewRound: 2 },
-      },
-    ],
-  });
-  expect(reviewStatus(reviewing)).toBe("reviewing fix 2/3 · behavior fail · 1 blocker");
-
-  expect(reviewStatus(task({ ...reviewing, reviewRound: 0 }))).toBe(
-    "reviewing · behavior fail · 1 blocker",
-  );
-
-  const twoBlockers = task({
-    ...reviewing,
-    findingLedger: [
-      ...(reviewing.findingLedger ?? []),
-      {
-        id: "finding-2",
-        lens: "behavior",
-        severity: "P0",
-        verdict: "confirmed",
-        description: "Crashes on empty input.",
-        status: "unresolved",
-        raisedAt: { head: "head-1", generation: 0, reviewRound: 2 },
-        statusAt: { head: "head-1", generation: 0, reviewRound: 2 },
-      },
-    ],
-  });
-  expect(reviewStatus(twoBlockers)).toBe("reviewing fix 2/3 · behavior fail · 2 blockers");
-
-  expect(reviewStatus(task({ stage: "implementing" }))).toBeUndefined();
-});
-
-test("source refresh status says whether the coordinator source moved, is local-only, or is current", () => {
-  const refresh = { head: "b", previousHead: "a", changed: false, localOnly: false };
-  expect(sourceRefreshStatus({ ...refresh, changed: true })).toStartWith(
-    "Coordinator source advanced from a to b;",
-  );
-  expect(sourceRefreshStatus({ ...refresh, localOnly: true })).toStartWith(
-    "Coordinator source is local-only;",
-  );
-  expect(sourceRefreshStatus(refresh)).toStartWith("Coordinator source is current for this turn.");
-  expect(sourceRefreshStatus(undefined)).toStartWith(
-    "Coordinator source is current for this turn.",
-  );
-});
 
 test("/tandem models . resolves to the coordinator's own checkout", () => {
   expect(resolveCommandAction({ action: "models", repoPath: "." }, "/repo")).toEqual({
@@ -373,4 +296,70 @@ test("session shutdown waits for an interval reconciliation already in flight", 
   await shutdownPromise;
   expect(timerCleared).toBe(true);
   expect(shutdownCalls).toBe(1);
+});
+
+test("OMP delivers a wake's hidden identifiers first, then the shown prompt that starts the turn", async () => {
+  type LifecycleHandler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
+  const handlers = new Map<string, LifecycleHandler>();
+  const calls: unknown[] = [];
+  const blocked = task({
+    stage: "blocked",
+    notifications: [
+      { id: "blocked-1", message: "Owner decision required.", acknowledged: false },
+      { id: "routine-1", message: "Workspace bookkeeping.", acknowledged: false, kind: "routine" },
+    ],
+  });
+  const service = {
+    list: async () => [blocked],
+    acknowledge: async () => blocked,
+  } as unknown as TandemService;
+  const pi = {
+    zod,
+    on: (event: string, handler: LifecycleHandler) => {
+      handlers.set(event, handler);
+    },
+    registerTool: () => undefined,
+    registerCommand: () => undefined,
+    logger: { error: () => undefined },
+    sendMessage: (message: unknown, options: unknown) => calls.push({ message, options }),
+    appendEntry: (customType: string) => calls.push({ entry: customType }),
+  } as unknown as ExtensionAPI;
+  createTandemExtension({
+    service,
+    processEnvironment: {},
+    environment: { home: "/tmp/tandem-home", sessionId: "s", poolRoot: "/tmp/pool", repo: "/repo" },
+  })(pi);
+  const context = {
+    cwd: "/repo",
+    sessionManager: { getSessionId: () => "s" },
+    ui: { notify: (text: string) => calls.push({ notify: text }) },
+    getContextUsage: () => undefined,
+  } as unknown as ExtensionContext;
+
+  await handlers.get("agent_end")?.({ willContinue: false }, context);
+
+  expect(calls).toMatchObject([
+    { notify: expect.stringContaining("Workspace bookkeeping.") },
+    { entry: "tandem-notification" },
+    {
+      message: {
+        customType: "tandem-notification",
+        content: expect.stringContaining("task task-1, notification blocked-1"),
+        display: false,
+        details: { notifications: [expect.objectContaining({ taskId: "task-1" })] },
+        attribution: "agent",
+      },
+      options: { deliverAs: "followUp" },
+    },
+    {
+      message: {
+        customType: "tandem-notification",
+        content: expect.stringContaining("Owner decision required."),
+        display: true,
+        attribution: "agent",
+      },
+      options: { deliverAs: "followUp", triggerTurn: true },
+    },
+  ]);
+  expect((calls[2] as { options: object }).options).toEqual({ deliverAs: "followUp" });
 });

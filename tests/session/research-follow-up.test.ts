@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type {
   RepoPolicy,
   ResearchContinuationDisposition,
@@ -10,6 +9,7 @@ import type {
   TaskRecord,
 } from "../../src/contracts.ts";
 import type { TandemService } from "../../src/service/controller.ts";
+import type { SessionHost } from "../../src/session/events.ts";
 import {
   deliverPendingNotifications,
   INLINE_RESEARCH_REPORT_MAX_CHARS,
@@ -53,17 +53,16 @@ const policy: ResolvedPolicy = {
   guidance: { implementation: [], validation: [], review: [] },
 };
 
-function recordingSink(sent: string[]): Pick<ExtensionAPI, "sendMessage" | "appendEntry"> {
+/** Records each delivered message as sent: the hidden part first, then the shown text. */
+function recordingHost(sent: string[], notices: string[] = []): Pick<SessionHost, "perform"> {
   return {
-    sendMessage: (message) => {
-      sent.push(typeof message === "string" ? message : String(message.content));
+    perform: async (effect) => {
+      if (effect.type === "notify") notices.push(effect.text);
+      if (effect.type !== "deliver") return;
+      if (effect.hidden !== undefined) sent.push(effect.hidden.text);
+      sent.push(effect.text);
     },
-    appendEntry: () => undefined,
   };
-}
-
-function silentUi(): { readonly ui: Pick<ExtensionContext["ui"], "notify"> } {
-  return { ui: { notify: () => undefined } };
 }
 
 function noopAcknowledge(
@@ -196,12 +195,11 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
 
     const first: string[] = [];
     await deliverPendingNotifications({
-      pi: recordingSink(first),
+      host: recordingHost(first),
       service: noopAcknowledge(record),
       tasks: [record],
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
-      ctx: silentUi(),
       readReport: readResearchReport,
     });
 
@@ -210,12 +208,11 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
     if (reloaded === undefined) throw new Error("scout task did not survive the restart");
     const second: string[] = [];
     await deliverPendingNotifications({
-      pi: recordingSink(second),
+      host: recordingHost(second),
       service: noopAcknowledge(reloaded),
       tasks: [reloaded],
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
-      ctx: silentUi(),
       readReport: readResearchReport,
     });
 
@@ -239,12 +236,11 @@ test("an unreadable report downgrades the recorded interview to a disclosed bloc
 
     const sent: string[] = [];
     await deliverPendingNotifications({
-      pi: recordingSink(sent),
+      host: recordingHost(sent),
       service: noopAcknowledge(record),
       tasks: [record],
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
-      ctx: silentUi(),
       readReport: readResearchReport,
     });
 
@@ -266,12 +262,11 @@ test("an implementation-interview wake approves no scope and creates no implemen
 
     const sent: string[] = [];
     await deliverPendingNotifications({
-      pi: recordingSink(sent),
+      host: recordingHost(sent),
       service: noopAcknowledge(record),
       tasks: [record],
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
-      ctx: silentUi(),
       readReport: readResearchReport,
     });
 
@@ -307,12 +302,11 @@ test("routine scout bookkeeping stays out of the model wake and carries no follo
     const sent: string[] = [];
     const notices: string[] = [];
     await deliverPendingNotifications({
-      pi: recordingSink(sent),
+      host: recordingHost(sent, notices),
       service: noopAcknowledge(routineOnly),
       tasks: [routineOnly],
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
-      ctx: { ui: { notify: (message) => notices.push(message) } },
       readReport: readResearchReport,
     });
 
@@ -375,12 +369,11 @@ test("the delivered wake matches the pure decision for the same durable record",
 
     const sent: string[] = [];
     await deliverPendingNotifications({
-      pi: recordingSink(sent),
+      host: recordingHost(sent),
       service: noopAcknowledge(record),
       tasks: [record],
       delivered: new Set<string>(),
       unacknowledged: new Set<string>(),
-      ctx: silentUi(),
       readReport: readResearchReport,
     });
 
@@ -404,19 +397,18 @@ test("a finished research wake carries a short report so the coordinator need no
     const deliver = async (): Promise<readonly string[]> => {
       const sent: string[] = [];
       await deliverPendingNotifications({
-        pi: {
-          sendMessage: (message) => {
-            if (typeof message === "string") throw new Error("expected a custom message payload");
-            sent.push(String(message.content));
-            savedDetails.push(JSON.stringify(message.details ?? null));
+        host: {
+          perform: async (effect) => {
+            if (effect.type !== "deliver") return;
+            sent.push(effect.hidden?.text ?? "", effect.text);
+            savedDetails.push(JSON.stringify(effect.hidden?.details ?? null));
+            savedDetails.push(JSON.stringify(effect.details ?? null));
           },
-          appendEntry: () => undefined,
         },
         service: noopAcknowledge(record),
         tasks: [record],
         delivered: new Set<string>(),
         unacknowledged: new Set<string>(),
-        ctx: silentUi(),
         readReport: readResearchReport,
       });
       return sent;

@@ -1,7 +1,6 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { isNotFoundError } from "./storage.ts";
 import { assertKnownKeys, isRecord, parseJson } from "./values.ts";
 
@@ -194,32 +193,15 @@ export function resolveTandemEnvironment(
   };
 }
 
+/** The boundary environment of an agent session running in `session.cwd`. */
 export function environmentForContext(
   options: TandemEnvironmentContextOptions,
-  ctx: Pick<ExtensionContext, "cwd" | "sessionManager">,
+  session: Readonly<{ cwd: string; sessionId: string }>,
 ): TandemBoundaryEnvironment {
   return resolveTandemEnvironment(
     processEnvironmentSnapshot(options.processEnvironment),
-    { cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId() },
-    {
-      ...(options.environment?.home === undefined ? {} : { home: options.environment.home }),
-      ...(options.environment?.sessionId === undefined
-        ? {}
-        : { sessionId: options.environment.sessionId }),
-      ...(options.environment?.parentWorkspaceId === undefined
-        ? {}
-        : { parentWorkspaceId: options.environment.parentWorkspaceId }),
-      ...(options.environment?.coordinatorPaneId === undefined
-        ? {}
-        : { coordinatorPaneId: options.environment.coordinatorPaneId }),
-      ...(options.environment?.poolRoot === undefined
-        ? {}
-        : { poolRoot: options.environment.poolRoot }),
-      ...(options.environment?.repo === undefined ? {} : { repo: options.environment.repo }),
-      ...(options.environment?.sourceRepo === undefined
-        ? {}
-        : { sourceRepo: options.environment.sourceRepo }),
-    },
+    session,
+    options.environment,
   );
 }
 
