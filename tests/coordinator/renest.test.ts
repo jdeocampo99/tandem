@@ -63,6 +63,25 @@ test("task workspaces are moved back under their own coordinator, oldest first",
   });
 });
 
+test("a task's presentation workspaces follow the task under its coordinator", async () => {
+  await withWorld(async (world) => {
+    await saveCoordinator(world.home, world.tagalog, "w2K");
+    await seedTasks(
+      world.home,
+      [{ id: "4a6ac223-research", repoPath: world.tagalog, workspaceId: "w2D" }],
+      [
+        { id: "76e03f8e-first", taskId: "4a6ac223-research", workspaceId: "w2A" },
+        { id: "027c60af-second", taskId: "4a6ac223-research", workspaceId: "w28" },
+      ],
+    );
+    const sidebar = fakeSidebar(["w2A", "w28", "w2K", "w2D"]);
+
+    await renest(world, sidebar, true);
+
+    expect(sidebar.order).toEqual(["w2K", "w2D", "w2A", "w28"]);
+  });
+});
+
 test("a coordinator listed last gets its task moved to the very end, after it", async () => {
   await withWorld(async (world) => {
     // The live order after `tandem update`: the replacement coordinator w1J is last, and w1F is a

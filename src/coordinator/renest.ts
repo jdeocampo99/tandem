@@ -6,7 +6,7 @@ import {
   listWorkspaces,
   moveWorkspaceAfterParent,
 } from "../adapters/herdr.ts";
-import type { CommandRunner, TaskRecord } from "../contracts.ts";
+import type { CommandRunner, Endpoint, TaskRecord } from "../contracts.ts";
 import { databasePath, withStateLock } from "../runtime/database.ts";
 import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
 import type { RuntimeState } from "../runtime/schema.ts";
@@ -118,30 +118,59 @@ async function readDurable(home: string, waitMs: number): Promise<Durable> {
   );
 }
 
+/** One workspace a task's durable records name: its own panes or a presentation it drew. */
+type TaskWorkspace = Readonly<{ readonly taskId: string; readonly endpoint: Endpoint }>;
+
+/**
+ * Every task and presentation workspace durable records name, in sidebar order: oldest task first,
+ * each task's own panes before its presentations. Runtime entries whose task record is gone come
+ * last. This is the one list of Tandem's task workspaces, for both nesting and leftover reports.
+ */
+function taskWorkspaces({ tasks, state }: Durable): readonly TaskWorkspace[] {
+  const recorded = [...tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const taskIds = [
+    ...new Set([
+      ...recorded.map((task) => task.id),
+      ...state.tasks.map((task) => task.taskId),
+      ...state.presentations.map((presentation) => presentation.taskId),
+    ]),
+  ];
+  return taskIds.flatMap((taskId) =>
+    [
+      ...(recorded.find((task) => task.id === taskId)?.endpoints ?? []),
+      ...(state.tasks.find((task) => task.taskId === taskId)?.endpoints ?? []),
+      ...state.presentations.flatMap((presentation) =>
+        presentation.taskId === taskId && presentation.endpoint !== undefined
+          ? [presentation.endpoint]
+          : [],
+      ),
+    ].map((endpoint) => ({ taskId, endpoint })),
+  );
+}
+
+/** Labels of worker and presentation workspaces whose launch is still in flight. */
+function launchingLabels({ state }: Durable): ReadonlySet<string> {
+  return new Set(
+    [...state.tasks, ...state.presentations].flatMap((entry) =>
+      entry.endpointLaunch === undefined ? [] : [entry.endpointLaunch.workspaceLabel],
+    ),
+  );
+}
+
 /**
  * Lists Tandem-labelled workspaces that no durable record names: not a coordinator's, not any
  * task's or presentation's endpoint, and not a worker launch still in flight under that label.
  */
 function leftoverWorkspaces(
   live: readonly HerdrWorkspace[],
-  records: readonly CoordinatorRecord[],
-  durable: Durable,
+  coordinatorWorkspaceIds: Iterable<string>,
+  owned: readonly TaskWorkspace[],
+  launching: ReadonlySet<string>,
 ): readonly LeftoverWorkspace[] {
-  const named = new Set<string>(records.map((record) => record.endpoint.workspaceId));
-  const launching = new Set<string>();
-  for (const task of durable.tasks) {
-    for (const endpoint of task.endpoints ?? []) named.add(endpoint.workspaceId);
-  }
-  for (const task of durable.state.tasks) {
-    for (const endpoint of task.endpoints) named.add(endpoint.workspaceId);
-    if (task.endpointLaunch !== undefined) launching.add(task.endpointLaunch.workspaceLabel);
-  }
-  for (const presentation of durable.state.presentations) {
-    if (presentation.endpoint !== undefined) named.add(presentation.endpoint.workspaceId);
-    if (presentation.endpointLaunch !== undefined) {
-      launching.add(presentation.endpointLaunch.workspaceLabel);
-    }
-  }
+  const named = new Set([
+    ...coordinatorWorkspaceIds,
+    ...owned.map(({ endpoint }) => endpoint.workspaceId),
+  ]);
   return live.flatMap(({ workspaceId, label }) => {
     if (label === undefined || !label.startsWith(TASK_WORKSPACE_MARKER)) return [];
     return named.has(workspaceId) || launching.has(label) ? [] : [{ workspaceId, label }];
@@ -149,34 +178,33 @@ function leftoverWorkspaces(
 }
 
 /**
- * Groups the session's live task workspaces under their repository's live coordinator, from
- * durable records only. A workspace is proven Tandem's when exactly one repository's task records
- * name it, it is not a coordinator's own workspace, and it appears once in the live list; anything
- * else is left where it is.
+ * Groups the session's live task workspaces under their repository's live coordinator. A workspace
+ * is proven Tandem's when exactly one repository's tasks name it, it is not a coordinator's own
+ * workspace, and it appears once in the live list; anything else is left where it is.
  */
-async function observeGroups(
-  durable: Durable,
-  sessionId: string,
-  records: readonly CoordinatorRecord[],
-  liveOrder: readonly string[],
-): Promise<Readonly<{ groups: readonly RenestGroup[]; warnings: readonly string[] }>> {
-  const live = (id: string) => liveOrder.filter((entry) => entry === id).length === 1;
-  const coordinators = records.filter((record) => live(record.endpoint.workspaceId));
+function groupUnderCoordinators(
+  input: Readonly<{
+    readonly owned: readonly TaskWorkspace[];
+    /** Each task's canonical repository path; a task missing here has no record to place it by. */
+    readonly repoPathByTask: ReadonlyMap<string, string>;
+    readonly sessionId: string;
+    readonly coordinators: readonly CoordinatorRecord[];
+    readonly liveOrder: readonly string[];
+  }>,
+): Readonly<{ groups: readonly RenestGroup[]; warnings: readonly string[] }> {
+  const live = (id: string) => input.liveOrder.filter((entry) => entry === id).length === 1;
+  const coordinators = input.coordinators.filter((record) => live(record.endpoint.workspaceId));
   const coordinatorWorkspaces = new Set(coordinators.map((record) => record.endpoint.workspaceId));
-  const { state } = durable;
-  const tasks = [...durable.tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const owners = new Map<string, { repoPath: string; taskId: string }>();
   const contested = new Set<string>();
-  for (const task of tasks) {
-    const repoPath = await canonicalPath(task.repoPath, "task repoPath");
-    const endpoints = state.tasks.find((entry) => entry.taskId === task.id)?.endpoints ?? [];
-    for (const endpoint of endpoints) {
-      const id = endpoint.workspaceId;
-      if (endpoint.sessionId !== sessionId || !live(id) || coordinatorWorkspaces.has(id)) continue;
-      const owner = owners.get(id);
-      if (owner === undefined) owners.set(id, { repoPath, taskId: task.id });
-      else if (owner.repoPath !== repoPath) contested.add(id);
-    }
+  for (const { taskId, endpoint } of input.owned) {
+    const repoPath = input.repoPathByTask.get(taskId);
+    const id = endpoint.workspaceId;
+    if (repoPath === undefined || endpoint.sessionId !== input.sessionId) continue;
+    if (!live(id) || coordinatorWorkspaces.has(id)) continue;
+    const owner = owners.get(id);
+    if (owner === undefined) owners.set(id, { repoPath, taskId });
+    else if (owner.repoPath !== repoPath) contested.add(id);
   }
   const warnings = [...contested].map(
     (id) => `left workspace ${id} in place: tasks from more than one project name it`,
@@ -191,10 +219,19 @@ async function observeGroups(
   return { groups, warnings };
 }
 
+/** Each task's repository path with symlinks resolved, so it compares with a coordinator's. */
+async function canonicalRepoPaths(
+  tasks: readonly TaskRecord[],
+): Promise<ReadonlyMap<string, string>> {
+  const paths = new Map<string, string>();
+  for (const task of tasks) paths.set(task.id, await canonicalPath(task.repoPath, "task repoPath"));
+  return paths;
+}
+
 /**
- * Puts every Tandem task workspace in a Herdr session back directly under its repository's
- * coordinator. Display-only: it never closes, renames, or creates anything, never touches a
- * workspace Tandem cannot prove is its own, and turns every failure into a warning.
+ * Puts every Tandem task and presentation workspace in a Herdr session back directly under its
+ * repository's coordinator. Display-only: it never closes, renames, or creates anything, never
+ * touches a workspace Tandem cannot prove is its own, and turns every failure into a warning.
  */
 export async function renestWorkspaces(
   run: CommandRunner,
@@ -231,12 +268,24 @@ export async function renestWorkspaces(
     return failed("Herdr workspaces", error);
   }
   const liveOrder = live.map((workspace) => workspace.workspaceId);
-  const leftovers = leftoverWorkspaces(live, records, durable);
+  const owned = taskWorkspaces(durable);
+  const leftovers = leftoverWorkspaces(
+    live,
+    records.map((record) => record.endpoint.workspaceId),
+    owned,
+    launchingLabels(durable),
+  );
   let planned: readonly RenestMove[];
   try {
-    const observed = await observeGroups(durable, input.sessionId, records, liveOrder);
-    warnings.push(...observed.warnings);
-    planned = planRenest(liveOrder, observed.groups);
+    const grouped = groupUnderCoordinators({
+      owned,
+      repoPathByTask: await canonicalRepoPaths(durable.tasks),
+      sessionId: input.sessionId,
+      coordinators: records,
+      liveOrder,
+    });
+    warnings.push(...grouped.warnings);
+    planned = planRenest(liveOrder, grouped.groups);
   } catch (error) {
     return failed("Tandem's task records", error);
   }
