@@ -356,6 +356,25 @@ function tandemRequestSchema(z: Zod) {
       .strict(),
     z.object({ action: z.literal("review-again"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("review-close"), taskId: z.string() }).strict(),
+    z.object({ action: z.literal("pr-watch") }).strict(),
+    z
+      .object({
+        action: z.literal("pr-watch-merging"),
+        repoPath: z.string(),
+        mergeWith: z.enum(["auto-merge", "queue-label", "off"]),
+        queueLabel: z.string().optional(),
+        blockedLabel: z.string().optional(),
+      })
+      .strict(),
+    ...(["pr-watch-start", "pr-watch-stop", "pr-watch-fix"] as const).map((action) =>
+      z
+        .object({
+          action: z.literal(action),
+          pullRequest: z.string().describe("A GitHub PR URL, owner/repo#123, or #123 here."),
+          repoPath: z.string().optional().describe("Where #123 is; defaults to this project."),
+        })
+        .strict(),
+    ),
   ]);
 
   return z.object({ request: actionSchema }).strict();

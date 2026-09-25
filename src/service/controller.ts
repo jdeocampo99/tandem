@@ -9,6 +9,7 @@ import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
+import { type HomeSettings, readHomeSettings, saveWorkerSkills } from "../config/home-settings.ts";
 import {
   type ModelSettings,
   parseModelAssignments,
@@ -22,12 +23,15 @@ import {
 } from "../config/operating-profile.ts";
 import { parsePolicyOverride } from "../config/policy.ts";
 import {
+  type MergingChoice,
+  type MergingSettingsFile,
   type OnboardRepoResult,
   onboardRepo,
   readCleanupCommands,
   resolveRepoPolicy,
+  saveMergingChoice,
 } from "../config/repositories.ts";
-import { findSkills } from "../config/skills.ts";
+import { findSkills, listPluginSkills } from "../config/skills.ts";
 import type {
   AnswerTaskInput,
   BlockCause,
@@ -72,6 +76,16 @@ import {
 } from "../pr-review/service.ts";
 import type { PrReviewState } from "../pr-review/state.ts";
 import { removeReviewWorktree } from "../pr-review/worktree.ts";
+import type { PrObservation } from "../pr-watch/decide.ts";
+import { checkProjectMerging, type MergingCheck } from "../pr-watch/merging-check.ts";
+import type { PrWatchNotice } from "../pr-watch/store.ts";
+import type { PrWatchView } from "../pr-watch/view.ts";
+import {
+  conflictFixObjective,
+  type NamedPullRequest,
+  PrWatcher,
+  resolvePullRequest,
+} from "../pr-watch/watcher.ts";
 import { PresentationFeedbackWorkflow } from "../presentations/feedback.ts";
 import { type PresentationRecord, readPresentationRecord } from "../presentations/records.ts";
 import { preparePresentation } from "../presentations/session.ts";
@@ -152,6 +166,7 @@ import {
   absoluteDirectory,
   currentWriter,
   describeError,
+  errorClassName,
   isMissing,
   isMissingEndpoint,
   isRecord,
@@ -355,7 +370,34 @@ export type TandemService = Readonly<{
   ) => Promise<PostPrReviewResult>;
   readonly reviewAgain: (id: string) => Promise<TaskRecord>;
   readonly reviewClose: (id: string) => Promise<TaskRecord>;
+  /** The PR watch view, after reading GitHub unless another Tandem is reading it right now. */
+  readonly prWatch: () => Promise<PrWatchView>;
+  /** Watches a pull request: a link, `owner/repo#N`, or `#N` in `repoPath` (default: this project). */
+  readonly prWatchStart: (input: PullRequestInput) => Promise<PrWatchView>;
+  readonly prWatchStop: (input: PullRequestInput) => Promise<PrWatchView>;
+  /** Notifications about watched pull requests that no Tandem has shown yet. */
+  readonly prWatchNotices: () => Promise<readonly PrWatchNotice[]>;
+  /**
+   * The user said yes to fixing a pull request's conflicts: starts an approved task that merges
+   * its base into its branch and pushes, never force-pushing.
+   */
+  readonly prWatchFix: (input: PullRequestInput) => Promise<TaskRecord>;
+  /** Read-only: how this project's pull requests would merge, for onboarding and PR watch. */
+  readonly mergingCheck: (repoPath: string) => Promise<MergingCheck>;
+  /** Saves the user's answer about merging into the project's settings (see pr-watch.md). */
+  readonly saveMerging: (
+    input: Readonly<{ readonly repoPath: string; readonly choice: MergingChoice }>,
+  ) => Promise<MergingSettingsFile>;
+  /** Claude Code plugin skills to offer as worker skills; none once the user chose. */
+  readonly workerSkillOffer: () => Promise<readonly string[]>;
+  /** Saves the user's answer to that offer, an empty list for no. */
+  readonly saveWorkerSkills: (skills: readonly string[]) => Promise<HomeSettings>;
   readonly shutdown: () => Promise<void>;
+}>;
+
+export type PullRequestInput = Readonly<{
+  readonly pullRequest: string;
+  readonly repoPath?: string | undefined;
 }>;
 
 type ServiceDependencies = Readonly<{
@@ -454,6 +496,7 @@ class TandemController {
   readonly #accounting: RequestAccountingWorkflow;
   readonly #prReviews: PrReviewWorkflow;
   readonly #drafts: DraftRefreshWorkflow;
+  readonly #prWatch: PrWatcher;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
@@ -468,6 +511,13 @@ class TandemController {
       run: deps.run,
       recordPullRequest: (taskId, expectedRevision, metadata) =>
         this.recordPullRequest(taskId, expectedRevision, metadata),
+    });
+    this.#prWatch = new PrWatcher({
+      home: deps.home,
+      run: deps.run,
+      clock: deps.clock,
+      listTasks: () => deps.store.list(),
+      steerTask: (taskId, text) => this.steerForPrWatch(taskId, text),
     });
     this.#accounting = new RequestAccountingWorkflow({
       home: deps.home,
@@ -698,8 +748,39 @@ class TandemController {
         this.#prReviews.post(assertTaskId(id), input.verdict, input.approved),
       reviewAgain: (id) => this.#prReviews.again(assertTaskId(id)),
       reviewClose: (id) => this.#prReviews.close(assertTaskId(id)),
+      prWatch: () => this.#prWatch.view(),
+      prWatchStart: async (input) => this.#prWatch.start(await this.namedPullRequest(input)),
+      prWatchStop: async (input) => this.#prWatch.stop((await this.namedPullRequest(input)).ref),
+      prWatchNotices: () => this.#prWatch.takeNotices(),
+      prWatchFix: async (input) => {
+        const named = await this.namedPullRequest(input);
+        return this.#prWatch.fixConflicts(named.ref, (pr, files) =>
+          this.startConflictFix(named, pr, files),
+        );
+      },
+      mergingCheck: (repoPath) =>
+        checkProjectMerging(
+          this.#deps.run,
+          absoluteDirectory(repoPath, "repoPath"),
+          this.#deps.home,
+        ),
+      saveMerging: (input) =>
+        saveMergingChoice({
+          repoPath: input.repoPath,
+          home: this.#deps.home,
+          choice: input.choice,
+        }),
+      workerSkillOffer: () => this.workerSkillOffer(),
+      saveWorkerSkills: (skills) =>
+        saveWorkerSkills(this.#deps.home, readTextList(skills, "workerSkills")),
       shutdown: () => this.shutdown(),
     };
+  }
+
+  private async workerSkillOffer(): Promise<readonly string[]> {
+    const settings = await readHomeSettings(this.#deps.home);
+    if (settings.workerSkillsChosen) return [];
+    return listPluginSkills(this.#deps.personalSkillsHome);
   }
 
   async onboard(
@@ -885,10 +966,15 @@ class TandemController {
                 : { checkoutPath: source.sourceRepoPath }),
             })
           : pinned.policy;
+      // Skills named for this task, then the ones every task carries.
+      const skillNames = [
+        ...(input.skills === undefined ? [] : readTextList(input.skills, "skills")),
+        ...(await readHomeSettings(this.#deps.home)).workerSkills,
+      ];
       const skills =
-        input.skills === undefined
+        skillNames.length === 0
           ? []
-          : await findSkills(readTextList(input.skills, "skills"), {
+          : await findSkills(skillNames, {
               repositoryCheckout: pinned?.target.checkout ?? source.checkoutPath,
               personalHome: this.#deps.personalSkillsHome,
             });
@@ -1535,7 +1621,8 @@ class TandemController {
     if (this.#shutdownPromise !== undefined) return this.#shutdownPromise;
     const tick = this.#tickPromise;
     const presentation = this.#presentationFeedback.shutdown();
-    const inFlight = [...(tick === undefined ? [] : [tick]), presentation];
+    const prWatch = this.#prWatch.settle();
+    const inFlight = [...(tick === undefined ? [] : [tick]), presentation, prWatch];
     const shutdown = Promise.allSettled(inFlight).then(() => undefined);
     this.#shutdownPromise = shutdown;
     await shutdown;
@@ -1554,7 +1641,74 @@ class TandemController {
     }
     const current = draftRecorded ? await this.#source.scopedTasks() : settled;
     await this.#accounting.recordSettledTasks(current);
+    // Not awaited: reading GitHub takes seconds and must not hold up task work.
+    void this.#prWatch.tick().catch((error: unknown) => this.recordPrWatchFailure(error));
     return current;
+  }
+
+  /** PR watch never holds up task work; a failed check is recorded and the next one retries. */
+  private async recordPrWatchFailure(error: unknown): Promise<void> {
+    await appendDiagnosticEvent(
+      this.#deps.home,
+      { event: "pr-watch-failed", details: { errorClass: errorClassName(error) } },
+      this.#deps.clock,
+    );
+  }
+
+  /**
+   * PR watch steers a task only from the coordinator whose project the task belongs to, which
+   * also runs its workers; anywhere else it answers false and a later check tries again.
+   */
+  private async steerForPrWatch(taskId: string, text: string): Promise<boolean> {
+    if (this.#deps.sourceWorkspace === undefined) return false;
+    const task = await this.#deps.store.read(taskId);
+    if (task === undefined || !(await this.#source.taskInScope(task))) return false;
+    await this.steer({ taskId, text });
+    return true;
+  }
+
+  /**
+   * An implementation task that adopts the pull request, so it pushes to that branch and returns
+   * straight to ready like any follow-up on an open pull request. It runs in the project when that
+   * is the pull request's repository, otherwise in the pull request's repository as a target.
+   */
+  private async startConflictFix(
+    named: NamedPullRequest,
+    pr: PrObservation,
+    files: readonly string[],
+  ): Promise<TaskRecord> {
+    const project = named.repoPath ?? this.#deps.sourceWorkspace?.repoPath;
+    if (project === undefined) throw new Error("fixing conflicts needs a Tandem project to run in");
+    const created = await this.create({
+      repoPath: project,
+      kind: "implementation",
+      objective: conflictFixObjective(pr, files),
+      acceptanceCriteria: [
+        `${pr.url} has no merge conflicts with ${pr.base}.`,
+        "The branch changes only by merging the base and resolving its conflicts.",
+      ],
+      surfaces: ["pull request branch"],
+      ...(named.repoPath === undefined ? { targetRepo: named.ref.repo } : {}),
+    });
+    const adopted = await this.recordPullRequest(created.id, created.revision, {
+      repository: named.ref.repo,
+      number: named.ref.number,
+      state: "open",
+      head: pr.head,
+      base: pr.base,
+      url: pr.url,
+      title: pr.title,
+    });
+    return this.approve(adopted.id);
+  }
+
+  private namedPullRequest(input: PullRequestInput): Promise<NamedPullRequest> {
+    if (!isRecord(input)) throw new TypeError("pull request input must be an object");
+    return resolvePullRequest(
+      this.#deps.run,
+      singleLine(input.pullRequest, "pullRequest"),
+      input.repoPath ?? this.#deps.sourceWorkspace?.repoPath,
+    );
   }
 
   /**

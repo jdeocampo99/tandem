@@ -9,6 +9,7 @@ import type {
   SetupCommand,
   ValidationCommand,
 } from "../contracts.ts";
+import { writeTextAtomically } from "../runtime/persistence.ts";
 import { type ModelSettings, readModelSettingsAt } from "./models.ts";
 import { copyPolicy, defaultPolicy, parsePolicy, parsePolicyOverride } from "./policy.ts";
 import {
@@ -31,6 +32,8 @@ import {
   INSTRUCTION_CHANNELS,
   isRecord,
   parseJson,
+  readNonEmptyString,
+  readPositiveInteger,
 } from "./values.ts";
 
 const ROOT_GUIDANCE_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
@@ -203,10 +206,79 @@ function readCleanupCommandList(value: unknown, source: string): readonly string
   });
 }
 
+export type MergeWith = "auto-merge" | "queue-label" | "off";
+
+/** The user's answer to "how does this repository merge?", as saved into `[merging]`. */
+export type MergingChoice =
+  | Readonly<{ readonly mergeWith: "auto-merge" | "off" }>
+  | Readonly<{
+      readonly mergeWith: "queue-label";
+      readonly queueLabel: string;
+      readonly blockedLabel?: string;
+    }>;
+
+/**
+ * How PR watch merges this repository's pull requests, as written in `[merging]`; each key left
+ * out falls back to PR watch's default, and no `mergeWith` means merging is not set up.
+ */
+export type MergingSettingsFile = Readonly<{
+  /** "off" is the user's "Not now": PR watch still retries CI but never arms merging. */
+  readonly mergeWith?: MergeWith;
+  readonly queueLabel?: string;
+  readonly blockedLabel?: string;
+  readonly maxCiRetries?: number;
+  readonly stuckAfterMinutes?: number;
+}>;
+
+const MERGING_KEYS: Readonly<Record<string, true>> = {
+  mergeWith: true,
+  queueLabel: true,
+  blockedLabel: true,
+  maxCiRetries: true,
+  stuckAfterMinutes: true,
+};
+
+function readMergingTable(value: unknown, source: string): MergingSettingsFile | undefined {
+  if (value === undefined) return undefined;
+  const field = `${source} merging`;
+  if (!isRecord(value)) throw new TypeError(`${field} must be a table`);
+  assertKnownKeys(value, MERGING_KEYS, field);
+  const { mergeWith, queueLabel, blockedLabel, maxCiRetries, stuckAfterMinutes } = value;
+  if (
+    mergeWith !== undefined &&
+    mergeWith !== "auto-merge" &&
+    mergeWith !== "queue-label" &&
+    mergeWith !== "off"
+  ) {
+    throw new TypeError(`${field}.mergeWith must be "auto-merge", "queue-label", or "off"`);
+  }
+  if (
+    maxCiRetries !== undefined &&
+    (!Number.isSafeInteger(maxCiRetries) || Number(maxCiRetries) < 0)
+  ) {
+    throw new TypeError(`${field}.maxCiRetries must be a whole number of retries`);
+  }
+  return {
+    ...(mergeWith === undefined ? {} : { mergeWith }),
+    ...(queueLabel === undefined
+      ? {}
+      : { queueLabel: readNonEmptyString(queueLabel, `${field}.queueLabel`) }),
+    ...(blockedLabel === undefined
+      ? {}
+      : { blockedLabel: readNonEmptyString(blockedLabel, `${field}.blockedLabel`) }),
+    ...(maxCiRetries === undefined ? {} : { maxCiRetries: Number(maxCiRetries) }),
+    ...(stuckAfterMinutes === undefined
+      ? {}
+      : {
+          stuckAfterMinutes: readPositiveInteger(stuckAfterMinutes, `${field}.stuckAfterMinutes`),
+        }),
+  };
+}
+
 /**
  * settings.toml is the policy itself plus the `repoPath` it belongs to, the coordinator's MCP
- * servers, and the cleanup commands. Those two are machine settings read live, not task policy, so
- * they stay out of the policy.
+ * servers, the cleanup commands, and `[merging]`. Those are machine settings read live, not task
+ * policy, so they stay out of the policy.
  */
 function readSettingsToml(text: string, source: string, root: string): Record<string, unknown> {
   let parsed: unknown;
@@ -223,6 +295,7 @@ function readSettingsToml(text: string, source: string, root: string): Record<st
   }
   readCoordinatorMcpServerList(parsed.coordinatorMcpServers, source);
   readCleanupCommandList(parsed.cleanupCommands, source);
+  readMergingTable(parsed.merging, source);
   return parsed;
 }
 
@@ -231,6 +304,7 @@ function parseSettingsToml(text: string, source: string, root: string): unknown 
     repoPath: _repoPath,
     coordinatorMcpServers: _servers,
     cleanupCommands: _cleanup,
+    merging: _merging,
     ...policy
   } = readSettingsToml(text, source, root);
   return policy;
@@ -396,6 +470,64 @@ export async function readCleanupCommands(
   const text = (await options.readText?.(file)) ?? (await readFile(file, "utf8"));
   const settings = readSettingsToml(text, file, root);
   return readCleanupCommandList(settings.cleanupCommands, file);
+}
+
+/** How PR watch merges this repository's pull requests; undefined when unset or not onboarded. */
+export async function readMergingSettings(
+  options: Readonly<{ repoPath: string; home: string; readText?: PolicyTextReader }>,
+): Promise<MergingSettingsFile | undefined> {
+  const root = await repositoryRoot(options.repoPath);
+  const file = await existingCentralFile(centralPaths(root, await configuredHome(options.home)));
+  if (file === undefined || !file.endsWith(".toml")) return undefined;
+  const text = (await options.readText?.(file)) ?? (await readFile(file, "utf8"));
+  return readMergingTable(readSettingsToml(text, file, root).merging, file);
+}
+
+/**
+ * Saves how PR watch merges this repository's pull requests into its existing settings.toml: the
+ * one field Tandem ever writes into a saved project's settings, and only after the user answered.
+ * It adds `mergeWith` (and the queue labels) to `[merging]`, never replacing a value already
+ * there, and writes nothing if the file changed since it was read. The file stays where it is;
+ * a symlink in the settings path is refused like any other policy read.
+ */
+export async function saveMergingChoice(
+  options: Readonly<{ repoPath: string; home: string; choice: MergingChoice }>,
+): Promise<MergingSettingsFile> {
+  const root = await repositoryRoot(options.repoPath);
+  const file = await existingCentralFile(centralPaths(root, await configuredHome(options.home)));
+  if (file === undefined) {
+    throw new Error("This project has no Tandem settings yet; save its settings first.");
+  }
+  if (!file.endsWith(".toml")) {
+    throw new Error(`${file} is from before settings.toml; merging can't be saved into it.`);
+  }
+  const before = await readFile(file, "utf8");
+  const current = readMergingTable(readSettingsToml(before, file, root).merging, file);
+  if (current?.mergeWith !== undefined) {
+    throw new Error(`${file} already says how this project merges; change it with tandem config.`);
+  }
+  const lines = mergingLines(options.choice);
+  const after =
+    current === undefined
+      ? `${before.replace(/\n*$/u, "\n")}\n[merging]\n${lines}`
+      : before.replace(/^\[merging\][ \t]*$/mu, `[merging]\n${lines.trimEnd()}`);
+  const saved = readMergingTable(readSettingsToml(after, file, root).merging, file);
+  if ((await readFile(file, "utf8")) !== before) {
+    throw new Error(`${file} changed while saving; nothing was written. Try again.`);
+  }
+  await writeTextAtomically(file, after);
+  return saved ?? {};
+}
+
+function mergingLines(choice: MergingChoice): string {
+  const lines = [`mergeWith = ${JSON.stringify(choice.mergeWith)}`];
+  if (choice.mergeWith === "queue-label") {
+    lines.push(`queueLabel = ${JSON.stringify(choice.queueLabel)}`);
+    if (choice.blockedLabel !== undefined) {
+      lines.push(`blockedLabel = ${JSON.stringify(choice.blockedLabel)}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 /** Resolves central policy by canonical repository identity and pins guidance from the requested checkout. */
@@ -588,6 +720,18 @@ ${setting(coordinatorMcpServers, "coordinatorMcpServers", '["linear"]')}
 # deepScrutiny = false
 # jevAssistance = "off"
 # sourceTransmission = false
+
+# How PR watch merges published pull requests and how patient it is with CI. mergeWith is
+# "auto-merge" (GitHub's own), "queue-label" (add queueLabel; blockedLabel is the label the queue
+# adds when it kicks a pull request out), or "off". Until mergeWith is set, PR watch retries CI
+# but never merges; Tandem offers to set it up the first time it watches one of your pull
+# requests here.
+# [merging]
+# mergeWith = "queue-label"
+# queueLabel = "mergequeue"
+# blockedLabel = "blocked"
+# maxCiRetries = 1
+# stuckAfterMinutes = 60
 
 # Use a different model for one role in this project only. Roles: coordinator, scout,
 # implementer, reviewer, presentation. Other roles keep your saved choices.

@@ -21,6 +21,10 @@ src/adapters/typesafe.ts, src/instructions.ts
 - `repoPath` in the record equals that canonical root. Treat it as a known project-index entry,
   never as a reason to crawl a home directory, guess a basename, clone, or create a checkout.
 - Global model choices: `<home>/models.json`.
+- Home settings: `<home>/settings.toml`, optional and hand-written, read live on each use and
+  never pinned (src/config/home-settings.ts). `workerSkills` lists personal skills every task
+  carries (see [Skills](#skills)); onboarding offers the user's Claude Code plugin skills once and
+  saves the answer here, an empty list for no. Unknown keys and bad TOML are refused.
 - Any symlink in the policy namespace below the home (`inspectPolicyPath`) fails closed. New
   directories use `0700`; new files use `0600`.
 - A child-root `.tandem.json` from old builds is ignored: neither imported nor deleted.
@@ -42,6 +46,11 @@ src/adapters/typesafe.ts, src/instructions.ts
 - A later custom policy edit requires approval scoped to the project and fields, a re-read
   immediately before writing (stale-snapshot guard for an existing file, exclusive create for a
   missing one), and refusal if a path or symlink could escape the home. Do not add a CLI flag for it.
+- The one such edit Tandem makes is saving how PR watch merges (`[merging] mergeWith`), after the
+  user answered in onboarding or at the first watch: `configure-merging` or `pr-watch-merging`,
+  each with its own approval, through `saveMergingChoice`, which only adds fields and follows the
+  guard above (see [pr-watch.md](pr-watch.md#setting-up-merging)). `configure-worker-skills` saves
+  `workerSkills` into the home settings the same way.
 
 ### Proposed commands
 
@@ -110,9 +119,9 @@ differs from resolved policy is rejected.
 `parsePolicyOverride` in `src/config/policy.ts` is the full schema; unknown keys are rejected.
 Contracts the parser does not make obvious:
 
-- `repoPath` must equal the canonical root. `coordinatorMcpServers` and `cleanupCommands` are
-  machine settings read live from `settings.toml`; they are stripped out of task policy and never
-  pinned. Everything else is policy, pinned with the task at creation, so edits apply to new tasks.
+- `repoPath` must equal the canonical root. `coordinatorMcpServers`, `cleanupCommands`, and
+  `[merging]` (PR watch; see [pr-watch.md](pr-watch.md#settings)) are machine settings read live
+  from `settings.toml`; they are stripped out of task policy and never pinned. Everything else is policy, pinned with the task at creation, so edits apply to new tasks.
 - Setup writes the file once with discovered commands filled in and every other setting commented
   out with a description and example. A test uncomments them all and checks the result parses;
   keep that true when adding a setting.
@@ -169,11 +178,18 @@ user-level skill folders. The coordinator does not load it and keeps the user's 
 
 - `create` takes `skills`, the names the user asked the work to use; `/skill:` prefixes are
   dropped. Owner: `src/config/skills.ts`.
+- Every task also gets the home's `workerSkills`, since tasks Tandem starts on its own (like PR
+  watch fixes) have no one to name skills. They are looked up and pinned exactly like `skills`,
+  after them; a name given in both, or two names reaching the same folder, counts once, and the
+  32 KB limit covers them all. Turning on every personal skill for workers was rejected: that is
+  about 70 skills, including mail and file actions and some that conflict with worker rules.
 - Each name is looked up under the repository's committed checkout (`.omp/skills`,
   `.claude/skills`, `.agents/skills`, `.agent/skills`, `.codex/skills`), then under the user's home
-  (`.omp/agent/skills`, `.claude/skills`, `.agents/skills`, `.agent/skills`, `.codex/skills`). A
-  repository skill wins over a personal one with the same name; linked copies of one folder count
-  once. Matching is by folder name.
+  (`.omp/agent/skills`, `.claude/skills`, `.agents/skills`, `.agent/skills`, `.codex/skills`) and
+  in Claude Code plugins: each install in `~/.claude/plugins/installed_plugins.json`, at
+  `<installPath>/skills/<name>/SKILL.md`. `plugin:name` looks only in that plugin (the install
+  key without `@marketplace`). A repository skill wins over a personal one with the same name;
+  linked copies of one folder count once. Matching is by folder name.
 - Create fails, with a message the coordinator puts to the user, when a name is not a plain folder
   name, matches nothing, matches two different folders in the same place, has an empty SKILL.md,
   or the skills together pass 32 KB (`MAX_TASK_SKILLS_BYTES`).
@@ -199,9 +215,10 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
   explicit task ID if present, and the lookup list.
 - Jev returns action, target, effect, scope, and composition. Confidence is the minimum across
   the five; below 0.80 goes to the coordinator.
-- Direct dispatch is read-only through the existing service: `list`, `presentations`, and
-  `receipt` (repository-wide), plus `show`, `messages`, `inspect`, which need an explicit
-  `task-...` ID or UUID in the prompt.
+- Direct dispatch is read-only through the existing service: `list`, `presentations`, `receipt`,
+  and `pr-watch` (repository-wide; questions like "how are my PRs?" or "did #409 merge?" print the
+  PR watch view, see [pr-watch.md](pr-watch.md#coordinator-shortcut)), plus `show`, `messages`,
+  `inspect`, which need an explicit `task-...` ID or UUID in the prompt.
 - Choice replies (src/extension/choice-reply-route.ts): a prompt of at most 160 characters, while
   Tandem is waiting on a fixed-choice answer, first gets one Jev call listing those choices plus
   `other`. The choices are read from durable state: each open recovery restart (`restart`/`stop`),

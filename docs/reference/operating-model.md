@@ -22,8 +22,9 @@ a restart never has to rebuild workflow from chat.
    produce durable evidence. A worker never claims a command ran unless the runner recorded it.
 4. **Review is independent.** The implementer is stopped while a fresh read-only reviewer examines
    the same worktree. Results bind to an exact HEAD and generation.
-5. **Delivery is gated.** A ready task opens its own draft PR. Final publishing and merging are
-   explicit approval-bearing actions. Tandem never merges automatically.
+5. **Delivery is gated.** A ready task opens its own draft PR. Final publishing is an explicit
+   approval-bearing action; once published, PR watch merges the pull request when its checks
+   pass ([pr-watch.md](pr-watch.md)). A draft is never merged.
 6. **Visuals are drawn outside the repository.** A research task's own scout writes HTML to a
    private artifact directory when asked; the controller, not the scout, opens Lavish and owns the
    feedback listener, and routes the user's comments back to that scout.
