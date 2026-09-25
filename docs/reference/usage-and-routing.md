@@ -24,10 +24,13 @@ src/workers/execution-routing.ts, src/service/request-accounting.ts
 
 - Elapsed is wall time from intake to terminal, including all waits. Parallel work is merged into a
   union of intervals, overlap is reported separately, and waiting is elapsed minus active.
-- Delivery ends at the verified-PR handoff: the terminal event is written when the ledger first sees
-  the PR `open` (or already `merged`). Its key has no time, so a later merge cannot move it.
+- Delivery ends at the ready handoff: the terminal event is written when the ledger first sees the
+  task `ready` (or its PR `open` or `merged`). Its key has no time, so a later publish or merge
+  cannot move it. Work after that, such as a fix round the user asks for, is outside the elapsed
+  window.
 - A late cost receipt updates totals but is clamped out of timing.
-- The first recorded delivery adds one coordinator notification with the receipt. An open request's
+- The first recorded delivery adds one coordinator notification asking for the PR link when there is
+  one, a short summary, and the receipt. An open request's
   receipt measures up to now, counting only finished work.
 
 ## Attribution
