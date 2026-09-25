@@ -1397,6 +1397,10 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     prWatchStop: unused,
     prWatchNotices: unused,
     prWatchFix: unused,
+    mergingCheck: unused,
+    saveMerging: unused,
+    workerSkillOffer: unused,
+    saveWorkerSkills: unused,
     shutdown: async () => undefined,
   };
   const stdout: string[] = [];
@@ -1547,6 +1551,51 @@ process.exitCode = result.exitCode;
   } finally {
     clearTimeout(timeout);
     if (!exited) child?.kill("SIGKILL");
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("onboard --json adds the merging check and worker skill offer; saving merging needs --yes", async () => {
+  const saved: unknown[] = [];
+  const root = await mkdtemp(join(tmpdir(), "tandem-cli-merging-"));
+  const input = join(root, "merging.json");
+  await writeFile(
+    input,
+    JSON.stringify({ mergeWith: "queue-label", queueLabel: "ready-to-merge" }),
+  );
+  const service = {
+    onboard: async () => ({ repoPath: "/repo", existingConfig: true }),
+    mergingCheck: async () => ({ repo: "acme/app", readable: true, method: "aviator" }),
+    workerSkillOffer: async () => ["buildkite"],
+    saveMerging: async (value: unknown) => {
+      saved.push(value);
+      return { mergeWith: "queue-label" };
+    },
+    shutdown: async () => undefined,
+  } as unknown as TandemService;
+  const stdout: string[] = [];
+  const dependencies = {
+    processEnvironment: { TANDEM_HOME: join(root, "home"), TANDEM_REPO: "/repo" },
+    service,
+    stdout: (value: string) => stdout.push(value),
+    stderr: () => undefined,
+  };
+  try {
+    expect((await runCli(["onboard", "--json"], dependencies)).exitCode).toBe(0);
+    expect(JSON.parse(stdout.join(""))).toEqual({
+      repoPath: "/repo",
+      existingConfig: true,
+      merging: { repo: "acme/app", readable: true, method: "aviator" },
+      workerSkillOffer: ["buildkite"],
+    });
+    expect((await runCli(["configure-merging", "--input", input], dependencies)).exitCode).toBe(2);
+    expect(saved).toEqual([]);
+    const result = await runCli(["configure-merging", "--input", input, "--yes"], dependencies);
+    expect(result.exitCode).toBe(0);
+    expect(saved).toEqual([
+      { repoPath: "/repo", choice: { mergeWith: "queue-label", queueLabel: "ready-to-merge" } },
+    ]);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

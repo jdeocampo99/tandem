@@ -1,6 +1,6 @@
 import { isRecord } from "../adapters/primitives.ts";
 import type { CommandResult, CommandRunner } from "../contracts.ts";
-import { checkOutcome, parseRemoteCheck } from "../delivery/pull-requests.ts";
+import { checkOutcome, parseRemoteCheck, repositoryFromRemote } from "../delivery/pull-requests.ts";
 import type { PullRequestRef } from "../pr-review/pull-request.ts";
 import type { Dequeuer, MergingSettings, PrObservation, WatchedCheck } from "./decide.ts";
 
@@ -283,6 +283,90 @@ export async function pushEmptyCommit(
   if (moved.code === 0) return { kind: "pushed", commit };
   if (NOT_FAST_FORWARD.test(moved.stderr)) return { kind: "moved" };
   throw new Error(`GitHub did not move ${input.branch}: ${firstLine(moved.stderr)}`);
+}
+
+/** What the repository settings say, or why `gh` can't read them. */
+export type RepositoryRead =
+  | Readonly<{
+      readonly readable: true;
+      readonly defaultBranch: string;
+      /** GitHub's "Allow auto-merge"; undefined when this login can't see it. */
+      readonly allowAutoMerge?: boolean;
+    }>
+  | Readonly<{ readonly readable: false; readonly reason: string }>;
+
+/** What branch rules and classic protection say about merging into one branch. */
+export type BranchRules = Readonly<{
+  readonly requiredChecks: "yes" | "none" | "unknown";
+  readonly dismissesApprovals: "yes" | "no" | "unknown";
+}>;
+
+export async function readRepository(
+  run: CommandRunner,
+  repository: string,
+  cwd: string,
+): Promise<RepositoryRead> {
+  const result = await gh(run, cwd, [
+    "api",
+    `repos/${repository}`,
+    "--jq",
+    "{allow_auto_merge, default_branch}",
+  ]);
+  if (result.code !== 0) return { readable: false, reason: firstLine(result.stderr) };
+  const repo = parseObject(result.stdout);
+  if (repo === undefined || text(repo.default_branch).length === 0) {
+    return { readable: false, reason: "GitHub returned no repository settings" };
+  }
+  return {
+    readable: true,
+    defaultBranch: text(repo.default_branch),
+    ...(typeof repo.allow_auto_merge === "boolean"
+      ? { allowAutoMerge: repo.allow_auto_merge }
+      : {}),
+  };
+}
+
+/**
+ * Whether merging into a branch needs checks and whether a push dismisses approvals, from its
+ * rulesets and, when this login may read it, its classic protection. Unknown when neither says.
+ */
+export async function readBranchRules(
+  run: CommandRunner,
+  repository: string,
+  branch: string,
+  cwd: string,
+): Promise<BranchRules> {
+  const rules = await gh(run, cwd, ["api", `repos/${repository}/rules/branches/${branch}`]);
+  const ruleList: unknown = rules.code === 0 ? parseJsonValue(rules.stdout) : undefined;
+  const typed = Array.isArray(ruleList) ? ruleList.filter(isRecord) : [];
+  const checksRule = typed.find((rule) => rule.type === "required_status_checks");
+  const reviewRule = typed.find((rule) => rule.type === "pull_request");
+  const protection = await gh(run, cwd, [
+    "api",
+    `repos/${repository}/branches/${branch}/protection`,
+  ]);
+  const unprotected = protection.code !== 0 && /not protected|HTTP 404/iu.test(protection.stderr);
+  const classic = protection.code === 0 ? parseObject(protection.stdout) : undefined;
+  const classicChecks = isRecord(classic?.required_status_checks)
+    ? list(classic.required_status_checks.contexts).length +
+      list(classic.required_status_checks.checks).length
+    : 0;
+  const classicReviews = isRecord(classic?.required_pull_request_reviews)
+    ? classic.required_pull_request_reviews
+    : undefined;
+  const reviewParameters = isRecord(reviewRule?.parameters) ? reviewRule.parameters : undefined;
+  const known = Array.isArray(ruleList) && (classic !== undefined || unprotected);
+  return {
+    requiredChecks:
+      checksRule !== undefined || classicChecks > 0 ? "yes" : known ? "none" : "unknown",
+    dismissesApprovals:
+      reviewParameters?.dismiss_stale_reviews_on_push === true ||
+      classicReviews?.dismiss_stale_reviews === true
+        ? "yes"
+        : known
+          ? "no"
+          : "unknown",
+  };
 }
 
 /** Whether the repository's default branch has an Aviator merge queue config. */
@@ -591,6 +675,14 @@ async function ghChecked(
   return result;
 }
 
+function parseJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseObject(value: string): Readonly<Record<string, unknown>> | undefined {
   try {
     const parsed: unknown = JSON.parse(value);
@@ -616,4 +708,21 @@ function list(value: unknown): readonly unknown[] {
 
 function firstLine(value: string): string {
   return value.trim().split("\n")[0] || "gh failed without a message";
+}
+
+/** The GitHub `owner/repo` a checkout's origin names, or undefined when it names none. */
+export async function originRepository(
+  run: CommandRunner,
+  repoPath: string,
+): Promise<string | undefined> {
+  const result = await run({
+    argv: ["git", "-C", repoPath, "remote", "get-url", "origin"],
+    cwd: repoPath,
+  });
+  if (result.code !== 0) return undefined;
+  try {
+    return repositoryFromRemote(result.stdout).toLowerCase();
+  } catch {
+    return undefined;
+  }
 }

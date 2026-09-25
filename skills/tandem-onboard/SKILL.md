@@ -9,7 +9,8 @@ user-invocable: true
 # tandem-onboard
 
 Onboarding looks at a project and proposes settings without changing anything. Saving model
-choices, saving project settings, and launching are three separate steps, each needing its own yes.
+choices, saving project settings, turning on merging, giving tasks plugin skills, and launching
+are separate steps, each needing its own yes.
 
 ## Talk like a teammate
 
@@ -41,7 +42,7 @@ covers another.
 ```sh
 set -o pipefail
 bun "<tandem-root>/src/cli.ts" onboard --repo "<repo>" --home "<home>" --json |
-  jq '{repoPath, existingConfig, modelSettings, configPath, validationCommands, setupCommands, unresolved}'
+  jq '{repoPath, existingConfig, modelSettings, configPath, validationCommands, setupCommands, unresolved, merging, workerSkillOffer}'
 ```
 
 This writes nothing. Tell the user, in a sentence or two, what Tandem found: the checks it would run
@@ -86,7 +87,40 @@ Ask:
 On yes: `bun "<tandem-root>/src/cli.ts" setup --repo "<repo>" --home "<home>" --yes`. The user can
 edit these later with `tandem config <repo>`.
 
-## 5. Launch (only when asked)
+## 5. Merging (optional)
+
+PR watch keeps the user's pull requests moving; merging them is off until they say how this repo
+merges. Use `merging` from step 2 (run step 2 again if settings were just saved).
+
+- `merging.readable` is false: pass on `merging.message` in one sentence and skip this step.
+- `merging.method` is `aviator` or `auto-merge`: ask, in one or two sentences, for example:
+
+  > This repo merges through Aviator. Tandem can queue your PRs and retry flaky CI.
+  >
+  > **Turn on** or **Not now**
+
+  (For `auto-merge`: "This repo allows GitHub auto-merge.") If `merging.warnings` has anything,
+  add it in one plain sentence.
+- `merging.method` is `unknown`: ask `merging.question`, the one question about which label queues
+  a pull request or whether to use GitHub auto-merge.
+
+Never ask about retries, how long CI may take, or any other setting; their defaults stay.
+
+Save the answer as a JSON file outside the project that you delete afterward: **Turn on** saves
+`merging.proposal`; a label they name saves `{"mergeWith": "queue-label", "queueLabel": "<label>"}`;
+auto-merge saves `{"mergeWith": "auto-merge"}`; **Not now** saves `{"mergeWith": "off"}`, so they
+are not asked again. Then run
+`bun "<tandem-root>/src/cli.ts" configure-merging --repo "<repo>" --home "<home>" --input <file> --yes`.
+If it says this project already says how it merges, move on.
+
+## 6. Plugin skills (optional, once)
+
+When `workerSkillOffer` lists skills, ask once, for example "Give tasks the buildkite skill? Every
+task Tandem starts would follow it." The user may pick some, all, or none. Save their pick (an
+empty list for no, so it isn't offered again) as `{"workerSkills": [...]}` in a temporary file with
+`bun "<tandem-root>/src/cli.ts" configure-worker-skills --home "<home>" --input <file> --yes`.
+
+## 7. Launch (only when asked)
 
 Onboarding is done. Tell the user they can start Tandem with `tandem <repo>`, and run it only when
 they ask. A launch opens a Herdr window with that project's coordinator, where they describe what

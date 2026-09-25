@@ -168,9 +168,10 @@ it looks only at what changed and tells you which of your comments were addresse
 CI takes a while and sometimes flakes. PR watch keeps an eye on every pull request Tandem opens, and
 any other you name with `tandem watch <link>`. When a required check fails, it reruns CI once with
 an empty commit, and waits instead when the same check is failing on `main` too. Once a pull
-request is published (not a draft), it turns on GitHub auto-merge, or adds your merge queue's label
-(set `[merging]` in the project's settings; Aviator repositories work without it), and puts it back
-in the queue after a flaky kick-out. When a pull request Tandem opened has conflicts, its task
+request is published (not a draft), it turns on GitHub auto-merge, or adds your merge queue's label,
+and puts it back in the queue after a flaky kick-out. Merging is off for a repository until you say
+how it merges: onboarding asks, or Tandem asks the first time it watches one of your pull requests
+there, and "Not now" sticks. When a pull request Tandem opened has conflicts, its task
 merges the base branch in and pushes; for one of yours, Tandem asks once ("fix it?") and starts a
 task only on yes. It only interrupts you when a pull request needs you: a check failing twice on the
 same code, a stuck check, conflicts it could not fix, requested changes, or a lost approval. It

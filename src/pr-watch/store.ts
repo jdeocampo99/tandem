@@ -1,4 +1,5 @@
 import { isRecord } from "../adapters/primitives.ts";
+import type { MergingChoice } from "../config/repositories.ts";
 import type { IsoTimestamp } from "../contracts.ts";
 import type { PullRequestRef } from "../pr-review/pull-request.ts";
 import {
@@ -20,8 +21,6 @@ export type PrWatch = Readonly<{
   readonly taskId?: string;
   /** A checkout of its repository, whose settings.toml `[merging]` applies; defaults without one. */
   readonly repoPath?: string;
-  /** Whether its repository has an Aviator config, looked up once when settings do not say. */
-  readonly aviator?: boolean;
   /** When watching started, or the user last asked to watch it again. */
   readonly startedAt: IsoTimestamp;
   /** When the user stopped watching; a stopped pull request is never picked up again on its own. */
@@ -51,6 +50,14 @@ export type PrWatchNotice = Readonly<{
   readonly text: string;
   /** A yes means start a task that fixes the conflicts (the `pr-watch-fix` action). */
   readonly askToFix?: boolean;
+  /**
+   * The question how this repository merges: the user's answer is saved into the project at
+   * `repoPath` (the `pr-watch-merging` action), `proposal` on "Turn on" when the check found one.
+   */
+  readonly setUpMerging?: Readonly<{
+    readonly repoPath: string;
+    readonly proposal?: MergingChoice;
+  }>;
 }>;
 
 export type PrWatchSummary = Readonly<{

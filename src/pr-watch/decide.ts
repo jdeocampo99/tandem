@@ -1,4 +1,4 @@
-import type { MergingSettingsFile } from "../config/repositories.ts";
+import type { MergeWith, MergingSettingsFile } from "../config/repositories.ts";
 import type { IsoTimestamp } from "../contracts.ts";
 import { clockTime } from "./view.ts";
 
@@ -44,7 +44,8 @@ export type PrObservation = Readonly<{
 
 /** How a repository merges and how patient the watcher is; see `[merging]` in settings.toml. */
 export type MergingSettings = Readonly<{
-  readonly mergeWith: "auto-merge" | "queue-label";
+  /** `not-set-up` until the user answers; neither it nor `off` ever arms merging. */
+  readonly mergeWith: MergeWith | "not-set-up";
   readonly queueLabel: string;
   readonly blockedLabel?: string;
   readonly maxCiRetries: number;
@@ -68,8 +69,11 @@ export type PrWatchLogEntry = Readonly<{
         /** Whether the pull request was approved just before the watcher pushed. */
         readonly approved: boolean;
       }>
-    /** Put it in the queue or armed auto-merge; `requeue` does either again after a dequeue. */
-    | Readonly<{ readonly kind: "queue" | "auto-merge" | "requeue" }>
+    /**
+     * Put it in the queue or armed auto-merge; `requeue` does either again after a dequeue.
+     * `offer-merging` asked the user how the repository merges.
+     */
+    | Readonly<{ readonly kind: "queue" | "auto-merge" | "requeue" | "offer-merging" }>
     /** Sent a task to fix the conflicts, or asked the user whether to; once per base commit. */
     | Readonly<{
         readonly kind: "fix-conflicts" | "ask-conflicts";
@@ -80,7 +84,9 @@ export type PrWatchLogEntry = Readonly<{
 
 export type PrWatchAction =
   | Readonly<{ readonly kind: "retry"; readonly checks: readonly string[] }>
-  | Readonly<{ readonly kind: "update-branch" | "queue" | "auto-merge" | "requeue" }>
+  | Readonly<{
+      readonly kind: "update-branch" | "queue" | "auto-merge" | "requeue" | "offer-merging";
+    }>
   | Readonly<{
       readonly kind: "fix-conflicts" | "ask-conflicts";
       readonly files: readonly string[];
@@ -129,27 +135,24 @@ export type PrWatchFacts = Readonly<{
   readonly task?: Readonly<{ readonly working: boolean }>;
   /** When the user last asked for this pull request to be watched; a declined fix counts from here. */
   readonly watchedSince: IsoTimestamp;
+  /** A Tandem project for this repository exists, so an answer about merging can be saved. */
+  readonly canSaveMerging: boolean;
 }>;
 
 const DEFAULT_RETRIES = { maxCiRetries: 1, stuckAfterMinutes: 60 } as const;
 /** A head with no checks yet counts as CI starting for this long, so nothing acts before it does. */
 const CI_START_MINUTES = 5;
-const AVIATOR_QUEUE = { queueLabel: "mergequeue", blockedLabel: "blocked" } as const;
+const DEFAULT_QUEUE_LABEL = "mergequeue";
 
 /**
- * The repository's settings over the defaults: GitHub auto-merge, or the Aviator queue labels
- * when the repository has an Aviator config and its settings do not say otherwise.
+ * The repository's settings over the defaults. Merging stays off until the user chose how the
+ * repository merges; retries and the stuck limit have defaults.
  */
-export function mergingSettings(
-  file: MergingSettingsFile | undefined,
-  aviator: boolean,
-): MergingSettings {
-  const mergeWith = file?.mergeWith ?? (aviator ? "queue-label" : "auto-merge");
-  const blockedLabel = file?.blockedLabel ?? (aviator ? AVIATOR_QUEUE.blockedLabel : undefined);
+export function mergingSettings(file: MergingSettingsFile | undefined): MergingSettings {
   return {
-    mergeWith,
-    queueLabel: file?.queueLabel ?? AVIATOR_QUEUE.queueLabel,
-    ...(blockedLabel === undefined ? {} : { blockedLabel }),
+    mergeWith: file?.mergeWith ?? "not-set-up",
+    queueLabel: file?.queueLabel ?? DEFAULT_QUEUE_LABEL,
+    ...(file?.blockedLabel === undefined ? {} : { blockedLabel: file.blockedLabel }),
     maxCiRetries: file?.maxCiRetries ?? DEFAULT_RETRIES.maxCiRetries,
     stuckAfterMinutes: file?.stuckAfterMinutes ?? DEFAULT_RETRIES.stuckAfterMinutes,
   };
@@ -297,6 +300,7 @@ function decideChecks(facts: PrWatchFacts): PrWatchDecision | undefined {
  */
 function decideArming(facts: PrWatchFacts): PrWatchDecision | undefined {
   const { settings } = facts;
+  if (!merges(settings)) return decideMergingOffer(facts);
   if (armed(facts.log) || inQueue(facts) || blocked(facts)) return undefined;
   if (facts.dequeuedBy === undefined) return { kind: "look-up", lookup: "dequeued-by" };
   if (facts.dequeuedBy !== null && !facts.dequeuedBy.bot) return undefined;
@@ -311,6 +315,7 @@ function decideArming(facts: PrWatchFacts): PrWatchDecision | undefined {
  */
 function decideMerging(facts: PrWatchFacts): PrWatchDecision | undefined {
   const pr = facts.observation;
+  if (!merges(facts.settings)) return undefined;
   if (pr.behind && !pr.fork && !actedOnHead(facts, "update-branch")) {
     return decided(row("green", mergeStatus(facts), `🔄 updating from ${pr.base}`), {
       kind: "update-branch",
@@ -335,6 +340,25 @@ function decideMerging(facts: PrWatchFacts): PrWatchDecision | undefined {
   });
 }
 
+/**
+ * A published pull request in a repository whose merging is not set up asks the user once how it
+ * merges, when there is a project to save the answer into.
+ */
+function decideMergingOffer(facts: PrWatchFacts): PrWatchDecision | undefined {
+  const offered = facts.log.some((entry) => entry.kind === "offer-merging");
+  if (facts.settings.mergeWith !== "not-set-up" || !facts.canSaveMerging || offered) {
+    return undefined;
+  }
+  return decided(row("green", mergeStatus(facts), "🙋 set up merging for this repo?"), {
+    kind: "offer-merging",
+  });
+}
+
+/** Whether the user chose a way to merge this repository's pull requests. */
+function merges(settings: MergingSettings): boolean {
+  return settings.mergeWith === "auto-merge" || settings.mergeWith === "queue-label";
+}
+
 /** Nothing to do: say what the pull request is waiting on. */
 function settledRow(facts: PrWatchFacts): PrWatchRow {
   const pr = facts.observation;
@@ -352,7 +376,11 @@ function settledRow(facts: PrWatchFacts): PrWatchRow {
     ? "⏳ waiting for you to publish it"
     : pr.reviewDecision === "REVIEW_REQUIRED"
       ? reviewNote
-      : undefined;
+      : facts.settings.mergeWith === "not-set-up"
+        ? "merging isn't set up for this repo"
+        : facts.settings.mergeWith === "off"
+          ? "merging is off for this repo"
+          : undefined;
   const note =
     recent?.kind === "retry"
       ? `🔁 retried ${recent.checks.join(", ")} (flaky?)`

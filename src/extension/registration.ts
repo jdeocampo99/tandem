@@ -350,6 +350,15 @@ function tandemRequestSchema(z: Zod) {
     z.object({ action: z.literal("review-again"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("review-close"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("pr-watch") }).strict(),
+    z
+      .object({
+        action: z.literal("pr-watch-merging"),
+        repoPath: z.string(),
+        mergeWith: z.enum(["auto-merge", "queue-label", "off"]),
+        queueLabel: z.string().optional(),
+        blockedLabel: z.string().optional(),
+      })
+      .strict(),
     ...(["pr-watch-start", "pr-watch-stop", "pr-watch-fix"] as const).map((action) =>
       z
         .object({

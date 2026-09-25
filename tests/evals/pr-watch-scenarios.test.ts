@@ -99,7 +99,7 @@ test("a flaky check gets one empty commit, then the PR moves on when it passes",
       { name: "e2e", state: "pass" },
     ];
     const row = await nextCheck(world, watcher);
-    expect(row).toMatchObject({ color: "green", checks: "✅ 2/2" });
+    expect(row).toMatchObject({ checks: "✅ 2/2", note: "🔁 retried e2e (flaky?)" });
     expect(emptyCommits(world)).toBe(1);
     expect(await service.prWatchNotices()).toEqual([]);
   });
@@ -324,6 +324,7 @@ test("opening the view reads GitHub but never acts", async () => {
 
 test("only required checks drive retries; an optional failure never blocks merging", async () => {
   await watching(async (world, service, watcher) => {
+    await saveMergingSettings(world, AUTO_MERGE);
     const pr = world.github.openPullRequest({
       repo: REPO,
       number: 7,
@@ -332,14 +333,14 @@ test("only required checks drive retries; an optional failure never blocks mergi
         { name: "preview", state: "fail" },
       ],
     });
-    await service.prWatchStart({ pullRequest: PR });
+    await service.prWatchStart({ ...HERE, repoPath: world.repoPath });
     expect(await nextCheck(world, watcher)).toMatchObject({
       checks: "❌ 1/2",
       status: "🤖 auto-merge",
     });
     expect(emptyCommits(world)).toBe(0);
     expect(pr.autoMerge).toBe(true);
-  });
+  }, ORIGIN);
 });
 
 test("GitHub's rate limit pauses checks and says so in the header", async () => {
@@ -361,12 +362,18 @@ test("GitHub's rate limit pauses checks and says so in the header", async () => 
 
 const ORIGIN = { origin: `https://github.com/${REPO}.git` };
 
-/** Saves the project's settings.toml with a `[merging]` section. */
-async function saveMergingSettings(world: ScenarioWorld, merging: string): Promise<void> {
+/** Saves the project's settings.toml, with a `[merging]` section when one is given. */
+async function saveMergingSettings(world: ScenarioWorld, merging?: string): Promise<void> {
   const path = await centralConfigPath(world.repoPath, world.home);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `repoPath = ${JSON.stringify(world.repoPath)}\n\n[merging]\n${merging}\n`);
+  const section = merging === undefined ? "" : `\n[merging]\n${merging}\n`;
+  await writeFile(path, `repoPath = ${JSON.stringify(world.repoPath)}\n${section}`);
 }
+
+const AUTO_MERGE = 'mergeWith = "auto-merge"';
+const AVIATOR_QUEUE =
+  'mergeWith = "queue-label"\nqueueLabel = "mergequeue"\nblockedLabel = "blocked"';
+const HERE = { pullRequest: "7" } as const;
 
 function labelEdits(world: ScenarioWorld): number {
   return world.trace().filter((event) => event.action === "gh pr edit").length;
@@ -374,13 +381,14 @@ function labelEdits(world: ScenarioWorld): number {
 
 test("a published pull request gets auto-merge once, and a draft never does", async () => {
   await watching(async (world, service, watcher) => {
+    await saveMergingSettings(world, AUTO_MERGE);
     const pr = world.github.openPullRequest({
       repo: REPO,
       number: 7,
       draft: true,
       checks: [{ name: "unit", state: "pass" }],
     });
-    await service.prWatchStart({ pullRequest: PR });
+    await service.prWatchStart({ ...HERE, repoPath: world.repoPath });
     expect((await nextCheck(world, watcher)).status).toBe("📝 draft");
     expect(pr.autoMerge).toBe(false);
 
@@ -393,18 +401,31 @@ test("a published pull request gets auto-merge once, and a draft never does", as
     expect(pr.autoMerge).toBe(true);
     await nextCheck(world, watcher);
     expect(world.trace().filter((event) => event.action === "gh pr merge")).toHaveLength(1);
-  });
+  }, ORIGIN);
 });
 
-test("with an Aviator queue: queued, kicked out by the queue, requeued once, merged", async () => {
+test("the first watch asks how an Aviator repo merges; once saved: queued, kicked out, requeued once, merged", async () => {
   await watching(async (world, service, watcher) => {
+    await saveMergingSettings(world);
     world.github.aviatorRepositories.push(REPO);
     const pr = world.github.openPullRequest({
       repo: REPO,
       number: 7,
       checks: [{ name: "unit", state: "pass" }],
     });
-    await service.prWatchStart({ pullRequest: PR });
+    await service.prWatchStart({ ...HERE, repoPath: world.repoPath });
+    const [question] = await service.prWatchNotices();
+    expect(question?.text).toContain("acme/app#7: This repo merges through Aviator.");
+    const setUp = question?.setUpMerging;
+    expect(setUp).toEqual({
+      repoPath: world.repoPath,
+      proposal: { mergeWith: "queue-label", queueLabel: "mergequeue", blockedLabel: "blocked" },
+    });
+    expect((await nextCheck(world, watcher)).note).toBe("merging isn't set up for this repo");
+    expect(pr.labels).toEqual([]);
+
+    if (setUp?.proposal === undefined) throw new Error("expected a proposal");
+    await service.saveMerging({ repoPath: world.repoPath, choice: setUp.proposal });
     expect((await nextCheck(world, watcher)).status).toBe("🚂 queued");
     expect(pr.labels).toEqual(["mergequeue"]);
 
@@ -437,18 +458,18 @@ test("with an Aviator queue: queued, kicked out by the queue, requeued once, mer
     expect(await service.prWatchNotices()).toEqual([
       { pullRequest: PR, text: "🎉 acme/app#7 merged" },
     ]);
-  });
+  }, ORIGIN);
 });
 
 test("a person who takes a pull request out of the queue is left alone", async () => {
   await watching(async (world, service, watcher) => {
-    world.github.aviatorRepositories.push(REPO);
+    await saveMergingSettings(world, AVIATOR_QUEUE);
     const pr = world.github.openPullRequest({
       repo: REPO,
       number: 7,
       checks: [{ name: "unit", state: "pass" }],
     });
-    await service.prWatchStart({ pullRequest: PR });
+    await service.prWatchStart({ ...HERE, repoPath: world.repoPath });
     await nextCheck(world, watcher);
     world.github.relabel(pr, { remove: "mergequeue", by: "sam", bot: false });
     expect(await nextCheck(world, watcher)).toMatchObject({
@@ -459,7 +480,34 @@ test("a person who takes a pull request out of the queue is left alone", async (
     await nextCheck(world, watcher);
     expect(labelEdits(world)).toBe(1);
     expect(pr.labels).toEqual([]);
-  });
+  }, ORIGIN);
+});
+
+test("without a saved choice the watcher retries CI but never merges, and Not now is remembered", async () => {
+  await watching(async (world, service, watcher) => {
+    await saveMergingSettings(world);
+    world.github.autoMergeRepositories.push(REPO);
+    const pr = world.github.openPullRequest({
+      repo: REPO,
+      number: 7,
+      checks: [{ name: "e2e", state: "fail" }],
+    });
+    await service.prWatchStart({ ...HERE, repoPath: world.repoPath });
+    const [question] = await service.prWatchNotices();
+    expect(question?.setUpMerging?.proposal).toEqual({ mergeWith: "auto-merge" });
+    expect((await nextCheck(world, watcher)).note).toBe("🔁 retried e2e (flaky?)");
+    pr.checks = [{ name: "e2e", state: "pass" }];
+    await nextCheck(world, watcher);
+    expect(pr.autoMerge).toBe(false);
+
+    await service.saveMerging({ repoPath: world.repoPath, choice: { mergeWith: "off" } });
+    await service.prWatchStart({ ...HERE, repoPath: world.repoPath });
+    expect(await service.prWatchNotices()).toEqual([]);
+    await nextCheck(world, watcher);
+    expect(pr.autoMerge).toBe(false);
+    expect(world.trace().some((event) => event.action === "gh pr merge")).toBe(false);
+    expect(labelEdits(world)).toBe(0);
+  }, ORIGIN);
 });
 
 test("a queue label with no blocked label: a flaky kick-out is retried and requeued", async () => {
@@ -509,6 +557,7 @@ test("an approval dismissed by the watcher's empty commit goes red", async () =>
  * task back to implementing the way a real steer does, recording what it was told.
  */
 async function conflictedTaskPullRequest(world: ScenarioWorld) {
+  await saveMergingSettings(world, AUTO_MERGE);
   const pr = world.github.openPullRequest({
     repo: REPO,
     number: 7,
@@ -680,5 +729,56 @@ test("a red row is told once, even when GitHub recomputing mergeability shows it
     pr.mergeable = "MERGEABLE";
     expect((await nextCheck(world, watcher)).color).toBe("red");
     expect(await service.prWatchNotices()).toEqual([]);
+  });
+});
+
+test("the merging check finds Aviator, GitHub auto-merge, or neither, and says when gh can't read", async () => {
+  await withScenario(ORIGIN, async (world) => {
+    const service = serviceFor(world);
+    try {
+      world.github.branchRules.set(`${REPO}:main`, [
+        { type: "required_status_checks", parameters: { required_status_checks: [] } },
+        { type: "pull_request", parameters: { dismiss_stale_reviews_on_push: true } },
+      ]);
+      expect(await service.mergingCheck(world.repoPath)).toEqual({
+        repo: REPO,
+        readable: true,
+        branch: "main",
+        method: "unknown",
+        requiredChecks: "yes",
+        dismissesApprovals: "yes",
+        warnings: [
+          "A push here dismisses approvals, so each CI retry would cost a pull request its approvals.",
+        ],
+        question:
+          "Which label queues a pull request here, or should Tandem use GitHub auto-merge once you turn it on in the repo's settings? Or Not now.",
+      });
+
+      world.github.branchRules.set(`${REPO}:main`, []);
+      world.github.autoMergeRepositories.push(REPO);
+      expect(await service.mergingCheck(world.repoPath)).toMatchObject({
+        method: "auto-merge",
+        proposal: { mergeWith: "auto-merge" },
+        requiredChecks: "none",
+        dismissesApprovals: "no",
+        warnings: ["main requires no checks, so a pull request can merge before its CI finishes."],
+      });
+
+      world.github.aviatorRepositories.push(REPO);
+      expect(await service.mergingCheck(world.repoPath)).toMatchObject({
+        method: "aviator",
+        proposal: { mergeWith: "queue-label", queueLabel: "mergequeue", blockedLabel: "blocked" },
+      });
+
+      world.github.unreadableRepositories.push(REPO);
+      expect(await service.mergingCheck(world.repoPath)).toEqual({
+        repo: REPO,
+        readable: false,
+        message:
+          "GitHub won't show acme/app to your gh login (gh: Resource protected by organization SAML enforcement (HTTP 403)). Run gh auth login, or authorize the login for the organization's SSO, then try again.",
+      });
+    } finally {
+      await service.shutdown();
+    }
   });
 });

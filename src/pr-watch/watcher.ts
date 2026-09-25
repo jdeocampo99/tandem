@@ -1,6 +1,5 @@
 import { readMergingSettings } from "../config/repositories.ts";
 import type { Clock, CommandRunner, IsoTimestamp, TaskRecord } from "../contracts.ts";
-import { repositoryFromRemote } from "../delivery/pull-requests.ts";
 import { type PullRequestRef, parsePullRequestRef } from "../pr-review/pull-request.ts";
 import { readRegisteredProjects } from "../terminal/projects.ts";
 import {
@@ -20,15 +19,16 @@ import {
   editLabels,
   enableAutoMerge,
   GitHubRateLimitError,
-  hasAviatorConfig,
   listMyOpenPullRequests,
   mergeBaseIntoBranch,
+  originRepository,
   pushEmptyCommit,
   readChecksNotPassing,
   readConflictFiles,
   readDequeuer,
   readWatchedPullRequest,
 } from "./github.ts";
+import { checkMerging } from "./merging-check.ts";
 import {
   type PrWatch,
   type PrWatchNotice,
@@ -74,6 +74,7 @@ const LOOK_EVERY_MS = 30_000;
 
 type Decided = Extract<PrWatchDecision, { readonly kind: "decided" }>;
 type Outcome = Readonly<{ row: PrWatchRow; entry?: PrWatchLogEntry; notice?: PrWatchNotice }>;
+type PrWatchOffer = Readonly<{ notice: PrWatchNotice; entry: PrWatchLogEntry }>;
 
 /**
  * Keeps watched pull requests moving: reads each one from GitHub on the shared schedule, decides
@@ -134,14 +135,24 @@ export class PrWatcher {
     const now = this.#deps.clock();
     const { ref } = named;
     const repoPath = named.repoPath ?? (await this.projectFor(ref));
+    const offer =
+      repoPath !== undefined &&
+      (await readMergingSettings({ repoPath, home: this.#deps.home }))?.mergeWith === undefined
+        ? await this.offerMerging(newWatch(ref, "user", now, repoPath), now)
+        : undefined;
     await withPrWatches(this.#deps.home, (transaction) => {
       const existing = transaction.watches.find((watch) => sameRef(watch.ref, ref));
-      if (existing === undefined) {
-        transaction.put(newWatch(ref, "user", now, repoPath));
-      } else {
-        const { stoppedAt: _stopped, finishedAt: _finished, ...rest } = existing;
-        transaction.put({ ...rest, origin: "user", startedAt: now });
-      }
+      const {
+        stoppedAt: _stopped,
+        finishedAt: _finished,
+        ...rest
+      } = existing ?? newWatch(ref, "user", now, repoPath);
+      const started: PrWatch = { ...rest, origin: "user", startedAt: now };
+      transaction.put(
+        offer === undefined
+          ? started
+          : { ...started, notice: offer.notice, log: [...started.log, offer.entry] },
+      );
     });
     return this.view();
   }
@@ -330,10 +341,11 @@ export class PrWatcher {
       {
         observation: pr,
         log: watch.log,
-        settings: merging.settings,
+        settings: merging,
         now,
         headSeenAt: head.seenAt,
         watchedSince: watch.startedAt,
+        canSaveMerging: watch.repoPath !== undefined,
         ...(task === undefined || CLOSED_STAGES.includes(task.stage)
           ? {}
           : { task: { working: WORKING_STAGES.includes(task.stage) } }),
@@ -346,13 +358,12 @@ export class PrWatcher {
         : await this.apply(decision.action, {
             watch,
             pr,
-            settings: merging.settings,
+            settings: merging,
             row: decision.row,
             now,
           });
     return (current) => ({
       ...current,
-      ...(merging.aviator === undefined ? {} : { aviator: merging.aviator }),
       checkedAt: now,
       head,
       required: read.required,
@@ -365,21 +376,45 @@ export class PrWatcher {
     });
   }
 
-  /**
-   * The repository's `[merging]` settings, read live from the checkout the watch belongs to. Only
-   * without an explicit `mergeWith` does it look for an Aviator config, once per watch.
-   */
-  private async mergingFor(
-    watch: PrWatch,
-  ): Promise<Readonly<{ settings: MergingSettings; aviator?: boolean }>> {
-    const file =
+  /** The repository's `[merging]` settings, read live from the checkout the watch belongs to. */
+  private async mergingFor(watch: PrWatch): Promise<MergingSettings> {
+    return mergingSettings(
       watch.repoPath === undefined
         ? undefined
-        : await readMergingSettings({ repoPath: watch.repoPath, home: this.#deps.home });
-    if (file?.mergeWith !== undefined) return { settings: mergingSettings(file, false) };
-    const aviator =
-      watch.aviator ?? (await hasAviatorConfig(this.#deps.run, watch.ref.repo, this.#deps.home));
-    return { settings: mergingSettings(file, aviator), aviator };
+        : await readMergingSettings({ repoPath: watch.repoPath, home: this.#deps.home }),
+    );
+  }
+
+  /**
+   * Asks the user how a repository merges, with what the read-only check found, and records the
+   * ask so this pull request is never asked about again. Their answer is saved by the coordinator.
+   */
+  private async offerMerging(watch: PrWatch, now: IsoTimestamp): Promise<PrWatchOffer> {
+    const check = await checkMerging(this.#deps.run, watch.ref.repo, this.#deps.home);
+    const pullRequest = `${watch.ref.repo}#${watch.ref.number}`;
+    const text = check.readable
+      ? [`${pullRequest}: ${check.question}`, ...check.warnings].join(" ")
+      : `${pullRequest}: ${check.message}`;
+    return {
+      notice: {
+        pullRequest,
+        text,
+        ...(check.readable && watch.repoPath !== undefined
+          ? {
+              setUpMerging: {
+                repoPath: watch.repoPath,
+                ...(check.proposal === undefined ? {} : { proposal: check.proposal }),
+              },
+            }
+          : {}),
+      },
+      entry: {
+        at: now,
+        kind: "offer-merging",
+        head: watch.head?.oid ?? "",
+        tree: watch.head?.tree ?? "",
+      },
+    };
   }
 
   /** Decides, making each extra GitHub read the decision asks for first. */
@@ -523,6 +558,8 @@ export class PrWatcher {
         const entry = { ...logged, kind: action.kind, base: pr.baseHead, files: action.files };
         return { row, entry };
       }
+      case "offer-merging":
+        return { row, ...(await this.offerMerging(context.watch, now)) };
       case "ask-conflicts":
         return {
           row,
@@ -566,19 +603,6 @@ export async function resolvePullRequest(
     throw new Error(`"${text}" is not a pull request; use its link, owner/repo#N, or #N here`);
   }
   return { ref, ...(repoPath !== undefined && origin === ref.repo ? { repoPath } : {}) };
-}
-
-async function originRepository(run: CommandRunner, repoPath: string): Promise<string | undefined> {
-  const result = await run({
-    argv: ["git", "-C", repoPath, "remote", "get-url", "origin"],
-    cwd: repoPath,
-  });
-  if (result.code !== 0) return undefined;
-  try {
-    return repositoryFromRemote(result.stdout).toLowerCase();
-  } catch {
-    return undefined;
-  }
 }
 
 /** Checks run when due: every 1 or 5 minutes, never while another Tandem holds the poll. */
