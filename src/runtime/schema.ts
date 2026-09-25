@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import type { GitCheckpoint } from "../adapters/git.ts";
 import {
@@ -699,6 +700,21 @@ function parseStopRequest(value: unknown, field: string): DurableStopRequest {
   };
 }
 
+const FINGERPRINT_DIGEST = /^[0-9a-f]{64}$/u;
+
+/** The fixed-size digest a task fingerprint is stored as. */
+export function fingerprintDigest(serialized: string): string {
+  return createHash("sha256").update(serialized).digest("hex");
+}
+
+// ponytail: a consumption recorded before fingerprints were hashed holds the whole serialized task.
+// Hashing it here yields exactly the digest the current code computes for that same task, so
+// replay decisions are unchanged, and the next runtime write stores only the digest.
+function storedFingerprint(value: unknown, field: string): string {
+  const stored = text(value, field);
+  return FINGERPRINT_DIGEST.test(stored) ? stored : fingerprintDigest(stored);
+}
+
 function parseJobConsumption(value: unknown, field: string): DurableJobConsumption {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   return {
@@ -707,8 +723,8 @@ function parseJobConsumption(value: unknown, field: string): DurableJobConsumpti
     appliedEventKey: text(value.appliedEventKey, `${field}.appliedEventKey`),
     beforeRevision: nonNegativeInteger(value.beforeRevision, `${field}.beforeRevision`),
     afterRevision: nonNegativeInteger(value.afterRevision, `${field}.afterRevision`),
-    beforeFingerprint: text(value.beforeFingerprint, `${field}.beforeFingerprint`),
-    taskFingerprint: text(value.taskFingerprint, `${field}.taskFingerprint`),
+    beforeFingerprint: storedFingerprint(value.beforeFingerprint, `${field}.beforeFingerprint`),
+    taskFingerprint: storedFingerprint(value.taskFingerprint, `${field}.taskFingerprint`),
     now: singleLine(value.now, `${field}.now`),
     notificationId: singleLine(value.notificationId, `${field}.notificationId`),
   };

@@ -42,6 +42,7 @@ import type {
   RuntimeTaskState,
 } from "../../src/runtime/schema.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
+import { taskFingerprint } from "../../src/service/records.ts";
 import { FINAL_REVIEW_LENSES } from "../../src/tasks/acceptance.ts";
 import {
   readTaskInbox,
@@ -1390,7 +1391,7 @@ function operationForJob(job: DurableJob, task: TaskRecord): DurableOperation {
   };
 }
 
-function taskFingerprint(task: TaskRecord): string {
+function legacyTaskFingerprint(task: TaskRecord): string {
   return JSON.stringify(task);
 }
 
@@ -2524,94 +2525,97 @@ test("owned pre-launch worker reservation recovers without a duplicate admission
 });
 
 test("pending worker consumption replays once from its persisted two-file identity", async () => {
-  await withFixture(
-    {
-      kind: "implementation",
-      stage: "implementing",
-      taskEdits: {},
-      runner: { active: false, checkoutHead: "new-head" },
-    },
-    async ({ home, lease, service }) => {
-      const store = createTaskStore({
-        directory: join(home, "tasks"),
-        clock: () => TIMESTAMP,
-        idFactory: () => "unused",
-      });
-      const initial = await service.get("task-1");
-      await store.update(initial.id, initial.revision, (task) => ({
-        ...task,
-        revision: task.revision + 1,
-        updatedAt: TIMESTAMP,
-        worktree: lease,
-        endpoints: [endpointFor("implementer")],
-      }));
-      const before = await service.get("task-1");
-      const endpoint = endpointFor("implementer");
-      const job = workerJob(home, endpoint, "implementer");
-      const event: TaskEvent = {
-        type: "implementation-complete",
-        head: "new-head",
-        generation: 0,
-        reportPath: join(home, "jobs", "task-1", "0", "job-1", "report.txt"),
-      };
-      const after = transitionTask(before, event, {
-        now: TIMESTAMP,
-        notificationId: "notification-1",
-      });
-      await writeJsonAtomically(job.resultPath, {
-        id: job.id,
-        taskId: job.taskId,
-        generation: job.generation,
-        role: job.role,
-        status: "completed",
-        text: "implementation report",
-        finishedAt: TIMESTAMP,
-      });
-      const pending: DurableJob = {
-        ...job,
-        consumption: {
-          schemaVersion: 1,
-          inputEventKey: eventKey(job.id, event),
-          appliedEventKey: eventKey(job.id, event),
-          beforeRevision: before.revision,
-          afterRevision: after.revision,
-          beforeFingerprint: taskFingerprint(before),
-          taskFingerprint: taskFingerprint(after),
+  // A consumption recorded before fingerprints were hashed holds whole task copies instead.
+  for (const fingerprint of [taskFingerprint, legacyTaskFingerprint]) {
+    await withFixture(
+      {
+        kind: "implementation",
+        stage: "implementing",
+        taskEdits: {},
+        runner: { active: false, checkoutHead: "new-head" },
+      },
+      async ({ home, lease, service }) => {
+        const store = createTaskStore({
+          directory: join(home, "tasks"),
+          clock: () => TIMESTAMP,
+          idFactory: () => "unused",
+        });
+        const initial = await service.get("task-1");
+        await store.update(initial.id, initial.revision, (task) => ({
+          ...task,
+          revision: task.revision + 1,
+          updatedAt: TIMESTAMP,
+          worktree: lease,
+          endpoints: [endpointFor("implementer")],
+        }));
+        const before = await service.get("task-1");
+        const endpoint = endpointFor("implementer");
+        const job = workerJob(home, endpoint, "implementer");
+        const event: TaskEvent = {
+          type: "implementation-complete",
+          head: "new-head",
+          generation: 0,
+          reportPath: join(home, "jobs", "task-1", "0", "job-1", "report.txt"),
+        };
+        const after = transitionTask(before, event, {
           now: TIMESTAMP,
           notificationId: "notification-1",
-        },
-      };
-      const operation = { ...operationForJob(pending, before), phase: "finalizing" as const };
-      const linkedPending = { ...pending, operationId: operation.id };
-      await writeRuntimeState(runtimeFile(home), {
-        schemaVersion: 1,
-        tasks: [
-          {
+        });
+        await writeJsonAtomically(job.resultPath, {
+          id: job.id,
+          taskId: job.taskId,
+          generation: job.generation,
+          role: job.role,
+          status: "completed",
+          text: "implementation report",
+          finishedAt: TIMESTAMP,
+        });
+        const pending: DurableJob = {
+          ...job,
+          consumption: {
             schemaVersion: 1,
-            taskId: "task-1",
-            sourceCheckpoint: SOURCE_CHECKPOINT,
-            taskName: "tandem-task-1",
-            worktree: lease,
-            endpoints: [endpoint],
-            operation,
-            jobs: [linkedPending],
+            inputEventKey: eventKey(job.id, event),
+            appliedEventKey: eventKey(job.id, event),
+            beforeRevision: before.revision,
+            afterRevision: after.revision,
+            beforeFingerprint: fingerprint(before),
+            taskFingerprint: fingerprint(after),
+            now: TIMESTAMP,
+            notificationId: "notification-1",
           },
-        ],
-        presentations: [],
-      });
-      await service.tick();
-      const consumed = await service.get("task-1");
-      const runtime = await readRuntime(home);
-      expect(consumed.stage).toBe("validating");
-      expect(consumed.revision).toBe(after.revision);
-      expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("consumed");
-      await service.tick();
-      expect(consumed.notifications).toHaveLength(before.notifications.length);
-      const repeated = await service.get("task-1");
-      expect(repeated.revision).toBe(consumed.revision);
-      expect(repeated.notifications).toHaveLength(consumed.notifications.length);
-    },
-  );
+        };
+        const operation = { ...operationForJob(pending, before), phase: "finalizing" as const };
+        const linkedPending = { ...pending, operationId: operation.id };
+        await writeRuntimeState(runtimeFile(home), {
+          schemaVersion: 1,
+          tasks: [
+            {
+              schemaVersion: 1,
+              taskId: "task-1",
+              sourceCheckpoint: SOURCE_CHECKPOINT,
+              taskName: "tandem-task-1",
+              worktree: lease,
+              endpoints: [endpoint],
+              operation,
+              jobs: [linkedPending],
+            },
+          ],
+          presentations: [],
+        });
+        await service.tick();
+        const consumed = await service.get("task-1");
+        const runtime = await readRuntime(home);
+        expect(consumed.stage).toBe("validating");
+        expect(consumed.revision).toBe(after.revision);
+        expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("consumed");
+        await service.tick();
+        expect(consumed.notifications).toHaveLength(before.notifications.length);
+        const repeated = await service.get("task-1");
+        expect(repeated.revision).toBe(consumed.revision);
+        expect(repeated.notifications).toHaveLength(consumed.notifications.length);
+      },
+    );
+  }
 });
 
 test("a direction arriving before worker completion survives an old-revision result", async () => {

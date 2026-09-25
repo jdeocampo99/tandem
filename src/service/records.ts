@@ -16,15 +16,16 @@ import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import { type AgentBriefReview, buildAgentBrief } from "../instructions.ts";
 import { activeRuntimeJob } from "../runtime/activity.ts";
 import { taskJobsDirectory } from "../runtime/persistence.ts";
-import type {
-  DurableEndpointLaunch,
-  DurableJob,
-  DurableOperation,
-  DurableOperationKind,
-  DurableReservation,
-  RuntimePresentation,
-  RuntimeState,
-  RuntimeTaskState,
+import {
+  type DurableEndpointLaunch,
+  type DurableJob,
+  type DurableOperation,
+  type DurableOperationKind,
+  type DurableReservation,
+  fingerprintDigest,
+  type RuntimePresentation,
+  type RuntimeState,
+  type RuntimeTaskState,
 } from "../runtime/schema.ts";
 import type { TaskEvent } from "../tasks/lifecycle.ts";
 import type { StoreTaskInput } from "../tasks/store.ts";
@@ -437,8 +438,9 @@ export function serializedIdentity(value: unknown, field: string): string {
   return serialized;
 }
 
+/** Compared, never read back: tells whether a job's result was already applied to the task. */
 export function taskFingerprint(task: TaskRecord): string {
-  return serializedIdentity(task, "task record");
+  return fingerprintDigest(serializedIdentity(task, "task record"));
 }
 export function taskWithQuestion(task: TaskRecord, question: TaskQuestion): TaskRecord {
   if (task.communication?.question?.id === question.id) return task;
