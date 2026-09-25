@@ -339,180 +339,158 @@ function commandFromToken(token: string): CliCommand {
   return command;
 }
 
+type OptionSpec =
+  | Readonly<{ readonly takesValue: false; readonly apply: (options: MutableCliOptions) => void }>
+  | Readonly<{
+      readonly takesValue: true;
+      readonly apply: (options: MutableCliOptions, value: string, name: string) => void;
+    }>;
+
+function flag(apply: (options: MutableCliOptions) => void): OptionSpec {
+  return { takesValue: false, apply };
+}
+
+function valued(
+  apply: (options: MutableCliOptions, value: string, name: string) => void,
+): OptionSpec {
+  return { takesValue: true, apply };
+}
+
+const OPTION_SPECS: Readonly<Record<string, OptionSpec>> = {
+  "--help": flag((options) => {
+    options.help = true;
+  }),
+  "--json": flag((options) => {
+    options.json = true;
+  }),
+  "--yes": flag((options) => {
+    options.yes = true;
+  }),
+  "--write": flag((options) => {
+    options.write = true;
+  }),
+  "--discard": flag((options) => {
+    options.discard = true;
+  }),
+  "--continue": flag((options) => {
+    options.continueSession = true;
+  }),
+  "--restart": flag((options) => {
+    options.restart = true;
+  }),
+  "--headless": flag((options) => {
+    options.headless = true;
+  }),
+  "--no-attach": flag((options) => {
+    options.noAttach = true;
+  }),
+  "--home": valued((options, value) => {
+    options.home = value;
+  }),
+  "--session": valued((options, value) => {
+    options.sessionId = value;
+  }),
+  "--parent-workspace": valued((options, value) => {
+    options.parentWorkspaceId = value;
+  }),
+  "--parent": valued((options, value) => {
+    options.parentWorkspaceId = value;
+  }),
+  "--pool-root": valued((options, value) => {
+    options.poolRoot = value;
+  }),
+  "--repo": valued((options, value) => {
+    options.repo = value;
+  }),
+  "--model": valued((options, value) => {
+    options.model = value;
+  }),
+  "--thinking": valued((options, value) => {
+    options.thinking = parseThinking(value);
+  }),
+  "--extension": valued((options, value) => {
+    options.extensionPath = value;
+  }),
+  "--config": valued((options, value) => {
+    options.configPath = value;
+  }),
+  "--interval-ms": valued((options, value, name) => {
+    options.intervalMs = positiveInteger(value, name);
+  }),
+  "--iterations": valued((options, value, name) => {
+    options.iterations = positiveInteger(value, name);
+  }),
+  "--kind": valued((options, value) => {
+    options.kind = parseTaskKind(value);
+  }),
+  "--objective": valued((options, value) => {
+    options.objective = value;
+  }),
+  "--task": valued((options, value) => {
+    options.taskId = value;
+  }),
+  "--task-id": valued((options, value) => {
+    options.taskId = value;
+  }),
+  "--text": valued((options, value) => {
+    options.text = value;
+  }),
+  "--question": valued((options, value) => {
+    options.questionId = value;
+  }),
+  "--supersedes": valued((options, value) => {
+    options.supersedes.push(value);
+  }),
+  "--presentation": valued((options, value) => {
+    options.presentationId = value;
+  }),
+  "--presentation-id": valued((options, value) => {
+    options.presentationId = value;
+  }),
+  "--reason": valued((options, value) => {
+    options.reason = value;
+  }),
+  "--title": valued((options, value) => {
+    options.title = value;
+  }),
+  "--base": valued((options, value) => {
+    options.base = value;
+  }),
+  "--summary": valued((options, value) => {
+    options.summary = value;
+  }),
+  "--method": valued((options, value) => {
+    options.method = parseMergeMethod(value);
+  }),
+  "--input": valued((options, value) => {
+    options.input = value;
+  }),
+  "--acceptance": valued((options, value) => {
+    options.acceptanceCriteria.push(value);
+  }),
+  "--surface": valued((options, value) => {
+    options.surfaces.push(value);
+  }),
+  "--artifact": valued((options, value) => {
+    options.artifacts.push(value);
+  }),
+};
+
+/** Apply the option at `index` and return the index of the last token it consumed. */
 function parseOption(options: MutableCliOptions, argv: readonly string[], index: number): number {
   const token = argv[index];
   if (token === undefined) throw new CliUsageError("missing CLI argument");
   const equalsIndex = token.indexOf("=");
   const name = equalsIndex >= 0 ? token.slice(0, equalsIndex) : token;
-  switch (name) {
-    case "--help":
-      options.help = true;
-      return index;
-    case "--json":
-      options.json = true;
-      return index;
-    case "--yes":
-      options.yes = true;
-      return index;
-    case "--write":
-      options.write = true;
-      return index;
-    case "--discard":
-      options.discard = true;
-      return index;
-    case "--continue":
-      options.continueSession = true;
-      return index;
-    case "--restart":
-      options.restart = true;
-      return index;
-    case "--headless":
-      options.headless = true;
-      return index;
-    case "--no-attach":
-      options.noAttach = true;
-      return index;
-    case "--home": {
-      const parsed = optionValue(argv, index, name);
-      options.home = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--session": {
-      const parsed = optionValue(argv, index, name);
-      options.sessionId = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--parent-workspace":
-    case "--parent": {
-      const parsed = optionValue(argv, index, name);
-      options.parentWorkspaceId = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--pool-root": {
-      const parsed = optionValue(argv, index, name);
-      options.poolRoot = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--repo": {
-      const parsed = optionValue(argv, index, name);
-      options.repo = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--model": {
-      const parsed = optionValue(argv, index, name);
-      options.model = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--thinking": {
-      const parsed = optionValue(argv, index, name);
-      options.thinking = parseThinking(parsed.value);
-      return parsed.nextIndex;
-    }
-    case "--extension": {
-      const parsed = optionValue(argv, index, name);
-      options.extensionPath = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--config": {
-      const parsed = optionValue(argv, index, name);
-      options.configPath = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--interval-ms": {
-      const parsed = optionValue(argv, index, name);
-      options.intervalMs = positiveInteger(parsed.value, name);
-      return parsed.nextIndex;
-    }
-    case "--iterations": {
-      const parsed = optionValue(argv, index, name);
-      options.iterations = positiveInteger(parsed.value, name);
-      return parsed.nextIndex;
-    }
-    case "--kind": {
-      const parsed = optionValue(argv, index, name);
-      options.kind = parseTaskKind(parsed.value);
-      return parsed.nextIndex;
-    }
-    case "--objective": {
-      const parsed = optionValue(argv, index, name);
-      options.objective = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--task":
-    case "--task-id": {
-      const parsed = optionValue(argv, index, name);
-      options.taskId = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--text": {
-      const parsed = optionValue(argv, index, name);
-      options.text = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--question": {
-      const parsed = optionValue(argv, index, name);
-      options.questionId = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--supersedes": {
-      const parsed = optionValue(argv, index, name);
-      options.supersedes.push(parsed.value);
-      return parsed.nextIndex;
-    }
-    case "--presentation":
-    case "--presentation-id": {
-      const parsed = optionValue(argv, index, name);
-      options.presentationId = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--reason": {
-      const parsed = optionValue(argv, index, name);
-      options.reason = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--title": {
-      const parsed = optionValue(argv, index, name);
-      options.title = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--base": {
-      const parsed = optionValue(argv, index, name);
-      options.base = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--summary": {
-      const parsed = optionValue(argv, index, name);
-      options.summary = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--method": {
-      const parsed = optionValue(argv, index, name);
-      options.method = parseMergeMethod(parsed.value);
-      return parsed.nextIndex;
-    }
-    case "--input": {
-      const parsed = optionValue(argv, index, name);
-      options.input = parsed.value;
-      return parsed.nextIndex;
-    }
-    case "--acceptance": {
-      const parsed = optionValue(argv, index, name);
-      options.acceptanceCriteria.push(parsed.value);
-      return parsed.nextIndex;
-    }
-    case "--surface": {
-      const parsed = optionValue(argv, index, name);
-      options.surfaces.push(parsed.value);
-      return parsed.nextIndex;
-    }
-    case "--artifact": {
-      const parsed = optionValue(argv, index, name);
-      options.artifacts.push(parsed.value);
-      return parsed.nextIndex;
-    }
-    default:
-      throw new CliUsageError(`unknown option ${JSON.stringify(token)}`);
+  const spec = Object.hasOwn(OPTION_SPECS, name) ? OPTION_SPECS[name] : undefined;
+  if (spec === undefined) throw new CliUsageError(`unknown option ${JSON.stringify(token)}`);
+  if (!spec.takesValue) {
+    spec.apply(options);
+    return index;
   }
+  const parsed = optionValue(argv, index, name);
+  spec.apply(options, parsed.value, name);
+  return parsed.nextIndex;
 }
 
 /** Parse CLI flags without executing commands or mutating the repository. */
