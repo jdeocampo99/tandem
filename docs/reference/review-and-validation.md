@@ -66,8 +66,7 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   `completed|needs-decision|failed` otherwise), a Markdown `report` (not required of reviewers), and
   role fields. `needs-decision` carries one single-line `question` and optional `recommendation`, each
   at most 1,000 characters; questions wake the coordinator, not the user. A reviewer's `review` must
-  match `ReviewResult` and the job's lens, HEAD, and generation; a presentation submits an absolute
-  `artifactPath`.
+  match `ReviewResult` and the job's lens, HEAD, and generation.
 - An invalid submission is a tool error naming the fix and never settles the job.
 
 ## Review briefs

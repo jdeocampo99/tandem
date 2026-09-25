@@ -14,6 +14,22 @@ export type PendingPresentationNotification = Readonly<{
   readonly kind: NotificationKind;
 }>;
 
+/** The research agent's live job that draws and revises this presentation. */
+export type PresentationAgent = Readonly<{
+  readonly jobId: string;
+  readonly jobPath: string;
+  readonly generation: number;
+  readonly cwd: string;
+}>;
+
+/** A draw or revise request the agent has not finished yet; `id` is stable across retries. */
+export type PresentationRequest = Readonly<{
+  readonly id: string;
+  readonly kind: "draw" | "revise";
+  readonly briefPath: string;
+  readonly requestedAt: string;
+}>;
+
 export type PresentationRecord = Readonly<{
   readonly id: string;
   readonly taskId: string;
@@ -22,8 +38,14 @@ export type PresentationRecord = Readonly<{
   readonly artifactPath: string;
   /** What the coordinator asked to show; absent on records made before it was kept. */
   readonly objective?: string;
-  readonly jobPath: string;
-  readonly resultPath: string;
+  /** Absent on records drawn by the retired presentation worker. */
+  readonly agent?: PresentationAgent;
+  readonly request?: PresentationRequest;
+  /** Lavish comments that arrived while a request was pending, sent together next. */
+  readonly pendingFeedback?: readonly string[];
+  /** Only records drawn by the retired presentation worker carry its job and result files. */
+  readonly jobPath?: string;
+  readonly resultPath?: string;
   readonly status: "queued" | "running" | "blocked" | "open" | "ended" | "failed";
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -47,14 +69,10 @@ export type PresentationFeedbackEvidence = Readonly<{
 export type ValidatedRecordPaths = Readonly<{
   readonly cwd: string;
   readonly artifactPath: string;
-  readonly jobPath: string;
-  readonly resultPath: string;
 }>;
 
 const MAX_NOTIFICATION_BYTES = 4_000;
 const ARTIFACT_FILE = "artifact.html";
-const JOB_FILE = "job.json";
-const RESULT_FILE = "result.json";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -163,12 +181,16 @@ export function isWithin(root: string, candidate: string): boolean {
 export function validateRecordPaths(record: PresentationRecord): ValidatedRecordPaths {
   const cwd = readAbsolutePath(record.cwd, "record.cwd");
   const artifactPath = readAbsolutePath(record.artifactPath, "record.artifactPath");
-  const jobPath = readAbsolutePath(record.jobPath, "record.jobPath");
-  const resultPath = readAbsolutePath(record.resultPath, "record.resultPath");
-  if (!isWithin(cwd, artifactPath) || !isWithin(cwd, jobPath) || !isWithin(cwd, resultPath)) {
+  const owned = [
+    artifactPath,
+    ...(record.request === undefined
+      ? []
+      : [readAbsolutePath(record.request.briefPath, "record.request.briefPath")]),
+  ];
+  if (!owned.every((path) => isWithin(cwd, path))) {
     throw new Error("presentation paths must remain inside the private artifact directory");
   }
-  return { cwd, artifactPath, jobPath, resultPath };
+  return { cwd, artifactPath };
 }
 
 export function validateRecord(record: PresentationRecord): ValidatedRecordPaths {
@@ -488,6 +510,29 @@ export function parsePendingPresentationNotificationQueue(
   );
 }
 
+function parseAgent(value: unknown, source: string): PresentationAgent {
+  if (!isRecord(value)) throw new TypeError(`${source} must be an object`);
+  return {
+    jobId: singleLine(value.jobId, `${source}.jobId`),
+    jobPath: absoluteDirectory(value.jobPath, `${source}.jobPath`),
+    generation: nonNegativeInteger(value.generation, `${source}.generation`),
+    cwd: absoluteDirectory(value.cwd, `${source}.cwd`),
+  };
+}
+
+function parseRequest(value: unknown, source: string): PresentationRequest {
+  if (!isRecord(value)) throw new TypeError(`${source} must be an object`);
+  if (value.kind !== "draw" && value.kind !== "revise") {
+    throw new TypeError(`${source}.kind is invalid`);
+  }
+  return {
+    id: singleLine(value.id, `${source}.id`),
+    kind: value.kind,
+    briefPath: absoluteDirectory(value.briefPath, `${source}.briefPath`),
+    requestedAt: singleLine(value.requestedAt, `${source}.requestedAt`),
+  };
+}
+
 export function parsePresentationRecord(value: unknown, source: string): PresentationRecord {
   if (!isRecord(value)) throw new TypeError(`${source} must be an object`);
   const statuses: readonly PresentationRecord["status"][] = [
@@ -533,6 +578,24 @@ export function parsePresentationRecord(value: unknown, source: string): Present
   const error = value.error === undefined ? undefined : text(value.error, `${source}.error`);
   const objective =
     value.objective === undefined ? undefined : text(value.objective, `${source}.objective`);
+  const agent = value.agent === undefined ? undefined : parseAgent(value.agent, `${source}.agent`);
+  const request =
+    value.request === undefined ? undefined : parseRequest(value.request, `${source}.request`);
+  let pendingFeedback: readonly string[] | undefined;
+  if (value.pendingFeedback !== undefined) {
+    if (!Array.isArray(value.pendingFeedback)) {
+      throw new TypeError(`${source}.pendingFeedback must be an array`);
+    }
+    pendingFeedback = value.pendingFeedback.map((entry, index) =>
+      text(entry, `${source}.pendingFeedback[${index}]`),
+    );
+  }
+  const jobPath =
+    value.jobPath === undefined ? undefined : absoluteDirectory(value.jobPath, `${source}.jobPath`);
+  const resultPath =
+    value.resultPath === undefined
+      ? undefined
+      : absoluteDirectory(value.resultPath, `${source}.resultPath`);
   return {
     id: singleLine(value.id, `${source}.id`),
     taskId: singleLine(value.taskId, `${source}.taskId`),
@@ -540,8 +603,11 @@ export function parsePresentationRecord(value: unknown, source: string): Present
     cwd: absoluteDirectory(value.cwd, `${source}.cwd`),
     artifactPath: absoluteDirectory(value.artifactPath, `${source}.artifactPath`),
     ...(objective === undefined ? {} : { objective }),
-    jobPath: absoluteDirectory(value.jobPath, `${source}.jobPath`),
-    resultPath: absoluteDirectory(value.resultPath, `${source}.resultPath`),
+    ...(agent === undefined ? {} : { agent }),
+    ...(request === undefined ? {} : { request }),
+    ...(pendingFeedback === undefined ? {} : { pendingFeedback }),
+    ...(jobPath === undefined ? {} : { jobPath }),
+    ...(resultPath === undefined ? {} : { resultPath }),
     status: status as PresentationRecord["status"],
     createdAt: singleLine(value.createdAt, `${source}.createdAt`),
     updatedAt: singleLine(value.updatedAt, `${source}.updatedAt`),
@@ -565,4 +631,4 @@ export async function readPresentationRecord(path: string): Promise<Presentation
   }
   return parsePresentationRecord(parsed, path);
 }
-export { ARTIFACT_FILE, JOB_FILE, RESULT_FILE };
+export { ARTIFACT_FILE };

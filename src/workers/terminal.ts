@@ -10,6 +10,8 @@ import type { LegacyWorkerRole, WorkerJob } from "./jobs.ts";
 export const WORKER_JOB_PATH_ENV = "TANDEM_WORKER_JOB_PATH";
 /** The only channel a worker uses to deliver its delegated result. */
 export const SUBMIT_REPORT_TOOL = "submit_report";
+/** A scout's only way to put a repository file (such as an image) next to its mockup. */
+export const COPY_ASSET_TOOL = "copy_asset";
 const HEARTBEAT_MAX_AGE_MS = 30_000;
 const CONTROL_TIMEOUT_MS = 10_000;
 const CONTROL_POLL_MS = 50;
@@ -35,6 +37,14 @@ export type WorkerTerminalState = Readonly<{
   completed: boolean;
   heartbeatAt: string;
   commandId?: string;
+  /** The last mockup request whose turn has finished. */
+  settledCommandId?: string;
+}>;
+
+/** Asks a finished scout to draw or revise the mockup at `artifactDir` from the brief file. */
+export type WorkerMockupRequest = Readonly<{
+  briefPath: string;
+  artifactDir: string;
 }>;
 
 export type WorkerTerminalCommand = Readonly<{
@@ -43,8 +53,10 @@ export type WorkerTerminalCommand = Readonly<{
   jobId: string;
   taskId: string;
   generation: number;
-  action: "pause" | "close";
+  action: "pause" | "close" | "mockup";
   expiresAt: string;
+  /** Present exactly when `action` is `mockup`. */
+  mockup?: WorkerMockupRequest;
 }>;
 
 type WorkerIdentity = Pick<WorkerJob, "id" | "taskId" | "generation">;
@@ -127,7 +139,8 @@ function parseTerminal(value: unknown): WorkerTerminalState {
     !["starting", "busy", "idle", "paused", "closing", "closed"].includes(value.phase) ||
     typeof value.completed !== "boolean" ||
     !timestamp(value.heartbeatAt) ||
-    (value.commandId !== undefined && !text(value.commandId))
+    (value.commandId !== undefined && !text(value.commandId)) ||
+    (value.settledCommandId !== undefined && !text(value.settledCommandId))
   ) {
     throw new TypeError("interactive worker terminal state is malformed");
   }
@@ -270,13 +283,22 @@ export async function writeWorkerTerminal(
   await writeJsonAtomically(terminalPath(jobPath), parseTerminal(state));
 }
 
+function absoluteText(value: unknown): value is string {
+  return text(value) && isAbsolute(value);
+}
+
 function parseCommand(value: unknown, job: WorkerIdentity): WorkerTerminalCommand {
   if (
     !record(value) ||
     value.schemaVersion !== 1 ||
     !text(value.id) ||
-    (value.action !== "pause" && value.action !== "close") ||
-    !timestamp(value.expiresAt)
+    (value.action !== "pause" && value.action !== "close" && value.action !== "mockup") ||
+    !timestamp(value.expiresAt) ||
+    (value.action === "mockup") !== (value.mockup !== undefined) ||
+    (value.mockup !== undefined &&
+      (!record(value.mockup) ||
+        !absoluteText(value.mockup.briefPath) ||
+        !absoluteText(value.mockup.artifactDir)))
   ) {
     throw new TypeError("interactive worker terminal command is malformed");
   }
@@ -299,6 +321,44 @@ export async function requestWorkerTerminalCommand(
   action: "pause" | "close",
   timeoutMs = CONTROL_TIMEOUT_MS,
 ): Promise<void> {
+  await publishCommand(
+    job,
+    { id: randomUUID(), action },
+    (state, id) =>
+      state.commandId === id &&
+      (state.phase === "closed" ||
+        (action === "close" && state.phase === "closing") ||
+        (action === "pause" && state.phase === "paused")),
+    timeoutMs,
+  );
+}
+
+/**
+ * Asks a finished scout to start a mockup turn. Resolves once the worker has taken the request;
+ * `id` is stable per request, so a retry after an unobserved acknowledgement is ignored.
+ */
+export async function requestWorkerMockup(
+  job: WorkerTerminalJob,
+  id: string,
+  mockup: WorkerMockupRequest,
+  timeoutMs = CONTROL_TIMEOUT_MS,
+): Promise<void> {
+  const current = await readWorkerTerminal(job);
+  if (current?.commandId === id || current?.settledCommandId === id) return;
+  await publishCommand(
+    job,
+    { id, action: "mockup", mockup },
+    (state) => state.commandId === id || state.settledCommandId === id,
+    timeoutMs,
+  );
+}
+
+async function publishCommand(
+  job: WorkerTerminalJob,
+  request: Pick<WorkerTerminalCommand, "id" | "action" | "mockup">,
+  acknowledged: (state: WorkerTerminalState, id: string) => boolean,
+  timeoutMs: number,
+): Promise<void> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new TypeError("interactive worker control timeout must be positive");
   }
@@ -314,12 +374,13 @@ export async function requestWorkerTerminalCommand(
   const deadline = Date.now() + timeoutMs;
   const command: WorkerTerminalCommand = {
     schemaVersion: 1,
-    id: randomUUID(),
+    id: request.id,
     jobId: job.id,
     taskId: job.taskId,
     generation: job.generation,
-    action,
+    action: request.action,
     expiresAt: new Date(deadline).toISOString(),
+    ...(request.mockup === undefined ? {} : { mockup: request.mockup }),
   };
   const temporary = `${path}.${command.id}.tmp`;
   try {
@@ -332,17 +393,10 @@ export async function requestWorkerTerminalCommand(
   try {
     while (true) {
       const state = await readWorkerTerminal(job);
-      if (
-        state?.commandId === command.id &&
-        (state.phase === "closed" ||
-          (action === "close" && state.phase === "closing") ||
-          (action === "pause" && state.phase === "paused"))
-      ) {
-        return;
-      }
+      if (state !== undefined && acknowledged(state, command.id)) return;
       if (Date.now() >= deadline) {
         throw new Error(
-          `interactive worker did not acknowledge ${action}; its terminal was preserved`,
+          `interactive worker did not acknowledge ${request.action}; its terminal was preserved`,
         );
       }
       await Bun.sleep(CONTROL_POLL_MS);

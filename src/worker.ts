@@ -19,7 +19,7 @@ import {
   type WorkerJob,
   type WorkerResult,
 } from "./workers/jobs.ts";
-import { SUBMIT_REPORT_TOOL, WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
+import { COPY_ASSET_TOOL, SUBMIT_REPORT_TOOL, WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
 
 export type WorkerClock = () => string;
 export type WorkerResultWriter = (resultPath: string, result: WorkerResult) => void | Promise<void>;
@@ -32,7 +32,18 @@ export type WorkerRunOptions = Readonly<{
   ) => ExecutionAdmission | PromiseLike<ExecutionAdmission>;
 }>;
 
-const SCOUT_TOOLS = ["read", "grep", "glob", "web_search", "task", SUBMIT_REPORT_TOOL] as const;
+// write, edit, and copy_asset reach only the mockup folder Tandem names (see mockupWriteDecision).
+const SCOUT_TOOLS = [
+  "read",
+  "grep",
+  "glob",
+  "web_search",
+  "task",
+  "write",
+  "edit",
+  COPY_ASSET_TOOL,
+  SUBMIT_REPORT_TOOL,
+] as const;
 const READ_ONLY_TOOLS = ["read", "grep", "glob", SUBMIT_REPORT_TOOL] as const;
 const IMPLEMENTER_TOOLS = [
   "read",
@@ -192,7 +203,7 @@ export async function runWorkerJob(
     jobId: job.id,
     taskId: job.taskId,
     generation: job.generation,
-    command: job.role === "presentation" ? "presentation" : "worker",
+    command: "worker",
     cwd: job.cwd,
     resultPath: job.resultPath,
     resolvedModel: job.model,

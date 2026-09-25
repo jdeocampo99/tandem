@@ -6,8 +6,13 @@ import { preparePrReviewRun } from "../pr-review/run.ts";
 import { unreleasedReservation } from "../runtime/activity.ts";
 import type { RuntimeTaskState } from "../runtime/schema.ts";
 import { describeError } from "../service/records.ts";
-import { decideScoutWorktreeRelease, observeScoutCheckout } from "../service/scout-cleanup.ts";
+import {
+  closeFinishedScoutPanes,
+  decideScoutWorktreeRelease,
+  observeScoutCheckout,
+} from "../service/scout-cleanup.ts";
 import { taskSourcePath } from "../service/source.ts";
+import type { TaskStore } from "../tasks/store.ts";
 import type { ReservationResult } from "./admission.ts";
 import { assertSourceUnchanged, isCleanAt } from "./checkout.ts";
 import type { OperationClaim } from "./operation-claim.ts";
@@ -17,6 +22,8 @@ export type WorktreeLeasesDependencies = Readonly<{
   readonly home: string;
   readonly sessionId: string;
   readonly poolRoot: string;
+  readonly store: TaskStore;
+  readonly runtimePath: string;
   readonly run: CommandRunner;
   readonly clock: Clock;
   readonly getTask: (taskId: string) => Promise<TaskRecord>;
@@ -142,13 +149,6 @@ export class WorktreeLeases {
         kind: "allocation-failed",
         summary: "Tandem couldn't set up a working copy for this task.",
         detail: `worktree allocation failed: ${describeError(error)}`,
-      });
-      const noLeaseReason = "worktree allocation returned no lease";
-      await this.#deps.records.blockIfOperationClaim(task.id, noLeaseReason, claim, {
-        group: "lost-resource",
-        kind: "allocation-failed",
-        summary: "Tandem couldn't set up a working copy for this task.",
-        detail: noLeaseReason,
       });
       return "stopped";
     }
@@ -298,7 +298,8 @@ export class WorktreeLeases {
   /**
    * The worktree an implementation can take over from the scout of its first research handoff:
    * the scout has settled, holds no pane or reservation, and its checkout is still clean on its
-   * own branch at its source commit. Anything else falls back to leasing a fresh worktree.
+   * own branch at its source commit. Anything else falls back to leasing a fresh worktree. A
+   * finished scout kept alive for mockups has its pane closed first, since building has started.
    */
   private async adoptableScoutWorktree(
     task: TaskRecord,
@@ -306,6 +307,11 @@ export class WorktreeLeases {
     const scoutId =
       task.kind === "implementation" ? task.researchHandoffs?.[0]?.scoutTaskId : undefined;
     if (scoutId === undefined) return undefined;
+    try {
+      await closeFinishedScoutPanes(this.#deps, scoutId);
+    } catch {
+      // A pane that would not close keeps the scout's worktree; the implementation leases another.
+    }
     const [scout, runtime] = await Promise.all([
       this.#deps.getTask(scoutId),
       this.#deps.runtimeFor(scoutId),

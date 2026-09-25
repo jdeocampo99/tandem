@@ -1625,7 +1625,7 @@ test("force reset ends stale presentations while preserving their artifacts", as
     });
 
     expect(JSON.parse(await readFile(recordPath, "utf8")).status).toBe("failed");
-    expect((await readRuntimeState(runtimeFile(values.home))).presentations[0]?.job.phase).toBe(
+    expect((await readRuntimeState(runtimeFile(values.home))).presentations[0]?.job?.phase).toBe(
       "failed",
     );
     expect(await readFile(artifactPath, "utf8")).toBe("<main>keep this presentation</main>");

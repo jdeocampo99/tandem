@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { copyFile, lstat, readFile, realpath } from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type {
   ExtensionAPI,
@@ -35,6 +36,7 @@ import {
 } from "./protocol.ts";
 import {
   addReplyUsage,
+  COPY_ASSET_TOOL,
   type ReplyUsage,
   readWorkerTerminalCommand,
   replyUsage,
@@ -65,6 +67,14 @@ const READ_ONLY_TOOLS: Readonly<Record<string, true>> = {
   glob: true,
   web_search: true,
 };
+/** The tools a scout may use only on the mockup Tandem asked it to draw. */
+const MOCKUP_WRITE_TOOLS: Readonly<Record<string, true>> = {
+  write: true,
+  edit: true,
+  [COPY_ASSET_TOOL]: true,
+};
+const MAX_ASSET_BYTES = 20 * 1024 * 1024;
+const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 function now(): string {
   return new Date().toISOString();
 }
@@ -285,6 +295,7 @@ function terminalState(
   phase: WorkerTerminalState["phase"],
   completed: boolean,
   commandId?: string,
+  settledCommandId?: string,
 ): WorkerTerminalState {
   return {
     schemaVersion: 1,
@@ -298,7 +309,70 @@ function terminalState(
     completed,
     heartbeatAt: now(),
     ...(commandId === undefined ? {} : { commandId }),
+    ...(settledCommandId === undefined ? {} : { settledCommandId }),
   };
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const path = relative(root, candidate);
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+}
+
+/**
+ * Whether a scout's write, edit, or copy_asset call targets the mockup it was asked to draw.
+ * `undefined` means the tool is not one of those; a scout writes nothing else, ever.
+ */
+export function mockupWriteDecision(
+  input: Readonly<{
+    role: WorkerRole;
+    toolName: string;
+    toolInput: unknown;
+    cwd: string;
+    artifactDir: string | undefined;
+  }>,
+): "allow" | { block: true; reason: string } | undefined {
+  if (input.role !== "scout" || MOCKUP_WRITE_TOOLS[input.toolName] !== true) return undefined;
+  if (input.artifactDir === undefined) {
+    return { block: true, reason: "A scout writes only the mockup Tandem asks it to draw." };
+  }
+  const args =
+    typeof input.toolInput === "object" && input.toolInput !== null
+      ? (input.toolInput as Record<string, unknown>)
+      : {};
+  if (input.toolName === COPY_ASSET_TOOL) return "allow";
+  const path = args.path;
+  if (typeof path !== "string" || path.trim().length === 0) {
+    return { block: true, reason: `${input.toolName} needs a path` };
+  }
+  if (!isWithin(input.artifactDir, resolve(input.cwd, path))) {
+    return {
+      block: true,
+      reason: `Write only inside the mockup folder ${input.artifactDir}.`,
+    };
+  }
+  return "allow";
+}
+
+/** Copies one file from the scout's checkout next to its mockup, byte for byte. */
+export async function copyMockupAsset(
+  input: Readonly<{ cwd: string; artifactDir: string; from: string; name: string }>,
+): Promise<string> {
+  if (!ASSET_NAME.test(input.name)) {
+    throw new Error("name must be a plain file name such as jr-thinking.webp");
+  }
+  const [root, source] = await Promise.all([
+    realpath(input.cwd),
+    realpath(resolve(input.cwd, input.from)),
+  ]);
+  if (!isWithin(root, source))
+    throw new Error("from must be a file inside the repository checkout");
+  const entry = await lstat(source);
+  if (!entry.isFile()) throw new Error("from must be a regular file");
+  if (entry.size > MAX_ASSET_BYTES) throw new Error("from is larger than 20 MB");
+  const target = resolve(input.artifactDir, input.name);
+  if (basename(target) !== input.name) throw new Error("name must be a plain file name");
+  await copyFile(source, target);
+  return target;
 }
 
 /** The lines a PR review's comments may anchor on, read from the diff the run was given. */
@@ -322,6 +396,9 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   await writeWorkerTerminal(jobPath, terminalState(identity, "starting", false));
 
   let closed = false;
+  // The mockup turn in progress, and the last one that finished.
+  let mockupCommand: WorkerTerminalCommand | undefined;
+  let settledMockupId: string | undefined;
   let resultPublished = false;
   let delegatedSettled = false;
   let timeoutRequested = false;
@@ -368,6 +445,11 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     if (!decision.settle) return;
     traceWorkerTurn(jobPath, "idle_after_result");
     agentActive = false;
+    // A mockup turn that never started or never ended cleanly still has to settle.
+    if (mockupCommand !== undefined) {
+      void settleMockupTurn().catch(() => abort(ctx));
+      return;
+    }
     void persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id).catch(
       () => abort(ctx),
     );
@@ -415,7 +497,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     commandId = currentState.commandId,
   ): Promise<void> => {
     if (closed && phase !== "closed") return;
-    const next = terminalState(identity, phase, completed, commandId);
+    const next = terminalState(identity, phase, completed, commandId, settledMockupId);
     currentState = next;
     const write = writeQueue.then(() => writeWorkerTerminal(jobPath, next));
     writeQueue = write.catch(() => undefined);
@@ -623,6 +705,43 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     await persistState("paused", currentState.completed, pauseCommand.id);
   };
 
+  // A finished scout takes a mockup request only while nothing else is happening in its pane,
+  // so it never interrupts the person typing there.
+  const startMockupTurn = async (
+    command: WorkerTerminalCommand,
+    ctx: ExtensionContext,
+  ): Promise<void> => {
+    const request = command.mockup;
+    if (
+      request === undefined ||
+      job.role !== "scout" ||
+      command.id === settledMockupId ||
+      mockupCommand !== undefined ||
+      pauseCommand !== undefined ||
+      closingCommand !== undefined ||
+      !currentState.completed ||
+      !ctx.isIdle() ||
+      ctx.hasPendingMessages() ||
+      ctx.ui.getEditorText().trim().length > 0
+    ) {
+      return;
+    }
+    const brief = await readFile(request.briefPath, "utf8");
+    traceWorkerTurn(jobPath, "control", { action: "mockup", phase: currentState.phase });
+    mockupCommand = command;
+    agentActive = true;
+    await persistState("busy", true, command.id);
+    await reportStatus();
+    pi.sendUserMessage(brief);
+  };
+
+  const settleMockupTurn = async (): Promise<void> => {
+    if (mockupCommand === undefined) return;
+    settledMockupId = mockupCommand.id;
+    mockupCommand = undefined;
+    await persistState(pauseCommand === undefined ? "idle" : "paused", true, pauseCommand?.id);
+  };
+
   const pollControl = async (ctx: ExtensionContext): Promise<void> => {
     if (closed) return;
     if (closingCommand !== undefined && Date.parse(closingCommand.expiresAt) <= Date.now()) {
@@ -632,6 +751,10 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     const command = await readWorkerTerminalCommand(jobPath, identity);
     if (command === undefined) return;
     if (command.id === currentState.commandId || command.id === pauseCommand?.id) return;
+    if (command.action === "mockup") {
+      await startMockupTurn(command, ctx);
+      return;
+    }
     traceWorkerTurn(jobPath, "control", { action: command.action, phase: currentState.phase });
     if (command.action === "pause") {
       pauseCommand = command;
@@ -688,7 +811,66 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     };
   };
 
-  pi.on("tool_call", (event) => guardTool(event.toolName) ?? guardReviewShell(event));
+  pi.on("tool_call", (event) => {
+    const write = mockupWriteDecision({
+      role: job.role,
+      toolName: event.toolName,
+      toolInput: event.input,
+      cwd: job.cwd,
+      artifactDir: mockupCommand?.mockup?.artifactDir,
+    });
+    if (write !== undefined) return write === "allow" ? undefined : write;
+    return guardTool(event.toolName) ?? guardReviewShell(event);
+  });
+
+  if (job.role === "scout") {
+    pi.registerTool({
+      name: COPY_ASSET_TOOL,
+      label: "Copy asset",
+      description:
+        "Copy an image, font, or other file from the repository checkout into the mockup folder, byte for byte, so the mockup can load it by relative path (for example ./jr-thinking.webp). Only works while drawing a mockup.",
+      parameters: z
+        .object({
+          from: z.string().describe("Path of the file in the repository checkout."),
+          name: z.string().describe("Plain file name to save it as in the mockup folder."),
+        })
+        .strict(),
+      strict: true,
+      approval: "read",
+      async execute(_toolCallId, params) {
+        const artifactDir = mockupCommand?.mockup?.artifactDir;
+        if (artifactDir === undefined) {
+          return {
+            content: [{ type: "text", text: "copy_asset only works while drawing a mockup." }],
+            details: undefined,
+            isError: true,
+          };
+        }
+        try {
+          const target = await copyMockupAsset({
+            cwd: job.cwd,
+            artifactDir,
+            from: params.from,
+            name: params.name,
+          });
+          return {
+            content: [
+              { type: "text", text: `Copied to ${target}; reference it as ./${params.name}.` },
+            ],
+            details: undefined,
+          };
+        } catch (error) {
+          return {
+            content: [
+              { type: "text", text: `copy_asset failed: ${describeExtensionError(error)}` },
+            ],
+            details: undefined,
+            isError: true,
+          };
+        }
+      },
+    });
+  }
 
   const recordUsage = (usage: ReplyUsage | undefined): void => {
     if (usage === undefined) return;
@@ -814,6 +996,12 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     }
     if (event.willContinue === true) {
       await persistState("busy", currentState.completed);
+      await reportStatus();
+      traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
+      return;
+    }
+    if (mockupCommand !== undefined) {
+      await settleMockupTurn();
       await reportStatus();
       traceWorkerTurn(jobPath, "agent_end_done", { phase: currentState.phase });
       return;
