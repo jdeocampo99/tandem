@@ -1133,6 +1133,37 @@ test("terminal commands are subcommands whose flags and arguments are checked", 
   expect(() => parseTerminalArgs(["update", "/repo"])).toThrow("tandem update takes no arguments");
   expect(() => parseTerminalArgs(["status", "a", "b"])).toThrow("at most 1 argument");
   expect(() => parseTerminalArgs(["--bogus"])).toThrow("unknown option --bogus");
+  expect(parseTerminalArgs(["watch", "--stop", "409"])).toMatchObject({
+    command: "watch",
+    paths: ["409"],
+    stop: true,
+  });
+  expect(() => parseTerminalArgs(["status", "--stop"])).toThrow("does not accept --stop");
+});
+
+test("tandem watch starts watching a pull request named from this directory and prints the view", async () => {
+  const started: unknown[] = [];
+  const service = {
+    prWatchStart: async (input: unknown) => {
+      started.push(input);
+      return { now: "2030-01-01T00:00:05.000Z", polledAt: "2030-01-01T00:00:00.000Z", rows: [] };
+    },
+    shutdown: async () => undefined,
+  } as unknown as TandemService;
+  const output: string[] = [];
+  const result = await runTerminal(["watch", "409"], {
+    cwd: "/repos/app",
+    processEnvironment: { TANDEM_HOME: "/tmp/tandem-watch-test" },
+    service,
+    stdout: (text) => output.push(text),
+    stderr: (text) => output.push(text),
+  });
+  expect(result).toEqual({ exitCode: 0, status: "watch" });
+  expect(started).toEqual([{ pullRequest: "409", repoPath: "/repos/app" }]);
+  expect(output.join("")).toBe(
+    "PR watch · 0 open · checked 5s ago\n\nNo pull requests are watched.\n",
+  );
+  expect((await runTerminal(["watch", "--stop"], { service, stderr: () => {} })).exitCode).toBe(1);
 });
 
 test("old command spellings name their replacement instead of opening a project", () => {

@@ -162,12 +162,32 @@ code, and when you're happy, say whether to comment, approve, or request changes
 review under your name only after you confirm. When the author pushes again, ask for a re-review:
 it looks only at what changed and tells you which of your comments were addressed.
 
+### Keeping pull requests moving
+
+CI takes a while and sometimes flakes. PR watch keeps an eye on every pull request Tandem opens, and
+any other you name with `tandem watch <link>` (or `watchAllMyPrs = true` in `~/.tandem/settings.toml`
+for all of yours). When a check fails, it reruns CI once with an empty commit, and waits instead
+when the same check is failing on `main` too. It only interrupts you when a pull request needs
+you: a check failing twice on the same code, a stuck check, a conflict, or requested changes.
+
+```
+PR watch · 3 open · checked 5s ago
+
+🔴 #409 refactor-cache   ❌ 15/16   ❌ failing    🙋 test_cache_evict failed twice → https://ci/…
+🟡 #412 fix-auth         ✅ 16/16   👀 review     ⏳ waiting on @reviewer
+🟢 #420 add-cache        ⏳ 12/16   ✅ approved   🔁 retried e2e/login (flaky?)
+```
+
+Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #409" or run
+`tandem watch --stop 409` to stop watching one. It works while Tandem is open.
+
 ## Terminal commands
 
 | Command | What it does |
 | --- | --- |
 | `tandem [PATH ...]` | Open or reconnect your projects |
 | `tandem status [TASK_ID]` | What's running and what needs you; with a task ID, that task's full history |
+| `tandem watch [PR]` | Your watched pull requests; with a PR link or number, start watching it (`--stop` to stop) |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Find and clean up leftovers from a crash or failed launch (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |
@@ -176,7 +196,7 @@ it looks only at what changed and tells you which of your comments were addresse
 | `tandem reset --hard` | Delete all Tandem state and start over |
 
 Common options: `--yes` skips confirmation (`fix`, `reset`), `--json` prints machine-readable
-output (`status`, `fix`), and `--home PATH` uses a different Tandem data folder. Run
+output (`status`, `watch`, `fix`), and `--home PATH` uses a different Tandem data folder. Run
 `tandem --help` for the full list.
 
 ## When something goes wrong

@@ -5104,8 +5104,11 @@ async function draftRefreshFailures(home: string): Promise<readonly Record<strin
   return events;
 }
 
+/** GitHub calls for the task's own draft; PR watch reading the draft on its own schedule is left out. */
 function githubCalls(calls: readonly CommandRequest[]): readonly CommandRequest[] {
-  return calls.filter((call) => call.argv[0] === "gh");
+  return calls.filter(
+    (call) => call.argv[0] === "gh" && !call.argv.some((word) => word.includes("mergeStateStatus")),
+  );
 }
 
 test("a ready task opens its own draft pull request once, against the default branch", async () => {

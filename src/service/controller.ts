@@ -56,6 +56,7 @@ import {
 import { maintainPool } from "../pool/maintenance.ts";
 import type { PoolMaintenanceResult } from "../pool/policy.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
+import type { PullRequestRef } from "../pr-review/pull-request.ts";
 import {
   createPrReviewWorkflow,
   type PostPrReviewResult,
@@ -67,6 +68,8 @@ import {
 } from "../pr-review/service.ts";
 import type { PrReviewState } from "../pr-review/state.ts";
 import { removeReviewWorktree } from "../pr-review/worktree.ts";
+import type { PrWatchView } from "../pr-watch/view.ts";
+import { PrWatcher, resolvePullRequestRef } from "../pr-watch/watcher.ts";
 import { PresentationFeedbackWorkflow } from "../presentations/feedback.ts";
 import { type PresentationRecord, readPresentationRecord } from "../presentations/records.ts";
 import { preparePresentation } from "../presentations/session.ts";
@@ -147,6 +150,7 @@ import {
   absoluteDirectory,
   currentWriter,
   describeError,
+  errorClassName,
   isMissing,
   isMissingEndpoint,
   isRecord,
@@ -346,7 +350,19 @@ export type TandemService = Readonly<{
   ) => Promise<PostPrReviewResult>;
   readonly reviewAgain: (id: string) => Promise<TaskRecord>;
   readonly reviewClose: (id: string) => Promise<TaskRecord>;
+  /** The PR watch view, after reading GitHub unless another Tandem is reading it right now. */
+  readonly prWatch: () => Promise<PrWatchView>;
+  /** Watches a pull request: a link, `owner/repo#N`, or `#N` in `repoPath` (default: this project). */
+  readonly prWatchStart: (input: PullRequestInput) => Promise<PrWatchView>;
+  readonly prWatchStop: (input: PullRequestInput) => Promise<PrWatchView>;
+  /** Notifications about watched pull requests that no Tandem has shown yet. */
+  readonly prWatchNotices: () => Promise<readonly string[]>;
   readonly shutdown: () => Promise<void>;
+}>;
+
+export type PullRequestInput = Readonly<{
+  readonly pullRequest: string;
+  readonly repoPath?: string | undefined;
 }>;
 
 type ServiceDependencies = Readonly<{
@@ -444,6 +460,7 @@ class TandemController {
   readonly #accounting: RequestAccountingWorkflow;
   readonly #prReviews: PrReviewWorkflow;
   readonly #drafts: DraftRefreshWorkflow;
+  readonly #prWatch: PrWatcher;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
@@ -458,6 +475,12 @@ class TandemController {
       run: deps.run,
       recordPullRequest: (taskId, expectedRevision, metadata) =>
         this.recordPullRequest(taskId, expectedRevision, metadata),
+    });
+    this.#prWatch = new PrWatcher({
+      home: deps.home,
+      run: deps.run,
+      clock: deps.clock,
+      listTasks: () => deps.store.list(),
     });
     this.#accounting = new RequestAccountingWorkflow({
       home: deps.home,
@@ -688,6 +711,10 @@ class TandemController {
         this.#prReviews.post(assertTaskId(id), input.verdict, input.approved),
       reviewAgain: (id) => this.#prReviews.again(assertTaskId(id)),
       reviewClose: (id) => this.#prReviews.close(assertTaskId(id)),
+      prWatch: () => this.#prWatch.view(),
+      prWatchStart: async (input) => this.#prWatch.start(await this.pullRequestRef(input)),
+      prWatchStop: async (input) => this.#prWatch.stop(await this.pullRequestRef(input)),
+      prWatchNotices: () => this.#prWatch.takeNotices(),
       shutdown: () => this.shutdown(),
     };
   }
@@ -1530,7 +1557,26 @@ class TandemController {
     }
     const current = draftRecorded ? await this.#source.scopedTasks() : settled;
     await this.#accounting.recordSettledTasks(current);
+    await this.#prWatch.tick().catch((error: unknown) => this.recordPrWatchFailure(error));
     return current;
+  }
+
+  /** PR watch never holds up task work; a failed check is recorded and the next one retries. */
+  private async recordPrWatchFailure(error: unknown): Promise<void> {
+    await appendDiagnosticEvent(
+      this.#deps.home,
+      { event: "pr-watch-failed", details: { errorClass: errorClassName(error) } },
+      this.#deps.clock,
+    );
+  }
+
+  private pullRequestRef(input: PullRequestInput): Promise<PullRequestRef> {
+    if (!isRecord(input)) throw new TypeError("pull request input must be an object");
+    return resolvePullRequestRef(
+      this.#deps.run,
+      singleLine(input.pullRequest, "pullRequest"),
+      input.repoPath ?? this.#deps.sourceWorkspace?.repoPath,
+    );
   }
 
   /**

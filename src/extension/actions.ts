@@ -4,7 +4,7 @@ import type { PrSummary } from "../delivery/evidence.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
 import type { CommentEdit } from "../pr-review/service.ts";
-import type { CreateTaskRequest, TandemService } from "../service/controller.ts";
+import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
 import { projectName, summarizeModelAssignments } from "./summary.ts";
@@ -162,7 +162,14 @@ export type TandemAction =
       readonly verdict: ReviewVerdict;
     }>
   | Readonly<{ readonly action: "review-again"; readonly taskId: string }>
-  | Readonly<{ readonly action: "review-close"; readonly taskId: string }>;
+  | Readonly<{ readonly action: "review-close"; readonly taskId: string }>
+  | Readonly<{ readonly action: "pr-watch" }>
+  | Readonly<{
+      readonly action: "pr-watch-start" | "pr-watch-stop";
+      /** A GitHub PR URL, `owner/repo#123`, or `#123` in `repoPath`. */
+      readonly pullRequest: string;
+      readonly repoPath?: string | undefined;
+    }>;
 
 export type TandemActionResult = Readonly<{
   readonly action: TandemAction["action"];
@@ -555,7 +562,21 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     textResult(await service.reviewAgain(action.taskId), action.action),
   "review-close": async (action, service) =>
     textResult(await service.reviewClose(action.taskId), action.action),
+  "pr-watch": async (action, service) => textResult(await service.prWatch(), action.action),
+  "pr-watch-start": async (action, service) =>
+    textResult(await service.prWatchStart(pullRequestInput(action)), action.action),
+  "pr-watch-stop": async (action, service) =>
+    textResult(await service.prWatchStop(pullRequestInput(action)), action.action),
 };
+
+function pullRequestInput(
+  action: Extract<TandemAction, { readonly action: "pr-watch-start" | "pr-watch-stop" }>,
+): PullRequestInput {
+  return {
+    pullRequest: action.pullRequest,
+    ...(action.repoPath === undefined ? {} : { repoPath: action.repoPath }),
+  };
+}
 
 function runTandemAction<Name extends TandemActionName>(
   name: Name,
@@ -752,6 +773,22 @@ const mergeParser: TandemCommandParser = {
   },
 };
 
+/** `/tandem watch` shows the view, `watch PR` watches it, and `watch --stop PR` stops. */
+const watchParser: TandemCommandParser = {
+  arity: { min: 1, max: 3 },
+  parse: (words, value) => {
+    if (words.length === 1) return { action: "pr-watch" };
+    const stop = words[1] === "--stop";
+    if (words.length !== (stop ? 3 : 2)) {
+      throw new TypeError("watch takes a pull request, or --stop and a pull request");
+    }
+    return {
+      action: stop ? "pr-watch-stop" : "pr-watch-start",
+      pullRequest: value(stop ? 2 : 1, "watch pull request"),
+    };
+  },
+};
+
 const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
   restart: {
     arity: { min: 2, max: 2 },
@@ -927,6 +964,7 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
   "pr-draft": draftParser,
   merge: mergeParser,
   "pr-merge": mergeParser,
+  watch: watchParser,
   cleanup: {
     arity: { min: 2, max: Number.POSITIVE_INFINITY },
     parse: (words) => {

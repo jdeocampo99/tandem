@@ -345,3 +345,21 @@ async function acknowledgeDelivered(
     }
   }
 }
+
+/**
+ * PR watch notifications (a pull request turned red or merged) go to the UI without a model turn.
+ * Taking them from the service marks them shown, so another open Tandem never repeats them.
+ */
+export async function deliverPrWatchNotices(
+  delivery: Readonly<{
+    readonly pi: Pick<ExtensionAPI, "appendEntry">;
+    readonly service: Pick<TandemService, "prWatchNotices">;
+    readonly ctx: NotificationUi;
+  }>,
+): Promise<void> {
+  const notices = await delivery.service.prWatchNotices();
+  if (notices.length === 0) return;
+  const content = notices.join("\n");
+  delivery.ctx.ui.notify(content, "info");
+  delivery.pi.appendEntry(TANDEM_NOTIFICATION_ENTRY, { prWatch: notices, content });
+}

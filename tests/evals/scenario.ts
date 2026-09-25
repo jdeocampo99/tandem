@@ -10,6 +10,7 @@ import type {
   Endpoint,
   IdFactory,
   IsoTimestamp,
+  PullRequestMetadata,
   ResearchContinuation,
   ResolvedPolicy,
   TaskRecord,
@@ -58,7 +59,49 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
 };
 
 /** Every external boundary a scenario is allowed to touch. */
-export type ScenarioBoundary = "herdr" | "treehouse" | "git" | "omp" | "ps" | "typesafe";
+export type ScenarioBoundary = "herdr" | "treehouse" | "git" | "omp" | "ps" | "typesafe" | "github";
+
+/** One CI check on a scripted pull request or branch. */
+export type ScenarioCheck = Readonly<{
+  readonly name: string;
+  readonly state: "pass" | "fail" | "pending";
+  readonly startedAt?: IsoTimestamp;
+}>;
+
+/**
+ * A scripted pull request. Scenarios change its fields directly between checks, the way GitHub
+ * would change while the watcher waits.
+ */
+export type ScenarioPullRequest = {
+  readonly repo: string;
+  readonly number: number;
+  title: string;
+  branch: string;
+  base: string;
+  head: string;
+  draft: boolean;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  mergeStateStatus: string;
+  reviewDecision: string;
+  labels: string[];
+  autoMerge: boolean;
+  checks: ScenarioCheck[];
+  mergedAt?: IsoTimestamp;
+};
+
+/** Scripted GitHub: pull requests, branch checks, commits and their trees, and your open PRs. */
+export type ScenarioGitHub = Readonly<{
+  readonly openPullRequest: (
+    input: Partial<ScenarioPullRequest> & Pick<ScenarioPullRequest, "repo" | "number">,
+  ) => ScenarioPullRequest;
+  /** Checks on the tip of a branch, such as the base a pull request merges into. */
+  readonly setBranchChecks: (repo: string, branch: string, checks: ScenarioCheck[]) => void;
+  /** Someone pushes to the pull request: a new head, with a new tree unless `sameTree`. */
+  readonly push: (pullRequest: ScenarioPullRequest, options?: { sameTree?: boolean }) => string;
+  /** The pull requests `gh search prs --author @me` finds. */
+  readonly myPullRequests: Array<Readonly<{ repo: string; number: number }>>;
+}>;
 
 /** Scripted TypeSafe provider behavior; no scenario ever reaches the real endpoint. */
 export type ScenarioProviderBehavior =
@@ -150,6 +193,9 @@ export type ScenarioWorld = Readonly<{
   ) => Promise<WorktreeLease>;
   readonly patchCheckout: (path: string, patch: ScenarioCheckoutPatch) => void;
   readonly providerFetch: (behavior: ScenarioProviderBehavior) => JevFetch;
+  readonly github: ScenarioGitHub;
+  /** Moves the scenario clock forward; it starts at SCENARIO_NOW and never moves on its own. */
+  readonly advanceClock: (minutes: number) => void;
   readonly trace: () => readonly ScenarioEvent[];
   readonly snapshot: () => Promise<ScenarioSnapshot>;
   readonly close: () => Promise<void>;
@@ -188,7 +234,61 @@ function describeCommand(argv: readonly string[]): Readonly<{
   }
   if (program === "omp") return { boundary: "omp", action: `omp ${argv[1] ?? ""}`.trim() };
   if (program === "ps") return { boundary: "ps", action: "ps" };
+  if (program === "gh") return { boundary: "github", action: githubAction(argv) };
   throw new Error(`unexpected scenario command ${JSON.stringify(argv)}`);
+}
+
+/** Flags of `gh api` that take a value, so the endpoint is the first word that is neither. */
+const GH_API_VALUE_FLAGS = new Set(["-X", "-f", "-F", "--jq", "-H"]);
+
+function githubEndpoint(argv: readonly string[]): string {
+  for (let index = 2; index < argv.length; index += 1) {
+    const word = argv[index] ?? "";
+    if (GH_API_VALUE_FLAGS.has(word)) index += 1;
+    else if (!word.startsWith("-")) return word;
+  }
+  return "";
+}
+
+function githubField(argv: readonly string[], name: string): string | undefined {
+  for (let index = 0; index < argv.length - 1; index += 1) {
+    const flag = argv[index];
+    const value = argv[index + 1] ?? "";
+    if ((flag === "-f" || flag === "-F") && value.startsWith(`${name}=`)) {
+      return value.slice(name.length + 1);
+    }
+  }
+  return undefined;
+}
+
+/** Names a `gh` call by what it does, like `gh pr view` or `gh api PATCH git/refs`. */
+function githubAction(argv: readonly string[]): string {
+  if (argv[1] !== "api") return `gh ${argv[1] ?? ""} ${argv[2] ?? ""}`.trim();
+  const method = argv[argv.indexOf("-X") + 1] ?? "GET";
+  const endpoint = githubEndpoint(argv);
+  const kinds: readonly (readonly [RegExp, string])[] = [
+    [/^graphql$/u, "graphql"],
+    [/\/git\/commits$/u, "git/commits"],
+    [/\/git\/refs\//u, "git/refs"],
+    [/\/commits\/[^/]+$/u, "commits"],
+    [/\/issues\/\d+\/events/u, "issues/events"],
+    [/\/pulls\/\d+\/update-branch$/u, "pulls/update-branch"],
+    [/\/contents\//u, "contents"],
+    [/\/compare\//u, "compare"],
+  ];
+  const kind = kinds.find(([pattern]) => pattern.test(endpoint))?.[1] ?? endpoint;
+  return `gh api ${argv.includes("-X") ? method : "GET"} ${kind}`;
+}
+
+function scenarioCheckRun(check: ScenarioCheck): Readonly<Record<string, unknown>> {
+  return {
+    __typename: "CheckRun",
+    name: check.name,
+    status: check.state === "pending" ? "IN_PROGRESS" : "COMPLETED",
+    conclusion: check.state === "pass" ? "SUCCESS" : check.state === "fail" ? "FAILURE" : "",
+    detailsUrl: `https://ci.example/${check.name}`,
+    ...(check.startedAt === undefined ? {} : { startedAt: check.startedAt }),
+  };
 }
 
 /** Recovers the process a bootstrap script would exec, so a launched pane proves the real argv. */
@@ -567,8 +667,141 @@ export async function createScenarioWorld(
     throw new Error(`unexpected git command ${JSON.stringify(argv)}`);
   };
 
+  const pullRequests: ScenarioPullRequest[] = [];
+  const branchChecks = new Map<string, ScenarioCheck[]>();
+  const trees = new Map<string, string>();
+  const myPullRequests: Array<Readonly<{ repo: string; number: number }>> = [];
+  let nextCommit = 0;
+  const newCommit = (tree: string): string => {
+    nextCommit += 1;
+    const sha = `commit-${nextCommit}`;
+    trees.set(sha, tree);
+    return sha;
+  };
+  const findPullRequest = (repo: string, number: number): ScenarioPullRequest => {
+    const found = pullRequests.find(
+      (candidate) => candidate.repo === repo && candidate.number === number,
+    );
+    if (found === undefined) throw new Error(`no scripted pull request ${repo}#${number}`);
+    return found;
+  };
+  const github: ScenarioGitHub = {
+    openPullRequest: (input) => {
+      const created: ScenarioPullRequest = {
+        title: `Pull request ${input.number}`,
+        branch: `feature-${input.number}`,
+        base: "main",
+        head: newCommit(`tree-${input.number}`),
+        draft: false,
+        state: "OPEN",
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
+        reviewDecision: "APPROVED",
+        labels: [],
+        autoMerge: false,
+        checks: [],
+        ...input,
+      };
+      if (!trees.has(created.head)) trees.set(created.head, `tree-${input.number}`);
+      pullRequests.push(created);
+      return created;
+    },
+    setBranchChecks: (repo, branch, checks) => {
+      branchChecks.set(`${repo}:${branch}`, checks);
+    },
+    push: (pullRequest, options = {}) => {
+      const tree =
+        options.sameTree === true ? (trees.get(pullRequest.head) ?? "") : `tree-${nextCommit + 1}`;
+      pullRequest.head = newCommit(tree);
+      return pullRequest.head;
+    },
+    myPullRequests,
+  };
+
+  const gh = async (request: CommandRequest): Promise<CommandResult> => {
+    const argv = request.argv;
+    if (argv[1] === "pr" && argv[2] === "view") {
+      const pr = findPullRequest(argv[argv.indexOf("--repo") + 1] ?? "", Number(argv[3]));
+      const [owner, name] = pr.repo.split("/");
+      return commandResult(
+        JSON.stringify({
+          state: pr.state,
+          isDraft: pr.draft,
+          title: pr.title,
+          url: `https://github.com/${pr.repo}/pull/${pr.number}`,
+          headRefName: pr.branch,
+          headRefOid: pr.head,
+          headRepository: { name },
+          headRepositoryOwner: { login: owner },
+          baseRefName: pr.base,
+          mergeable: pr.mergeable,
+          mergeStateStatus: pr.mergeStateStatus,
+          reviewDecision: pr.reviewDecision,
+          reviewRequests: [],
+          labels: pr.labels.map((label) => ({ name: label })),
+          autoMergeRequest: pr.autoMerge ? { enabledAt: SCENARIO_NOW } : null,
+          mergedAt: pr.mergedAt ?? null,
+          statusCheckRollup: pr.checks.map(scenarioCheckRun),
+        }),
+      );
+    }
+    if (argv[1] === "search" && argv[2] === "prs") {
+      return commandResult(
+        JSON.stringify(
+          myPullRequests.map((ref) => ({
+            number: ref.number,
+            repository: { nameWithOwner: ref.repo },
+          })),
+        ),
+      );
+    }
+    if (argv[1] !== "api") throw new Error(`unexpected gh command ${JSON.stringify(argv)}`);
+    const endpoint = githubEndpoint(argv);
+    if (endpoint === "graphql") {
+      const repo = `${githubField(argv, "owner")}/${githubField(argv, "name")}`;
+      const branch = (githubField(argv, "ref") ?? "").replace(/^refs\/heads\//u, "");
+      const checks = branchChecks.get(`${repo}:${branch}`) ?? [];
+      return commandResult(
+        JSON.stringify({
+          data: {
+            repository: {
+              ref: {
+                target: {
+                  statusCheckRollup: { contexts: { nodes: checks.map(scenarioCheckRun) } },
+                },
+              },
+            },
+          },
+        }),
+      );
+    }
+    const commit = /^repos\/[^/]+\/[^/]+\/commits\/([^/]+)$/u.exec(endpoint)?.[1];
+    if (commit !== undefined) return commandResult(trees.get(commit) ?? "");
+    if (/\/git\/commits$/u.test(endpoint)) {
+      const parent = githubField(argv, "parents[]") ?? "";
+      const sha = newCommit(githubField(argv, "tree") ?? "");
+      trees.set(`${sha}:parent`, parent);
+      return commandResult(sha);
+    }
+    const ref = /^repos\/([^/]+\/[^/]+)\/git\/refs\/heads\/(.+)$/u.exec(endpoint);
+    if (ref !== null) {
+      const sha = githubField(argv, "sha") ?? "";
+      const pr = pullRequests.find(
+        (candidate) => candidate.repo === ref[1] && candidate.branch === ref[2],
+      );
+      if (pr === undefined || trees.get(`${sha}:parent`) !== pr.head) {
+        return commandResult("", 1, "gh: Update is not a fast forward (HTTP 422)");
+      }
+      pr.head = sha;
+      pr.checks = pr.checks.map((check) => ({ name: check.name, state: "pending" }));
+      return commandResult(JSON.stringify({ object: { sha } }));
+    }
+    throw new Error(`unexpected gh command ${JSON.stringify(argv)}`);
+  };
+
   const dispatch = async (request: CommandRequest): Promise<CommandResult> => {
     const program = request.argv[0];
+    if (program === "gh") return gh(request);
     if (program === "herdr") return herdr(request);
     if (program === "treehouse") return treehouse(request);
     if (program === "git") return git(request);
@@ -610,7 +843,8 @@ export async function createScenarioWorld(
     return result;
   };
 
-  const clock: Clock = () => SCENARIO_NOW;
+  let now = Date.parse(SCENARIO_NOW);
+  const clock: Clock = () => new Date(now).toISOString();
   const idFactory: IdFactory = () => {
     identifier += 1;
     return `scenario-id-${identifier}`;
@@ -681,6 +915,10 @@ export async function createScenarioWorld(
         }),
         { status: 200 },
       );
+    },
+    github,
+    advanceClock: (minutes) => {
+      now += minutes * 60_000;
     },
     trace: () => [...trace],
     snapshot,
@@ -784,6 +1022,7 @@ export type SeedTaskInput = Readonly<{
   readonly endpoints?: readonly Endpoint[];
   readonly researchContinuation?: ResearchContinuation;
   readonly manualVerification?: readonly string[];
+  readonly pullRequest?: PullRequestMetadata;
 }>;
 
 /** Seeds one durable task in the scenario home, bypassing approval prompts the scenario is not testing. */
@@ -833,6 +1072,7 @@ export async function seedScenarioTask(
     ...(input.reportPath === undefined ? {} : { reportPath: input.reportPath }),
     ...(input.worktree === undefined ? {} : { worktree: input.worktree }),
     ...(input.endpoints === undefined ? {} : { endpoints: input.endpoints }),
+    ...(input.pullRequest === undefined ? {} : { pullRequest: input.pullRequest }),
   }));
 }
 

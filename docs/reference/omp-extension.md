@@ -39,6 +39,8 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   hidden identifiers message, so the coordinator answers without a separate `read` call. The
   session entry's `details` keep the identifiers only, not the report.
 - A scout is completed research only when durable state records `completed` and its report.
+- PR watch notices (a watched pull request turned red or merged) go to `ctx.ui.notify` and the UI
+  log with no model turn; the first coordinator to take one clears it (see [pr-watch.md](pr-watch.md#notifications)).
 
 ## Compaction and the durable digest
 

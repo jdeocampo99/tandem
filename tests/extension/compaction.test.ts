@@ -63,6 +63,7 @@ test("the coordinator compacts when a task finishes while idle over the threshol
   const service = {
     list: async () => tasks,
     acknowledge: async () => undefined,
+    prWatchNotices: async () => [],
   } as unknown as TandemService;
   const pi = {
     zod,
