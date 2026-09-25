@@ -187,6 +187,36 @@ async function startExtension(
   };
 }
 
+test("a subagent's copy of the extension keeps the tool guard but never drives the job", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-native-worker-"));
+  const previous = process.env.TANDEM_WORKER_JOB_PATH;
+  try {
+    const job = makeJob(root);
+    const { terminalJob } = await startExtension(root, job);
+    const before = await readWorkerTerminal(terminalJob);
+
+    // OMP loads a fresh copy into each subagent, in the same process and with the same job.
+    const subagent = fixture();
+    await registerWorkerTerminalExtension({
+      zod,
+      on(event: string, handler: Handler): void {
+        subagent.handlers.set(event, handler);
+      },
+      registerTool(tool: { name: string; execute: SubmitReport }): void {
+        subagent.tools.set(tool.name, tool.execute);
+      },
+    } as never);
+
+    expect([...subagent.handlers.keys()]).toEqual(["tool_call"]);
+    expect(subagent.tools.size).toBe(0);
+    expect(await readWorkerTerminal(terminalJob)).toEqual(before);
+  } finally {
+    if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
+    else process.env.TANDEM_WORKER_JOB_PATH = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("persists native result before process shutdown and keeps very large reports intact", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-native-worker-"));
   const previous = process.env.TANDEM_WORKER_JOB_PATH;
