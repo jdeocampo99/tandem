@@ -36,6 +36,7 @@ import {
   ReportRejection,
   resolveSubmittedReport,
   type SubmittedReport,
+  uncommittedWorkRejection,
   WorkerOutputError,
 } from "./protocol.ts";
 import {
@@ -317,6 +318,22 @@ function terminalState(
   };
 }
 
+/**
+ * The worktree's `git status --porcelain=v1` output, or undefined when git cannot report it. The
+ * settle-time checkpoint check stays authoritative, so an unreadable status never blocks a report.
+ */
+async function worktreeStatus(cwd: string): Promise<string | undefined> {
+  try {
+    const result = await runCommand({
+      argv: ["git", "-C", cwd, "status", "--porcelain=v1", "--untracked-files=all"],
+      cwd,
+    });
+    return result.code === 0 ? result.stdout : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function isWithin(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
   return path === "" || (!path.startsWith("..") && !isAbsolute(path));
@@ -399,10 +416,6 @@ type SubmitReportToolResult = {
 function reviewResultSchema(z: Zod) {
   return z
     .object({
-      lens: z.enum(["review"]),
-      head: z.string(),
-      generation: z.number().int().nonnegative(),
-      pass: z.boolean(),
       findings: z.array(
         z
           .object({
@@ -454,7 +467,9 @@ function submitReportParameters(z: Zod, role: WorkerRole) {
         ? {
             review: reviewResultSchema(z)
               .optional()
-              .describe("Required for completed: the ReviewResult."),
+              .describe(
+                "Required for completed: your findings and summary. Tandem records the commit and whether the review passes.",
+              ),
           }
         : {}),
     })
@@ -748,6 +763,11 @@ class WorkerTerminalSession {
     const job = this.job;
     try {
       assertSelectedModel(expectedModelParts(job.model.model), ctx.model);
+      if (job.role === "implementer" && submission.outcome === "implemented") {
+        const status = await worktreeStatus(job.cwd);
+        const uncommitted = status === undefined ? undefined : uncommittedWorkRejection(status);
+        if (uncommitted !== undefined) return uncommitted;
+      }
       const report = resolveSubmittedReport(job, submission, await reviewAnchors(job));
       const revision = await instructionRevision(job, report.status !== "failed");
       return resultFor(job, report.status, report.text, {
@@ -1126,9 +1146,17 @@ class WorkerTerminalSession {
   }
 }
 
+/**
+ * Jobs whose worker copy this process already loaded. OMP loads a fresh copy of this extension into
+ * each subagent, in the same process and with the same job; the first copy is the worker's.
+ */
+const loadedJobs = new Set<string>();
+
 export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise<void> {
   const jobPath = process.env[WORKER_JOB_PATH_ENV];
   if (jobPath === undefined || jobPath.trim().length === 0) return;
+  const subagent = loadedJobs.has(jobPath);
+  loadedJobs.add(jobPath);
   const job = await readJob(jobPath);
   const session = new WorkerTerminalSession({
     job,
@@ -1149,6 +1177,12 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       ),
     sendUserMessage: (text) => pi.sendUserMessage(text),
   });
+  if (subagent) {
+    // A subagent keeps the worker's role limits but never drives the job: its turns, idle time,
+    // model, and reports are not the worker's.
+    pi.on("tool_call", (event) => session.guardToolCall(event));
+    return;
+  }
   await session.start();
 
   pi.registerTool({

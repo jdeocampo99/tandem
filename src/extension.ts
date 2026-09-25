@@ -21,10 +21,7 @@ import {
   coordinatorCompactTokens,
   finishedTaskIds,
 } from "./extension/compaction.ts";
-import {
-  deliverPendingNotifications,
-  isResearchReportReadable,
-} from "./extension/notifications.ts";
+import { deliverPendingNotifications, readResearchReport } from "./extension/notifications.ts";
 import { type PromptRoutingConfig, promptRoutingConfig } from "./extension/prompt-routing.ts";
 import {
   registerTandemOmp,
@@ -382,7 +379,7 @@ class TandemCoordinator {
         delivered: this.deliveredNotifications,
         unacknowledged: this.unacknowledgedNotifications,
         ctx,
-        reportReadable: isResearchReportReadable,
+        readReport: readResearchReport,
       });
       const idle =
         !this.status.agentActive &&

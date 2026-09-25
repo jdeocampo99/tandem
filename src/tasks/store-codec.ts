@@ -793,7 +793,7 @@ export function parseNotification(value: unknown, source: string): Notification 
   const kind =
     value.kind === undefined
       ? undefined
-      : requiredEnum(value, "kind", ["routine", "coordinator"] as const, source);
+      : requiredEnum(value, "kind", ["routine", "coordinator", "receipt"] as const, source);
   return {
     id: requiredText(value, "id", source),
     message: requiredText(value, "message", source),

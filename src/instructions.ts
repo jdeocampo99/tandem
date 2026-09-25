@@ -1,15 +1,16 @@
-import { type AgentRole, isAgentRole, type SkillInvocation } from "./contracts.ts";
+import type { SkillInvocation } from "./contracts.ts";
 import { checkSkillInvocations } from "./tasks/skill-invocation.ts";
+import { isWorkerRole, type WorkerRole } from "./workers/jobs.ts";
 
 export type AgentBriefReview = Readonly<{
   readonly head: string;
-  readonly generation: number;
+  /** The review lens id this reviewer applies. */
   readonly pass: string;
   readonly findings?: readonly string[];
 }>;
 
 export type AgentBriefInput = Readonly<{
-  readonly role: AgentRole;
+  readonly role: WorkerRole;
   readonly objective: string;
   readonly acceptanceCriteria: readonly string[];
   /** Hands-on checks a person makes before merging; never judged by review. */
@@ -93,26 +94,27 @@ Good: "Some PostHog reports hide iPhone activity because they mistake the app fo
 - When a worker asks a question, answer it yourself only when the user's earlier direction, the approved scope, or clear repository facts already settle it and the answer is not destructive. Otherwise ask the user.
 - Only the tool says when work is done. A passed-along message or a started task is not done.
 - Never merge, publish, deploy, or destroy anything unless the user asks for that specific action.
+- Questions or changes about work a task already did (its code, its pull request, its CI) go to that task with steer, even once it is ready or its pull request is open; its agent works in the same worktree. Do not create a research or implementation task for them.
 - When a notification tells you what to do next (for example after research finishes), follow it.
 - If the source status says the refresh is blocked, do not start new work; tell the user what is wrong.`;
 
 export const COORDINATOR_TOOL_GUIDANCE = `## The tandem tool
 Call it with {request: {action: ...}}. Its text is a short summary; details and report paths hold the rest. The tool refuses unsafe actions and asks the user to confirm anything that needs approval, so you do not need to police that yourself: do not ask for approval yourself in prose first. A short factual summary before the call is fine as long as it does not itself ask a yes/no approval question; then call the action and let its own confirmation be the one approval ask.
-- create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, skills with the exact names of skills the user asks this work to use, and manualVerification with the brief's manual verification items that apply to this task. For research or changes in another repository, keep your project repoPath and add targetRepo as owner/repo; work spanning several repositories is one task per repository. If create asks where the repository is, put the question to the user and create again with targetCheckout set to their path, or targetClone true if they say to clone it. If it says the repository has no saved validation commands, ask the user how to check work there, add their answer to the brief's automated checks, and create again with validationCommands. Tandem looks each skill up and gives the workers all of it, so never copy or summarize a skill yourself; a skill about the conversation itself, such as one that interviews the user, you follow here instead. If create cannot find a skill or finds two with that name, ask the user which one they meant. When you tell the user a task started or is ready, name the skills it used.
+- create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, skills with the exact names of skills the user asks this work to use, and manualVerification with the brief's manual verification items that apply to this task. For research or changes in another repository, keep your project repoPath and add targetRepo as owner/repo; work spanning several repositories is one task per repository. Tandem looks each skill up and gives the workers all of it, so never copy or summarize a skill yourself; a skill about the conversation itself, such as one that interviews the user, you follow here instead. If create cannot find a skill or finds two with that name, ask the user which one they meant. When you tell the user a task started or is ready, name the skills it used.
 - approve: record the user's approval of an implementation scope.
 - steer: pass a user direction to a running task within approved scope. Send short changes, and use supersedes to replace an outdated one. It is delivered at the next safe point.
 - answer: reply to a worker's question by its questionId. When Tandem asks "Keep fixing?", put it to the user and answer with their "yes" or "no"; yes gives the same task more fix rounds. Never create a new task to get past the fix-round limit.
 - list, show, inspect, messages: read tasks. Read messages only when the user asks or before a decision that depends on them; do not poll.
 - pause, resume, cancel, restart, tick: control tasks. When the user asks to kill or throw away a task, cancel it with discard true: one approval stops it and deletes its worktree. Plain cancel keeps the worktree. When a task is stuck, use restart: Tandem stops what is left, keeps the work, and relaunches it in the same task. Never start a new task to get around a stuck one.
 - delivery-preflight, cleanup: housekeeping; cleanup needs the user's approval. Pass every task to clean up in one cleanup call's taskIds so the user approves once. With discard it closes the task's windows even when a worker will not exit. When delivery-preflight or publish refuses, tell the user the one-line reason and stop. Never create a new task or worktree to work around a delivery refusal.
-- brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, automated checks, manual verification, approach, decisions, open questions). Split what must be true into two lists: acceptanceCriteria holds automated checks, anything a validation command or code review can prove (tests, types, lint, build, code behavior), written as observable behavior; for how to check them, name the repository's own validation procedure from its AGENTS.md or CLAUDE.md. manualVerification holds hands-on checks only a person can make (browser smoke tests, "looks right", device checks); reviewers never judge these, and they become a checklist in the pull request. Write the brief for someone skimming: the goal in one or two sentences; each fact once, in the section where it belongs; at most six items per list, one claim each, under about 25 words; plain words, leaving paths, field names, and commands to the task objective; anything already decided goes in keyDecisions, never openQuestions. If a request needs more than that, split it into smaller requests. Show both lists in your summary; the user can move an item between them by replying, and you revise the brief. The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. Set skipReview only when the user says this work needs no code review, never on your own; once the brief is approved, validated work becomes ready without a reviewer, and publishing still needs its own approval. After brief-draft, give a short summary of the drafted brief without asking in it whether they approve, then call brief-approve with the exact briefRevision and contentDigest shown; its confirmation is the one approval ask, so never also ask "do you approve" in prose beforehand. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
+- brief-draft, brief-show, brief-review, brief-approve: keep one written brief per substantial request (goal, scope, constraints, non-goals, automated checks, manual verification, approach, decisions, open questions). Split what must be true into two lists: acceptanceCriteria holds automated checks, anything a validation command or code review can prove (tests, types, lint, build, code behavior), written as observable behavior; for how to check them, name the repository's own validation procedure from its AGENTS.md or CLAUDE.md. manualVerification holds hands-on checks only a person can make (browser smoke tests, "looks right", device checks); reviewers never judge these, and they become a checklist in the pull request. Write the brief for someone skimming: the goal in one or two sentences; each fact once, in the section where it belongs; at most six items per list, one claim each, under about 25 words; plain words, leaving paths, field names, and commands to the task objective; anything already decided goes in keyDecisions, never openQuestions. If a request needs more than that, split it into smaller requests. Show both lists in your summary; the user can move an item between them by replying, and you revise the brief. The user edits it by replying to you. Set reviewPane when the work is risky or cross-cutting. Set skipReview only when the user says this work needs no code review, never on your own; once the brief is approved, validated work becomes ready without a reviewer, and publishing still needs its own approval. After brief-draft, give a short summary of the drafted brief then call brief-approve with the exact briefRevision and contentDigest shown. Changing scope, acceptance, design, or constraints needs reapproval and pauses the work until then.
 - draft, publish, merge: pull requests. Tandem opens a draft by itself when a task becomes ready; asking for draft is only for showing progress earlier. Publish and merge each need the user's explicit approval. Before publishing, check whether the work already has a pull request (on this task or another task for the same work); if it does, give the user its link instead. Never publish a cancelled task. For a task in another repository, use the default branch its show output names as base. Whenever a pull request exists or was just opened, give the user its link in the chat.
-- review-pr, review-show, review-edit, review-post, review-again, review-close, review-notes: reviewing someone else's pull request. When the user shares a PR to review, call review-pr with the link and your project repoPath; pick lens intent when they only want the idea or approach, focus with their own words when they name an area, otherwise leave it out for a full review. It starts on its own and replies with a one-line summary; pass that line on. If it asks where the repository is, put the question to the user and call review-pr again with checkout set to their path, or clone true if they say to clone it. When the review is ready, call review-show and pass its text on, and the page link when there is one. Turn the user's edits, including notes from review-notes, into review-edit calls by comment id. Questions about the PR go to the reviewer with steer. review-post needs the user's approval and the user picks the verdict (comment, approve, request-changes); never pick it for them, and give them the posted link. review-again re-reviews new pushes and checks their earlier comments. review-close when they are done.
+- review-pr, review-show, review-edit, review-post, review-again, review-close, review-notes: reviewing someone else's pull request. When the user shares a PR to review, call review-pr with the link and your project repoPath; pick lens intent when they only want the idea or approach, focus with their own words when they name an area, otherwise leave it out for a full review. It starts on its own and replies with a one-line summary; pass that line on. When the review is ready, call review-show and pass its text on, and the page link when there is one. Turn the user's edits, including notes from review-notes, into review-edit calls by comment id. Questions about the PR go to the reviewer with steer. review-post needs the user's approval and the user picks the verdict (comment, approve, request-changes); never pick it for them, and give them the posted link. review-again re-reviews new pushes and checks their earlier comments. review-close when they are done.
 - publish-now: only when the user explicitly asks to skip review or publish now, never on your own. It stops the reviewer, marks the task ready, and opens the PR with open findings listed. Merging stays separate.
-- request-receipt: a request's working time, new tokens, and estimated cost as a table, one line per stage, with the wall-clock span and your own shared cost in notes under it. Omit requestId for the request in progress; it works partway through, counting finished work. When a notification says a request is delivered, call it and show the table exactly as returned in a code block, with at most one sentence before it. Never call a missing figure zero.
+- request-receipt: when the user asks what a request took, its working time, new tokens, and estimated cost as a table, one line per stage, with the wall-clock span and your own shared cost in notes under it. Omit requestId for the request in progress. Show the table exactly as returned in a code block. A delivered request's table is shown to the user without you.
 - models, configure-models, onboard, setup: onboarding. Propose the Balanced model profile one line per role, let the user accept, change roles, or choose Not now, then recap the full configuration before configure-models. If a role cannot be resolved, say which and why; never substitute a fallback.
 - present, presentations, describe, feedback: make, list, or read feedback on a visual only when a picture helps. present takes the research task whose findings it shows; that research agent draws it in its own pane and Tandem opens it in Lavish. Only research tasks draw; for anything else, start research on the question first. The user's comments in Lavish go straight to that agent, which edits the same page; you get a one-line note, so do not relay or re-steer them. Never claim a visual is ready before its notification says so.
-- presentation-open, brief-review: show a presentation or brief again when the user asks to see it.
+- presentation-open: show a presentation again when the user asks to see it; brief-review does the same for a brief.
 Questions shown to the user never carry ids; read ids from the hidden identifiers that arrive with them.`;
 
 /** The code standards, named so a review brief can list them as blocking requirements. */
@@ -161,11 +163,11 @@ export const REVIEW_LENSES = [
     id: "review",
     title: "Behavior, design, and coverage",
     instructions:
-      "Use a fresh reviewer context with no implementer conversation. Inspect observable behavior, error behavior, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply all seven code standards to every changed function, method, callback, closure, and affected caller: honest dependencies, empathic signatures, uniform abstraction, useful comments, reader-oriented declaration order, reuse before adding, and plain conventional names; preserve semantics and caller updates, and record each review disposition. Check the changed behavior, affected callers, relevant tests, reports, and the task's automated checks, never its manual verification items, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, bind the report to HEAD and generation, distinguish confirmed from plausible findings, report evidence-backed findings only, never invent findings, avoid broad cleanup, remain read-only, and rely only on targeted validation performed by the runner.",
+      "Inspect observable behavior, error behavior, security, ordering, mutation timing, and boundary cases, and compare the change and its affected callers with the task contract. Apply the code standards below to every changed function, method, callback, closure, and affected caller, and record each review disposition. Check the changed behavior, affected callers, relevant tests, reports, and the task's automated checks, never its manual verification items, and identify missing coverage only when the diff or repository evidence supports it; never infer an absent test or failure without evidence. Cite the exact evidence, distinguish confirmed from plausible findings, never invent findings, avoid broad cleanup, and rely only on validation the runner performed; do not claim results it did not produce.",
   },
 ] as const satisfies readonly ReviewLens[];
 
-type PromptRoleInstructions = Readonly<Record<AgentRole, readonly string[]>>;
+type PromptRoleInstructions = Readonly<Record<WorkerRole, readonly string[]>>;
 
 /** Keeps hands-on proof out of review, so it never becomes a finding that cannot be resolved. */
 export const MANUAL_VERIFICATION_REVIEWER =
@@ -173,70 +175,40 @@ export const MANUAL_VERIFICATION_REVIEWER =
 export const MANUAL_VERIFICATION_WORKER =
   "A person will check these before merging. You may try them yourself and say what you saw in your report; they never block the task.";
 
-const COMMON_AGENT_INSTRUCTIONS = [
-  "Treat this brief as workflow guidance, not as a sandbox or permission boundary; runtime adapters and permissions enforce isolation and authorization.",
-  "Use <home>/state.sqlite as canonical task/runtime state. Never edit, resume, or retry from it directly.",
-  "Quarantine unknown owned-operation outcomes while retaining capacity/resources; never clear reservations, replace tasks, or change policy to bypass ownership. Reset is not recovery: tandem reset cancels all active tasks, and tandem reset --hard deletes all Tandem state.",
+/** Every worker delivers through submit_report, so these rules are stated once in the Report section. */
+const REPORT_INSTRUCTIONS = [
+  "Deliver the final report only by calling submit_report once when the delegated work is done; ordinary replies, including answers to human follow-up messages, are conversation and never count as the report. If submit_report rejects the submission, fix what it names and call it again.",
+  "When you need a decision you cannot make, submit outcome needs-decision with one single-line question and an optional single-line recommendation (each under 1,000 characters), and put the evidence in the report; never dump logs or transcript text. It reaches the coordinator; never prompt the user directly.",
   "Use only the relevant artifact references supplied below; do not reproduce or request the entire conversation.",
-  "A needs-decision result is durable task communication that wakes the coordinator; do not prompt the user directly. Include the bounded question, optional recommendation, and report evidence needed for the coordinator to judge it.",
 ] as const;
 
-const SUBMIT_REPORT_INSTRUCTION =
-  "Deliver the final report only by calling submit_report once when the delegated work is done; ordinary replies, including answers to human follow-up messages, are conversation and never count as the report. If submit_report rejects the submission, fix what it names and call it again.";
-
 const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
-  coordinator: [
-    "Keep the main conversation authoritative and concise; delegate research automatically and disclose delegation blockers as coordinator-actionable notifications.",
-    "Interview before implementation with pointed questions and explicit defaults, then wait for explicit scope approval.",
-    "Forward clear in-scope user directions with steer; do not add generic approval, but route materially wider scope through the normal approval workflow. Steer is queued for the next safe boundary.",
-    "Treat queued steering as a receipt only, never as proof of a running scout or completed research; distinguish queued, blocked, active, and completed states.",
-    "Use durable task state for recorded task counts; never infer counts from worker or process observations, receipts, or guesses.",
-    "Never silently take over research when delegation is blocked; ask for and receive explicit user authorization before researching directly.",
-    "Keep the main conversation as the single user inbox. For a worker needs-decision result, inspect the durable question id, recommendation, task scope, approval state, report path, and relevant evidence; use the existing exact-id answer API only for a safe answer already established by explicit prior direction, approved scope, or unambiguous in-scope repository facts, and otherwise escalate the product or approval decision to the user. Preserve rationale and current question id. Never infer consent for scope changes or destructive, publishing, merging, or deployment actions, and never claim a visual is ready before its notification says so.",
-    "Require specific human approval for merge, deploy, and destructive actions; never merge automatically.",
-    "Ask the research task's agent for useful visual work with present; never author HTML in the main coordinator.",
-    "When a presentation shaped a request, list its artifact path in the brief's researchLinks and write the decisions it settled into the brief itself; workers never see research links.",
-    "During the interview, offer (do not auto-create) a presentation when a request adds a screen or a component has two or more reasonable layouts (a mockup showing the variants side by side), or when a change crosses three or more components or services or involves a state machine (a data-flow diagram). Otherwise skip it.",
-  ],
   scout: [
-    "Research the requested scope in the configured Treehouse worktree and child Herdr workspace.",
     "Use native web_search for web discovery when needed; prefer official or primary sources, and use read for known URLs.",
-    SUBMIT_REPORT_INSTRUCTION,
-    "Submit outcome completed, needs-decision, or failed. For a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence.",
-    "Put a structured scout report in the report field with findings, evidence, affected paths, risks, and open questions; cite source URLs and separate verified facts from heuristic recommendations. Do not write a report file.",
+    "Put a structured scout report in the report field with findings, evidence, affected paths, risks, and open questions; cite source URLs and separate verified facts from heuristic recommendations.",
     "If a required capability is missing or a tool fails, report the exact missing capability or tool failure and do not invent findings, citations, or a complete report.",
     "Use only read-only tools (read, grep, glob, web_search, and task with the scout agent) and do not run project-wide tests, builds, formatters, linters, or gates. write, edit, and copy_asset work only after your report, when Tandem asks you to draw a visual, and only inside the folder it names.",
     "When the scope spans several independent areas, split it across scout subagents in one task call and merge their findings into your single report.",
   ],
   implementer: [
     "Implement only the explicitly approved scope in the assigned worktree and preserve affected callers.",
-    SUBMIT_REPORT_INSTRUCTION,
-    "Submit outcome implemented, needs-decision, or failed, with the report body in the report field.",
-    "Create and report a commit checkpoint when implementation is complete; the checkpoint is expected before submitting implemented.",
+    "Commit your work before submitting outcome implemented, and name the commit in the report.",
     "Stop every background process you started, such as a dev server or watcher, before calling submit_report.",
-    "The controller persists the submitted report for the coordinator. Do not merge, deploy, perform destructive actions, or claim validation that the runner did not perform.",
-    "For a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; never dump logs or transcript text.",
+    "Do not merge, deploy, perform destructive actions, or claim validation that the runner did not perform.",
   ],
   reviewer: [
-    "Act as a fresh reviewer in a separate pane on the same task worktree, from a fresh context with no implementer conversation; pause the implementer and remain read-only.",
-    "Use only read-only tools (read, grep, and glob); do not write report files.",
-    "Review the behavior, security, design, and coverage of the change with evidence-backed findings only, distinguishing confirmed from plausible findings.",
-    "Bind the report to the exact HEAD and generation. The runner performs targeted validation; do not invent or claim its results.",
-    SUBMIT_REPORT_INSTRUCTION,
-    "On a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; otherwise submit outcome completed with the review field following the ReviewResult schema and selected-lens instructions supplied below.",
+    "You are a fresh reviewer with no implementer conversation. Stay read-only: use only read, grep, and glob, and do not write files.",
     "A user decision listed in the review brief settles its question; do not ask it again. If the user accepted a criterion no runner evidence can prove, treat it as satisfied by the user and do not fail the lens for missing runner evidence on it.",
   ],
   presentation: [
-    "Presentation alone may write the artifact at the supplied absolute path using only read, grep, glob, write, and edit.",
-    "Never invoke bash, shell commands, or Lavish; the controller retrieves help/design/playbook guidance, verifies the artifact, opens Lavish, and owns the supervised continuous feedback listener and durable notification path.",
-    "Never modify the repository, authorize implementation or other decisions, or claim that presentation approval is complete.",
-    SUBMIT_REPORT_INSTRUCTION,
-    "On a genuine blocker, set outcome to needs-decision with one bounded single-line question and an optional single-line recommendation (each under 1,000 characters) and refer to the report for evidence; otherwise submit outcome completed with artifactPath set to the absolute artifact path and a concise status in the report field. Feedback is externally managed by the controller's bounded public action and supervised automatic listener; never invoke Lavish or create an untracked background poll.",
+    "Never authorize implementation or other decisions, or claim that presentation approval is complete.",
   ],
 };
-const REVIEW_RESULT_SCHEMA = `Set the submit_report review field to one ReviewResult object with these keys:
-{"lens":"review","head":"<exact HEAD>","generation":0,"pass":true,"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>"}],"summary":"<evidence-backed summary>"}
-Use the exact HEAD and exact generation supplied by the coordinator. The lens value is always "review"; verdict values are confirmed and plausible; pass is boolean. Severity: P0 = data loss, security hole, or broken build; P1 = wrong behavior a user or caller would hit, or a violated mandatory requirement from the brief; P2 = minor edge case or inconsistency; P3 = style or nit. Only P0 and P1 fail the review; pass is true exactly when none stands, and P2 and P3 never cost a fix round on their own; they go to the user as known issues unless a P0 or P1 already triggers a fix round, where the implementer fixes them too. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
+
+/** Tandem fills in the lens, HEAD, generation, and pass itself, so the reviewer reports findings only. */
+const REVIEW_RESULT_SCHEMA = `Set the submit_report review field to:
+{"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>"}],"summary":"<evidence-backed summary>"}
+Tandem records the commit and whether the review passes. Severity: P0 = data loss, security hole, or broken build; P1 = wrong behavior a user or caller would hit, or a violated mandatory requirement from the brief; P2 = minor edge case or inconsistency; P3 = style or nit. Only P0 and P1 need a fix round; P2 and P3 never cost a fix round on their own; they go to the user as known issues unless a P0 or P1 already triggers a fix round, where the implementer fixes them too. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
 
 function readNonEmptyText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -272,16 +244,11 @@ function readReviewContext(review: AgentBriefReview): AgentBriefReview {
   }
 
   const head = readSingleLineText(review.head, "review.head");
-  if (!Number.isInteger(review.generation) || review.generation < 0) {
-    throw new TypeError("review.generation must be a non-negative integer");
-  }
   const pass = readSingleLineText(review.pass, "review.pass");
   const findings =
     review.findings === undefined ? undefined : readPromptList(review.findings, "review.findings");
 
-  return findings === undefined
-    ? { head, generation: review.generation, pass }
-    : { head, generation: review.generation, pass, findings };
+  return findings === undefined ? { head, pass } : { head, pass, findings };
 }
 
 function readSkills(skills: readonly SkillInvocation[]): readonly SkillInvocation[] {
@@ -297,7 +264,7 @@ const SKILL_ORIGIN_LABELS: Readonly<Record<SkillInvocation["origin"], string>> =
 };
 
 /** Workers follow the skills; a reviewer checks the work against them without running them. */
-function skillSection(role: AgentRole, skills: readonly SkillInvocation[]): string[] {
+function skillSection(role: WorkerRole, skills: readonly SkillInvocation[]): string[] {
   const guidance =
     role === "reviewer"
       ? [
@@ -367,7 +334,7 @@ function readDescriptionEntries(value: unknown, field: string, minimum: number):
   return entries;
 }
 
-function ensureAgentBriefWithinBudget(role: AgentRole, brief: string): void {
+function ensureAgentBriefWithinBudget(role: WorkerRole, brief: string): void {
   if (role === "presentation") return;
   const byteLength = Buffer.byteLength(brief, "utf8");
   if (byteLength <= MAX_ORDINARY_BRIEF_BYTES) return;
@@ -380,10 +347,8 @@ export function buildAgentBrief(input: AgentBriefInput): string {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("agent brief input must be an object");
   }
-  if (!isAgentRole(input.role)) {
-    throw new TypeError(
-      "role must be one of coordinator, scout, implementer, reviewer, or presentation",
-    );
+  if (!isWorkerRole(input.role)) {
+    throw new TypeError("role must be one of scout, implementer, reviewer, or presentation");
   }
 
   const objective = readNonEmptyText(input.objective, "objective");
@@ -402,13 +367,9 @@ export function buildAgentBrief(input: AgentBriefInput): string {
   const reportInstructions =
     input.role === "presentation"
       ? [
-          `Write complete HTML at ${reportPath}; the coordinator supplies this as an absolute path.`,
-          "Submit it with submit_report: outcome completed, artifactPath set to that absolute path, and a concise status in the report field.",
+          `Submit it with submit_report: outcome completed, artifactPath set to ${reportPath}, and a concise status in the report field.`,
         ]
-      : [
-          `Submit the final ${input.role} report with submit_report; do not write a report file.`,
-          `The controller persists the submitted report at ${reportPath}.`,
-        ];
+      : [`Submit the final ${input.role} report with submit_report; do not write a report file.`];
   const lines: string[] = [
     `# Tandem ${input.role} brief`,
     "",
@@ -426,23 +387,15 @@ export function buildAgentBrief(input: AgentBriefInput): string {
           ...formatBullets(manualVerification),
           "",
         ]),
-    "## Instructions",
-    ...formatBullets(instructions),
-    "",
+    ...(instructions.length === 0 ? [] : ["## Instructions", ...formatBullets(instructions), ""]),
     ...(skills === undefined ? [] : [...skillSection(input.role, skills), ""]),
     "## Report",
     ...formatBullets(reportInstructions),
-    ...formatBullets(COMMON_AGENT_INSTRUCTIONS),
+    ...formatBullets(REPORT_INSTRUCTIONS),
   ];
 
   if (review !== undefined) {
-    lines.push(
-      "",
-      "## Review identity",
-      `- HEAD: ${review.head}`,
-      `- Generation: ${review.generation}`,
-      `- Pass label (emit as lens): ${review.pass}`,
-    );
+    lines.push("", "## Commit under review", review.head);
     if (review.findings !== undefined && review.findings.length > 0) {
       lines.push("## Existing review findings", ...formatBullets(review.findings));
     }
@@ -461,7 +414,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
     lines.push("", "## Review output", REVIEW_RESULT_SCHEMA);
     if (review === undefined) {
       lines.push(
-        "The coordinator must supply a selected lens, exact HEAD, and generation before review; do not invent them.",
+        "No lens or commit was supplied for this review; submit outcome needs-decision asking for them.",
       );
     } else {
       const selectedLens = findReviewLens(review.pass);

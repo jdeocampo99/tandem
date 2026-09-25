@@ -503,7 +503,7 @@ export class ReviewStage {
         role,
         reportPathFor(jobFiles.jobPath),
         context.artifacts,
-        { head, generation: task.generation, pass: lens },
+        { head, pass: lens },
         context.instructions,
       ),
       resultPath: jobFiles.resultPath,

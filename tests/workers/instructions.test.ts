@@ -188,10 +188,49 @@ test("gives implementers the same code standards the reviewer grades against", (
     buildAgentBrief({
       ...input,
       role: "reviewer",
-      review: { head: "abc123", generation: 1, pass: "review" },
+      review: { head: "abc123", pass: "review" },
     }),
   ).toContain(CODE_STANDARDS);
   expect(buildAgentBrief({ ...input, role: "scout" })).not.toContain(CODE_STANDARDS);
+});
+
+test("each worker brief states the report rules once and leaves out coordinator-only rules", () => {
+  const input = {
+    objective: "Change the parser",
+    acceptanceCriteria: ["Keep behavior identical."],
+    instructions: [],
+    reportPath: "/tmp/report.txt",
+  };
+  for (const role of ["scout", "implementer", "reviewer", "presentation"] as const) {
+    const brief = buildAgentBrief({ ...input, role });
+    expect(brief.split("Deliver the final report only by calling submit_report")).toHaveLength(2);
+    expect(brief.split("one single-line question")).toHaveLength(2);
+    expect(brief).not.toContain("state.sqlite");
+    expect(brief).not.toContain("tandem reset");
+    expect(brief).not.toContain("## Instructions");
+  }
+  expect(() =>
+    buildAgentBrief({ ...input, role: "coordinator" } as unknown as Parameters<
+      typeof buildAgentBrief
+    >[0]),
+  ).toThrow(TypeError);
+});
+
+test("a reviewer reports findings only; Tandem supplies the lens, generation, and verdict", () => {
+  const brief = buildAgentBrief({
+    role: "reviewer",
+    objective: "Review the change",
+    acceptanceCriteria: ["Confirm behavior."],
+    instructions: [],
+    reportPath: "/tmp/report.txt",
+    review: { head: "abc123", pass: "review" },
+  });
+
+  expect(brief).toContain("## Commit under review\nabc123");
+  expect(brief).toContain("Tandem records the commit and whether the review passes.");
+  expect(brief).not.toContain('"lens"');
+  expect(brief).not.toContain('"generation"');
+  expect(brief).not.toContain('"pass"');
 });
 
 test("manual verification becomes an unticked checklist after validation", () => {

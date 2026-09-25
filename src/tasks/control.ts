@@ -112,6 +112,10 @@ export type TaskControlDependencies = Readonly<{
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
 }>;
 
+/** Added to a direction for a task whose pull request is open, since no one else pushes it. */
+const OPEN_PR_FOLLOW_UP =
+  "This task's pull request is already open. If you change code, commit it and push the branch to origin (never force-push) before you submit.";
+
 const REDIRECT_STAGES: readonly TaskRecord["stage"][] = [
   "validating",
   "reviewing",
@@ -910,7 +914,10 @@ export class TaskControlWorkflow {
           : appendTaskMessage(task.communication, {
               id: singleLine(this.#deps.idFactory(), "message id"),
               kind: "instruction",
-              text: instruction.text,
+              text:
+                task.pullRequest?.state === "open"
+                  ? `${instruction.text} ${OPEN_PR_FOLLOW_UP}`
+                  : instruction.text,
               createdAt: this.#deps.clock(),
               ...(instruction.supersedes === undefined
                 ? {}

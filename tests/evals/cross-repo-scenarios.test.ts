@@ -136,7 +136,7 @@ test("a repository that is not on disk is asked about, and implementation there 
     } as const;
 
     await expect(service.create(implementation)).rejects.toThrow(
-      `Where's acme/api on your machine? Or say "clone it".`,
+      `Where's acme/api on your machine? Or say "clone it". Ask the user this, then create again with targetCheckout`,
     );
     await expect(
       service.create({ ...implementation, targetCheckout: other.checkout }),

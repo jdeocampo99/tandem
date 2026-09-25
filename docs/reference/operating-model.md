@@ -38,7 +38,7 @@ child worker also gets `submit_report`.
 | Coordinator | OMP conversation in the clean source worktree | `read`, `ask`, `tandem`, plus MCP servers listed in the project's `coordinatorMcpServers` | Edit code, run shell commands, search the repo (scouts do that) |
 | Scout | Isolated Treehouse worktree, child Herdr workspace | `read`, `grep`, `glob`, `web_search`, `task` (fans broad scope out to OMP's bundled read-only `scout` subagents; other bundled agents are disabled in worker-config.yml, repository-defined agents are not blocked); `write`, `edit`, `copy_asset` only inside a presentation's artifact directory during a mockup turn | Write anywhere else, run project-wide gates, invent findings when a tool fails (report the exact failure) |
 | Implementer | Assigned task worktree, child Herdr workspace | `read`, `grep`, `glob`, `edit`, `write`, `bash` | Exceed approved scope, merge, deploy, destructive cleanup, claim validation results |
-| Reviewer | Fresh read-only pane in the task worktree | `read`, `grep`, `glob` | Edit or write a report file; returns evidence-bound `ReviewResult` data |
+| Reviewer | Fresh read-only pane in the task worktree | `read`, `grep`, `glob` | Edit or write a report file; submits findings and a summary; Tandem binds them to the reviewed HEAD and derives the verdict |
 
 Default policy: `maxWorkers: 3`, `maxFixRounds: 2` (src/config/policy.ts). These are policy
 limits, not a worktree cap. The `verifier` role was removed; it survives only as a legacy decode
@@ -57,8 +57,8 @@ value in `LEGACY_ENDPOINT_ROLES` (src/contracts.ts) and is never assigned to new
 
 - Everything runs on the local machine: orchestration, durable state, workers, Herdr workspaces,
   Treehouse pool, Lavish control. No remote fleets, alternate terminal or harness backends, relays,
-  or hosted state. Only the automatic draft at ready and explicitly requested PR publish/merge touch
-  the remote, through local `gh` and Git.
+  or hosted state. Only the automatic draft at ready, explicitly requested PR publish/merge, and an
+  implementer's follow-up push to its own open PR touch the remote, through local `gh` and Git.
 - macOS only. The task-store lock is a Darwin native `O_EXLOCK` lock on the task-store directory
   with a 5-second default acquisition timeout (`DEFAULT_LOCK_TIMEOUT_MS`). Coordinator locks under
   `<home>/coordinator-registry/` use the same primitive and timeout; see
