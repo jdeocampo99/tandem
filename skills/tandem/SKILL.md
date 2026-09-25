@@ -66,25 +66,11 @@ user approves the full recap. Model choices apply to all projects and take effec
 
 ## Faster answers with Jev (optional)
 
-With a TypeSafe key, Tandem answers simple lookups and short replies to its own questions without
-waking the coordinator model. To turn it on, add to the shell profile (for example `~/.zshrc`):
-
-```sh
-export TYPESAFE_API_KEY=...
-```
-
-If the user's company reaches Jev through a Portkey gateway, also add the values their team uses:
-
-```sh
-export PORTKEY_BASE_URL=https://gateway.example/v1   # Tandem calls .../proxy/decisions
-export PORTKEY_API_KEY=...
-export PORTKEY_PROVIDER=...          # for example @openrouter
-export PORTKEY_CUSTOM_HOST=...       # for example https://openrouter.ai/api/alpha
-export PORTKEY_JEV_MODEL=...         # the gateway's name for Jev, e.g. typesafe/jev-1.13-20260917
-```
-
-Ask the user for each value; never guess a key or URL. Then open a new terminal and relaunch
-Tandem so it picks them up. A wrong value never breaks anything: Tandem just skips Jev.
+With `TYPESAFE_API_KEY` in the shell profile, Tandem answers simple lookups without waking the
+coordinator model. A company Portkey gateway also needs `PORTKEY_BASE_URL`, `PORTKEY_API_KEY`,
+`PORTKEY_PROVIDER`, `PORTKEY_CUSTOM_HOST`, and `PORTKEY_JEV_MODEL` (details in
+`docs/reference/policy.md`). Ask the user for every value; never guess a key or URL. Relaunch
+Tandem from a new terminal afterward. A wrong value just skips Jev.
 
 ## Starter requests
 
