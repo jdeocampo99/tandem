@@ -71,6 +71,8 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
 - An implementer's `implemented` is refused while `git status` in its worktree shows changes, so it
   commits before the job settles instead of blocking the task with `no-clean-checkpoint`. When git
   cannot report a status, the submission goes through and the settle-time checkpoint check decides.
+- An implementer's `implemented` is also refused while any of its
+  [playbook](task-lifecycle.md#playbooks) steps is not completed or abandoned in its `todo` list.
 - An invalid submission is a tool error naming the fix and never settles the job.
 
 ## Review briefs
