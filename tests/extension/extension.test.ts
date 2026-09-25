@@ -7,8 +7,9 @@ import { resolveTandemEnvironment } from "../../src/config/environment.ts";
 import type { ModelSpec, RepoPolicy, ResolvedPolicy, TaskRecord } from "../../src/contracts.ts";
 import { executeTandemAction, parseTandemCommand } from "../../src/extension/actions.ts";
 import { deliverPendingNotifications } from "../../src/extension/notifications.ts";
+import { resolveCommandAction } from "../../src/extension/registration.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/extension/summary.ts";
-import { createTandemExtension, reviewStatus } from "../../src/extension.ts";
+import { createTandemExtension, reviewStatus, sourceRefreshStatus } from "../../src/extension.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
@@ -155,6 +156,35 @@ test("review status renders round, failed lenses, and blocker count for the stat
   expect(reviewStatus(twoBlockers)).toBe("reviewing fix 2/3 · behavior fail · 2 blockers");
 
   expect(reviewStatus(task({ stage: "implementing" }))).toBeUndefined();
+});
+
+test("source refresh status says whether the coordinator source moved, is local-only, or is current", () => {
+  const refresh = { head: "b", previousHead: "a", changed: false, localOnly: false };
+  expect(sourceRefreshStatus({ ...refresh, changed: true })).toStartWith(
+    "Coordinator source advanced from a to b;",
+  );
+  expect(sourceRefreshStatus({ ...refresh, localOnly: true })).toStartWith(
+    "Coordinator source is local-only;",
+  );
+  expect(sourceRefreshStatus(refresh)).toStartWith("Coordinator source is current for this turn.");
+  expect(sourceRefreshStatus(undefined)).toStartWith(
+    "Coordinator source is current for this turn.",
+  );
+});
+
+test("/tandem models . resolves to the coordinator's own checkout", () => {
+  expect(resolveCommandAction({ action: "models", repoPath: "." }, "/repo")).toEqual({
+    action: "models",
+    repoPath: "/repo",
+  });
+  expect(resolveCommandAction({ action: "models", repoPath: "/other" }, "/repo")).toEqual({
+    action: "models",
+    repoPath: "/other",
+  });
+  expect(resolveCommandAction({ action: "setup", repoPath: "." }, "/repo")).toEqual({
+    action: "setup",
+    repoPath: ".",
+  });
 });
 
 test("environment resolution applies explicit boundary values and ignores unrelated variables", () => {

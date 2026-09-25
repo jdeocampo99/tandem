@@ -1,6 +1,8 @@
 import { isAbsolute } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { TaskInbox, WorkerReceipt } from "../contracts.ts";
 import {
+  formatTaskMessages,
   parseTaskMessageBatch,
   TASK_COMMUNICATION_MARKER,
   type TaskMessageBatch,
@@ -189,4 +191,101 @@ export function toolName(value: unknown): string | undefined {
   }
   if (value.includes("\0") || /[\r\n\u2028\u2029]/u.test(value)) return undefined;
   return value;
+}
+
+/** The inbox's messages as a batch, or undefined when it holds none. */
+export function inboxMessageBatch(
+  taskId: string,
+  inbox: TaskInbox | undefined,
+): TaskMessageBatch | undefined {
+  if (inbox === undefined || inbox.revision === 0 || inbox.messages.length === 0) return undefined;
+  return parseTaskMessageBatch({ taskId, revision: inbox.revision, messages: inbox.messages });
+}
+
+/** The incoming batch when it is at least as new as the retained one, otherwise the retained one. */
+export function atLeastAsNewBatch(
+  incoming: TaskMessageBatch | undefined,
+  retained: TaskMessageBatch | undefined,
+): TaskMessageBatch | undefined {
+  if (incoming === undefined) return retained;
+  return retained === undefined || incoming.revision >= retained.revision ? incoming : retained;
+}
+
+/** The newest task-message marker for this task already in the conversation. */
+export function newestTaskMarker(
+  messages: readonly AgentMessage[],
+  taskId: string,
+): Marker | undefined {
+  const markers = markersFromMessages(messages).filter(
+    (marker) => marker.batch.taskId === taskId && marker.batch.revision > 0,
+  );
+  if (markers.length === 0) return undefined;
+  return markers.reduce((best, marker) =>
+    marker.batch.revision > best.batch.revision ? marker : best,
+  );
+}
+
+function taskMessagesEntry(content: string, timestamp: number): AgentMessage {
+  return {
+    role: "user",
+    content,
+    synthetic: true,
+    attribution: "agent",
+    timestamp,
+  } as AgentMessage;
+}
+
+/**
+ * The conversation with every marker for this task collapsed into one copy of `batch`, placed where
+ * the first marker was, or appended when the conversation has none.
+ */
+export function contextWithTaskMessages(
+  messages: readonly AgentMessage[],
+  taskId: string,
+  batch: TaskMessageBatch,
+  hasMarker: boolean,
+  timestamp: number,
+): AgentMessage[] {
+  const replacement = formatTaskMessages(taskId, batch.revision, batch.messages);
+  if (!hasMarker) return [...messages, taskMessagesEntry(replacement, timestamp)];
+  const insertion: MarkerInsertion = { inserted: false };
+  const updated: AgentMessage[] = [];
+  for (const message of messages) {
+    const collapsed = collapseMessageMarkers(message, taskId, replacement, insertion);
+    if (collapsed.message !== undefined) updated.push(collapsed.message);
+  }
+  if (!insertion.inserted) updated.push(taskMessagesEntry(replacement, timestamp));
+  return updated;
+}
+
+export type ReceiptActivity = Readonly<{
+  readonly phase: WorkerReceipt["phase"];
+  readonly tool?: string | undefined;
+  /** Whether the activity is progress, not just a heartbeat. */
+  readonly meaningful: boolean;
+}>;
+
+/**
+ * The receipt after an activity observation, and whether it changed phase or tool, which is
+ * written immediately rather than waiting for the write interval.
+ */
+export function touchedReceipt(
+  receipt: WorkerReceipt,
+  activity: ReceiptActivity,
+  now: string,
+): Readonly<{ receipt: WorkerReceipt; changed: boolean }> {
+  const { phase, tool } = activity;
+  const phaseChanged = receipt.phase !== phase;
+  const toolChanged = phase === "tool" && receipt.tool !== tool;
+  const { tool: _previousTool, ...withoutTool } = receipt;
+  return {
+    receipt: {
+      ...withoutTool,
+      heartbeatAt: now,
+      progressAt: activity.meaningful ? now : receipt.progressAt,
+      phase,
+      ...(phase === "tool" && tool !== undefined ? { tool } : {}),
+    },
+    changed: phaseChanged || toolChanged,
+  };
 }
