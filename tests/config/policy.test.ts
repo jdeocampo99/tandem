@@ -85,7 +85,7 @@ test("defaultPolicy exposes the exact configured role pins", () => {
     presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
   });
   expect(policy.maxWorkers).toBe(3);
-  expect(policy.maxFixRounds).toBe(3);
+  expect(policy.maxFixRounds).toBe(2);
 });
 
 test("resolveRepoPolicy inherits global values, appends guidance, and snapshots file content", async () => {

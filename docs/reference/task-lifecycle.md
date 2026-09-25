@@ -46,7 +46,7 @@ src/workers/terminal-extension.ts
 - Completion and fix cycles bind to the current generation and HEAD. A fix cycle increments the
   generation, retires the old review round, returns to `implementing`, and keeps only passing checks
   at the reported commit's exact HEAD.
-- Budget is pinned `maxFixRounds` (default 3) plus `fixRoundGrants`, stored beside the pinned policy,
+- Budget is pinned `maxFixRounds` (default 2) plus `fixRoundGrants`, stored beside the pinned policy,
   which never changes.
 - `Keep fixing "<task>"?` is asked before a round when the budget is spent, or the latest review
   repeats a blocker unchanged (same lens and id, file, and description ignoring case and spacing;

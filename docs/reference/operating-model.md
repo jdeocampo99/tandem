@@ -40,7 +40,7 @@ child worker also gets `submit_report`.
 | Implementer | Assigned task worktree, child Herdr workspace | `read`, `grep`, `glob`, `edit`, `write`, `bash` | Exceed approved scope, merge, deploy, destructive cleanup, claim validation results |
 | Reviewer | Fresh read-only pane in the task worktree | `read`, `grep`, `glob` | Edit or write a report file; returns evidence-bound `ReviewResult` data |
 
-Default policy: `maxWorkers: 3`, `maxFixRounds: 3` (src/config/policy.ts). These are policy
+Default policy: `maxWorkers: 3`, `maxFixRounds: 2` (src/config/policy.ts). These are policy
 limits, not a worktree cap. The `verifier` role was removed; it survives only as a legacy decode
 value in `LEGACY_ENDPOINT_ROLES` (src/contracts.ts) and is never assigned to new work.
 
