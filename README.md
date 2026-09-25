@@ -65,26 +65,14 @@ your local permissions.
 From a clone of this repository:
 
 ```sh
-# Bun
-curl -fsSL https://bun.com/install | bash
-export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
-
-# Herdr and Treehouse
-curl -fsSL https://herdr.dev/install.sh | sh
-curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh
-
-# OMP
-bun install -g @oh-my-pi/pi-coding-agent
-
-# Tandem
-bun install
-bun link
-tandem --help
+./setup.sh
 ```
 
-These installers run scripts from the linked projects; read their instructions first if you want
-to check what they do. Keep Bun's global bin directory on your `PATH` so `tandem` works from any
-folder.
+The script installs Bun, Herdr, Treehouse, OMP, `lavish-axi`, and `gh` (through Homebrew),
+skipping any you already have, then installs Tandem. It reminds you to run `gh auth login` if
+you aren't signed in. It's safe to run again. The tool installers run scripts from the linked projects; read
+[setup.sh](setup.sh) first if you want to check what they do. Keep Bun's global bin directory on
+your `PATH` so `tandem` works from any folder.
 
 ## First run
 
