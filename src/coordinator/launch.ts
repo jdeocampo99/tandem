@@ -7,6 +7,7 @@ import { readCheckpoint } from "../adapters/git.ts";
 import { readHerdrStatus } from "../adapters/herdr.ts";
 import { acquireWorktree } from "../adapters/treehouse.ts";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
+import { readModelSettings } from "../config/models.ts";
 import type {
   CommandRequest,
   CommandResult,
@@ -793,11 +794,16 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     request.parentWorkspaceId ?? context?.workspaceId,
     coordinatorCwd,
   );
+  // Turning Jev off hides the key from this coordinator and every task it starts.
+  const jevOverride: Readonly<Record<string, string>> =
+    (await readModelSettings({ repoPath: paths.repo, home: paths.home })).jev === "off"
+      ? { TYPESAFE_API_KEY: "" }
+      : {};
   if (context !== undefined && !headless) {
-    const environment = mergeInheritedEnvironment(
-      dependencies.processEnvironment,
-      sourceEnvironment,
-    );
+    const environment = mergeInheritedEnvironment(dependencies.processEnvironment, {
+      ...sourceEnvironment,
+      ...jevOverride,
+    });
     const processExitCode = await dependencies.runInteractive({
       argv,
       cwd: coordinatorCwd,
@@ -861,12 +867,15 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     generation: 0,
   };
   startup.onEndpointCreated(endpoint);
-  const coordinatorEnvironment = coordinatorEnvironmentOverrides(
-    paths,
-    request,
-    request.parentWorkspaceId ?? workspace.workspaceId,
-    coordinatorCwd,
-  );
+  const coordinatorEnvironment = {
+    ...coordinatorEnvironmentOverrides(
+      paths,
+      request,
+      request.parentWorkspaceId ?? workspace.workspaceId,
+      coordinatorCwd,
+    ),
+    ...jevOverride,
+  };
   const resumeArgv = buildCoordinatorArgv({
     cwd: coordinatorCwd,
     model: request.model,

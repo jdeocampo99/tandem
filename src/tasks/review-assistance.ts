@@ -6,7 +6,9 @@ import {
   type JevEvaluationInput,
   type JevEvaluationOptions,
   type JevEvaluationResponse,
+  type JevGateway,
   type JevQuestions,
+  jevGateway,
   jevUsageRecord,
 } from "../adapters/typesafe.ts";
 import type { ReviewLevel, ReviewLevelPolicy, ReviewLevelRecord } from "../contracts.ts";
@@ -115,6 +117,7 @@ export type ReviewAssistanceClock = () => number;
 
 export type ReviewAssistanceRuntime = Readonly<{
   readonly apiKey?: string;
+  readonly gateway?: JevGateway;
   readonly timeoutMs: number;
   readonly evaluate: JevEvaluator;
   readonly cache: ReviewAssistanceCache;
@@ -180,14 +183,23 @@ export function createReviewAssistanceCache(): ReviewAssistanceCache {
 /** Reads the transport settings from an environment-shaped record without touching the process. */
 export function reviewAssistanceConfig(
   source: Readonly<Record<string, string | undefined>>,
-): Readonly<{ readonly apiKey?: string; readonly timeoutMs: number }> {
+): Readonly<{
+  readonly apiKey?: string;
+  readonly gateway?: JevGateway;
+  readonly timeoutMs: number;
+}> {
   const apiKey = source.TYPESAFE_API_KEY?.trim();
+  const gateway = jevGateway(source);
   const requested = Number(source.TANDEM_JEV_TIMEOUT_MS);
   const timeoutMs =
     Number.isSafeInteger(requested) && requested >= 100 && requested <= 10_000
       ? requested
       : DEFAULT_REVIEW_ASSISTANCE_TIMEOUT_MS;
-  return { timeoutMs, ...(apiKey === undefined || apiKey.length === 0 ? {} : { apiKey }) };
+  return {
+    timeoutMs,
+    ...(apiKey === undefined || apiKey.length === 0 ? {} : { apiKey }),
+    ...(gateway === undefined ? {} : { gateway }),
+  };
 }
 
 /**
@@ -383,6 +395,7 @@ export async function requestReviewAssistance(
     response = await runtime.evaluate(input, {
       apiKey,
       timeoutMs: runtime.timeoutMs,
+      ...(runtime.gateway === undefined ? {} : { gateway: runtime.gateway }),
     });
   } catch (error) {
     const code = error instanceof JevEvaluationError ? error.code : "unavailable";
@@ -446,6 +459,7 @@ function elapsedMs(startedAt: number, endedAt: number): number {
 export function reviewAssistanceRuntime(
   input: Readonly<{
     readonly apiKey?: string;
+    readonly gateway?: JevGateway;
     readonly timeoutMs: number;
     readonly evaluate?: JevEvaluator;
     readonly cache?: ReviewAssistanceCache;
@@ -460,6 +474,7 @@ export function reviewAssistanceRuntime(
     now: input.now ?? (() => performance.now()),
     recordDiagnostic: input.recordDiagnostic ?? (async () => undefined),
     ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),
+    ...(input.gateway === undefined ? {} : { gateway: input.gateway }),
   };
 }
 

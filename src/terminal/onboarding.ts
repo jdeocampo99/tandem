@@ -1,5 +1,6 @@
 import type { OmpModelRecord } from "../adapters/omp.ts";
-import { parseModelAssignments } from "../config/models.ts";
+import { jevGateway } from "../adapters/typesafe.ts";
+import { type JevSetting, parseModelAssignments } from "../config/models.ts";
 import {
   type BalancedProfileProposal,
   type BalancedRoleGap,
@@ -42,6 +43,10 @@ export type ModelOnboardingInput = Readonly<{
   readonly enabledProviders?: readonly string[];
   readonly prompter: TerminalPrompter;
   readonly home: string;
+  /** Read only to tell the user whether a Jev key is set; keys are never asked for or stored. */
+  readonly environment: Readonly<Record<string, string | undefined>>;
+  /** The saved Jev setting; absent means on. */
+  readonly jev?: JevSetting;
 }>;
 
 export type ModelOnboardingResult = Readonly<{
@@ -50,6 +55,8 @@ export type ModelOnboardingResult = Readonly<{
   readonly models?: RepoPolicy["models"];
   /** Present only when this run decided a new explicit provider set; absent preserves the saved one. */
   readonly enabledProviders?: readonly string[];
+  /** The Jev setting after this run, whether or not the user changed it. */
+  readonly jev?: JevSetting;
 }>;
 
 const CANCEL_WORDS: Readonly<Record<string, true>> = {
@@ -499,6 +506,42 @@ async function savedOnboarding(input: ModelOnboardingInput): Promise<ModelOnboar
   return { status: "approved", action: "change", models };
 }
 
+/**
+ * Jev is on unless the user turns it off. Keys stay in the user's shell profile: this step only
+ * says whether one is set and shows the lines to add, so a key never passes through Tandem.
+ */
+async function askJev(input: ModelOnboardingInput): Promise<JevSetting> {
+  const current = input.jev ?? "on";
+  const { prompter, environment } = input;
+  prompter.write(
+    '\nFaster answers (Jev): answers simple questions like "list my tasks" without waking the coordinator\'s model.\n',
+  );
+  const hasKey = (environment.TYPESAFE_API_KEY?.trim() ?? "").length > 0;
+  if (!hasKey) {
+    prompter.write(
+      "No TypeSafe key found. To use Jev, add this to ~/.zshrc, then open a new terminal:\n" +
+        "  export TYPESAFE_API_KEY=<your key>\n" +
+        "Using a company Portkey gateway? Also add PORTKEY_BASE_URL, PORTKEY_API_KEY, PORTKEY_PROVIDER, PORTKEY_CUSTOM_HOST, and PORTKEY_JEV_MODEL.\n",
+    );
+  } else if (jevGateway(environment) === undefined) {
+    prompter.write("Found your TypeSafe key.\n");
+  } else {
+    prompter.write(
+      `Found your keys; Jev connects through ${environment.PORTKEY_BASE_URL?.trim()}.\n`,
+    );
+  }
+  const answer = normalized(
+    await prompter.ask("Use Jev?", {
+      choices: [
+        { name: "Use Jev (recommended)", value: "on" },
+        { name: "Turn off", value: "off" },
+      ],
+      default: current,
+    }),
+  );
+  return answer === "on" || answer === "off" ? answer : current;
+}
+
 /** Collects every exact catalogue-backed role choice and requires explicit save consent. */
 export async function runModelOnboarding(
   input: ModelOnboardingInput,
@@ -506,8 +549,10 @@ export async function runModelOnboarding(
   if (!input.prompter || typeof input.prompter.ask !== "function") {
     throw new TypeError("prompter must provide ask");
   }
-  if (input.mode === "first") return firstTimeOnboarding(input);
-  return savedOnboarding(input);
+  const decision =
+    input.mode === "first" ? await firstTimeOnboarding(input) : await savedOnboarding(input);
+  if (decision.status !== "approved") return decision;
+  return { ...decision, jev: await askJev(input) };
 }
 
 /** Asks for approval to create a Tandem-owned central project record. */

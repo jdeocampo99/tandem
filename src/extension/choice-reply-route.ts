@@ -7,6 +7,7 @@ import {
   type JevEvaluationInput,
   type JevEvaluationOptions,
   type JevEvaluationResponse,
+  type JevGateway,
   type JevQuestions,
   jevUsageRecord,
 } from "../adapters/typesafe.ts";
@@ -152,7 +153,7 @@ function questions(choices: readonly OpenChoice[]): JevQuestions {
 export async function classifyChoiceReply(
   prompt: string,
   choices: readonly OpenChoice[],
-  config: Readonly<{ apiKey?: string; timeoutMs: number }>,
+  config: Readonly<{ apiKey?: string; gateway?: JevGateway; timeoutMs: number }>,
   evaluate: ChoiceReplyEvaluator = evaluateJev,
   now: () => number = () => performance.now(),
 ): Promise<ChoiceReplyEvaluation> {
@@ -177,7 +178,11 @@ export async function classifyChoiceReply(
   try {
     response = await evaluate(
       { model: JEV_MODEL, state: { message: prompt }, questions: questions(choices) },
-      { apiKey: config.apiKey, timeoutMs: config.timeoutMs },
+      {
+        apiKey: config.apiKey,
+        timeoutMs: config.timeoutMs,
+        ...(config.gateway === undefined ? {} : { gateway: config.gateway }),
+      },
     );
   } catch (error) {
     const code = error instanceof JevEvaluationError ? error.code : "unavailable";
