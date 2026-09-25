@@ -1,9 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { validateToolArguments } from "@oh-my-pi/pi-ai";
-import { zod } from "@oh-my-pi/pi-coding-agent";
 import type { z } from "zod/v4";
 import { ompToolParameters } from "../../src/adapters/omp-tool-schema.ts";
-import { tandemRequestSchema as ompTandemRequestSchema } from "../../src/extension/registration.ts";
 import type { TandemAction } from "../../src/session/actions.ts";
 import {
   copyAssetSchema,
@@ -11,37 +9,34 @@ import {
   tandemRequestSchema,
 } from "../../src/session/tools.ts";
 import type { WorkerRole } from "../../src/workers/jobs.ts";
-import {
-  copyAssetParameters,
-  submitReportParameters,
-} from "../../src/workers/terminal-extension.ts";
 
 type Case = Readonly<{ name: string; input: unknown; valid: boolean }>;
 
-type SafeParser = Readonly<{ safeParse(value: unknown): { success: boolean } }>;
-
-/** Agreement between the pi.zod schema OMP uses today and its plain zod replacement. */
-function expectParity(cases: readonly Case[], old: SafeParser, next: z.ZodType): void {
-  const parameters = ompToolParameters(next);
+/**
+ * Zod matches the valid/invalid corpus exactly. OMP's own validator, which repairs common LLM
+ * quirks (coercions, dropped unknown root fields) before validating, is checked one way only: it
+ * must accept everything the schema accepts, so a well-formed call is never rejected by OMP.
+ */
+function expectValid(cases: readonly Case[], schema: z.ZodType): void {
+  const parameters = ompToolParameters(schema);
   for (const { name, input, valid } of cases) {
-    expect({ name, old: old.safeParse(input).success }).toEqual({ name, old: valid });
-    expect({ name, next: next.safeParse(input).success }).toEqual({ name, next: valid });
-    expect({ name, omp: ompAccepts(parameters, input) }).toEqual({
-      name,
-      omp: ompAccepts(old, input),
-    });
+    expect({ name, zod: schema.safeParse(input).success }).toEqual({ name, zod: valid });
+    if (valid) {
+      expect({ name, omp: ompAccepts(parameters, input) }).toEqual({ name, omp: true });
+    }
   }
 }
 
-/** What OMP's own argument validation (with its LLM-quirk repairs) makes of `input`. */
-function ompAccepts(parameters: object, input: unknown): unknown {
+/** Whether OMP's own argument validation (with its LLM-quirk repairs) accepts `input`. */
+function ompAccepts(parameters: object, input: unknown): boolean {
   try {
-    return validateToolArguments(
+    validateToolArguments(
       { name: "tool", description: "", parameters: parameters as Record<string, unknown> },
       { type: "toolCall", id: "call-1", name: "tool", arguments: input as Record<string, unknown> },
     );
+    return true;
   } catch {
-    return "rejected";
+    return false;
   }
 }
 
@@ -322,30 +317,25 @@ function submitReportCases(role: WorkerRole): readonly Case[] {
 
 const workerRoles: readonly WorkerRole[] = ["scout", "implementer", "reviewer", "presentation"];
 
-describe("tool schemas match the pi.zod schemas OMP uses today", () => {
+describe("tool schemas agree with OMP's own tool-argument validator", () => {
   test("tandem request", () => {
-    expectParity(tandemCases, ompTandemRequestSchema(zod), tandemRequestSchema);
+    expectValid(tandemCases, tandemRequestSchema);
   });
 
   for (const role of workerRoles) {
     test(`submit_report for ${role}`, () => {
-      expectParity(
-        submitReportCases(role),
-        submitReportParameters(zod, role),
-        submitReportSchema(role),
-      );
+      expectValid(submitReportCases(role), submitReportSchema(role));
     });
   }
 
   test("copy_asset", () => {
-    expectParity(
+    expectValid(
       [
         { name: "both paths", input: { from: "img/a.png", name: "a.png" }, valid: true },
         { name: "missing name", input: { from: "img/a.png" }, valid: false },
         { name: "extra field", input: { from: "a", name: "b", mode: "link" }, valid: false },
         { name: "numeric name", input: { from: "a", name: 1 }, valid: false },
       ],
-      copyAssetParameters(zod),
       copyAssetSchema,
     );
   });

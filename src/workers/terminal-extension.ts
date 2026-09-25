@@ -20,13 +20,12 @@ import type {
 import { copyAssetSchema, submitReportSchema } from "../session/tools.ts";
 import { type WorkerHost, WorkerSession } from "../session/worker.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
-import { parseWorkerJob, persistWorkerResult, type WorkerJob, type WorkerRole } from "./jobs.ts";
+import { parseWorkerJob, persistWorkerResult, type WorkerJob } from "./jobs.ts";
 import {
   assertSelectedModel,
   expectedModelParts,
   nativeAgentEndAborted,
   nativeAgentEndFailure,
-  outcomesFor,
 } from "./protocol.ts";
 import {
   COPY_ASSET_TOOL,
@@ -160,6 +159,9 @@ export class OmpWorkerPane {
   }
 }
 
+const MAX_ASSET_BYTES = 20 * 1024 * 1024;
+const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+
 /** Copies one file from the scout's checkout next to its mockup, byte for byte. */
 export async function copyMockupAsset(
   input: Readonly<{ cwd: string; artifactDir: string; from: string; name: string }>,
@@ -180,87 +182,6 @@ export async function copyMockupAsset(
   if (basename(target) !== input.name) throw new Error("name must be a plain file name");
   await copyFile(source, target);
   return target;
-}
-
-type Zod = ExtensionAPI["zod"];
-
-/**
- * The `submit_report` parameters for one role in OMP's zod shim. Superseded by
- * `submitReportSchema`; kept only for the schema parity test.
- */
-export function submitReportParameters(z: Zod, role: WorkerRole) {
-  const reviews = role === "reviewer";
-  return z
-    .object({
-      outcome: z.enum(outcomesFor(role)),
-      report: z
-        .string()
-        .optional()
-        .describe(
-          reviews
-            ? "Optional context for a needs-decision or failed outcome."
-            : "The full report body in Markdown.",
-        ),
-      question: z
-        .string()
-        .optional()
-        .describe("Required for needs-decision: one bounded single-line question."),
-      recommendation: z
-        .string()
-        .optional()
-        .describe("Optional for needs-decision: one bounded single-line recommendation."),
-      ...(role === "presentation"
-        ? {
-            artifactPath: z
-              .string()
-              .optional()
-              .describe("Required for completed: the absolute path of the written artifact."),
-          }
-        : {}),
-      ...(reviews
-        ? {
-            review: reviewResultParameters(z)
-              .optional()
-              .describe(
-                "Required for completed: your findings and summary. Tandem records the commit and whether the review passes.",
-              ),
-          }
-        : {}),
-    })
-    .strict();
-}
-
-/** The `copy_asset` parameters in OMP's zod shim; kept only for the schema parity test. */
-export function copyAssetParameters(z: Zod) {
-  return z
-    .object({
-      from: z.string().describe("Path of the file in the repository checkout."),
-      name: z.string().describe("Plain file name to save it as in the mockup folder."),
-    })
-    .strict();
-}
-
-const MAX_ASSET_BYTES = 20 * 1024 * 1024;
-const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-
-function reviewResultParameters(z: Zod) {
-  return z
-    .object({
-      findings: z.array(
-        z
-          .object({
-            id: z.string(),
-            severity: z.enum(["P0", "P1", "P2", "P3"]),
-            verdict: z.enum(["confirmed", "plausible"]),
-            file: z.string().optional(),
-            line: z.number().int().positive().optional(),
-            description: z.string(),
-          })
-          .strict(),
-      ),
-      summary: z.string(),
-    })
-    .strict();
 }
 
 function isWithin(root: string, candidate: string): boolean {
