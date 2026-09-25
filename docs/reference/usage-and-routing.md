@@ -27,7 +27,8 @@ src/workers/execution-routing.ts, src/service/request-accounting.ts
 - Delivery ends at the verified-PR handoff: the terminal event is written when the ledger first sees
   the PR `open` (or already `merged`). Its key has no time, so a later merge cannot move it.
 - A late cost receipt updates totals but is clamped out of timing.
-- The first recorded delivery adds one coordinator notification with the receipt. An open request's
+- The first recorded delivery adds one `receipt` notification. The extension renders the receipt
+  table into it when it is delivered, so showing it takes no coordinator turn. An open request's
   receipt measures up to now, counting only finished work.
 
 ## Attribution

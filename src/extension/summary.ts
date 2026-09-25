@@ -868,6 +868,7 @@ function summarizePrReview(result: unknown): string {
   const parts: string[] = [];
   if (typeof value.taskId === "string") parts.push(`Task ${value.taskId}.`);
   if (typeof value.message === "string") parts.push(value.message);
+  if (typeof value.nextStep === "string") parts.push(value.nextStep);
   if (typeof value.pageUrl === "string") parts.push(`Review page: ${value.pageUrl}`);
   if (typeof value.text === "string") parts.push("", value.text);
   if (typeof value.feedback === "string") {
@@ -941,6 +942,21 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
 }
 
 /** Build the small durable state block that survives OMP context compaction. */
+/** A finished task with nothing unread, no blocker, and no open question: history, not work. */
+function isQuietFinishedTask(task: TaskRecord): boolean {
+  return (
+    isTerminalTask(task) &&
+    pendingCount(task) === 0 &&
+    task.blockReason === undefined &&
+    task.communication?.question === undefined
+  );
+}
+
+/**
+ * The task state injected into every coordinator turn. Commit hashes are left out (the coordinator
+ * never shows them), and finished tasks with nothing new collapse to one line of ids and objectives,
+ * enough to cite earlier research; show and list carry the rest.
+ */
 export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
   const lines = ["Tandem work right now:"];
   if (tasks.length === 0) {
@@ -949,11 +965,11 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
   }
   lines.push(`- ${tasks.length} task(s).`);
   const ordered = prioritizeTasks(tasks);
-  for (const task of ordered.slice(0, DIGEST_MAX_TASKS)) {
+  const active = ordered.filter((task) => !isQuietFinishedTask(task));
+  const quiet = ordered.filter(isQuietFinishedTask);
+  for (const task of active.slice(0, DIGEST_MAX_TASKS)) {
     const pending = pendingCount(task);
     const notificationSuffix = pending > 0 ? `; ${pending} unread update(s)` : "";
-    const heads = taskHeads(task);
-    const headSuffix = heads.length === 0 ? "" : `; commits: ${compactList(heads, 4, 100)}`;
     const blockerSuffix =
       task.blockReason === undefined ? "" : `; blocker: ${compactText(task.blockReason)}`;
     const reportSuffix =
@@ -962,7 +978,7 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
     const continuationSuffix =
       continuation === undefined ? "" : `; after research: ${continuation.disposition}`;
     lines.push(
-      `- ${task.id}: ${task.stage}; ${compactText(task.objective)}${notificationSuffix}${blockerSuffix}${headSuffix}${reportSuffix}${continuationSuffix}`,
+      `- ${task.id}: ${task.stage}; ${compactText(task.objective)}${notificationSuffix}${blockerSuffix}${reportSuffix}${continuationSuffix}`,
     );
     const question = task.communication?.question;
     if (question !== undefined) {
@@ -992,7 +1008,13 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
       }
     }
   }
-  if (tasks.length > DIGEST_MAX_TASKS)
-    lines.push(`- ${tasks.length - DIGEST_MAX_TASKS} more task(s) not shown.`);
+  if (active.length > DIGEST_MAX_TASKS)
+    lines.push(`- ${active.length - DIGEST_MAX_TASKS} more task(s) not shown.`);
+  if (quiet.length > 0) {
+    const named = quiet.map((task) => `${task.id} (${compactText(task.objective, 60)})`);
+    lines.push(
+      `- Finished, nothing new (${quiet.length}): ${compactList(named, DIGEST_MAX_TASKS, 180)}`,
+    );
+  }
   return boundedOutput(lines.join("\n"), DIGEST_MAX_CHARS);
 }

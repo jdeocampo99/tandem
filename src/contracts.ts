@@ -381,7 +381,11 @@ export type LegacyValidationEvidence = RecordedCheck & {
 
 export type ValidationEvidence = PinnedValidationEvidence | LegacyValidationEvidence;
 
-export type NotificationKind = "routine" | "coordinator";
+/**
+ * `routine` is shown to the person without waking the coordinator; `coordinator` wakes it for a
+ * judgment; `receipt` marks a delivered request whose usage table is shown directly, without a turn.
+ */
+export type NotificationKind = "routine" | "coordinator" | "receipt";
 
 export type Notification = {
   readonly id: string;

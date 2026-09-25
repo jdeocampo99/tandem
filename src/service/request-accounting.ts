@@ -176,9 +176,9 @@ export class RequestAccountingWorkflow {
   }
 
   /**
-   * Wakes the coordinator once, when a request's delivery is first recorded, to show the person
-   * where the request's time and tokens went. The ledger records each delivery once, so a replay
-   * never repeats this.
+   * Marks the request's delivery once, when it is first recorded, so the person is shown where the
+   * request's time and tokens went. The extension renders the receipt when it delivers this, without
+   * a coordinator turn. The ledger records each delivery once, so a replay never repeats this.
    */
   private async notifyReceiptReady(event: RequestUsageEvent): Promise<void> {
     const taskId = event.identity.taskId;
@@ -191,10 +191,9 @@ export class RequestAccountingWorkflow {
         ...current.notifications,
         {
           id: singleLine(this.#deps.idFactory(), "receipt notification id"),
-          message:
-            "The request is delivered. Show where its time and tokens went: call request-receipt for this task's request and show its table exactly as returned.",
+          message: "The request is delivered. Where its time and tokens went:",
           acknowledged: false,
-          kind: "coordinator",
+          kind: "receipt",
         },
       ],
     }));
