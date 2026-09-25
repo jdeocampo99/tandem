@@ -453,7 +453,6 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       ),
       configuration: [
         `maxFixRounds=${task.policy.config.maxFixRounds}`,
-        `maxWorkers=${task.policy.config.maxWorkers}`,
         `validation commands: ${task.policy.config.validationCommands.map((command) => command.name).join(", ")}`,
       ],
     },

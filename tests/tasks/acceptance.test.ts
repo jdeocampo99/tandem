@@ -36,7 +36,6 @@ function policyWith(commands: readonly ValidationCommand[]): ResolvedPolicy {
       instructionFiles: { implementation: [], validation: [], review: [] },
       validationCommands: commands,
       setupCommands: [],
-      maxWorkers: 3,
       maxFixRounds: 3,
       reviewLevels: {
         deepScrutiny: false,

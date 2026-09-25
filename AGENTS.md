@@ -20,7 +20,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | `tandem` terminal command, onboarding, project selection | [main.ts](src/main.ts) → [terminal/](src/terminal/) |
 | Action CLI / JSON automation | [cli.ts](src/cli.ts) → [terminal/cli-application.ts](src/terminal/cli-application.ts), per-command handlers in [terminal/cli-commands.ts](src/terminal/cli-commands.ts) |
 | Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `registry.ts`, `restart.ts` (`tandem update`), `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
-| Models, environment, policy | [config/](src/config/) |
+| Models, environment, policy, skill lookup | [config/](src/config/); skills: `skills.ts` |
 | Request briefs, approval revisions, review pane | [requests/](src/requests/): `brief.ts`, `store.ts`, `store-codec.ts`, `markdown.ts`, `review-pane.ts`, `workflow.ts` |
 | Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts`, `question.ts`, `communication-protocol.ts`, `inspection.ts` (`tandem status TASK_ID`) |
 | Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `central.ts` (stop/save/re-enter effects), `central-reentry.ts` (pure re-entry table and decisions), `central-review.ts` |
@@ -89,7 +89,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 
 - Roles, approvals, worker tools, what guards what: [operating-model.md](docs/reference/operating-model.md).
 - Launch, reconnect, `update`, `reset`, coordinator ownership: [coordinator.md](docs/reference/coordinator.md).
-- Onboarding, settings file, model choices, Jev routing, instruction provenance: [policy.md](docs/reference/policy.md).
+- Onboarding, settings file, model choices, Jev routing, instruction provenance, skills: [policy.md](docs/reference/policy.md).
 - Task stages, fix rounds, research continuation, child terminals: [task-lifecycle.md](docs/reference/task-lifecycle.md).
 - Request briefs, approval revisions, review pane: [request-briefs.md](docs/reference/request-briefs.md).
 - Usage receipts, model routing, premium-tier approval: [usage-and-routing.md](docs/reference/usage-and-routing.md).

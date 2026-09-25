@@ -84,7 +84,7 @@ test("defaultPolicy exposes the exact configured role pins", () => {
     reviewer: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
     presentation: { model: "openai-codex/gpt-5.6-luna", thinking: "low" },
   });
-  expect(policy.maxWorkers).toBe(3);
+  expect(policy).not.toHaveProperty("maxWorkers");
   expect(policy.maxFixRounds).toBe(2);
 });
 
@@ -108,13 +108,13 @@ test("resolveRepoPolicy inherits global values, appends guidance, and snapshots 
       globalPolicy: {
         models: { implementer: { thinking: "low" } },
         instructions: { implementation: ["global instruction"] },
-        maxWorkers: 4,
+        maxFixRounds: 4,
       },
     });
 
     expect(resolved.config.models.implementer.thinking).toBe("low");
     expect(resolved.config.models.reviewer.thinking).toBe("high");
-    expect(resolved.config.maxWorkers).toBe(4);
+    expect(resolved.config.maxFixRounds).toBe(4);
     expect(resolved.config.instructions.implementation).toEqual([
       "global instruction",
       "repository instruction",
@@ -182,7 +182,6 @@ test("parsePolicy rejects unknown keys, invalid pins, invalid limits, and unsafe
   expect(() => parsePolicy({ unexpected: true })).toThrow(TypeError);
   expect(() => parsePolicy({ models: { scout: { model: "gpt-5.6-luna" } } })).toThrow(TypeError);
   expect(() => parsePolicy({ models: { scout: { thinking: "turbo" } } })).toThrow(TypeError);
-  expect(() => parsePolicy({ maxWorkers: 0 })).toThrow(TypeError);
   expect(() => parsePolicy({ maxFixRounds: -1 })).toThrow(TypeError);
   expect(() => parsePolicy({ instructionFiles: { review: ["../outside.md"] } })).toThrow(TypeError);
   expect(() =>
@@ -210,7 +209,7 @@ test("read-only onboarding leaves the target and absent Tandem home untouched", 
       JSON.stringify({ scripts: { test: "bun test", lint: "bun lint", start: "bun start" } }),
       "utf8",
     );
-    await writeFile(join(repo, ".tandem.json"), JSON.stringify({ maxWorkers: 1 }), "utf8");
+    await writeFile(join(repo, ".tandem.json"), JSON.stringify({ maxFixRounds: 1 }), "utf8");
 
     const first = await onboardRepo({ repoPath: repo, home });
 
@@ -225,14 +224,14 @@ test("read-only onboarding leaves the target and absent Tandem home untouched", 
     expect(await pathExists(home)).toBe(false);
     expect(await pathExists(first.configPath)).toBe(false);
     expect(await readFile(join(repo, ".tandem.json"), "utf8")).toBe(
-      JSON.stringify({ maxWorkers: 1 }),
+      JSON.stringify({ maxFixRounds: 1 }),
     );
 
     const written = await onboardRepo({ repoPath: repo, home, write: true });
     expect(written.modelSettings.configured).toBe(false);
     expect(written.written).toBe(true);
     const resolved = await resolveRepoPolicy({ repoPath: repo, home });
-    expect(resolved.config.maxWorkers).toBe(3);
+    expect(resolved.config.maxFixRounds).toBe(2);
     await expect(onboardRepo({ repoPath: repo, home, write: true })).rejects.toThrow(Error);
   });
 });
@@ -297,16 +296,16 @@ test("canonical repository aliases share central policy while distinct roots and
       const otherPreview = await onboardRepo({ repoPath: otherRepo, home });
       expect(otherPreview.configPath).not.toBe(rootPreview.configPath);
       await writeCentralEnvelope(rootPreview.configPath, repo, {
-        maxWorkers: 1,
+        maxFixRounds: 1,
       });
       const otherResolved = await resolveRepoPolicy({ repoPath: otherRepo, home });
-      expect(otherResolved.config.maxWorkers).toBe(3);
+      expect(otherResolved.config.maxFixRounds).toBe(2);
 
       const separateHome = join(root, "separate-home");
       const separatePreview = await onboardRepo({ repoPath: repo, home: separateHome });
       expect(separatePreview.configPath).not.toBe(rootPreview.configPath);
       const separateResolved = await resolveRepoPolicy({ repoPath: repo, home: separateHome });
-      expect(separateResolved.config.maxWorkers).toBe(3);
+      expect(separateResolved.config.maxFixRounds).toBe(2);
     } finally {
       await rm(otherParent, { recursive: true, force: true });
     }
@@ -400,13 +399,15 @@ test("a repository config that still sets reducedRouting still loads, ignoring i
   });
 });
 
-test("a repository config that still sets requestBudget still loads, ignoring it", () => {
+test("a repository config that still sets requestBudget or maxWorkers still loads, ignoring both", () => {
   const parsed = parsePolicy({
     requestBudget: { capMicros: 5_000_000 },
-    maxWorkers: 3,
+    maxWorkers: 0,
+    maxFixRounds: 3,
   });
-  expect(parsed.maxWorkers).toBe(3);
+  expect(parsed.maxFixRounds).toBe(3);
   expect(parsed).not.toHaveProperty("requestBudget");
+  expect(parsed).not.toHaveProperty("maxWorkers");
 });
 
 test("saved provider enablement is exposed through onboarding but never becomes part of the resolved policy", async () => {
@@ -463,7 +464,7 @@ test("onboardRepo proposes a frozen install from the lockfile and saves it", asy
     const text = await readFile(written.configPath, "utf8");
     expect(written.configPath.endsWith("settings.toml")).toBe(true);
     expect(text).toContain('setupCommands = ["pnpm install --frozen-lockfile"]');
-    expect(text).toContain("# maxWorkers = 3");
+    expect(text).not.toContain("maxWorkers");
     const resolved = await resolveRepoPolicy({ repoPath: repo, home });
     expect(resolved.config.setupCommands.map((entry) => entry.argv)).toEqual([install]);
   });
@@ -509,7 +510,6 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
       "instructionFiles",
       "instructions",
       "maxFixRounds",
-      "maxWorkers",
       "models",
       "repoPath",
       "reviewLevels",

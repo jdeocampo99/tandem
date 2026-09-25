@@ -159,11 +159,12 @@ A missing note loads unchanged; a present but malformed note fails the read as s
 
 ## Disk-pressure admission
 
-- Minimum free space defaults to 2 GiB (src/pool/policy.ts). Below it, maintenance removes retained
-  warm idle copies one at a time, rechecking capacity after each.
+- Minimum free space defaults to 2 GiB (src/pool/policy.ts). Each repository keeps up to 3 idle
+  copies warm for the next task; other idle copies are removed. Below the minimum, maintenance also
+  removes the warm copies one at a time, rechecking capacity after each.
 - If free space is unknown or still too low, the task stays queued, its reservation is released,
   and a durable blocker/notification says to verify capacity or free disk. The next pass retries.
-- Admission is governed by `maxWorkers` and the disk threshold; there is no fixed worktree count.
+- Admission is governed by the disk threshold alone; there is no worker limit or fixed worktree count.
 
 ## Discard
 

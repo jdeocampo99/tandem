@@ -205,7 +205,11 @@ export type RepoPolicy = {
   readonly instructionFiles: InstructionChannels;
   readonly validationCommands: readonly ValidationCommand[];
   readonly setupCommands: readonly SetupCommand[];
-  readonly maxWorkers: number;
+  /**
+   * Only on a policy pinned before the worker limit was removed. Never read: it stays in place so
+   * that task's policy digest, and the evidence bound to it, still match.
+   */
+  readonly maxWorkers?: number;
   readonly maxFixRounds: number;
   readonly reviewLevels: ReviewLevelPolicy;
 };
@@ -420,16 +424,30 @@ export type ResearchHandoff = {
 };
 
 export const MAX_SKILL_NAME_CHARS = 100;
-export const MAX_SKILL_CONTEXT_BYTES = 4 * 1024;
+/** Every skill a task carries goes into each of its worker briefs, so together they stay well inside the brief budget. */
+export const MAX_TASK_SKILLS_BYTES = 32 * 1024;
+export const SKILL_ORIGINS = ["repository", "personal", "summary"] as const;
+export type SkillOrigin = (typeof SKILL_ORIGINS)[number];
 
 /**
- * An explicit, user-invoked skill pinned to a task. Tandem records its identity and carries its
- * bounded context to the intended child worker without interpreting the skill's domain semantics.
+ * A skill the user asked a task to use, pinned when the task is created. Tandem looked it up by
+ * name and copied its instructions, so later edits to the skill never change the task.
  */
-export type SkillInvocation = {
-  readonly name: string;
-  readonly context: string;
-};
+export type SkillInvocation =
+  | {
+      readonly name: string;
+      readonly origin: "repository" | "personal";
+      /** Absolute folder holding the skill's SKILL.md, where its reference files and scripts live. */
+      readonly directory: string;
+      /** The SKILL.md body without its frontmatter. */
+      readonly instructions: string;
+    }
+  | {
+      readonly name: string;
+      /** Tasks created before Tandem looked skills up itself carry the coordinator's summary. */
+      readonly origin: "summary";
+      readonly instructions: string;
+    };
 
 export const RESEARCH_CONTINUATION_DISPOSITIONS = [
   "report-only",
@@ -719,7 +737,7 @@ export type TaskRecord = {
   readonly findingLedger?: readonly FindingLedgerEntry[];
   readonly researchHandoffs?: readonly ResearchHandoff[];
   readonly researchContinuation?: ResearchContinuation;
-  readonly skill?: SkillInvocation;
+  readonly skills?: readonly SkillInvocation[];
   readonly blockReason?: string;
   /** Typed cause behind `blockReason`, when the site that blocked the task recorded one. Old records
    *  and sites not yet migrated to a typed cause carry `blockReason` alone. */

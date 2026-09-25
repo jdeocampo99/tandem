@@ -46,7 +46,6 @@ function task(stage: TaskStage, notifications: TaskRecord["notifications"] = [])
         instructionFiles: { implementation: [], validation: [], review: [] },
         validationCommands: [],
         setupCommands: [],
-        maxWorkers: 1,
         maxFixRounds: 1,
         reviewLevels: DEFAULT_REVIEW_LEVEL_POLICY,
       },

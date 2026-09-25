@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,7 +52,6 @@ const policy: ResolvedPolicy = {
       { name: "check", argv: ["bun", "run", "check"], surfaces: ["store"], timeoutMs: 10_000 },
     ],
     setupCommands: [],
-    maxWorkers: 3,
     maxFixRounds: 1,
     reviewLevels: {
       deepScrutiny: false,
@@ -395,35 +395,56 @@ test("round-trips handoff snapshots and rejects oversized persisted excerpts", a
 
 const skill = {
   name: "refactor-functions",
-  context: "Apply the five function-review principles.",
+  origin: "personal",
+  directory: "/Users/me/.claude/skills/refactor-functions",
+  instructions: "Apply the five function-review principles.",
 } as const;
 
-test("round-trips a pinned skill invocation and refuses a malformed one at creation", async () => {
+test("round-trips pinned skills and refuses a malformed one at creation", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
     const without = await store.create({ ...input, id: "without-skill" });
-    const withSkill = await store.create({ ...input, id: "with-skill", skill });
-    expect(without.skill).toBeUndefined();
-    expect((await store.read(without.id))?.skill).toBeUndefined();
-    expect((await store.read(withSkill.id))?.skill).toEqual(skill);
+    const withSkill = await store.create({ ...input, id: "with-skill", skills: [skill] });
+    expect(without.skills).toBeUndefined();
+    expect((await store.read(without.id))?.skills).toBeUndefined();
+    expect((await store.read(withSkill.id))?.skills).toEqual([skill]);
 
     const reloaded = makeStore(directory, "reloaded");
-    expect((await reloaded.read(withSkill.id))?.skill).toEqual(skill);
+    expect((await reloaded.read(withSkill.id))?.skills).toEqual([skill]);
 
     await expect(
-      store.create({ ...input, id: "invalid-skill", skill: { ...skill, name: "" } }),
+      store.create({ ...input, id: "invalid-skill", skills: [{ ...skill, name: "" }] }),
     ).rejects.toThrow(TypeError);
   });
 });
 
-test("fails closed on a persisted skill record with an unexpected field", async () => {
+test("fails closed on a persisted skill with an unexpected field or both skill fields", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
-    const created = await store.create({ ...input, id: "with-skill", skill });
+    const created = await store.create({ ...input, id: "with-skill", skills: [skill] });
     rewritePayload(directory, created.id, (payload) => {
-      payload.skill = { ...skill, scope: "everything" };
+      payload.skills = [{ ...skill, scope: "everything" }];
     });
     await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+
+    const both = await store.create({ ...input, id: "both-skill-fields", skills: [skill] });
+    rewritePayload(directory, both.id, (payload) => {
+      payload.skill = { name: "refactor-functions", context: "Summary." };
+    });
+    await expect(store.read(both.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("reads the single skill an older task recorded as the coordinator's summary", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-skill" });
+    rewritePayload(directory, created.id, (payload) => {
+      payload.skill = { name: "refactor-functions", context: "Apply the principles." };
+    });
+    expect((await store.read(created.id))?.skills).toEqual([
+      { name: "refactor-functions", origin: "summary", instructions: "Apply the principles." },
+    ]);
   });
 });
 
@@ -849,6 +870,31 @@ test("a record written while standing request budgets still existed loads, ignor
     const reloaded = await store.read(created.id);
     if (reloaded === undefined) throw new Error("the upgraded record did not reload");
     expect(reloaded.policy.config).not.toHaveProperty("requestBudget");
+  });
+});
+
+test("a record pinned while the worker limit existed keeps its policy digest across reloads and updates", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-max-workers" });
+    let pinnedDigest = "";
+    rewritePayload(directory, created.id, (payload) => {
+      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
+      // Where the worker limit sat when it was pinned: after setupCommands, before maxFixRounds.
+      const { maxFixRounds, reviewLevels, ...before } = policyValue.config ?? {};
+      policyValue.config = { ...before, maxWorkers: 3, maxFixRounds, reviewLevels };
+      pinnedDigest = createHash("sha256").update(JSON.stringify(policyValue)).digest("hex");
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("the legacy record did not reload");
+    expect(policyIdentity(reloaded.policy)).toBe(pinnedDigest);
+    await store.update(created.id, reloaded.revision, (task) =>
+      transitionTask(task, { type: "approve" }, transitionContext()),
+    );
+    const updated = await store.read(created.id);
+    if (updated === undefined) throw new Error("the updated record did not reload");
+    expect(policyIdentity(updated.policy)).toBe(pinnedDigest);
   });
 });
 

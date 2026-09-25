@@ -37,7 +37,6 @@ const policy: ResolvedPolicy = {
     instructionFiles: { implementation: [], validation: [], review: [] },
     validationCommands: [{ name: "smoke", argv: ["true"], surfaces: ["*"], timeoutMs: 1_000 }],
     setupCommands: [],
-    maxWorkers: 4,
     maxFixRounds: 1,
     reviewLevels: {
       deepScrutiny: false,
@@ -466,12 +465,12 @@ test("a revalidate refusal blocks the task with the refusal reason", async () =>
   }
 });
 
-test("a revalidate held back by the worker limit waits without blocking, spending, or repeating itself", async () => {
+test("a revalidate held back by a held slot waits without blocking, spending, or repeating itself", async () => {
   const f = await fixture({ job: deadValidationJob() });
   f.setRevalidateOutcome({
     started: false,
-    reason: "The worker limit (4) is reached.",
-    refusal: "worker-limit",
+    reason: "Another worker still holds this task's slot.",
+    refusal: "slot-held",
   });
   try {
     for (let pass = 0; pass < 3; pass += 1) {
@@ -485,7 +484,7 @@ test("a revalidate held back by the worker limit waits without blocking, spendin
     expect(state.tasks[0]?.recovery?.validationRetries ?? 0).toBe(0);
     const waited = await f.store.read("task-1");
     expect(
-      waited?.notifications.filter((entry) => entry.message.includes("The worker limit (4)")),
+      waited?.notifications.filter((entry) => entry.message.includes("Another worker still holds")),
     ).toHaveLength(1);
   } finally {
     await f.cleanup();

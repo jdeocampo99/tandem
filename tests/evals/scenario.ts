@@ -54,7 +54,6 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
     instructionFiles: { implementation: [], validation: [], review: [] },
     validationCommands: [],
     setupCommands: [],
-    maxWorkers: 2,
     maxFixRounds: 1,
     reviewLevels: {
       deepScrutiny: false,

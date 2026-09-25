@@ -243,7 +243,6 @@ const resetPolicy: ResolvedPolicy = {
     instructionFiles: resetChannels,
     validationCommands: [],
     setupCommands: [],
-    maxWorkers: 3,
     maxFixRounds: 1,
     reviewLevels: {
       deepScrutiny: false,

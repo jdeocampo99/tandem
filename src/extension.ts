@@ -9,6 +9,7 @@ import {
   type TandemEnvironmentSource,
 } from "./config/environment.ts";
 import { readCoordinatorMcpServers } from "./config/repositories.ts";
+import type { CommandRunner } from "./contracts.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import { ompSessionHost, ompToolCall } from "./extension/omp-host.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
@@ -37,6 +38,8 @@ export type TandemExtensionOptions = Readonly<{
   readonly environment?: Partial<TandemBoundaryEnvironment>;
   readonly processEnvironment?: TandemEnvironmentSource;
   readonly tickIntervalMs?: number;
+  /** Runs the Herdr status commands; the real command runner when absent. */
+  readonly run?: CommandRunner;
 }>;
 
 function createCoordinatorService(
@@ -123,7 +126,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             return () => timerContext.clearTimer(timer);
           },
         },
-        status: createHerdrStatusReporter(runCommand, {
+        status: createHerdrStatusReporter(options.run ?? runCommand, {
           cwd: ctx.cwd,
           agentLabel: "tandem-coordinator",
           ...(options.processEnvironment === undefined

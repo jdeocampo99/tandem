@@ -4,6 +4,7 @@ import {
   LEGACY_EVIDENCE_CONTRACT,
   MODEL_ROLE_LABELS,
   MODEL_ROLE_ORDER,
+  type SkillOrigin,
   type TaskRecord,
 } from "../contracts.ts";
 import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
@@ -161,6 +162,12 @@ function taskHeads(task: TaskRecord): readonly string[] {
   return heads;
 }
 
+const SKILL_SOURCES: Readonly<Record<SkillOrigin, string>> = {
+  repository: "from the repository",
+  personal: "personal",
+  summary: "coordinator summary",
+};
+
 function summarizeTask(task: TaskRecord): string {
   const pending = pendingCount(task);
   const findings = currentReviewFindings(task);
@@ -183,6 +190,11 @@ function summarizeTask(task: TaskRecord): string {
       : [`Request: ${compactText(task.requestId, ACTION_SUMMARY_MAX_TEXT)}`]),
     `Acceptance criteria (${task.acceptanceCriteria.length}): ${compactList(task.acceptanceCriteria)}`,
     `Surfaces (${task.surfaces.length}): ${compactList(task.surfaces)}`,
+    ...(task.skills === undefined
+      ? []
+      : [
+          `Skills: ${task.skills.map((skill) => `${skill.name} (${SKILL_SOURCES[skill.origin]})`).join(", ")}`,
+        ]),
   ];
   if (heads.length > 0) lines.push(`Commits: ${heads.join(", ")}`);
   if (task.worktree !== undefined) {

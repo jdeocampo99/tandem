@@ -669,92 +669,6 @@ test("restarting a blocked task with a still-quarantined launch relaunches once 
 }, 20_000);
 
 test("a refused relaunch says why in plain English instead of a generic refusal", async () => {
-  const cases = [
-    {
-      name: "worker limit",
-      expected: `The worker limit (${SCENARIO_POLICY.config.maxWorkers}) is reached.`,
-    },
-    {
-      name: "routing question",
-      expected: "A routing question is waiting: That model isn't listed right now.",
-    },
-  ] as const;
-  for (const entry of cases) {
-    await withScenario({}, async (world) => {
-      const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
-      const job1 = deadJob(world, lease.path, "job-1");
-      await seedScenarioTask(world, {
-        kind: "implementation",
-        stage: "implementing",
-        worktree: lease,
-        endpoints: [],
-      });
-      const task = scenarioRuntimeTask({
-        worktree: lease,
-        endpoints: [],
-        jobs: [job1],
-        ...(entry.name === "routing question"
-          ? {
-              routingPause: {
-                schemaVersion: 1 as const,
-                decisionId: "routing-absent",
-                reason: "pinned-model-absent-from-catalogue" as const,
-                taskId: SCENARIO_TASK_ID,
-                jobId: job1.id,
-                operationId: "operation-0",
-                role: "implementer" as const,
-                generation: 0,
-                attempt: 1,
-                policyDigest: policyIdentity(SCENARIO_POLICY),
-                inputHead: SCENARIO_HEAD,
-                pinnedSelector: SCENARIO_POLICY.config.models.implementer.model,
-                pinnedThinking: SCENARIO_POLICY.config.models.implementer.thinking,
-                evidenceGaps: [],
-                enabledProviders: [],
-                usageSource: "no-governing-request" as const,
-                limits: { maxWorkers: SCENARIO_POLICY.config.maxWorkers },
-                observedAt: SCENARIO_NOW,
-              },
-            }
-          : {}),
-      });
-      // Other work already holds every worker slot.
-      const others = Array.from({ length: SCENARIO_POLICY.config.maxWorkers }, (_, index) =>
-        scenarioRuntimeTask({
-          taskId: `other-${index}`,
-          reservation: scenarioReservation({
-            id: `other-reservation-${index}`,
-            taskId: `other-${index}`,
-          }),
-        }),
-      );
-      await writeRuntimeState(runtimeFile(world.home), {
-        schemaVersion: 1,
-        tasks: entry.name === "worker limit" ? [task, ...others] : [task],
-        presentations: [],
-      });
-      const service = createTandemService({
-        home: world.home,
-        sessionId: world.sessionId,
-        poolRoot: world.poolRoot,
-        run: world.run,
-        clock: world.clock,
-        idFactory: world.idFactory,
-        workerTimeoutMs: 1_500,
-      });
-
-      await service.tick();
-
-      // Both clear only when a fact changes, so the task waits at its stage instead of blocking.
-      const waiting = await service.get(SCENARIO_TASK_ID);
-      expect(waiting.stage, entry.name).toBe("implementing");
-      expect(waiting.notifications.at(-1)?.message, entry.name).toContain(entry.expected);
-      await service.shutdown();
-    });
-  }
-}, 20_000);
-
-test("a relaunch held back by the worker limit notifies once, waits, and relaunches once a slot frees", async () => {
   await withScenario({}, async (world) => {
     const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
     const job1 = deadJob(world, lease.path, "job-1");
@@ -764,8 +678,69 @@ test("a relaunch held back by the worker limit notifies once, waits, and relaunc
       worktree: lease,
       endpoints: [],
     });
-    // Other work holds every worker slot.
-    const others = Array.from({ length: SCENARIO_POLICY.config.maxWorkers }, (_, index) =>
+    const task = scenarioRuntimeTask({
+      worktree: lease,
+      endpoints: [],
+      jobs: [job1],
+      routingPause: {
+        schemaVersion: 1 as const,
+        decisionId: "routing-absent",
+        reason: "pinned-model-absent-from-catalogue" as const,
+        taskId: SCENARIO_TASK_ID,
+        jobId: job1.id,
+        operationId: "operation-0",
+        role: "implementer" as const,
+        generation: 0,
+        attempt: 1,
+        policyDigest: policyIdentity(SCENARIO_POLICY),
+        inputHead: SCENARIO_HEAD,
+        pinnedSelector: SCENARIO_POLICY.config.models.implementer.model,
+        pinnedThinking: SCENARIO_POLICY.config.models.implementer.thinking,
+        evidenceGaps: [],
+        enabledProviders: [],
+        usageSource: "no-governing-request" as const,
+        observedAt: SCENARIO_NOW,
+      },
+    });
+    await writeRuntimeState(runtimeFile(world.home), {
+      schemaVersion: 1,
+      tasks: [task],
+      presentations: [],
+    });
+    const service = createTandemService({
+      home: world.home,
+      sessionId: world.sessionId,
+      poolRoot: world.poolRoot,
+      run: world.run,
+      clock: world.clock,
+      idFactory: world.idFactory,
+      workerTimeoutMs: 1_500,
+    });
+
+    await service.tick();
+
+    // It clears only when the question is answered, so the task waits instead of blocking.
+    const waiting = await service.get(SCENARIO_TASK_ID);
+    expect(waiting.stage).toBe("implementing");
+    expect(waiting.notifications.at(-1)?.message).toContain(
+      "A routing question is waiting: That model isn't listed right now.",
+    );
+    await service.shutdown();
+  });
+}, 20_000);
+
+test("a relaunch starts at once however much other work holds a slot", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const job1 = deadJob(world, lease.path, "job-1");
+    await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "implementing",
+      worktree: lease,
+      endpoints: [],
+    });
+    // More reservations than the removed default limit of 3 ever allowed.
+    const others = Array.from({ length: 5 }, (_, index) =>
       scenarioRuntimeTask({
         taskId: `other-${index}`,
         reservation: scenarioReservation({
@@ -789,22 +764,6 @@ test("a relaunch held back by the worker limit notifies once, waits, and relaunc
       workerTimeoutMs: 1_500,
     });
 
-    for (let tick = 0; tick < 3; tick += 1) await service.tick();
-
-    const waiting = await service.get(SCENARIO_TASK_ID);
-    expect(waiting.stage).toBe("implementing");
-    const limitNotices = waiting.notifications.filter((entry) =>
-      entry.message.includes("The worker limit"),
-    );
-    expect(limitNotices).toHaveLength(1);
-    expect(waiting.notifications).toHaveLength(1);
-
-    // A slot frees.
-    const state = await readRuntimeState(runtimeFile(world.home));
-    await writeRuntimeState(runtimeFile(world.home), {
-      ...state,
-      tasks: state.tasks.filter((entry) => entry.taskId !== "other-0"),
-    });
     await service.tick();
 
     const replacement = await activeJobAfterRelaunch(world, job1.id);

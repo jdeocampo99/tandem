@@ -29,6 +29,10 @@ home is a separate namespace and never changes the remembered setup.
 
 - Canonical writes are short SQLite transactions under `.state.lock`. Sidecar JSON is evidence,
   projection, or job input, never a second authority. Never hand-edit either while Tandem runs.
+- Consuming a job result records the task's revision and SHA-256 fingerprint before and after the
+  change, so a restart applies that result exactly once. A consumption recorded before fingerprints
+  were hashed holds whole task copies; they are hashed when read and stored as digests on the next
+  write.
 - `onboard`, `models`, and `doctor` create nothing. Approved setup creates only the missing central
   file, exclusively (`0700` dirs, `0600` files). Existing, malformed, mismatched, or symlinked policy
   state is reported, never overwritten.
@@ -113,13 +117,12 @@ When the gate admits nothing, `reserveTask` returns a `ReservationRefusal`; its 
 | --- | --- |
 | `slot-held` | Another worker still holds this task's slot. |
 | `job-running` | A worker is still running for this task. |
-| `worker-limit` | The worker limit (N) is reached. |
 | `routing-question` | The routing question's own one-line reason. |
 | `stop-requested` | A stop was requested for this task. |
 | `stage` | The task is at a stage where that role can't start. |
 | `fix-rounds` | The worker has no fix rounds left. |
 
-- The first five (`WAITING_REFUSALS`) clear only when a fact changes, so they do not block: the task
+- The first four (`WAITING_REFUSALS`) clear only when a fact changes, so they do not block: the task
   keeps its stage, the coordinator gets one notice (skipped if already latest), no restart or retry
   is spent, and the next scheduler pass retries.
 - `stage`, `fix-rounds`, and post-admission failures (no terminal, working copy gone, task moved on)

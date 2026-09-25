@@ -52,49 +52,85 @@ test("retains accepted ordinary briefs and rejects oversized multibyte briefs", 
   expect(() => buildAgentBrief(oversized)).toThrow(TypeError);
 });
 
-test("renders a skill section with its bounded context and a needs-decision reminder", () => {
+const skillBriefBase = {
+  objective: "Refactor the parser",
+  acceptanceCriteria: ["Keep behavior identical."],
+  instructions: ["Follow the guidance channel."],
+  reportPath: "/tmp/report.txt",
+} as const;
+const repositorySkill = {
+  name: "refactor-functions",
+  origin: "repository",
+  directory: "/repo/.claude/skills/refactor-functions",
+  instructions: "Apply the five function-review principles.",
+} as const;
+const personalSkill = {
+  name: "tdd",
+  origin: "personal",
+  directory: "/Users/me/.claude/skills/tdd",
+  instructions: "Write a failing test first.",
+} as const;
+
+test("gives a worker every skill in full with its folder, and keeps the brief in charge", () => {
   const brief = buildAgentBrief({
+    ...skillBriefBase,
     role: "implementer",
-    objective: "Refactor the parser",
-    acceptanceCriteria: ["Keep behavior identical."],
-    instructions: ["Follow the guidance channel."],
-    reportPath: "/tmp/report.txt",
-    skill: { name: "refactor-functions", context: "Apply the five function-review principles." },
+    skills: [repositorySkill, personalSkill],
   });
 
-  expect(brief).toContain("## Skill");
-  expect(brief).toContain("Requested skill: refactor-functions");
+  expect(brief).toContain("## Skills");
+  expect(brief).toContain("Follow each one as part of the objective above.");
+  expect(brief).toContain("### refactor-functions, from this repository");
+  expect(brief).toContain("Folder: /repo/.claude/skills/refactor-functions");
   expect(brief).toContain("Apply the five function-review principles.");
-  expect(brief).toContain("do not load, infer, or run any other skill");
-  expect(brief).toContain("never open a separate user conversation or channel");
+  expect(brief).toContain("### tdd, from the user's personal skills");
+  expect(brief).toContain("Folder: /Users/me/.claude/skills/tdd");
+  expect(brief).toContain("Write a failing test first.");
+  expect(brief).toContain("this brief wins");
+  expect(brief).toContain("outcome needs-decision");
 });
 
-test("omits the skill section entirely when no skill is supplied", () => {
+test("asks a reviewer to check the work against the skills, not to run them", () => {
+  const brief = buildAgentBrief({ ...skillBriefBase, role: "reviewer", skills: [personalSkill] });
+
+  expect(brief).toContain("Check that the change follows them.");
+  expect(brief).toContain("Report a departure only when it changes behavior");
+  expect(brief).toContain("stay read-only");
+  expect(brief).toContain("Write a failing test first.");
+  expect(brief).not.toContain("Follow each one as part of the objective above.");
+});
+
+test("labels an older task's skill as the coordinator's summary without a folder", () => {
   const brief = buildAgentBrief({
-    role: "reviewer",
-    objective: "Review the change",
-    acceptanceCriteria: ["Confirm behavior."],
-    instructions: ["Stay read-only."],
-    reportPath: "/tmp/report.txt",
+    ...skillBriefBase,
+    role: "implementer",
+    skills: [{ name: "refactor", origin: "summary", instructions: "Summary text." }],
   });
 
-  expect(brief).not.toContain("## Skill");
+  expect(brief).toContain("### refactor, the coordinator's summary of it");
+  expect(brief).not.toContain("Folder:");
+});
+
+test("omits the skills section entirely when no skill is supplied", () => {
+  const brief = buildAgentBrief({ ...skillBriefBase, role: "reviewer" });
+
+  expect(brief).not.toContain("## Skills");
 });
 
 test("rejects a malformed skill input", () => {
-  const base = {
-    role: "implementer" as const,
-    objective: "Refactor the parser",
-    acceptanceCriteria: ["Keep behavior identical."],
-    instructions: ["Follow the guidance channel."],
-    reportPath: "/tmp/report.txt",
-  };
-
-  expect(() => buildAgentBrief({ ...base, skill: { name: "", context: "context" } })).toThrow(
-    TypeError,
-  );
   expect(() =>
-    buildAgentBrief({ ...base, skill: { name: "refactor-functions", context: "" } }),
+    buildAgentBrief({
+      ...skillBriefBase,
+      role: "implementer",
+      skills: [{ ...personalSkill, name: "" }],
+    }),
+  ).toThrow(TypeError);
+  expect(() =>
+    buildAgentBrief({
+      ...skillBriefBase,
+      role: "implementer",
+      skills: [{ ...personalSkill, instructions: "" }],
+    }),
   ).toThrow(TypeError);
 });
 

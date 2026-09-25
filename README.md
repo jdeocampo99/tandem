@@ -129,6 +129,16 @@ anything involving product choices, scope changes, credentials, or publishing.
 The coordinator also has a `/tandem` command for direct actions (for example
 `/tandem restart TASK_ID` to restart one stuck worker). Type `/tandem` to see the list.
 
+### Using skills
+
+Invoke a skill the way you would in any agent session: `/skill:tdd fix the retry bug`, or "use
+the tdd skill for this". Tandem finds the skill in the repository first, then in your own skill
+folders, and gives the worker the whole thing, including the folder its reference files live in.
+The reviewer gets it too, to check the work followed it. If the name matches no skill, or two, you
+hear about it before any work starts. A task keeps the version it started with, and its status
+lists the skills it uses. Workers also pick up the repository's own skills without being asked;
+your personal skills reach a worker only when you name one.
+
 ### Working in another repository
 
 Ask for research or a change in another repository ("how does acme/api handle retries?", "add the

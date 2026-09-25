@@ -89,9 +89,24 @@ test("create forwards the named request so work can join one of several open req
   expect(createCalls).toMatchObject([{ requestId: "req-2" }]);
 });
 
-test("create forwards an explicit skill invocation to task creation untouched", async () => {
+test("create forwards skill names and the created task summary names each skill", async () => {
   const createCalls: unknown[] = [];
-  const created = task({ skill: { name: "refactor-functions", context: "Refactor foo.ts" } });
+  const created = task({
+    skills: [
+      {
+        name: "refactor-functions",
+        origin: "repository",
+        directory: "/repo/.claude/skills/refactor-functions",
+        instructions: "Refactor foo.ts",
+      },
+      {
+        name: "tdd",
+        origin: "personal",
+        directory: "/Users/me/.claude/skills/tdd",
+        instructions: "Test first.",
+      },
+    ],
+  });
   const service = {
     create: async (input: unknown) => {
       createCalls.push(input);
@@ -108,7 +123,7 @@ test("create forwards an explicit skill invocation to task creation untouched", 
       objective: "ship feature",
       acceptanceCriteria: ["behavior"],
       surfaces: ["src"],
-      skill: { name: "refactor-functions", context: "Refactor foo.ts" },
+      skills: ["refactor-functions", "tdd"],
     },
     service,
     noDialog,
@@ -121,10 +136,13 @@ test("create forwards an explicit skill invocation to task creation untouched", 
       objective: "ship feature",
       acceptanceCriteria: ["behavior"],
       surfaces: ["src"],
-      skill: { name: "refactor-functions", context: "Refactor foo.ts" },
+      skills: ["refactor-functions", "tdd"],
     },
   ]);
   expect(result.value).toBe(created);
+  expect(summarizeTandemActionValue("create", created)).toContain(
+    "Skills: refactor-functions (from the repository), tdd (personal)",
+  );
 });
 
 test("inspection and delivery slash commands preserve their arguments", () => {

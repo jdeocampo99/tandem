@@ -61,7 +61,7 @@ import { FINDING_STATUSES } from "./findings.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { DEFAULT_REVIEW_LEVEL_POLICY } from "./review-levels.ts";
-import { checkSkillInvocation } from "./skill-invocation.ts";
+import { checkLegacySkillInvocation, checkSkillInvocations } from "./skill-invocation.ts";
 import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
 
 const TASK_STAGES: readonly TaskStage[] = [
@@ -134,6 +134,8 @@ const TOP_LEVEL_KEYS = [
   "findingLedger",
   "researchHandoffs",
   "researchContinuation",
+  "skills",
+  // Tasks created before Tandem looked skills up itself recorded one coordinator-written skill.
   "skill",
   "reportPath",
   "blockReason",
@@ -314,7 +316,8 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
   }
   // ponytail: a policy snapshot pinned before standing request budgets were removed may still
   // carry "requestBudget"; the key stays accepted here so that snapshot still decodes, but it is
-  // never read into the result below.
+  // never read into the result below. "maxWorkers" from before the worker limit was removed is
+  // carried through unread instead, because the policy digest hashes it.
   assertExactKeys(
     value,
     [
@@ -385,7 +388,9 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       parseValidationCommand(entry, `${source}.validationCommands[${index}]`),
     ),
     setupCommands: parseSetupCommands(value, source),
-    maxWorkers: requiredInteger(value, "maxWorkers", source, 1),
+    ...(Object.hasOwn(value, "maxWorkers")
+      ? { maxWorkers: requiredInteger(value, "maxWorkers", source, 1) }
+      : {}),
     maxFixRounds: requiredInteger(value, "maxFixRounds", source, 0),
     reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`),
   };
@@ -902,10 +907,18 @@ function parseResearchHandoff(value: unknown, source: string): ResearchHandoff {
   };
 }
 
-function parseSkillInvocation(value: unknown, source: string): SkillInvocation {
-  const check = checkSkillInvocation(value);
-  if (!check.valid) failState(source, check.defect);
-  return check.invocation;
+/** Reads `skills`, or the single `skill` older records carry; a record holding both is corrupt. */
+function parseSkills(value: UnknownRecord, source: string): readonly SkillInvocation[] | undefined {
+  const hasSkills = Object.hasOwn(value, "skills");
+  const hasLegacySkill = Object.hasOwn(value, "skill");
+  if (hasSkills && hasLegacySkill)
+    failState(source, "a task records either skills or skill, not both");
+  if (!hasSkills && !hasLegacySkill) return undefined;
+  const check = hasSkills
+    ? checkSkillInvocations(requiredValue(value, "skills", source))
+    : checkLegacySkillInvocation(requiredValue(value, "skill", source));
+  if (!check.valid) failState(`${source}.${hasSkills ? "skills" : "skill"}`, check.defect);
+  return check.skills;
 }
 
 /**
@@ -1047,9 +1060,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   const cleanupValue = Object.hasOwn(value, "cleanup")
     ? requiredValue(value, "cleanup", source)
     : undefined;
-  const skillValue = Object.hasOwn(value, "skill")
-    ? requiredValue(value, "skill", source)
-    : undefined;
+  const skills = parseSkills(value, source);
   const kind = requiredEnum(value, "kind", TASK_KINDS, source);
   if (kind !== "pr-review" && Object.hasOwn(value, "prReview")) {
     failState(source, "only pr-review tasks may record a pull request to review");
@@ -1097,9 +1108,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
           ),
         }),
     ...(researchContinuation === undefined ? {} : { researchContinuation }),
-    ...(skillValue === undefined
-      ? {}
-      : { skill: parseSkillInvocation(skillValue, `${source}.skill`) }),
+    ...(skills === undefined ? {} : { skills }),
   };
   return {
     ...taskBase,

@@ -92,7 +92,7 @@ const validRequests: readonly Record<string, unknown>[] = [
     manualVerification: ["Click"],
     surfaces: ["src"],
     researchTaskIds: ["t0"],
-    skill: { name: "tdd", context: "red first" },
+    skills: ["tdd"],
     targetRepo: "owner/repo",
     targetCheckout: "/elsewhere",
     targetClone: true,
@@ -194,7 +194,7 @@ const invalidRequests: readonly [string, unknown][] = [
     },
   ],
   [
-    "skill with an extra field",
+    "skills that are not names",
     {
       request: {
         action: "create",
@@ -203,7 +203,7 @@ const invalidRequests: readonly [string, unknown][] = [
         objective: "o",
         acceptanceCriteria: [],
         surfaces: [],
-        skill: { name: "n", context: "c", args: "x" },
+        skills: [{ name: "n" }],
       },
     },
   ],

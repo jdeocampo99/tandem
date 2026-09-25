@@ -1,9 +1,4 @@
-import type {
-  CreatableTaskKind,
-  RepoPolicy,
-  RequestBriefContent,
-  SkillInvocation,
-} from "../contracts.ts";
+import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
@@ -43,8 +38,8 @@ export type TandemAction =
       readonly manualVerification?: readonly string[] | undefined;
       readonly surfaces: readonly string[];
       readonly researchTaskIds?: readonly string[] | undefined;
-      /** An explicit user-invoked skill to pin to this task, opaque to Tandem. */
-      readonly skill?: SkillInvocation | undefined;
+      /** Names of skills the user asked this work to use. */
+      readonly skills?: readonly string[] | undefined;
       readonly targetRepo?: string | undefined;
       readonly targetCheckout?: string | undefined;
       readonly targetClone?: boolean | undefined;
@@ -353,7 +348,7 @@ function serviceCreateInput(
       : { manualVerification: action.manualVerification }),
     surfaces: action.surfaces,
     ...(action.researchTaskIds === undefined ? {} : { researchTaskIds: action.researchTaskIds }),
-    ...(action.skill === undefined ? {} : { skill: action.skill }),
+    ...(action.skills === undefined ? {} : { skills: action.skills }),
     ...(action.targetRepo === undefined ? {} : { targetRepo: action.targetRepo }),
     ...(action.targetCheckout === undefined ? {} : { targetCheckout: action.targetCheckout }),
     ...(action.targetClone === undefined ? {} : { targetClone: action.targetClone }),

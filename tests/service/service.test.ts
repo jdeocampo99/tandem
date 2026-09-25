@@ -11,7 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   type CommandRequest,
   type CommandResult,
@@ -25,7 +25,7 @@ import {
   type WorktreeLease,
 } from "../../src/contracts.ts";
 import type { PresentationRecord } from "../../src/presentations/records.ts";
-import { activeReservations, activeRuntimeJob } from "../../src/runtime/activity.ts";
+import { activeRuntimeJob, unreleasedReservation } from "../../src/runtime/activity.ts";
 import { diagnosticsPath } from "../../src/runtime/diagnostics.ts";
 import {
   readRuntimeState,
@@ -42,6 +42,7 @@ import type {
   RuntimeTaskState,
 } from "../../src/runtime/schema.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
+import { taskFingerprint } from "../../src/service/records.ts";
 import { FINAL_REVIEW_LENSES } from "../../src/tasks/acceptance.ts";
 import {
   readTaskInbox,
@@ -93,7 +94,6 @@ const policy: ResolvedPolicy = {
       { name: "check", argv: ["bun", "run", "check"], surfaces: [], timeoutMs: 10_000 },
     ],
     setupCommands: [],
-    maxWorkers: 4,
     maxFixRounds: 1,
     reviewLevels: {
       deepScrutiny: false,
@@ -524,7 +524,6 @@ function reservationFor(
 type FixtureOptions = Readonly<{
   readonly kind?: "scout" | "implementation";
   readonly stage?: TaskRecord["stage"];
-  readonly maxWorkers?: number;
   readonly clock?: () => string;
   readonly idFactory?: () => string;
   readonly taskEdits?: Readonly<{
@@ -565,10 +564,6 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     idFactory: () => "store-id",
   });
   const kind = options.kind ?? "scout";
-  const taskPolicy =
-    options.maxWorkers === undefined
-      ? policy
-      : { ...policy, config: { ...policy.config, maxWorkers: options.maxWorkers } };
   let task = await store.create({
     id: "task-1",
     repoPath,
@@ -576,7 +571,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     objective: "exercise a durable service path",
     acceptanceCriteria: ["the outcome is persisted"],
     surfaces: ["service"],
-    policy: taskPolicy,
+    policy,
   });
   if (
     task.stage === "awaiting-approval" &&
@@ -803,71 +798,86 @@ test("bound task creation normalizes clean input to the original identity and pe
     await rm(root, { recursive: true, force: true });
   }
 });
-test("records an explicit skill invocation on the durable task and it survives a restart", async () => {
+test("looks skills up at creation, repository first, and pins them across a restart", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-service-skill-"));
   const home = join(root, "home");
   const repoPath = join(root, "repo");
+  const personalHome = join(root, "personal");
   const common = join(root, "git-common");
   await Promise.all([mkdir(repoPath, { recursive: true }), mkdir(common, { recursive: true })]);
+  const repositorySkill = await writeSkill(
+    join(repoPath, ".claude", "skills", "refactor-functions"),
+    "Apply the five function-review principles.",
+  );
+  await writeSkill(
+    join(personalHome, ".claude", "skills", "refactor-functions"),
+    "A personal copy that the repository's skill shadows.",
+  );
+  const personalSkill = await writeSkill(
+    join(personalHome, ".agents", "skills", "tdd"),
+    "Write a failing test first.",
+  );
+  await mkdir(join(personalHome, ".omp", "agent", "skills"), { recursive: true });
+  await symlink(personalSkill, join(personalHome, ".omp", "agent", "skills", "tdd"));
   const runner = fakeRunner({ commonDirectory: common });
-  const skill = {
-    name: "refactor-functions",
-    context: "Apply the five function-review principles.",
-  } as const;
   let idSequence = 0;
-  const service = createTandemService({
+  const serviceOptions = {
     home,
     sessionId: "session-a",
     poolRoot: join(root, "pool"),
     run: runner.run,
     clock: () => TIMESTAMP,
+    personalSkillsHome: personalHome,
+  };
+  const service = createTandemService({
+    ...serviceOptions,
     idFactory: () => {
       idSequence += 1;
       return `task-skill-${idSequence}`;
     },
   });
+  const request = {
+    repoPath,
+    kind: "implementation",
+    objective: "Refactor the parser",
+    acceptanceCriteria: ["Keep behavior identical."],
+    surfaces: ["src"],
+  } as const;
+  const pinnedSkills = [
+    {
+      name: "refactor-functions",
+      origin: "repository",
+      directory: repositorySkill,
+      instructions: "Apply the five function-review principles.",
+    },
+    {
+      name: "tdd",
+      origin: "personal",
+      directory: personalSkill,
+      instructions: "Write a failing test first.",
+    },
+  ] as const;
   try {
     const created = await service.create({
-      repoPath,
-      kind: "implementation",
-      objective: "Refactor the parser",
-      acceptanceCriteria: ["Keep behavior identical."],
-      surfaces: ["src"],
-      skill,
+      ...request,
+      skills: ["refactor-functions", "/skill:tdd"],
     });
-    expect(created.skill).toEqual(skill);
+    expect(created.skills).toEqual(pinnedSkills);
 
-    const withoutSkill = await service.create({
-      repoPath,
-      kind: "implementation",
-      objective: "Adjust logging",
-      acceptanceCriteria: ["Keep behavior identical."],
-      surfaces: ["src"],
-    });
-    expect(withoutSkill.skill).toBeUndefined();
+    const withoutSkill = await service.create({ ...request, objective: "Adjust logging" });
+    expect(withoutSkill.skills).toBeUndefined();
 
-    await expect(
-      service.create({
-        repoPath,
-        kind: "implementation",
-        objective: "Refactor the parser again",
-        acceptanceCriteria: ["Keep behavior identical."],
-        surfaces: ["src"],
-        skill: { ...skill, name: "" },
-      }),
-    ).rejects.toThrow(TypeError);
+    await expect(service.create({ ...request, skills: ["missing"] })).rejects.toThrow(
+      "No skill named missing in this repository or the user's personal skills",
+    );
+    await expect(service.create({ ...request, skills: ["../tdd"] })).rejects.toThrow(
+      "is not a skill name",
+    );
 
-    const reloaded = createTandemService({
-      home,
-      sessionId: "session-a",
-      poolRoot: join(root, "pool"),
-      run: runner.run,
-      clock: () => TIMESTAMP,
-      idFactory: () => "unused",
-    });
+    await writeFile(join(personalSkill, "SKILL.md"), "Changed after the task was created.");
+    const reloaded = createTandemService({ ...serviceOptions, idFactory: () => "unused" });
     try {
-      const persisted = await reloaded.get(created.id);
-      expect(persisted.skill).toEqual(skill);
+      expect((await reloaded.get(created.id)).skills).toEqual(pinnedSkills);
     } finally {
       await reloaded.shutdown();
     }
@@ -876,6 +886,16 @@ test("records an explicit skill invocation on the durable task and it survives a
     await rm(root, { recursive: true, force: true });
   }
 });
+
+/** Writes a SKILL.md with frontmatter and returns the folder's real path. */
+async function writeSkill(directory: string, body: string): Promise<string> {
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, "SKILL.md"),
+    `---\nname: ${basename(directory)}\ndescription: test skill\n---\n\n${body}\n`,
+  );
+  return realpath(directory);
+}
 test("new scouts persist a classified continuation and an explicit disposition still wins", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-service-continuation-"));
   const home = join(root, "home");
@@ -1371,7 +1391,7 @@ function operationForJob(job: DurableJob, task: TaskRecord): DurableOperation {
   };
 }
 
-function taskFingerprint(task: TaskRecord): string {
+function legacyTaskFingerprint(task: TaskRecord): string {
   return JSON.stringify(task);
 }
 
@@ -1724,7 +1744,6 @@ test("a dispatched job carries the exact model its recorded execution transition
       expect(routing.basis).toBe("pinned-policy");
       expect(routing.selector).toBe("test/implementer");
       expect(routing.evidence.source).toBe("catalogue-read");
-      expect(routing.limits.maxWorkers).toBe(4);
       const spec = JSON.parse(await readFile(jobPath, "utf8")) as WorkerJob;
       expect(spec.model).toEqual({ model: routing.selector, thinking: routing.thinking });
     },
@@ -1808,10 +1827,12 @@ test("implementer jobs receive bounded scout context and the full report artifac
     expect(spec.prompt).toContain(reportPath);
   });
 });
-test("routes a pinned skill invocation to the implementer and scout worker context but never to a review worker", async () => {
+test("gives pinned skills to implementer, scout, and reviewer briefs", async () => {
   const skill = {
     name: "refactor-functions",
-    context: "Apply the five function-review principles.",
+    origin: "repository",
+    directory: "/repo/.claude/skills/refactor-functions",
+    instructions: "Apply the five function-review principles.",
   } as const;
 
   await withFixture({ kind: "implementation" }, async ({ home, lease, service }) => {
@@ -1827,7 +1848,7 @@ test("routes a pinned skill invocation to the implementer and scout worker conte
       revision: task.revision + 1,
       updatedAt: TIMESTAMP,
       worktree: lease,
-      skill,
+      skills: [skill],
     }));
     const runtime = await readRuntime(home);
     await writeRuntimeState(runtimeFile(home), {
@@ -1848,10 +1869,11 @@ test("routes a pinned skill invocation to the implementer and scout worker conte
     const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
       readonly prompt: string;
     };
-    expect(spec.prompt).toContain("## Skill");
-    expect(spec.prompt).toContain("Requested skill: refactor-functions");
-    expect(spec.prompt).toContain(skill.context);
-    expect(spec.prompt).toContain("never open a separate user conversation or channel");
+    expect(spec.prompt).toContain("## Skills");
+    expect(spec.prompt).toContain("### refactor-functions, from this repository");
+    expect(spec.prompt).toContain(`Folder: ${skill.directory}`);
+    expect(spec.prompt).toContain(skill.instructions);
+    expect(spec.prompt).toContain("this brief wins");
   });
 
   await withFixture({ kind: "scout" }, async ({ home, lease, service }) => {
@@ -1867,7 +1889,7 @@ test("routes a pinned skill invocation to the implementer and scout worker conte
       revision: task.revision + 1,
       updatedAt: TIMESTAMP,
       worktree: lease,
-      skill,
+      skills: [skill],
     }));
     const runtime = await readRuntime(home);
     await writeRuntimeState(runtimeFile(home), {
@@ -1887,8 +1909,8 @@ test("routes a pinned skill invocation to the implementer and scout worker conte
     const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
       readonly prompt: string;
     };
-    expect(spec.prompt).toContain("## Skill");
-    expect(spec.prompt).toContain("Requested skill: refactor-functions");
+    expect(spec.prompt).toContain("## Skills");
+    expect(spec.prompt).toContain(skill.instructions);
   });
 
   await withFixture(
@@ -1910,7 +1932,7 @@ test("routes a pinned skill invocation to the implementer and scout worker conte
         ...task,
         revision: task.revision + 1,
         updatedAt: TIMESTAMP,
-        skill,
+        skills: [skill],
       }));
       await seedTaskResources(home, lease, [endpointFor("implementer")], []);
 
@@ -1921,7 +1943,9 @@ test("routes a pinned skill invocation to the implementer and scout worker conte
       const spec = JSON.parse(await readFile(launched.jobPath, "utf8")) as {
         readonly prompt: string;
       };
-      expect(spec.prompt).not.toContain("## Skill");
+      expect(spec.prompt).toContain("## Skills");
+      expect(spec.prompt).toContain("Check that the change follows them.");
+      expect(spec.prompt).toContain(skill.instructions);
     },
   );
 });
@@ -2494,101 +2518,104 @@ test("owned pre-launch worker reservation recovers without a duplicate admission
       await service.tick();
       expect(runnerState.launches).toBe(1);
       const recovered = await readRuntime(home);
-      expect(activeReservations(recovered)).toBe(1);
+      expect(unreleasedReservation(recovered.tasks[0]?.reservation)).toBe(true);
       expect(recovered.tasks[0]?.jobs.filter(activeRuntimeJob)).toHaveLength(1);
     },
   );
 });
 
 test("pending worker consumption replays once from its persisted two-file identity", async () => {
-  await withFixture(
-    {
-      kind: "implementation",
-      stage: "implementing",
-      taskEdits: {},
-      runner: { active: false, checkoutHead: "new-head" },
-    },
-    async ({ home, lease, service }) => {
-      const store = createTaskStore({
-        directory: join(home, "tasks"),
-        clock: () => TIMESTAMP,
-        idFactory: () => "unused",
-      });
-      const initial = await service.get("task-1");
-      await store.update(initial.id, initial.revision, (task) => ({
-        ...task,
-        revision: task.revision + 1,
-        updatedAt: TIMESTAMP,
-        worktree: lease,
-        endpoints: [endpointFor("implementer")],
-      }));
-      const before = await service.get("task-1");
-      const endpoint = endpointFor("implementer");
-      const job = workerJob(home, endpoint, "implementer");
-      const event: TaskEvent = {
-        type: "implementation-complete",
-        head: "new-head",
-        generation: 0,
-        reportPath: join(home, "jobs", "task-1", "0", "job-1", "report.txt"),
-      };
-      const after = transitionTask(before, event, {
-        now: TIMESTAMP,
-        notificationId: "notification-1",
-      });
-      await writeJsonAtomically(job.resultPath, {
-        id: job.id,
-        taskId: job.taskId,
-        generation: job.generation,
-        role: job.role,
-        status: "completed",
-        text: "implementation report",
-        finishedAt: TIMESTAMP,
-      });
-      const pending: DurableJob = {
-        ...job,
-        consumption: {
-          schemaVersion: 1,
-          inputEventKey: eventKey(job.id, event),
-          appliedEventKey: eventKey(job.id, event),
-          beforeRevision: before.revision,
-          afterRevision: after.revision,
-          beforeFingerprint: taskFingerprint(before),
-          taskFingerprint: taskFingerprint(after),
+  // A consumption recorded before fingerprints were hashed holds whole task copies instead.
+  for (const fingerprint of [taskFingerprint, legacyTaskFingerprint]) {
+    await withFixture(
+      {
+        kind: "implementation",
+        stage: "implementing",
+        taskEdits: {},
+        runner: { active: false, checkoutHead: "new-head" },
+      },
+      async ({ home, lease, service }) => {
+        const store = createTaskStore({
+          directory: join(home, "tasks"),
+          clock: () => TIMESTAMP,
+          idFactory: () => "unused",
+        });
+        const initial = await service.get("task-1");
+        await store.update(initial.id, initial.revision, (task) => ({
+          ...task,
+          revision: task.revision + 1,
+          updatedAt: TIMESTAMP,
+          worktree: lease,
+          endpoints: [endpointFor("implementer")],
+        }));
+        const before = await service.get("task-1");
+        const endpoint = endpointFor("implementer");
+        const job = workerJob(home, endpoint, "implementer");
+        const event: TaskEvent = {
+          type: "implementation-complete",
+          head: "new-head",
+          generation: 0,
+          reportPath: join(home, "jobs", "task-1", "0", "job-1", "report.txt"),
+        };
+        const after = transitionTask(before, event, {
           now: TIMESTAMP,
           notificationId: "notification-1",
-        },
-      };
-      const operation = { ...operationForJob(pending, before), phase: "finalizing" as const };
-      const linkedPending = { ...pending, operationId: operation.id };
-      await writeRuntimeState(runtimeFile(home), {
-        schemaVersion: 1,
-        tasks: [
-          {
+        });
+        await writeJsonAtomically(job.resultPath, {
+          id: job.id,
+          taskId: job.taskId,
+          generation: job.generation,
+          role: job.role,
+          status: "completed",
+          text: "implementation report",
+          finishedAt: TIMESTAMP,
+        });
+        const pending: DurableJob = {
+          ...job,
+          consumption: {
             schemaVersion: 1,
-            taskId: "task-1",
-            sourceCheckpoint: SOURCE_CHECKPOINT,
-            taskName: "tandem-task-1",
-            worktree: lease,
-            endpoints: [endpoint],
-            operation,
-            jobs: [linkedPending],
+            inputEventKey: eventKey(job.id, event),
+            appliedEventKey: eventKey(job.id, event),
+            beforeRevision: before.revision,
+            afterRevision: after.revision,
+            beforeFingerprint: fingerprint(before),
+            taskFingerprint: fingerprint(after),
+            now: TIMESTAMP,
+            notificationId: "notification-1",
           },
-        ],
-        presentations: [],
-      });
-      await service.tick();
-      const consumed = await service.get("task-1");
-      const runtime = await readRuntime(home);
-      expect(consumed.stage).toBe("validating");
-      expect(consumed.revision).toBe(after.revision);
-      expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("consumed");
-      await service.tick();
-      expect(consumed.notifications).toHaveLength(before.notifications.length);
-      const repeated = await service.get("task-1");
-      expect(repeated.revision).toBe(consumed.revision);
-      expect(repeated.notifications).toHaveLength(consumed.notifications.length);
-    },
-  );
+        };
+        const operation = { ...operationForJob(pending, before), phase: "finalizing" as const };
+        const linkedPending = { ...pending, operationId: operation.id };
+        await writeRuntimeState(runtimeFile(home), {
+          schemaVersion: 1,
+          tasks: [
+            {
+              schemaVersion: 1,
+              taskId: "task-1",
+              sourceCheckpoint: SOURCE_CHECKPOINT,
+              taskName: "tandem-task-1",
+              worktree: lease,
+              endpoints: [endpoint],
+              operation,
+              jobs: [linkedPending],
+            },
+          ],
+          presentations: [],
+        });
+        await service.tick();
+        const consumed = await service.get("task-1");
+        const runtime = await readRuntime(home);
+        expect(consumed.stage).toBe("validating");
+        expect(consumed.revision).toBe(after.revision);
+        expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("consumed");
+        await service.tick();
+        expect(consumed.notifications).toHaveLength(before.notifications.length);
+        const repeated = await service.get("task-1");
+        expect(repeated.revision).toBe(consumed.revision);
+        expect(repeated.notifications).toHaveLength(consumed.notifications.length);
+      },
+    );
+  }
 });
 
 test("a direction arriving before worker completion survives an old-revision result", async () => {
@@ -2731,7 +2758,9 @@ test("needs-decision survives reload, rejects stale answers, and resumes only af
 test("a skill-originated needs-decision question is surfaced by the coordinator's own communication protocol and the skill survives restart", async () => {
   const skill = {
     name: "refactor-functions",
-    context: "Apply the five function-review principles.",
+    origin: "repository",
+    directory: "/repo/.claude/skills/refactor-functions",
+    instructions: "Apply the five function-review principles.",
   } as const;
 
   await withFixture(
@@ -2752,7 +2781,7 @@ test("a skill-originated needs-decision question is surfaced by the coordinator'
         ...task,
         revision: task.revision + 1,
         updatedAt: TIMESTAMP,
-        skill,
+        skills: [skill],
       }));
 
       const endpoint = endpointFor("implementer");
@@ -2788,7 +2817,7 @@ test("a skill-originated needs-decision question is surfaced by the coordinator'
         if (question === undefined) throw new Error("needs-decision question was not persisted");
         expect(persisted.stage).toBe("blocked");
         expect(question.text).toBe("Should the skill also touch the deprecated legacy module?");
-        expect(persisted.skill).toEqual(skill);
+        expect(persisted.skills).toEqual([skill]);
 
         const answered = await reloaded.answer({
           taskId: "task-1",
@@ -2799,7 +2828,7 @@ test("a skill-originated needs-decision question is surfaced by the coordinator'
 
         const resumed = await reloaded.get("task-1");
         expect(resumed.stage).toBe("implementing");
-        expect(resumed.skill).toEqual(skill);
+        expect(resumed.skills).toEqual([skill]);
       } finally {
         await reloaded.shutdown();
       }
@@ -3854,7 +3883,6 @@ test("classification leaves a running task's pinned policy and model choices unc
       expect(after.policy).toEqual(before.policy);
       expect(after.policy.config.models).toEqual(task.policy.config.models);
       expect(after.policy.config.maxFixRounds).toBe(task.policy.config.maxFixRounds);
-      expect(after.policy.config.maxWorkers).toBe(task.policy.config.maxWorkers);
       expect(after.policy.config.validationCommands).toEqual(task.policy.config.validationCommands);
     },
   );
@@ -4015,13 +4043,12 @@ test("validation runs in a split non-model pane beside the retained writer", asy
   );
 });
 
-test("resume waits for capacity and retains admission after the slot is freed", async () => {
+test("resume dispatches at once while another task holds a slot", async () => {
   for (const kind of ["implementation", "scout"] as const) {
     await withFixture(
       {
         kind,
         stage: "paused",
-        maxWorkers: 1,
         taskEdits: {
           previousStage: kind === "scout" ? "scouting" : "implementing",
         },
@@ -4058,36 +4085,11 @@ test("resume waits for capacity and retains admission after the slot is freed", 
 
         const resumed = await service.resume("task-1");
         expect(resumed.stage).toBe(kind === "scout" ? "scouting" : "implementing");
-        expect(runnerState.launches).toBe(0);
-        const waiting = await readRuntime(home);
-        const waitingTask = waiting.tasks.find((entry) => entry.taskId === "task-1");
-        expect(waitingTask?.reservation?.phase).toBe("released");
-        expect(waitingTask?.worktree?.path).toBe(lease.path);
-
-        const withFreeSlot = await readRuntime(home);
-        await writeRuntimeState(runtimeFile(home), {
-          schemaVersion: 1,
-          tasks: withFreeSlot.tasks.map(
-            (entry): RuntimeTaskState =>
-              entry.taskId === "task-2" && entry.reservation !== undefined
-                ? {
-                    ...entry,
-                    reservation: {
-                      ...entry.reservation,
-                      phase: "released",
-                      releasedAt: TIMESTAMP,
-                    },
-                  }
-                : entry,
-          ),
-          presentations: withFreeSlot.presentations,
-        });
-
-        await service.tick();
         expect(runnerState.launches).toBe(1);
         const running = await readRuntime(home);
-        expect(activeReservations(running)).toBe(1);
         const resumedRuntime = running.tasks.find((entry) => entry.taskId === "task-1");
+        expect(unreleasedReservation(resumedRuntime?.reservation)).toBe(true);
+        expect(resumedRuntime?.worktree?.path).toBe(lease.path);
         expect(resumedRuntime?.jobs.filter(activeRuntimeJob)).toHaveLength(1);
       },
     );
@@ -4255,7 +4257,7 @@ test("TAG-989 maxed awaiting-fixes intent cannot reserve, launch, or advance wor
       expect(after.reviewHead).toBe(before.reviewHead);
       expect(after.policy).toEqual(before.policy);
       expect(runnerState.launches).toBe(0);
-      expect(activeReservations(state)).toBe(0);
+      expect(unreleasedReservation(runtime?.reservation)).toBe(false);
       expect(runtime?.operation).toBeUndefined();
       expect(runtime?.endpoints).toEqual([endpoint]);
       expect(runtime?.jobs.some(activeRuntimeJob)).toBe(false);
@@ -4362,7 +4364,6 @@ test("legacy incomplete reservation is quarantined without inventing an operatio
       expect(runtime?.operation).toBeUndefined();
       expect(runtime?.reservation?.phase).toBe("reserved");
       expect(runtime?.lastError).toContain("legacy reservation");
-      expect(activeReservations(recovered)).toBe(1);
       const task = await service.get("task-1");
       expect(task.stage).toBe("blocked");
       expect(task.blockCause).toMatchObject({
@@ -4545,7 +4546,6 @@ test("unknown launch acknowledgement quarantines the operation and retains capac
       expect(runtime?.operation?.phase).toBe("quarantined");
       expect(runtime?.reservation?.phase).toBe("reserved");
       expect(runtime?.jobs[0]?.phase).toBe("launching");
-      expect(activeReservations(state)).toBe(1);
     },
   );
 });
@@ -4681,7 +4681,6 @@ test("validation endpoint started intent without a receipt quarantines before pa
       expect(runtime?.operation?.id).toBe(intent.operationId);
       expect(runtime?.operation?.phase).toBe("quarantined");
       expect(runtime?.reservation?.phase).toBe("reserved");
-      expect(activeReservations(state)).toBe(1);
     },
   );
 });
@@ -5034,7 +5033,6 @@ test("launched operation with missing endpoint and result is quarantined, not fa
       expect(recovered?.operation?.phase).toBe("quarantined");
       expect(recovered?.reservation?.phase).toBe("reserved");
       expect(recovered?.jobs[0]?.phase).toBe("running");
-      expect(activeReservations(after)).toBe(1);
       expect(recovered?.endpoints).toHaveLength(0);
     },
   );

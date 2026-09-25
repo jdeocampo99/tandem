@@ -9,6 +9,7 @@ import type { CoordinatorUsageEntry } from "../runtime/usage-receipt.ts";
 import type { SourceRefreshResult, TandemService } from "../service/controller.ts";
 import { isMissing, isTerminalTask } from "../service/records.ts";
 import { fixRoundBudget, ledgerBlockers } from "../tasks/findings.ts";
+import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
 import type { ReplyUsage } from "../workers/terminal.ts";
 import { atCompactionBoundary, finishedTaskIds } from "./compaction.ts";
 import type {
@@ -388,8 +389,12 @@ export class CoordinatorSession {
         this.unacknowledgedNotifications.size === 0;
       this.compaction.compactIfAtBoundary(tasks, idle);
     } catch (error) {
-      this.status.block(errorMessage(error));
-      this.status.report();
+      // Another process holding the state lock is routine contention the next tick retries, not
+      // something for the user to act on.
+      if (!(error instanceof StoreLockTimeoutError)) {
+        this.status.block(errorMessage(error));
+        this.status.report();
+      }
       throw error;
     }
   }

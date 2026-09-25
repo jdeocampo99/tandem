@@ -16,15 +16,16 @@ import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import { type AgentBriefReview, buildAgentBrief } from "../instructions.ts";
 import { activeRuntimeJob } from "../runtime/activity.ts";
 import { taskJobsDirectory } from "../runtime/persistence.ts";
-import type {
-  DurableEndpointLaunch,
-  DurableJob,
-  DurableOperation,
-  DurableOperationKind,
-  DurableReservation,
-  RuntimePresentation,
-  RuntimeState,
-  RuntimeTaskState,
+import {
+  type DurableEndpointLaunch,
+  type DurableJob,
+  type DurableOperation,
+  type DurableOperationKind,
+  type DurableReservation,
+  fingerprintDigest,
+  type RuntimePresentation,
+  type RuntimeState,
+  type RuntimeTaskState,
 } from "../runtime/schema.ts";
 import type { TaskEvent } from "../tasks/lifecycle.ts";
 import type { StoreTaskInput } from "../tasks/store.ts";
@@ -42,7 +43,7 @@ export type TaskCreationRequest = Readonly<{
   readonly requestId?: string;
   readonly researchHandoffs?: TaskRecord["researchHandoffs"];
   readonly researchContinuation?: TaskRecord["researchContinuation"];
-  readonly skill?: TaskRecord["skill"];
+  readonly skills?: TaskRecord["skills"];
   readonly prReview?: TaskRecord["prReview"];
   readonly target?: TaskRecord["target"];
 }>;
@@ -327,11 +328,6 @@ export function reviewFindings(task: TaskRecord): readonly Finding[] {
   return findings;
 }
 
-/** The worker role that actually performs the task's work, as opposed to review. */
-function isSkillEligibleRole(role: WorkerRole): boolean {
-  return role === "implementer" || role === "scout";
-}
-
 export function buildPrompt(
   task: TaskRecord,
   role: WorkerRole,
@@ -341,7 +337,8 @@ export function buildPrompt(
   extraInstructions: readonly string[] = [],
 ): string {
   const guidance = task.policy.guidance[roleChannel(role)].map((entry) => entry.text);
-  const skill = isSkillEligibleRole(role) ? task.skill : undefined;
+  // Reviewers get the skills too, to check the work followed them; a visual never needs them.
+  const skills = role === "presentation" ? undefined : task.skills;
   return buildAgentBrief({
     role,
     objective: task.objective,
@@ -353,7 +350,7 @@ export function buildPrompt(
     reportPath,
     ...(review === undefined ? {} : { review }),
     ...(artifacts.length === 0 ? {} : { artifacts }),
-    ...(skill === undefined ? {} : { skill }),
+    ...(skills === undefined ? {} : { skills }),
   });
 }
 
@@ -441,8 +438,9 @@ export function serializedIdentity(value: unknown, field: string): string {
   return serialized;
 }
 
+/** Compared, never read back: tells whether a job's result was already applied to the task. */
 export function taskFingerprint(task: TaskRecord): string {
-  return serializedIdentity(task, "task record");
+  return fingerprintDigest(serializedIdentity(task, "task record"));
 }
 export function taskWithQuestion(task: TaskRecord, question: TaskQuestion): TaskRecord {
   if (task.communication?.question?.id === question.id) return task;
@@ -560,7 +558,9 @@ export function taskInputFor(
     ...(request.researchContinuation === undefined
       ? {}
       : { researchContinuation: request.researchContinuation }),
-    ...(request.skill === undefined ? {} : { skill: request.skill }),
+    ...(request.skills === undefined || request.skills.length === 0
+      ? {}
+      : { skills: request.skills }),
     ...(request.prReview === undefined ? {} : { prReview: request.prReview }),
     ...(request.target === undefined ? {} : { target: request.target }),
   };

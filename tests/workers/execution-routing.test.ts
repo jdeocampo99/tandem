@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { OmpIncludedAllowance, OmpModelRecord } from "../../src/adapters/omp.ts";
 import type { ModelSpec, ThinkingLevel } from "../../src/contracts.ts";
-import type { DurableExecutionRouting, ExecutionRoutingLimits } from "../../src/runtime/schema.ts";
+import type { DurableExecutionRouting } from "../../src/runtime/schema.ts";
 import {
   authorizeExecutionModel,
   describeExecutionRoutingDecision,
@@ -24,10 +24,6 @@ const PINNED: ModelSpec = { model: "alpha/base", thinking: "high" };
 const MEASURED: RequestUsageExposure = { unaccountedSamples: 0, unmeasuredTokenSamples: 0 };
 
 const OBSERVED: ExecutionUsageObservation = { status: "observed", exposure: MEASURED };
-
-const LIMITS: ExecutionRoutingLimits = {
-  maxWorkers: 3,
-};
 
 type CatalogueOverrides = Readonly<{
   readonly thinking?: readonly ThinkingLevel[];
@@ -75,7 +71,6 @@ function routingRequest(overrides: Partial<ExecutionRoutingRequest> = {}): Execu
     },
     pinned: PINNED,
     catalogue: snapshot([catalogueEntry(PINNED.model)], ["alpha"]),
-    limits: LIMITS,
     usage: OBSERVED,
     now: "2030-01-01T00:00:01.000Z",
     ...overrides,
@@ -102,7 +97,7 @@ function pauseOf(decision: ExecutionRoutingDecision) {
   return decision.pause;
 }
 
-test("a job launch records the pinned assignment with the identity and limits it ran under", () => {
+test("a job launch records the pinned assignment with the identity it ran under", () => {
   const routing = authorizedRouting(resolveExecutionRouting(routingRequest()));
 
   expect(routing.basis).toBe("pinned-policy");
@@ -116,7 +111,6 @@ test("a job launch records the pinned assignment with the identity and limits it
   expect(routing.operationId).toBe("operation-1");
   expect(routing.generation).toBe(2);
   expect(routing.attempt).toBe(1);
-  expect(routing.limits).toEqual(LIMITS);
   expect(routing.evidence.source).toBe("catalogue-read");
   expect(routing.evidence.enabledProviders).toEqual(["alpha"]);
 });

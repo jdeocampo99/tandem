@@ -62,7 +62,6 @@ const policy: ResolvedPolicy = {
     instructionFiles: { implementation: [], validation: [], review: [] },
     validationCommands: [],
     setupCommands: [],
-    maxWorkers: 4,
     maxFixRounds: 1,
     reviewLevels: {
       deepScrutiny: false,
