@@ -1,4 +1,4 @@
-import { summarizeTandemActionValue } from "./extension/summary.ts";
+import { summarizeTandemActionValue } from "./session/summary.ts";
 import { type CliDependencies, createCliApplication } from "./terminal/cli-application.ts";
 import {
   type CliCommand,

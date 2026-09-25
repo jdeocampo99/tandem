@@ -2,12 +2,7 @@ import { expect, test } from "bun:test";
 import { appendFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  type ExtensionAPI,
-  type ExtensionContext,
-  type InputEvent,
-  zod,
-} from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import {
   choiceConfidence,
   JEV_MODEL,
@@ -15,20 +10,24 @@ import {
   JevEvaluationError,
   type JevEvaluationInput,
   type JevEvaluationResponse,
+  type JevFetch,
 } from "../../src/adapters/typesafe.ts";
+import { registerTandemOmp } from "../../src/extension/registration.ts";
+import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
+import { appendDiagnosticEvent, readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
+import { JEV_PRICING_SNAPSHOT, USAGE_RECORD_SCHEMA_VERSION } from "../../src/runtime/usage.ts";
+import type { TandemService } from "../../src/service/controller.ts";
 import {
   actionForPromptDecision,
   type ChoiceConfirmation,
   classifyPrompt,
-  handlePromptInput,
   PROMPT_ROUTING_QUESTION_SCHEMA_VERSION,
+  type PromptRoutingDependencies,
   promptRoutingConfig,
-} from "../../src/extension/prompt-routing.ts";
-import { registerTandemOmp } from "../../src/extension/registration.ts";
-import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
-import { readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
-import { JEV_PRICING_SNAPSHOT, USAGE_RECORD_SCHEMA_VERSION } from "../../src/runtime/usage.ts";
-import type { TandemService } from "../../src/service/controller.ts";
+  routeUserPrompt,
+  type UserPrompt,
+} from "../../src/session/prompt-routing.ts";
+import { type RecordingSessionHost, recordingSessionHost } from "../evals/scenario.ts";
 
 type Choice = Readonly<{ choice: string; confidence?: number }>;
 
@@ -65,10 +64,30 @@ function response(
   };
 }
 
-const context = {
-  hasUI: false,
-  mode: "rpc",
-} as unknown as ExtensionContext;
+function typed(text: string): UserPrompt {
+  return { type: "userPrompt", text, interactive: true, attachments: 0 };
+}
+
+/** Routing deps that record replies on a session host and diagnostics under `home`. */
+function routing(
+  home: string,
+  service: TandemService,
+  overrides: Partial<PromptRoutingDependencies> = {},
+  recording: RecordingSessionHost = recordingSessionHost(),
+): Readonly<{ deps: PromptRoutingDependencies; sent: () => string[] }> {
+  return {
+    deps: {
+      config: { apiKey: "key", timeoutMs: 1_500 },
+      service: () => service,
+      host: recording.host,
+      confirm: undefined,
+      diagnostics: (entry) => appendDiagnosticEvent(home, entry),
+      ...overrides,
+    },
+    sent: () =>
+      recording.effects.flatMap((effect) => (effect.type === "deliver" ? [effect.text] : [])),
+  };
+}
 
 const listFacts = response(
   { choice: "list" },
@@ -286,7 +305,6 @@ test("records usage as unavailable for a malformed provider response", async () 
 
 test("direct routing executes a read-only service action and records ordered diagnostics", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-"));
-  const sent: string[] = [];
   let listCalls = 0;
   const service = {
     list: async () => {
@@ -294,25 +312,23 @@ test("direct routing executes a read-only service action and records ordered dia
       return [{ id: "task-1", stage: "ready" }];
     },
   } as unknown as TandemService;
+  const recording = recordingSessionHost();
   try {
-    const result = await handlePromptInput(
-      { source: "interactive", text: "list my tasks" } as InputEvent,
-      context,
-      {
-        config: { apiKey: "key", timeoutMs: 1_500 },
-        getService: () => service,
-        getHome: () => home,
-        sendMessage: ((message: string | { readonly content?: string }) => {
-          sent.push(typeof message === "string" ? message : (message.content ?? ""));
-        }) as never,
-        evaluate: async () => listFacts,
-      },
-    );
+    const { deps } = routing(home, service, { evaluate: async () => listFacts }, recording);
+    const result = await routeUserPrompt(typed("list my tasks"), deps);
     expect(result).toEqual({ handled: true });
     // Once to look for open questions a short reply could answer, once for the lookup itself.
     expect(listCalls).toBe(2);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toContain("task-1");
+    expect(recording.effects).toEqual([
+      {
+        type: "deliver",
+        source: "prompt-route",
+        text: expect.stringContaining("task-1"),
+        details: { promptHash: expect.any(String), action: "list" },
+        timing: "nextTurn",
+        triggerTurn: false,
+      },
+    ]);
 
     const raw = await readFile(join(home, "logs", "tandem.jsonl"), "utf8");
     const diagnostics = JSON.parse(`[${raw.trim().split("\n").join(",")}]`) as {
@@ -366,33 +382,53 @@ test("an old diagnostic line recorded before usage existed still parses", async 
   }
 });
 
-test("registration installs the OMP input hook before command handling", async () => {
-  type InputHandler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
+type InputHandler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
+
+/** Registers Tandem on a fake OMP API and returns its input hook and every message it sent. */
+function registeredInputHook(
+  home: string,
+  service: TandemService,
+  promptRouting: PromptRoutingDependencies["config"],
+): Readonly<{ input: InputHandler; sent: unknown[] }> {
   const handlers = new Map<string, InputHandler>();
+  const sent: unknown[] = [];
+  const pi = {
+    on: (event: string, handler: InputHandler) => {
+      handlers.set(event, handler);
+    },
+    registerTool: () => undefined,
+    registerCommand: () => undefined,
+    sendMessage: (message: unknown, options: unknown) => {
+      sent.push({ message, options });
+    },
+  } as unknown as ExtensionAPI;
+  registerTandemOmp(pi, {
+    getService: () => service,
+    getHome: () => home,
+    promptRouting,
+    reconcile: async () => undefined,
+    postAction: async () => undefined,
+    coordinatorMcpServers: async () => [],
+    researchRunning: async () => false,
+  });
+  const input = handlers.get("input");
+  if (input === undefined) throw new Error("input hook was not registered");
+  return { input, sent };
+}
+
+const HEADLESS = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
+
+function ompInput(text: string): unknown {
+  return { type: "input", source: "interactive", text };
+}
+
+test("registration installs the OMP input hook before command handling", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-prompt-hook-"));
   try {
-    const pi = {
-      zod,
-      on: (event: string, handler: InputHandler) => {
-        handlers.set(event, handler);
-      },
-      registerTool: () => undefined,
-      registerCommand: () => undefined,
-      sendMessage: () => undefined,
-    } as unknown as ExtensionAPI;
-    registerTandemOmp(pi, {
-      getService: () => ({}) as TandemService,
-      getHome: () => home,
-      promptRouting: { timeoutMs: 1_500 },
-      reconcile: async () => undefined,
-      postAction: async () => undefined,
-      coordinatorMcpServers: async () => [],
-      researchRunning: async () => false,
-    });
-    const input = handlers.get("input");
-    if (input === undefined) throw new Error("input hook was not registered");
+    const { input } = registeredInputHook(home, {} as TandemService, { timeoutMs: 1_500 });
+    expect(await input(ompInput("/tandem list"), HEADLESS)).toBeUndefined();
     expect(
-      await input({ source: "interactive", text: "/tandem list" } as InputEvent, context),
+      await input({ type: "input", source: "rpc", text: "list my tasks" }, HEADLESS),
     ).toBeUndefined();
   } finally {
     await rm(home, { recursive: true, force: true });
@@ -401,31 +437,49 @@ test("registration installs the OMP input hook before command handling", async (
 
 test("unconfigured and exact-command input preserves normal OMP handling", async () => {
   let evaluations = 0;
-  const deps = {
-    config: promptRoutingConfig({}),
-    getService: () => ({}) as TandemService,
-    getHome: () => "/tmp/tandem-no-route",
-    sendMessage: (() => undefined) as never,
-    evaluate: async () => {
-      evaluations += 1;
-      return listFacts;
+  const recording = recordingSessionHost();
+  const { deps } = routing(
+    "/tmp/tandem-no-route",
+    {} as TandemService,
+    {
+      config: promptRoutingConfig({}),
+      diagnostics: async () => undefined,
+      evaluate: async () => {
+        evaluations += 1;
+        return listFacts;
+      },
     },
-  };
-  expect(
-    await handlePromptInput(
-      { source: "interactive", text: "list tasks" } as InputEvent,
-      context,
-      deps,
-    ),
-  ).toBeUndefined();
-  expect(
-    await handlePromptInput(
-      { source: "interactive", text: "/tandem list" } as InputEvent,
-      context,
-      deps,
-    ),
-  ).toBeUndefined();
+    recording,
+  );
+  expect(await routeUserPrompt(typed("list tasks"), deps)).toEqual({ handled: false });
+  expect(await routeUserPrompt(typed("/tandem list"), deps)).toEqual({ handled: false });
   expect(evaluations).toBe(0);
+  expect(recording.effects).toEqual([]);
+});
+
+test("a prompt that is not typed, or carries an attachment, is never routed", async () => {
+  let evaluations = 0;
+  const recording = recordingSessionHost();
+  const { deps } = routing(
+    "/tmp/tandem-no-route",
+    {} as TandemService,
+    {
+      diagnostics: async () => undefined,
+      evaluate: async () => {
+        evaluations += 1;
+        return listFacts;
+      },
+    },
+    recording,
+  );
+  expect(await routeUserPrompt({ ...typed("list my tasks"), interactive: false }, deps)).toEqual({
+    handled: false,
+  });
+  expect(await routeUserPrompt({ ...typed("list my tasks"), attachments: 1 }, deps)).toEqual({
+    handled: false,
+  });
+  expect(evaluations).toBe(0);
+  expect(recording.effects).toEqual([]);
 });
 
 test("asking what the request has cost so far routes straight to its receipt", async () => {
@@ -449,7 +503,6 @@ test("asking what the request has cost so far routes straight to its receipt", a
 
 test("asking how your pull requests are doing shows the PR watch view without a coordinator turn", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-pr-watch-"));
-  const sent: string[] = [];
   const prWatchFacts = response(
     { choice: "pr-watch" },
     { choice: "repository" },
@@ -477,21 +530,10 @@ test("asking how your pull requests are doing shows the PR watch view without a 
     }),
   } as unknown as TandemService;
   try {
-    const result = await handlePromptInput(
-      { source: "interactive", text: "did #409 merge?" } as InputEvent,
-      context,
-      {
-        config: { apiKey: "key", timeoutMs: 1_500 },
-        getService: () => service,
-        getHome: () => home,
-        sendMessage: ((message: string | { readonly content?: string }) => {
-          sent.push(typeof message === "string" ? message : (message.content ?? ""));
-        }) as never,
-        evaluate: async () => prWatchFacts,
-      },
-    );
+    const { deps, sent } = routing(home, service, { evaluate: async () => prWatchFacts });
+    const result = await routeUserPrompt(typed("did #409 merge?"), deps);
     expect(result).toEqual({ handled: true });
-    expect(sent).toEqual([
+    expect(sent()).toEqual([
       "PR watch · 0 open · checked 5s ago\n\n⚪ #409 refactor-cache ✅ 🎉 merged 11:02\n",
     ]);
 
@@ -516,7 +558,6 @@ test("asking how your pull requests are doing shows the PR watch view without a 
 test("a pasted PR link starts a review under the project, and anything else goes to the coordinator", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-pr-"));
   const started: unknown[] = [];
-  const sent: string[] = [];
   const service = {
     reviewPr: async (input: unknown) => {
       started.push(input);
@@ -544,36 +585,26 @@ test("a pasted PR link starts a review under the project, and anything else goes
     },
     usage: { input_tokens: 12, output_tokens: 8 },
   });
-  const deps = (request: string) => ({
-    config: { apiKey: "key", timeoutMs: 1_500 },
-    getService: () => service,
-    getHome: () => home,
-    getRepo: () => "/work/project",
-    sendMessage: ((message: string | { readonly content?: string }) => {
-      sent.push(typeof message === "string" ? message : (message.content ?? ""));
-    }) as never,
-    evaluate: async () => prAnswers(request),
-  });
+  const route = (request: string) =>
+    routing(home, service, {
+      repoPath: () => "/work/project",
+      evaluate: async () => prAnswers(request),
+    });
   try {
     const url = "https://github.com/acme/api/pull/7";
-    const handled = await handlePromptInput(
-      { source: "interactive", text: `skim the idea behind ${url}` } as InputEvent,
-      context,
-      deps("review"),
-    );
+    const review = route("review");
+    const handled = await routeUserPrompt(typed(`skim the idea behind ${url}`), review.deps);
     expect(handled).toEqual({ handled: true });
     expect(started).toEqual([
       { pullRequest: "acme/api#7", repoPath: "/work/project", lens: { kind: "intent" } },
     ]);
-    expect(sent.at(-1)).toContain("Reviewing acme/api#7 for intent.");
+    expect(review.sent().at(-1)).toContain("Reviewing acme/api#7 for intent.");
 
-    const declined = await handlePromptInput(
-      { source: "interactive", text: `merge ${url} when CI passes` } as InputEvent,
-      context,
-      deps("other"),
-    );
-    expect(declined).toBeUndefined();
+    const other = route("other");
+    const declined = await routeUserPrompt(typed(`merge ${url} when CI passes`), other.deps);
+    expect(declined).toEqual({ handled: false });
     expect(started).toHaveLength(1);
+    expect(other.sent()).toEqual([]);
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -581,7 +612,6 @@ test("a pasted PR link starts a review under the project, and anything else goes
 
 test("a pull-up prompt opens the one presentation Jev matched", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-"));
-  const sent: string[] = [];
   const opened: string[] = [];
   const service = {
     requestBriefs: async () => [
@@ -603,40 +633,30 @@ test("a pull-up prompt opens the one presentation Jev matched", async () => {
     },
   } as unknown as TandemService;
   try {
-    const result = await handlePromptInput(
-      { source: "interactive", text: "pull up the settings mockup" } as InputEvent,
-      context,
-      {
-        config: { apiKey: "key", timeoutMs: 1_500 },
-        getService: () => service,
-        getHome: () => home,
-        sendMessage: ((message: string | { readonly content?: string }) => {
-          sent.push(typeof message === "string" ? message : (message.content ?? ""));
-        }) as never,
-        evaluate: async (input) => {
-          // Only openable presentations are offered, before briefs.
-          expect(Object.keys(input.questions.target?.criteria ?? {})).toEqual(["c1", "c2", "none"]);
-          return {
-            model: JEV_MODEL,
-            answers: {
-              request: choiceAnswer({ choice: "open" }),
-              target: choiceAnswer({ choice: "c1" }),
-            },
-            usage: { input_tokens: 12, output_tokens: 8 },
-          };
-        },
+    const { deps, sent } = routing(home, service, {
+      evaluate: async (input) => {
+        // Only openable presentations are offered, before briefs.
+        expect(Object.keys(input.questions.target?.criteria ?? {})).toEqual(["c1", "c2", "none"]);
+        return {
+          model: JEV_MODEL,
+          answers: {
+            request: choiceAnswer({ choice: "open" }),
+            target: choiceAnswer({ choice: "c1" }),
+          },
+          usage: { input_tokens: 12, output_tokens: 8 },
+        };
       },
-    );
+    });
+    const result = await routeUserPrompt(typed("pull up the settings mockup"), deps);
     expect(result).toEqual({ handled: true });
     expect(opened).toEqual(["presentation-1"]);
-    expect(sent).toHaveLength(1);
+    expect(sent()).toHaveLength(1);
   } finally {
     await rm(home, { recursive: true, force: true });
   }
 });
 
 function choiceReplyFixture(replyChoice: Choice) {
-  const sent: string[] = [];
   const answered: unknown[] = [];
   const approved: unknown[] = [];
   const service = {
@@ -668,66 +688,61 @@ function choiceReplyFixture(replyChoice: Choice) {
     },
   } as unknown as TandemService;
   const lookups: string[] = [];
-  const deps = (home: string, confirmation?: ChoiceConfirmation) => ({
-    config: { apiKey: "key", timeoutMs: 1_500 },
-    getService: () => service,
-    getHome: () => home,
-    sendMessage: ((message: string | { readonly content?: string }) => {
-      sent.push(typeof message === "string" ? message : (message.content ?? ""));
-    }) as never,
-    evaluate: async (input: JevEvaluationInput): Promise<JevEvaluationResponse> => {
-      const question = input.questions.reply;
-      if (question === undefined) {
-        lookups.push(JSON.stringify(input.state));
-        return response(
-          { choice: "none" },
-          { choice: "conversation" },
-          { choice: "read-only" },
-          { choice: "within" },
-          { choice: "single" },
-        );
-      }
-      const options = Object.keys(question.criteria ?? {});
-      const confidence = replyChoice.confidence ?? 0.95;
-      return {
-        model: JEV_MODEL,
-        answers: {
-          reply: {
-            type: "choice",
-            choice: replyChoice.choice,
-            confidence,
-            probabilities: Object.fromEntries(
-              options.map((option) => [
-                option,
-                option === replyChoice.choice
-                  ? confidence
-                  : (1 - confidence) / (options.length - 1),
-              ]),
-            ),
-          },
+  const evaluate = async (input: JevEvaluationInput): Promise<JevEvaluationResponse> => {
+    const question = input.questions.reply;
+    if (question === undefined) {
+      lookups.push(JSON.stringify(input.state));
+      return response(
+        { choice: "none" },
+        { choice: "conversation" },
+        { choice: "read-only" },
+        { choice: "within" },
+        { choice: "single" },
+      );
+    }
+    const options = Object.keys(question.criteria ?? {});
+    const confidence = replyChoice.confidence ?? 0.95;
+    return {
+      model: JEV_MODEL,
+      answers: {
+        reply: {
+          type: "choice",
+          choice: replyChoice.choice,
+          confidence,
+          probabilities: Object.fromEntries(
+            options.map((option) => [
+              option,
+              option === replyChoice.choice ? confidence : (1 - confidence) / (options.length - 1),
+            ]),
+          ),
         },
-        usage: { input_tokens: 9, output_tokens: 1 },
-      };
-    },
-    ...(confirmation === undefined ? {} : { confirmation }),
-  });
-  return { sent, answered, approved, lookups, deps };
-}
-
-function typed(text: string): InputEvent {
-  return { source: "interactive", text } as InputEvent;
+      },
+      usage: { input_tokens: 9, output_tokens: 1 },
+    };
+  };
+  const recording = recordingSessionHost();
+  const deps = (home: string, confirmation?: ChoiceConfirmation) =>
+    routing(
+      home,
+      service,
+      { evaluate, ...(confirmation === undefined ? {} : { confirmation }) },
+      recording,
+    ).deps;
+  const sent = () =>
+    recording.effects.flatMap((effect) => (effect.type === "deliver" ? [effect.text] : []));
+  return { service, evaluate, recording, sent, answered, approved, lookups, deps };
 }
 
 test("a short reply to a fixed-choice question answers it in code, with no coordinator turn", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-"));
   const fixture = choiceReplyFixture({ choice: "c1" });
   try {
-    const result = await handlePromptInput(typed("yeah restart it"), context, fixture.deps(home));
+    const result = await routeUserPrompt(typed("yeah restart it"), fixture.deps(home));
     expect(result).toEqual({ handled: true });
     expect(fixture.answered).toEqual([
       { taskId: "task-1", questionId: `${RESTART_QUESTION_ID_PREFIX}incident`, text: "restart" },
     ]);
-    expect(fixture.sent).toHaveLength(1);
+    expect(fixture.sent()).toHaveLength(1);
     expect(fixture.lookups).toEqual([]);
     const raw = await readFile(join(home, "logs", "tandem.jsonl"), "utf8");
     expect(raw).toContain("choice-reply-route/1");
@@ -745,18 +760,32 @@ test("a risky choice runs only after an exact y to a code-written confirmation",
   const confirmation: ChoiceConfirmation = {};
   try {
     expect(
-      await handlePromptInput(typed("yes sounds good"), context, fixture.deps(home, confirmation)),
+      await routeUserPrompt(typed("yes sounds good"), fixture.deps(home, confirmation)),
     ).toEqual({ handled: true });
-    expect(fixture.sent).toEqual(['Approve the brief for "Fix login"? (y/n)']);
+    expect(fixture.recording.effects).toEqual([
+      {
+        type: "deliver",
+        source: "prompt-route",
+        text: 'Approve the brief for "Fix login"? (y/n)',
+        details: {
+          promptHash: expect.any(String),
+          action: "brief-approve",
+          awaitingConfirmation: true,
+        },
+        timing: "nextTurn",
+        triggerTurn: false,
+      },
+    ]);
     expect(fixture.approved).toEqual([]);
 
-    // The context has no approval dialog, so only the typed "y" can approve.
-    expect(await handlePromptInput(typed("y"), context, fixture.deps(home, confirmation))).toEqual({
+    // Nobody can answer an approval dialog here, so only the typed "y" can approve.
+    expect(await routeUserPrompt(typed("y"), fixture.deps(home, confirmation))).toEqual({
       handled: true,
     });
     expect(fixture.approved).toEqual([
       { requestId: "req-1", briefRevision: 3, contentDigest: "digest" },
     ]);
+    expect(fixture.recording.confirmations).toEqual([]);
     expect(confirmation.pending).toBeUndefined();
   } finally {
     await rm(home, { recursive: true, force: true });
@@ -768,19 +797,26 @@ test("a risky choice is dropped on n, and on anything else the reply routes as a
   const declined = choiceReplyFixture({ choice: "c3" });
   const confirmation: ChoiceConfirmation = {};
   try {
-    await handlePromptInput(typed("approve it"), context, declined.deps(home, confirmation));
-    expect(await handlePromptInput(typed("n"), context, declined.deps(home, confirmation))).toEqual(
-      { handled: true },
-    );
+    await routeUserPrompt(typed("approve it"), declined.deps(home, confirmation));
+    expect(await routeUserPrompt(typed("n"), declined.deps(home, confirmation))).toEqual({
+      handled: true,
+    });
     expect(declined.approved).toEqual([]);
-    expect(declined.sent.at(-1)).toBe("Okay, I didn't do that.");
+    expect(declined.recording.effects.at(-1)).toEqual({
+      type: "deliver",
+      source: "prompt-route",
+      text: "Okay, I didn't do that.",
+      details: { promptHash: expect.any(String), action: "brief-approve", declined: true },
+      timing: "nextTurn",
+      triggerTurn: false,
+    });
 
-    await handlePromptInput(typed("approve it"), context, declined.deps(home, confirmation));
+    await routeUserPrompt(typed("approve it"), declined.deps(home, confirmation));
     // "yes please" is not an exact "y": nothing is approved and the reply goes on to the coordinator.
     const changed = choiceReplyFixture({ choice: "other" });
-    expect(
-      await handlePromptInput(typed("yes please"), context, changed.deps(home, confirmation)),
-    ).toBeUndefined();
+    expect(await routeUserPrompt(typed("yes please"), changed.deps(home, confirmation))).toEqual({
+      handled: false,
+    });
     expect(changed.approved).toEqual([]);
     expect(declined.approved).toEqual([]);
     expect(confirmation.pending).toBeUndefined();
@@ -793,16 +829,77 @@ test("without a confirmation holder, or below the cutoff, the reply goes to the 
   const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-"));
   try {
     const risky = choiceReplyFixture({ choice: "c3" });
-    expect(await handlePromptInput(typed("approve it"), context, risky.deps(home))).toBeUndefined();
+    expect(await routeUserPrompt(typed("approve it"), risky.deps(home))).toEqual({
+      handled: false,
+    });
     expect(risky.approved).toEqual([]);
 
     const unsure = choiceReplyFixture({ choice: "c1", confidence: 0.6 });
-    expect(
-      await handlePromptInput(typed("hmm restart?"), context, unsure.deps(home)),
-    ).toBeUndefined();
+    expect(await routeUserPrompt(typed("hmm restart?"), unsure.deps(home))).toEqual({
+      handled: false,
+    });
     expect(unsure.answered).toEqual([]);
     // The ordinary lookup routes still get their turn.
     expect(unsure.lookups).toHaveLength(1);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("a failed reply delivery is reported as the action's failure", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-"));
+  const recording = recordingSessionHost();
+  recording.failNext("deliver");
+  const service = { list: async () => [] } as unknown as TandemService;
+  try {
+    const { deps } = routing(home, service, { evaluate: async () => listFacts }, recording);
+    expect(await routeUserPrompt(typed("list my tasks"), deps)).toEqual({ handled: true });
+    expect(recording.effects.map((effect) => effect.type === "deliver" && effect.details)).toEqual([
+      { promptHash: expect.any(String), action: "list" },
+      { promptHash: expect.any(String), action: "list", error: "action-failed" },
+    ]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("the OMP input hook holds a risky choice's confirmation for exactly one message", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-prompt-hook-"));
+  const fixture = choiceReplyFixture({ choice: "c3" });
+  const fetch: JevFetch = async (_endpoint, init) =>
+    new Response(
+      JSON.stringify(await fixture.evaluate(JSON.parse(String(init?.body)) as JevEvaluationInput)),
+    );
+  try {
+    const { input, sent } = registeredInputHook(home, fixture.service, {
+      apiKey: "key",
+      timeoutMs: 1_500,
+      fetch,
+    });
+    expect(await input(ompInput("yes sounds good"), HEADLESS)).toEqual({ handled: true });
+    expect(sent).toEqual([
+      {
+        message: {
+          customType: "tandem-prompt-route",
+          content: 'Approve the brief for "Fix login"? (y/n)',
+          display: true,
+          attribution: "agent",
+          details: {
+            promptHash: expect.any(String),
+            action: "brief-approve",
+            awaitingConfirmation: true,
+          },
+        },
+        options: { deliverAs: "nextTurn" },
+      },
+    ]);
+    expect(await input(ompInput("y"), HEADLESS)).toEqual({ handled: true });
+    expect(fixture.approved).toHaveLength(1);
+    // The confirmation was used up: a second "y" routes as a new reply and is only asked back.
+    expect(await input(ompInput("y"), HEADLESS)).toEqual({ handled: true });
+    expect(fixture.approved).toHaveLength(1);
+    expect(sent).toHaveLength(3);
+    expect(sent.at(-1)).toMatchObject({ message: { details: { awaitingConfirmation: true } } });
   } finally {
     await rm(home, { recursive: true, force: true });
   }

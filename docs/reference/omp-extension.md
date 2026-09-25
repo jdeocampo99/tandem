@@ -3,15 +3,22 @@
 What the coordinator's OMP extension, its scheduler and notifications, and worktree maintenance and
 scout release must guarantee.
 
-Code: src/extension.ts, src/extension/registration.ts, src/extension/actions.ts,
-src/extension/notifications.ts, src/pool/maintenance.ts, src/pool/policy.ts,
+Code: src/extension.ts (OMP adapter), src/extension/registration.ts, src/extension/omp-host.ts,
+src/session/coordinator.ts (scheduler, status, compaction), src/session/actions.ts,
+src/session/tools.ts, src/session/tool-guard.ts, src/session/prompt-routing.ts,
+src/session/notifications.ts, src/pool/maintenance.ts, src/pool/policy.ts,
 src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts, src/workers/worktree-lease.ts
 
 ## Tool and command contract
 
-- The extension registers one strict `tandem` tool, `{ "request": { "action": ... } }`, a zod
-  union in src/extension/registration.ts. Unknown fields are rejected. That schema is the action
-  list; keep it, `TandemAction`, and `parseTandemCommand` in src/extension/actions.ts in step.
+- The extension registers one strict `tandem` tool, `{ "request": { "action": ... } }`. Its schema,
+  `tandemRequestSchema`, is harness-neutral plain zod in src/session/tools.ts; registration.ts turns
+  it into OMP's JSON Schema parameters and parses tool calls with it directly. That schema is the
+  action list; keep it, `TandemAction`, and `parseTandemCommand` in src/session/actions.ts in step.
+  The schema itself rejects unknown fields. OMP's own tool-call validator repairs common LLM
+  quirks first, including dropping unknown root fields before it ever reaches the schema, so a
+  model call with a stray root field is still accepted; "unknown fields are rejected" is a property
+  of the schema, not of every OMP tool call.
 - Tool text is a bounded summary; structured details stay in the tool result and durable reports.
 - A refusal the coordinator recovers from by asking the user carries its own next step, so the
   per-turn prompt does not: `create` and `review-pr` asking where a repository is, and `create`
@@ -22,6 +29,17 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   `publish-now`, `draft`, `merge`, and `cleanup` with `discard`. Each needs a live TUI confirmation; without an
   interactive TUI they fail closed.
 - `configure-models` does not change existing task snapshots.
+- User prompts route through `routeUserPrompt` (src/session/prompt-routing.ts) before the model
+  sees them, for confirmations and other harness-neutral prompt handling; OMP's `input` event
+  forwards there via `registerPromptRouting` in src/extension/registration.ts.
+- The coordinator's own tool calls, not the `tandem` tool's, are guarded by `coordinatorToolRefusal`
+  (src/session/tool-guard.ts), keyed on the call's harness-neutral `ToolCall.kind` (`"mcp"`,
+  `"read"`, ...) rather than an OMP tool name. `registerCoordinatorToolGuard` in
+  src/extension/registration.ts converts OMP's native `tool_call` event to that shape with
+  `ompToolCall` (src/extension/omp-host.ts) and blocks the call when a reason comes back.
+- src/extension/omp-host.ts is the shared OMP coordinator host: `ompSessionHost` (the `SessionHost`
+  the harness-neutral core calls into), `ompToolCall`, `ompMcpToolPrefix`, and `ompApprovalDialog`.
+  src/extension.ts and src/extension/registration.ts build the coordinator extension on it.
 
 ## Scheduler and notifications
 
@@ -48,7 +66,7 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   and durable reports stay authoritative. It carries no commit hashes, and finished tasks with
   nothing unread, no blocker, and no open question collapse to one line of ids and objectives. Action summaries are bounded separately; `show --full`
   keeps more structured detail.
-- Early compaction (src/extension/compaction.ts) cuts the cost of resending a long history. On a
+- Early compaction (src/session/compaction.ts, driven by src/session/coordinator.ts) cuts the cost of resending a long history. On a
   reconcile where a non-scout task newly reached `completed`, `merged`, or `cancelled`, it calls
   `ctx.compact()` only when the coordinator is idle (no turn, no pending `ask`, no unacknowledged
   delivery), no listed task is `blocked`, `paused`, `awaiting-approval`, or `ready` or has an

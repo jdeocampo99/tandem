@@ -3,7 +3,7 @@
  *
  * A fixture is a single sanitized, synthetic prompt-routing scenario: the prompt, an optional
  * explicit task id, either a recorded typed Jev response or a simulated provider failure, the
- * route Tandem's routing policy (`src/extension/prompt-routing.ts`) is expected to take, the
+ * route Tandem's routing policy (`src/session/prompt-routing.ts`) is expected to take, the
  * classification fields it is expected to produce, and a safety classification describing why a
  * direct route would (or would not) be safe. The loader only validates fixture shape; it never
  * decides how a fixture should be routed, since that decision belongs to the production routing
@@ -15,7 +15,7 @@
 
 import { readFile } from "node:fs/promises";
 import type { JevEvaluationError, JevEvaluationResponse } from "../src/adapters/typesafe.ts";
-import type { PromptRoutingDecision } from "../src/extension/prompt-routing.ts";
+import type { PromptRoutingDecision } from "../src/session/prompt-routing.ts";
 
 /** Bump whenever a fixture field is added, removed, or reinterpreted. */
 export const PROMPT_ROUTING_FIXTURE_SET_VERSION = "prompt-routing-fixtures-2026.09.20-v1";

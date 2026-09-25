@@ -25,8 +25,15 @@ import type {
   RuntimeState,
   RuntimeTaskState,
 } from "../../src/runtime/schema.ts";
+import type {
+  Capabilities,
+  SessionDeps,
+  SessionEffect,
+  SessionHost,
+} from "../../src/session/events.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore, type TaskStore } from "../../src/tasks/store.ts";
+import { WorkerOutputError } from "../../src/workers/protocol.ts";
 
 export const SCENARIO_NOW: IsoTimestamp = "2030-01-01T00:00:00.000Z";
 export const SCENARIO_HEAD = "0123456789abcdef0123456789abcdef01234567";
@@ -1353,4 +1360,123 @@ export async function withScenario(
   } finally {
     await world.close();
   }
+}
+
+/** What a recording host answers to the core's queries; tests may change it mid-scenario. */
+export type SessionHostAnswers = {
+  confirm: boolean;
+  contextTokens: number | undefined;
+  paneState: ReturnType<SessionHost["paneState"]>;
+  /** The model selector `assertSelectedModel` accepts; any other throws WorkerOutputError. */
+  selectedModel: string;
+};
+
+export type RecordingSessionHost = Readonly<{
+  readonly host: SessionHost;
+  /** Every effect the core performed, in order, including ones scripted to fail. */
+  readonly effects: readonly SessionEffect[];
+  readonly confirmations: readonly Readonly<{ readonly title: string; readonly message: string }>[];
+  readonly answers: SessionHostAnswers;
+  /** Makes the next `perform` of this effect type reject, as when a send fails. */
+  readonly failNext: (type: SessionEffect["type"]) => void;
+}>;
+
+/** A fake harness for the session core: records effects and answers queries from `answers`. */
+export function recordingSessionHost(
+  options: Readonly<{
+    readonly capabilities?: Partial<Capabilities>;
+    readonly answers?: Partial<SessionHostAnswers>;
+  }> = {},
+): RecordingSessionHost {
+  const effects: SessionEffect[] = [];
+  const confirmations: { title: string; message: string }[] = [];
+  const failing: SessionEffect["type"][] = [];
+  const answers: SessionHostAnswers = {
+    confirm: false,
+    contextTokens: undefined,
+    paneState: { idle: true, pendingMessages: false, draft: false },
+    selectedModel: SCENARIO_POLICY.config.models.coordinator.model,
+    ...options.answers,
+  };
+  const host: SessionHost = {
+    capabilities: {
+      proactiveCompaction: true,
+      hiddenMessages: true,
+      streamingProgress: true,
+      perActionApproval: true,
+      ...options.capabilities,
+    },
+    perform: async (effect) => {
+      effects.push(effect);
+      const failure = failing.indexOf(effect.type);
+      if (failure === -1) return;
+      failing.splice(failure, 1);
+      throw new Error(`scripted ${effect.type} failure`);
+    },
+    confirm: async (title, message) => {
+      confirmations.push({ title, message });
+      return answers.confirm;
+    },
+    contextTokens: () => answers.contextTokens,
+    paneState: () => answers.paneState,
+    assertSelectedModel: (selector) => {
+      if (selector !== answers.selectedModel) {
+        throw new WorkerOutputError(`selected ${answers.selectedModel}, expected ${selector}`);
+      }
+    },
+    mcpToolPrefix: (server) => `mcp__${server}_`,
+  };
+  return { host, effects, confirmations, answers, failNext: (type) => failing.push(type) };
+}
+
+export type FakeSessionTime = Readonly<{
+  readonly clock: SessionDeps["clock"];
+  readonly timers: SessionDeps["timers"];
+  /** Moves both clocks forward, running each due timer in due order. */
+  readonly advance: (ms: number) => void;
+  readonly pendingTimers: () => number;
+}>;
+
+/** A manual wall clock starting at `SCENARIO_NOW` and a monotonic clock starting at zero. */
+export function fakeSessionTime(): FakeSessionTime {
+  const start = Date.parse(SCENARIO_NOW);
+  let elapsed = 0;
+  let nextId = 0;
+  const scheduled = new Map<number, { due: number; every?: number; run: () => void }>();
+  const schedule = (ms: number, run: () => void, every?: number) => {
+    nextId += 1;
+    const id = nextId;
+    scheduled.set(id, { due: elapsed + ms, run, ...(every === undefined ? {} : { every }) });
+    return () => {
+      scheduled.delete(id);
+    };
+  };
+  const nextDue = (until: number) => {
+    let found: [number, { due: number; every?: number; run: () => void }] | undefined;
+    for (const entry of scheduled) {
+      if (entry[1].due <= until && (found === undefined || entry[1].due < found[1].due)) {
+        found = entry;
+      }
+    }
+    return found;
+  };
+  return {
+    clock: { now: () => start + elapsed, monotonic: () => elapsed },
+    timers: {
+      every: (ms, run) => schedule(ms, run, ms),
+      after: (ms, run) => schedule(ms, run),
+    },
+    advance: (ms) => {
+      const until = elapsed + ms;
+      for (let due = nextDue(until); due !== undefined; due = nextDue(until)) {
+        const [id, timer] = due;
+        elapsed = timer.due;
+        if (timer.every === undefined) scheduled.delete(id);
+        else timer.due += timer.every;
+        timer.run();
+      }
+      elapsed = until;
+    },
+    pendingTimers: () => scheduled.size,
+  };
 }

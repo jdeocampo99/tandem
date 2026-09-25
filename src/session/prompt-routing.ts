@@ -1,10 +1,4 @@
 import { createHash } from "node:crypto";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  InputEvent,
-  InputEventResult,
-} from "@oh-my-pi/pi-coding-agent";
 import {
   choiceConfidence,
   evaluateJev,
@@ -22,10 +16,10 @@ import {
 } from "../adapters/typesafe.ts";
 import { findPullRequestRef } from "../pr-review/pull-request.ts";
 import { classifyPrReviewPrompt, PR_REVIEW_ROUTE_QUESTION_VERSION } from "../pr-review/route.ts";
-import { appendDiagnosticEvent, type DiagnosticValue } from "../runtime/diagnostics.ts";
+import type { DiagnosticEvent, DiagnosticValue } from "../runtime/diagnostics.ts";
 import type { UsageRecord } from "../runtime/usage.ts";
 import type { TandemService } from "../service/controller.ts";
-import { executeTandemAction, type TandemAction } from "./actions.ts";
+import { type ApprovalDialog, executeTandemAction, type TandemAction } from "./actions.ts";
 import {
   CHOICE_REPLY_ROUTE_QUESTION_VERSION,
   classifyChoiceReply,
@@ -33,6 +27,7 @@ import {
   type OpenChoice,
   openChoices,
 } from "./choice-reply-route.ts";
+import type { SessionEvent, SessionHost } from "./events.ts";
 import {
   classifyPullUpPrompt,
   MAX_PULL_UP_CANDIDATES,
@@ -90,13 +85,19 @@ export type PromptRoutingEvaluation = Readonly<{
   readonly usage?: UsageRecord;
 }>;
 
+export type UserPrompt = Extract<SessionEvent, { type: "userPrompt" }>;
+
 export type PromptRoutingDependencies = Readonly<{
   readonly config: PromptRoutingConfig;
-  readonly getService: (ctx: ExtensionContext) => TandemService;
-  readonly getHome: (ctx: ExtensionContext) => string;
+  /** Read only when a route needs Tandem state. */
+  readonly service: () => TandemService;
   /** The project a routed PR review runs under; without it, PR links go to the coordinator. */
-  readonly getRepo?: (ctx: ExtensionContext) => string;
-  readonly sendMessage: ExtensionAPI["sendMessage"];
+  readonly repoPath?: () => string;
+  /** Delivers routed replies. */
+  readonly host: Pick<SessionHost, "perform">;
+  readonly confirm: ApprovalDialog | undefined;
+  /** Best effort: a failed write never changes how the prompt is handled. */
+  readonly diagnostics: (event: DiagnosticEvent) => Promise<void>;
   readonly evaluate?: (
     input: JevEvaluationInput,
     options: JevEvaluationOptions,
@@ -438,64 +439,59 @@ function routeDetails(
 
 async function recordDiagnostic(
   deps: PromptRoutingDependencies,
-  ctx: ExtensionContext,
   event: string,
   details: Record<string, DiagnosticValue>,
   usage?: UsageRecord,
 ): Promise<void> {
   try {
-    await appendDiagnosticEvent(deps.getHome(ctx), {
-      event,
-      details,
-      ...(usage === undefined ? {} : { usage }),
-    });
+    await deps.diagnostics({ event, details, ...(usage === undefined ? {} : { usage }) });
   } catch {
     // Diagnostics are best effort and must never alter prompt handling.
   }
 }
 
-function sendDisplayedMessage(
+async function deliverReply(
   deps: PromptRoutingDependencies,
-  content: string,
+  text: string,
   details: Record<string, DiagnosticValue>,
-): void {
-  deps.sendMessage(
-    {
-      customType: "tandem-prompt-route",
-      content,
-      display: true,
-      attribution: "agent",
-      details,
-    },
-    { deliverAs: "nextTurn" },
-  );
+): Promise<void> {
+  await deps.host.perform({
+    type: "deliver",
+    source: "prompt-route",
+    text,
+    details,
+    timing: "nextTurn",
+    triggerTurn: false,
+  });
 }
 
-export async function handlePromptInput(
-  event: InputEvent,
-  ctx: ExtensionContext,
+/**
+ * Answers an interactive prompt in code when it is a lookup, a PR review, a pull-up, or a reply to
+ * a fixed-choice question, delivering the reply through the host. `handled: false` leaves the
+ * prompt to the coordinator.
+ */
+export async function routeUserPrompt(
+  event: UserPrompt,
   deps: PromptRoutingDependencies,
-): Promise<InputEventResult | undefined> {
-  if (event.source !== "interactive") return undefined;
+): Promise<Readonly<{ handled: boolean }>> {
+  if (!event.interactive) return { handled: false };
   const prompt = normalizePrompt(event.text);
-  if (prompt.length === 0) return undefined;
+  if (prompt.length === 0) return { handled: false };
   // A confirmation lasts one message: anything but an exact "y" or "n" routes as a new prompt.
   const pending = deps.confirmation?.pending;
   if (deps.confirmation !== undefined && pending !== undefined) {
     deps.confirmation.pending = undefined;
     if (prompt === "y") {
-      await dispatchRoutedAction(prompt, pending.action, ctx, deps, {
-        confirmedInConversation: true,
-      });
+      await dispatchRoutedAction(prompt, pending.action, deps, { confirmedInConversation: true });
       return { handled: true };
     }
     if (prompt === "n") {
-      sendDisplayedMessage(deps, "Okay, I didn't do that.", {
+      await deliverReply(deps, "Okay, I didn't do that.", {
         promptHash: promptHash(prompt),
         action: pending.action.action,
         declined: true,
       });
-      await recordDiagnostic(deps, ctx, "prompt-route-declined", {
+      await recordDiagnostic(deps, "prompt-route-declined", {
         promptHash: promptHash(prompt),
         action: pending.action.action,
       });
@@ -503,25 +499,27 @@ export async function handlePromptInput(
     }
   }
   if (prompt.startsWith("/")) {
-    await recordDiagnostic(deps, ctx, "prompt-route-bypassed", {
+    await recordDiagnostic(deps, "prompt-route-bypassed", {
       promptHash: promptHash(prompt),
       reason: "known-command",
     });
-    return undefined;
+    return { handled: false };
   }
-  if ((event.images?.length ?? 0) > 0) {
-    await recordDiagnostic(deps, ctx, "prompt-route-bypassed", {
+  if (event.attachments > 0) {
+    await recordDiagnostic(deps, "prompt-route-bypassed", {
       promptHash: promptHash(prompt),
       reason: "attachments-present",
     });
-    return undefined;
+    return { handled: false };
   }
 
-  if (findPullRequestRef(prompt) !== undefined) return routePrReview(prompt, ctx, deps);
+  if (findPullRequestRef(prompt) !== undefined) {
+    return { handled: await routePrReview(prompt, deps) };
+  }
   if (
     deps.config.apiKey !== undefined &&
     prompt.length <= MAX_CHOICE_REPLY_CHARS &&
-    (await routeChoiceReply(prompt, ctx, deps)) !== undefined
+    (await routeChoiceReply(prompt, deps))
   ) {
     return { handled: true };
   }
@@ -529,40 +527,42 @@ export async function handlePromptInput(
   if (
     deps.config.apiKey !== undefined &&
     mentionsPullUp(prompt) &&
-    (await routePullUp(prompt, ctx, deps)) !== undefined
+    (await routePullUp(prompt, deps))
   ) {
     return { handled: true };
   }
+  return { handled: await routeLookup(prompt, deps) };
+}
 
+/** Runs the one read-only lookup Jev names with confidence; false, with nothing run, otherwise. */
+async function routeLookup(prompt: string, deps: PromptRoutingDependencies): Promise<boolean> {
   const evaluation = await classifyPrompt(prompt, deps.config, deps.evaluate, deps.now);
   await recordDiagnostic(
     deps,
-    ctx,
     "prompt-route-evaluated",
     routeDetails(prompt, evaluation),
     evaluation.usage,
   );
   const decision = evaluation.decision;
   if (decision === undefined) {
-    await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
+    await recordDiagnostic(deps, "prompt-route-fallback", {
       promptHash: promptHash(prompt),
       reason: evaluation.reason,
     });
-    return undefined;
+    return false;
   }
   const action = actionForPromptDecision(decision);
   if (action === undefined) {
-    await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
+    await recordDiagnostic(deps, "prompt-route-fallback", {
       promptHash: promptHash(prompt),
       reason: "unsafe-action-shape",
     });
-    return undefined;
+    return false;
   }
-
-  await dispatchRoutedAction(prompt, action, ctx, deps, {
+  await dispatchRoutedAction(prompt, action, deps, {
     details: decision.taskId === undefined ? {} : { taskId: decision.taskId },
   });
-  return { handled: true };
+  return true;
 }
 
 /**
@@ -572,7 +572,6 @@ export async function handlePromptInput(
 async function dispatchRoutedAction(
   prompt: string,
   action: TandemAction,
-  ctx: ExtensionContext,
   deps: PromptRoutingDependencies,
   options: Readonly<{
     readonly details?: Record<string, DiagnosticValue>;
@@ -581,19 +580,20 @@ async function dispatchRoutedAction(
 ): Promise<void> {
   const shared = { promptHash: promptHash(prompt), action: action.action };
   try {
-    const result = await executeTandemAction(action, deps.getService(ctx), ctx, {
+    const result = await executeTandemAction(action, deps.service(), {
+      confirm: deps.confirm,
       confirmedInConversation: options.confirmedInConversation ?? false,
     });
-    sendDisplayedMessage(deps, summarizeTandemActionValue(result.action, result.value), {
+    await deliverReply(deps, summarizeTandemActionValue(result.action, result.value), {
       ...shared,
       ...options.details,
     });
-    await recordDiagnostic(deps, ctx, "prompt-route-dispatched", { ...shared, ...options.details });
+    await recordDiagnostic(deps, "prompt-route-dispatched", { ...shared, ...options.details });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const output = `Tandem ${action.action} failed: ${compactText(message, ACTION_RESULT_MAX_CHARS)}`;
-    sendDisplayedMessage(deps, output, { ...shared, error: "action-failed" });
-    await recordDiagnostic(deps, ctx, "prompt-route-failed", { ...shared, error: "action-failed" });
+    await deliverReply(deps, output, { ...shared, error: "action-failed" });
+    await recordDiagnostic(deps, "prompt-route-failed", { ...shared, error: "action-failed" });
   }
 }
 
@@ -601,15 +601,10 @@ async function dispatchRoutedAction(
  * A prompt with a PR link either starts a review directly, when Jev is confident it asks for one,
  * or goes to the coordinator. It never falls through to the read-only lookup routes.
  */
-async function routePrReview(
-  prompt: string,
-  ctx: ExtensionContext,
-  deps: PromptRoutingDependencies,
-): Promise<InputEventResult | undefined> {
+async function routePrReview(prompt: string, deps: PromptRoutingDependencies): Promise<boolean> {
   const evaluation = await classifyPrReviewPrompt(prompt, deps.config, deps.evaluate, deps.now);
   await recordDiagnostic(
     deps,
-    ctx,
     "prompt-route-evaluated",
     {
       promptHash: promptHash(prompt),
@@ -622,22 +617,22 @@ async function routePrReview(
     evaluation.usage,
   );
   const route = evaluation.route;
-  if (route === undefined || deps.getRepo === undefined) {
-    await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
+  if (route === undefined || deps.repoPath === undefined) {
+    await recordDiagnostic(deps, "prompt-route-fallback", {
       promptHash: promptHash(prompt),
       reason: route === undefined ? evaluation.reason : "no-project",
     });
-    return undefined;
+    return false;
   }
   const action: TandemAction = {
     action: "review-pr",
     pullRequest: route.pullRequest,
-    repoPath: deps.getRepo(ctx),
+    repoPath: deps.repoPath(),
     lens: route.lens.kind,
     ...(route.lens.kind === "focus" ? { focus: route.lens.focus } : {}),
   };
-  await dispatchRoutedAction(prompt, action, ctx, deps);
-  return { handled: true };
+  await dispatchRoutedAction(prompt, action, deps);
+  return true;
 }
 
 /** Briefs and presentations a person could ask to see, newest first. */
@@ -668,23 +663,18 @@ async function pullUpCandidates(service: TandemService): Promise<readonly PullUp
 
 /**
  * Opens the brief or presentation a prompt asks to see, when Jev names exactly one with
- * confidence. Returns undefined, with nothing opened, when the prompt should route on.
+ * confidence. Returns false, with nothing opened, when the prompt should route on.
  */
-async function routePullUp(
-  prompt: string,
-  ctx: ExtensionContext,
-  deps: PromptRoutingDependencies,
-): Promise<true | undefined> {
-  const service = deps.getService(ctx);
+async function routePullUp(prompt: string, deps: PromptRoutingDependencies): Promise<boolean> {
   let candidates: readonly PullUpCandidate[];
   try {
-    candidates = await pullUpCandidates(service);
+    candidates = await pullUpCandidates(deps.service());
   } catch {
-    await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
+    await recordDiagnostic(deps, "prompt-route-fallback", {
       promptHash: promptHash(prompt),
       reason: "pull-up-candidates-unavailable",
     });
-    return undefined;
+    return false;
   }
   const evaluation = await classifyPullUpPrompt(
     prompt,
@@ -695,7 +685,6 @@ async function routePullUp(
   );
   await recordDiagnostic(
     deps,
-    ctx,
     "prompt-route-evaluated",
     {
       promptHash: promptHash(prompt),
@@ -708,36 +697,32 @@ async function routePullUp(
     evaluation.usage,
   );
   const target = evaluation.target;
-  if (target === undefined) return undefined;
+  if (target === undefined) return false;
   const action: TandemAction =
     target.kind === "brief"
       ? { action: "brief-review", requestId: target.id }
       : { action: "presentation-open", presentationId: target.id };
-  await dispatchRoutedAction(prompt, action, ctx, deps);
+  await dispatchRoutedAction(prompt, action, deps);
   return true;
 }
 
 /**
  * Answers the fixed-choice question a short reply picks, when Jev names exactly one with
  * confidence. A low-risk choice runs now; a risky one is only asked back as a y/n question.
- * Returns undefined, with nothing done, when the prompt should route on.
+ * Returns false, with nothing done, when the prompt should route on.
  */
-async function routeChoiceReply(
-  prompt: string,
-  ctx: ExtensionContext,
-  deps: PromptRoutingDependencies,
-): Promise<true | undefined> {
+async function routeChoiceReply(prompt: string, deps: PromptRoutingDependencies): Promise<boolean> {
   let choices: readonly OpenChoice[];
   try {
-    choices = await openChoices(deps.getService(ctx));
+    choices = await openChoices(deps.service());
   } catch {
-    await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
+    await recordDiagnostic(deps, "prompt-route-fallback", {
       promptHash: promptHash(prompt),
       reason: "open-choices-unavailable",
     });
-    return undefined;
+    return false;
   }
-  if (choices.length === 0) return undefined;
+  if (choices.length === 0) return false;
   const evaluation = await classifyChoiceReply(
     prompt,
     choices,
@@ -747,7 +732,6 @@ async function routeChoiceReply(
   );
   await recordDiagnostic(
     deps,
-    ctx,
     "prompt-route-evaluated",
     {
       promptHash: promptHash(prompt),
@@ -760,25 +744,25 @@ async function routeChoiceReply(
     evaluation.usage,
   );
   const choice = evaluation.choice;
-  if (choice === undefined) return undefined;
+  if (choice === undefined) return false;
   if (choice.confirm === undefined) {
-    await dispatchRoutedAction(prompt, choice.action, ctx, deps);
+    await dispatchRoutedAction(prompt, choice.action, deps);
     return true;
   }
   if (deps.confirmation === undefined) {
-    await recordDiagnostic(deps, ctx, "prompt-route-fallback", {
+    await recordDiagnostic(deps, "prompt-route-fallback", {
       promptHash: promptHash(prompt),
       reason: "confirmation-unavailable",
     });
-    return undefined;
+    return false;
   }
   deps.confirmation.pending = choice;
-  sendDisplayedMessage(deps, choice.confirm, {
+  await deliverReply(deps, choice.confirm, {
     promptHash: promptHash(prompt),
     action: choice.action.action,
     awaitingConfirmation: true,
   });
-  await recordDiagnostic(deps, ctx, "prompt-route-confirm-asked", {
+  await recordDiagnostic(deps, "prompt-route-confirm-asked", {
     promptHash: promptHash(prompt),
     action: choice.action.action,
   });

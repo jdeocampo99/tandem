@@ -1,15 +1,16 @@
 import { expect, test } from "bun:test";
-import type {
-  JevChoiceAnswer,
-  JevEvaluationInput,
-  JevEvaluationResponse,
+import {
+  JEV_MODEL,
+  type JevChoiceAnswer,
+  type JevEvaluationInput,
+  type JevEvaluationResponse,
 } from "../../src/adapters/typesafe.ts";
 import {
   classifyPullUpPrompt,
   mentionsPullUp,
   type PullUpCandidate,
   type PullUpEvaluator,
-} from "../../src/extension/pull-up-route.ts";
+} from "../../src/session/pull-up-route.ts";
 
 const config = { apiKey: "key", timeoutMs: 1_500 };
 const CANDIDATES: readonly PullUpCandidate[] = [
@@ -112,4 +113,18 @@ test("no candidates or no API key skips Jev", async () => {
       .reason,
   ).toBe("jev-not-configured");
   expect(seen).toHaveLength(0);
+});
+
+test("the configured fetch carries the Jev request", async () => {
+  const seen: JevEvaluationInput[] = [];
+  const reply = answers(choice("open", ["open", "other"]), choice("c2", TARGETS), seen);
+  const result = await classifyPullUpPrompt("pull up the settings brief", CANDIDATES, {
+    ...config,
+    fetch: async (_endpoint, init) => {
+      const response = await reply(JSON.parse(String(init?.body)) as JevEvaluationInput, config);
+      return new Response(JSON.stringify({ ...response, model: JEV_MODEL }));
+    },
+  });
+  expect(seen).toHaveLength(1);
+  expect(result.target).toEqual(CANDIDATES[1]);
 });

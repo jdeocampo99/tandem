@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { TaskRecord } from "../contracts.ts";
 import type { PrWatchNotice } from "../pr-watch/store.ts";
 import { renderRequestReceiptTable } from "../runtime/usage-receipt.ts";
 import type { TandemService } from "../service/controller.ts";
 import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
+import type { SessionHost } from "./events.ts";
 import { buildResearchFollowUpContent } from "./research-follow-up.ts";
 import { ACTION_SUMMARY_MAX_TEXT, compactText, prioritizeTasks } from "./summary.ts";
 
@@ -175,9 +175,8 @@ function judgmentDisplayContent(notifications: readonly NotificationRef[]): stri
 
 /**
  * The task/request and question ids the displayed judgment-needed text just left out, in the same
- * order, for a tool call to act on. Sent as a `display: false` companion message: it still reaches
- * the model's context (a custom message's `content` is converted to LLM history regardless of
- * `display`), but the host transcript never renders it, so the user never sees an id.
+ * order, for a tool call to act on. Delivered as the hidden part of the wake: it reaches the
+ * model's context, but the host never renders it, so the user never sees an id.
  */
 function judgmentIdentifiers(notifications: readonly NotificationRef[]): string {
   const lines = notifications.map((notification) => {
@@ -245,11 +244,8 @@ function withoutReportText(notification: NotificationRef): NotificationRef {
   return rest;
 }
 
-type NotificationMessageSink = Pick<ExtensionAPI, "sendMessage" | "appendEntry">;
-type NotificationUi = Readonly<{ readonly ui: Pick<ExtensionContext["ui"], "notify"> }>;
-
 export type PendingNotificationDelivery = Readonly<{
-  readonly pi: NotificationMessageSink;
+  readonly host: Pick<SessionHost, "perform">;
   readonly service: Pick<TandemService, "acknowledge" | "requestReceipt">;
   readonly tasks: readonly TaskRecord[];
   /** Task/notification pairs already sent in this process, so one wake is not repeated. */
@@ -259,15 +255,17 @@ export type PendingNotificationDelivery = Readonly<{
    * pair here for a later tick instead of re-sending a wake the coordinator has already read.
    */
   readonly unacknowledged: Set<string>;
-  readonly ctx: NotificationUi;
   readonly readReport: ResearchReportReader;
 }>;
 
-/** Deliver pending notifications without turning routine scheduler work into model input. */
+/**
+ * Deliver pending notifications without turning routine scheduler work into model input. A failed
+ * send forgets the batch, so a later tick sends it again.
+ */
 export async function deliverPendingNotifications(
   delivery: PendingNotificationDelivery,
 ): Promise<void> {
-  const { pi, tasks, delivered, unacknowledged, ctx } = delivery;
+  const { host, tasks, delivered, unacknowledged } = delivery;
   const pending = await allPendingNotifications(tasks, delivery.readReport);
   if (pending.length === 0) return;
   const batch = pending
@@ -285,31 +283,27 @@ export async function deliverPendingNotifications(
   try {
     if (routine.length > 0) {
       const content = notificationContent(routine);
-      ctx.ui.notify(content, "info");
-      pi.appendEntry(TANDEM_NOTIFICATION_ENTRY, { notifications: routine, content });
+      await host.perform({ type: "notify", text: content, level: "info" });
+      await host.perform({
+        type: "recordEntry",
+        entryType: TANDEM_NOTIFICATION_ENTRY,
+        data: { notifications: routine, content },
+      });
     }
     if (actionable.length > 0) {
-      // The identifiers land in context first (hidden), then the clean prompt the user reads;
-      // only the second call triggers the turn, so the model responds once with both in hand.
-      pi.sendMessage(
-        {
-          customType: TANDEM_NOTIFICATION_ENTRY,
-          content: judgmentIdentifiers(actionable),
-          display: false,
+      // The identifiers land in context first (hidden), then the clean prompt the user reads,
+      // which alone triggers the turn, so the model responds once with both in hand.
+      await host.perform({
+        type: "deliver",
+        source: "notification",
+        text: judgmentDisplayContent(actionable),
+        hidden: {
+          text: judgmentIdentifiers(actionable),
           details: { notifications: actionable.map(withoutReportText) },
-          attribution: "agent",
         },
-        { deliverAs: "followUp" },
-      );
-      pi.sendMessage(
-        {
-          customType: TANDEM_NOTIFICATION_ENTRY,
-          content: judgmentDisplayContent(actionable),
-          display: true,
-          attribution: "agent",
-        },
-        { deliverAs: "followUp", triggerTurn: true },
-      );
+        timing: "followUp",
+        triggerTurn: true,
+      });
     }
   } catch (error) {
     for (const notification of batch) {
@@ -355,39 +349,33 @@ async function acknowledgeDelivered(
  */
 export async function deliverPrWatchNotices(
   delivery: Readonly<{
-    readonly pi: Pick<ExtensionAPI, "appendEntry" | "sendMessage">;
+    readonly host: SessionHost;
     readonly service: Pick<TandemService, "prWatchNotices">;
-    readonly ctx: NotificationUi;
   }>,
 ): Promise<void> {
+  const { host } = delivery;
   const notices = await delivery.service.prWatchNotices();
   const routine = notices.filter(
     (notice) => notice.askToFix !== true && notice.setUpMerging === undefined,
   );
   if (routine.length > 0) {
     const content = routine.map((notice) => notice.text).join("\n");
-    delivery.ctx.ui.notify(content, "info");
-    delivery.pi.appendEntry(TANDEM_NOTIFICATION_ENTRY, { prWatch: routine, content });
+    await host.perform({ type: "notify", text: content, level: "info" });
+    await host.perform({
+      type: "recordEntry",
+      entryType: TANDEM_NOTIFICATION_ENTRY,
+      data: { prWatch: routine, content },
+    });
   }
   for (const question of notices.filter((notice) => !routine.includes(notice))) {
-    delivery.pi.sendMessage(
-      {
-        customType: TANDEM_NOTIFICATION_ENTRY,
-        content: questionInstruction(question),
-        display: false,
-        attribution: "agent",
-      },
-      { deliverAs: "nextTurn" },
-    );
-    delivery.pi.sendMessage(
-      {
-        customType: TANDEM_NOTIFICATION_ENTRY,
-        content: question.text,
-        display: true,
-        attribution: "agent",
-      },
-      { deliverAs: "nextTurn" },
-    );
+    await host.perform({
+      type: "deliver",
+      source: "notification",
+      text: question.text,
+      hidden: { text: questionInstruction(question) },
+      timing: "nextTurn",
+      triggerTurn: false,
+    });
   }
 }
 

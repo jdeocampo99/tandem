@@ -2,7 +2,6 @@ import { expect, setSystemTime, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { zod } from "@oh-my-pi/pi-coding-agent";
 import { runWorkerJob } from "../../src/worker.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import {
@@ -158,7 +157,6 @@ async function startExtension(
   process.env.TANDEM_WORKER_JOB_PATH = jobPath;
   const testFixture = fixture();
   const pi = {
-    zod,
     on(event: string, handler: Handler): void {
       testFixture.handlers.set(event, handler);
     },
@@ -194,7 +192,6 @@ test("a subagent's copy of the extension keeps the tool guard but never drives t
     // OMP loads a fresh copy into each subagent, in the same process and with the same job.
     const subagent = fixture();
     await registerWorkerTerminalExtension({
-      zod,
       on(event: string, handler: Handler): void {
         subagent.handlers.set(event, handler);
       },
@@ -287,21 +284,9 @@ test("malformed submissions are rejected back to the worker without settling the
     readonly good: SubmittedReport;
   }[] = [
     {
-      role: "reviewer",
-      bad: { outcome: "completed", review: { findings: [] } },
-      rejection: "review.summary",
-      good: { outcome: "completed", review: review() },
-    },
-    {
       role: "implementer",
       bad: { outcome: "needs-decision", report: "Blocked." },
       rejection: "requires a question",
-      good: IMPLEMENTED,
-    },
-    {
-      role: "implementer",
-      bad: { outcome: "completed", report: "Done." },
-      rejection: "outcome must be one of implemented",
       good: IMPLEMENTED,
     },
     {
@@ -336,6 +321,33 @@ test("malformed submissions are rejected back to the worker without settling the
         expect((await readWorkerTerminal(terminalJob))?.completed).toBe(false);
         expect((await submitReport(f, value.good)).isError).toBeUndefined();
         expect((await readWorkerResult(job.resultPath, job)).status).toBe("completed");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.TANDEM_WORKER_JOB_PATH;
+    else process.env.TANDEM_WORKER_JOB_PATH = previous;
+  }
+});
+
+test("arguments outside the submit_report schema never reach the report contract", async () => {
+  const previous = process.env.TANDEM_WORKER_JOB_PATH;
+  const cases: readonly { readonly role: WorkerJob["role"]; readonly bad: SubmittedReport }[] = [
+    { role: "reviewer", bad: { outcome: "completed", review: { findings: [] } } },
+    { role: "implementer", bad: { outcome: "completed", report: "Done." } },
+    { role: "scout", bad: { outcome: "completed", report: "Done.", artifactPath: "/tmp/a" } },
+  ];
+  try {
+    for (const value of cases) {
+      const root = await mkdtemp(join(tmpdir(), "tandem-native-worker-schema-"));
+      try {
+        const job = makeJob(root, value.role);
+        const { fixture: f, terminalJob } = await startExtension(root, job);
+        // OMP validates arguments against the same schema before execute is ever called.
+        await expect(submitReport(f, value.bad)).rejects.toThrow();
+        expect(await Bun.file(job.resultPath).exists()).toBe(false);
+        expect((await readWorkerTerminal(terminalJob))?.completed).toBe(false);
       } finally {
         await rm(root, { recursive: true, force: true });
       }

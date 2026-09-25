@@ -100,7 +100,7 @@ src/terminal/cli-arguments.ts, src/cli.ts
 
 Every approval prompt is one short question plus at most one short line, naming the task by its
 objective's first sentence. Never include a path, hash, branch, criteria list, or id. Prompt text
-lives in `approvalPrompt` in src/extension/actions.ts.
+lives in `approvalPrompt` in src/session/actions.ts.
 
 ## CLI consent and output
 

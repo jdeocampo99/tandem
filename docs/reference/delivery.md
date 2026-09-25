@@ -165,7 +165,7 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
 - During that turn the scout may `write` and `edit` only inside the artifact directory, and may
   `copy_asset` a regular file from its checkout into it, byte for byte, for relative reference.
   Outside a mockup turn, and for every other path, the scout's writes are refused
-  (src/workers/terminal-extension.ts).
+  (src/session/worker.ts).
 - When a draw settles, the controller verifies the artifact is a regular file inside the directory
   before opening it in Lavish; a missing or escaping artifact fails the presentation with a
   coordinator notification.

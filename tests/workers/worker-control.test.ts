@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -18,6 +18,7 @@ import {
   newestTaskMarker,
   touchedReceipt,
 } from "../../src/workers/control-protocol.ts";
+import { readWorkerTerminal, WORKER_JOB_PATH_ENV } from "../../src/workers/terminal.ts";
 
 type Handler = (event: unknown, context: unknown) => unknown | Promise<unknown>;
 
@@ -203,6 +204,126 @@ test("poll observes receipts without model wakes, context applies one bounded ba
   }
 });
 
+/** An OMP extension API fake that, like OMP, keeps and runs every handler registered for an event. */
+function multiHandlerPi() {
+  const handlers = new Map<string, Handler[]>();
+  const tools = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+  const pi = {
+    on(event: string, handler: Handler): void {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+    },
+    registerTool(tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }): void {
+      tools.set(tool.name, tool.execute);
+    },
+  };
+  const emit = async (event: string, payload: unknown, context: unknown) => {
+    const results: unknown[] = [];
+    for (const handler of handlers.get(event) ?? []) results.push(await handler(payload, context));
+    return results;
+  };
+  return { pi, handlers, tools, emit };
+}
+
+test("the combined worker extension runs both its steering and terminal handlers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-worker-combined-"));
+  const previous = {
+    control: process.env[WORKER_CONTROL_ENV],
+    job: process.env[WORKER_JOB_PATH_ENV],
+  };
+  const taskId = "task-combined";
+  const jobPath = join(root, "job.json");
+  const receiptPath = join(root, "communication.json");
+  try {
+    const job = {
+      schemaVersion: 1,
+      id: "job-combined",
+      taskId,
+      generation: 1,
+      role: "scout",
+      cwd: root,
+      model: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
+      prompt: "Research.",
+      resultPath: join(root, "result.json"),
+    };
+    await writeFile(jobPath, `${JSON.stringify(job)}\n`);
+    await writeTaskInbox(join(root, "inbox.json"), taskInbox(taskId, communicationWith(1)));
+    process.env[WORKER_JOB_PATH_ENV] = jobPath;
+    process.env[WORKER_CONTROL_ENV] = JSON.stringify({
+      schemaVersion: 1,
+      jobId: job.id,
+      taskId,
+      generation: 1,
+      inboxPath: join(root, "inbox.json"),
+      receiptPath,
+      initialRevision: 0,
+    });
+    const fake = multiHandlerPi();
+    let intervals = 0;
+    const context = {
+      model: { provider: "openai-codex", id: "gpt-5.6-luna" },
+      ui: { getEditorText: () => "", onTerminalInput: () => () => {} },
+      setInterval: () => {
+        intervals += 1;
+        return {};
+      },
+      setTimeout: () => ({}),
+      clearTimer: () => {},
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      abort: () => {},
+    };
+    await workerControlExtension(fake.pi as never);
+    for (const event of ["session_start", "context", "agent_end", "tool_execution_end"]) {
+      expect({ event, handlers: fake.handlers.get(event)?.length }).toEqual({ event, handlers: 2 });
+    }
+
+    await fake.emit("session_start", { type: "session_start" }, context);
+    expect(intervals).toBe(4);
+    const identity = { jobId: job.id, taskId, generation: 1 };
+    expect((await readWorkerReceipt(receiptPath, identity))?.phase).toBe("model");
+    const terminalJob = { ...job, role: "scout" as const, jobPath };
+    expect((await readWorkerTerminal(terminalJob))?.phase).toBe("busy");
+
+    const [steered, watched] = await fake.emit(
+      "context",
+      { type: "context", messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      context,
+    );
+    expect(markerCount((steered as { messages: unknown[] }).messages)).toBe(1);
+    expect(watched).toBeUndefined();
+    expect((await readWorkerReceipt(receiptPath, identity))?.appliedRevision).toBe(1);
+
+    const submit = fake.tools.get("submit_report");
+    if (submit === undefined) throw new Error("missing submit_report");
+    await submit(
+      "call-1",
+      { outcome: "completed", report: "Findings." },
+      undefined,
+      undefined,
+      context,
+    );
+    const shell = { toolName: "bash", input: { command: "touch x" } };
+    expect(await fake.emit("tool_call", shell, context)).toEqual([
+      {
+        block: true,
+        reason: "worker terminal is paused or completed; mutating tools are disabled",
+      },
+    ]);
+    const trace = await readFile(`${jobPath}.trace.jsonl`, "utf8");
+    expect(trace).toContain('"event":"context"');
+    expect(trace).toContain('"event":"result_published"');
+  } finally {
+    for (const [key, value] of [
+      [WORKER_CONTROL_ENV, previous.control],
+      [WORKER_JOB_PATH_ENV, previous.job],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function communicationWith(count: number): TaskCommunication {
   let communication: TaskCommunication | undefined;
   for (let index = 1; index <= count; index += 1) {
@@ -243,11 +364,12 @@ test("task messages collapse into one copy at the first marker, or are appended"
   expect(newestTaskMarker(history, "task-a")?.batch.revision).toBe(2);
   expect(newestTaskMarker(history, "task-b")).toBeUndefined();
 
-  const collapsed = contextWithTaskMessages(history, "task-a", two, true, 9);
+  const placement = { taskId: "task-a", batch: two };
+  const collapsed = contextWithTaskMessages(history, { ...placement, replaceExisting: true }, 9);
   expect(collapsed).toEqual([{ role: "user", content: `note\n${marker(2)}`, timestamp: 1 }]);
 
   const plain = [{ role: "user", content: "hello", timestamp: 1 }] as AgentMessage[];
-  expect(contextWithTaskMessages(plain, "task-a", two, false, 9)).toEqual([
+  expect(contextWithTaskMessages(plain, { ...placement, replaceExisting: false }, 9)).toEqual([
     ...plain,
     { role: "user", content: marker(2), synthetic: true, attribution: "agent", timestamp: 9 },
   ] as AgentMessage[]);

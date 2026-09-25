@@ -16,7 +16,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Endpoint, ResolvedPolicy, WorktreeLease } from "../../src/contracts.ts";
-import { buildResearchFollowUpContent } from "../../src/extension/research-follow-up.ts";
+import { buildResearchFollowUpContent } from "../../src/session/research-follow-up.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import {
   checkResearchContinuation,

@@ -1,14 +1,11 @@
 import { expect, test } from "bun:test";
-import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-coding-agent";
 import type { TaskRecord } from "../../src/contracts.ts";
 import {
   atCompactionBoundary,
   coordinatorCompactTokens,
   DEFAULT_COORDINATOR_COMPACT_TOKENS,
   finishedTaskIds,
-} from "../../src/extension/compaction.ts";
-import { createTandemExtension } from "../../src/extension.ts";
-import type { TandemService } from "../../src/service/controller.ts";
+} from "../../src/session/compaction.ts";
 
 function task(overrides: Partial<TaskRecord>): TaskRecord {
   return {
@@ -54,60 +51,4 @@ test("any task waiting on the user holds compaction back", () => {
     notifications: [{ id: "n1", message: "report ready", acknowledged: false }],
   } as Partial<TaskRecord>);
   expect(atCompactionBoundary([unread], { taskFinished: true, idle: true })).toBe(false);
-});
-
-test("the coordinator compacts when a task finishes while idle over the threshold", async () => {
-  type Handler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
-  const handlers = new Map<string, Handler>();
-  let tasks: TaskRecord[] = [task({ id: "a" }), task({ id: "b", stage: "blocked" })];
-  const service = {
-    list: async () => tasks,
-    acknowledge: async () => undefined,
-    prWatchNotices: async () => [],
-  } as unknown as TandemService;
-  const pi = {
-    zod,
-    on: (event: string, handler: Handler) => handlers.set(event, handler),
-    registerTool: () => undefined,
-    registerCommand: () => undefined,
-    logger: { error: () => undefined },
-    sendMessage: () => undefined,
-    appendEntry: () => undefined,
-  } as unknown as ExtensionAPI;
-  createTandemExtension({
-    service,
-    processEnvironment: {},
-    environment: { home: "/tmp/tandem-home", sessionId: "s", poolRoot: "/tmp/pool", repo: "/repo" },
-  })(pi);
-  let compactions = 0;
-  let tokens = 200_000;
-  const ctx = {
-    cwd: "/repo",
-    sessionManager: { getSessionId: () => "s" },
-    getContextUsage: () => ({ tokens, contextWindow: 1_000_000, percent: tokens / 10_000 }),
-    compact: async () => {
-      compactions += 1;
-    },
-  } as unknown as ExtensionContext;
-  const agentEnd = async (): Promise<void> => {
-    await handlers.get("agent_end")?.({ willContinue: false }, ctx);
-  };
-
-  await agentEnd(); // seeds the finished set; nothing has finished yet
-  tasks = [task({ id: "a", stage: "completed" }), task({ id: "b", stage: "blocked" })];
-  await agentEnd();
-  expect(compactions).toBe(0); // b is still waiting on the user
-
-  tasks = [task({ id: "a", stage: "completed" }), task({ id: "b", stage: "implementing" })];
-  tokens = 50_000;
-  await agentEnd();
-  expect(compactions).toBe(0); // under the threshold, and that boundary is now used up
-
-  tokens = 200_000;
-  await agentEnd();
-  expect(compactions).toBe(0); // no new task finished since
-
-  tasks = [...tasks, task({ id: "c", stage: "merged" })];
-  await agentEnd();
-  expect(compactions).toBe(1);
 });

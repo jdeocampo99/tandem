@@ -7,6 +7,7 @@ import {
   type JevEvaluationInput,
   type JevEvaluationOptions,
   type JevEvaluationResponse,
+  type JevFetch,
   type JevGateway,
   type JevQuestions,
   jevUsageRecord,
@@ -34,6 +35,7 @@ export type PullUpRouteConfig = Readonly<{
   apiKey?: string;
   gateway?: JevGateway;
   timeoutMs: number;
+  fetch?: JevFetch;
 }>;
 
 export type PullUpEvaluator = (
@@ -124,6 +126,7 @@ export async function classifyPullUpPrompt(
       {
         apiKey: config.apiKey,
         timeoutMs: config.timeoutMs,
+        ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
         ...(config.gateway === undefined ? {} : { gateway: config.gateway }),
       },
     );

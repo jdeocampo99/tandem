@@ -3,7 +3,7 @@
 What each Tandem role may do, what actually enforces the workflow, and the local-only limits of
 Tandem's state and locks.
 
-Code: src/contracts.ts, src/worker.ts, src/coordinator/launch.ts, src/extension/tool-guard.ts,
+Code: src/contracts.ts, src/worker.ts, src/coordinator/launch.ts, src/session/tool-guard.ts,
 src/config/policy.ts, src/tasks/lifecycle.ts, src/tasks/store.ts, src/coordinator/lock.ts
 
 ## Roles and approvals
@@ -72,4 +72,4 @@ assigned to new work.
   they do not protect multiple machines or network filesystems.
 - Authoritative contracts are in code: src/contracts.ts (types and roles), src/config/ (policy),
   src/tasks/lifecycle.ts (transitions), src/adapters/ (native tools), src/service/controller.ts
-  (composition), src/extension.ts, src/extension/, src/instructions.ts (OMP integration).
+  (composition), src/extension.ts, src/extension/, src/session/, src/instructions.ts (OMP integration).

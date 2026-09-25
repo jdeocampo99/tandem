@@ -6,7 +6,7 @@ how it reads GitHub, what it does on its own, and when it tells the user.
 Code: src/pr-watch/ (`decide.ts` the decision table, `github.ts` every GitHub read and write,
 `watcher.ts` the schedule and effects, `store.ts` durable records, `view.ts` the table),
 src/service/controller.ts (`prWatch*`), src/main.ts (`tandem watch`), src/terminal/status.ts,
-src/extension/notifications.ts (`deliverPrWatchNotices`). Scenarios:
+src/session/notifications.ts (`deliverPrWatchNotices`). Scenarios:
 tests/evals/pr-watch-scenarios.test.ts.
 
 ## What is watched
@@ -184,7 +184,7 @@ PR watch · 4 open · checked 5s ago
 
 - With Jev prompt routing on, a coordinator message Jev confidently classifies as asking how the
   user's pull requests are doing ("how are my PRs?", "did #409 merge?") prints the PR watch view
-  and skips the coordinator turn (`pr-watch` in the lookup list of src/extension/prompt-routing.ts,
+  and skips the coordinator turn (`pr-watch` in the lookup list of src/session/prompt-routing.ts,
   question schema version 3). Opening the view only reads, so a wrong guess only shows a table.
 - Messages that change something ("hands off #409", "watch #412") stay with the coordinator, which
   uses `pr-watch-stop` and `pr-watch-start`. A message with a PR link or `owner/repo#N` goes to the

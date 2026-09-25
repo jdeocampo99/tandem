@@ -1,15 +1,13 @@
 import { expect, test } from "bun:test";
-import type { ExtensionContext, InputEvent } from "@oh-my-pi/pi-coding-agent";
+import { appendDiagnosticEvent, readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
+import type { TandemService } from "../../src/service/controller.ts";
 import {
-  handlePromptInput,
   type PromptRoutingConfig,
   promptRoutingConfig,
-} from "../../src/extension/prompt-routing.ts";
-import { readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
-import type { TandemService } from "../../src/service/controller.ts";
-import { type ScenarioWorld, withScenario } from "./scenario.ts";
+  routeUserPrompt,
+} from "../../src/session/prompt-routing.ts";
+import { recordingSessionHost, type ScenarioWorld, withScenario } from "./scenario.ts";
 
-const CONTEXT = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
 const PROMPT = "list my tandem tasks";
 const ROUTING_CRITERIA: Readonly<Record<string, readonly string[]>> = {
   action: ["list", "presentations", "show", "messages", "inspect", "receipt", "pr-watch", "none"],
@@ -54,20 +52,18 @@ async function routePrompt(
   world: ScenarioWorld,
   config: PromptRoutingConfig,
 ): Promise<RoutingProbe> {
-  const displayed: string[] = [];
-  const result = await handlePromptInput(
-    { source: "interactive", text: PROMPT } as InputEvent,
-    CONTEXT,
+  const recording = recordingSessionHost();
+  const result = await routeUserPrompt(
+    { type: "userPrompt", text: PROMPT, interactive: true, attachments: 0 },
     {
       config,
-      getService: () =>
+      service: () =>
         ({
           list: async () => [],
         }) as unknown as TandemService,
-      getHome: () => world.home,
-      sendMessage: ((message: string | { readonly content?: string }) => {
-        displayed.push(typeof message === "string" ? message : (message.content ?? ""));
-      }) as never,
+      host: recording.host,
+      confirm: undefined,
+      diagnostics: (entry) => appendDiagnosticEvent(world.home, entry),
     },
   );
   const events = (await readPromptRoutingLog(world.home)).map(
@@ -75,9 +71,11 @@ async function routePrompt(
       JSON.parse(line) as { readonly event: string; readonly details?: { reason?: string } },
   );
   return {
-    handled: result?.handled === true,
+    handled: result.handled,
     dispatched: events.filter((entry) => entry.event === "prompt-route-dispatched").length,
-    displayed,
+    displayed: recording.effects.flatMap((effect) =>
+      effect.type === "deliver" ? [effect.text] : [],
+    ),
     reasons: events.flatMap((entry) =>
       entry.details?.reason === undefined ? [] : [entry.details.reason],
     ),

@@ -4,7 +4,7 @@
  * (`classifyResearchContinuation` in `src/tasks/research-continuation-classifier.ts`) decides a
  * disposition from a request objective, and the pure follow-up decision
  * (`decideResearchFollowUp`/`buildResearchFollowUpContent` in `src/tasks/research-continuation.ts`
- * and `src/extension/research-follow-up.ts`) turns that disposition, plus the scout's durable
+ * and `src/session/research-follow-up.ts`) turns that disposition, plus the scout's durable
  * stage, into the coordinator-facing wake content. The loader only validates fixture shape; it
  * never decides how a fixture should classify or resolve, since that decision belongs to the
  * production code under test.

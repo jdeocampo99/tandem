@@ -7,6 +7,7 @@ import {
   type JevEvaluationInput,
   type JevEvaluationOptions,
   type JevEvaluationResponse,
+  type JevFetch,
   type JevGateway,
   type JevQuestions,
   jevUsageRecord,
@@ -153,7 +154,7 @@ function questions(choices: readonly OpenChoice[]): JevQuestions {
 export async function classifyChoiceReply(
   prompt: string,
   choices: readonly OpenChoice[],
-  config: Readonly<{ apiKey?: string; gateway?: JevGateway; timeoutMs: number }>,
+  config: Readonly<{ apiKey?: string; gateway?: JevGateway; timeoutMs: number; fetch?: JevFetch }>,
   evaluate: ChoiceReplyEvaluator = evaluateJev,
   now: () => number = () => performance.now(),
 ): Promise<ChoiceReplyEvaluation> {
@@ -181,6 +182,7 @@ export async function classifyChoiceReply(
       {
         apiKey: config.apiKey,
         timeoutMs: config.timeoutMs,
+        ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
         ...(config.gateway === undefined ? {} : { gateway: config.gateway }),
       },
     );

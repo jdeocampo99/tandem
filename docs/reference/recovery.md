@@ -7,8 +7,8 @@ Code: src/recovery/central.ts, src/recovery/central-reentry.ts, src/recovery/cen
 src/runtime/database.ts, src/runtime/persistence.ts, src/runtime/schema.ts, src/workers/workflow.ts,
 src/workers/admission.ts, src/workers/reservation.ts, src/workers/job-launch.ts,
 src/workers/job-settlement.ts, src/workers/operation-claim.ts, src/workers/operation-records.ts,
-src/workers/terminal-extension.ts, src/service/controller.ts, src/tasks/control.ts,
-src/tasks/endpoint-launch.ts, src/config/environment.ts
+src/workers/terminal-extension.ts, src/session/worker.ts, src/service/controller.ts,
+src/tasks/control.ts, src/tasks/endpoint-launch.ts, src/config/environment.ts
 
 ## Durable home
 
@@ -63,7 +63,7 @@ home is a separate namespace and never changes the remembered setup.
 ## Worker liveness
 
 These rules decide when a worker is dead, which feeds central recovery
-(`src/workers/terminal-extension.ts`).
+(`src/session/worker.ts`, adapted for OMP by `src/workers/terminal-extension.ts`).
 
 - A submitted worker idle with nothing queued for 30 s is settled even if OMP ended the turn with
   `willContinue`, which OMP does while a backgrounded command (a dev server) still runs.
