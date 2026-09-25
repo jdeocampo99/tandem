@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { evaluateJev, type JevEvaluationInput } from "../../src/adapters/typesafe.ts";
+import { evaluateJev, type JevEvaluationInput, jevGateway } from "../../src/adapters/typesafe.ts";
 
 const input: JevEvaluationInput = {
   model: "jev-1.13.0",
@@ -59,4 +59,42 @@ test("rejects timeout values above the Jev maximum", async () => {
   await expect(
     evaluateJev(input, { apiKey: "fake", timeoutMs: 10_001, fetch: async () => response() }),
   ).rejects.toMatchObject({ code: "invalid-request" });
+});
+
+test("sends the same body through a Portkey gateway under the gateway's model name", async () => {
+  const gateway = jevGateway({
+    PORTKEY_BASE_URL: "https://gateway.example/v1/",
+    PORTKEY_API_KEY: "portkey-key",
+    PORTKEY_PROVIDER: "@openrouter",
+    PORTKEY_CUSTOM_HOST: "https://openrouter.ai/api/alpha",
+    PORTKEY_JEV_MODEL: "typesafe/jev-1.13-20260917",
+  });
+  let seen: { url: string; headers: Headers; body: Record<string, unknown> } | undefined;
+  const result = await evaluateJev(input, {
+    apiKey: "typesafe-key",
+    timeoutMs: 2_000,
+    ...(gateway === undefined ? {} : { gateway }),
+    fetch: async (url, init) => {
+      seen = {
+        url: String(url),
+        headers: new Headers(init?.headers),
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      };
+      return new Response(
+        JSON.stringify({
+          model: "typesafe/jev-1.13-20260917",
+          answers: { relevant: { type: "noul", noul: 0.8 } },
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+      );
+    },
+  });
+  expect(seen?.url).toBe("https://gateway.example/v1/proxy/decisions");
+  expect(seen?.headers.get("x-portkey-api-key")).toBe("portkey-key");
+  expect(seen?.headers.get("x-portkey-provider")).toBe("@openrouter");
+  expect(seen?.headers.get("x-portkey-custom-host")).toBe("https://openrouter.ai/api/alpha");
+  expect(seen?.headers.get("authorization")).toBe("Bearer typesafe-key");
+  expect(seen?.body.model).toBe("typesafe/jev-1.13-20260917");
+  expect(result.model).toBe("jev-1.13.0");
+  expect(jevGateway({})).toBeUndefined();
 });

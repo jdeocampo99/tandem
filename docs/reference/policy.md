@@ -168,6 +168,10 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
 
 - Enabled only when `TYPESAFE_API_KEY` is set at launch; otherwise the coordinator path is
   unchanged. Model `jev-1.13.0` at `https://api.typesafe.ai/v1/systemone`.
+  With `PORTKEY_BASE_URL` set, the same request goes to `$PORTKEY_BASE_URL/proxy/decisions`
+  instead, adding `x-portkey-api-key`, `x-portkey-provider`, and `x-portkey-custom-host` from
+  `PORTKEY_API_KEY`, `PORTKEY_PROVIDER`, and `PORTKEY_CUSTOM_HOST`. `PORTKEY_JEV_MODEL` is the
+  gateway's name for Jev (default `jev-1.13.0`); receipts still record `jev-1.13.0`.
   `TANDEM_JEV_TIMEOUT_MS` accepts 100 to 10,000 (default 1,500); out-of-range falls back to default.
 - Exact slash commands bypass Jev. Other prompts send one request with only the prompt, an
   explicit task ID if present, and the lookup list.
