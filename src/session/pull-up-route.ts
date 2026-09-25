@@ -7,6 +7,7 @@ import {
   type JevEvaluationInput,
   type JevEvaluationOptions,
   type JevEvaluationResponse,
+  type JevFetch,
   type JevQuestions,
   jevUsageRecord,
 } from "../adapters/typesafe.ts";
@@ -29,7 +30,7 @@ export type PullUpCandidate = Readonly<{
   readonly about: string;
 }>;
 
-export type PullUpRouteConfig = Readonly<{ apiKey?: string; timeoutMs: number }>;
+export type PullUpRouteConfig = Readonly<{ apiKey?: string; timeoutMs: number; fetch?: JevFetch }>;
 
 export type PullUpEvaluator = (
   input: JevEvaluationInput,
@@ -116,7 +117,11 @@ export async function classifyPullUpPrompt(
         state: { message: prompt.slice(0, 2_000) },
         questions: questions(listed),
       },
-      { apiKey: config.apiKey, timeoutMs: config.timeoutMs },
+      {
+        apiKey: config.apiKey,
+        timeoutMs: config.timeoutMs,
+        ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
+      },
     );
   } catch (error) {
     const code = error instanceof JevEvaluationError ? error.code : "unavailable";
