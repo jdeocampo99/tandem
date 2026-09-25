@@ -202,8 +202,9 @@ Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #40
 `tandem board` is a live view of all your projects in one pane: what needs you (briefs to approve,
 questions, pull requests that need a person), what's running, and your watched pull requests. It
 refreshes every 2 seconds from what Tandem already saved, so an open board never calls GitHub; its
-pull request rows show when PR watch last checked. The coordinator opens it beside its chat when
-something new needs you, and asking "how's it going?" shows the same thing in the chat.
+pull request rows show when PR watch last checked. The coordinator opens it beside its chat when a
+brief, a question, a pull request, or finished work newly waits on you, and asking "how's it
+going?" shows the same thing in the chat.
 
 ```
 Tandem · tandem, tagalingo · checked 5s ago

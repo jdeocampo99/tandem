@@ -6,14 +6,10 @@ import { requestApprovalState } from "../requests/brief.ts";
 import { isTerminalTask } from "../service/records.ts";
 
 /** Task stages that wait on the user. */
-export const NEEDS_YOU_STAGES: readonly TaskStage[] = [
-  "awaiting-approval",
-  "blocked",
-  "paused",
-  "ready",
-];
-/** Task stages where Tandem is working on its own. */
+export const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
+/** Task stages where Tandem is working on its own, or the user paused it. */
 export const RUNNING_STAGES: readonly TaskStage[] = [
+  "paused",
   "queued",
   "scouting",
   "implementing",
@@ -47,6 +43,8 @@ export type BoardView = Readonly<{
 export type BoardRow = Readonly<{
   /** Stays the same while the row stands for the same thing, so a new arrival can be noticed. */
   readonly key: string;
+  /** What the row is: a brief, a task question, a pull request, or a task in this stage. */
+  readonly cause: "brief" | "question" | "pull-request" | TaskStage;
   /** The project the row belongs to; absent for a pull request no project claims. */
   readonly repoPath?: string;
   readonly project: string;
@@ -59,6 +57,7 @@ const NAME_CHARS = 30;
 const TEXT_CHARS = 80;
 
 const RUNNING_LABELS: Readonly<Record<string, Readonly<{ mark: string; label: string }>>> = {
+  paused: { mark: "⏸️", label: "paused" },
   queued: { mark: "⏳", label: "waiting to start" },
   scouting: { mark: "🔍", label: "researching" },
   implementing: { mark: "🔨", label: "implementing" },
@@ -69,7 +68,6 @@ const RUNNING_LABELS: Readonly<Record<string, Readonly<{ mark: string; label: st
 
 const NEEDS_YOU_LABELS: Readonly<Record<string, string>> = {
   "awaiting-approval": "waiting for approval",
-  paused: "paused",
   ready: "done, waiting for you",
 };
 
@@ -95,6 +93,19 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
       .map((task) => runningRow(task, now)),
     pullRequests: pullRequests.rows.filter((row) => row.color !== "red"),
   };
+}
+
+/**
+ * Whether a "Needs you" row is worth opening the board for. A blocked task is not: recovery
+ * restarts most blocks on its own, so the pane would pop for blocks that clear themselves.
+ */
+export function opensBoard(row: BoardRow): boolean {
+  return (
+    row.cause === "brief" ||
+    row.cause === "question" ||
+    row.cause === "pull-request" ||
+    row.cause === "ready"
+  );
 }
 
 export function renderBoard(view: BoardView): string {
@@ -138,6 +149,7 @@ function awaitsApproval(brief: RequestBriefRecord): boolean {
 function briefRow(brief: RequestBriefRecord): BoardRow {
   return {
     key: `brief:${brief.id}`,
+    cause: "brief",
     repoPath: brief.repoPath,
     project: basename(brief.repoPath),
     mark: "🙋",
@@ -159,6 +171,7 @@ function taskNeedsYouRow(task: TaskRecord): BoardRow {
         : (NEEDS_YOU_LABELS[task.stage] ?? task.stage);
   return {
     key: question === undefined ? `task:${task.id}:${task.stage}` : `question:${question.id}`,
+    cause: question === undefined ? task.stage : "question",
     ...taskIdentity(task),
     mark: "🙋",
     text: shorten(text, TEXT_CHARS),
@@ -169,6 +182,7 @@ function runningRow(task: TaskRecord, now: IsoTimestamp): BoardRow {
   const { mark, label } = RUNNING_LABELS[task.stage] ?? { mark: "🔨", label: task.stage };
   return {
     key: `task:${task.id}:${task.stage}`,
+    cause: task.stage,
     ...taskIdentity(task),
     mark,
     text: `${label} · ${elapsed(task.createdAt, now)}`,
@@ -191,6 +205,7 @@ function pullRequestRow(row: PrWatchViewRow, state: BoardState): BoardRow {
   const note = row.link === undefined ? row.note : `${row.note} → ${row.link}`;
   return {
     key: `pr:${row.repo}#${row.number}`,
+    cause: "pull-request",
     ...(repoPath === undefined ? {} : { repoPath }),
     project: row.repo.slice(row.repo.indexOf("/") + 1),
     mark: "🙋",

@@ -28,8 +28,8 @@ PRs
 
 | Section | Rows |
 | --- | --- |
-| Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks awaiting approval, blocked (with the reason), paused, or ready; pull requests PR watch marked 🔴. Always shown; "Nothing needs you." when empty. |
-| Running | Tasks queued, researching, implementing, checking, in review, or fixing findings, with the time since the task was created. Left out when empty. |
+| Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked 🔴. Always shown; "Nothing needs you." when empty. |
+| Running | Tasks paused by the user, queued, researching, implementing, checking, in review, or fixing findings, with the time since the task was created. Left out when empty. |
 | PRs | Every other watched pull request, as PR watch's rows with `owner/repo#N`. Left out when empty. |
 
 - Finished tasks (completed, merged, cancelled) are not shown.
@@ -55,8 +55,11 @@ PRs
 
 - On each scheduler reconcile, a coordinator reads the board and keeps the keys of the "Needs you"
   rows that belong to its own project (a pull request belongs to its task's project, or to the
-  checkout it was watched from). When a key appears that was not there on the last reconcile, it
-  opens the board.
+  checkout it was watched from) and that `opensBoard` accepts: briefs awaiting approval, task
+  questions, red pull requests, and ready tasks. When such a key appears that was not there on the
+  last reconcile, it opens the board.
+- Blocked tasks and tasks awaiting approval stay listed but never open the board: recovery
+  restarts most blocks on its own, so the pane would pop for blocks that clear themselves.
 - Rows already there when the coordinator started count as seen, so a relaunch or `tandem update`
   opens nothing.
 - It opens as an unfocused split beside the coordinator's pane, running `tandem board --home

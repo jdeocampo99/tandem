@@ -1,4 +1,5 @@
 import type { HerdrAgentState, HerdrStatusReporter } from "../adapters/herdr-status.ts";
+import { opensBoard } from "../board/view.ts";
 import {
   coordinatorSourceGuidance,
   type TandemBoundaryEnvironment,
@@ -374,8 +375,8 @@ export class CoordinatorSession {
   }
 
   /**
-   * Opens the board when something of this project's lands in "Needs you". What was already
-   * there when the coordinator started counts as seen, so a relaunch opens nothing.
+   * Opens the board when something of this project's that {@link opensBoard} lands in "Needs you".
+   * What was already there when the coordinator started counts as seen, so a relaunch opens nothing.
    */
   private async showBoardOnArrival(service: TandemService): Promise<void> {
     const rows = (await service.board()).needsYou;
@@ -383,7 +384,7 @@ export class CoordinatorSession {
     if (rows.length > 0) {
       const repo = await this.deps.realpath(this.deps.environment.repo);
       for (const row of rows) {
-        if (row.repoPath === undefined) continue;
+        if (row.repoPath === undefined || !opensBoard(row)) continue;
         if (await isInRepository(row.repoPath, repo, this.deps.realpath)) current.add(row.key);
       }
     }

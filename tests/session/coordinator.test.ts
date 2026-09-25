@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { HerdrAgentState, HerdrStatusReporter } from "../../src/adapters/herdr-status.ts";
+import type { BoardRow } from "../../src/board/view.ts";
 import type { TaskRecord } from "../../src/contracts.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import {
@@ -337,9 +338,10 @@ test("turn usage is recorded with the injected clock and the resolved repository
   ]);
 });
 
-test("the board opens when something of this project's lands in Needs you, not for what was already there", async () => {
-  const row = (key: string, repoPath: string) => ({
+test("the board opens when something of this project's lands in Needs you, not for what was already there or a block", async () => {
+  const row = (key: string, repoPath: string, cause: BoardRow["cause"] = "brief") => ({
     key,
+    cause,
     repoPath,
     project: "p",
     mark: "🙋",
@@ -361,11 +363,15 @@ test("the board opens when something of this project's lands in Needs you, not f
   await session.reconcile(false);
   expect(opened).toEqual([]);
 
-  needsYou = [...needsYou, row("question:q-1", "/other-project")];
+  needsYou = [
+    ...needsYou,
+    row("question:q-1", "/other-project", "question"),
+    row("task:task-1:blocked", "/repo", "blocked"),
+  ];
   await session.reconcile(false);
   expect(opened).toEqual([]);
 
-  needsYou = [...needsYou, row("pr:acme/app#409", "/repo")];
+  needsYou = [...needsYou, row("pr:acme/app#409", "/repo", "pull-request")];
   await session.reconcile(false);
   expect(opened).toEqual(["/repo"]);
 

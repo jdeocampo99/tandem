@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { type BoardState, boardView, renderBoard } from "../../src/board/view.ts";
+import { type BoardState, boardView, opensBoard, renderBoard } from "../../src/board/view.ts";
 import type { RequestBriefContent } from "../../src/contracts.ts";
 import type { PrWatch } from "../../src/pr-watch/store.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
@@ -151,4 +151,41 @@ test("an approved brief leaves the board, and a blocked task says why", () => {
     NOW,
   );
   expect(view.needsYou.map((row) => row.text)).toEqual(["blocked: validation failed twice"]);
+});
+
+test("a paused task shows under Running, and only briefs, questions, red PRs, and ready tasks open the board", () => {
+  const view = boardView(
+    state({
+      briefs: [
+        createRequestBriefRecord(
+          { id: "req-1", repoPath: "/work/tandem", content: content("Dark mode") },
+          NOW,
+        ),
+      ],
+      tasks: [
+        task({ id: "task-paused", stage: "paused", objective: "Paused work", createdAt: NOW }),
+        task({ id: "task-blocked", stage: "blocked", blockReason: "worker exited" }),
+        task({ id: "task-approval", stage: "awaiting-approval" }),
+        task({ id: "task-ready", stage: "ready" }),
+        task({
+          id: "task-q",
+          stage: "implementing",
+          communication: { revision: 1, messages: [], question: { id: "q-1", text: "Which?" } },
+        }),
+      ],
+      watches: [watch(409, { color: "red", status: "❌ failing", note: "" })],
+    }),
+    NOW,
+  );
+  expect(view.running.map((row) => [row.key, row.text])).toEqual([
+    ["task:task-paused:paused", "paused · 0s"],
+  ]);
+  expect(view.needsYou.map((row) => [row.key, opensBoard(row)])).toEqual([
+    ["brief:req-1", true],
+    ["task:task-blocked:blocked", false],
+    ["task:task-approval:awaiting-approval", false],
+    ["task:task-ready:ready", true],
+    ["question:q-1", true],
+    ["pr:acme/app#409", true],
+  ]);
 });
