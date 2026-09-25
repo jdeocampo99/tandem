@@ -40,9 +40,12 @@ child worker also gets `submit_report`.
 | Implementer | Assigned task worktree, child Herdr workspace | `read`, `grep`, `glob`, `edit`, `write`, `bash` | Exceed approved scope, merge, deploy, destructive cleanup, claim validation results |
 | Reviewer | Fresh read-only pane in the task worktree | `read`, `grep`, `glob` | Edit or write a report file; returns evidence-bound `ReviewResult` data |
 
-Default policy: `maxWorkers: 3`, `maxFixRounds: 2` (src/config/policy.ts). These are policy
-limits, not a worktree cap. The `verifier` role was removed; it survives only as a legacy decode
-value in `LEGACY_ENDPOINT_ROLES` (src/contracts.ts) and is never assigned to new work.
+Default policy: `maxFixRounds: 2` (src/config/policy.ts). There is no limit on how many workers run
+at once, in one repository or across them; only free disk space holds new work back. A policy pinned
+before the limit was removed keeps its unread `maxWorkers` so its policy digest still matches, and a
+settings file that still sets it loads with the value ignored. The `verifier` role was removed; it
+survives only as a legacy decode value in `LEGACY_ENDPOINT_ROLES` (src/contracts.ts) and is never
+assigned to new work.
 
 ## What guards the workflow
 

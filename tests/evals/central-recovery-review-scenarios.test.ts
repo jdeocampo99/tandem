@@ -44,7 +44,6 @@ const REVIEW_POLICY: ResolvedPolicy = {
     instructionFiles: { implementation: [], validation: [], review: [] },
     validationCommands: [{ name: "smoke", argv: ["true"], surfaces: ["*"], timeoutMs: 1_000 }],
     setupCommands: [],
-    maxWorkers: 2,
     maxFixRounds: 1,
     reviewLevels: {
       deepScrutiny: false,

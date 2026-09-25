@@ -314,7 +314,8 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
   }
   // ponytail: a policy snapshot pinned before standing request budgets were removed may still
   // carry "requestBudget"; the key stays accepted here so that snapshot still decodes, but it is
-  // never read into the result below.
+  // never read into the result below. "maxWorkers" from before the worker limit was removed is
+  // carried through unread instead, because the policy digest hashes it.
   assertExactKeys(
     value,
     [
@@ -385,7 +386,9 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       parseValidationCommand(entry, `${source}.validationCommands[${index}]`),
     ),
     setupCommands: parseSetupCommands(value, source),
-    maxWorkers: requiredInteger(value, "maxWorkers", source, 1),
+    ...(Object.hasOwn(value, "maxWorkers")
+      ? { maxWorkers: requiredInteger(value, "maxWorkers", source, 1) }
+      : {}),
     maxFixRounds: requiredInteger(value, "maxFixRounds", source, 0),
     reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`),
   };

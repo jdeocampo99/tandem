@@ -1,15 +1,9 @@
 import type { AgentRole, ModelSpec, TaskRecord } from "../contracts.ts";
-import {
-  activeReservations,
-  activeRuntimeJob,
-  unreleasedReservation,
-} from "../runtime/activity.ts";
+import { activeRuntimeJob, unreleasedReservation } from "../runtime/activity.ts";
 import type {
   DurableOperation,
   DurableOperationKind,
   DurableReservation,
-  ExecutionRoutingLimits,
-  RuntimeState,
   RuntimeTaskState,
 } from "../runtime/schema.ts";
 import { iterationScopeFor } from "../tasks/acceptance.ts";
@@ -34,7 +28,6 @@ export type ReservationRefusal = Readonly<{
     | "stop-requested"
     | "slot-held"
     | "job-running"
-    | "worker-limit"
     | "routing-question";
   readonly summary: string;
   readonly detail: string;
@@ -84,12 +77,8 @@ export function taskAdmissionRefusal(
   };
 }
 
-/** Refuses while a stop, another reservation, a running job, or the worker limit stands. */
-export function runtimeAdmissionRefusal(
-  state: RuntimeState,
-  runtime: RuntimeTaskState,
-  maxWorkers: number,
-): ReservationRefusal | undefined {
+/** Refuses while a stop, another reservation, or a running job stands. */
+export function runtimeAdmissionRefusal(runtime: RuntimeTaskState): ReservationRefusal | undefined {
   if (runtime.stopRequest !== undefined) {
     return {
       refusal: "stop-requested",
@@ -111,14 +100,6 @@ export function runtimeAdmissionRefusal(
       refusal: "job-running",
       summary: "A worker is still running for this task.",
       detail: `job ${running.id} is ${running.phase}`,
-    };
-  }
-  const active = activeReservations(state);
-  if (active >= maxWorkers) {
-    return {
-      refusal: "worker-limit",
-      summary: `The worker limit (${maxWorkers}) is reached.`,
-      detail: `${active} active reservations of ${maxWorkers}`,
     };
   }
   return undefined;
@@ -200,10 +181,4 @@ export function routingBoundary(
   prior: PriorExecutionAttempt | undefined,
 ): ExecutionRoutingBoundary {
   return prior === undefined ? { kind: "job-launch" } : { kind: "replacement-attempt", prior };
-}
-
-export function routingLimits(task: TaskRecord): ExecutionRoutingLimits {
-  return {
-    maxWorkers: task.policy.config.maxWorkers,
-  };
 }

@@ -25,7 +25,7 @@ import {
   type WorktreeLease,
 } from "../../src/contracts.ts";
 import type { PresentationRecord } from "../../src/presentations/records.ts";
-import { activeReservations, activeRuntimeJob } from "../../src/runtime/activity.ts";
+import { activeRuntimeJob, unreleasedReservation } from "../../src/runtime/activity.ts";
 import { diagnosticsPath } from "../../src/runtime/diagnostics.ts";
 import {
   readRuntimeState,
@@ -93,7 +93,6 @@ const policy: ResolvedPolicy = {
       { name: "check", argv: ["bun", "run", "check"], surfaces: [], timeoutMs: 10_000 },
     ],
     setupCommands: [],
-    maxWorkers: 4,
     maxFixRounds: 1,
     reviewLevels: {
       deepScrutiny: false,
@@ -524,7 +523,6 @@ function reservationFor(
 type FixtureOptions = Readonly<{
   readonly kind?: "scout" | "implementation";
   readonly stage?: TaskRecord["stage"];
-  readonly maxWorkers?: number;
   readonly clock?: () => string;
   readonly idFactory?: () => string;
   readonly taskEdits?: Readonly<{
@@ -564,10 +562,6 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     idFactory: () => "store-id",
   });
   const kind = options.kind ?? "scout";
-  const taskPolicy =
-    options.maxWorkers === undefined
-      ? policy
-      : { ...policy, config: { ...policy.config, maxWorkers: options.maxWorkers } };
   let task = await store.create({
     id: "task-1",
     repoPath,
@@ -575,7 +569,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     objective: "exercise a durable service path",
     acceptanceCriteria: ["the outcome is persisted"],
     surfaces: ["service"],
-    policy: taskPolicy,
+    policy,
   });
   if (
     task.stage === "awaiting-approval" &&
@@ -1722,7 +1716,6 @@ test("a dispatched job carries the exact model its recorded execution transition
       expect(routing.basis).toBe("pinned-policy");
       expect(routing.selector).toBe("test/implementer");
       expect(routing.evidence.source).toBe("catalogue-read");
-      expect(routing.limits.maxWorkers).toBe(4);
       const spec = JSON.parse(await readFile(jobPath, "utf8")) as WorkerJob;
       expect(spec.model).toEqual({ model: routing.selector, thinking: routing.thinking });
     },
@@ -2492,7 +2485,7 @@ test("owned pre-launch worker reservation recovers without a duplicate admission
       await service.tick();
       expect(runnerState.launches).toBe(1);
       const recovered = await readRuntime(home);
-      expect(activeReservations(recovered)).toBe(1);
+      expect(unreleasedReservation(recovered.tasks[0]?.reservation)).toBe(true);
       expect(recovered.tasks[0]?.jobs.filter(activeRuntimeJob)).toHaveLength(1);
     },
   );
@@ -3833,7 +3826,6 @@ test("classification leaves a running task's pinned policy and model choices unc
       expect(after.policy).toEqual(before.policy);
       expect(after.policy.config.models).toEqual(task.policy.config.models);
       expect(after.policy.config.maxFixRounds).toBe(task.policy.config.maxFixRounds);
-      expect(after.policy.config.maxWorkers).toBe(task.policy.config.maxWorkers);
       expect(after.policy.config.validationCommands).toEqual(task.policy.config.validationCommands);
     },
   );
@@ -3994,13 +3986,12 @@ test("validation runs in a split non-model pane beside the retained writer", asy
   );
 });
 
-test("resume waits for capacity and retains admission after the slot is freed", async () => {
+test("resume dispatches at once while another task holds a slot", async () => {
   for (const kind of ["implementation", "scout"] as const) {
     await withFixture(
       {
         kind,
         stage: "paused",
-        maxWorkers: 1,
         taskEdits: {
           previousStage: kind === "scout" ? "scouting" : "implementing",
         },
@@ -4037,36 +4028,11 @@ test("resume waits for capacity and retains admission after the slot is freed", 
 
         const resumed = await service.resume("task-1");
         expect(resumed.stage).toBe(kind === "scout" ? "scouting" : "implementing");
-        expect(runnerState.launches).toBe(0);
-        const waiting = await readRuntime(home);
-        const waitingTask = waiting.tasks.find((entry) => entry.taskId === "task-1");
-        expect(waitingTask?.reservation?.phase).toBe("released");
-        expect(waitingTask?.worktree?.path).toBe(lease.path);
-
-        const withFreeSlot = await readRuntime(home);
-        await writeRuntimeState(runtimeFile(home), {
-          schemaVersion: 1,
-          tasks: withFreeSlot.tasks.map(
-            (entry): RuntimeTaskState =>
-              entry.taskId === "task-2" && entry.reservation !== undefined
-                ? {
-                    ...entry,
-                    reservation: {
-                      ...entry.reservation,
-                      phase: "released",
-                      releasedAt: TIMESTAMP,
-                    },
-                  }
-                : entry,
-          ),
-          presentations: withFreeSlot.presentations,
-        });
-
-        await service.tick();
         expect(runnerState.launches).toBe(1);
         const running = await readRuntime(home);
-        expect(activeReservations(running)).toBe(1);
         const resumedRuntime = running.tasks.find((entry) => entry.taskId === "task-1");
+        expect(unreleasedReservation(resumedRuntime?.reservation)).toBe(true);
+        expect(resumedRuntime?.worktree?.path).toBe(lease.path);
         expect(resumedRuntime?.jobs.filter(activeRuntimeJob)).toHaveLength(1);
       },
     );
@@ -4234,7 +4200,7 @@ test("TAG-989 maxed awaiting-fixes intent cannot reserve, launch, or advance wor
       expect(after.reviewHead).toBe(before.reviewHead);
       expect(after.policy).toEqual(before.policy);
       expect(runnerState.launches).toBe(0);
-      expect(activeReservations(state)).toBe(0);
+      expect(unreleasedReservation(runtime?.reservation)).toBe(false);
       expect(runtime?.operation).toBeUndefined();
       expect(runtime?.endpoints).toEqual([endpoint]);
       expect(runtime?.jobs.some(activeRuntimeJob)).toBe(false);
@@ -4341,7 +4307,6 @@ test("legacy incomplete reservation is quarantined without inventing an operatio
       expect(runtime?.operation).toBeUndefined();
       expect(runtime?.reservation?.phase).toBe("reserved");
       expect(runtime?.lastError).toContain("legacy reservation");
-      expect(activeReservations(recovered)).toBe(1);
       const task = await service.get("task-1");
       expect(task.stage).toBe("blocked");
       expect(task.blockCause).toMatchObject({
@@ -4524,7 +4489,6 @@ test("unknown launch acknowledgement quarantines the operation and retains capac
       expect(runtime?.operation?.phase).toBe("quarantined");
       expect(runtime?.reservation?.phase).toBe("reserved");
       expect(runtime?.jobs[0]?.phase).toBe("launching");
-      expect(activeReservations(state)).toBe(1);
     },
   );
 });
@@ -4660,7 +4624,6 @@ test("validation endpoint started intent without a receipt quarantines before pa
       expect(runtime?.operation?.id).toBe(intent.operationId);
       expect(runtime?.operation?.phase).toBe("quarantined");
       expect(runtime?.reservation?.phase).toBe("reserved");
-      expect(activeReservations(state)).toBe(1);
     },
   );
 });
@@ -5013,7 +4976,6 @@ test("launched operation with missing endpoint and result is quarantined, not fa
       expect(recovered?.operation?.phase).toBe("quarantined");
       expect(recovered?.reservation?.phase).toBe("reserved");
       expect(recovered?.jobs[0]?.phase).toBe("running");
-      expect(activeReservations(after)).toBe(1);
       expect(recovered?.endpoints).toHaveLength(0);
     },
   );

@@ -785,7 +785,7 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
         argv: [...command.argv],
         timeoutMs: command.timeoutMs,
       })),
-      maxWorkers: policy.config.maxWorkers,
+      ...(policy.config.maxWorkers === undefined ? {} : { maxWorkers: policy.config.maxWorkers }),
       maxFixRounds: policy.config.maxFixRounds,
       reviewLevels: { ...policy.config.reviewLevels },
     },

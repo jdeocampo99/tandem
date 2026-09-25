@@ -38,7 +38,6 @@ import {
   type DurableExecutionRoutingPause,
   EXECUTION_ROUTING_PAUSE_REASONS,
   type ExecutionRoutingEvidence,
-  type ExecutionRoutingLimits,
   type ExecutionRoutingPauseReason,
 } from "../runtime/schema.ts";
 import type { RequestUsageExposure } from "../runtime/usage-receipt.ts";
@@ -118,7 +117,6 @@ export type ExecutionRoutingRequest = Readonly<{
   /** The pinned role assignment. Routing reads it and never writes back to pinned policy. */
   readonly pinned: ModelSpec;
   readonly catalogue: ModelCatalogueSnapshot;
-  readonly limits: ExecutionRoutingLimits;
   readonly usage: ExecutionUsageObservation;
   readonly now: IsoTimestamp;
 }>;
@@ -507,7 +505,6 @@ function continueWithPinnedModel(
       selector: request.pinned.model,
       thinking: request.pinned.thinking,
       evidence,
-      limits: request.limits,
       resolvedAt: request.now,
     },
   };
@@ -540,7 +537,6 @@ function reassignToComparableModel(
       thinking: chosen.evidence.thinking,
       replaces: { selector: prior.selector, thinking: request.pinned.thinking },
       evidence: readEvidence(catalogue, request.usage, chosen),
-      limits: request.limits,
       resolvedAt: request.now,
     },
   };
@@ -571,7 +567,6 @@ function routingQuestion(
       evidenceGaps: detail.evidenceGaps ?? [],
       enabledProviders: detail.enabledProviders ?? [],
       ...observedUsage(request.usage),
-      limits: request.limits,
       observedAt: request.now,
     },
   };

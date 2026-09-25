@@ -205,7 +205,11 @@ export type RepoPolicy = {
   readonly instructionFiles: InstructionChannels;
   readonly validationCommands: readonly ValidationCommand[];
   readonly setupCommands: readonly SetupCommand[];
-  readonly maxWorkers: number;
+  /**
+   * Only on a policy pinned before the worker limit was removed. Never read: it stays in place so
+   * that task's policy digest, and the evidence bound to it, still match.
+   */
+  readonly maxWorkers?: number;
   readonly maxFixRounds: number;
   readonly reviewLevels: ReviewLevelPolicy;
 };

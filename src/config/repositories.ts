@@ -567,9 +567,6 @@ ${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"
 # needs for looking things up, like reading tickets.
 ${setting(coordinatorMcpServers, "coordinatorMcpServers", '["linear"]')}
 
-# How many tasks may run at the same time.
-# maxWorkers = ${defaults.maxWorkers}
-
 # How many times reviewers may send a change back for fixes before Tandem asks you.
 # maxFixRounds = ${defaults.maxFixRounds}
 

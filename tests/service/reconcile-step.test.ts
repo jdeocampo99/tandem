@@ -33,7 +33,6 @@ function task(stage: TaskStage): TaskRecord {
         instructionFiles: { implementation: [], validation: [], review: [] },
         validationCommands: [],
         setupCommands: [],
-        maxWorkers: 1,
         maxFixRounds: 1,
         reviewLevels: DEFAULT_REVIEW_LEVEL_POLICY,
       },
