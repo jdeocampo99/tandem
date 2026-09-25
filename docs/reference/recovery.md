@@ -24,7 +24,7 @@ home is a separate namespace and never changes the remembered setup.
 | `coordinator-registry/`, `coordinator-scripts/` | Coordinator records, per-repository locks, `0700` launch scripts; see [coordinator.md](coordinator.md). |
 | `communications/<task>/inbox.json` | Derived message projection of the task row. |
 | `jobs/<task-id>/` | Job inputs, private results, reports, `job.json.terminal.json` heartbeat, `.command` pause/close requests, `job.json.trace.jsonl`, recovery snapshots. |
-| `sessions/<task-id>/` | One OMP conversation per implementation or scout task; every job uses `--session-dir` and `--continue`, so fixes and relaunches resume it. Reviewers and validation get none; a scout's mockup turns run in its own conversation. |
+| `sessions/<task-id>/` | One OMP conversation per implementation or scout task; every job uses `--session-dir` and `--continue`, so fixes and relaunches resume it. Reviewers and validation get none; a scout's mockup turns run in its own conversation. The scheduler tick deletes the folder of a cancelled, completed, or merged task 30 days after its last change (`src/service/transcript-pruning.ts`); a failed deletion is logged and retried next tick. |
 | `presentations/<id>/`, `pool/` | Presentation artifact, draw and revise briefs, record, and feedback evidence; default Treehouse pool root. |
 
 - Canonical writes are short SQLite transactions under `.state.lock`. Sidecar JSON is evidence,
