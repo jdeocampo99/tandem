@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import {
   buildAgentBrief,
+  CODE_STANDARD_NAMES,
   CODE_STANDARDS,
+  COORDINATOR_INSTRUCTIONS,
   IMPLEMENTER_PRINCIPLES,
   MANUAL_VERIFICATION_REVIEWER,
   MANUAL_VERIFICATION_WORKER,
@@ -194,6 +196,14 @@ test("gives implementers the same code standards the reviewer grades against", (
     }),
   ).toContain(CODE_STANDARDS);
   expect(buildAgentBrief({ ...input, role: "scout" })).not.toContain(CODE_STANDARDS);
+});
+
+test("holds worker prose to the coordinator's writing bans as a blocking standard", () => {
+  const bans = "no em dashes, no closing summary";
+  expect(COORDINATOR_INSTRUCTIONS).toContain(bans);
+  expect(CODE_STANDARDS).toContain("## 8. Plain Prose");
+  expect(CODE_STANDARDS).toContain(bans);
+  expect(CODE_STANDARD_NAMES.some((name) => name.startsWith("Plain Prose:"))).toBe(true);
 });
 
 test("implementers follow the principle rules and reviewers grade the same rules as blocking", () => {

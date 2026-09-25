@@ -81,7 +81,7 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   built by src/tasks/review-brief.ts as a pure function of durable task state plus injected git
   observations. Every field comes from existing records; it is not a memory or handoff system.
 - Fix rounds point the reviewer at the diff since the last reviewed HEAD and the open findings.
-- The seven code standards are mandatory blocking requirements, and implementer claims are never
+- The eight code standards are mandatory blocking requirements, and implementer claims are never
   proof: every claim is confirmed against source, diff, or runner evidence.
 - Principles (`src/instructions.ts`): nine one-line rules adapted from pstack (delete dead code
   first, define a repeated rule once, fix where a bug starts, migrate callers then delete, no
