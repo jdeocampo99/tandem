@@ -10,6 +10,7 @@ import {
 } from "./config/environment.ts";
 import { readCoordinatorMcpServers } from "./config/repositories.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
+import { ompSessionHost, ompToolCall } from "./extension/omp-host.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { appendCoordinatorUsage } from "./runtime/usage-ledger.ts";
 import {
@@ -19,7 +20,6 @@ import {
 } from "./service/controller.ts";
 import { coordinatorCompactTokens } from "./session/compaction.ts";
 import { CoordinatorSession } from "./session/coordinator.ts";
-import type { SessionEffect, SessionHost, ToolCall } from "./session/events.ts";
 import { readResearchReport } from "./session/notifications.ts";
 import { promptRoutingConfig } from "./session/prompt-routing.ts";
 import {
@@ -27,7 +27,6 @@ import {
   researchContinuationClassifier,
   researchContinuationClassifierConfig,
 } from "./tasks/research-continuation-classifier.ts";
-import { assertSelectedModel, expectedModelParts } from "./workers/protocol.ts";
 import { replyUsage } from "./workers/terminal.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
@@ -39,15 +38,6 @@ export type TandemExtensionOptions = Readonly<{
   readonly processEnvironment?: TandemEnvironmentSource;
   readonly tickIntervalMs?: number;
 }>;
-
-/** The custom message type each delivered message is saved under in the OMP session. */
-const DELIVERY_MESSAGE_TYPE: Readonly<
-  Record<Extract<SessionEffect, { type: "deliver" }>["source"], string>
-> = {
-  notification: "tandem-notification",
-  "prompt-route": "tandem-prompt-route",
-  "stall-reminder": "tandem-stall-reminder",
-};
 
 function createCoordinatorService(
   options: TandemExtensionOptions,
@@ -91,104 +81,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** OMP's MCP tool name prefix for a server, matching how OMP sanitizes server names. */
-function mcpToolPrefix(server: string): string {
-  const sanitized = server
-    .toLowerCase()
-    .replace(/[^a-z_]+/gu, "_")
-    .replace(/_+/gu, "_")
-    .replace(/^_+|_+$/gu, "");
-  return `mcp__${sanitized.length > 0 ? sanitized : "server"}_`;
-}
-
-/** A hidden part goes first as its own `display: false` message; only the shown one triggers a turn. */
-async function performOmpEffect(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  effect: SessionEffect,
-): Promise<void> {
-  switch (effect.type) {
-    case "deliver": {
-      const customType = DELIVERY_MESSAGE_TYPE[effect.source];
-      if (effect.hidden !== undefined) {
-        pi.sendMessage(
-          {
-            customType,
-            content: effect.hidden.text,
-            display: false,
-            ...(effect.hidden.details === undefined ? {} : { details: effect.hidden.details }),
-            attribution: "agent",
-          },
-          { deliverAs: effect.timing },
-        );
-      }
-      pi.sendMessage(
-        {
-          customType,
-          content: effect.text,
-          display: true,
-          attribution: "agent",
-          ...(effect.details === undefined ? {} : { details: effect.details }),
-        },
-        { deliverAs: effect.timing, ...(effect.triggerTurn ? { triggerTurn: true } : {}) },
-      );
-      return;
-    }
-    case "promptAsUser":
-      pi.sendUserMessage(effect.text);
-      return;
-    case "notify":
-      ctx.ui.notify(effect.text, effect.level);
-      return;
-    case "recordEntry":
-      pi.appendEntry(effect.entryType, effect.data);
-      return;
-    case "compact":
-      return ctx.compact();
-    case "abort":
-      ctx.abort();
-      return;
-    case "shutdown":
-      ctx.shutdown();
-      return;
-  }
-}
-
-/** Every call reads the latest OMP context, the one of the event being handled. */
-function ompSessionHost(pi: ExtensionAPI, currentContext: () => ExtensionContext): SessionHost {
-  return {
-    capabilities: {
-      proactiveCompaction: true,
-      hiddenMessages: true,
-      streamingProgress: true,
-      perActionApproval: true,
-    },
-    perform: (effect) => performOmpEffect(pi, currentContext(), effect),
-    confirm: async (title, message) => {
-      const ctx = currentContext();
-      return ctx.hasUI && ctx.mode === "tui" ? ctx.ui.confirm(title, message) : false;
-    },
-    contextTokens: () => currentContext().getContextUsage()?.tokens,
-    paneState: () => {
-      const ctx = currentContext();
-      return {
-        idle: ctx.isIdle(),
-        pendingMessages: ctx.hasPendingMessages(),
-        draft: ctx.ui.getEditorText().trim().length > 0,
-      };
-    },
-    assertSelectedModel: (selector) =>
-      assertSelectedModel(expectedModelParts(selector), currentContext().model),
-    mcpToolPrefix,
-  };
-}
-
-function toolCall(event: Readonly<{ toolCallId: string; toolName: string }>): ToolCall {
-  return {
-    id: event.toolCallId,
-    name: event.toolName,
-    kind: event.toolName === "ask" ? "ask" : "other",
-  };
+/** The status line only needs the tool's kind, so its arguments are not classified. */
+function statusToolCall(event: Readonly<{ toolCallId: string; toolName: string }>) {
+  return ompToolCall({ toolCallId: event.toolCallId, toolName: event.toolName, input: {} });
 }
 
 type BoundCoordinator = Readonly<{
@@ -274,8 +169,8 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     });
     pi.on("session_start", (_event, ctx) => session(ctx).sessionStart());
     pi.on("turn_start", (_event, ctx) => session(ctx).turnStart());
-    pi.on("tool_execution_start", (event, ctx) => session(ctx).toolStart(toolCall(event)));
-    pi.on("tool_execution_end", (event, ctx) => session(ctx).toolEnd(toolCall(event)));
+    pi.on("tool_execution_start", (event, ctx) => session(ctx).toolStart(statusToolCall(event)));
+    pi.on("tool_execution_end", (event, ctx) => session(ctx).toolEnd(statusToolCall(event)));
     pi.on("turn_end", (event, ctx) => session(ctx).turnEnd(replyUsage(event.message)));
     pi.on("agent_end", (event, ctx) => session(ctx).agentEnd(event.willContinue === true));
     pi.on("session.compacting", async (_event, ctx) => {

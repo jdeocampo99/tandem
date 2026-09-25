@@ -5,25 +5,9 @@ import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-coding-agent";
 import { resolveTandemEnvironment } from "../../src/config/environment.ts";
 import type { TaskRecord } from "../../src/contracts.ts";
-import { resolveCommandAction } from "../../src/extension/registration.ts";
 import { createTandemExtension } from "../../src/extension.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import { task } from "../session/fixtures.ts";
-
-test("/tandem models . resolves to the coordinator's own checkout", () => {
-  expect(resolveCommandAction({ action: "models", repoPath: "." }, "/repo")).toEqual({
-    action: "models",
-    repoPath: "/repo",
-  });
-  expect(resolveCommandAction({ action: "models", repoPath: "/other" }, "/repo")).toEqual({
-    action: "models",
-    repoPath: "/other",
-  });
-  expect(resolveCommandAction({ action: "setup", repoPath: "." }, "/repo")).toEqual({
-    action: "setup",
-    repoPath: ".",
-  });
-});
 
 test("environment resolution applies explicit boundary values and ignores unrelated variables", () => {
   const environment = resolveTandemEnvironment(

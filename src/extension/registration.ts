@@ -6,12 +6,10 @@ import { type AgentRole, MODEL_ROLE_ORDER } from "../contracts.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import type { TandemService } from "../service/controller.ts";
 import {
-  type ApprovalDialog,
   runTandemCommand,
   runTandemTool,
   type TandemCallDependencies,
 } from "../session/actions.ts";
-import type { SessionEffect, SessionHost, ToolCall, ToolKind } from "../session/events.ts";
 import {
   type ChoiceConfirmation,
   type PromptRoutingConfig,
@@ -19,9 +17,7 @@ import {
 } from "../session/prompt-routing.ts";
 import { coordinatorToolRefusal } from "../session/tool-guard.ts";
 import { tandemRequestSchema as tandemToolSchema } from "../session/tools.ts";
-
-// Kept for tests/extension/extension.test.ts until its import moves to session/actions.ts.
-export { resolveCommandAction } from "../session/actions.ts";
+import { ompApprovalDialog, ompMcpToolPrefix, ompSessionHost, ompToolCall } from "./omp-host.ts";
 
 export type TandemOmpRegistrationDependencies = Readonly<{
   readonly getService: (ctx: ExtensionContext) => TandemService;
@@ -37,52 +33,6 @@ export type TandemOmpRegistrationDependencies = Readonly<{
   readonly researchRunning: (ctx: ExtensionContext) => Promise<boolean>;
 }>;
 
-const OMP_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
-  read: "read",
-  grep: "search",
-  glob: "search",
-  web_search: "web-search",
-  write: "write",
-  edit: "edit",
-  bash: "shell",
-  ask: "ask",
-  task: "subagent",
-};
-
-/**
- * Classifies an OMP tool call. MCP tools arrive either under their own `mcp__` name or, through
- * OMP's discovery shim, as a `write` to an `xd://mcp__` path.
- */
-export function ompToolCall(
-  event: Readonly<{ toolCallId: string; toolName: string; input: object }>,
-): ToolCall {
-  const path = "path" in event.input ? event.input.path : undefined;
-  const command = "command" in event.input ? event.input.command : undefined;
-  const base = {
-    id: event.toolCallId,
-    name: event.toolName,
-    ...(typeof path === "string" ? { path } : {}),
-    ...(typeof command === "string" ? { command } : {}),
-  };
-  if (event.toolName.startsWith("mcp__")) {
-    return { ...base, kind: "mcp", mcpTool: event.toolName };
-  }
-  if (event.toolName === "write" && typeof path === "string" && path.startsWith("xd://mcp__")) {
-    return { ...base, kind: "mcp", mcpTool: path.slice("xd://".length) };
-  }
-  return { ...base, kind: OMP_TOOL_KINDS[event.toolName] ?? "other" };
-}
-
-/** ponytail: mirrors OMP's private sanitizeMCPToolNamePart; tool names are `mcp__<server>_<tool>`. */
-export function ompMcpToolPrefix(server: string): string {
-  const sanitized = server
-    .toLowerCase()
-    .replace(/[^a-z_]+/gu, "_")
-    .replace(/_+/gu, "_")
-    .replace(/^_+|_+$/gu, "");
-  return `mcp__${sanitized.length > 0 ? sanitized : "server"}_`;
-}
-
 export function registerTandemOmp(
   pi: ExtensionAPI,
   dependencies: TandemOmpRegistrationDependencies,
@@ -91,39 +41,6 @@ export function registerTandemOmp(
   registerCoordinatorToolGuard(pi, dependencies);
   registerTandemTool(pi, dependencies);
   registerTandemCommand(pi, dependencies);
-}
-
-/** Only the TUI can show an approval dialog; elsewhere approval fails closed. */
-function ompApprovalDialog(ctx: ExtensionContext): ApprovalDialog | undefined {
-  return ctx.hasUI && ctx.mode === "tui"
-    ? (title, message) => ctx.ui.confirm(title, message)
-    : undefined;
-}
-
-/** Carries out the effects the tool, command, and prompt routes emit. */
-function ompEffects(pi: ExtensionAPI, ctx: ExtensionContext): Pick<SessionHost, "perform"> {
-  return {
-    perform: async (effect: SessionEffect) => {
-      if (effect.type === "notify") {
-        ctx.ui.notify(effect.text, effect.level);
-        return;
-      }
-      if (effect.type === "deliver" && effect.source === "prompt-route") {
-        pi.sendMessage(
-          {
-            customType: "tandem-prompt-route",
-            content: effect.text,
-            display: true,
-            attribution: "agent",
-            ...(effect.details === undefined ? {} : { details: effect.details }),
-          },
-          { deliverAs: effect.timing, ...(effect.triggerTurn ? { triggerTurn: true } : {}) },
-        );
-        return;
-      }
-      throw new Error(`Tandem registration cannot perform a ${effect.type} effect`);
-    },
-  };
 }
 
 function callDependencies(
@@ -157,7 +74,7 @@ function registerPromptRouting(
         config: dependencies.promptRouting,
         service: () => dependencies.getService(ctx),
         ...(getRepo === undefined ? {} : { repoPath: () => getRepo(ctx) }),
-        host: ompEffects(pi, ctx),
+        host: ompSessionHost(pi, () => ctx),
         confirm: ompApprovalDialog(ctx),
         diagnostics: (entry) => appendDiagnosticEvent(dependencies.getHome(ctx), entry),
       },
@@ -216,7 +133,12 @@ function registerTandemCommand(
     description:
       "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
     handler: (args, ctx) =>
-      runTandemCommand(args, ctx.cwd, callDependencies(ctx, dependencies), ompEffects(pi, ctx)),
+      runTandemCommand(
+        args,
+        ctx.cwd,
+        callDependencies(ctx, dependencies),
+        ompSessionHost(pi, () => ctx),
+      ),
   });
 }
 
