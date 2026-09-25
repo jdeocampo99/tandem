@@ -264,6 +264,35 @@ test("the brief shows automated checks and manual verification as two lists", ()
   expect(markdown).not.toContain("Acceptance criteria");
 });
 
+test("the brief puts what approval needs first and the details after", () => {
+  const settled = renderRequestBriefMarkdown(seeded());
+  const open = renderRequestBriefMarkdown(
+    createRequestBriefRecord(
+      { id: "req-1", repoPath: "/repo", content: content({ openQuestions: ["Ship to web too?"] }) },
+      NOW,
+    ),
+  );
+
+  const headings = (markdown: string) => markdown.match(/^#+ .+$/gmu);
+  expect(headings(open)).toEqual([
+    "# Request brief",
+    "## Goal",
+    "## Decisions required",
+    "## In scope",
+    "## Out of scope",
+    "## Automated checks",
+    "## Manual verification",
+    "## Key decisions",
+    "# Details",
+    "## Approach",
+    "## Constraints",
+    "## References",
+    "## Record",
+  ]);
+  expect(settled).not.toContain("Decisions required");
+  expect(settled).toContain("Revision 1, not approved yet.");
+});
+
 test("new implementation work joins the one open approved request in its repository", () => {
   const approve = (id: string, repoPath = "/repo"): RequestBriefRecord => {
     const record = createRequestBriefRecord({ id, repoPath, content: content() }, NOW);
