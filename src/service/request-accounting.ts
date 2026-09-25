@@ -191,8 +191,10 @@ export class RequestAccountingWorkflow {
         ...current.notifications,
         {
           id: singleLine(this.#deps.idFactory(), "receipt notification id"),
+          // Recorded at the ready transition, before that tick opens the draft, so the link comes
+          // from show rather than from this record.
           message:
-            "The request is delivered. Show where its time and tokens went: call request-receipt for this task's request and show its table exactly as returned.",
+            "The request is delivered. If the task has a pull request, give the user its link from show. Summarize in a few lines what changed and what the user still needs to check, then show where its time and tokens went: call request-receipt for this task's request and show its table exactly as returned.",
           acknowledged: false,
           kind: "coordinator",
         },

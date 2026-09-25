@@ -224,7 +224,7 @@ test("a distinct retry keys differently from the attempt it replaced", () => {
   expect(retry?.identity.attempt).toBe(2);
 });
 
-test("a completed task or a published pull request delivers the request; a merge adds nothing new", () => {
+test("a completed or ready task delivers the request; a later publish or merge adds nothing new", () => {
   const pullRequest = (state: "draft" | "open" | "merged") => ({
     repository: "owner/app",
     number: 7,
@@ -236,14 +236,14 @@ test("a completed task or a published pull request delivers the request; a merge
   expect(requestTerminalEvent(REQUEST_ID, terminalTask("cancelled"))?.outcome).toBe("cancelled");
   expect(requestTerminalEvent(REQUEST_ID, terminalTask("merged"))).toBeUndefined();
   expect(requestTerminalEvent(REQUEST_ID, terminalTask("implementing"))).toBeUndefined();
-  expect(
-    requestTerminalEvent(REQUEST_ID, terminalTask("ready", pullRequest("draft"))),
-  ).toBeUndefined();
+  const ready = requestTerminalEvent(REQUEST_ID, terminalTask("ready", pullRequest("draft")));
   const published = requestTerminalEvent(REQUEST_ID, terminalTask("ready", pullRequest("open")));
   const merged = requestTerminalEvent(REQUEST_ID, terminalTask("merged", pullRequest("merged")));
-  expect(published?.outcome).toBe("delivered");
-  // Same identity, so the ledger keeps the publish moment and ignores the later merge.
-  expect(merged?.eventKey).toBe(published?.eventKey);
+  expect(ready?.outcome).toBe("delivered");
+  expect(requestTerminalEvent(REQUEST_ID, terminalTask("ready"))?.outcome).toBe("delivered");
+  // Same identity, so the ledger keeps the ready moment and ignores the later publish and merge.
+  expect(published?.eventKey).toBe(ready?.eventKey);
+  expect(merged?.eventKey).toBe(ready?.eventKey);
 });
 
 test("intake is the durable brief creation, not the first worker launch", () => {

@@ -1503,12 +1503,15 @@ class TandemController {
     for (const task of tasks) await this.reconcileOrBlock(task);
     await this.reconcilePresentations(new Set(tasks.map((task) => task.id)));
     const settled = await this.#source.scopedTasks();
-    await this.#accounting.recordSettledTasks(settled);
     let draftRecorded = false;
     for (const task of settled) {
-      if (await this.#drafts.refresh(task)) draftRecorded = true;
+      if ((await this.#drafts.openWhenReady(task)) || (await this.#drafts.refresh(task))) {
+        draftRecorded = true;
+      }
     }
-    return draftRecorded ? this.#source.scopedTasks() : settled;
+    const current = draftRecorded ? await this.#source.scopedTasks() : settled;
+    await this.#accounting.recordSettledTasks(current);
+    return current;
   }
 
   /**

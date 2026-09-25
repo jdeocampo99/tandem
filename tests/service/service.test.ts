@@ -275,6 +275,9 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
     calls.push(request);
     const argv = request.argv;
     if (draftRemote !== undefined) {
+      if (argv[0] === "git" && argv.includes("refs/remotes/origin/HEAD")) {
+        return commandResult(`origin/${draftRemote.base}\n`);
+      }
       if (argv[0] === "git" && argv.includes("symbolic-ref")) {
         return commandResult(`${draftRemote.branch}\n`);
       }
@@ -5038,6 +5041,49 @@ async function draftRefreshFailures(home: string): Promise<readonly Record<strin
 function githubCalls(calls: readonly CommandRequest[]): readonly CommandRequest[] {
   return calls.filter((call) => call.argv[0] === "gh");
 }
+
+test("a ready task opens its own draft pull request once, against the default branch", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "ready",
+      attachLease: true,
+      taskEdits: { reviewHead: "source-head" },
+      runner: {
+        draftRemote: { repository: "acme/repo", branch: "tandem/task-1", base: "main", number: 12 },
+      },
+    },
+    async ({ home, service, runnerState }) => {
+      await service.tick();
+      const task = await service.get("task-1");
+      expect(task.pullRequest).toMatchObject({ number: 12, state: "draft", base: "main" });
+      expect(runnerState.draftRemote.created).toBe(1);
+      const create = runnerState.calls.find(
+        (call) => call.argv[0] === "gh" && call.argv[2] === "create",
+      );
+      expect(create?.argv).toContain("--draft");
+      expect(await draftRefreshFailures(home)).toHaveLength(0);
+
+      await service.tick();
+      expect(runnerState.draftRemote.created).toBe(1);
+    },
+  );
+});
+
+test("a ready task whose draft can't open stays ready and records one failure per state", async () => {
+  await withFixture(
+    { kind: "implementation", stage: "ready", attachLease: true },
+    async ({ home, service }) => {
+      await service.tick();
+      await service.tick();
+      expect((await service.get("task-1")).stage).toBe("ready");
+      expect((await service.get("task-1")).pullRequest).toBeUndefined();
+      const failures = await draftRefreshFailures(home);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({ taskId: "task-1", details: { step: "open" } });
+    },
+  );
+});
 
 test("the scheduler refreshes an approved draft on durable change and records refresh failures", async () => {
   await withFixture(
