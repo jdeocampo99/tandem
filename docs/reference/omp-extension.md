@@ -3,8 +3,9 @@
 What the coordinator's OMP extension, its scheduler and notifications, and worktree maintenance and
 scout release must guarantee.
 
-Code: src/extension.ts, src/extension/registration.ts, src/session/actions.ts,
-src/session/notifications.ts, src/pool/maintenance.ts, src/pool/policy.ts,
+Code: src/extension.ts (OMP adapter), src/extension/registration.ts, src/session/coordinator.ts
+(scheduler, status, compaction), src/session/actions.ts, src/session/notifications.ts,
+src/pool/maintenance.ts, src/pool/policy.ts,
 src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts, src/workers/worktree-lease.ts
 
 ## Tool and command contract
@@ -46,7 +47,7 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   and durable reports stay authoritative. It carries no commit hashes, and finished tasks with
   nothing unread, no blocker, and no open question collapse to one line of ids and objectives. Action summaries are bounded separately; `show --full`
   keeps more structured detail.
-- Early compaction (src/session/compaction.ts) cuts the cost of resending a long history. On a
+- Early compaction (src/session/compaction.ts, driven by src/session/coordinator.ts) cuts the cost of resending a long history. On a
   reconcile where a non-scout task newly reached `completed`, `merged`, or `cancelled`, it calls
   `ctx.compact()` only when the coordinator is idle (no turn, no pending `ask`, no unacknowledged
   delivery), no listed task is `blocked`, `paused`, `awaiting-approval`, or `ready` or has an
