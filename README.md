@@ -139,6 +139,24 @@ hear about it before any work starts. A task keeps the version it started with, 
 lists the skills it uses. Workers also pick up the repository's own skills without being asked;
 your personal skills reach a worker only when you name one.
 
+### Playbooks
+
+Every coding task follows a short playbook for its kind of job, so the agent doesn't skip the
+steps that catch the usual mistakes. You don't invoke anything: Tandem picks the playbook, the task
+status shows it (`Type: bug fix`), and you can say "treat this as a refactor" to change it.
+
+| Playbook | Good for | What it makes the agent do |
+| --- | --- | --- |
+| Bug fix | Something behaves wrongly | Reproduce it in a failing test first, fix it where it starts, and commit the test before the fix |
+| Feature | New behavior | Reuse existing code, test through the public entry point, and check what happens if it runs twice or fails halfway |
+| Refactor | Same behavior, new structure | Confirm tests cover it first, move every caller, and delete the old version |
+| Perf | Making something faster | Measure before and after, and fix the cause |
+| General | Anything else | The feature steps, without naming the data first |
+| Fix round | Review found problems | Fix every finding, confirm each is gone, and question the first fix if one comes back |
+
+The agent works through the steps as its to-do list. It can skip a step that doesn't apply, but it
+has to say why, and it can't finish with a step left open.
+
 ### Working in another repository
 
 Ask for research or a change in another repository ("how does acme/api handle retries?", "add the
@@ -211,7 +229,8 @@ data folder and session name are remembered in `~/.config/tandem/config.json`.
   A short reply to one of Tandem's fixed-choice questions ("yeah restart it") is answered the same
   way; approving a brief this way still asks you to type `y` first. Anything else that changes
   state goes through the coordinator. See
-  [Jev prompt routing](docs/reference/policy.md#jev-prompt-routing).
+  [Jev prompt routing](docs/reference/policy.md#jev-prompt-routing). The same key lets Tandem
+  pick each coding task's [playbook](#playbooks); without it, tasks use General.
 - **Visual presentations.** With `lavish-axi` installed, a research task's agent can draw a mockup
   or explainer page in its own pane, and Tandem opens it in Lavish. Your comments there go straight
   back to that agent, which updates the same page while the tab reloads. The research agent stays
@@ -219,6 +238,11 @@ data folder and session name are remembered in `~/.config/tandem/config.json`.
 - **Conversational skills.** Three skills let any agent session explain Tandem, onboard a
   repository, or report status. See
   [installing the skills](skills/README.md).
+
+## Credits
+
+Tandem's playbooks and the principle rules its coding and review agents follow are adapted from
+[pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT).
 
 ## Learn more
 
