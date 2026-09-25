@@ -15,10 +15,11 @@ test("selection pins each confident job type, and general for other, low confide
   expect(selectPlaybook(undefined)).toBe("general");
 });
 
-test("a fix round follows the fix-round playbook; a task without one gets none", () => {
+test("every fix round follows the fix-round playbook; otherwise the pinned one, if any", () => {
   expect(playbookForRun("perf", false)).toBe("perf");
   expect(playbookForRun("perf", true)).toBe("fix-round");
-  expect(playbookForRun(undefined, true)).toBeUndefined();
+  expect(playbookForRun(undefined, true)).toBe("fix-round");
+  expect(playbookForRun(undefined, false)).toBeUndefined();
 });
 
 test("general is the feature playbook without naming its data first", () => {

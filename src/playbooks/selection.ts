@@ -16,13 +16,12 @@ export function selectPlaybook(
 }
 
 /**
- * The playbook one implementer run follows: a fix round always follows `fix-round`, otherwise the
- * task's pinned playbook. Tasks created before playbooks existed pinned none and get none.
+ * The playbook one implementer run follows: every fix round follows `fix-round`, otherwise the
+ * task's pinned playbook. Tasks created before playbooks existed pin none.
  */
 export function playbookForRun(
   pinned: PlaybookId | undefined,
   fixRound: boolean,
 ): PlaybookId | undefined {
-  if (pinned === undefined) return undefined;
   return fixRound ? "fix-round" : pinned;
 }

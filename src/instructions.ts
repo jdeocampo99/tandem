@@ -156,7 +156,7 @@ Before writing a new helper, type, or module, search the repository for an exist
 ## 7. Plain, Conventional Names
 Name things with full words for what they mean in the domain. Avoid abbreviations, internal jargon, and names that describe mechanics rather than meaning. Follow the language's conventional short names where they are idiomatic, such as i, err, or id.
 
-Review protocol: preserve observable semantics, ordering, mutation timing, boundary behavior, and error behavior. Update every affected caller transitively. For every changed function, method, callback, closure, and affected caller, record an explicit disposition: changed, intentionally unchanged with a rationale, or blocked with the exact reason. Apply the same review to newly introduced functions. Report only evidence-backed findings and keep the change focused; do not broaden the review into unrelated cleanup.`;
+Review protocol: preserve observable semantics, ordering, mutation timing, boundary behavior, and error behavior. Update every affected caller transitively. For every changed function, method, callback, closure, and affected caller, record an explicit disposition: changed, intentionally unchanged with a rationale, or blocked with the exact reason. Apply the same review to newly introduced functions. Report only evidence-backed findings. Outside the files the change edits and the callers of anything it replaces, leave code alone.`;
 
 /**
  * Principles adapted from pstack (MIT, github.com/cursor/plugins/tree/main/pstack), written as
