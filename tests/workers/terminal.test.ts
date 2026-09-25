@@ -10,6 +10,7 @@ import {
   readWorkerTerminalCommand,
   readWorkerTokenTally,
   replyUsage,
+  requestWorkerMockup,
   requestWorkerTerminalCommand,
   taskUsage,
   traceWorkerTurn,
@@ -288,5 +289,33 @@ test("a worker's replies add up to one token tally that round-trips through its 
     expect(await readWorkerTokenTally(jobPath)).toEqual(tally);
   } finally {
     await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("a mockup request carries its brief and resolves once the scout takes it, once", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-interactive-mockup-"));
+  try {
+    const { job: writer, state: writerState } = fixture(root);
+    const job: WorkerTerminalJob = { ...writer, role: "scout" };
+    const state: WorkerTerminalState = { ...writerState, role: "scout" };
+    await writeWorkerTerminal(job.jobPath, state);
+    const mockup = { briefPath: join(root, "brief.md"), artifactDir: join(root, "presentation") };
+    const request = requestWorkerMockup(job, "request-1", mockup, 1_000);
+    let command = await readWorkerTerminalCommand(job.jobPath, job);
+    const deadline = Date.now() + 500;
+    while (command === undefined && Date.now() < deadline) {
+      await Bun.sleep(5);
+      command = await readWorkerTerminalCommand(job.jobPath, job);
+    }
+    expect(command).toMatchObject({ id: "request-1", action: "mockup", mockup });
+    await writeWorkerTerminal(job.jobPath, { ...state, phase: "busy", commandId: "request-1" });
+    await request;
+    expect(await readWorkerTerminalCommand(job.jobPath, job)).toBeUndefined();
+
+    await writeWorkerTerminal(job.jobPath, { ...state, settledCommandId: "request-1" });
+    await requestWorkerMockup(job, "request-1", mockup, 25);
+    expect(await readWorkerTerminalCommand(job.jobPath, job)).toBeUndefined();
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

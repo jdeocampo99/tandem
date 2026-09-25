@@ -2,12 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import type { ModelSpec, TaskRecord } from "../contracts.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../runtime/persistence.ts";
-import type {
-  DurableJob,
-  DurableOperation,
-  RuntimePresentation,
-  RuntimeTaskState,
-} from "../runtime/schema.ts";
+import type { DurableJob, DurableOperation } from "../runtime/schema.ts";
 import { createTaskStore, type TaskStore, type TaskStoreTransaction } from "../tasks/store.ts";
 import { authorizeExecutionModel, executionRoutingFence } from "./execution-routing.ts";
 
@@ -24,7 +19,7 @@ export type ExecutionGateInput = Readonly<{
   readonly jobId: string;
   readonly taskId: string;
   readonly generation: number;
-  readonly command: "worker" | "validation" | "presentation";
+  readonly command: "worker" | "validation";
   readonly cwd: string;
   readonly resultPath: string;
   readonly inputHead?: string;
@@ -59,20 +54,8 @@ function refusal(reason: string): ExecutionAdmission {
   return { admitted: false, reason };
 }
 
-function activeTask(task: TaskRecord, command: ExecutionGateInput["command"]): boolean {
-  const terminal =
-    command === "presentation"
-      ? ["cancelled"]
-      : ["paused", "blocked", "cancelled", "completed", "merged"];
-  return !terminal.includes(task.stage);
-}
-
-function jobForRuntime(
-  runtime: RuntimeTaskState | RuntimePresentation,
-  jobId: string,
-): DurableJob | undefined {
-  if ("jobs" in runtime) return runtime.jobs.find((job) => job.id === jobId);
-  return runtime.job.id === jobId ? runtime.job : undefined;
+function activeTask(task: TaskRecord): boolean {
+  return !["paused", "blocked", "cancelled", "completed", "merged"].includes(task.stage);
 }
 
 function operationEffectId(jobId: string): string {
@@ -118,22 +101,13 @@ async function claimInTransaction(
 ): Promise<ExecutionAdmission> {
   const task = await transaction.read(input.taskId);
   if (task === undefined) return refusal(`task ${input.taskId} is missing`);
-  if (input.command !== "presentation" && task.generation !== input.generation) {
-    return refusal("task generation is stale");
-  }
-  if (!activeTask(task, input.command)) return refusal(`task ${input.taskId} is not active`);
+  if (task.generation !== input.generation) return refusal("task generation is stale");
+  if (!activeTask(task)) return refusal(`task ${input.taskId} is not active`);
   const state = await readRuntimeState(runtimePath);
 
   const taskRuntime = state.tasks.find((entry) => entry.taskId === input.taskId);
-  const presentationRuntime = state.presentations.find(
-    (entry) => entry.taskId === input.taskId && entry.job.id === input.jobId,
-  );
-  const runtime =
-    taskRuntime !== undefined && jobForRuntime(taskRuntime, input.jobId) !== undefined
-      ? taskRuntime
-      : presentationRuntime;
-  if (runtime === undefined) return refusal(`runtime task ${input.taskId} is missing`);
-  const job = jobForRuntime(runtime, input.jobId);
+  if (taskRuntime === undefined) return refusal(`runtime task ${input.taskId} is missing`);
+  const job = taskRuntime.jobs.find((entry) => entry.id === input.jobId);
   if (job === undefined) return refusal(`runtime job ${input.jobId} is missing`);
   if (
     job.id !== input.jobId ||
@@ -150,7 +124,6 @@ async function claimInTransaction(
   }
   if (
     (input.command === "validation" && job.role !== "validation") ||
-    (input.command === "presentation" && job.role !== "presentation") ||
     (input.command === "worker" && (job.role === "validation" || job.role === "presentation"))
   ) {
     return refusal("runtime job role does not match execution command");
@@ -167,13 +140,11 @@ async function claimInTransaction(
     return refusal("job is not in an admitted launch state");
   }
 
-  const presentationOperation = "job" in runtime ? runtime.operation : undefined;
-  const operation = presentationOperation ?? taskRuntime?.operation;
+  const operation = taskRuntime.operation;
   if (operation === undefined) return refusal("runtime operation is missing");
   const operationKind = operation.kind;
   if (
     (input.command === "validation" && operationKind !== "validation") ||
-    (input.command === "presentation" && operationKind !== "presentation") ||
     (input.command === "worker" &&
       (operationKind === "validation" || operationKind === "presentation")) ||
     operation.role !== job.role
@@ -222,21 +193,12 @@ async function claimInTransaction(
       },
     ],
   };
-  const nextState =
-    "job" in runtime
-      ? {
-          ...state,
-          presentations: state.presentations.map((entry) =>
-            entry.id === runtime.id ? { ...entry, operation: claimedOperation } : entry,
-          ),
-        }
-      : {
-          ...state,
-          tasks: state.tasks.map((entry) =>
-            entry.taskId === input.taskId ? { ...entry, operation: claimedOperation } : entry,
-          ),
-        };
-  await writeRuntimeState(runtimePath, nextState);
+  await writeRuntimeState(runtimePath, {
+    ...state,
+    tasks: state.tasks.map((entry) =>
+      entry.taskId === input.taskId ? { ...entry, operation: claimedOperation } : entry,
+    ),
+  });
   return { admitted: true };
 }
 

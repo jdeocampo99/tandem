@@ -64,6 +64,7 @@ export type TandemAction =
   | Readonly<{
       readonly action: "create";
       readonly repoPath: string;
+      readonly requestId?: string | undefined;
       readonly kind: CreatableTaskKind;
       readonly objective: string;
       readonly acceptanceCriteria: readonly string[];
@@ -368,6 +369,7 @@ function serviceCreateInput(
     repoPath: action.repoPath,
     kind: action.kind,
     objective: action.objective,
+    ...(action.requestId === undefined ? {} : { requestId: action.requestId }),
     acceptanceCriteria: action.acceptanceCriteria,
     ...(action.manualVerification === undefined
       ? {}

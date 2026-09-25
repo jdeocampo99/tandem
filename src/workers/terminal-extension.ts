@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { copyFile, lstat, readFile, realpath } from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type {
   ExtensionAPI,
@@ -39,6 +40,7 @@ import {
 } from "./protocol.ts";
 import {
   addReplyUsage,
+  COPY_ASSET_TOOL,
   type ReplyUsage,
   readWorkerTerminalCommand,
   replyUsage,
@@ -69,6 +71,14 @@ const READ_ONLY_TOOLS: Readonly<Record<string, true>> = {
   glob: true,
   web_search: true,
 };
+/** The tools a scout may use only on the mockup Tandem asked it to draw. */
+const MOCKUP_WRITE_TOOLS: Readonly<Record<string, true>> = {
+  write: true,
+  edit: true,
+  [COPY_ASSET_TOOL]: true,
+};
+const MAX_ASSET_BYTES = 20 * 1024 * 1024;
+const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 function now(): string {
   return new Date().toISOString();
 }
@@ -289,6 +299,7 @@ function terminalState(
   phase: WorkerTerminalState["phase"],
   completed: boolean,
   commandId?: string,
+  settledCommandId?: string,
 ): WorkerTerminalState {
   return {
     schemaVersion: 1,
@@ -302,7 +313,70 @@ function terminalState(
     completed,
     heartbeatAt: now(),
     ...(commandId === undefined ? {} : { commandId }),
+    ...(settledCommandId === undefined ? {} : { settledCommandId }),
   };
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const path = relative(root, candidate);
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+}
+
+/**
+ * Whether a scout's write, edit, or copy_asset call targets the mockup it was asked to draw.
+ * `undefined` means the tool is not one of those; a scout writes nothing else, ever.
+ */
+export function mockupWriteDecision(
+  input: Readonly<{
+    role: WorkerRole;
+    toolName: string;
+    toolInput: unknown;
+    cwd: string;
+    artifactDir: string | undefined;
+  }>,
+): "allow" | { block: true; reason: string } | undefined {
+  if (input.role !== "scout" || MOCKUP_WRITE_TOOLS[input.toolName] !== true) return undefined;
+  if (input.artifactDir === undefined) {
+    return { block: true, reason: "A scout writes only the mockup Tandem asks it to draw." };
+  }
+  const args =
+    typeof input.toolInput === "object" && input.toolInput !== null
+      ? (input.toolInput as Record<string, unknown>)
+      : {};
+  if (input.toolName === COPY_ASSET_TOOL) return "allow";
+  const path = args.path;
+  if (typeof path !== "string" || path.trim().length === 0) {
+    return { block: true, reason: `${input.toolName} needs a path` };
+  }
+  if (!isWithin(input.artifactDir, resolve(input.cwd, path))) {
+    return {
+      block: true,
+      reason: `Write only inside the mockup folder ${input.artifactDir}.`,
+    };
+  }
+  return "allow";
+}
+
+/** Copies one file from the scout's checkout next to its mockup, byte for byte. */
+export async function copyMockupAsset(
+  input: Readonly<{ cwd: string; artifactDir: string; from: string; name: string }>,
+): Promise<string> {
+  if (!ASSET_NAME.test(input.name)) {
+    throw new Error("name must be a plain file name such as jr-thinking.webp");
+  }
+  const [root, source] = await Promise.all([
+    realpath(input.cwd),
+    realpath(resolve(input.cwd, input.from)),
+  ]);
+  if (!isWithin(root, source))
+    throw new Error("from must be a file inside the repository checkout");
+  const entry = await lstat(source);
+  if (!entry.isFile()) throw new Error("from must be a regular file");
+  if (entry.size > MAX_ASSET_BYTES) throw new Error("from is larger than 20 MB");
+  const target = resolve(input.artifactDir, input.name);
+  if (basename(target) !== input.name) throw new Error("name must be a plain file name");
+  await copyFile(source, target);
+  return target;
 }
 
 /** The lines a PR review's comments may anchor on, read from the diff the run was given. */
@@ -471,6 +545,8 @@ type WorkerTerminalDependencies = Readonly<{
   readonly statusReporter: HerdrStatusReporter | undefined;
   /** Queues the stall reminder as the worker's next turn. */
   readonly sendStallReminder: () => void;
+  /** Sends text as the worker's next user message. */
+  readonly sendUserMessage: (text: string) => void;
 }>;
 
 /**
@@ -483,6 +559,7 @@ class WorkerTerminalSession {
   private readonly identity: NativeWorkerIdentity;
   private readonly statusReporter: HerdrStatusReporter | undefined;
   private readonly sendStallReminder: () => void;
+  private readonly sendUserMessage: (text: string) => void;
   private closed = false;
   private resultPublished = false;
   private delegatedSettled = false;
@@ -490,6 +567,9 @@ class WorkerTerminalSession {
   private extensionAborted = false;
   private pauseCommand: WorkerTerminalCommand | undefined;
   private closingCommand: WorkerTerminalCommand | undefined;
+  // The mockup turn in progress, and the last one that finished.
+  private mockupCommand: WorkerTerminalCommand | undefined;
+  private settledMockupId: string | undefined;
   private writeQueue = Promise.resolve();
   private currentState: WorkerTerminalState;
   private timeoutTimer: Timer | undefined;
@@ -513,6 +593,7 @@ class WorkerTerminalSession {
     this.identity = workerIdentity(dependencies.job, dependencies.jobPath);
     this.statusReporter = dependencies.statusReporter;
     this.sendStallReminder = dependencies.sendStallReminder;
+    this.sendUserMessage = dependencies.sendUserMessage;
     this.currentState = terminalState(this.identity, "starting", false);
   }
 
@@ -550,7 +631,7 @@ class WorkerTerminalSession {
     commandId = this.currentState.commandId,
   ): Promise<void> {
     if (this.closed && phase !== "closed") return;
-    const next = terminalState(this.identity, phase, completed, commandId);
+    const next = terminalState(this.identity, phase, completed, commandId, this.settledMockupId);
     this.currentState = next;
     const write = this.writeQueue.then(() => writeWorkerTerminal(this.jobPath, next));
     this.writeQueue = write.catch(() => undefined);
@@ -576,6 +657,11 @@ class WorkerTerminalSession {
     if (!decision.settle) return;
     this.trace("idle_after_result");
     this.agentActive = false;
+    // A mockup turn that never started or never ended cleanly still has to settle.
+    if (this.mockupCommand !== undefined) {
+      void this.settleMockupTurn().catch(() => this.abort(ctx));
+      return;
+    }
     void this.persistState(this.settledPhase(), true, this.pauseCommand?.id).catch(() =>
       this.abort(ctx),
     );
@@ -790,6 +876,41 @@ class WorkerTerminalSession {
     await this.persistState("closing", true, confirmed.id);
   }
 
+  // A finished scout takes a mockup request only while nothing else is happening in its pane,
+  // so it never interrupts the person typing there.
+  private async startMockupTurn(
+    command: WorkerTerminalCommand,
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    const request = command.mockup;
+    if (
+      request === undefined ||
+      this.job.role !== "scout" ||
+      command.id === this.settledMockupId ||
+      this.mockupCommand !== undefined ||
+      this.pauseCommand !== undefined ||
+      this.closingCommand !== undefined ||
+      !this.currentState.completed ||
+      paneBusy(ctx)
+    ) {
+      return;
+    }
+    const brief = await readFile(request.briefPath, "utf8");
+    this.trace("control", { action: "mockup", phase: this.currentState.phase });
+    this.mockupCommand = command;
+    this.agentActive = true;
+    await this.persistState("busy", true, command.id);
+    await this.reportStatus();
+    this.sendUserMessage(brief);
+  }
+
+  private async settleMockupTurn(): Promise<void> {
+    if (this.mockupCommand === undefined) return;
+    this.settledMockupId = this.mockupCommand.id;
+    this.mockupCommand = undefined;
+    await this.persistState(this.settledPhase(), true, this.pauseCommand?.id);
+  }
+
   private async pollControl(ctx: ExtensionContext): Promise<void> {
     if (this.closed) return;
     if (
@@ -802,12 +923,29 @@ class WorkerTerminalSession {
     const command = await readWorkerTerminalCommand(this.jobPath, this.identity);
     if (command === undefined) return;
     if (command.id === this.currentState.commandId || command.id === this.pauseCommand?.id) return;
+    if (command.action === "mockup") {
+      await this.startMockupTurn(command, ctx);
+      return;
+    }
     this.trace("control", { action: command.action, phase: this.currentState.phase });
     if (command.action === "pause") await this.pause(command, ctx);
     else await this.acceptClose(command, ctx);
   }
 
+  /** The folder the scout is drawing a mockup in right now, if it is. */
+  mockupArtifactDir(): string | undefined {
+    return this.mockupCommand?.mockup?.artifactDir;
+  }
+
   guardToolCall(event: Readonly<{ toolName: string; input: unknown }>): ToolBlock | undefined {
+    const write = mockupWriteDecision({
+      role: this.job.role,
+      toolName: event.toolName,
+      toolInput: event.input,
+      cwd: this.job.cwd,
+      artifactDir: this.mockupArtifactDir(),
+    });
+    if (write !== undefined) return write === "allow" ? undefined : write;
     return (
       workerToolRefusal(
         {
@@ -963,6 +1101,9 @@ class WorkerTerminalSession {
     }
     if (event.willContinue === true || resumingAfterStall) {
       await this.persistBusy();
+    } else if (this.mockupCommand !== undefined) {
+      await this.settleMockupTurn();
+      await this.reportStatus();
     } else if (this.resultPublished) {
       await this.persistState(this.settledPhase(), true, this.pauseCommand?.id);
       this.trace("agent_end_persisted", { phase: this.currentState.phase });
@@ -1006,6 +1147,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
         },
         { deliverAs: "nextTurn", triggerTurn: true },
       ),
+    sendUserMessage: (text) => pi.sendUserMessage(text),
   });
   await session.start();
 
@@ -1020,6 +1162,55 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     approval: "read",
     execute: (_toolCallId, params, _signal, _onUpdate, ctx) => session.submitReport(params, ctx),
   });
+
+  if (job.role === "scout") {
+    pi.registerTool({
+      name: COPY_ASSET_TOOL,
+      label: "Copy asset",
+      description:
+        "Copy an image, font, or other file from the repository checkout into the mockup folder, byte for byte, so the mockup can load it by relative path (for example ./jr-thinking.webp). Only works while drawing a mockup.",
+      parameters: pi.zod
+        .object({
+          from: pi.zod.string().describe("Path of the file in the repository checkout."),
+          name: pi.zod.string().describe("Plain file name to save it as in the mockup folder."),
+        })
+        .strict(),
+      strict: true,
+      approval: "read",
+      async execute(_toolCallId, params) {
+        const artifactDir = session.mockupArtifactDir();
+        if (artifactDir === undefined) {
+          return {
+            content: [{ type: "text", text: "copy_asset only works while drawing a mockup." }],
+            details: undefined,
+            isError: true,
+          };
+        }
+        try {
+          const target = await copyMockupAsset({
+            cwd: job.cwd,
+            artifactDir,
+            from: params.from,
+            name: params.name,
+          });
+          return {
+            content: [
+              { type: "text", text: `Copied to ${target}; reference it as ./${params.name}.` },
+            ],
+            details: undefined,
+          };
+        } catch (error) {
+          return {
+            content: [
+              { type: "text", text: `copy_asset failed: ${describeExtensionError(error)}` },
+            ],
+            details: undefined,
+            isError: true,
+          };
+        }
+      },
+    });
+  }
   pi.on("tool_call", (event) => session.guardToolCall(event));
   pi.on("session_start", (_event, ctx) => session.onSessionStart(ctx));
   pi.on("agent_start", (_event, ctx) => session.onAgentStart(ctx));

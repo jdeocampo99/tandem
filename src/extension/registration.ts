@@ -139,6 +139,10 @@ function tandemRequestSchema(z: Zod) {
       .object({
         action: z.literal("create"),
         repoPath: z.string(),
+        requestId: z
+          .string()
+          .optional()
+          .describe("The approved request this work belongs to; required when several are open."),
         kind: z.enum(["scout", "implementation"]),
         objective: z.string(),
         acceptanceCriteria: z.array(z.string()),

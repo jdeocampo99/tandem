@@ -51,16 +51,14 @@ src/terminal/cli-arguments.ts, src/cli.ts
 ## Answering a worker question
 
 - The coordinator is the single user inbox. Before answering it inspects the durable current
-  question id, recommendation, report or artifact path, task/presentation identity, approval
-  state, and in-scope evidence.
+  question id, recommendation, report path, task identity, approval state, and in-scope
+  evidence.
 - It may answer only when explicit prior user direction, the approved scope, or unambiguous
   repository facts establish a safe non-destructive answer, and it sends a concise rationale bound
   to the exact current question id. Stale question ids are rejected.
 - Product choices, ambiguous evidence, scope changes, credentials, and approval-bearing,
   destructive, publishing, merging, or deployment decisions stay with the user. The coordinator
   never infers consent.
-- For a presentation question, the answer carries the presentation's task identity and current
-  question id; the controller routes it to the presentation runtime.
 
 ## Message receipts
 

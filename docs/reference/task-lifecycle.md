@@ -24,7 +24,7 @@ src/workers/terminal-extension.ts
   `acceptanceCriteria`, and `surfaces`.
 - Ordinary worker briefs fail closed above 64 KiB of UTF-8 (`MAX_ORDINARY_BRIEF_BYTES` in
   src/instructions.ts) with an error asking to shorten them; they are never silently truncated.
-  Presentation keeps its own 32,000-character prompt bound.
+  A draw brief keeps its own 32,000-character bound.
 
 ## Stages
 
@@ -112,8 +112,10 @@ from the prompt router.
   it still fails the job on provider error, abort, model substitution, or requested timeout.
 - The scheduler may consume a result while OMP stays open after checking job identity, generation,
   native PID, physical checkout, and a fresh terminal heartbeat. Terminal output is display only.
-- After completion or pause, follow-up turns are read-only (mutating tools blocked). Reviewer and
-  presentation conversations stay open after consumption.
+- After completion or pause, follow-up turns are read-only (mutating tools blocked), except a
+  completed scout's mockup turn, which may write only inside its presentation's artifact directory
+  (see [delivery.md](delivery.md#presentations-and-lavish)). Reviewer conversations stay open after
+  consumption.
 - A writer job reuses a pane only when the prior turn finished or paused and the session is idle with
   no queued messages or draft. Cooperative close freezes input, requests exit, and verifies process
   exit. Busy, foreign, stale, or unproven terminals are retained, never interrupted.

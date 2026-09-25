@@ -87,7 +87,11 @@ import {
   workerCommand,
   workerRoleForTask,
 } from "../service/records.ts";
-import { decideScoutWorktreeRelease, observeScoutCheckout } from "../service/scout-cleanup.ts";
+import {
+  closeFinishedScoutPanes,
+  decideScoutWorktreeRelease,
+  observeScoutCheckout,
+} from "../service/scout-cleanup.ts";
 import { taskSourcePath } from "../service/source.ts";
 import {
   type PlannedValidation,
@@ -1431,13 +1435,6 @@ export class WorkerWorkflow {
         kind: "allocation-failed",
         summary: "Tandem couldn't set up a working copy for this task.",
         detail: allocationFailedReason,
-      });
-      const noLeaseReason = "worktree allocation returned no lease";
-      await this.blockIfOperationClaim(task.id, noLeaseReason, claim, {
-        group: "lost-resource",
-        kind: "allocation-failed",
-        summary: "Tandem couldn't set up a working copy for this task.",
-        detail: noLeaseReason,
       });
       return "stopped";
     }
@@ -3677,7 +3674,8 @@ export class WorkerWorkflow {
   /**
    * The worktree an implementation can take over from the scout of its first research handoff:
    * the scout has settled, holds no pane or reservation, and its checkout is still clean on its
-   * own branch at its source commit. Anything else falls back to leasing a fresh worktree.
+   * own branch at its source commit. Anything else falls back to leasing a fresh worktree. A
+   * finished scout kept alive for mockups has its pane closed first, since building has started.
    */
   private async adoptableScoutWorktree(
     task: TaskRecord,
@@ -3685,6 +3683,11 @@ export class WorkerWorkflow {
     const scoutId =
       task.kind === "implementation" ? task.researchHandoffs?.[0]?.scoutTaskId : undefined;
     if (scoutId === undefined) return undefined;
+    try {
+      await closeFinishedScoutPanes(this.#deps, scoutId);
+    } catch {
+      // A pane that would not close keeps the scout's worktree; the implementation leases another.
+    }
     const [scout, runtime] = await Promise.all([
       this.#deps.getTask(scoutId),
       this.#deps.runtimeFor(scoutId),

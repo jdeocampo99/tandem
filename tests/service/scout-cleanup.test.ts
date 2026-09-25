@@ -27,6 +27,7 @@ import type { DurableJob, DurableOperation, RuntimeState } from "../../src/runti
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import {
   classifyCleanupFailure,
+  closeFinishedScoutPanes,
   decideScoutCleanupEligibility,
   decideScoutWorktreeRelease,
   finishPendingScoutCleanup,
@@ -572,7 +573,7 @@ test("a completed clean scout is released while its report and history survive",
   });
 });
 
-test("a scout whose research leads to implementation closes its pane and keeps its worktree", async () => {
+test("a scout whose research leads to implementation keeps its pane and worktree", async () => {
   await withFixture(
     { disposition: "implementation-interview" },
     async ({ home, world, service, lease }) => {
@@ -580,33 +581,61 @@ test("a scout whose research leads to implementation closes its pane and keeps i
 
       const task = await service.get("task-1");
       expect(task.cleanup?.status).toBe("retained");
-      expect(task.cleanup?.reason).toContain("kept for the implementation");
-      expect(world.closedPanes).toEqual(["pane-1"]);
+      expect(task.cleanup?.reason).toContain("mockups");
+      expect(world.closedPanes).toEqual([]);
       expect(world.returnedLeases).toEqual([]);
-      expect((await readRuntime(home)).tasks[0]?.worktree?.leaseId).toBe(lease.leaseId);
+      const runtime = (await readRuntime(home)).tasks[0];
+      expect(runtime?.endpoints).toHaveLength(1);
+      expect(runtime?.worktree?.leaseId).toBe(lease.leaseId);
     },
   );
 });
 
-test("a finished scout whose OMP stays open idle is closed so its worktree can be adopted", async () => {
+test("a finished scout kept open for mockups is closed when building starts, keeping its worktree", async () => {
   await withFixture(
     {
       disposition: "implementation-interview",
       world: { paneActive: true, workerAcceptsClose: true },
     },
-    async ({ home, world, service, lease }) => {
+    async ({ home, world, service, lease, run }) => {
       const job = scoutJob(home, endpointFor(), "consumed");
       await writeScoutTerminal(job, { phase: "idle", completed: true });
-      const stop = answerCloseRequests(job);
+      await service.tick();
+      expect(world.closedPanes).toEqual([]);
 
-      await service.tick().finally(stop);
+      const stop = answerCloseRequests(job);
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      await closeFinishedScoutPanes(
+        { store, runtimePath: runtimeFile(home), run },
+        "task-1",
+      ).finally(stop);
 
       expect(world.closedPanes).toEqual(["pane-1"]);
       const runtime = (await readRuntime(home)).tasks[0];
       expect(runtime?.endpoints).toEqual([]);
       expect(runtime?.worktree?.leaseId).toBe(lease.leaseId);
+      const task = await service.get("task-1");
+      expect(task.endpoints ?? []).toEqual([]);
+      expect(task.cleanup?.status).toBe("retained");
     },
   );
+});
+
+test("closing finished scout panes leaves a scout that is not finished alone", async () => {
+  await withFixture({ stage: "blocked" }, async ({ home, world, run }) => {
+    const store = createTaskStore({
+      directory: join(home, "tasks"),
+      clock: () => TIMESTAMP,
+      idFactory: () => "unused",
+    });
+    await closeFinishedScoutPanes({ store, runtimePath: runtimeFile(home), run }, "task-1");
+    expect(world.closedPanes).toEqual([]);
+    expect((await readRuntime(home)).tasks[0]?.endpoints).toHaveLength(1);
+  });
 });
 
 test("a scout whose OMP is still busy keeps its pane until a later tick", async () => {

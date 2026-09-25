@@ -12,13 +12,16 @@ import type {
   TaskRecord,
   WorktreeLease,
 } from "../../src/contracts.ts";
-import type { PresentationRecord } from "../../src/presentations/records.ts";
+import type { PresentationAgent } from "../../src/presentations/records.ts";
 import {
-  completePresentation,
+  buildRevisionBrief,
+  openDrawnPresentation,
   preparePresentation,
   readPresentationFeedback,
+  writeRevisionBrief,
 } from "../../src/presentations/session.ts";
-import type { WorkerResult } from "../../src/workers/jobs.ts";
+import { presentationRequestStep } from "../../src/presentations/workflow.ts";
+import type { WorkerTerminalState } from "../../src/workers/terminal.ts";
 
 const models: Readonly<
   Record<"coordinator" | "scout" | "implementer" | "reviewer" | "presentation", ModelSpec>
@@ -64,6 +67,13 @@ const lease: WorktreeLease = {
   leasedAt: "2030-01-02T03:04:05.000Z",
 };
 
+const agent: PresentationAgent = {
+  jobId: "scout-job-1",
+  jobPath: "/tmp/jobs/task-1/0/scout-job-1/job.json",
+  generation: 0,
+  cwd: "/tmp/task-worktree",
+};
+
 function task(repoPath: string): TaskRecord {
   return {
     schemaVersion: 1,
@@ -104,22 +114,6 @@ function result(stdout = "", code = 0, stderr = ""): CommandResult {
   return { code, stdout, stderr };
 }
 
-function completedResult(
-  record: PresentationRecord,
-  artifactPath = record.artifactPath,
-): WorkerResult {
-  return {
-    id: record.id,
-    taskId: record.taskId,
-    generation: record.generation,
-    role: "presentation",
-    status: "completed",
-    text: `Artifact: ${artifactPath}`,
-    artifactPath,
-    finishedAt: "2030-01-02T03:04:06.000Z",
-  };
-}
-
 function feedbackResponse(): string {
   return [
     "session:",
@@ -141,7 +135,7 @@ function lavishGuideResult(request: CommandRequest): CommandResult | undefined {
   return undefined;
 }
 
-test("prepares a private directory and worker job from bounded Lavish guidance", async () => {
+test("prepares a private directory and a draw request for the research agent", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-presentation-"));
   try {
     const paths = await freshPresentationPaths(root);
@@ -159,6 +153,8 @@ test("prepares a private directory and worker job from bounded Lavish guidance",
     const prepared = await preparePresentation({
       task: task(paths.repository),
       id: "presentation-1",
+      requestId: "request-1",
+      agent,
       directory: paths.directory,
       objective: "Show the approved work clearly",
       artifacts: ["/tmp/reference.png"],
@@ -167,20 +163,26 @@ test("prepares a private directory and worker job from bounded Lavish guidance",
       run,
     });
 
-    expect(prepared.record.status).toBe("queued");
-    expect(prepared.record.cwd).toBe(paths.directory);
-    expect(prepared.record.artifactPath).toBe(join(paths.directory, "artifact.html"));
-    expect(prepared.job.role).toBe("presentation");
-    expect(prepared.job.sessionDirectory).toBeUndefined();
-    expect(prepared.job.prompt).toContain("lavish-axi help");
-    expect(prepared.job.prompt).toContain("Required plan playbook guidance");
-    expect(prepared.job.prompt).toContain("fallback design guidance");
-    expect(prepared.job.prompt).toContain(paths.repository);
-    expect(prepared.job.prompt).toContain("The controller—not the restricted worker—opens Lavish");
-    expect(prepared.job.prompt).toContain("Never invoke bash, shell commands, or Lavish");
-    expect(prepared.job.prompt).not.toContain("## Controller command boundary");
-    expect(prepared.job.prompt).toContain("/tmp/reference.png");
-    expect(JSON.parse(await readFile(prepared.record.jobPath, "utf8"))).toEqual(prepared.job);
+    expect(prepared.status).toBe("running");
+    expect(prepared.cwd).toBe(paths.directory);
+    expect(prepared.artifactPath).toBe(join(paths.directory, "artifact.html"));
+    expect(prepared.agent).toEqual(agent);
+    expect(prepared.jobPath).toBeUndefined();
+    expect(prepared.request).toEqual({
+      id: "request-1",
+      kind: "draw",
+      briefPath: join(paths.directory, "brief.md"),
+      requestedAt: "2030-01-02T03:04:05.000Z",
+    });
+    const brief = await readFile(join(paths.directory, "brief.md"), "utf8");
+    expect(brief).toContain(`Write the complete HTML to exactly ${prepared.artifactPath}`);
+    expect(brief).toContain("copy_asset");
+    expect(brief).toContain("Do not open Lavish or call submit_report");
+    expect(brief).toContain("lavish-axi help");
+    expect(brief).toContain("Required plan playbook guidance");
+    expect(brief).toContain("fallback design guidance");
+    expect(brief).toContain("The artifact is useful and complete.");
+    expect(brief).toContain("/tmp/reference.png");
     expect(calls).toHaveLength(3);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -194,9 +196,11 @@ test("briefs a mockup with the style guide instead of Lavish guidance or task ch
     const run: CommandRunner = async (request) => {
       throw new Error(`unexpected command: ${request.argv.join(" ")}`);
     };
-    const prepared = await preparePresentation({
+    await preparePresentation({
       task: task(paths.repository),
       id: "presentation-1",
+      requestId: "request-1",
+      agent,
       directory: paths.directory,
       objective: "Create four phone-screen mockups of the cancellation flow",
       artifacts: [],
@@ -204,13 +208,11 @@ test("briefs a mockup with the style guide instead of Lavish guidance or task ch
       run,
     });
 
-    expect(prepared.job.prompt).toContain(
-      "Mockup style guide (follow it exactly):\n# Mockup style",
-    );
-    expect(prepared.job.prompt).toContain("AGENTS.md and CLAUDE.md");
-    expect(prepared.job.prompt).not.toContain("## Automated checks");
-    expect(prepared.job.prompt).not.toContain("The artifact is useful and complete.");
-    expect(prepared.job.prompt).not.toContain("Lavish guidance");
+    const brief = await readFile(join(paths.directory, "brief.md"), "utf8");
+    expect(brief).toContain("Mockup style guide (follow it exactly):\n# Mockup style");
+    expect(brief).toContain("AGENTS.md and CLAUDE.md");
+    expect(brief).not.toContain("The artifact is useful and complete.");
+    expect(brief).not.toContain("Lavish guidance");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -225,6 +227,8 @@ test("accepts a fresh child through the /tmp physical alias when it is outside t
     const prepared = await preparePresentation({
       task: task(paths.repository),
       id: "presentation-1",
+      requestId: "request-1",
+      agent,
       directory: paths.directory,
       objective: "Show the approved work clearly",
       artifacts: [],
@@ -233,8 +237,8 @@ test("accepts a fresh child through the /tmp physical alias when it is outside t
       run,
     });
 
-    expect(prepared.record.cwd).toBe(paths.directory);
-    expect(prepared.record.artifactPath).toBe(join(paths.directory, "artifact.html"));
+    expect(prepared.cwd).toBe(paths.directory);
+    expect(prepared.artifactPath).toBe(join(paths.directory, "artifact.html"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -255,6 +259,8 @@ test("verifies the expected regular artifact before opening Lavish and preserves
     const prepared = await preparePresentation({
       task: task(paths.repository),
       id: "presentation-1",
+      requestId: "request-1",
+      agent,
       directory: paths.directory,
       objective: "Show the approved work clearly",
       artifacts: [],
@@ -262,10 +268,9 @@ test("verifies the expected regular artifact before opening Lavish and preserves
       timeoutMs: 10_000,
       run,
     });
-    await writeFile(prepared.record.artifactPath, "<!doctype html><title>Artifact</title>", "utf8");
-    const opened = await completePresentation({
-      record: prepared.record,
-      result: completedResult(prepared.record),
+    await writeFile(prepared.artifactPath, "<!doctype html><title>Artifact</title>", "utf8");
+    const opened = await openDrawnPresentation({
+      record: prepared,
       now: "2030-01-02T03:04:07.000Z",
       run,
     });
@@ -278,50 +283,6 @@ test("verifies the expected regular artifact before opening Lavish and preserves
     await rm(root, { recursive: true, force: true });
   }
 });
-test("preserves a presentation needs-decision question for coordinator resume", async () => {
-  const root = await mkdtemp(join(tmpdir(), "tandem-presentation-question-"));
-  try {
-    const paths = await freshPresentationPaths(root, "presentation-question");
-    const run: CommandRunner = async () => result(feedbackResponse());
-    const prepared = await preparePresentation({
-      task: task(paths.repository),
-      id: "presentation-question",
-      directory: paths.directory,
-      objective: "Show the approved work clearly",
-      artifacts: [],
-      now: "2030-01-02T03:04:05.000Z",
-      timeoutMs: 10_000,
-      run,
-    });
-    const blocked = await completePresentation({
-      record: prepared.record,
-      result: {
-        id: prepared.record.id,
-        taskId: prepared.record.taskId,
-        generation: prepared.record.generation,
-        role: "presentation",
-        status: "needs-decision",
-        text: "Outcome: needs-decision\nQuestion: Which visual direction is approved?",
-        question: {
-          text: "Which visual direction is approved?",
-          recommendation: "Use the existing product palette.",
-        },
-        finishedAt: "2030-01-02T03:04:06.000Z",
-      },
-      now: "2030-01-02T03:04:07.000Z",
-      run,
-    });
-    expect(blocked.status).toBe("blocked");
-    expect(blocked.question).toEqual({
-      id: prepared.record.id,
-      text: "Which visual direction is approved?",
-      recommendation: "Use the existing product palette.",
-    });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test("preserves a known session URL when later observations omit it", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-presentation-"));
   try {
@@ -342,6 +303,8 @@ test("preserves a known session URL when later observations omit it", async () =
     const prepared = await preparePresentation({
       task: task(paths.repository),
       id: "presentation-url",
+      requestId: "request-1",
+      agent,
       directory: paths.directory,
       objective: "Show the approved work clearly",
       artifacts: [],
@@ -349,10 +312,9 @@ test("preserves a known session URL when later observations omit it", async () =
       timeoutMs: 10_000,
       run,
     });
-    await writeFile(prepared.record.artifactPath, "<html>ok</html>", "utf8");
-    const opened = await completePresentation({
-      record: prepared.record,
-      result: completedResult(prepared.record),
+    await writeFile(prepared.artifactPath, "<html>ok</html>", "utf8");
+    const opened = await openDrawnPresentation({
+      record: prepared,
       now: "2030-01-02T03:04:07.000Z",
       run,
     });
@@ -386,6 +348,8 @@ test("keeps a native feedback payload when cancellation arrives after the respon
     const prepared = await preparePresentation({
       task: task(paths.repository),
       id: "presentation-late-abort",
+      requestId: "request-1",
+      agent,
       directory: paths.directory,
       objective: "Show the approved work clearly",
       artifacts: [],
@@ -393,10 +357,9 @@ test("keeps a native feedback payload when cancellation arrives after the respon
       timeoutMs: 10_000,
       run,
     });
-    await writeFile(prepared.record.artifactPath, "<html>ok</html>", "utf8");
-    const opened = await completePresentation({
-      record: prepared.record,
-      result: completedResult(prepared.record),
+    await writeFile(prepared.artifactPath, "<html>ok</html>", "utf8");
+    const opened = await openDrawnPresentation({
+      record: prepared,
       now: "2030-01-02T03:04:07.000Z",
       run,
     });
@@ -414,17 +377,22 @@ test("keeps a native feedback payload when cancellation arrives after the respon
   }
 });
 
-test("rejects worker identity and outside or symlink artifact paths", async () => {
+test("fails a draw whose artifact is missing or a symlink out of the folder, without opening Lavish", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-presentation-"));
   try {
     const paths = await freshPresentationPaths(root);
+    const opens: CommandRequest[] = [];
     const run: CommandRunner = async (request) => {
       const guidance = lavishGuideResult(request);
-      return guidance ?? result(feedbackResponse());
+      if (guidance !== undefined) return guidance;
+      opens.push(request);
+      return result(feedbackResponse());
     };
     const prepared = await preparePresentation({
       task: task(paths.repository),
       id: "presentation-1",
+      requestId: "request-1",
+      agent,
       directory: paths.directory,
       objective: "Show the approved work clearly",
       artifacts: [],
@@ -432,35 +400,30 @@ test("rejects worker identity and outside or symlink artifact paths", async () =
       timeoutMs: 10_000,
       run,
     });
-    await writeFile(prepared.record.artifactPath, "<html>ok</html>", "utf8");
-    await expect(
-      completePresentation({
-        record: prepared.record,
-        result: { ...completedResult(prepared.record), taskId: "other-task" },
-        now: "2030-01-02T03:04:07.000Z",
-        run,
-      }),
-    ).rejects.toThrow("identity");
+    const missing = await openDrawnPresentation({
+      record: prepared,
+      now: "2030-01-02T03:04:07.000Z",
+      run,
+    });
+    expect(missing.status).toBe("failed");
+    expect(missing.error).toContain("without writing the page");
 
     const outside = join(root, "outside.html");
     await writeFile(outside, "<html>outside</html>", "utf8");
-    const symlinkPath = prepared.record.artifactPath;
-    await rm(symlinkPath);
-    await symlink(outside, symlinkPath);
-    await expect(
-      completePresentation({
-        record: prepared.record,
-        result: completedResult(prepared.record),
-        now: "2030-01-02T03:04:08.000Z",
-        run,
-      }),
-    ).rejects.toThrow("symlink");
+    await symlink(outside, prepared.artifactPath);
+    const escaped = await openDrawnPresentation({
+      record: prepared,
+      now: "2030-01-02T03:04:08.000Z",
+      run,
+    });
+    expect(escaped.status).toBe("failed");
+    expect(opens).toHaveLength(0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("rejects a pre-positioned artifact symlink before creating a worker job", async () => {
+test("rejects a pre-positioned artifact symlink before writing the brief", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-presentation-"));
   try {
     const paths = await freshPresentationPaths(root);
@@ -479,6 +442,8 @@ test("rejects a pre-positioned artifact symlink before creating a worker job", a
       preparePresentation({
         task: task(paths.repository),
         id: "presentation-1",
+        requestId: "request-1",
+        agent,
         directory: paths.directory,
         objective: "Show the approved work clearly",
         artifacts: [],
@@ -494,15 +459,13 @@ test("rejects a pre-positioned artifact symlink before creating a worker job", a
   }
 });
 
-test("rejects stale job and result files without overwriting them", async () => {
+test("rejects a stale brief without overwriting it", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-presentation-"));
   try {
     const paths = await freshPresentationPaths(root);
     await mkdir(paths.directory);
-    const staleJob = '{"stale":"job"}\n';
-    const staleResult = '{"stale":"result"}\n';
-    await writeFile(join(paths.directory, "job.json"), staleJob, "utf8");
-    await writeFile(join(paths.directory, "result.json"), staleResult, "utf8");
+    const staleBrief = "stale brief\n";
+    await writeFile(join(paths.directory, "brief.md"), staleBrief, "utf8");
     const calls: CommandRequest[] = [];
     const run: CommandRunner = async (request) => {
       calls.push(request);
@@ -513,6 +476,8 @@ test("rejects stale job and result files without overwriting them", async () => 
       preparePresentation({
         task: task(paths.repository),
         id: "presentation-1",
+        requestId: "request-1",
+        agent,
         directory: paths.directory,
         objective: "Show the approved work clearly",
         artifacts: [],
@@ -521,8 +486,7 @@ test("rejects stale job and result files without overwriting them", async () => 
         run,
       }),
     ).rejects.toThrow("freshly created");
-    expect(await readFile(join(paths.directory, "job.json"), "utf8")).toBe(staleJob);
-    expect(await readFile(join(paths.directory, "result.json"), "utf8")).toBe(staleResult);
+    expect(await readFile(join(paths.directory, "brief.md"), "utf8")).toBe(staleBrief);
     expect(calls).toHaveLength(0);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -546,6 +510,8 @@ test("rejects a physical parent alias into the source repository before mutation
       preparePresentation({
         task: task(paths.repository),
         id: "presentation-1",
+        requestId: "request-1",
+        agent,
         directory,
         objective: "Show the approved work clearly",
         artifacts: [],
@@ -586,6 +552,8 @@ test("performs one cancellable poll per feedback request and preserves meaningfu
     const prepared = await preparePresentation({
       task: task(paths.repository),
       id: "presentation-1",
+      requestId: "request-1",
+      agent,
       directory: paths.directory,
       objective: "Show the approved work clearly",
       artifacts: [],
@@ -593,10 +561,9 @@ test("performs one cancellable poll per feedback request and preserves meaningfu
       timeoutMs: 10_000,
       run,
     });
-    await writeFile(prepared.record.artifactPath, "<html>ok</html>", "utf8");
-    const opened = await completePresentation({
-      record: prepared.record,
-      result: completedResult(prepared.record),
+    await writeFile(prepared.artifactPath, "<html>ok</html>", "utf8");
+    const opened = await openDrawnPresentation({
+      record: prepared,
       now: "2030-01-02T03:04:07.000Z",
       run,
     });
@@ -650,6 +617,8 @@ test("keeps an open presentation resumable when its poll command times out", asy
     const prepared = await preparePresentation({
       task: task(paths.repository),
       id: "presentation-timeout",
+      requestId: "request-1",
+      agent,
       directory: paths.directory,
       objective: "Show the approved work clearly",
       artifacts: [],
@@ -657,10 +626,9 @@ test("keeps an open presentation resumable when its poll command times out", asy
       timeoutMs: 10_000,
       run,
     });
-    await writeFile(prepared.record.artifactPath, "<html>ok</html>", "utf8");
-    const opened = await completePresentation({
-      record: prepared.record,
-      result: completedResult(prepared.record),
+    await writeFile(prepared.artifactPath, "<html>ok</html>", "utf8");
+    const opened = await openDrawnPresentation({
+      record: prepared,
       now: "2030-01-02T03:04:07.000Z",
       run,
     });
@@ -690,6 +658,8 @@ test("does not start a poll when cancellation is already requested", async () =>
     const prepared = await preparePresentation({
       task: task(paths.repository),
       id: "presentation-1",
+      requestId: "request-1",
+      agent,
       directory: paths.directory,
       objective: "Show the approved work clearly",
       artifacts: [],
@@ -697,10 +667,9 @@ test("does not start a poll when cancellation is already requested", async () =>
       timeoutMs: 10_000,
       run,
     });
-    await writeFile(prepared.record.artifactPath, "<html>ok</html>", "utf8");
-    const opened = await completePresentation({
-      record: prepared.record,
-      result: completedResult(prepared.record),
+    await writeFile(prepared.artifactPath, "<html>ok</html>", "utf8");
+    const opened = await openDrawnPresentation({
+      record: prepared,
       now: "2030-01-02T03:04:07.000Z",
       run,
     });
@@ -717,4 +686,65 @@ test("does not start a poll when cancellation is already requested", async () =>
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("writes each Lavish comment as its own revision brief that edits the same page", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-presentation-revision-"));
+  try {
+    const paths = await freshPresentationPaths(root);
+    const run: CommandRunner = async (request) =>
+      lavishGuideResult(request) ?? result("unexpected command");
+    const prepared = await preparePresentation({
+      task: task(paths.repository),
+      id: "presentation-1",
+      requestId: "request-1",
+      agent,
+      directory: paths.directory,
+      objective: "Show the approved work clearly",
+      artifacts: [],
+      now: "2030-01-02T03:04:05.000Z",
+      run,
+    });
+    const briefPath = await writeRevisionBrief(prepared, "request-2", "Add a sad JR on screen 2");
+    expect(briefPath).toBe(join(paths.directory, "revision-request-2.md"));
+    const brief = await readFile(briefPath, "utf8");
+    expect(brief).toBe(buildRevisionBrief(prepared.artifactPath, "Add a sad JR on screen 2"));
+    expect(brief).toContain("Add a sad JR on screen 2");
+    expect(brief).toContain(`Update ${prepared.artifactPath} in place`);
+    await expect(writeRevisionBrief(prepared, "request-2", "again")).rejects.toThrow();
+    await expect(writeRevisionBrief(prepared, "../escape", "x")).rejects.toThrow();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a pending request is sent only to a finished, idle agent and ends when its turn settles", () => {
+  const now = Date.parse("2030-01-02T03:04:05.000Z");
+  const terminal: WorkerTerminalState = {
+    schemaVersion: 1,
+    jobId: agent.jobId,
+    taskId: "task-1",
+    generation: 0,
+    role: "scout",
+    cwd: agent.cwd,
+    pid: 1,
+    phase: "idle",
+    completed: true,
+    heartbeatAt: "2030-01-02T03:04:04.000Z",
+  };
+  const request = { id: "request-1" };
+  expect(presentationRequestStep(request, terminal, now)).toBe("send");
+  expect(presentationRequestStep(request, { ...terminal, completed: false }, now)).toBe("wait");
+  expect(presentationRequestStep(request, { ...terminal, phase: "busy" }, now)).toBe("wait");
+  expect(
+    presentationRequestStep(request, { ...terminal, phase: "busy", commandId: "request-1" }, now),
+  ).toBe("drawing");
+  expect(
+    presentationRequestStep(request, { ...terminal, settledCommandId: "request-1" }, now),
+  ).toBe("finished");
+  expect(presentationRequestStep(request, undefined, now)).toBe("gone");
+  expect(presentationRequestStep(request, { ...terminal, phase: "closed" }, now)).toBe("gone");
+  expect(
+    presentationRequestStep(request, { ...terminal, heartbeatAt: "2030-01-02T03:03:00.000Z" }, now),
+  ).toBe("gone");
 });

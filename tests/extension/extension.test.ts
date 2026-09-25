@@ -435,6 +435,32 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
     researchTaskIds: ["scout-a", "scout-b"],
   });
 });
+test("create forwards the named request so work can join one of several open requests", async () => {
+  const createCalls: unknown[] = [];
+  const service = {
+    create: async (input: unknown) => {
+      createCalls.push(input);
+      return task({});
+    },
+  } as unknown as TandemService;
+  const noUiContext = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;
+
+  await executeTandemAction(
+    {
+      action: "create",
+      repoPath: "/repo",
+      requestId: "req-2",
+      kind: "implementation",
+      objective: "ship feature",
+      acceptanceCriteria: ["behavior"],
+      surfaces: ["src"],
+    },
+    service,
+    noUiContext,
+  );
+
+  expect(createCalls).toMatchObject([{ requestId: "req-2" }]);
+});
 test("create forwards an explicit skill invocation to task creation untouched", async () => {
   const createCalls: unknown[] = [];
   const created = task({ skill: { name: "refactor-functions", context: "Refactor foo.ts" } });

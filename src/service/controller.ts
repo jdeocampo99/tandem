@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
@@ -69,7 +68,7 @@ import { removeReviewWorktree } from "../pr-review/worktree.ts";
 import { PresentationFeedbackWorkflow } from "../presentations/feedback.ts";
 import { type PresentationRecord, readPresentationRecord } from "../presentations/records.ts";
 import { preparePresentation } from "../presentations/session.ts";
-import { PresentationRuntimeWorkflow } from "../presentations/workflow.ts";
+import { PresentationRuntimeWorkflow, presentationAgentFor } from "../presentations/workflow.ts";
 import {
   CentralRecoveryWorkflow,
   RESTART_QUESTION_ID_PREFIX,
@@ -109,7 +108,6 @@ import {
   writeRuntimeState,
 } from "../runtime/persistence.ts";
 import type {
-  DurableJob,
   DurableReservation,
   RuntimePresentation,
   RuntimeState,
@@ -152,16 +150,13 @@ import {
   absoluteDirectory,
   currentWriter,
   describeError,
-  durableOperation,
   isMissing,
   isMissingEndpoint,
   isRecord,
   isTerminalTask,
-  makeDurableJob,
   positiveInteger,
   readTextList,
   replaceRuntimeTask,
-  serializedIdentity,
   singleLine,
   taskInputFor,
   taskNameFor,
@@ -546,17 +541,11 @@ class TandemController {
       taskInScope: (task) => this.#source.taskInScope(task),
     });
     this.#presentationRuntime = new PresentationRuntimeWorkflow({
-      sessionId: deps.sessionId,
-      parentWorkspaceId: deps.parentWorkspaceId,
-      workerPath: deps.workerPath,
       run: deps.run,
       clock: deps.clock,
-      idFactory: deps.idFactory,
       store: deps.store,
       runtimePath: deps.runtimePath,
       readState: () => this.readState(),
-      readTask: (taskId) => this.get(taskId),
-      taskInScope: (task) => this.#source.taskInScope(task),
       feedback: this.#presentationFeedback,
     });
     this.#worker = new WorkerWorkflow({
@@ -1082,17 +1071,7 @@ class TandemController {
   async restart(id: string): Promise<TaskRecord> {
     const taskId = assertTaskId(id);
     const task = await this.get(taskId);
-    const state = await this.readState();
-    for (const presentation of state.presentations) {
-      if (presentation.taskId !== task.id) continue;
-      const record = await readPresentationRecord(presentation.recordPath);
-      if (record.question !== undefined) {
-        throw new Error(
-          `Task ${taskId} has an unanswered presentation question ${JSON.stringify(record.question.id)}; answer it before restarting managed work`,
-        );
-      }
-    }
-    return this.#control.restartTask(taskId);
+    return this.#control.restartTask(task.id);
   }
 
   /** With discard, the cleanup that follows the cancel deletes the worktree and its changes. */
@@ -1160,12 +1139,6 @@ class TandemController {
       await this.answerTaskQuestion(taskId, questionId, answer);
       return this.messages(taskId);
     }
-    const presentationId = await this.blockedPresentationAsking(task.id, questionId);
-    if (presentationId !== undefined) {
-      await this.#presentationRuntime.answer(presentationId, questionId, answer);
-      const view = await this.messages(taskId);
-      return { ...view, presentationAnswer: { presentationId, questionId, status: "queued" } };
-    }
     const result = await this.#source.appendAnswer(taskId, questionId, answer);
     if (result.resumed) await this.#control.resumeTask(taskId);
     return this.messages(taskId);
@@ -1197,22 +1170,6 @@ class TandemController {
     if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage)) {
       await this.reconcileTask(resumed);
     }
-  }
-
-  /** The task's blocked presentation waiting on this question, if one is. */
-  private async blockedPresentationAsking(
-    taskId: string,
-    questionId: string,
-  ): Promise<string | undefined> {
-    const state = await this.readState();
-    for (const presentation of state.presentations) {
-      if (presentation.taskId !== taskId) continue;
-      const record = await readPresentationRecord(presentation.recordPath);
-      if (record.status === "blocked" && record.question?.id === questionId) {
-        return presentation.id;
-      }
-    }
-    return undefined;
   }
 
   /**
@@ -1458,11 +1415,12 @@ class TandemController {
         if (!isMissingEndpoint(error) && !discard) throw error;
       }
     }
-    // A finished or failed mockup's pane holds nothing its artifact file doesn't, so it closes even
-    // with its process still running; a running mockup is left alone.
+    // ponytail: only the retired presentation worker had its own pane. A finished one holds
+    // nothing its artifact file doesn't, so it closes even with its process still running.
     const presentationPanes = (await this.readState()).presentations.flatMap((presentation) =>
       presentation.taskId === task.id &&
       presentation.endpoint !== undefined &&
+      presentation.job !== undefined &&
       !activeRuntimeJob(presentation.job)
         ? [{ endpoint: presentation.endpoint, cwd: presentation.job.cwd, force: true }]
         : [],
@@ -1479,102 +1437,61 @@ class TandemController {
     }
   }
 
+  /**
+   * Asks the research task's own agent to draw a visual in its pane. Tandem opens it in Lavish when
+   * the agent's turn ends, and the user's comments there go back to the same agent.
+   */
   async present(
     id: string,
     input: { readonly objective: string; readonly artifacts: readonly string[] },
   ): Promise<PresentationRecord> {
     if (!isRecord(input)) throw new TypeError("presentation input must be an object");
     const task = await this.get(id);
+    if (task.kind !== "scout") {
+      throw new Error(
+        `Task ${task.id} is not research. Visuals come from a research task's agent; start research on the question and ask it for the visual.`,
+      );
+    }
+    if (task.stage !== "scouting" && task.stage !== "completed") {
+      throw new Error(`Task ${task.id} is ${task.stage}, so its research agent can't draw now.`);
+    }
+    const agent = presentationAgentFor(await this.readState(), task.id);
+    if (agent === undefined) {
+      throw new Error(
+        `Task ${task.id}'s research agent has closed, so it can't draw. Start research on the question and ask that task for the visual.`,
+      );
+    }
     const presentationId = singleLine(this.#deps.idFactory(), "presentation id");
-    const prepared = await preparePresentation({
+    const record = await preparePresentation({
       task,
       id: presentationId,
+      requestId: singleLine(this.#deps.idFactory(), "presentation request id"),
       directory: join(this.#deps.home, "presentations", presentationId),
       objective: text(input.objective, "objective"),
       artifacts: assertArtifacts(input.artifacts),
+      agent,
       now: this.#deps.clock(),
       ...(this.#deps.workerTimeoutMs === undefined
         ? {}
         : { timeoutMs: this.#deps.workerTimeoutMs }),
       run: this.#deps.run,
     });
-    const recordPath = join(dirname(prepared.record.jobPath), "record.json");
-    await writeJsonAtomically(recordPath, prepared.record);
-    await this.registerPresentation(task, prepared.record, recordPath);
-    await this.#presentationRuntime.startPresentation(prepared.record.id);
-    return this.readPresentation(prepared.record.id);
-  }
-
-  /**
-   * Records the presentation's durable job and owned operation, and stamps that operation into
-   * the worker spec so the worker can prove which claim it runs under.
-   */
-  private async registerPresentation(
-    task: TaskRecord,
-    record: PresentationRecord,
-    recordPath: string,
-  ): Promise<void> {
-    const durableJob: DurableJob = makeDurableJob(
-      task.id,
-      record.generation,
-      "presentation",
-      "worker",
-      record.cwd,
-      record.jobPath,
-      record.resultPath,
-      1,
-      this.#deps.clock(),
-    );
-    await this.#deps.store.exclusive(async () => {
-      const state = await readRuntimeState(this.#deps.runtimePath);
+    const recordPath = join(record.cwd, "record.json");
+    await writeJsonAtomically(recordPath, record);
+    const runtime: RuntimePresentation = {
+      schemaVersion: 1,
+      id: record.id,
+      taskId: task.id,
+      recordPath,
+    };
+    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (state) => {
       if (presentationRuntime(state, record.id) !== undefined) {
         throw new Error(`presentation ${record.id} already exists`);
       }
-      const taskRuntimeState = taskRuntime(state, task.id);
-      if (taskRuntimeState === undefined) {
-        throw new Error(`runtime task ${task.id} is missing`);
-      }
-      const operationId = singleLine(this.#deps.idFactory(), "presentation operation id");
-      const operation = durableOperation(
-        operationId,
-        task.id,
-        "presentation",
-        "presentation",
-        record.generation,
-        task.reviewHead ?? taskRuntimeState.sourceCheckpoint.head,
-        createHash("sha256").update(serializedIdentity(task.policy, "task policy")).digest("hex"),
-        task.communication?.revision ?? 0,
-        durableJob.id,
-        this.#worker.claimOwner,
-        this.#deps.clock(),
-      );
-      const workerSpec = JSON.parse(await readFile(record.jobPath, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      await writeJsonAtomically(record.jobPath, {
-        ...workerSpec,
-        execution: {
-          schemaVersion: 1,
-          home: this.#deps.home,
-          operationId: operation.id,
-          fencingRevision: operation.fencingRevision,
-          claimOwner: operation.claimOwner,
-        },
-      });
-      const next: RuntimePresentation = {
-        schemaVersion: 1,
-        id: record.id,
-        taskId: task.id,
-        recordPath,
-        operation,
-        job: { ...durableJob, operationId: operation.id },
-      };
-      await writeRuntimeState(this.#deps.runtimePath, {
-        ...state,
-        presentations: [...state.presentations, next],
-      });
+      return { ...state, presentations: [...state.presentations, runtime] };
     });
+    await this.#presentationRuntime.reconcilePresentation(runtime);
+    return this.readPresentation(record.id);
   }
 
   async presentations(): Promise<readonly PresentationRecord[]> {
@@ -1651,17 +1568,7 @@ class TandemController {
       try {
         await this.#presentationRuntime.reconcilePresentation(presentation);
       } catch (error) {
-        await this.#presentationRuntime.failPresentation(
-          presentation.id,
-          describeError(error),
-          {
-            jobId: presentation.job.id,
-            operationId: presentation.operation?.id,
-            fencingRevision: presentation.operation?.fencingRevision,
-            claimOwner: presentation.operation?.claimOwner,
-          },
-          true,
-        );
+        await this.#presentationRuntime.failPresentation(presentation.id, describeError(error));
       }
     }
   }
