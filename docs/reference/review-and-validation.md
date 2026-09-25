@@ -114,6 +114,12 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   in the ready message and the PR's `# Known issues`. A violated mandatory design rule is P1.
 - A spent fix-round budget asks `Keep fixing?` ([Task lifecycle](task-lifecycle.md#fix-rounds)).
   Nothing retries without `yes`, auto-passes, or downgrades a blocker.
+- Each finding carries the reviewer's `category` (`correctness`, `error-handling`, `security`,
+  `tests`, `design`, `requirements`, `docs`) and `catchStage`, the earliest stage that should have
+  caught it (`planning`, `implementation`, `validation`, `review`). They are fields of the review
+  report, required by the `submit_report` schema, with no Jev call. The ledger keeps them, and the
+  task timeline records them when a finding is raised ([task-lifecycle.md](task-lifecycle.md#timeline-and-trace)).
+  Findings recorded before tagging load without them.
 - Pre-ledger records load with no ledger. An entry with an unknown status or no supporting observation
   fails closed.
 

@@ -11,6 +11,8 @@ src/terminal/cli-arguments.ts, src/cli.ts
 - `show` is bounded for model-facing output; `--full` (tool: `detail: "full"`) returns the larger
   structured record, including pinned policy, generation, review round, reviewed HEAD, evidence,
   blocker, notifications, and pull-request metadata.
+- `tandem trace TASK_ID [--json]` prints the task's timeline and rollups; without a task it prints
+  the rollups across every task in scope. See [timeline and trace](task-lifecycle.md#timeline-and-trace).
 - Task counts and stage claims come from durable task state only, never from worker or process
   observations, receipts, or notifications.
 

@@ -162,6 +162,14 @@ import {
   reviewAssistanceRuntime,
 } from "../tasks/review-assistance.ts";
 import { createTaskStore, type TaskStore, transitionStoredTask } from "../tasks/store.ts";
+import { readTimeline } from "../tasks/timeline-store.ts";
+import {
+  summarizeRollups,
+  type TaskTrace,
+  type TraceSummary,
+  taskCost,
+  taskRollup,
+} from "../tasks/trace.ts";
 import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { claimOf, ownsOperation } from "../workers/operation-claim.ts";
@@ -303,6 +311,10 @@ export type TandemService = Readonly<{
   readonly list: () => Promise<readonly TaskRecord[]>;
   readonly get: (id: string) => Promise<TaskRecord>;
   readonly inspect: (id: string) => Promise<TaskInspection>;
+  /** One task's timeline and rollup. */
+  readonly trace: (id: string) => Promise<TaskTrace>;
+  /** The rollups across every task in scope. */
+  readonly traceSummary: () => Promise<TraceSummary>;
   readonly deliveryPreflight: (
     id: string,
     input: { readonly base: string },
@@ -458,6 +470,9 @@ type ServiceDependencies = Readonly<{
   personalSkillsHome: string;
   checkIssueDraft: IssueDraftChecker;
 }>;
+
+/** Why a task resumed after its question was answered, as its timeline records it. */
+const QUESTION_ANSWERED = "Its question was answered.";
 
 function assertTaskId(id: unknown): string {
   return singleLine(id, "task id");
@@ -742,6 +757,8 @@ class TandemController {
       onboard: (repoPath, write, coordinatorMcpServers) =>
         this.onboard(repoPath, write, coordinatorMcpServers),
       inspect: (id) => this.inspect(id),
+      trace: (id) => this.trace(id),
+      traceSummary: () => this.traceSummary(),
       deliveryPreflight: (id, input) => this.deliveryPreflight(id, input.base),
       models: (repoPath) => this.models(repoPath),
       configureModels: (input) => this.configureModels(input),
@@ -1214,12 +1231,37 @@ class TandemController {
     return inspectTask(this.#deps, task);
   }
 
+  async trace(id: string): Promise<TaskTrace> {
+    const task = await this.get(assertTaskId(id));
+    if (!(await this.#source.taskInScope(task))) {
+      throw new Error(`task ${task.id} is outside the repository scope`);
+    }
+    return this.traceOf(task);
+  }
+
+  async traceSummary(): Promise<TraceSummary> {
+    const traces = await Promise.all((await this.list()).map((task) => this.traceOf(task)));
+    return summarizeRollups(traces.map((trace) => trace.rollup));
+  }
+
+  private async traceOf(task: TaskRecord): Promise<TaskTrace> {
+    const timeline = await readTimeline(this.#deps.home, task.id);
+    const cost =
+      task.requestId === undefined
+        ? undefined
+        : taskCost(await this.#deps.usageLedger.read(task.requestId), task.requestId, task.id);
+    return {
+      ...timeline,
+      rollup: taskRollup(task.id, timeline.events, this.#deps.clock(), cost),
+    };
+  }
+
   async deliveryPreflight(id: string, base: string): Promise<DeliveryPreflightResult> {
     return deliveryPreflight(this.#deps, await this.get(assertTaskId(id)), base);
   }
 
   async resume(id: string): Promise<TaskRecord> {
-    return this.#control.resumeTask(assertTaskId(id));
+    return this.#control.resumeTask(assertTaskId(id), "The user resumed it.");
   }
   async restart(id: string): Promise<TaskRecord> {
     const taskId = assertTaskId(id);
@@ -1293,7 +1335,7 @@ class TandemController {
       return this.messages(taskId);
     }
     const result = await this.#source.appendAnswer(taskId, questionId, answer);
-    if (result.resumed) await this.#control.resumeTask(taskId);
+    if (result.resumed) await this.#control.resumeTask(taskId, QUESTION_ANSWERED);
     return this.messages(taskId);
   }
 
@@ -1319,7 +1361,7 @@ class TandemController {
     }
     const result = await this.#source.appendAnswer(taskId, questionId, answer);
     if (!result.resumed) return;
-    const resumed = await this.#control.resumeTask(taskId);
+    const resumed = await this.#control.resumeTask(taskId, QUESTION_ANSWERED);
     if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage)) {
       await this.reconcileTask(resumed);
     }
@@ -1352,7 +1394,7 @@ class TandemController {
       }));
     });
     if (choice === "no") return;
-    const resumed = await this.#control.resumeTask(taskId);
+    const resumed = await this.#control.resumeTask(taskId, "The user chose to keep fixing.");
     if (resumed.stage === "awaiting-fixes") await this.reconcileTask(resumed);
   }
 

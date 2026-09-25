@@ -292,8 +292,17 @@ const review = {
       file: "src/a.ts",
       line: 3,
       description: "Broken.",
+      category: "correctness",
+      catchStage: "validation",
     },
-    { id: "f2", severity: "P3", verdict: "plausible", description: "Maybe." },
+    {
+      id: "f2",
+      severity: "P3",
+      verdict: "plausible",
+      description: "Maybe.",
+      category: "docs",
+      catchStage: "review",
+    },
   ],
   summary: "One issue.",
 };
@@ -341,6 +350,14 @@ function submitReportCases(role: WorkerRole): readonly Case[] {
     {
       name: "review with an extra field",
       input: { outcome: done, review: { ...review, passed: true } },
+      valid: false,
+    },
+    {
+      name: "review finding without a category",
+      input: {
+        outcome: done,
+        review: { ...review, findings: [{ ...review.findings[1], category: undefined }] },
+      },
       valid: false,
     },
     {

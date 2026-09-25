@@ -46,6 +46,8 @@ import { isTerminalTask, replaceRuntimeTask, workerRoleForTask } from "../servic
 import { transitionTask } from "../tasks/lifecycle.ts";
 import { formatDecisionQuestion } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
+import type { TimelineEvent } from "../tasks/timeline.ts";
+import { recordTimelineEvents } from "../tasks/timeline-store.ts";
 import type { ReservationRefusal } from "../workers/admission.ts";
 import { readWorkerTerminal, type WorkerTerminalJob } from "../workers/terminal.ts";
 import { pauseWorkerTerminal } from "../workers/terminal-control.ts";
@@ -88,6 +90,16 @@ export type CentralRecoveryOutcome = Readonly<{
   readonly action: CentralRecoveryAction;
   readonly reason: string;
 }>;
+
+function restartEvent(
+  taskId: string,
+  role: "worker" | "validation",
+  attempt: number,
+  at: IsoTimestamp,
+  notice: string,
+): TimelineEvent {
+  return { type: "restarted", role, attempt, taskId, at, cause: notice };
+}
 
 /** Every restart question's id starts with this, so an answer path can route to this module alone. */
 export const RESTART_QUESTION_ID_PREFIX = `${RECOVERY_QUESTION_ID_PREFIX}restart-`;
@@ -586,15 +598,18 @@ export class CentralRecoveryWorkflow {
         refusedRelaunchCause(relaunch, proof.deadJobId, "automatic restart"),
       );
     }
-    await this.updateTaskRuntime(task.id, (entry) =>
-      withRestartRecorded(entry, {
-        attempt: decision.attempt,
-        generation: task.generation,
-        failureClass: decision.failureClass,
-        at: now,
-      }),
-    );
     const notice = `The worker stopped (${proof.reasonSummary}). I restarted it; your edits are kept. (Restart ${decision.attempt} of ${MAX_AUTOMATIC_RESTARTS_PER_GENERATION}.)${relaunch.sourceDriftNote === undefined ? "" : ` Note: ${relaunch.sourceDriftNote}.`}`;
+    await this.updateTaskRuntime(
+      task.id,
+      (entry) =>
+        withRestartRecorded(entry, {
+          attempt: decision.attempt,
+          generation: task.generation,
+          failureClass: decision.failureClass,
+          at: now,
+        }),
+      restartEvent(task.id, "worker", decision.attempt, now, notice),
+    );
     await this.notifyCoordinator(task.id, notice, now);
     return { taskId: task.id, action: "relaunched", reason: notice };
   }
@@ -613,7 +628,7 @@ export class CentralRecoveryWorkflow {
     if (!canCentralRecoverBlockedTask(task, runtime)) {
       return skipped(task.id, "block is not eligible for automatic recovery");
     }
-    const resumed = await this.resumeBlocked(task.id);
+    const resumed = await this.resumeBlocked(task.id, "Tandem recovered it automatically.");
     if (resumed === undefined || resumed.stage === "blocked") {
       return skipped(task.id, "task could not be resumed");
     }
@@ -710,7 +725,11 @@ export class CentralRecoveryWorkflow {
       return { started: false, reason };
     }
     const now = this.#deps.clock();
-    await this.updateTaskRuntime(task.id, (entry) => withValidationRetryRecorded(entry, attempt));
+    await this.updateTaskRuntime(
+      task.id,
+      (entry) => withValidationRetryRecorded(entry, attempt),
+      restartEvent(task.id, "validation", attempt, now, notice),
+    );
     await this.notifyCoordinator(task.id, notice, now);
     return { started: true };
   }
@@ -917,15 +936,18 @@ export class CentralRecoveryWorkflow {
       return;
     }
     const now = this.#deps.clock();
-    await this.updateTaskRuntime(task.id, (entry) =>
-      withRestartRecorded(entry, {
-        attempt,
-        generation: task.generation,
-        failureClass: classifyRestartFailure(proof.reasonSummary),
-        at: now,
-      }),
-    );
     const notice = `The worker stopped (${proof.reasonSummary}). You approved another restart; I restarted it and your edits are kept.${relaunch.sourceDriftNote === undefined ? "" : ` Note: ${relaunch.sourceDriftNote}.`}`;
+    await this.updateTaskRuntime(
+      task.id,
+      (entry) =>
+        withRestartRecorded(entry, {
+          attempt,
+          generation: task.generation,
+          failureClass: classifyRestartFailure(proof.reasonSummary),
+          at: now,
+        }),
+      restartEvent(task.id, "worker", attempt, now, notice),
+    );
     await this.notifyCoordinator(task.id, notice, now);
   }
 
@@ -1002,13 +1024,16 @@ export class CentralRecoveryWorkflow {
     }>,
   ): Promise<void> {
     await this.snapshotWorktree(task, runtime, restart.attempt);
-    await this.updateTaskRuntime(task.id, (entry) =>
-      withRestartRecorded(withQuarantineSettled(entry), {
-        attempt: restart.attempt,
-        generation: task.generation,
-        failureClass: restart.failureClass,
-        at: restart.at,
-      }),
+    await this.updateTaskRuntime(
+      task.id,
+      (entry) =>
+        withRestartRecorded(withQuarantineSettled(entry), {
+          attempt: restart.attempt,
+          generation: task.generation,
+          failureClass: restart.failureClass,
+          at: restart.at,
+        }),
+      restartEvent(task.id, "worker", restart.attempt, restart.at, restart.notice),
     );
     await this.notifyCoordinator(task.id, restart.notice, restart.at);
     const refreshed = await this.#deps.getTask(task.id);
@@ -1096,19 +1121,23 @@ export class CentralRecoveryWorkflow {
     };
     if (task.stage !== "blocked") return accepts(task.stage) ? task : undefined;
     if (!accepts(task.previousStage)) return undefined;
-    return this.resumeBlocked(task.id);
+    return this.resumeBlocked(task.id, "The user approved a restart.");
   }
 
-  private async resumeBlocked(taskId: string): Promise<TaskRecord | undefined> {
+  private async resumeBlocked(taskId: string, cause: string): Promise<TaskRecord | undefined> {
     return this.#deps.store.exclusive(async (store) => {
       const current = await store.read(taskId);
       if (current === undefined || current.stage !== "blocked") return current;
-      return store.update(current.id, current.revision, (entry) =>
-        transitionTask(
-          entry,
-          { type: "resume" },
-          { now: this.#deps.clock(), notificationId: this.#deps.idFactory() },
-        ),
+      return store.update(
+        current.id,
+        current.revision,
+        (entry) =>
+          transitionTask(
+            entry,
+            { type: "resume" },
+            { now: this.#deps.clock(), notificationId: this.#deps.idFactory() },
+          ),
+        { cause },
       );
     });
   }
@@ -1434,13 +1463,18 @@ export class CentralRecoveryWorkflow {
     return taskRuntime(await readRuntimeState(this.#deps.runtimePath), taskId);
   }
 
+  /** `restart`, when given, is recorded on the timeline in the same transaction as the update. */
   private async updateTaskRuntime(
     taskId: string,
     update: (entry: RuntimeTaskState) => RuntimeTaskState,
+    restart?: TimelineEvent,
   ): Promise<void> {
-    await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
-      replaceRuntimeTask(current, taskId, update),
-    );
+    await this.#deps.store.exclusive(async () => {
+      await updateRuntimeState(this.#deps.store, this.#deps.runtimePath, (current) =>
+        replaceRuntimeTask(current, taskId, update),
+      );
+      if (restart !== undefined) await recordTimelineEvents(this.#deps.home, [restart]);
+    });
   }
 
   private async block(taskId: string, cause: BlockCause): Promise<CentralRecoveryOutcome> {

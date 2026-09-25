@@ -23,6 +23,7 @@ import { MAX_AUTOMATIC_RESTARTS_PER_GENERATION } from "../../src/recovery/centra
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { DurableJob, RuntimeState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { readTimeline } from "../../src/tasks/timeline-store.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
 const policy: ResolvedPolicy = {
@@ -330,6 +331,11 @@ test("a task with nothing owned and no dead job re-enters with restart 1 of 2", 
     expect(notified?.notifications.some((entry) => entry.message.includes("restarted it"))).toBe(
       true,
     );
+    const restarts = (await readTimeline(f.home, "task-1")).events.filter(
+      (event) => event.type === "restarted",
+    );
+    expect(restarts).toMatchObject([{ type: "restarted", role: "worker", attempt: 1 }]);
+    expect(restarts[0]?.cause).toContain("Restart 1 of 2");
   } finally {
     await f.cleanup();
   }

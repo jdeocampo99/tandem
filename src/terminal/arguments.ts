@@ -1,6 +1,7 @@
 export type TerminalCommand =
   | "launch"
   | "status"
+  | "trace"
   | "watch"
   | "update"
   | "fix"
@@ -34,6 +35,7 @@ export type TerminalRunResult = Readonly<{
     | "launched"
     | "configured"
     | "status"
+    | "trace"
     | "watch"
     | "fixed"
     | "reset"
@@ -67,6 +69,7 @@ function optionValue(
 
 const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
   status: "status",
+  trace: "trace",
   watch: "watch",
   update: "update",
   fix: "fix",
@@ -109,6 +112,7 @@ const ALLOWED: Readonly<
 > = {
   launch: { flags: ["fresh", "headless", "noAttach"], maxPaths: Number.POSITIVE_INFINITY },
   status: { flags: ["json", "logs"], maxPaths: 1 },
+  trace: { flags: ["json"], maxPaths: 1 },
   watch: { flags: ["json", "stop"], maxPaths: 1 },
   update: { flags: ["fresh", "headless", "noAttach"], maxPaths: 0 },
   fix: { flags: ["yes", "json", "verbose", "freeSuperseded"], maxPaths: 0 },

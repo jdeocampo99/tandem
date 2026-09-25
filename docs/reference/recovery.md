@@ -17,7 +17,7 @@ home is a separate namespace and never changes the remembered setup.
 
 | Path under home | Contents |
 | --- | --- |
-| `state.sqlite` | The only canonical store: tasks, policy snapshots, lifecycle/evidence/review/delivery metadata, reservations, endpoint identities, jobs, operations, stop requests, presentations, PR watch records ([pr-watch.md](pr-watch.md#durable-state)). |
+| `state.sqlite` | The only canonical store: tasks, the append-only task timeline (`task_events`), policy snapshots, lifecycle/evidence/review/delivery metadata, reservations, endpoint identities, jobs, operations, stop requests, presentations, PR watch records ([pr-watch.md](pr-watch.md#durable-state)). |
 | `.state.lock` | Darwin `O_EXLOCK` fence guarding state ownership and external-effect decisions. |
 | `models.json` | Global five-role model preferences, replaced atomically (`0600`). |
 | `repositories/<key>/settings.toml` | Central repository settings (legacy `config.json`); `<key>` = first 24 hex of SHA-256 of the realpath. |
@@ -134,6 +134,8 @@ When the gate admits nothing, `reserveTask` returns a `ReservationRefusal`; its 
 - A job that died within 15 s of launch (`IMMEDIATE_FAILURE_WINDOW_MS`) in the same failure class as
   the previous restart (`classifyRestartFailure`, e.g. provider unavailable) asks instead.
 - Each automatic restart posts one plain-English notice: what happened, edits kept, restart N of 2.
+  The same write that spends the restart records a `restarted` timeline event with that notice as
+  its cause; validation retries record one with role `validation`.
 - Recovery questions use the standard short question shape and question-id-bound answer API.
   Central recovery handles the answer and never bumps `task.communication.revision`, so it never
   reads as a worker instruction.
