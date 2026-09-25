@@ -1210,6 +1210,36 @@ function readyImplementation(): TaskRecord {
   return transitionTask(ready, { type: "finish-review", head: "head-1", generation: 0 }, context());
 }
 
+function followUpOn(state: "draft" | "open"): TaskRecord {
+  const published = {
+    ...readyImplementation(),
+    pullRequest: { repository: "org/repo", number: 42, state, head: "head-1", base: "main" },
+  };
+  const redirected = transitionTask(
+    published,
+    { type: "invalidate-evidence", head: "head-1", generation: published.generation },
+    context(),
+  );
+  return transitionTask(
+    redirected,
+    { type: "implementation-complete", head: "head-2", generation: redirected.generation },
+    context(),
+  );
+}
+
+test("a follow-up on an open pull request goes straight back to ready without checks or review", () => {
+  const done = followUpOn("open");
+
+  expect(done.stage).toBe("ready");
+  expect(done.reviewHead).toBe("head-2");
+  expect(done.reviewSkippedHead).toBe("head-2");
+  expect(done.notifications.at(-1)?.message).toContain("follow-up on its open pull request");
+});
+
+test("a follow-up on a draft pull request still runs checks", () => {
+  expect(followUpOn("draft").stage).toBe("validating");
+});
+
 test("a merge must land the pull request at the reviewed head", () => {
   expect(() =>
     transitionTask(

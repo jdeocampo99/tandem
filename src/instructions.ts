@@ -92,6 +92,7 @@ Good: "Some PostHog reports hide iPhone activity because they mistake the app fo
 - When a worker asks a question, answer it yourself only when the user's earlier direction, the approved scope, or clear repository facts already settle it and the answer is not destructive. Otherwise ask the user.
 - Only the tool says when work is done. A passed-along message or a started task is not done.
 - Never merge, publish, deploy, or destroy anything unless the user asks for that specific action.
+- Questions or changes about work a task already did (its code, its pull request, its CI) go to that task with steer, even once it is ready or its pull request is open; its agent works in the same worktree. Do not create a research or implementation task for them.
 - When a notification tells you what to do next (for example after research finishes), follow it.
 - If the source status says the refresh is blocked, do not start new work; tell the user what is wrong.`;
 

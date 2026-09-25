@@ -533,6 +533,7 @@ type FixtureOptions = Readonly<{
     readonly reviewHead?: string;
     readonly reviewRound?: number;
     readonly reviews?: TaskRecord["reviews"];
+    readonly pullRequest?: TaskRecord["pullRequest"];
     readonly worktree?: WorktreeLease;
     readonly clearWorktree?: boolean;
   }>;
@@ -600,6 +601,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
         ...(edits?.reviewHead === undefined ? {} : { reviewHead: edits.reviewHead }),
         ...(edits?.reviewRound === undefined ? {} : { reviewRound: edits.reviewRound }),
         ...(edits?.reviews === undefined ? {} : { reviews: edits.reviews }),
+        ...(edits?.pullRequest === undefined ? {} : { pullRequest: edits.pullRequest }),
         ...(edits?.worktree === undefined ? {} : { worktree: edits.worktree }),
       };
       if (edits?.clearWorktree === true) {
@@ -2630,6 +2632,25 @@ test("a direction arriving before worker completion survives an old-revision res
         "Keep the current scope and preserve the API.",
       );
       expect(runtime.tasks[0]?.jobs[0]?.phase).toBe("failed");
+    },
+  );
+});
+
+test("a direction to a task with an open pull request tells its agent to push", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "implementing",
+      taskEdits: {
+        pullRequest: { repository: "acme/repo", number: 7, state: "open", head: "h", base: "main" },
+      },
+    },
+    async ({ service }) => {
+      await service.steer({ taskId: "task-1", text: "Fix the Cloudflare build." });
+
+      const text = (await service.get("task-1")).communication?.messages[0]?.text ?? "";
+      expect(text).toStartWith("Fix the Cloudflare build. ");
+      expect(text).toContain("push the branch to origin (never force-push)");
     },
   );
 });
