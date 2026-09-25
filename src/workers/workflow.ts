@@ -69,6 +69,7 @@ import { keepFixingQuestion } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
 import type { ReviewAssistanceRuntime } from "../tasks/review-assistance.ts";
 import type { TaskStore } from "../tasks/store.ts";
+import type { TranscriptRef } from "../tasks/timeline.ts";
 import { readValidationResult, type ValidationResult } from "../validation-worker.ts";
 import type { AdmissionRole, ReservationRefusal, ReservationResult } from "./admission.ts";
 import { type CurrentCheckout, isClean, isCleanAt, readWorkerCheckout } from "./checkout.ts";
@@ -125,6 +126,23 @@ function progressWarning(
 }
 
 /** The decision a worker stopped on, bounded to what a task message may carry. */
+/** What a worker result adds to the consumption beyond its lifecycle event. */
+function resultOptions(
+  result: WorkerResult,
+): Readonly<{ instructionRevision?: number; transcript?: TranscriptRef }> {
+  return {
+    ...instructionOptions(result.instructionRevision),
+    ...(result.transcript === undefined ? {} : { transcript: result.transcript }),
+  };
+}
+
+/** The commit a consumed result is about: the one its event names, else the one the job ran on. */
+function commitRef(event: TaskEvent, job: DurableJob): Readonly<{ commit?: string }> {
+  const head =
+    event.type === "record-review" ? event.review.head : "head" in event ? event.head : job.head;
+  return head === undefined ? {} : { commit: head };
+}
+
 function workerQuestion(job: DurableJob, result: WorkerResult): TaskQuestion {
   const text =
     (result.question?.text ?? result.text).trim() || `Worker ${job.role} needs a decision`;
@@ -568,7 +586,7 @@ export class WorkerWorkflow {
         { type: "block", reason, cause },
         {
           ...(question === undefined ? {} : { question }),
-          ...instructionOptions(result.instructionRevision),
+          ...resultOptions(result),
           instructionRequired: result.status !== "failed",
           reportPath,
         },
@@ -640,7 +658,7 @@ export class WorkerWorkflow {
       job.id,
       claim,
       { type: "block", reason, cause },
-      instructionOptions(result.instructionRevision),
+      resultOptions(result),
     );
   }
 
@@ -707,7 +725,7 @@ export class WorkerWorkflow {
         generation: job.generation,
         ...(prReviewRound === undefined ? {} : { prReviewRound }),
       },
-      instructionOptions(result.instructionRevision),
+      resultOptions(result),
     );
   }
 
@@ -743,7 +761,7 @@ export class WorkerWorkflow {
         generation: job.generation,
         reportPath,
       },
-      instructionOptions(result.instructionRevision),
+      resultOptions(result),
     );
   }
 
@@ -799,7 +817,7 @@ export class WorkerWorkflow {
       job.id,
       claim,
       { type: "record-review", review: { ...review, mode: expectedReviewMode } },
-      instructionOptions(result.instructionRevision),
+      resultOptions(result),
     );
   }
 
@@ -933,6 +951,7 @@ export class WorkerWorkflow {
       /** False for a failed worker result, which never carries proof of the canonical instruction. */
       instructionRequired?: boolean;
       reportPath?: string;
+      transcript?: TranscriptRef;
     }> = {},
   ): Promise<TaskRecord> {
     return this.#deps.store.exclusive(async (store) => {
@@ -976,7 +995,14 @@ export class WorkerWorkflow {
         await writeRuntimeState(this.#deps.runtimePath, pendingRuntime);
       }
       if (nextTask !== task) {
-        await store.update(task.id, task.revision, () => nextTask);
+        await store.update(task.id, task.revision, () => nextTask, {
+          refs: {
+            job: job.id,
+            report: options.reportPath ?? job.resultPath,
+            ...commitRef(event, job),
+            ...(options.transcript === undefined ? {} : { transcript: options.transcript }),
+          },
+        });
       }
       const nextRuntime = replaceRuntimeTask(state, taskId, (current) =>
         consumedJobRuntime(

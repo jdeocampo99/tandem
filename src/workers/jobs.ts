@@ -4,6 +4,8 @@ import { dirname, isAbsolute } from "node:path";
 import {
   type AgentRole,
   ALL_REVIEW_LENSES,
+  FINDING_CATCH_STAGES,
+  FINDING_CATEGORIES,
   type Finding,
   type FindingSeverity,
   type FindingVerdict,
@@ -17,6 +19,7 @@ import {
   type ThinkingLevel,
 } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
+import type { TranscriptRef } from "../tasks/timeline.ts";
 import type { ExecutionIdentity } from "./execution-gate.ts";
 
 export type WorkerRole = Exclude<AgentRole, "coordinator">;
@@ -88,6 +91,8 @@ export type WorkerResult = Readonly<{
   readonly question?: WorkerQuestion;
   readonly error?: string;
   readonly instructionRevision?: number;
+  /** The conversation entry the worker submitted from; absent when the worker kept no transcript. */
+  readonly transcript?: TranscriptRef;
   readonly finishedAt: string;
 }>;
 
@@ -307,14 +312,38 @@ function readFinding(value: unknown, index: number): Finding {
       ? undefined
       : readPositiveInteger(value.line, `review.findings[${index}].line`);
   const description = readNonEmptyText(value.description, `review.findings[${index}].description`);
+  const category = readOptionalEnum(
+    value.category,
+    FINDING_CATEGORIES,
+    `review.findings[${index}].category`,
+  );
+  const catchStage = readOptionalEnum(
+    value.catchStage,
+    FINDING_CATCH_STAGES,
+    `review.findings[${index}].catchStage`,
+  );
+  return {
+    id,
+    severity: value.severity,
+    verdict: value.verdict,
+    description,
+    ...(file === undefined ? {} : { file }),
+    ...(line === undefined ? {} : { line }),
+    ...(category === undefined ? {} : { category }),
+    ...(catchStage === undefined ? {} : { catchStage }),
+  };
+}
 
-  return line === undefined
-    ? file === undefined
-      ? { id, severity: value.severity, verdict: value.verdict, description }
-      : { id, severity: value.severity, verdict: value.verdict, file, description }
-    : file === undefined
-      ? { id, severity: value.severity, verdict: value.verdict, line, description }
-      : { id, severity: value.severity, verdict: value.verdict, file, line, description };
+function readOptionalEnum<Value extends string>(
+  value: unknown,
+  values: readonly Value[],
+  field: string,
+): Value | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !(values as readonly string[]).includes(value)) {
+    throw new TypeError(`${field} must be one of ${values.join(", ")}`);
+  }
+  return value as Value;
 }
 
 function isFindingSeverity(value: unknown): value is FindingSeverity {
@@ -487,6 +516,8 @@ export function parseWorkerResult(value: unknown): WorkerResult {
       ? undefined
       : readNonNegativeInteger(value.instructionRevision, "instructionRevision");
   const question = value.question === undefined ? undefined : readWorkerQuestion(value.question);
+  const transcript =
+    value.transcript === undefined ? undefined : readTranscriptRef(value.transcript);
   const finishedAt = readSingleLineText(value.finishedAt, "finishedAt");
 
   const requiresReview = role === "reviewer" || role === "verifier";
@@ -515,7 +546,16 @@ export function parseWorkerResult(value: unknown): WorkerResult {
     ...(error === undefined ? {} : { error }),
     ...(instructionRevision === undefined ? {} : { instructionRevision }),
     ...(question === undefined ? {} : { question }),
+    ...(transcript === undefined ? {} : { transcript }),
     finishedAt,
+  };
+}
+
+function readTranscriptRef(value: unknown): TranscriptRef {
+  if (!isRecord(value)) throw new TypeError("transcript must be an object");
+  return {
+    file: readAbsolutePath(value.file, "transcript.file"),
+    entryId: readSingleLineText(value.entryId, "transcript.entryId"),
   };
 }
 

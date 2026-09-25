@@ -8,7 +8,11 @@ import {
   type BlockCause,
   type CheckOrigin,
   type Endpoint,
+  FINDING_CATCH_STAGES,
+  FINDING_CATEGORIES,
   type Finding,
+  type FindingCatchStage,
+  type FindingCategory,
   type FindingLedgerEntry,
   type FindingObservation,
   type FindingSeverity,
@@ -241,6 +245,28 @@ function requiredEnum<Value extends string>(
     failState(source, `field ${key} has unsupported value ${String(value)}`);
   }
   return value;
+}
+
+function optionalEnum<Value extends string>(
+  record: UnknownRecord,
+  key: string,
+  values: readonly Value[],
+  source: string,
+): Value | undefined {
+  return record[key] === undefined ? undefined : requiredEnum(record, key, values, source);
+}
+
+/** Reviewer tags on a finding; findings recorded before tagging carry neither. */
+function findingTags(
+  value: UnknownRecord,
+  source: string,
+): Readonly<{ category?: FindingCategory; catchStage?: FindingCatchStage }> {
+  const category = optionalEnum(value, "category", FINDING_CATEGORIES, source);
+  const catchStage = optionalEnum(value, "catchStage", FINDING_CATCH_STAGES, source);
+  return {
+    ...(category === undefined ? {} : { category }),
+    ...(catchStage === undefined ? {} : { catchStage }),
+  };
 }
 
 function requiredTextArray(record: UnknownRecord, key: string, source: string): readonly string[] {
@@ -555,7 +581,11 @@ function parseFinding(value: unknown, source: string): Finding {
   if (!isRecord(value)) {
     failState(source, "finding must be an object");
   }
-  assertExactKeys(value, ["id", "severity", "verdict", "file", "line", "description"], source);
+  assertExactKeys(
+    value,
+    ["id", "severity", "verdict", "file", "line", "description", "category", "catchStage"],
+    source,
+  );
   const file = optionalText(value, "file", source);
   const line = optionalInteger(value, "line", source, 1);
   return {
@@ -565,6 +595,7 @@ function parseFinding(value: unknown, source: string): Finding {
     description: requiredText(value, "description", source),
     ...(file === undefined ? {} : { file }),
     ...(line === undefined ? {} : { line }),
+    ...findingTags(value, source),
   };
 }
 
@@ -691,6 +722,8 @@ function parseFindingLedgerEntry(value: unknown, source: string): FindingLedgerE
       "description",
       "file",
       "line",
+      "category",
+      "catchStage",
       "status",
       "raisedAt",
       "statusAt",
@@ -716,6 +749,7 @@ function parseFindingLedgerEntry(value: unknown, source: string): FindingLedgerE
     ),
     ...(file === undefined ? {} : { file }),
     ...(line === undefined ? {} : { line }),
+    ...findingTags(value, source),
   };
 }
 
