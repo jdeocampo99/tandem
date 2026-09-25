@@ -32,7 +32,7 @@ extension input handler
 
 The implementation lives at:
 
-- `src/extension/prompt-routing.ts`: normalization, Jev questions, confidence gate, allowlist,
+- `src/session/prompt-routing.ts`: normalization, Jev questions, confidence gate, allowlist,
   action construction, result display, and diagnostics;
 - `src/extension/registration.ts`: OMP `input` hook;
 - `src/extension.ts`: process-boundary configuration and service/home dependencies;

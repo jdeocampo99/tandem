@@ -5,10 +5,7 @@ import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-coding-agent";
 import { resolveTandemEnvironment } from "../../src/config/environment.ts";
 import type { ModelSpec, RepoPolicy, ResolvedPolicy, TaskRecord } from "../../src/contracts.ts";
-import { executeTandemAction, parseTandemCommand } from "../../src/extension/actions.ts";
-import { deliverPendingNotifications } from "../../src/extension/notifications.ts";
 import { resolveCommandAction } from "../../src/extension/registration.ts";
-import { buildDurableDigest, summarizeTandemActionValue } from "../../src/extension/summary.ts";
 import { createTandemExtension, reviewStatus, sourceRefreshStatus } from "../../src/extension.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
 import {
@@ -16,6 +13,9 @@ import {
   renderRequestReceiptTable,
 } from "../../src/runtime/usage-receipt.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
+import { executeTandemAction, parseTandemCommand } from "../../src/session/actions.ts";
+import { deliverPendingNotifications } from "../../src/session/notifications.ts";
+import { buildDurableDigest, summarizeTandemActionValue } from "../../src/session/summary.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";

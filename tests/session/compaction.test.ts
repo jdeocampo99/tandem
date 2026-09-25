@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-coding-agent";
 import type { TaskRecord } from "../../src/contracts.ts";
+import { createTandemExtension } from "../../src/extension.ts";
+import type { TandemService } from "../../src/service/controller.ts";
 import {
   atCompactionBoundary,
   coordinatorCompactTokens,
   DEFAULT_COORDINATOR_COMPACT_TOKENS,
   finishedTaskIds,
-} from "../../src/extension/compaction.ts";
-import { createTandemExtension } from "../../src/extension.ts";
-import type { TandemService } from "../../src/service/controller.ts";
+} from "../../src/session/compaction.ts";
 
 function task(overrides: Partial<TaskRecord>): TaskRecord {
   return {

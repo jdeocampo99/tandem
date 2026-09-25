@@ -6,7 +6,7 @@
  *    disposition from a sanitized request objective, either deterministically or through an
  *    injected Jev evaluator.
  * 2. `decideResearchFollowUp` / `buildResearchFollowUpContent`
- *    (`src/tasks/research-continuation.ts`, `src/extension/research-follow-up.ts`) turn that
+ *    (`src/tasks/research-continuation.ts`, `src/session/research-follow-up.ts`) turn that
  *    disposition, plus the scout's durable stage, into the coordinator-facing wake content.
  *
  * Fake mode (the only mode exercised by `bun test`) never touches the network: deterministic
@@ -30,12 +30,12 @@ import {
   JevEvaluationError,
 } from "../src/adapters/typesafe.ts";
 import type { ResearchContinuation, ResolvedPolicy } from "../src/contracts.ts";
-import { buildResearchFollowUpContent } from "../src/extension/research-follow-up.ts";
 import {
   JEV_PRICING_SNAPSHOT,
   USAGE_RECORD_SCHEMA_VERSION,
   type UsageRecord,
 } from "../src/runtime/usage.ts";
+import { buildResearchFollowUpContent } from "../src/session/research-follow-up.ts";
 import { transitionTask } from "../src/tasks/lifecycle.ts";
 import {
   decideResearchFollowUp,

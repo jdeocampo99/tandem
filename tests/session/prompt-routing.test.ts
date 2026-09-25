@@ -16,6 +16,11 @@ import {
   type JevEvaluationInput,
   type JevEvaluationResponse,
 } from "../../src/adapters/typesafe.ts";
+import { registerTandemOmp } from "../../src/extension/registration.ts";
+import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
+import { readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
+import { JEV_PRICING_SNAPSHOT, USAGE_RECORD_SCHEMA_VERSION } from "../../src/runtime/usage.ts";
+import type { TandemService } from "../../src/service/controller.ts";
 import {
   actionForPromptDecision,
   type ChoiceConfirmation,
@@ -23,12 +28,7 @@ import {
   handlePromptInput,
   PROMPT_ROUTING_QUESTION_SCHEMA_VERSION,
   promptRoutingConfig,
-} from "../../src/extension/prompt-routing.ts";
-import { registerTandemOmp } from "../../src/extension/registration.ts";
-import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
-import { readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
-import { JEV_PRICING_SNAPSHOT, USAGE_RECORD_SCHEMA_VERSION } from "../../src/runtime/usage.ts";
-import type { TandemService } from "../../src/service/controller.ts";
+} from "../../src/session/prompt-routing.ts";
 
 type Choice = Readonly<{ choice: string; confidence?: number }>;
 

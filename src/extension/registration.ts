@@ -6,20 +6,20 @@ import {
   parseTandemCommand,
   type TandemAction,
   type TandemActionResult,
-} from "./actions.ts";
+} from "../session/actions.ts";
 import {
   type ChoiceConfirmation,
   handlePromptInput,
   type PromptRoutingConfig,
-} from "./prompt-routing.ts";
+} from "../session/prompt-routing.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
   boundedJson,
   compactText,
   summarizeTandemActionValue,
-} from "./summary.ts";
-import { coordinatorToolRefusal } from "./tool-guard.ts";
+} from "../session/summary.ts";
+import { coordinatorToolRefusal } from "../session/tool-guard.ts";
 
 export type TandemOmpRegistrationDependencies = Readonly<{
   readonly getService: (ctx: ExtensionContext) => TandemService;

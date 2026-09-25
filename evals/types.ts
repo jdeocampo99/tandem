@@ -9,8 +9,8 @@ import type {
   ResearchContinuationDisposition,
   ResearchContinuationSelector,
 } from "../src/contracts.ts";
-import type { PromptRoutingDecision } from "../src/extension/prompt-routing.ts";
 import type { UsageRecord } from "../src/runtime/usage.ts";
+import type { PromptRoutingDecision } from "../src/session/prompt-routing.ts";
 import type {
   ResearchContinuationOverride,
   ResearchFollowUp,

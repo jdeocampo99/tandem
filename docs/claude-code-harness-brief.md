@@ -133,7 +133,7 @@ These do not override "prefer simple": no wrapping short signatures or extractin
 
 ## Open questions
 
-- **Prompt routing** (`src/extension/prompt-routing.ts`) answers some prompts without a model turn.
+- **Prompt routing** (`src/session/prompt-routing.ts`) answers some prompts without a model turn.
   `UserPromptSubmit` can block a prompt but cannot swap in an answer. The candidate is to block and
   reply through the channel. Needs a spike before step 4.
 - **Worker pane keys and editor text** (`ctx.ui.onTerminalInput`, `getEditorText`) have no Claude

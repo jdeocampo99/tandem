@@ -17,17 +17,9 @@ import { readCoordinatorMcpServers } from "./config/repositories.ts";
 import type { TaskRecord } from "./contracts.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import {
-  atCompactionBoundary,
-  coordinatorCompactTokens,
-  finishedTaskIds,
-} from "./extension/compaction.ts";
-import { deliverPendingNotifications, readResearchReport } from "./extension/notifications.ts";
-import { type PromptRoutingConfig, promptRoutingConfig } from "./extension/prompt-routing.ts";
-import {
   registerTandemOmp,
   type TandemOmpRegistrationDependencies,
 } from "./extension/registration.ts";
-import { buildDurableDigest } from "./extension/summary.ts";
 import { COORDINATOR_INSTRUCTIONS, COORDINATOR_TOOL_GUIDANCE } from "./instructions.ts";
 import { appendCoordinatorUsage } from "./runtime/usage-ledger.ts";
 import {
@@ -37,6 +29,14 @@ import {
   type TandemServiceOptions,
 } from "./service/controller.ts";
 import { isMissing, isTerminalTask } from "./service/records.ts";
+import {
+  atCompactionBoundary,
+  coordinatorCompactTokens,
+  finishedTaskIds,
+} from "./session/compaction.ts";
+import { deliverPendingNotifications, readResearchReport } from "./session/notifications.ts";
+import { type PromptRoutingConfig, promptRoutingConfig } from "./session/prompt-routing.ts";
+import { buildDurableDigest } from "./session/summary.ts";
 import { fixRoundBudget, ledgerBlockers } from "./tasks/findings.ts";
 import {
   type ResearchContinuationClassifier,

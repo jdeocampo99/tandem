@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import type { ExtensionContext, InputEvent } from "@oh-my-pi/pi-coding-agent";
+import { readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
+import type { TandemService } from "../../src/service/controller.ts";
 import {
   handlePromptInput,
   type PromptRoutingConfig,
   promptRoutingConfig,
-} from "../../src/extension/prompt-routing.ts";
-import { readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
-import type { TandemService } from "../../src/service/controller.ts";
+} from "../../src/session/prompt-routing.ts";
 import { type ScenarioWorld, withScenario } from "./scenario.ts";
 
 const CONTEXT = { hasUI: false, mode: "rpc" } as unknown as ExtensionContext;

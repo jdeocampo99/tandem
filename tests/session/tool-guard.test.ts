@@ -4,7 +4,7 @@ import {
   COORDINATOR_TOOL_REFUSAL,
   type CoordinatorToolPolicy,
   coordinatorToolRefusal,
-} from "../../src/extension/tool-guard.ts";
+} from "../../src/session/tool-guard.ts";
 
 function policy(overrides: Partial<CoordinatorToolPolicy> = {}): CoordinatorToolPolicy {
   return {

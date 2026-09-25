@@ -73,7 +73,7 @@ building a second accounting path.
 ## Fixture-driven routing evaluation harness
 
 `evals/` holds a fixture-driven evaluation harness for the routing policy in
-`src/extension/prompt-routing.ts`. It exercises the production policy directly
+`src/session/prompt-routing.ts`. It exercises the production policy directly
 (`classifyPrompt` for classification fixtures, `handlePromptInput` for image/slash-command bypass
 fixtures) instead of reimplementing it, so an evaluation result can never drift from what the
 extension actually does.
@@ -252,7 +252,7 @@ coordinator correctly stay report-only, ask one intent question, or start a focu
 interview, without ever authorizing implementation on its own. It exercises the production seams
 directly — `classifyResearchContinuation` (`src/tasks/research-continuation-classifier.ts`) and
 `decideResearchFollowUp` / `buildResearchFollowUpContent`
-(`src/tasks/research-continuation.ts`, `src/extension/research-follow-up.ts`) — instead of
+(`src/tasks/research-continuation.ts`, `src/session/research-follow-up.ts`) — instead of
 reimplementing them, and reuses the prompt-routing harness's fixture-parsing shell, live-Jev
 budget/cost tracking, JSONL/summary writer, and generalized percentile/usage-summary functions
 rather than building a second copy of any of them.
@@ -283,7 +283,7 @@ rather than building a second copy of any of them.
   injects a fixed clock (mirroring `classifyPrompt`'s clock seam) so two fake runs, including every
   nested usage-record duration, are byte-identical. Restart/compaction fixtures build a real,
   disk-backed scout through `createTaskStore`/`transitionTask` (the same pattern
-  `tests/extension/research-follow-up.test.ts` uses), decide the follow-up, then reopen the
+  `tests/session/research-follow-up.test.ts` uses), decide the follow-up, then reopen the
   directory with a **fresh task-store instance** and decide again, asserting byte-identical
   content. `runLiveResearchContinuationFixtures` calls the pinned Jev model for every fixture whose
   deterministic cues leave it unresolved, sharing `evals/live-jev-budget.ts`'s budget/cost tracking

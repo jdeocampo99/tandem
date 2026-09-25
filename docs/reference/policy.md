@@ -5,7 +5,7 @@ policy, routes coordinator prompts through Jev, and records where each instructi
 
 Code: src/config/repositories.ts, src/config/policy.ts, src/config/models.ts,
 src/config/storage.ts, src/config/values.ts, src/config/environment.ts,
-src/terminal/onboarding.ts, src/extension/tool-guard.ts, src/extension/prompt-routing.ts,
+src/terminal/onboarding.ts, src/session/tool-guard.ts, src/session/prompt-routing.ts,
 src/adapters/typesafe.ts, src/instructions.ts
 
 ## Where settings live
@@ -176,7 +176,7 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
 - Direct dispatch is read-only through the existing service: `list`, `presentations`, and
   `receipt` (repository-wide), plus `show`, `messages`, `inspect`, which need an explicit
   `task-...` ID or UUID in the prompt.
-- Choice replies (src/extension/choice-reply-route.ts): a prompt of at most 160 characters, while
+- Choice replies (src/session/choice-reply-route.ts): a prompt of at most 160 characters, while
   Tandem is waiting on a fixed-choice answer, first gets one Jev call listing those choices plus
   `other`. The choices are read from durable state: each open recovery restart (`restart`/`stop`),
   validation retry (`retry`/`stop`), and "Keep fixing?" (`yes`/`no`) question on a non-terminal
@@ -191,7 +191,7 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
   - `other`, low confidence, and provider errors continue to the routes below, then the
     coordinator.
 - Pull-up: a prompt that names a brief or a visual and a verb like "pull up", "open", or "show"
-  first gets one Jev call (src/extension/pull-up-route.ts) listing the coordinator repository's
+  first gets one Jev call (src/session/pull-up-route.ts) listing the coordinator repository's
   briefs and openable presentations (15 newest of each), described by goal or objective. Only a
   confident `open` request that matches one listed item runs `brief-review` or
   `presentation-open`; anything else continues to the lookup routing above.

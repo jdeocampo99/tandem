@@ -9,14 +9,14 @@ import type {
   ResolvedPolicy,
   TaskRecord,
 } from "../../src/contracts.ts";
+import type { TandemService } from "../../src/service/controller.ts";
 import {
   deliverPendingNotifications,
   INLINE_RESEARCH_REPORT_MAX_CHARS,
   readResearchReport,
-} from "../../src/extension/notifications.ts";
-import { buildResearchFollowUpContent } from "../../src/extension/research-follow-up.ts";
-import { summarizeTandemActionValue } from "../../src/extension/summary.ts";
-import type { TandemService } from "../../src/service/controller.ts";
+} from "../../src/session/notifications.ts";
+import { buildResearchFollowUpContent } from "../../src/session/research-follow-up.ts";
+import { summarizeTandemActionValue } from "../../src/session/summary.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import {
   decideResearchFollowUp,

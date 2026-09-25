@@ -1,7 +1,7 @@
 /**
  * Fixture-driven Jev routing evaluation runner.
  *
- * This module exercises the production routing policy in `src/extension/prompt-routing.ts`
+ * This module exercises the production routing policy in `src/session/prompt-routing.ts`
  * (`classifyPrompt` for classification fixtures, `handlePromptInput` for bypass fixtures) against
  * either recorded typed Jev responses (fake mode, deterministic, no network) or the pinned live
  * `jev-1.13.0` model (live mode, opt-in only). It never reimplements the routing policy itself,
@@ -24,6 +24,8 @@ import {
   JevEvaluationError,
   type JevEvaluationResponse,
 } from "../src/adapters/typesafe.ts";
+import { readPromptRoutingLog } from "../src/runtime/diagnostics.ts";
+import { JEV_PRICING_SNAPSHOT } from "../src/runtime/usage.ts";
 import {
   classifyPrompt,
   extractPromptTaskId,
@@ -33,9 +35,7 @@ import {
   type PromptRoutingConfig,
   type PromptRoutingDependencies,
   type PromptRoutingEvaluation,
-} from "../src/extension/prompt-routing.ts";
-import { readPromptRoutingLog } from "../src/runtime/diagnostics.ts";
-import { JEV_PRICING_SNAPSHOT } from "../src/runtime/usage.ts";
+} from "../src/session/prompt-routing.ts";
 import {
   loadPromptRoutingFixtures,
   type PromptRoutingExpectedDecision,

@@ -9,7 +9,7 @@ import {
   mentionsPullUp,
   type PullUpCandidate,
   type PullUpEvaluator,
-} from "../../src/extension/pull-up-route.ts";
+} from "../../src/session/pull-up-route.ts";
 
 const config = { apiKey: "key", timeoutMs: 1_500 };
 const CANDIDATES: readonly PullUpCandidate[] = [

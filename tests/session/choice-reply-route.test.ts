@@ -4,15 +4,15 @@ import type {
   JevEvaluationInput,
   JevEvaluationResponse,
 } from "../../src/adapters/typesafe.ts";
+import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
+import type { TandemService } from "../../src/service/controller.ts";
 import {
   type ChoiceReplyEvaluator,
   classifyChoiceReply,
   MAX_CHOICE_REPLY_CHARS,
   type OpenChoice,
   openChoices,
-} from "../../src/extension/choice-reply-route.ts";
-import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
-import type { TandemService } from "../../src/service/controller.ts";
+} from "../../src/session/choice-reply-route.ts";
 import { KEEP_FIXING_QUESTION_ID_PREFIX } from "../../src/tasks/findings.ts";
 
 const config = { apiKey: "key", timeoutMs: 1_500 };

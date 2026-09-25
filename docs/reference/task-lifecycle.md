@@ -3,7 +3,7 @@
 Task stages, approvals, fix rounds, post-research continuation, child terminals, and Herdr status.
 
 Code: src/tasks/lifecycle.ts, src/tasks/findings.ts, src/tasks/research-continuation.ts,
-src/tasks/research-continuation-classifier.ts, src/extension/research-follow-up.ts,
+src/tasks/research-continuation-classifier.ts, src/session/research-follow-up.ts,
 src/service/source.ts, src/adapters/herdr.ts, src/adapters/herdr-status.ts,
 src/workers/terminal-extension.ts
 
@@ -83,7 +83,7 @@ never permission. It does not set `scopeApproved` or create tasks. It is refused
   replacement. An open `needs-decision` question is answered first (`answer-question`); a non-scout,
   failed, blocked, cancelled, incomplete, stale-generation, or unreadable-report record gets
   `disclose-blocker`. Otherwise the disposition picks the reply shape (see
-  src/extension/research-follow-up.ts); no path widens scope.
+  src/session/research-follow-up.ts); no path widens scope.
 - After the user answers, an implementation task citing the scout in `researchTaskIds` is created
   `awaiting-approval`, passes repository and report-provenance handoff validation, and launches only
   after explicit approval. Research on an older commit still hands off, recording the scout's HEAD.

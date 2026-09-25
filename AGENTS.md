@@ -27,7 +27,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Request usage, cost, quota, elapsed-time receipts | [runtime/](src/runtime/): `usage.ts`, `usage-events.ts`, `usage-ledger.ts`, `usage-codec.ts`, `usage-receipt.ts` |
 | Model tier evidence and economical routing | [config/model-tier.ts](src/config/model-tier.ts), [workers/execution-routing.ts](src/workers/execution-routing.ts) |
 | Worker execution, results, control, validation | [workers/](src/workers/); entry points: [worker.ts](src/worker.ts), [worker-control.ts](src/worker-control.ts), [validation-worker.ts](src/validation-worker.ts) |
-| OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/](src/extension/) (`tool-guard.ts` limits coordinator tools); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
+| OMP tools, notifications, compaction, prompts | [extension.ts](src/extension.ts) → [extension/registration.ts](src/extension/registration.ts) (OMP wiring) and [session/](src/session/) (harness-neutral logic; `tool-guard.ts` limits coordinator tools); [instructions.ts](src/instructions.ts), [worker-config.yml](src/worker-config.yml) |
 | Worktree capacity and maintenance | [pool/](src/pool/) |
 | Evidence, PR publication, merge | [delivery/](src/delivery/): `preflight.ts` checks a ready task before publishing |
 | Artifacts, feedback, Lavish | [presentations/](src/presentations/) |

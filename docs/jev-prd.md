@@ -90,6 +90,6 @@ contract and proposed work; the proposed context-reuse path is not implemented o
 Current implementation areas:
 
 - [TypeSafe transport](../src/adapters/typesafe.ts)
-- [Prompt routing](../src/extension/prompt-routing.ts)
+- [Prompt routing](../src/session/prompt-routing.ts)
 - [Extension registration](../src/extension/registration.ts)
 - [Diagnostic persistence](../src/runtime/diagnostics.ts)
