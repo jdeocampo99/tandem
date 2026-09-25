@@ -115,6 +115,23 @@ function ensurePrWatchTable(db: StateDatabase): void {
   `);
 }
 
+/**
+ * The task timeline, one row per event, appended in the same transaction as the task change it
+ * describes and never updated or deleted. `seq` orders events within and across tasks.
+ */
+function ensureTaskEventsTable(db: StateDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_events (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      at TEXT NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS task_events_by_task ON task_events(task_id, seq);
+  `);
+}
+
 function assertSchema(db: StateDatabase): void {
   const rows = db
     .query(
@@ -156,6 +173,7 @@ async function openDatabase(home: string): Promise<StateDatabase> {
     ensureRequestUsageTable(db);
     ensureRepoLocationsTable(db);
     ensurePrWatchTable(db);
+    ensureTaskEventsTable(db);
     await chmod(path, 0o600);
   } catch (error) {
     try {
@@ -408,6 +426,37 @@ export function writePrWatchPayload(db: StateDatabase, key: string, payload: unk
   db.query(
     "INSERT INTO pr_watches(key, payload) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET payload = excluded.payload",
   ).run(key, JSON.stringify(payload));
+}
+
+export function insertTaskEventPayload(
+  db: StateDatabase,
+  entry: Readonly<{ taskId: string; at: string; type: string; payload: unknown }>,
+): void {
+  db.query("INSERT INTO task_events(task_id, at, type, payload) VALUES (?, ?, ?, ?)").run(
+    entry.taskId,
+    entry.at,
+    entry.type,
+    JSON.stringify(entry.payload),
+  );
+}
+
+/** One task's events in the order they were written; a row whose text is not JSON reads as null. */
+export function readTaskEventPayloads(
+  db: StateDatabase,
+  taskId: string,
+): readonly Readonly<{ seq: number; payload: unknown }>[] {
+  const rows = db
+    .query("SELECT seq, payload FROM task_events WHERE task_id = ? ORDER BY seq")
+    .all(taskId) as readonly { seq?: unknown; payload?: unknown }[];
+  return rows.map((row) => {
+    const seq = typeof row.seq === "number" ? row.seq : 0;
+    if (typeof row.payload !== "string") return { seq, payload: null };
+    try {
+      return { seq, payload: JSON.parse(row.payload) as unknown };
+    } catch {
+      return { seq, payload: null };
+    }
+  });
 }
 
 /** A value kept in the metadata table by its own key, such as the PR watch poll schedule. */
