@@ -4,7 +4,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readRuntimeState, writeRuntimeState } from "../../src/runtime/persistence.ts";
-import { type DurableJob, emptyRuntimeState, parseRuntimeState } from "../../src/runtime/schema.ts";
+import {
+  type DurableJob,
+  emptyRuntimeState,
+  fingerprintDigest,
+  parseRuntimeState,
+} from "../../src/runtime/schema.ts";
 
 const checkpoint = {
   head: "abc123",
@@ -84,6 +89,9 @@ test("runtime persistence rejects a missing row after initialization", async () 
 });
 
 test("round-trips durable launch, stop, consumption, and pool housekeeping metadata", async () => {
+  // A whole task copy is how a fingerprint was stored before fingerprints were hashed.
+  const legacyFingerprint = JSON.stringify({ id: "task-1", revision: 1 });
+  const currentFingerprint = fingerprintDigest(JSON.stringify({ id: "task-1", revision: 2 }));
   const root = await mkdtemp(join(tmpdir(), "tandem-runtime-durable-"));
   const path = join(root, "runtime.json");
   const timestamp = "2030-01-01T00:00:00.000Z";
@@ -103,8 +111,8 @@ test("round-trips durable launch, stop, consumption, and pool housekeeping metad
         appliedEventKey: "job:event",
         beforeRevision: 1,
         afterRevision: 2,
-        beforeFingerprint: "before",
-        taskFingerprint: "after",
+        beforeFingerprint: legacyFingerprint,
+        taskFingerprint: currentFingerprint,
         now: timestamp,
         notificationId: "notification-1",
       },
@@ -148,6 +156,10 @@ test("round-trips durable launch, stop, consumption, and pool housekeeping metad
     expect(task?.endpointLaunch?.workspaceLabel).toBe("└ tandem-task-1");
     expect(task?.stopRequest?.action).toBe("pause");
     expect(task?.jobs[0]?.consumption?.afterRevision).toBe(2);
+    expect(task?.jobs[0]?.consumption?.beforeFingerprint).toBe(
+      fingerprintDigest(legacyFingerprint),
+    );
+    expect(task?.jobs[0]?.consumption?.taskFingerprint).toBe(currentFingerprint);
     expect(task?.poolNotice).toBe("pool capacity is unavailable");
     expect(task?.terminalCleanupRevision).toBe(3);
   } finally {
