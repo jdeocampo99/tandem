@@ -33,6 +33,7 @@ const VIEW_FIELDS = [
   "headRepositoryOwner",
   "isCrossRepository",
   "baseRefName",
+  "baseRefOid",
   "mergeable",
   "mergeStateStatus",
   "reviewDecision",
@@ -314,6 +315,31 @@ export async function mergeBaseIntoBranch(
   return sha.length === 0 ? undefined : sha;
 }
 
+/**
+ * The files a pull request and its base both changed since they split: where its conflicts are.
+ * GitHub does not name conflicting files, so this is the closest it can tell without a checkout.
+ */
+export async function readConflictFiles(
+  run: CommandRunner,
+  repository: string,
+  range: Readonly<{ base: string; head: string }>,
+  cwd: string,
+): Promise<readonly string[]> {
+  const changed = async (from: string, to: string): Promise<readonly string[]> => {
+    const result = await ghChecked(run, cwd, [
+      "api",
+      `repos/${repository}/compare/${from}...${to}`,
+      "--jq",
+      "[.files[].filename]",
+    ]);
+    const files: unknown = JSON.parse(result.stdout);
+    return Array.isArray(files) ? files.filter((file) => typeof file === "string") : [];
+  };
+  const ours = await changed(range.base, range.head);
+  const theirs = new Set(await changed(range.head, range.base));
+  return ours.filter((file) => theirs.has(file));
+}
+
 /** Every open pull request the signed-in GitHub user authored, across repositories. */
 export async function listMyOpenPullRequests(
   run: CommandRunner,
@@ -411,6 +437,7 @@ function observation(
     head: read.head,
     tree: read.tree,
     base: text(view.baseRefName),
+    baseHead: text(view.baseRefOid),
     mergeable: mergeable === "MERGEABLE" || mergeable === "CONFLICTING" ? mergeable : "UNKNOWN",
     behind: view.mergeStateStatus === "BEHIND",
     reviewDecision:

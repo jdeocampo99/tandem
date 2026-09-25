@@ -1396,6 +1396,7 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     prWatchStart: unused,
     prWatchStop: unused,
     prWatchNotices: unused,
+    prWatchFix: unused,
     shutdown: async () => undefined,
   };
   const stdout: string[] = [];

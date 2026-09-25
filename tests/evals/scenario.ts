@@ -78,6 +78,8 @@ export type ScenarioPullRequest = {
   title: string;
   branch: string;
   base: string;
+  /** The base branch's commit; a new one gives a conflict a new fix attempt. */
+  baseHead: string;
   head: string;
   draft: boolean;
   state: "OPEN" | "CLOSED" | "MERGED";
@@ -90,6 +92,8 @@ export type ScenarioPullRequest = {
   mergedAt?: IsoTimestamp;
   /** Label and auto-merge events in order, as `issues/N/events` lists them. */
   events: ScenarioIssueEvent[];
+  /** Files both this pull request and its base changed, which the compare API reports. */
+  conflictFiles: string[];
 };
 
 export type ScenarioIssueEvent = Readonly<{
@@ -722,6 +726,7 @@ export async function createScenarioWorld(
         title: `Pull request ${input.number}`,
         branch: `feature-${input.number}`,
         base: "main",
+        baseHead: "base-1",
         head: newCommit(`tree-${input.number}`),
         draft: false,
         state: "OPEN",
@@ -732,6 +737,7 @@ export async function createScenarioWorld(
         autoMerge: false,
         checks: [],
         events: [],
+        conflictFiles: [],
         ...input,
       };
       if (!trees.has(created.head)) trees.set(created.head, `tree-${input.number}`);
@@ -774,6 +780,7 @@ export async function createScenarioWorld(
           headRepositoryOwner: { login: owner },
           isCrossRepository: false,
           baseRefName: pr.base,
+          baseRefOid: pr.baseHead,
           mergeable: pr.mergeable,
           mergeStateStatus: pr.mergeStateStatus,
           reviewDecision: pr.reviewDecision,
@@ -852,6 +859,14 @@ export async function createScenarioWorld(
     if (events !== null) {
       const pr = findPullRequest(events[1] ?? "", Number(events[2]));
       return commandResult(pr.events.map((event) => JSON.stringify(event)).join("\n"));
+    }
+    const compare = /^repos\/([^/]+\/[^/]+)\/compare\/(.+)\.\.\.(.+)$/u.exec(endpoint);
+    if (compare !== null) {
+      const pr = pullRequests.find(
+        (candidate) =>
+          candidate.repo === compare[1] && [compare[2], compare[3]].includes(candidate.head),
+      );
+      return commandResult(JSON.stringify(pr?.conflictFiles ?? []));
     }
     const merges = /^repos\/([^/]+\/[^/]+)\/merges$/u.exec(endpoint);
     if (merges !== null) {

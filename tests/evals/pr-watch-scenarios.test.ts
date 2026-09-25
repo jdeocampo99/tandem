@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { centralConfigPath } from "../../src/config/repositories.ts";
+import type { TaskRecord } from "../../src/contracts.ts";
 import type { PrWatchViewRow } from "../../src/pr-watch/view.ts";
 import { PrWatcher } from "../../src/pr-watch/watcher.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
@@ -96,7 +97,10 @@ test("the same check failing again on the same code goes red and says so once", 
     });
     expect(emptyCommits(world)).toBe(1);
     expect(await service.prWatchNotices()).toEqual([
-      "🔴 acme/app#7 ❌ failing: 🙋 e2e failed twice → https://ci.example/e2e",
+      {
+        pullRequest: PR,
+        text: "🔴 acme/app#7 ❌ failing: 🙋 e2e failed twice → https://ci.example/e2e",
+      },
     ]);
     await nextCheck(world, service);
     expect(await service.prWatchNotices()).toEqual([]);
@@ -233,6 +237,7 @@ test("a Tandem task's pull request is watched without anyone asking", async () =
       run: world.run,
       clock: world.clock,
       listTasks: () => world.store.list(),
+      steerTask: async () => true,
     });
     await watcher.tick();
     const view = await watcher.view();
@@ -355,7 +360,9 @@ test("with an Aviator queue: queued, kicked out by the queue, requeued once, mer
     pr.state = "MERGED";
     pr.mergedAt = world.clock();
     expect((await nextCheck(world, service)).color).toBe("done");
-    expect(await service.prWatchNotices()).toEqual(["🎉 acme/app#7 merged"]);
+    expect(await service.prWatchNotices()).toEqual([
+      { pullRequest: PR, text: "🎉 acme/app#7 merged" },
+    ]);
   });
 });
 
@@ -417,5 +424,166 @@ test("an approval dismissed by the watcher's empty commit goes red", async () =>
       status: "✋ approval",
       note: "🙋 the watcher's push dismissed the approval",
     });
+  });
+});
+
+/**
+ * A Tandem task's open pull request with merge conflicts, and a watcher whose steering moves the
+ * task back to implementing the way a real steer does, recording what it was told.
+ */
+async function conflictedTaskPullRequest(world: ScenarioWorld) {
+  const pr = world.github.openPullRequest({
+    repo: REPO,
+    number: 7,
+    autoMerge: true,
+    mergeable: "CONFLICTING",
+    conflictFiles: ["auth/session.ts"],
+    checks: [{ name: "unit", state: "pass" }],
+  });
+  const task = await seedScenarioTask(world, {
+    kind: "implementation",
+    stage: "ready",
+    pullRequest: { repository: REPO, number: 7, state: "open", head: pr.head, base: "main" },
+  });
+  const steered: string[] = [];
+  const setStage = async (stage: TaskRecord["stage"]) => {
+    const current = await world.store.read(task.id);
+    if (current === undefined) throw new Error("the seeded task is gone");
+    await world.store.update(task.id, current.revision, (record) => ({
+      ...record,
+      revision: record.revision + 1,
+      stage,
+    }));
+  };
+  const watcher = new PrWatcher({
+    home: world.home,
+    run: world.run,
+    clock: world.clock,
+    listTasks: () => world.store.list(),
+    steerTask: async (taskId, text) => {
+      steered.push(`${taskId}: ${text}`);
+      await setStage("implementing");
+      return true;
+    },
+  });
+  const check = async (): Promise<PrWatchViewRow | undefined> => {
+    world.advanceClock(5);
+    return (await watcher.view()).rows[0];
+  };
+  return { pr, task, steered, setStage, watcher, check };
+}
+
+test("a Tandem task resolves its pull request's conflicts, then it merges", async () => {
+  await withScenario({}, async (world) => {
+    const { pr, task, steered, setStage, watcher, check } = await conflictedTaskPullRequest(world);
+    expect(await check()).toMatchObject({
+      color: "green",
+      status: "🔀 conflict",
+      note: "🔀 resolving conflicts in auth/session.ts",
+    });
+    expect(steered).toEqual([
+      `${task.id}: Merge origin/main into this branch, resolve the conflicts, commit, and push. Never force-push.`,
+    ]);
+
+    world.github.push(pr);
+    pr.mergeable = "MERGEABLE";
+    pr.checks = [{ name: "unit", state: "pending" }];
+    await setStage("ready");
+    expect((await check())?.note).toBe("🔀 resolved conflicts in auth/session.ts · CI running");
+
+    pr.checks = [{ name: "unit", state: "pass" }];
+    pr.state = "MERGED";
+    expect((await check())?.color).toBe("done");
+    expect(await watcher.takeNotices()).toEqual([
+      { pullRequest: PR, text: "🎉 acme/app#7 merged" },
+    ]);
+    expect(steered).toHaveLength(1);
+  });
+});
+
+test("conflicts the task could not resolve go red", async () => {
+  await withScenario({}, async (world) => {
+    const { steered, setStage, watcher, check } = await conflictedTaskPullRequest(world);
+    await check();
+    await setStage("blocked");
+    expect(await check()).toMatchObject({
+      color: "red",
+      note: "🙋 conflicts in auth/session.ts are still there after a fix",
+    });
+    expect((await watcher.takeNotices()).map((notice) => notice.askToFix)).toEqual([undefined]);
+    expect(steered).toHaveLength(1);
+  });
+});
+
+test("conflicts that come back on the same base go red instead of another attempt", async () => {
+  await withScenario({}, async (world) => {
+    const { pr, steered, setStage, check } = await conflictedTaskPullRequest(world);
+    await check();
+    world.github.push(pr);
+    pr.mergeable = "MERGEABLE";
+    await setStage("ready");
+    expect((await check())?.color).toBe("green");
+
+    world.github.push(pr);
+    pr.mergeable = "CONFLICTING";
+    expect((await check())?.color).toBe("red");
+    expect(steered).toHaveLength(1);
+
+    pr.baseHead = "base-2";
+    expect((await check())?.color).toBe("green");
+    expect(steered).toHaveLength(2);
+  });
+});
+
+test("your own conflicted pull request asks first, and stays red when you decline", async () => {
+  await watching(async (world, service) => {
+    world.github.openPullRequest({
+      repo: REPO,
+      number: 7,
+      mergeable: "CONFLICTING",
+      conflictFiles: ["auth/session.ts"],
+    });
+    const started = await service.prWatchStart({ pullRequest: PR });
+    expect(started.rows[0]).toMatchObject({
+      color: "red",
+      note: "🙋 fix conflicts in auth/session.ts?",
+    });
+    expect(await service.prWatchNotices()).toEqual([
+      {
+        pullRequest: PR,
+        text: "acme/app#7 has merge conflicts in auth/session.ts. Fix them?",
+        askToFix: true,
+      },
+    ]);
+
+    expect((await nextCheck(world, service)).color).toBe("red");
+    expect(await service.prWatchNotices()).toEqual([]);
+    expect((await world.snapshot()).tasks).toEqual([]);
+  });
+});
+
+test("a yes to fixing your own pull request's conflicts starts an approved task on its branch", async () => {
+  await watchingWithOrigin(async (world, service) => {
+    const pr = world.github.openPullRequest({
+      repo: REPO,
+      number: 7,
+      branch: "refactor-cache",
+      mergeable: "CONFLICTING",
+      conflictFiles: ["auth/session.ts"],
+    });
+    await service.prWatchStart({ pullRequest: "7", repoPath: world.repoPath });
+    const task = await service.prWatchFix({ pullRequest: "7", repoPath: world.repoPath });
+    expect(task.stage).toBe("queued");
+    expect(task.pullRequest).toMatchObject({
+      repository: REPO,
+      number: 7,
+      state: "open",
+      head: pr.head,
+    });
+    expect(task.objective).toContain("git push origin HEAD:refactor-cache. Never force-push.");
+
+    expect((await nextCheck(world, service)).note).toBe(
+      "🔀 resolving conflicts in auth/session.ts",
+    );
   });
 });

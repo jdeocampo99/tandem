@@ -23,6 +23,7 @@ function pr(overrides: Partial<PrObservation> = {}): PrObservation {
     head: "head-1",
     tree: "tree-1",
     base: "main",
+    baseHead: "base-1",
     mergeable: "MERGEABLE",
     behind: false,
     reviewDecision: "APPROVED",
@@ -110,7 +111,7 @@ test("GitHub's own states come first: merged, still computing, conflicts, change
   ).not.toHaveProperty("action");
   expect(
     decidePrWatch(facts({ observation: pr({ mergeable: "CONFLICTING", checks: failing }) })),
-  ).toMatchObject({ row: { color: "red", status: "⚔️ conflict" } });
+  ).toEqual({ kind: "look-up", lookup: "conflict-files" });
   expect(
     decidePrWatch(facts({ observation: pr({ reviewDecision: "CHANGES_REQUESTED" }) })),
   ).toMatchObject({ row: { color: "red" } });
@@ -193,4 +194,38 @@ test("a branch GitHub requires to be up to date is updated once per head, never 
   expect(
     decidePrWatch({ ...behind, observation: { ...behind.observation, fork: true } }),
   ).not.toHaveProperty("action");
+});
+
+test("conflicts get one fix attempt per base commit: a task is steered, anyone else is asked", () => {
+  const conflicting = facts({
+    observation: pr({ mergeable: "CONFLICTING" }),
+    conflictFiles: ["auth/session.ts"],
+  });
+  const attempt = (kind: "fix-conflicts" | "ask-conflicts", base: string): PrWatchLogEntry => ({
+    at: NOW,
+    kind,
+    head: "head-1",
+    tree: "tree-1",
+    base,
+    files: ["auth/session.ts"],
+  });
+  expect(decidePrWatch(conflicting)).toEqual({
+    kind: "decided",
+    row: { color: "red", status: "⚔️ conflict", note: "🙋 fix conflicts in auth/session.ts?" },
+    action: { kind: "ask-conflicts", files: ["auth/session.ts"] },
+  });
+  expect(
+    decidePrWatch({ ...conflicting, log: [attempt("ask-conflicts", "base-1")] }),
+  ).not.toHaveProperty("action");
+
+  const tasked = { ...conflicting, task: { working: false } };
+  expect(decidePrWatch(tasked)).toMatchObject({ action: { kind: "fix-conflicts" } });
+  const fixing = { ...tasked, log: [attempt("fix-conflicts", "base-1")] };
+  expect(decidePrWatch({ ...fixing, task: { working: true } })).toMatchObject({
+    row: { color: "green", note: "🔀 resolving conflicts in auth/session.ts" },
+  });
+  expect(decidePrWatch(fixing)).toMatchObject({ row: { color: "red" } });
+  expect(decidePrWatch({ ...tasked, log: [attempt("fix-conflicts", "base-0")] })).toMatchObject({
+    action: { kind: "fix-conflicts" },
+  });
 });

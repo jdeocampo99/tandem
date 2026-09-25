@@ -171,8 +171,10 @@ for all of yours). When a check fails, it reruns CI once with an empty commit, a
 when the same check is failing on `main` too. Once a pull request is published (not a draft), it
 turns on GitHub auto-merge, or adds your merge queue's label (set `[merging]` in the project's
 settings; Aviator repositories work without it), and puts it back in the queue after a flaky
-kick-out. It only interrupts you when a pull request needs you: a check failing twice on the same
-code, a stuck check, a conflict, requested changes, or a lost approval.
+kick-out. When a pull request Tandem opened has conflicts, its task merges the base branch in and pushes;
+for one of yours, Tandem asks first ("fix it?") and starts a task only on yes. It only interrupts
+you when a pull request needs you: a check failing twice on the same code, a stuck check,
+conflicts it could not fix, requested changes, or a lost approval.
 
 ```
 PR watch · 3 open · checked 5s ago

@@ -165,7 +165,7 @@ export type TandemAction =
   | Readonly<{ readonly action: "review-close"; readonly taskId: string }>
   | Readonly<{ readonly action: "pr-watch" }>
   | Readonly<{
-      readonly action: "pr-watch-start" | "pr-watch-stop";
+      readonly action: "pr-watch-start" | "pr-watch-stop" | "pr-watch-fix";
       /** A GitHub PR URL, `owner/repo#123`, or `#123` in `repoPath`. */
       readonly pullRequest: string;
       readonly repoPath?: string | undefined;
@@ -204,7 +204,8 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "publish-now" ||
     action.action === "draft" ||
     action.action === "merge" ||
-    action.action === "review-post"
+    action.action === "review-post" ||
+    action.action === "pr-watch-fix"
   );
 }
 function capitalize(value: string): string {
@@ -252,6 +253,12 @@ async function approvalPrompt(
           title: `Delete the worktrees for ${names.length} tasks?`,
           message: `${names.map((name) => `- ${name}`).join("\n")}\nThis discards their changes.`,
         };
+  }
+  if (action.action === "pr-watch-fix") {
+    return {
+      title: `Fix the merge conflicts on ${action.pullRequest}?`,
+      message: "Starts a task that merges the base into its branch and pushes. Never force-pushes.",
+    };
   }
   if (!("taskId" in action)) return { title: "Allow this Tandem action?", message: "" };
   const task = await service.get(action.taskId);
@@ -567,10 +574,15 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     textResult(await service.prWatchStart(pullRequestInput(action)), action.action),
   "pr-watch-stop": async (action, service) =>
     textResult(await service.prWatchStop(pullRequestInput(action)), action.action),
+  "pr-watch-fix": async (action, service) =>
+    textResult(await service.prWatchFix(pullRequestInput(action)), action.action, true),
 };
 
 function pullRequestInput(
-  action: Extract<TandemAction, { readonly action: "pr-watch-start" | "pr-watch-stop" }>,
+  action: Extract<
+    TandemAction,
+    { readonly action: "pr-watch-start" | "pr-watch-stop" | "pr-watch-fix" }
+  >,
 ): PullRequestInput {
   return {
     pullRequest: action.pullRequest,

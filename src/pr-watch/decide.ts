@@ -26,6 +26,8 @@ export type PrObservation = Readonly<{
   /** The head commit's tree: the version of the code, which an empty commit keeps. */
   readonly tree: string;
   readonly base: string;
+  /** The base branch's commit; conflicts get one fix attempt per base commit. */
+  readonly baseHead: string;
   readonly mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   /** GitHub requires the branch to be up to date with its base and it is not. */
   readonly behind: boolean;
@@ -66,11 +68,21 @@ export type PrWatchLogEntry = Readonly<{
       }>
     /** Put it in the queue or armed auto-merge; `requeue` does either again after a dequeue. */
     | Readonly<{ readonly kind: "queue" | "auto-merge" | "requeue" }>
+    /** Sent a task to fix the conflicts, or asked the user whether to; once per base commit. */
+    | Readonly<{
+        readonly kind: "fix-conflicts" | "ask-conflicts";
+        readonly base: string;
+        readonly files: readonly string[];
+      }>
   );
 
 export type PrWatchAction =
   | Readonly<{ readonly kind: "retry"; readonly checks: readonly string[] }>
-  | Readonly<{ readonly kind: "update-branch" | "queue" | "auto-merge" | "requeue" }>;
+  | Readonly<{ readonly kind: "update-branch" | "queue" | "auto-merge" | "requeue" }>
+  | Readonly<{
+      readonly kind: "fix-conflicts" | "ask-conflicts";
+      readonly files: readonly string[];
+    }>;
 
 export type PrWatchColor = "red" | "yellow" | "green" | "done";
 
@@ -85,7 +97,7 @@ export type PrWatchRow = Readonly<{
 }>;
 
 /** An extra GitHub read the decision needs before it can choose. */
-export type PrWatchLookup = "base-checks" | "dequeued-by";
+export type PrWatchLookup = "base-checks" | "dequeued-by" | "conflict-files";
 
 /** Who last took the pull request out of the queue or turned auto-merge off; null when unknown. */
 export type Dequeuer = Readonly<{ readonly login: string; readonly bot: boolean }> | null;
@@ -109,6 +121,10 @@ export type PrWatchFacts = Readonly<{
   readonly baseFailing?: ReadonlySet<string>;
   /** Who dequeued it, once looked up. */
   readonly dequeuedBy?: Dequeuer;
+  /** Files both the pull request and its base changed, once looked up. */
+  readonly conflictFiles?: readonly string[];
+  /** The Tandem task this pull request belongs to, when it can still take directions. */
+  readonly task?: Readonly<{ readonly working: boolean }>;
 }>;
 
 const DEFAULT_RETRIES = { maxCiRetries: 1, stuckAfterMinutes: 60 } as const;
@@ -146,9 +162,7 @@ export function decidePrWatch(facts: PrWatchFacts): PrWatchDecision {
   if (pr.mergeable === "UNKNOWN") {
     return decided(row("green", mergeStatus(facts), "⏳ GitHub is still checking for conflicts"));
   }
-  if (pr.mergeable === "CONFLICTING") {
-    return decided(row("red", "⚔️ conflict", "🙋 fix the merge conflicts"));
-  }
+  if (pr.mergeable === "CONFLICTING") return decideConflicts(facts);
   if (pr.reviewDecision === "CHANGES_REQUESTED") {
     return decided(row("red", "✋ changes", "🙋 a reviewer asked for changes"));
   }
@@ -162,6 +176,33 @@ export function decidePrWatch(facts: PrWatchFacts): PrWatchDecision {
   if (arm !== undefined) return arm;
   if (pr.checks.some((check) => check.state === "pending")) return decided(settledRow(facts));
   return decideMerging(facts) ?? decided(settledRow(facts));
+}
+
+/**
+ * One fix attempt per base commit: a Tandem task's pull request steers the task; anyone else's
+ * asks the user first, since a fix pushes to a branch they may have local commits on. Still
+ * conflicting once that attempt is over, or declined, is red.
+ */
+function decideConflicts(facts: PrWatchFacts): PrWatchDecision {
+  const pr = facts.observation;
+  if (facts.conflictFiles === undefined) return { kind: "look-up", lookup: "conflict-files" };
+  const files = fileList(facts.conflictFiles);
+  const attempt = (kind: "fix-conflicts" | "ask-conflicts") =>
+    facts.log.some((entry) => entry.kind === kind && entry.base === pr.baseHead);
+  if (attempt("fix-conflicts")) {
+    return facts.task?.working === true
+      ? decided(row("green", "🔀 conflict", `🔀 resolving conflicts in ${files}`))
+      : decided(row("red", "⚔️ conflict", `🙋 conflicts in ${files} are still there after a fix`));
+  }
+  if (facts.task !== undefined) {
+    return decided(row("green", "🔀 conflict", `🔀 resolving conflicts in ${files}`), {
+      kind: "fix-conflicts",
+      files: facts.conflictFiles,
+    });
+  }
+  const ask = row("red", "⚔️ conflict", `🙋 fix conflicts in ${files}?`);
+  if (attempt("ask-conflicts")) return decided(ask);
+  return decided(ask, { kind: "ask-conflicts", files: facts.conflictFiles });
 }
 
 /** How many empty commits already reran this check on this version of the code. */
@@ -270,7 +311,11 @@ function decideMerging(facts: PrWatchFacts): PrWatchDecision | undefined {
 function settledRow(facts: PrWatchFacts): PrWatchRow {
   const pr = facts.observation;
   const running = pr.checks.some((check) => check.state === "pending");
-  const retried = facts.log.findLast((entry) => entry.kind === "retry" && entry.pushed === pr.head);
+  const recent = facts.log.findLast(
+    (entry) =>
+      (entry.kind === "retry" && entry.pushed === pr.head) ||
+      (entry.kind === "fix-conflicts" && entry.head !== pr.head),
+  );
   const reviewNote =
     pr.reviewers.length === 0
       ? "⏳ waiting for a review"
@@ -281,11 +326,13 @@ function settledRow(facts: PrWatchFacts): PrWatchRow {
       ? reviewNote
       : undefined;
   const note =
-    retried?.kind === "retry"
-      ? `🔁 retried ${retried.checks.join(", ")} (flaky?)`
-      : running
-        ? "⏳ CI running"
-        : (waiting ?? "");
+    recent?.kind === "retry"
+      ? `🔁 retried ${recent.checks.join(", ")} (flaky?)`
+      : recent?.kind === "fix-conflicts"
+        ? `🔀 resolved conflicts in ${fileList(recent.files)}${running ? " · CI running" : ""}`
+        : running
+          ? "⏳ CI running"
+          : (waiting ?? "");
   return row(running || waiting === undefined ? "green" : "yellow", mergeStatus(facts), note);
 }
 
@@ -351,6 +398,12 @@ function decided(rowValue: PrWatchRow, action?: PrWatchAction): PrWatchDecision 
 
 function row(color: PrWatchColor, status: string, note: string, link?: string): PrWatchRow {
   return { color, status, note, ...(link === undefined ? {} : { link }) };
+}
+
+/** A few file names, or how many when there are more than three. */
+function fileList(files: readonly string[]): string {
+  if (files.length === 0) return "its files";
+  return files.length <= 3 ? files.join(", ") : `${files.length} files`;
 }
 
 function names(checks: readonly WatchedCheck[]): string {

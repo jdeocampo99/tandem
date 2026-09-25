@@ -67,8 +67,15 @@ import {
 } from "../pr-review/service.ts";
 import type { PrReviewState } from "../pr-review/state.ts";
 import { removeReviewWorktree } from "../pr-review/worktree.ts";
+import type { PrObservation } from "../pr-watch/decide.ts";
+import type { PrWatchNotice } from "../pr-watch/store.ts";
 import type { PrWatchView } from "../pr-watch/view.ts";
-import { type NamedPullRequest, PrWatcher, resolvePullRequest } from "../pr-watch/watcher.ts";
+import {
+  conflictFixObjective,
+  type NamedPullRequest,
+  PrWatcher,
+  resolvePullRequest,
+} from "../pr-watch/watcher.ts";
 import { PresentationFeedbackWorkflow } from "../presentations/feedback.ts";
 import { type PresentationRecord, readPresentationRecord } from "../presentations/records.ts";
 import { preparePresentation } from "../presentations/session.ts";
@@ -355,7 +362,12 @@ export type TandemService = Readonly<{
   readonly prWatchStart: (input: PullRequestInput) => Promise<PrWatchView>;
   readonly prWatchStop: (input: PullRequestInput) => Promise<PrWatchView>;
   /** Notifications about watched pull requests that no Tandem has shown yet. */
-  readonly prWatchNotices: () => Promise<readonly string[]>;
+  readonly prWatchNotices: () => Promise<readonly PrWatchNotice[]>;
+  /**
+   * The user said yes to fixing a pull request's conflicts: starts an approved task that merges
+   * its base into its branch and pushes, never force-pushing.
+   */
+  readonly prWatchFix: (input: PullRequestInput) => Promise<TaskRecord>;
   readonly shutdown: () => Promise<void>;
 }>;
 
@@ -480,6 +492,7 @@ class TandemController {
       run: deps.run,
       clock: deps.clock,
       listTasks: () => deps.store.list(),
+      steerTask: (taskId, text) => this.steerForPrWatch(taskId, text),
     });
     this.#accounting = new RequestAccountingWorkflow({
       home: deps.home,
@@ -714,6 +727,12 @@ class TandemController {
       prWatchStart: async (input) => this.#prWatch.start(await this.namedPullRequest(input)),
       prWatchStop: async (input) => this.#prWatch.stop((await this.namedPullRequest(input)).ref),
       prWatchNotices: () => this.#prWatch.takeNotices(),
+      prWatchFix: async (input) => {
+        const named = await this.namedPullRequest(input);
+        return this.#prWatch.fixConflicts(named.ref, (pr, files) =>
+          this.startConflictFix(named, pr, files),
+        );
+      },
       shutdown: () => this.shutdown(),
     };
   }
@@ -1567,6 +1586,53 @@ class TandemController {
       { event: "pr-watch-failed", details: { errorClass: errorClassName(error) } },
       this.#deps.clock,
     );
+  }
+
+  /**
+   * PR watch steers a task only from the coordinator whose project the task belongs to, which
+   * also runs its workers; anywhere else it answers false and a later check tries again.
+   */
+  private async steerForPrWatch(taskId: string, text: string): Promise<boolean> {
+    if (this.#deps.sourceWorkspace === undefined) return false;
+    const task = await this.#deps.store.read(taskId);
+    if (task === undefined || !(await this.#source.taskInScope(task))) return false;
+    await this.steer({ taskId, text });
+    return true;
+  }
+
+  /**
+   * An implementation task that adopts the pull request, so it pushes to that branch and returns
+   * straight to ready like any follow-up on an open pull request. It runs in the project when that
+   * is the pull request's repository, otherwise in the pull request's repository as a target.
+   */
+  private async startConflictFix(
+    named: NamedPullRequest,
+    pr: PrObservation,
+    files: readonly string[],
+  ): Promise<TaskRecord> {
+    const project = named.repoPath ?? this.#deps.sourceWorkspace?.repoPath;
+    if (project === undefined) throw new Error("fixing conflicts needs a Tandem project to run in");
+    const created = await this.create({
+      repoPath: project,
+      kind: "implementation",
+      objective: conflictFixObjective(pr, files),
+      acceptanceCriteria: [
+        `${pr.url} has no merge conflicts with ${pr.base}.`,
+        "The branch changes only by merging the base and resolving its conflicts.",
+      ],
+      surfaces: ["pull request branch"],
+      ...(named.repoPath === undefined ? { targetRepo: named.ref.repo } : {}),
+    });
+    const adopted = await this.recordPullRequest(created.id, created.revision, {
+      repository: named.ref.repo,
+      number: named.ref.number,
+      state: "open",
+      head: pr.head,
+      base: pr.base,
+      url: pr.url,
+      title: pr.title,
+    });
+    return this.approve(adopted.id);
   }
 
   private namedPullRequest(input: PullRequestInput): Promise<NamedPullRequest> {

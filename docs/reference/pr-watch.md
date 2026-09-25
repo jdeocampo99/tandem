@@ -44,7 +44,7 @@ every read, so a pull request watched by name merges once it is not a draft.
 - A full page of 100 checks means there may be more: `gh pr checks --json` reads them all.
 - The head commit's tree is read (`gh api repos/R/commits/SHA`) only when the head changes.
 - Extra reads happen only when the decision asks for them: the base branch's checks (one GraphQL
-  call) when a check fails, and the issue events (label and auto-merge changes, with who made
+  call) when a check fails, the files both sides changed (two compare calls) on a conflict, and the issue events (label and auto-merge changes, with who made
   them) when the pull request left the queue. Whether the repository has `.aviator/config.yml` is
   read once per watch, and only when its settings do not name `mergeWith`.
 - An unreadable pull request (missing SSO authorization, a GraphQL error, no rollup at all) shows
@@ -76,7 +76,7 @@ acting, the watcher checks the pull request is still watched. First match wins:
 | --- | --- |
 | Merged or closed | Done (⚪). |
 | `mergeable` is `UNKNOWN` | Nothing; GitHub is still computing it. |
-| Merge conflict | 🔴 red. |
+| Merge conflict | See [Conflicts](#conflicts): steer the task, or ask the user. |
 | Changes requested | 🔴 red. |
 | The watcher's own push is the head, the pull request was approved before it, and is not now | 🔴 red: the push dismissed the approval. |
 | A check pending longer than `stuckAfterMinutes` (from its start, or from when the watcher first saw the head) | 🔴 red, `⏰ stuck`. |
@@ -119,6 +119,32 @@ acting, the watcher checks the pull request is still watched. First match wins:
 - These are the only merges Tandem makes without asking. The `merge` action still merges right
   away when the user asks and approves it.
 
+## Conflicts
+
+- GitHub does not name conflicting files, so the row names the files both the pull request and its
+  base changed since they split (`compare` both ways), the closest guess without a checkout.
+- **A Tandem task's pull request:** the task is steered: "Merge `origin/<base>` into this branch,
+  resolve the conflicts, commit, and push. Never force-push." Merge instead of rebase, because
+  open-PR follow-ups never force-push (`OPEN_PR_FOLLOW_UP` in src/tasks/control.ts). CI checks
+  the result. The row shows `🔀 resolving conflicts in <files>` while the task works, then
+  `🔀 resolved conflicts in <files> · CI running`. Only the coordinator whose project the task
+  belongs to steers it; elsewhere the row waits for it. A cancelled, merged, or completed task
+  counts as no task.
+- **Anyone else's pull request:** the user is asked first ("acme/app#409 has merge conflicts in
+  auth/session.ts. Fix them?"), since a fix pushes to a branch they may have local commits on. The
+  question is shown in the coordinator's chat with the pull request in a hidden line, without a
+  model turn. On yes the coordinator calls `pr-watch-fix`, which needs the user's approval and
+  starts an approved implementation task that adopts the pull request (so it returns straight to
+  ready when it pushes, like any open-PR follow-up), starts from the pull request's branch in its
+  own worktree, merges the base, resolves, and pushes with `git push origin HEAD:<branch>`. That
+  task becomes the pull request's task. It runs in the coordinator's project when that is the pull
+  request's repository, otherwise as a task in that repository (see
+  [other-repositories.md](other-repositories.md)). A declined or unanswered question leaves the
+  row red and is not asked again for that base commit.
+- One attempt per base commit. Still conflicting after the task stops working (ready, blocked,
+  paused), or conflicting again at the same base commit, is 🔴 red. A new base commit gets a new
+  attempt.
+
 ## The view
 
 ```
@@ -138,9 +164,10 @@ PR watch · 4 open · checked 5s ago
 
 ## Notifications
 
-- Only when a row turns red or a pull request merges. The text is stored on the record, and the
-  first coordinator to take it shows it with `ctx.ui.notify`, with no model turn; taking it clears
-  it, so another open Tandem never repeats it.
+- Only when a row turns red or a pull request merges, plus the question whether to fix someone's
+  conflicts. The notice is stored on the record, and the first coordinator to take it shows it:
+  a routine one with `ctx.ui.notify`, the question in the chat as described above, neither with a
+  model turn. Taking it clears it, so another open Tandem never repeats it.
 
 ## Settings
 

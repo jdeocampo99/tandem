@@ -23,12 +23,14 @@ import {
   listMyOpenPullRequests,
   mergeBaseIntoBranch,
   pushEmptyCommit,
+  readConflictFiles,
   readDequeuer,
   readFailingChecks,
   readWatchedPullRequest,
 } from "./github.ts";
 import {
   type PrWatch,
+  type PrWatchNotice,
   type PrWatchPoll,
   type PrWatchSummary,
   sameRef,
@@ -42,7 +44,24 @@ export type PrWatcherDependencies = Readonly<{
   readonly clock: Clock;
   /** Every task in this Tandem home; each one's pull request is watched. */
   readonly listTasks: () => Promise<readonly TaskRecord[]>;
+  /**
+   * Gives a Tandem task a direction; false when this Tandem does not run that task (another
+   * project's coordinator does), so a later check tries again.
+   */
+  readonly steerTask: (taskId: string, text: string) => Promise<boolean>;
 }>;
+
+/** Task stages in which a task is still working on what it was last told. */
+const WORKING_STAGES: readonly TaskRecord["stage"][] = [
+  "awaiting-approval",
+  "queued",
+  "implementing",
+  "validating",
+  "reviewing",
+  "awaiting-fixes",
+];
+/** Task stages that can no longer take a direction. */
+const CLOSED_STAGES: readonly TaskRecord["stage"][] = ["cancelled", "merged", "completed"];
 
 /** One check at a time: a Tandem that stops mid-check frees the others after this long. */
 const LEASE_MINUTES = 5;
@@ -53,7 +72,7 @@ const BUSY_MINUTES = 5;
 const LOOK_EVERY_MS = 30_000;
 
 type Decided = Extract<PrWatchDecision, { readonly kind: "decided" }>;
-type Outcome = Readonly<{ row: PrWatchRow; entry?: PrWatchLogEntry }>;
+type Outcome = Readonly<{ row: PrWatchRow; entry?: PrWatchLogEntry; notice?: PrWatchNotice }>;
 
 /**
  * Keeps watched pull requests moving: reads each one from GitHub on the shared schedule, decides
@@ -111,10 +130,51 @@ export class PrWatcher {
     return this.storedView();
   }
 
+  /**
+   * Starts fixing the conflicts on a pull request the user said yes to: `startTask` creates and
+   * approves the task, which this records as the pull request's task and its fix attempt.
+   */
+  async fixConflicts(
+    ref: PullRequestRef,
+    startTask: (pr: PrObservation, files: readonly string[]) => Promise<TaskRecord>,
+  ): Promise<TaskRecord> {
+    const read = await readWatchedPullRequest(this.#deps.run, ref, { cwd: this.#deps.home });
+    if (read.kind === "unreadable")
+      throw new Error(`can't read ${ref.repo}#${ref.number}: ${read.reason}`);
+    const pr = read.observation;
+    if (pr.mergeable !== "CONFLICTING") {
+      throw new Error(`${ref.repo}#${ref.number} has no merge conflicts right now`);
+    }
+    const files = await readConflictFiles(this.#deps.run, ref.repo, pr, this.#deps.home);
+    const task = await startTask(pr, files);
+    const now = this.#deps.clock();
+    await withPrWatches(this.#deps.home, (transaction) => {
+      const watch =
+        transaction.watches.find((candidate) => sameRef(candidate.ref, ref)) ??
+        newWatch(ref, "user", now);
+      transaction.put({
+        ...watch,
+        taskId: task.id,
+        log: [
+          ...watch.log,
+          {
+            at: now,
+            kind: "fix-conflicts",
+            head: pr.head,
+            tree: pr.tree,
+            base: pr.baseHead,
+            files,
+          },
+        ],
+      });
+    });
+    return task;
+  }
+
   /** Notifications no coordinator has shown yet; taking them means no other Tandem shows them. */
-  async takeNotices(): Promise<readonly string[]> {
+  async takeNotices(): Promise<readonly PrWatchNotice[]> {
     return withPrWatches(this.#deps.home, (transaction) => {
-      const notices: string[] = [];
+      const notices: PrWatchNotice[] = [];
       for (const watch of transaction.watches) {
         if (watch.notice === undefined) continue;
         const { notice, ...rest } = watch;
@@ -152,7 +212,7 @@ export class PrWatcher {
     let rateLimitedUntil: IsoTimestamp | undefined;
     try {
       if (settings.watchAllMyPrs) await this.watchMyPullRequests(now);
-      for (const watch of await this.activeWatches()) await this.checkWatch(watch, now);
+      for (const watch of await this.activeWatches()) await this.checkWatch(watch, tasks, now);
     } catch (error) {
       if (!(error instanceof GitHubRateLimitError)) throw error;
       rateLimitedUntil = plusMinutes(now, RATE_LIMIT_BACKOFF_MINUTES);
@@ -182,10 +242,14 @@ export class PrWatcher {
   }
 
   /** Reads, decides, and acts for one pull request; a failure here only marks its own row. */
-  private async checkWatch(watch: PrWatch, now: IsoTimestamp): Promise<void> {
+  private async checkWatch(
+    watch: PrWatch,
+    tasks: readonly TaskRecord[],
+    now: IsoTimestamp,
+  ): Promise<void> {
     let update: (current: PrWatch) => PrWatch;
     try {
-      update = await this.observeAndAct(watch, now);
+      update = await this.observeAndAct(watch, tasks, now);
     } catch (error) {
       if (error instanceof GitHubRateLimitError) throw error;
       const reason = error instanceof Error ? error.message : String(error);
@@ -200,6 +264,7 @@ export class PrWatcher {
 
   private async observeAndAct(
     watch: PrWatch,
+    tasks: readonly TaskRecord[],
     now: IsoTimestamp,
   ): Promise<(current: PrWatch) => PrWatch> {
     const read = await readWatchedPullRequest(this.#deps.run, watch.ref, {
@@ -219,6 +284,7 @@ export class PrWatcher {
     const head =
       watch.head?.oid === pr.head ? watch.head : { oid: pr.head, tree: pr.tree, seenAt: now };
     const merging = await this.mergingFor(watch);
+    const task = tasks.find((candidate) => candidate.id === watch.taskId);
     const decision = await this.decide(
       {
         observation: pr,
@@ -226,6 +292,9 @@ export class PrWatcher {
         settings: merging.settings,
         now,
         headSeenAt: head.seenAt,
+        ...(task === undefined || CLOSED_STAGES.includes(task.stage)
+          ? {}
+          : { task: { working: WORKING_STAGES.includes(task.stage) } }),
       },
       watch.ref,
     );
@@ -249,7 +318,7 @@ export class PrWatcher {
       ...(outcome.row.color === "done" && current.finishedAt === undefined
         ? { finishedAt: now }
         : {}),
-      ...withRow(current, outcome.row),
+      ...withRow(current, outcome.row, outcome.notice),
     });
   }
 
@@ -300,6 +369,16 @@ export class PrWatcher {
         return {
           ...facts,
           dequeuedBy: await readDequeuer(this.#deps.run, ref, facts.settings, this.#deps.home),
+        };
+      case "conflict-files":
+        return {
+          ...facts,
+          conflictFiles: await readConflictFiles(
+            this.#deps.run,
+            ref.repo,
+            facts.observation,
+            this.#deps.home,
+          ),
         };
     }
   }
@@ -386,6 +465,31 @@ export class PrWatcher {
           );
         }
         return { row, entry: { ...logged, kind: "requeue" } };
+      case "fix-conflicts": {
+        const taskId = context.watch.taskId;
+        const text = `Merge origin/${pr.base} into this branch, resolve the conflicts, commit, and push. Never force-push.`;
+        if (taskId === undefined || !(await this.#deps.steerTask(taskId, text))) {
+          return {
+            row: {
+              color: "yellow",
+              status: "⚔️ conflict",
+              note: "⏳ its task gets the conflicts once its project's Tandem is open",
+            },
+          };
+        }
+        const entry = { ...logged, kind: action.kind, base: pr.baseHead, files: action.files };
+        return { row, entry };
+      }
+      case "ask-conflicts":
+        return {
+          row,
+          entry: { ...logged, kind: action.kind, base: pr.baseHead, files: action.files },
+          notice: {
+            pullRequest: `${ref.repo}#${ref.number}`,
+            text: `${ref.repo}#${ref.number} has merge conflicts${action.files.length === 0 ? "" : ` in ${action.files.join(", ")}`}. Fix them?`,
+            askToFix: true,
+          },
+        };
     }
   }
 
@@ -501,17 +605,34 @@ function isActive(watch: PrWatch): boolean {
   return watch.stoppedAt === undefined && watch.finishedAt === undefined;
 }
 
-/** The new row, and a notification when it just turned red or the pull request just merged. */
-function withRow(current: PrWatch, row: PrWatchRow): Pick<PrWatch, "row" | "notice"> {
-  const name = `${current.ref.repo}#${current.ref.number}`;
+/**
+ * The new row, and a notification: the one an action raised, or else one when the row just turned
+ * red or the pull request just merged.
+ */
+function withRow(
+  current: PrWatch,
+  row: PrWatchRow,
+  raised?: PrWatchNotice,
+): Pick<PrWatch, "row" | "notice"> {
+  const pullRequest = `${current.ref.repo}#${current.ref.number}`;
   const turnedRed = row.color === "red" && current.row?.color !== "red";
   const merged = row.status.startsWith("🎉") && current.row?.color !== "done";
-  const notice = turnedRed
-    ? `🔴 ${name} ${row.status}: ${row.note}${row.link === undefined ? "" : ` → ${row.link}`}`
+  const text = turnedRed
+    ? `🔴 ${pullRequest} ${row.status}: ${row.note}${row.link === undefined ? "" : ` → ${row.link}`}`
     : merged
-      ? `🎉 ${name} merged`
-      : current.notice;
+      ? `🎉 ${pullRequest} merged`
+      : undefined;
+  const notice = raised ?? (text === undefined ? current.notice : { pullRequest, text });
   return { row, ...(notice === undefined ? {} : { notice }) };
+}
+
+/** What a task that fixes someone's conflicts is told to do, starting from their branch. */
+export function conflictFixObjective(pr: PrObservation, files: readonly string[]): string {
+  return [
+    `Resolve the merge conflicts on pull request ${pr.url} (branch ${pr.branch}) with ${pr.base}${files.length === 0 ? "" : `, in ${files.join(", ")}`}.`,
+    `Start from the pull request's branch: git fetch origin ${pr.branch} ${pr.base}, then git reset --hard origin/${pr.branch}.`,
+    `Merge origin/${pr.base} into it, resolve the conflicts, commit, and push with git push origin HEAD:${pr.branch}. Never force-push.`,
+  ].join(" ");
 }
 
 /** An unreadable pull request, such as one behind SSO the login has not authorized. */

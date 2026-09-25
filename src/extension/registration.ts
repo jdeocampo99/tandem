@@ -350,7 +350,7 @@ function tandemRequestSchema(z: Zod) {
     z.object({ action: z.literal("review-again"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("review-close"), taskId: z.string() }).strict(),
     z.object({ action: z.literal("pr-watch") }).strict(),
-    ...(["pr-watch-start", "pr-watch-stop"] as const).map((action) =>
+    ...(["pr-watch-start", "pr-watch-stop", "pr-watch-fix"] as const).map((action) =>
       z
         .object({
           action: z.literal(action),

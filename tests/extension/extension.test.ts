@@ -12,7 +12,10 @@ import type {
   TaskRecord,
 } from "../../src/contracts.ts";
 import { executeTandemAction, parseTandemCommand } from "../../src/extension/actions.ts";
-import { deliverPendingNotifications } from "../../src/extension/notifications.ts";
+import {
+  deliverPendingNotifications,
+  deliverPrWatchNotices,
+} from "../../src/extension/notifications.ts";
 import { resolveCommandAction } from "../../src/extension/registration.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/extension/summary.ts";
 import { createTandemExtension, reviewStatus, sourceRefreshStatus } from "../../src/extension.ts";
@@ -2448,4 +2451,46 @@ test("a tick that only waited out the state lock leaves the Herdr status alone; 
 
     expect(states.includes("blocked"), failure.error.message).toBe(failure.reportsBlocked);
   }
+});
+
+test("PR watch notices show without a turn, and a question to fix conflicts waits for the reply", async () => {
+  const notified: string[] = [];
+  const sent: { content: unknown; display: unknown; triggerTurn: unknown }[] = [];
+  await deliverPrWatchNotices({
+    pi: {
+      appendEntry: () => undefined,
+      sendMessage: (message, options) => {
+        if (typeof message === "string") throw new Error("expected a custom message");
+        sent.push({
+          content: message.content,
+          display: message.display,
+          triggerTurn: options?.triggerTurn,
+        });
+      },
+    },
+    service: {
+      prWatchNotices: async () => [
+        { pullRequest: "acme/app#7", text: "🎉 acme/app#7 merged" },
+        {
+          pullRequest: "acme/app#9",
+          text: "acme/app#9 has merge conflicts in a.ts. Fix them?",
+          askToFix: true,
+        },
+      ],
+    },
+    ctx: { ui: { notify: (message: string) => notified.push(message) } },
+  });
+  expect(notified).toEqual(["🎉 acme/app#7 merged"]);
+  expect(sent).toEqual([
+    {
+      content: expect.stringContaining("call pr-watch-fix with pullRequest acme/app#9"),
+      display: false,
+      triggerTurn: undefined,
+    },
+    {
+      content: "acme/app#9 has merge conflicts in a.ts. Fix them?",
+      display: true,
+      triggerTurn: undefined,
+    },
+  ]);
 });

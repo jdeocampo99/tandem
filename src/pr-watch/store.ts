@@ -35,7 +35,16 @@ export type PrWatch = Readonly<{
   /** What the watcher did, oldest first. */
   readonly log: readonly PrWatchLogEntry[];
   /** A notification no coordinator has shown yet. */
-  readonly notice?: string;
+  readonly notice?: PrWatchNotice;
+}>;
+
+/** A pull request turned red or merged, or the watcher asks whether to fix its conflicts. */
+export type PrWatchNotice = Readonly<{
+  /** `owner/repo#N`, for the coordinator to act on. */
+  readonly pullRequest: string;
+  readonly text: string;
+  /** A yes means start a task that fixes the conflicts (the `pr-watch-fix` action). */
+  readonly askToFix?: boolean;
 }>;
 
 export type PrWatchSummary = Readonly<{

@@ -19,6 +19,8 @@ src/terminal/cli-arguments.ts, src/cli.ts
 - A tick reconciles durable jobs and endpoints and may start queued work, validation, or review.
   Polling never creates a model turn; routine scheduler notices, including automatic review-fix
   handoffs, are UI/log activity, not model input.
+- The advanced CLI's `watch` (repeated ticks) is not `tandem watch`, which shows PR watch
+  ([pr-watch.md](pr-watch.md)).
 - `watch` defaults to a 2,000 ms interval; `--iterations` must be a positive finite count, and
   without it watch runs until interrupted.
 - Interrupting `watch`, `tick`, or `feedback` stops the CLI's own feedback listeners and timer, then
@@ -47,6 +49,10 @@ src/terminal/cli-arguments.ts, src/cli.ts
   for the serialized active payload with metadata. At a bound, supersede obsolete directions.
 - If directions arrive before initial approval, the approval confirmation states how many
   effective, non-superseded directions the worker will also receive.
+- PR watch steers a task itself when the task's pull request has merge conflicts: "Merge
+  `origin/<base>` into this branch, resolve the conflicts, commit, and push. Never force-push."
+  Only the coordinator whose project the task belongs to sends it, so the worker starts where it
+  always does; any other Tandem leaves it for a later check ([pr-watch.md](pr-watch.md#conflicts)).
 
 ## Answering a worker question
 
