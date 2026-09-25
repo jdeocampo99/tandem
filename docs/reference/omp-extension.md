@@ -59,6 +59,8 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
 - A scout is completed research only when durable state records `completed` and its report.
 - PR watch notices (a watched pull request turned red or merged) go to `ctx.ui.notify` and the UI
   log with no model turn; the first coordinator to take one clears it (see [pr-watch.md](pr-watch.md#notifications)).
+- When a new "Needs you" row of the coordinator's project appears, the reconcile opens the live
+  board beside the coordinator's pane (see [board.md](board.md#when-tandem-opens-it)).
 
 ## Compaction and the durable digest
 

@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
 import { listOmpMcpServers } from "./adapters/omp.ts";
+import { readBoard, runLiveBoard } from "./board/read.ts";
+import { renderBoard } from "./board/view.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
@@ -67,6 +69,7 @@ Usage:
   tandem status [TASK_ID]  What's running and what needs you; --logs shows prompt routing
   tandem watch [PR]        Your watched pull requests; with a PR link or number, watch it
                            --stop PR stops watching it
+  tandem board             Live view of what needs you, what's running, and your PRs
   tandem update            Load your latest local Tandem code into every coordinator
                            Keeps chats and tasks; --fresh starts new chats
   tandem fix               Find stale Tandem resources and offer the repair
@@ -291,6 +294,22 @@ async function handleWatch({
   } finally {
     await service.shutdown();
   }
+}
+
+/**
+ * `tandem board` redraws the board across all projects until Ctrl-C. It only reads saved state;
+ * pull requests show what PR watch last read.
+ */
+function handleBoard(
+  environment: TerminalEnvironment,
+  stdout: (text: string) => void,
+): Promise<never> {
+  return runLiveBoard({
+    render: async () =>
+      renderBoard(await readBoard(environment.home, () => new Date().toISOString())),
+    draw: (text) => stdout(`\x1b[H\x1b[2J${text}`),
+    sleep: (ms) => Bun.sleep(ms),
+  });
 }
 
 /**
@@ -549,6 +568,7 @@ export async function runTerminal(
     if (invocation.command === "watch") {
       return await handleWatch({ invocation, environment, dependencies, run, stdout });
     }
+    if (invocation.command === "board") return await handleBoard(environment, stdout);
     await assertNotInCoordinatorPane(invocation, environment);
     const interaction = createTerminalInteraction(dependencies, stdout);
     try {

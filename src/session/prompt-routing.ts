@@ -50,6 +50,7 @@ type ReadOnlyAction =
   | "messages"
   | "inspect"
   | "receipt"
+  | "board"
   | "pr-watch";
 type RouteTarget = "repository" | "task" | "conversation" | "unresolved";
 type RouteEffect = "read-only" | "state-change" | "sensitive" | "unknown";
@@ -114,7 +115,7 @@ export type PromptRoutingDependencies = Readonly<{
 export type ChoiceConfirmation = { pending?: OpenChoice | undefined };
 
 /** Bumped whenever the shape or meaning of {@link ROUTING_QUESTIONS} changes. */
-export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 3;
+export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 4;
 
 const ROUTING_QUESTIONS: JevQuestions = {
   action: {
@@ -129,6 +130,8 @@ const ROUTING_QUESTIONS: JevQuestions = {
       inspect: "The user asks to inspect one task's runtime state.",
       receipt:
         "The user asks how much time, how many tokens, or how much money the current request has used so far.",
+      board:
+        'The user asks how Tandem or their work is going overall, like "how\'s it going?": what needs them, what is running, and their pull requests at a glance.',
       "pr-watch":
         "The user asks how their pull requests are doing: CI, review, merge status, or whether one merged.",
       none: "The request is not exactly one supported read-only lookup.",
@@ -139,7 +142,7 @@ const ROUTING_QUESTIONS: JevQuestions = {
     instructions: "Identify what the lookup is about.",
     criteria: {
       repository:
-        "The lookup concerns the current repository, its task collection, or the user's watched pull requests.",
+        "The lookup concerns the current repository, its task collection, the user's watched pull requests, or Tandem's work overall.",
       task: "The lookup concerns one explicitly identified Tandem task.",
       conversation:
         "The request concerns the chat or a general answer rather than durable Tandem state.",
@@ -163,7 +166,7 @@ const ROUTING_QUESTIONS: JevQuestions = {
     instructions: "Identify whether the lookup stays within the current Tandem repository scope.",
     criteria: {
       within:
-        "The lookup stays within the current Tandem repository, its tasks, and the user's watched pull requests.",
+        "The lookup stays within the current Tandem repository, its tasks, the user's watched pull requests, and Tandem's own work across projects.",
       changes: "The request asks to modify files, repositories, or external state.",
       unclear: "The scope is unclear or potentially outside the current repository.",
     },
@@ -230,6 +233,7 @@ function knownAction(choice: string): choice is ReadOnlyAction | "none" {
     choice === "messages" ||
     choice === "inspect" ||
     choice === "receipt" ||
+    choice === "board" ||
     choice === "pr-watch" ||
     choice === "none"
   );
@@ -301,7 +305,15 @@ export async function classifyPrompt(
     state: {
       prompt: normalized,
       explicitTaskId: taskId ?? null,
-      supportedLookups: ["list", "presentations", "show", "messages", "inspect", "pr-watch"],
+      supportedLookups: [
+        "list",
+        "presentations",
+        "show",
+        "messages",
+        "inspect",
+        "board",
+        "pr-watch",
+      ],
     },
     questions: ROUTING_QUESTIONS,
   };
@@ -363,6 +375,7 @@ export async function classifyPrompt(
     actionAnswer.choice === "list" ||
     actionAnswer.choice === "presentations" ||
     actionAnswer.choice === "receipt" ||
+    actionAnswer.choice === "board" ||
     actionAnswer.choice === "pr-watch";
   const targetMatchesAction = repositoryWide
     ? targetAnswer.choice === "repository"
@@ -398,10 +411,11 @@ export async function classifyPrompt(
 export function actionForPromptDecision(
   decision: PromptRoutingDecision,
 ): Extract<TandemAction, { readonly action: ReadOnlyAction | "request-receipt" }> | undefined {
-  // The PR watch view reads GitHub first, so the answer is current.
+  // The PR watch view reads GitHub first, so the answer is current; the board only reads saved state.
   if (
     decision.action === "list" ||
     decision.action === "presentations" ||
+    decision.action === "board" ||
     decision.action === "pr-watch"
   ) {
     return { action: decision.action };

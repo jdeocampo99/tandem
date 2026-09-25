@@ -1175,6 +1175,13 @@ test("terminal commands are subcommands whose flags and arguments are checked", 
     stop: true,
   });
   expect(() => parseTerminalArgs(["status", "--stop"])).toThrow("does not accept --stop");
+  expect(parseTerminalArgs(["board", "--home", "/h"])).toMatchObject({
+    command: "board",
+    home: "/h",
+  });
+  expect(() => parseTerminalArgs(["board", "--json"])).toThrow(
+    "tandem board does not accept --json",
+  );
 });
 
 test("tandem watch starts watching a pull request named from this directory and prints the view", async () => {

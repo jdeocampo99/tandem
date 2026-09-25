@@ -555,6 +555,56 @@ test("asking how your pull requests are doing shows the PR watch view without a 
   }
 });
 
+test("asking how it's going shows the board without a coordinator turn, and a Jev failure leaves it to the coordinator", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-board-"));
+  const boardFacts = response(
+    { choice: "board" },
+    { choice: "repository" },
+    { choice: "read-only" },
+    { choice: "within" },
+    { choice: "single" },
+  );
+  const service = {
+    board: async () => ({
+      now: "2030-01-01T00:00:05.000Z",
+      projects: ["app"],
+      needsYou: [
+        {
+          key: "brief:req-1",
+          repoPath: "/work/app",
+          project: "app",
+          mark: "🙋",
+          name: "Dark mode",
+          text: "brief waiting for approval",
+        },
+      ],
+      running: [],
+      pullRequests: [],
+    }),
+  } as unknown as TandemService;
+  try {
+    const answered = routing(home, service, { evaluate: async () => boardFacts });
+    expect(await routeUserPrompt(typed("how's it going?"), answered.deps)).toEqual({
+      handled: true,
+    });
+    expect(answered.sent()).toEqual([
+      "Tandem · app · PRs not checked yet\n\nNeeds you\n🙋 app Dark mode brief waiting for approval\n",
+    ]);
+
+    const failed = routing(home, service, {
+      evaluate: async () => {
+        throw new JevEvaluationError("unavailable", "Jev service unavailable");
+      },
+    });
+    expect(await routeUserPrompt(typed("how's it going?"), failed.deps)).toEqual({
+      handled: false,
+    });
+    expect(failed.sent()).toEqual([]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("a pasted PR link starts a review under the project, and anything else goes to the coordinator", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-prompt-route-pr-"));
   const started: unknown[] = [];

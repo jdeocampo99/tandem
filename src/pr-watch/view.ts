@@ -88,16 +88,19 @@ export function renderPrWatchView(view: PrWatchView): string {
   ].join(" · ");
   if (view.rows.length === 0) return `${header}\n\nNo pull requests are watched.\n`;
   const repos = new Set(view.rows.map((row) => row.repo));
-  const names = view.rows.map((row) =>
-    repos.size > 1 ? `${row.repo}#${row.number}` : `#${row.number}`,
-  );
+  return `${header}\n\n${prWatchLines(view.rows, repos.size > 1).join("\n")}\n`;
+}
+
+/** One aligned line per row; `nameRepo` names each pull request `owner/repo#N` instead of `#N`. */
+export function prWatchLines(rows: readonly PrWatchViewRow[], nameRepo: boolean): string[] {
+  const names = rows.map((row) => (nameRepo ? `${row.repo}#${row.number}` : `#${row.number}`));
   const width = (values: readonly string[]) =>
     Math.max(...values.map((value) => [...value].length));
   const nameWidth = width(names);
-  const branchWidth = width(view.rows.map((row) => row.branch));
-  const checksWidth = width(view.rows.map((row) => row.checks));
-  const statusWidth = width(view.rows.map((row) => row.status));
-  const lines = view.rows.map((row, index) =>
+  const branchWidth = width(rows.map((row) => row.branch));
+  const checksWidth = width(rows.map((row) => row.checks));
+  const statusWidth = width(rows.map((row) => row.status));
+  return rows.map((row, index) =>
     [
       COLOR_MARKS[row.color],
       pad(names[index] ?? "", nameWidth),
@@ -109,7 +112,6 @@ export function renderPrWatchView(view: PrWatchView): string {
       .join(" ")
       .trimEnd(),
   );
-  return `${header}\n\n${lines.join("\n")}\n`;
 }
 
 function unwatchedRow(mine: AuthoredPullRequest): PrWatchViewRow {
@@ -153,16 +155,21 @@ function checksColumn(watch: PrWatch): string {
   return `${mark} ${checks.passed}/${total}`;
 }
 
-function pad(value: string, width: number): string {
+export function pad(value: string, width: number): string {
   return value + " ".repeat(Math.max(0, width - [...value].length));
 }
 
 function ago(from: IsoTimestamp, to: IsoTimestamp): string {
+  return `${elapsed(from, to)} ago`;
+}
+
+/** How long from one time to another, in its largest whole unit: 5s, 12m, 3h, 2d. */
+export function elapsed(from: IsoTimestamp, to: IsoTimestamp): string {
   const seconds = Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86_400)}d ago`;
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86_400)}d`;
 }
 
 /** Hours and minutes in local time, like 11:02. */

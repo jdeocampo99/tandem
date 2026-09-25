@@ -29,7 +29,12 @@ function coordinatorDeps(
       poolRoot: "/tmp/tandem-pool",
       repo: "/repo",
     },
-    createService: () => ({ prWatchNotices: async () => [], ...service }) as TandemService,
+    createService: () =>
+      ({
+        prWatchNotices: async () => [],
+        board: async () => ({ now: "", projects: [], needsYou: [], running: [], pullRequests: [] }),
+        ...service,
+      }) as TandemService,
     realpath: async (path) => path,
     readReport: async () => undefined,
     appendUsage: async () => undefined,
@@ -330,4 +335,40 @@ test("turn usage is recorded with the injected clock and the resolved repository
       costUsd: 0.5,
     },
   ]);
+});
+
+test("the board opens when something of this project's lands in Needs you, not for what was already there", async () => {
+  const row = (key: string, repoPath: string) => ({
+    key,
+    repoPath,
+    project: "p",
+    mark: "🙋",
+    name: key,
+    text: "",
+  });
+  let needsYou = [row("brief:req-old", "/repo")];
+  const opened: string[] = [];
+  const session = new CoordinatorSession(
+    coordinatorDeps({
+      list: async () => [],
+      board: async () => ({ now: "", projects: [], needsYou, running: [], pullRequests: [] }),
+      showBoard: async (repoPath) => {
+        opened.push(repoPath);
+      },
+    }),
+  );
+
+  await session.reconcile(false);
+  expect(opened).toEqual([]);
+
+  needsYou = [...needsYou, row("question:q-1", "/other-project")];
+  await session.reconcile(false);
+  expect(opened).toEqual([]);
+
+  needsYou = [...needsYou, row("pr:acme/app#409", "/repo")];
+  await session.reconcile(false);
+  expect(opened).toEqual(["/repo"]);
+
+  await session.reconcile(false);
+  expect(opened).toEqual(["/repo"]);
 });

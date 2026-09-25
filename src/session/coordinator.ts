@@ -99,18 +99,18 @@ function coordinatorContext(
   ];
 }
 
-/** Whether the task belongs to this already-resolved repository; a missing task checkout does not. */
-async function isTaskInRepository(
-  task: TaskRecord,
+/** Whether a path is this already-resolved repository; a missing checkout is not. */
+async function isInRepository(
+  repoPath: string,
   repo: string,
   realpath: CoordinatorDeps["realpath"],
 ): Promise<boolean> {
-  if (task.repoPath === repo) return true;
-  const taskRepo = await realpath(task.repoPath).catch((error: unknown) => {
+  if (repoPath === repo) return true;
+  const resolved = await realpath(repoPath).catch((error: unknown) => {
     if (isMissing(error)) return undefined;
     throw error;
   });
-  return taskRepo === repo;
+  return resolved === repo;
 }
 
 type TaskStatus = Readonly<{ state: HerdrAgentState; message: string | undefined }>;
@@ -127,7 +127,7 @@ async function coordinatorTaskStatus(
   let status: TaskStatus = { state: "idle", message: undefined };
   for (const task of tasks) {
     if (isTerminalTask(task) || task.stage === "ready") continue;
-    if (!(await isTaskInRepository(task, repo, realpath))) continue;
+    if (!(await isInRepository(task.repoPath, repo, realpath))) continue;
     if (task.stage === "blocked" || task.stage === "paused" || task.stage === "awaiting-approval") {
       return { state: "blocked", message: task.blockReason ?? `${task.stage}: ${task.objective}` };
     }
@@ -235,6 +235,8 @@ export class CoordinatorSession {
   private createdService: TandemService | undefined;
   private cancelTick: Cancel | undefined;
   private reconcileInFlight: Promise<void> | undefined;
+  /** This project's "Needs you" rows at the last reconcile; unset until the first one. */
+  private needsYouSeen: ReadonlySet<string> | undefined;
   private sourceStatus = INITIAL_SOURCE_STATUS;
   private shuttingDown = false;
 
@@ -255,7 +257,8 @@ export class CoordinatorSession {
       for (const task of await this.service().list()) {
         const researching =
           task.kind === "scout" && (task.stage === "queued" || task.stage === "scouting");
-        if (researching && (await isTaskInRepository(task, repo, this.deps.realpath))) return true;
+        if (researching && (await isInRepository(task.repoPath, repo, this.deps.realpath)))
+          return true;
       }
       return false;
     } catch {
@@ -370,6 +373,28 @@ export class CoordinatorSession {
     }
   }
 
+  /**
+   * Opens the board when something of this project's lands in "Needs you". What was already
+   * there when the coordinator started counts as seen, so a relaunch opens nothing.
+   */
+  private async showBoardOnArrival(service: TandemService): Promise<void> {
+    const rows = (await service.board()).needsYou;
+    const current = new Set<string>();
+    if (rows.length > 0) {
+      const repo = await this.deps.realpath(this.deps.environment.repo);
+      for (const row of rows) {
+        if (row.repoPath === undefined) continue;
+        if (await isInRepository(row.repoPath, repo, this.deps.realpath)) current.add(row.key);
+      }
+    }
+    const seen = this.needsYouSeen;
+    this.needsYouSeen = current;
+    if (seen === undefined || [...current].every((key) => seen.has(key))) return;
+    await service
+      .showBoard(this.deps.environment.repo)
+      .catch((error: unknown) => this.deps.logError("Tandem could not open the board", error));
+  }
+
   private async reconcileOnce(runTick: boolean): Promise<void> {
     try {
       const service = this.service();
@@ -388,6 +413,7 @@ export class CoordinatorSession {
         readReport: this.deps.readReport,
       });
       await deliverPrWatchNotices({ host: this.deps.host, service });
+      await this.showBoardOnArrival(service);
       const idle =
         !this.status.agentActive &&
         !this.status.waitingForInput &&

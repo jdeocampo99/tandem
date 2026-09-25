@@ -106,6 +106,7 @@ Talk to it in plain language. Some things you can say:
 - "Fix the flaky login test."
 - "Research how we handle retries before we change anything."
 - "What's the status of the dark mode task?"
+- "How's it going?" (what needs you, what's running, and your pull requests, across projects)
 - "Also make the toggle remember the last choice." (a follow-up for work you already approved)
 - "Open a draft PR so I can see progress."
 - "Publish it." / "Merge it."
@@ -196,6 +197,28 @@ PR watch · 3 open · checked 5s ago
 Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #409" or run
 `tandem watch --stop 409` to stop watching one. It works while Tandem is open.
 
+### The board
+
+`tandem board` is a live view of all your projects in one pane: what needs you (briefs to approve,
+questions, pull requests that need a person), what's running, and your watched pull requests. It
+refreshes every 2 seconds from what Tandem already saved, so an open board never calls GitHub; its
+pull request rows show when PR watch last checked. The coordinator opens it beside its chat when
+something new needs you, and asking "how's it going?" shows the same thing in the chat.
+
+```
+Tandem · tandem, tagalingo · checked 5s ago
+
+Needs you
+🙋 tandem    Dark mode           brief waiting for approval
+🙋 tagalingo #409 refactor-cache ❌ failing 🙋 test_cache_evict failed twice → https://ci/…
+
+Running
+🔨 tandem    Fix the flaky login implementing · 12m
+
+PRs
+🟢 acme/app#420 add-cache ⏳ 12/16 ✅ approved
+```
+
 ## Terminal commands
 
 | Command | What it does |
@@ -203,6 +226,7 @@ Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #40
 | `tandem [PATH ...]` | Open or reconnect your projects |
 | `tandem status [TASK_ID]` | What's running and what needs you; with a task ID, that task's full history |
 | `tandem watch [PR]` | Your watched pull requests; with a PR link or number, start watching it (`--stop` to stop) |
+| `tandem board` | Live view of what needs you, what's running, and your pull requests across projects |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Find and clean up leftovers from a crash or failed launch (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |
@@ -242,7 +266,7 @@ data folder and session name are remembered in `~/.config/tandem/config.json`.
 ## Optional extras
 
 - **Faster answers to simple questions.** With a `TYPESAFE_API_KEY` set, Tandem uses the TypeSafe
-  Jev classifier to answer read-only lookups ("list my tasks", "how are my PRs?") instantly without
+  Jev classifier to answer read-only lookups ("list my tasks", "how are my PRs?", "how's it going?") instantly without
   a full model turn.
   A short reply to one of Tandem's fixed-choice questions ("yeah restart it") is answered the same
   way; approving a brief this way still asks you to type `y` first. Anything else that changes

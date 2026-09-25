@@ -1,17 +1,8 @@
-import type { CommandRunner, TaskRecord, TaskStage } from "../contracts.ts";
+import { NEEDS_YOU_STAGES, RUNNING_STAGES } from "../board/view.ts";
+import type { CommandRunner, TaskRecord } from "../contracts.ts";
 import { listCoordinatorRecords } from "../coordinator/registry.ts";
 import { type PrWatchView, renderPrWatchView } from "../pr-watch/view.ts";
 import type { TandemService } from "../service/controller.ts";
-
-const NEEDS_YOU: readonly TaskStage[] = ["awaiting-approval", "blocked", "paused", "ready"];
-const WORKING: readonly TaskStage[] = [
-  "queued",
-  "scouting",
-  "implementing",
-  "validating",
-  "reviewing",
-  "awaiting-fixes",
-];
 
 export type TandemStatus = Readonly<{
   readonly code: string;
@@ -57,8 +48,8 @@ function taskLine(task: TaskRecord): string {
 }
 
 export function renderTandemStatus(status: TandemStatus): string {
-  const needsYou = status.tasks.filter((task) => NEEDS_YOU.includes(task.stage));
-  const working = status.tasks.filter((task) => WORKING.includes(task.stage));
+  const needsYou = status.tasks.filter((task) => NEEDS_YOU_STAGES.includes(task.stage));
+  const working = status.tasks.filter((task) => RUNNING_STAGES.includes(task.stage));
   const finished = status.tasks.length - needsYou.length - working.length;
   const lines = [
     `Tandem code: ${status.code}`,

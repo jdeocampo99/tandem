@@ -177,7 +177,8 @@ PR watch · 4 open · checked 5s ago
   GitHub. Rows name `owner/repo#N` when more than one repository is watched.
 - `tandem watch` prints it (`--json` for the structure); `tandem status` adds it below the tasks
   when it has any rows; the coordinator's `pr-watch` action returns it for the coordinator to
-  show as-is. The header counts watched pull requests still open; the user's unwatched ones come
+  show as-is. `tandem board` shows the saved rows without reading GitHub: red rows under "Needs
+  you", the rest under PRs (see [board.md](board.md)). The header counts watched pull requests still open; the user's unwatched ones come
   last.
 
 ## Coordinator shortcut

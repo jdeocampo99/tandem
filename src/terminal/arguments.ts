@@ -2,6 +2,7 @@ export type TerminalCommand =
   | "launch"
   | "status"
   | "watch"
+  | "board"
   | "update"
   | "fix"
   | "reset"
@@ -68,6 +69,7 @@ function optionValue(
 const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
   status: "status",
   watch: "watch",
+  board: "board",
   update: "update",
   fix: "fix",
   reset: "reset",
@@ -110,6 +112,7 @@ const ALLOWED: Readonly<
   launch: { flags: ["fresh", "headless", "noAttach"], maxPaths: Number.POSITIVE_INFINITY },
   status: { flags: ["json", "logs"], maxPaths: 1 },
   watch: { flags: ["json", "stop"], maxPaths: 1 },
+  board: { flags: [], maxPaths: 0 },
   update: { flags: ["fresh", "headless", "noAttach"], maxPaths: 0 },
   fix: { flags: ["yes", "json", "verbose", "freeSuperseded"], maxPaths: 0 },
   reset: { flags: ["yes", "hard", "headless", "noAttach"], maxPaths: 0 },
