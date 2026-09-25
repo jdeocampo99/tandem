@@ -24,7 +24,6 @@ const policy: ResolvedPolicy = {
     instructionFiles: channels,
     validationCommands: [],
     setupCommands: [],
-    maxWorkers: 2,
     maxFixRounds: 1,
     reviewLevels: {
       deepScrutiny: false,
@@ -152,7 +151,6 @@ function reassignmentRouting(
       unaccountedSamples: 0,
       unmeasuredTokenSamples: 0,
     },
-    limits: { maxWorkers: 2 },
     resolvedAt: "2030-01-01T00:00:00.000Z",
     ...overrides,
   };

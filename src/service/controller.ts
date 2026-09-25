@@ -91,12 +91,7 @@ import {
   type RequestBriefView,
   RequestBriefWorkflow,
 } from "../requests/workflow.ts";
-import {
-  activeReservations,
-  activeRuntimeJob,
-  presentationRuntime,
-  taskRuntime,
-} from "../runtime/activity.ts";
+import { activeRuntimeJob, presentationRuntime, taskRuntime } from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import {
@@ -173,6 +168,10 @@ import {
   type TerminalTaskCleanupOptions,
 } from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskCheckoutPath, taskSourcePath } from "./source.ts";
+
+// ponytail: a fixed count of ready idle worktree copies per repository, removed first under disk
+// pressure. Size it from recent task starts if copies are too often missing or left unused.
+const WARM_IDLE_COPIES = 3;
 
 export type CreateTaskRequest = Readonly<{
   readonly repoPath: string;
@@ -1902,7 +1901,7 @@ class TandemController {
         root: this.#deps.poolRoot,
         managedPaths,
         protectedPaths,
-        retainIdle: Math.max(0, task.policy.config.maxWorkers - activeReservations(state)),
+        retainIdle: WARM_IDLE_COPIES,
       });
     } catch (error) {
       await this.recordPoolResult(task.id, {

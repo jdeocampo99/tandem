@@ -27,7 +27,6 @@ import {
   type ReservationResult,
   type RoutingAttempt,
   routingBoundary,
-  routingLimits,
   runtimeAdmissionRefusal,
   taskAdmissionRefusal,
 } from "./admission.ts";
@@ -86,7 +85,7 @@ export class TaskReservations {
       const state = await readRuntimeState(this.#deps.runtimePath);
       const runtime = taskRuntime(state, taskId);
       if (runtime === undefined) throw new Error(`runtime task ${taskId} is missing`);
-      const runtimeRefusal = runtimeAdmissionRefusal(state, runtime, task.policy.config.maxWorkers);
+      const runtimeRefusal = runtimeAdmissionRefusal(runtime);
       if (runtimeRefusal !== undefined) return runtimeRefusal;
       const isFix = isFixAdmission(task, role);
       const operationId = singleLine(this.#deps.idFactory(), "operation id");
@@ -257,7 +256,6 @@ export class TaskReservations {
       },
       pinned: task.policy.config.models[modelRole],
       catalogue: await this.readCatalogue(attempt.cwd),
-      limits: routingLimits(task),
       usage: await this.observeRequestUsage(task),
       now: this.#deps.clock(),
     });

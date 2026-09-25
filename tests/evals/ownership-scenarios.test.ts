@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { activeReservations } from "../../src/runtime/activity.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { persistWorkerResult } from "../../src/workers/jobs.ts";
 import {
@@ -171,7 +170,6 @@ test("an unreadable Herdr pane fences the task without releasing its capacity", 
     expect(snapshot.resources.retained).toContain("lease:lease-1");
     expect(snapshot.resources.retained).toContain("reservation:reservation-1");
     expect(snapshot.resources.retained).toContain("job:job-1");
-    expect(activeReservations(snapshot.runtime)).toBe(1);
     expect(world.paneIsPresent("pane-1")).toBe(true);
     await service.shutdown();
   });

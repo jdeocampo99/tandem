@@ -3,17 +3,8 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { activeReservations } from "../../src/runtime/activity.ts";
 import { readRuntimeState, writeRuntimeState } from "../../src/runtime/persistence.ts";
-import {
-  type DurableJob,
-  type DurableReservation,
-  emptyRuntimeState,
-  parseRuntimeState,
-  type RuntimePresentation,
-  type RuntimeState,
-  type RuntimeTaskState,
-} from "../../src/runtime/schema.ts";
+import { type DurableJob, emptyRuntimeState, parseRuntimeState } from "../../src/runtime/schema.ts";
 
 const checkpoint = {
   head: "abc123",
@@ -22,21 +13,6 @@ const checkpoint = {
   dirty: false,
   unmerged: false,
 };
-
-function reservation(
-  id: string,
-  taskId: string,
-  phase: DurableReservation["phase"] = "reserved",
-): DurableReservation {
-  return {
-    schemaVersion: 1,
-    id,
-    taskId,
-    ownerSessionId: "session-1",
-    phase,
-    createdAt: "2030-01-01T00:00:00.000Z",
-  };
-}
 
 function presentationJob(taskId: string): DurableJob {
   return {
@@ -75,38 +51,6 @@ test("runtime state preserves a clean source checkpoint with an empty diff", () 
 
   expect(state.tasks[0]?.sourceCheckpoint.diff).toBe("");
   expect(state.tasks[0]?.sourceRepoPath).toBe("/tmp/tandem-clean-source");
-});
-
-test("active reservations count task and presentation capacity but ignore released entries", () => {
-  const task: RuntimeTaskState = {
-    schemaVersion: 1,
-    taskId: "task-1",
-    sourceCheckpoint: checkpoint,
-    taskName: "tandem-task-1",
-    reservation: reservation("reservation-1", "task-1"),
-    endpoints: [],
-    jobs: [],
-  };
-  const presentation: RuntimePresentation = {
-    schemaVersion: 1,
-    id: "presentation-1",
-    taskId: "task-1",
-    recordPath: "/tmp/tandem-presentation/record.json",
-    reservation: reservation("reservation-2", "task-1"),
-    job: presentationJob("task-1"),
-  };
-  const released: RuntimeTaskState = {
-    ...task,
-    taskId: "task-2",
-    reservation: reservation("reservation-3", "task-2", "released"),
-  };
-  const state: RuntimeState = {
-    ...emptyRuntimeState(),
-    tasks: [task, released],
-    presentations: [presentation],
-  };
-
-  expect(activeReservations(state)).toBe(2);
 });
 
 test("runtime persistence rejects malformed SQLite payload instead of resetting scheduler state", async () => {

@@ -78,11 +78,6 @@ export const EXECUTION_ROUTING_USAGE_SOURCES = ["request-ledger", "no-governing-
 
 export type ExecutionRoutingUsageSource = (typeof EXECUTION_ROUTING_USAGE_SOURCES)[number];
 
-/** The configured limits a routing choice was taken under, recorded as they stood. */
-export type ExecutionRoutingLimits = Readonly<{
-  readonly maxWorkers: number;
-}>;
-
 /**
  * What the boundary knew about the two models it placed against each other, and how much of the
  * request's own spending nobody could observe. The sample counts are present exactly when a
@@ -130,7 +125,6 @@ export type DurableExecutionRouting = Readonly<{
     readonly thinking: ThinkingLevel;
   }>;
   readonly evidence: ExecutionRoutingEvidence;
-  readonly limits: ExecutionRoutingLimits;
   readonly resolvedAt: IsoTimestamp;
 }>;
 
@@ -179,7 +173,6 @@ export type DurableExecutionRoutingPause = Readonly<{
   /** Work under this request whose cost or tokens nobody reported; present with a read ledger. */
   readonly unaccountedSamples?: number;
   readonly unmeasuredTokenSamples?: number;
-  readonly limits: ExecutionRoutingLimits;
   readonly observedAt: IsoTimestamp;
 }>;
 
@@ -415,13 +408,6 @@ function enumValue<Value extends string>(
 // role was removed; see workers/jobs.ts's LegacyWorkerRole.
 const WORKER_ROLES = ["scout", "implementer", "reviewer", "verifier", "presentation"] as const;
 
-function parseRoutingLimits(value: unknown, field: string): ExecutionRoutingLimits {
-  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  return {
-    maxWorkers: positiveInteger(value.maxWorkers, `${field}.maxWorkers`),
-  };
-}
-
 function parseProviderList(value: unknown, field: string): readonly string[] {
   if (!Array.isArray(value)) throw new TypeError(`${field} must be an array`);
   return value.map((entry, index) => singleLine(entry, `${field}[${index}]`));
@@ -519,7 +505,6 @@ function parseExecutionRouting(value: unknown, field: string): DurableExecutionR
     thinking: enumValue(value.thinking, THINKING_LEVELS, `${field}.thinking`),
     ...(replaces === undefined ? {} : { replaces }),
     evidence: parseRoutingEvidence(value.evidence, `${field}.evidence`),
-    limits: parseRoutingLimits(value.limits, `${field}.limits`),
     resolvedAt: singleLine(value.resolvedAt, `${field}.resolvedAt`),
   };
 }
@@ -558,7 +543,6 @@ function parseRoutingPause(value: unknown, field: string): DurableExecutionRouti
       `${field}.usageSource`,
     ),
     ...parseObservedSamples(value, field),
-    limits: parseRoutingLimits(value.limits, `${field}.limits`),
     observedAt: singleLine(value.observedAt, `${field}.observedAt`),
   };
 }

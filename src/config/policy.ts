@@ -26,8 +26,9 @@ import {
   readThinkingLevel,
 } from "./values.ts";
 
-// ponytail: a repository config may still set "requestBudget" from before standing request
-// budgets were removed; accept it here so the config still loads, but its value is never read.
+// ponytail: a repository config may still set "requestBudget" or "maxWorkers" from before standing
+// request budgets and the worker limit were removed; accept them here so the config still loads,
+// but their values are never read.
 const POLICY_KEYS: Readonly<Record<string, true>> = {
   version: true,
   models: true,
@@ -285,7 +286,6 @@ export function copyPolicy(policy: PolicyBase): RepoPolicy {
       argv: [...command.argv],
       timeoutMs: command.timeoutMs,
     })),
-    maxWorkers: policy.maxWorkers,
     maxFixRounds: policy.maxFixRounds,
     reviewLevels: { ...policy.reviewLevels },
   };
@@ -337,9 +337,6 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     ? readSetupCommands(input.setupCommands, base.setupCommands)
     : [...base.setupCommands];
 
-  const maxWorkers = hasKey(input, "maxWorkers")
-    ? readPositiveInteger(input.maxWorkers, "maxWorkers")
-    : base.maxWorkers;
   const maxFixRounds = hasKey(input, "maxFixRounds")
     ? readPositiveInteger(input.maxFixRounds, "maxFixRounds")
     : base.maxFixRounds;
@@ -354,7 +351,6 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     instructionFiles,
     validationCommands,
     setupCommands,
-    maxWorkers,
     maxFixRounds,
     reviewLevels,
   };
@@ -382,7 +378,6 @@ function buildDefaultPolicy(): RepoPolicy {
     },
     validationCommands: [],
     setupCommands: [],
-    maxWorkers: 3,
     maxFixRounds: 2,
     reviewLevels: { ...DEFAULT_REVIEW_LEVEL_POLICY },
   };

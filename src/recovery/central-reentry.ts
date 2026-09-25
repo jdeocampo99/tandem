@@ -133,7 +133,6 @@ export function hasLiveOwner(runtime: RuntimeTaskState): boolean {
 const WAITING_REFUSALS: ReadonlySet<ReservationRefusal["refusal"]> = new Set([
   "slot-held",
   "job-running",
-  "worker-limit",
   "routing-question",
   "stop-requested",
 ]);
