@@ -430,3 +430,37 @@ test("a model name too long to store as a label is left off rather than failing 
   expect(event?.identity.model).toBeUndefined();
   expect(() => parseRequestUsageEvent(event)).not.toThrow();
 });
+
+test("work no request governs is keyed to its own task scope and survives the durable parser", () => {
+  const observation = {
+    requestId: undefined,
+    runtime: runtime({
+      operationHistory: [operation({ kind: "scout", role: "scout" })],
+    }),
+    presentations: [],
+  };
+  const [event] = settledWorkEvents(observation);
+  const [governed] = settledWorkEvents({ ...observation, requestId: REQUEST_ID });
+  if (event === undefined) throw new Error("the settled scout operation made no span");
+
+  expect(event.workKind).toBe("research");
+  expect(event?.identity.requestId).toBeUndefined();
+  expect(event?.identity.taskId).toBe("task-1");
+  expect(parseRequestUsageEvent(event)).toEqual(event);
+  // A replay reproduces the key; the same span credited to a request is a separate scope's fact.
+  expect(settledWorkEvents(observation)[0]?.eventKey).toBe(event?.eventKey ?? "");
+  expect(governed?.eventKey).not.toBe(event?.eventKey ?? "");
+});
+
+test("an event naming neither a request nor a task is refused", () => {
+  const [event] = settledWorkEvents({
+    requestId: undefined,
+    runtime: runtime({ operationHistory: [operation()] }),
+    presentations: [],
+  });
+  const { taskId: _taskId, ...unscoped } = event?.identity ?? {};
+
+  expect(() => parseRequestUsageEvent({ ...event, identity: unscoped })).toThrow(
+    "identity names neither a request nor a task",
+  );
+});

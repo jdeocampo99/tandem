@@ -191,9 +191,15 @@ function optionalCount(record: UnknownRecord, key: string, source: string): numb
 function parseIdentity(value: unknown, source: string): RequestWorkIdentity {
   const record = requiredRecord(value, source);
   assertExactKeys(record, IDENTITY_KEYS, source);
-  const requestId = requiredLabel(record, "requestId", source);
-  if (!isSafeRequestId(requestId)) failState(source, `unsafe request id ${requestId}`);
+  const requestId = optionalLabel(record, "requestId", source);
+  if (requestId !== undefined && !isSafeRequestId(requestId)) {
+    failState(source, `unsafe request id ${requestId}`);
+  }
   const taskId = optionalLabel(record, "taskId", source);
+  // Work no request governs is scoped to its task, so an identity must name one or the other.
+  if (requestId === undefined && taskId === undefined) {
+    failState(source, "identity names neither a request nor a task");
+  }
   const jobId = optionalLabel(record, "jobId", source);
   const operationId = optionalLabel(record, "operationId", source);
   const role = optionalLabel(record, "role", source);
@@ -202,7 +208,7 @@ function parseIdentity(value: unknown, source: string): RequestWorkIdentity {
   const generation = optionalCount(record, "generation", source);
   const attempt = optionalCount(record, "attempt", source);
   return {
-    requestId,
+    ...(requestId === undefined ? {} : { requestId }),
     ...(taskId === undefined ? {} : { taskId }),
     ...(jobId === undefined ? {} : { jobId }),
     ...(operationId === undefined ? {} : { operationId }),

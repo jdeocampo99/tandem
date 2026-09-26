@@ -11,6 +11,10 @@ src/workers/execution-routing.ts, src/service/request-accounting.ts
 - Each durable request has one append-only ledger in the `request_usage_events` table of
   `<home>/state.sqlite`, joined to the request identity. It is the single owner of usage, cost,
   quota, and timing records for a request.
+- Work no request governs (research and PR reviews created without `requestId`, or implementation
+  with no open request) is kept in the same ledger under its task's own scope, the
+  `task_usage_events` table: `work` events whose identity names the task and no request. See
+  [Task-scoped usage](#task-scoped-usage).
 - It records facts and uncertainty only: nothing in it authorizes, pauses, retries, or blocks work.
   Unavailable telemetry never fails a receipt or a state transition.
 - Events are `intake` (brief became durable; the clock starts), `work` (one settled operation; work in
@@ -47,7 +51,7 @@ src/workers/execution-routing.ts, src/service/request-accounting.ts
   re-sent each reply, so they are left out of the count; their cost is still in the charge. Spans
   recorded before this rule keep the cache reads they were recorded with.
 - Research is credited through the implementation that cites it in `researchTaskIds`, without joining
-  the request.
+  the request. Research with no request of its own also keeps those spans in its task scope.
 - Coordinator replies go to `<home>/coordinator-usage.jsonl`. The coordinator serves every request,
   so a receipt shows only its cost, in a note under the table, never in the request total.
 - The receipt table's total time is working time (the union of work intervals). The wall-clock span
@@ -55,6 +59,25 @@ src/workers/execution-routing.ts, src/service/request-accounting.ts
 - An implementation task created without `requestId` joins the repository's one open request (approved
   brief, governed work not all finished; an approved request with no task after 3 days no longer
   counts). With none it stands alone; with several, create is refused unless `requestId` names one.
+
+## Task-scoped usage
+
+- Why: only implementation joins the open request on its own, so research and PR reviews usually
+  have no request, and their agent work was never recorded. Attaching them to an unrelated open
+  request would put their cost on that request's receipt, so they get a scope of their own instead.
+- The same accounting pass that records request spans records one `work` span per settled
+  operation of every task without a `requestId`, keyed like a request span but with no request
+  (so the key differs from the same span credited to a request). There is no `intake` or
+  `terminal` event: a task scope has no request window, no receipt, and no receipt notification.
+- A task scope is never read by `tandem receipt`, economical routing, or any request total, so
+  request receipts are unchanged. An event must name a request or a task; one naming neither is
+  refused on write and read.
+- Per-task readers (`tandem trace`, `tandem report`, the board's finished-this-week rollups) read
+  the scope that holds the task's own work: its request's ledger, or its task scope without one
+  (`readTaskUsage`). A cited scout's spans exist under both the citing request and its task scope;
+  each reader reads one scope, so neither the receipt nor the scout's cost counts them twice.
+- A task with no recorded work or provider sample has no cost (shown as not recorded), never a
+  zero cost.
 
 ## Provenance and privacy
 

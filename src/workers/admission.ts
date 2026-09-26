@@ -9,6 +9,7 @@ import type {
 import { iterationScopeFor } from "../tasks/acceptance.ts";
 import { fixRoundBudget } from "../tasks/findings.ts";
 import { type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
+import type { AdmissionWaitReason } from "../tasks/timeline.ts";
 import type { ExecutionRoutingBoundary, PriorExecutionAttempt } from "./execution-routing.ts";
 import type { WorkerRole } from "./jobs.ts";
 
@@ -103,6 +104,28 @@ export function runtimeAdmissionRefusal(runtime: RuntimeTaskState): ReservationR
     };
   }
   return undefined;
+}
+
+/**
+ * The admission wait the runtime record last noted, which is the latest one the timeline recorded:
+ * a standing routing question, else the pool's blocking reason. Admission clears the routing
+ * question and an allowed allocation clears the pool's reason.
+ */
+export function latestAdmissionWait(runtime: RuntimeTaskState): AdmissionWaitReason | undefined {
+  if (runtime.routingPause !== undefined) return "routing-question";
+  return poolAdmissionWaitReason(runtime.poolAdmissionKey);
+}
+
+/** The admission wait a pool admission key (src/pool/policy.ts `poolAdmissionKey`) stands for. */
+export function poolAdmissionWaitReason(key: string | undefined): AdmissionWaitReason | undefined {
+  switch (key) {
+    case "capacity-insufficient":
+      return "worktree-disk-space";
+    case "capacity-unknown":
+      return "worktree-capacity-unknown";
+    default:
+      return undefined;
+  }
 }
 
 export function operationKindFor(role: AdmissionRole, isFix: boolean): DurableOperationKind {

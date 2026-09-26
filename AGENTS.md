@@ -35,7 +35,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Research and changes in another repository, finding a repository's checkout | [repos/locate.ts](src/repos/locate.ts); `target` on tasks |
 | Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
 | `tandem report`, the HTML time/cost report | [report/](src/report/): `model.ts` (view contract), `build.ts` (pure assembly and choke rules), `render.ts` + `page.html`, `publish.ts` (write under the home, open in Lavish) |
-| `tandem status` and `--watch`, "Needs you", "how's it going?" | [board/](src/board/): `view.ts` (pure sections and rendering), `read.ts`, `pane.ts`; [terminal/status.ts](src/terminal/status.ts) |
+| `tandem status`, `--watch`, `--line`, "Needs you", "how's it going?" | [board/](src/board/): `view.ts` (pure sections and chat rendering), `terminal.ts` (terminal rendering and the one-line summary), `read.ts`; [terminal/status.ts](src/terminal/status.ts); Herdr tab bar and `prefix+t` popup setup: [terminal/herdr-setup.ts](src/terminal/herdr-setup.ts) |
 | PR watch: keeping open PRs moving until they merge, `tandem watch` | [pr-watch/](src/pr-watch/): `decide.ts` (pure decision table), `github.ts`, `watcher.ts`, `store.ts`, `view.ts` |
 | Workstream memory: catch-ups, handoffs, follow-ups | [memory/](src/memory/): `workstream.ts` (pure sections, cap, catch-up view), `view.ts` (card and list), `store.ts` (files in the home), `service.ts`; `tandem memory` in [main.ts](src/main.ts) |
 | Self-improvement: trigger rules, investigations, report-mode issues | [self-improvement/](src/self-improvement/): `triggers.ts` (pure rules), `issue-draft.ts` (scrub and Jev check), `service.ts` |
@@ -112,7 +112,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - Tasks in another repository (`targetRepo`), finding checkouts: [other-repositories.md](docs/reference/other-repositories.md).
 - Reviewing someone else's PR (`pr-review` tasks): [pr-review.md](docs/reference/pr-review.md).
 - PR watch, its decision table, and `tandem watch`: [pr-watch.md](docs/reference/pr-watch.md).
-- `tandem status`, "Needs you", and when the coordinator opens the live view: [status.md](docs/reference/status.md).
+- `tandem status`, "Needs you", the live view, and Herdr's tab bar, popup, and notification: [status.md](docs/reference/status.md).
 - `tandem report`, its data sources, choke rules, and where the page is written: [report.md](docs/reference/report.md).
 - Self-improvement modes, triggers, investigations, report-mode issues: [self-improvement.md](docs/reference/self-improvement.md).
 - Workstreams, catch-ups, handoffs, and what the notes may hold: [project-memory.md](docs/reference/project-memory.md).

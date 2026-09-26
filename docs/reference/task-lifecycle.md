@@ -101,6 +101,17 @@ decides them; the lifecycle and the review stage read the record and never re-de
   `unblocked`, `fix-round`, `finding-raised` and `finding-settled`, `question-asked` and
   `question-answered`, and `steered`. Central recovery adds `restarted` in the write that spends the
   restart.
+- `admission-waiting` records why a queued task was not admitted, with a closed `reason`
+  (`ADMISSION_WAIT_REASONS`): `worktree-disk-space` (pool free space below the minimum for a new
+  worktree), `worktree-capacity-unknown` (free space could not be checked, or pool maintenance
+  failed), or `routing-question` (a model routing question is waiting). It comes from the caller's
+  note (`admissionWait`), written in the same transaction as the runtime record's `poolAdmissionKey`
+  or `routingPause`, and only while the task is `queued`. `admissionWaitToRecord` appends it only
+  when the reason differs from the latest one the runtime record noted (`latestAdmissionWait`: a
+  standing routing question, else the pool key), so scheduler passes do not repeat it. The pool's
+  notice or the routing explanation is its cause. The wait's end is the stage change out of
+  `queued`; there is no worker limit, so no other reason exists. A stored `admission-waiting` event
+  with an unknown reason is counted as unreadable.
 - An event holds its type, task, time, a one-line cause (at most 200 characters), and references:
   the transcript file and entry id the worker submitted from, the commit, the report path, and the
   job. It never copies message, finding, transcript, or report text.
@@ -109,8 +120,9 @@ decides them; the lifecycle and the review stage read the record and never re-de
 - `tandem trace` computes rollups when read; there are no metrics tables. First-pass review: the
   first time a task left `reviewing`, whether it went to `ready`/`completed` (pass) or
   `awaiting-fixes` (fail). Fix rounds: `fix-round` events. Time blocked: `blocked` to `unblocked`,
-  an open block counting to now. Cost: the task's own samples in its request's usage ledger; a task
-  with no request has none.
+  an open block counting to now. Cost: the task's own samples in its request's usage ledger, or in
+  its task-scoped ledger when no request governs it (see usage-and-routing.md); a task with no
+  recorded work has none.
 
 ## Research continuation
 

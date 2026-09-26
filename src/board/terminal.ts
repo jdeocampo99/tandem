@@ -136,6 +136,30 @@ export function sectionHeading(title: string, count: number, tone: Tone, width: 
   return [...heading, span("─".repeat(Math.max(0, width - lineWidth(heading))), "dim")];
 }
 
+/**
+ * `tandem status --line`: the board in one short line for Herdr's tab bar, like
+ * "🙋 3 need you · 🔨 2 running · 🔴 1 🟡 1 🟢 1". Herdr strips colors there, so emoji carry the
+ * meaning; paused tasks are left out, and pull request dots count only what PR watch still watches.
+ */
+export function renderStatusLine(view: BoardView): string {
+  const needs = view.needsYou.length;
+  const running = view.running.filter((row) => row.cause !== "paused").length;
+  const colors = [
+    ...view.needsYou.filter((row) => row.cause === "pull-request").map(() => "red" as const),
+    ...view.pullRequests.map((row) => row.color),
+  ];
+  const dots = (["red", "yellow", "green"] as const)
+    .map((color) => [PR_MARKS[color], colors.filter((each) => each === color).length] as const)
+    .filter(([, count]) => count > 0)
+    .map(([mark, count]) => `${mark} ${count}`);
+  if (needs === 0 && running === 0 && dots.length === 0) return "✓ all quiet";
+  return [
+    needs === 0 ? "✓ nothing needs you" : `🙋 ${needs} ${needs === 1 ? "needs" : "need"} you`,
+    ...(running === 0 ? [] : [`🔨 ${running} running`]),
+    ...(dots.length === 0 ? [] : [dots.join(" ")]),
+  ].join(" · ");
+}
+
 function header(view: BoardView, color: boolean): Line {
   const projects = view.projects.length === 0 ? "none yet" : view.projects.join(", ");
   const checked =

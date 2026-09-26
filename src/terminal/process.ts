@@ -13,6 +13,48 @@ export function streamIsTTY(stream: NodeJS.ReadableStream | NodeJS.WritableStrea
   return (stream as { readonly isTTY?: unknown }).isTTY === true;
 }
 
+/** Esc, q, or Ctrl-C closes a live view. Keys that start with Esc, like arrows, do not. */
+export function isCloseKey(chunk: string): boolean {
+  return chunk === "\x1b" || chunk === "q" || chunk === "Q" || chunk === "\x03";
+}
+
+/**
+ * Reads single keys from a terminal until one closes the view, then gives the terminal back.
+ * `release` gives it back early, as when the view stops on an error. Without a terminal `closed`
+ * never settles, and Ctrl-C stops the process as usual.
+ */
+export function watchCloseKeys(input: NodeJS.ReadableStream): Readonly<{
+  readonly closed: Promise<void>;
+  readonly release: () => void;
+}> {
+  const tty = input as NodeJS.ReadableStream & {
+    readonly isTTY?: unknown;
+    readonly setRawMode?: (raw: boolean) => unknown;
+  };
+  if (tty.isTTY !== true || typeof tty.setRawMode !== "function") {
+    return { closed: new Promise<void>(() => {}), release: () => {} };
+  }
+  const setRawMode = tty.setRawMode.bind(tty);
+  let release = (): void => {};
+  const closed = new Promise<void>((resolve) => {
+    const onData = (chunk: Buffer | string): void => {
+      if (!isCloseKey(chunk.toString())) return;
+      release();
+      resolve();
+    };
+    release = () => {
+      release = () => {};
+      input.off("data", onData);
+      setRawMode(false);
+      input.pause();
+    };
+    setRawMode(true);
+    input.on("data", onData);
+    input.resume();
+  });
+  return { closed, release: () => release() };
+}
+
 export function writeText(output: NodeJS.WritableStream, text: string): void {
   output.write(text);
 }

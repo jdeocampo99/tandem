@@ -2,7 +2,9 @@
  * The durable request accounting ledger: append-only facts in the authoritative SQLite state.
  *
  * This is the one owner of usage, cost, quota, and timing records for a request, and the only
- * place they are written. It records what happened and how certain it is; it never authorizes,
+ * place they are written. Work no request governs, such as standalone research or a PR review, is
+ * kept in the same ledger under its task's own scope, so it is counted without touching any
+ * request's receipt. It records what happened and how certain it is; it never authorizes,
  * pauses, retries, or blocks work. A downstream reader such as economical routing's usage-safety
  * check reads {@link RequestUsageLedger.read} or {@link RequestUsageLedger.receipt} on its own.
  */
@@ -10,9 +12,12 @@
 import { appendFile, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type Clock, isSafeRequestId } from "../contracts.ts";
+import { isSafeTaskId } from "../tasks/lifecycle.ts";
 import {
   insertRequestUsagePayload,
+  insertTaskUsagePayload,
   readRequestUsagePayloads,
+  readTaskUsagePayloads,
   withStateTransaction,
 } from "./database.ts";
 import type { RequestUsageEvent } from "./usage.ts";
@@ -37,6 +42,11 @@ export type RequestUsageLedger = Readonly<{
   readonly record: (events: readonly RequestUsageEvent[]) => Promise<RequestUsageRecordResult>;
   /** Every recorded event for one request, plus how many stored rows could not be read. */
   readonly read: (requestId: string) => Promise<RequestUsageReadout>;
+  /**
+   * The events recorded under one task's own scope: the settled work of a task no request
+   * governs. A governed task's work is in its request's readout instead.
+   */
+  readonly readTask: (taskId: string) => Promise<RequestUsageReadout>;
   /** The compact receipt and expandable breakdown built from those events. */
   readonly receipt: (requestId: string) => Promise<RequestUsageReceipt>;
 }>;
@@ -66,20 +76,43 @@ export function createRequestUsageLedger(options: RequestUsageLedgerOptions): Re
       return withStateTransaction(home, (db) => {
         const added: RequestUsageEvent[] = [];
         for (const event of checked) {
-          const inserted = insertRequestUsagePayload(db, {
-            eventKey: event.eventKey,
-            requestId: event.identity.requestId,
-            recordedAt,
-            payload: event,
-          });
+          const { requestId } = event.identity;
+          const entry = { eventKey: event.eventKey, recordedAt, payload: event };
+          const inserted =
+            requestId === undefined
+              ? insertTaskUsagePayload(db, { ...entry, taskId: taskScope(event) })
+              : insertRequestUsagePayload(db, { ...entry, requestId });
           if (inserted) added.push(event);
         }
         return { recorded: added.length, duplicates: checked.length - added.length, added };
       });
     },
     read,
+    readTask: async (taskId) => {
+      if (!isSafeTaskId(taskId)) {
+        throw new TypeError(
+          `A task usage read needs a task id; received ${JSON.stringify(String(taskId))}`,
+        );
+      }
+      return withStateTransaction(home, (db) => readoutOf(readTaskUsagePayloads(db, taskId)));
+    },
     receipt: async (requestId) => buildRequestUsageReceipt(requestId, await read(requestId)),
   };
+}
+
+/** The readout that holds a task's own work: its request's, or its own scope without one. */
+export function readTaskUsage(
+  ledger: RequestUsageLedger,
+  task: Readonly<{ readonly id: string; readonly requestId?: string }>,
+): Promise<RequestUsageReadout> {
+  return task.requestId === undefined ? ledger.readTask(task.id) : ledger.read(task.requestId);
+}
+
+/** The task an event without a request is scoped to; the codec has already refused one without. */
+function taskScope(event: RequestUsageEvent): string {
+  const taskId = event.identity.taskId;
+  if (taskId === undefined) throw new TypeError("A usage event must name a request or a task");
+  return taskId;
 }
 
 function assertRequestId(value: unknown): asserts value is string {

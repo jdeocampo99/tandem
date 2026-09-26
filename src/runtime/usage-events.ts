@@ -33,9 +33,12 @@ import {
 } from "./usage.ts";
 import { MAX_USAGE_LABEL_CHARS } from "./usage-codec.ts";
 
-/** The durable work one request's accounting pass can see for a single task. */
+/**
+ * The durable work one accounting pass can see for a single task, under the request that governs
+ * it or, without one, under the task's own ledger scope.
+ */
 export type RequestWorkObservation = Readonly<{
-  readonly requestId: string;
+  readonly requestId: string | undefined;
   readonly runtime: RuntimeTaskState;
   readonly presentations: readonly RuntimePresentation[];
   /** Token tallies the task's workers recorded, by job id; a job without one stays unmeasured. */
@@ -295,7 +298,7 @@ function pointEvent(
  * such as a model-free validation run, says so explicitly instead of implying the work was free.
  */
 function operationSpans(
-  requestId: string,
+  requestId: string | undefined,
   operations: readonly DurableOperation[],
   jobs: readonly DurableJob[],
   tallies: ReadonlyMap<string, JobTokenTally>,
@@ -308,7 +311,7 @@ function operationSpans(
     const endedAt = operationEnd(operation, job);
     if (endedAt === undefined || !isTimestamp(operation.createdAt)) continue;
     const keyed: RequestWorkIdentity = {
-      requestId,
+      ...(requestId === undefined ? {} : { requestId }),
       taskId: operation.taskId,
       jobId: operation.jobId,
       operationId: operation.id,

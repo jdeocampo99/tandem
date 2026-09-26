@@ -15,7 +15,11 @@ import {
   requestUsageEventKey,
 } from "../../src/runtime/usage.ts";
 import type { RequestUsageReadout } from "../../src/runtime/usage-receipt.ts";
-import type { StoredTimelineEvent, TimelineEvent } from "../../src/tasks/timeline.ts";
+import type {
+  AdmissionWaitReason,
+  StoredTimelineEvent,
+  TimelineEvent,
+} from "../../src/tasks/timeline.ts";
 import { taskCost } from "../../src/tasks/trace.ts";
 import { task } from "../session/fixtures.ts";
 
@@ -160,6 +164,20 @@ test("an open task runs until now, and awaiting-fixes draws in the implement lan
   expect(report.lanes.find((lane) => lane.lane === "implement")?.durationMs).toBe(15 * MINUTE);
 });
 
+test("a ready task shows its draft pull request as open, not in progress", () => {
+  const report = buildTaskReport({
+    task: record({ stage: "ready" }),
+    timeline: timeline(
+      [0, { type: "created", stage: "implementing" }],
+      [30, stage("implementing", "ready")],
+    ),
+    usage: undefined,
+    now: at(90),
+  });
+  expect(report.status).toBe("pr-open");
+  expect(report.wallMs).toBe(30 * MINUTE);
+});
+
 test("a task with no events has no segments and ends at its last write when finished", () => {
   const finished = buildTaskReport({
     task: record({ stage: "completed", updatedAt: at(42) }),
@@ -223,7 +241,8 @@ test("runs, lane costs, and the task's cost come from its own work events", () =
     { lane: "implement", durationMs: 20 * MINUTE, costMicros: 1_000_000 },
     { lane: "validate", durationMs: 10 * MINUTE },
   ]);
-  const expected = taskCost(usage, REQUEST_ID, TASK_ID);
+  const expected = taskCost(usage, TASK_ID);
+  if (expected === undefined) throw new Error("the task's own usage was not found");
   expect(report.costMicros).toBe(expected.amountMicros);
   expect(report.costMicros).toBe(1_550_000);
   expect(report.unpricedSamples).toBe(expected.unavailableSamples);
@@ -336,6 +355,70 @@ test("a queued stretch names the work that followed it", () => {
     endMs: 26 * MINUTE,
     headline: "Queued 26m",
     explanation: "Queued 26m. The review then took 18m.",
+  });
+});
+
+function wait(reason: AdmissionWaitReason): Facts {
+  return { type: "admission-waiting", reason };
+}
+
+test.each([
+  ["worktree-disk-space", "Queued 26m waiting for disk space for a new worktree"],
+  ["worktree-capacity-unknown", "Queued 26m waiting for a worktree capacity check"],
+  ["routing-question", "Queued 26m waiting on a model routing question"],
+] as const)("a queued stretch waiting for admission (%s) says why", (reason, headline) => {
+  const report = buildTaskReport({
+    task: record({ stage: "ready" }),
+    timeline: timeline(
+      [0, { type: "created", stage: "queued" }],
+      [6, wait(reason)],
+      [26, stage("queued", "implementing")],
+      [40, stage("implementing", "ready")],
+    ),
+    usage: undefined,
+    now: at(500),
+  });
+  expect(report.choke?.headline).toBe(headline);
+  expect(report.choke?.explanation).toBe(
+    `${headline.replace(" waiting", ", 20m of it waiting")}. The implementation then took 14m.`,
+  );
+});
+
+test("the admission wait that covered most of the queued stretch names it", () => {
+  const report = buildTaskReport({
+    task: record({ stage: "queued" }),
+    timeline: timeline(
+      [0, { type: "created", stage: "queued" }],
+      [1, wait("worktree-capacity-unknown")],
+      [5, wait("worktree-disk-space")],
+      [12, wait("worktree-capacity-unknown")],
+      [16, wait("worktree-disk-space")],
+      // A wait outside any queued stretch counts for nothing.
+      [40, { type: "blocked", from: "queued" }],
+      [41, wait("routing-question")],
+    ),
+    usage: undefined,
+    now: at(60),
+  });
+  expect(report.choke).toMatchObject({
+    kind: "queued",
+    headline: "Queued 40m waiting for disk space for a new worktree",
+    explanation: "Queued 40m, 31m of it waiting for disk space for a new worktree.",
+  });
+});
+
+test("a queued stretch with no admission waits keeps the plain headline", () => {
+  const report = buildTaskReport({
+    task: record({ stage: "queued" }),
+    timeline: timeline([0, { type: "created", stage: "queued" }]),
+    usage: undefined,
+    now: at(26),
+  });
+  expect(report.choke).toEqual({
+    kind: "queued",
+    startMs: 0,
+    endMs: 26 * MINUTE,
+    headline: "Queued 26m",
   });
 });
 

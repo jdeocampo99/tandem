@@ -68,9 +68,8 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
 - A scout is completed research only when durable state records `completed` and its report.
 - PR watch notices (a watched pull request turned red or merged) go to `ctx.ui.notify` and the UI
   log with no model turn; the first coordinator to take one clears it (see [pr-watch.md](pr-watch.md#notifications)).
-- When a new "Needs you" row of the coordinator's project appears, the reconcile opens
-  `tandem status --watch` beside the coordinator's pane (see
-  [status.md](status.md#when-the-coordinator-opens-it)).
+- When a new "Needs you" row of the coordinator's project appears, the reconcile sends one Herdr
+  notification (see [status.md](status.md#the-notification-when-something-new-needs-you)).
 
 ## Compaction and the durable digest
 
@@ -195,6 +194,8 @@ A missing note loads unchanged; a present but malformed note fails the read as s
   removes the warm copies one at a time, rechecking capacity after each.
 - If free space is unknown or still too low, the task stays queued, its reservation is released,
   and a durable blocker/notification says to verify capacity or free disk. The next pass retries.
+  The task's timeline records an `admission-waiting` event when the reason is new or changes (see
+  task-lifecycle.md), so `tandem trace` and `tandem report` can say what the queue waited for.
 - Admission is governed by the disk threshold alone; there is no worker limit or fixed worktree count.
 
 ## Discard

@@ -87,3 +87,45 @@ test("report assembles every task in scope, filters by creation, and reads share
     }
   });
 });
+
+test("report and trace show the cost of research no request governs", async () => {
+  await withScenario({}, async (world) => {
+    await world.store.create({
+      id: "task-scout",
+      repoPath: world.repoPath,
+      kind: "scout",
+      objective: "Find where usage is recorded",
+      acceptanceCriteria: ["the findings name the ledger"],
+      surfaces: ["report"],
+      policy: SCENARIO_POLICY,
+    });
+    const identity = { taskId: "task-scout", operationId: "research-task-scout" };
+    await createRequestUsageLedger({ home: world.home, clock: world.clock }).record([
+      {
+        ...implementationWork("task-scout", 4_000),
+        eventKey: requestUsageEventKey({ kind: "work", identity, discriminator: "settled" }),
+        workKind: "research",
+        identity,
+      },
+    ]);
+    const service = createTandemService({
+      home: world.home,
+      sessionId: world.sessionId,
+      poolRoot: world.poolRoot,
+      run: world.run,
+      clock: world.clock,
+      idFactory: world.idFactory,
+    });
+    try {
+      const report = await service.report();
+      expect(report.tasks.map((task) => [task.id, task.costMicros])).toEqual([
+        ["task-scout", 4_000],
+      ]);
+      expect(report.tasks[0]?.runs.map((run) => run.workKind)).toEqual(["research"]);
+      const trace = await service.trace("task-scout");
+      expect(trace.rollup.cost?.amountMicros).toBe(4_000);
+    } finally {
+      await service.shutdown();
+    }
+  });
+});

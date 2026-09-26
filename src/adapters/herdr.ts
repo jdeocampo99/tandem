@@ -729,6 +729,20 @@ function parseWorkspaceMoveResponse(
   return { type: "workspace_list", workspaces: parseWorkspaceList(value, operation, response) };
 }
 
+/**
+ * Shows a notification through the user's Herdr toast settings (in-app, system, terminal, or off),
+ * with Herdr's needs-input sound.
+ */
+export async function showNotification(
+  run: CommandRunner,
+  sessionId: string,
+  cwd: string,
+  notice: Readonly<{ readonly title: string; readonly body: string }>,
+): Promise<void> {
+  const args = ["notification", "show", notice.title, "--body", notice.body, "--sound", "request"];
+  await runChecked(run, herdrRequest(sessionId, cwd, args), "herdr notification show");
+}
+
 /** The session's workspaces with their labels, in sidebar order. Read-only. */
 export async function listWorkspaces(
   run: CommandRunner,

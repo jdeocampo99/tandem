@@ -65,16 +65,17 @@ export class RequestAccountingWorkflow {
 
   /**
    * Brings the ledger level with durable state: the intake of every governing request, one span
-   * per settled operation, and the terminal fact of every delivered or cancelled task. Each event
-   * identity is derived from the records themselves, so repeating this pass after a restart, a
-   * reconciliation, or a compaction records nothing new.
+   * per settled operation, and the terminal fact of every delivered or cancelled task. A task no
+   * request governs, such as standalone research or a PR review, has its spans recorded under its
+   * own task scope instead, with no intake or terminal fact because it has no request window. Each
+   * event identity is derived from the records themselves, so repeating this pass after a restart,
+   * a reconciliation, or a compaction records nothing new.
    */
   async recordSettledTasks(tasks: readonly TaskRecord[]): Promise<void> {
-    const governed = tasks.filter((task) => task.requestId !== undefined);
-    if (governed.length === 0) return;
+    if (tasks.length === 0) return;
     const state = await this.#deps.readState();
     try {
-      await this.record(await this.settledTaskEvents(governed, state));
+      await this.record(await this.settledTaskEvents(tasks, state));
     } catch (error) {
       await this.diagnoseFailure(error);
     }
@@ -139,14 +140,19 @@ export class RequestAccountingWorkflow {
     const openedRequests = new Set<string>();
     for (const task of tasks) {
       const requestId = task.requestId;
-      if (requestId === undefined) continue;
+      if (requestId === undefined) {
+        events.push(...(await settledWorkEventsFor(undefined, task.id, state)));
+        continue;
+      }
       if (!openedRequests.has(requestId)) {
         openedRequests.add(requestId);
         const brief = await this.#deps.requestStore.read(requestId);
         if (brief !== undefined) events.push(requestIntakeEvent(brief));
       }
       // Research usually runs before its brief exists, so it is credited to the request through
-      // the implementation that cites it rather than by joining the request's membership.
+      // the implementation that cites it rather than by joining the request's membership. Research
+      // with no request of its own keeps the same spans in its task scope too; the receipt reads
+      // only the request and the task's cost only its own scope, so neither counts them twice.
       const researchTaskIds = (task.researchHandoffs ?? []).map((handoff) => handoff.scoutTaskId);
       for (const taskId of [task.id, ...researchTaskIds]) {
         events.push(...(await settledWorkEventsFor(requestId, taskId, state)));
@@ -223,7 +229,7 @@ function canonicalPath(path: string): Promise<string> {
 }
 
 async function settledWorkEventsFor(
-  requestId: string,
+  requestId: string | undefined,
   taskId: string,
   state: RuntimeState,
 ): Promise<readonly RequestUsageEvent[]> {

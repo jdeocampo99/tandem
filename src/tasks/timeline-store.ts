@@ -5,6 +5,8 @@ import {
   withStateTransaction,
 } from "../runtime/database.ts";
 import {
+  ADMISSION_WAIT_REASONS,
+  type AdmissionWaitReason,
   type StoredTimelineEvent,
   TIMELINE_EVENT_TYPES,
   type TimelineEvent,
@@ -58,5 +60,11 @@ function storedEvent(
   const record = payload as Readonly<Record<string, unknown>>;
   if (record.taskId !== taskId || typeof record.at !== "string") return undefined;
   if (!TIMELINE_EVENT_TYPES.includes(record.type as TimelineEventType)) return undefined;
+  if (
+    record.type === "admission-waiting" &&
+    !ADMISSION_WAIT_REASONS.includes(record.reason as AdmissionWaitReason)
+  ) {
+    return undefined;
+  }
   return { ...(record as TimelineEvent), seq };
 }

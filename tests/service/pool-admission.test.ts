@@ -7,6 +7,7 @@ import {
   taskWithPoolAdmission,
 } from "../../src/service/pool-admission.ts";
 import { DEFAULT_REVIEW_LEVEL_POLICY } from "../../src/tasks/review-levels.ts";
+import { latestAdmissionWait, poolAdmissionWaitReason } from "../../src/workers/admission.ts";
 
 const NOW = "2026-09-24T00:00:00.000Z";
 const stamp = { clock: () => NOW, notificationId: () => "notification-1" };
@@ -91,23 +92,61 @@ test("an allowed allocation clears the pool notice but keeps an unrelated last e
 });
 
 test("a queued task is notified once per new blocking reason", () => {
-  const notified = taskWithPoolAdmission(task("queued"), undefined, full, stamp);
+  const notified = taskWithPoolAdmission(task("queued"), undefined, full, stamp).task;
   expect(notified.revision).toBe(2);
   expect(notified.notifications).toHaveLength(1);
   expect(notified.notifications[0]?.id).toBe("notification-1");
-  expect(taskWithPoolAdmission(notified, undefined, full, stamp)).toBe(notified);
+  expect(taskWithPoolAdmission(notified, undefined, full, stamp).task).toBe(notified);
   const sameKey = task("queued");
-  expect(taskWithPoolAdmission(sameKey, "capacity-insufficient", full, stamp)).toBe(sameKey);
+  const keyed = runtime({ poolAdmissionKey: "capacity-insufficient" });
+  expect(taskWithPoolAdmission(sameKey, keyed, full, stamp)).toEqual({ task: sameKey });
   const running = task("implementing");
-  expect(taskWithPoolAdmission(running, undefined, full, stamp)).toBe(running);
+  expect(taskWithPoolAdmission(running, undefined, full, stamp).task).toBe(running);
 });
 
 test("an allowed allocation withdraws pool notices and leaves a clean task untouched", () => {
   const notice = poolNotificationMessage("capacity-unknown", "unknown");
   const withNotice = task("queued", [{ id: "n", message: notice, acknowledged: false }]);
-  const withdrawn = taskWithPoolAdmission(withNotice, "capacity-unknown", allowed, stamp);
-  expect(withdrawn.notifications).toEqual([]);
-  expect(withdrawn.revision).toBe(2);
+  const keyed = runtime({ poolAdmissionKey: "capacity-unknown" });
+  const withdrawn = taskWithPoolAdmission(withNotice, keyed, allowed, stamp);
+  expect(withdrawn.task.notifications).toEqual([]);
+  expect(withdrawn.task.revision).toBe(2);
+  expect(withdrawn.note).toBeUndefined();
   const clean = task("queued");
-  expect(taskWithPoolAdmission(clean, undefined, allowed, stamp)).toBe(clean);
+  expect(taskWithPoolAdmission(clean, runtime(), allowed, stamp)).toEqual({ task: clean });
+});
+
+test("a queued task's admission wait is noted when its pool reason is new or changes", () => {
+  const first = taskWithPoolAdmission(task("queued"), runtime(), full, stamp);
+  expect(first.note).toEqual({
+    admissionWait: "worktree-disk-space",
+    cause: "pool has insufficient free space for a new worktree; free space and retry",
+  });
+  expect(first.task.notifications).toHaveLength(1);
+
+  // The same reason again is not recorded twice, even across scheduler passes.
+  const again = runtimeWithPoolAdmission(runtime(), full);
+  expect(taskWithPoolAdmission(first.task, again, full, stamp)).toEqual({ task: first.task });
+
+  // A changed reason is recorded even when its notification already stands.
+  const unknown: PoolMaintenanceResult = { ...full, availableBytes: null };
+  const notice = poolNotificationMessage("capacity-unknown", "unknown");
+  const notified = task("queued", [{ id: "n", message: notice, acknowledged: false }]);
+  const changed = taskWithPoolAdmission(notified, again, unknown, stamp);
+  expect(changed.note?.admissionWait).toBe("worktree-capacity-unknown");
+  expect(changed.task.revision).toBe(2);
+  expect(changed.task.notifications).toEqual(notified.notifications);
+
+  // Only a queued task waits for admission, and a task with no runtime record remembers nothing.
+  expect(taskWithPoolAdmission(task("implementing"), runtime(), full, stamp).note).toBeUndefined();
+  expect(taskWithPoolAdmission(task("queued"), undefined, full, stamp).note).toBeUndefined();
+});
+
+test("a routing question standing on the runtime record is the latest admission wait", () => {
+  expect(latestAdmissionWait(runtime())).toBeUndefined();
+  expect(latestAdmissionWait(runtime({ poolAdmissionKey: "capacity-unknown" }))).toBe(
+    "worktree-capacity-unknown",
+  );
+  expect(poolAdmissionWaitReason("capacity-insufficient")).toBe("worktree-disk-space");
+  expect(poolAdmissionWaitReason("something-else")).toBeUndefined();
 });

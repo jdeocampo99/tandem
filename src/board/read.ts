@@ -4,7 +4,7 @@ import { withPrWatches } from "../pr-watch/store.ts";
 import { createRequestBriefStore } from "../requests/store.ts";
 import { withStateTransaction } from "../runtime/database.ts";
 import { defaultIdFactory } from "../runtime/persistence.ts";
-import { createRequestUsageLedger } from "../runtime/usage-ledger.ts";
+import { createRequestUsageLedger, readTaskUsage } from "../runtime/usage-ledger.ts";
 import { createTaskStore } from "../tasks/store.ts";
 import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
 import { readTimeline } from "../tasks/timeline-store.ts";
@@ -50,37 +50,39 @@ async function weekRollups(
     if (!withinWeek(task.updatedAt, now)) continue;
     const { events } = await readTimeline(home, task.id);
     if (!finishedWithinWeek(events, now)) continue;
-    const cost =
-      task.requestId === undefined
-        ? undefined
-        : taskCost(await ledger.read(task.requestId), task.requestId, task.id);
+    const cost = taskCost(await readTaskUsage(ledger, task), task.id);
     rollups.push(taskRollup(task.id, events, now, cost));
   }
   return rollups;
 }
 
 /**
- * Draws the board until the process is interrupted: renders it every {@link BOARD_REFRESH_MS} and
- * draws only when the text changed. A round that finds the state locked by another Tandem is
- * skipped; the next one reads again.
+ * Draws the board until `closed` settles, or forever without it: renders it every
+ * {@link BOARD_REFRESH_MS} and draws only when the text changed. A round that finds the state
+ * locked by another Tandem is skipped; the next one reads again. Closing cuts the current sleep
+ * short, so nothing keeps the process waiting.
  */
 export async function runLiveBoard(
   deps: Readonly<{
     readonly render: () => Promise<string>;
     readonly draw: (text: string) => void;
-    readonly sleep: (ms: number) => Promise<void>;
+    readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+    readonly closed?: Promise<void>;
   }>,
-): Promise<never> {
+): Promise<void> {
+  const close = new AbortController();
+  void deps.closed?.then(() => close.abort());
   let shown: string | undefined;
-  while (true) {
+  while (!close.signal.aborted) {
     const text = await deps.render().catch((error: unknown) => {
       if (error instanceof StoreLockTimeoutError) return shown;
       throw error;
     });
+    if (close.signal.aborted) return;
     if (text !== undefined && text !== shown) {
       deps.draw(text);
       shown = text;
     }
-    await deps.sleep(BOARD_REFRESH_MS);
+    await deps.sleep(BOARD_REFRESH_MS, close.signal);
   }
 }
