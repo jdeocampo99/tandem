@@ -255,7 +255,9 @@ before touching anything.
 
 ## Where things live
 
-Tandem stores its data in `~/.tandem` (tasks, settings, worktrees), not in your repository. Each
+Tandem stores its data in `~/.tandem` (tasks, settings, worktrees), not in your repository. A
+finished task's worker conversation is deleted 30 days after the task last changed; its reports
+are kept. Each
 project's settings file, including the check commands, opens with `tandem config`. Your default
 data folder and session name are remembered in `~/.config/tandem/config.json`.
 

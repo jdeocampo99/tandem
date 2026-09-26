@@ -211,6 +211,7 @@ import {
   type TerminalTaskCleanupOptions,
 } from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskCheckoutPath, taskSourcePath } from "./source.ts";
+import { pruneTranscripts, transcriptsToPrune } from "./transcript-pruning.ts";
 
 // ponytail: a fixed count of ready idle worktree copies per repository, removed first under disk
 // pressure. Size it from recent task starts if copies are too often missing or left unused.
@@ -1729,9 +1730,23 @@ class TandemController {
     }
     const current = draftRecorded ? await this.#source.scopedTasks() : settled;
     await this.#accounting.recordSettledTasks(current);
+    await this.pruneFinishedTranscripts(current);
     // Not awaited: reading GitHub takes seconds and must not hold up task work.
     void this.#prWatch.tick().catch((error: unknown) => this.recordPrWatchFailure(error));
     return current;
+  }
+
+  /** Pruning never holds up task work; a failure is recorded and the next tick retries. */
+  private async pruneFinishedTranscripts(tasks: readonly TaskRecord[]): Promise<void> {
+    try {
+      await pruneTranscripts(this.#deps.home, transcriptsToPrune(tasks, this.#deps.clock()));
+    } catch (error) {
+      await appendDiagnosticEvent(
+        this.#deps.home,
+        { event: "transcript-prune-failed", details: { errorClass: errorClassName(error) } },
+        this.#deps.clock,
+      );
+    }
   }
 
   /** PR watch never holds up task work; a failed check is recorded and the next one retries. */
