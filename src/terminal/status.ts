@@ -1,5 +1,6 @@
 import { readBoard } from "../board/read.ts";
-import type { BoardView, StatusFooter } from "../board/view.ts";
+import type { StatusFooter } from "../board/terminal.ts";
+import type { BoardView } from "../board/view.ts";
 import type { CommandRunner } from "../contracts.ts";
 import { listCoordinatorRecords } from "../coordinator/registry.ts";
 

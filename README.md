@@ -150,21 +150,10 @@ the coordinator's chat is compacted after a task finishes so later turns don't p
 requests. `tandem status --watch` keeps it live, and the coordinator opens it beside the chat when
 something new waits on you.
 
-```
-Projects: tandem, tagalingo · PRs checked 40s ago
+![tandem status in a terminal: a yellow Needs you section with briefs, questions, blocked tasks, and failing pull requests; Running and PRs sections with column headers and check progress bars; and a weekly summary](docs/images/status.svg)
 
-Needs you
-🙋 tandem     Dark mode                    brief waiting for approval
-🔴 tagalingo  acme/app#409 refactor-cache  🙋 test_cache_evict failed twice → https://ci/…
-
-Running
-🔨 tandem     Fix the flaky login  implementing · 12m
-
-PRs
-🟢 acme/app#420 add-cache ⏳ 12/16 ✅ approved
-
-This week: 7 done · 5 of 7 passed review first time · $14.20
-```
+Sections are colored by what they mean: yellow waits on you, red failed, cyan is in progress,
+green is done. Piped output and `NO_COLOR` give the same layout as plain text.
 
 ## Requirements
 

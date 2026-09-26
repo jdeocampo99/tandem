@@ -1238,7 +1238,7 @@ test("tandem status shows the board from saved state, and --json adds tasks with
     });
     expect(shown.exitCode).toBe(0);
     expect(output.join("")).toStartWith(
-      "Projects: none yet · PRs not checked yet\n\nNeeds you\nNothing needs you.\n",
+      `Projects: none yet · PRs not checked yet\n\nNEEDS YOU ${"─".repeat(30)}\nNothing needs you.\n`,
     );
     expect(output.join("")).toContain("Tandem code: abc1234 feat: board");
     expect(listed).toBe(0);
