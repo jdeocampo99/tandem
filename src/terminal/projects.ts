@@ -244,28 +244,31 @@ async function resolveProjectRoots(
   return roots;
 }
 
+/**
+ * The projects a command works on. Explicit paths win. Otherwise launch, update, and reset take
+ * every saved project plus the Tandem checkout, whose coordinator onboards the rest; the
+ * single-project commands take the current Git project or ask.
+ */
 export async function selectProjects(
   invocation: TerminalInvocation,
   environment: TerminalEnvironment,
   run: CommandRunner,
   interactive: boolean,
   prompter: TerminalPrompter | undefined,
+  tandemCheckout: string,
 ): Promise<readonly string[] | undefined> {
   if (invocation.paths.length > 0) {
     const current = await gitRootForPath(environment.cwd, environment.cwd, run);
     return resolveProjectRoots(invocation.paths, environment, run, current);
   }
 
-  let registered: readonly string[] | undefined;
   if (
     invocation.command === "launch" ||
     invocation.command === "update" ||
     invocation.command === "reset"
   ) {
-    registered = await readRegisteredProjects(environment.home);
-    if (registered.length > 0) {
-      return resolveProjectRoots(registered, environment, run);
-    }
+    const registered = await readRegisteredProjects(environment.home);
+    return resolveProjectRoots([...registered, tandemCheckout], environment, run);
   }
 
   const current = await gitRootForPath(environment.cwd, environment.cwd, run);
@@ -273,7 +276,7 @@ export async function selectProjects(
     return [await mapCoordinatorCheckoutIdentity(current, environment, run, true)];
   }
   if (!interactive || prompter === undefined) throw noTtyError("project selection");
-  registered ??= await readRegisteredProjects(environment.home);
+  const registered = await readRegisteredProjects(environment.home);
   const selected = await askProjectSelection(prompter, registered);
   if (selected === undefined) return undefined;
   return resolveProjectRoots(selected, environment, run);

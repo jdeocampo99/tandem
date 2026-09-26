@@ -25,6 +25,7 @@ export type TandemAction =
   | Readonly<{ readonly action: "setup"; readonly repoPath: string }>
   | Readonly<{ readonly action: "models"; readonly repoPath: string }>
   | Readonly<{ readonly action: "onboard"; readonly repoPath: string }>
+  | Readonly<{ readonly action: "open-project"; readonly repoPath: string }>
   | Readonly<{
       readonly action: "configure-models";
       readonly repoPath: string;
@@ -239,6 +240,7 @@ function requiresHumanApproval(action: TandemAction): boolean {
   if (action.action === "cleanup") return action.discard === true;
   return (
     action.action === "setup" ||
+    action.action === "open-project" ||
     action.action === "configure-models" ||
     action.action === "approve" ||
     action.action === "brief-approve" ||
@@ -277,6 +279,12 @@ async function approvalPrompt(
     return {
       title: `Save Tandem settings for ${projectName(onboarded.repoPath)}?`,
       message: "Saved outside the project.",
+    };
+  }
+  if (action.action === "open-project") {
+    return {
+      title: `Open ${projectName(action.repoPath)} in Tandem?`,
+      message: "It gets its own coordinator chat in a new workspace.",
     };
   }
   if (action.action === "brief-approve") {
@@ -438,6 +446,8 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.restart(action.taskId), action.action),
   onboard: async (action, service) =>
     actionResult(await service.onboard(action.repoPath, false), action.action),
+  "open-project": async (action, service) =>
+    actionResult(await service.openProject(action.repoPath), action.action, { approved: true }),
   setup: async (action, service) =>
     actionResult(await service.onboard(action.repoPath, true), action.action, { approved: true }),
   models: async (action, service) =>
@@ -1032,6 +1042,10 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
   setup: {
     arity: { min: 2, max: 2 },
     parse: (_words, value) => ({ action: "setup", repoPath: value(1, "setup") }),
+  },
+  "open-project": {
+    arity: { min: 2, max: 2 },
+    parse: (_words, value) => ({ action: "open-project", repoPath: value(1, "open-project") }),
   },
   models: {
     arity: { min: 1, max: 2 },

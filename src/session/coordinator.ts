@@ -5,12 +5,17 @@ import {
   type TandemBoundaryEnvironment,
 } from "../config/environment.ts";
 import type { TaskRecord } from "../contracts.ts";
-import { COORDINATOR_INSTRUCTIONS, COORDINATOR_TOOL_GUIDANCE } from "../instructions.ts";
+import {
+  COORDINATOR_INSTRUCTIONS,
+  COORDINATOR_TOOL_GUIDANCE,
+  TANDEM_COORDINATOR_INSTRUCTIONS,
+} from "../instructions.ts";
 import type { CoordinatorUsageEntry } from "../runtime/usage-receipt.ts";
 import type { SourceRefreshResult, TandemService } from "../service/controller.ts";
 import { isMissing, isTerminalTask } from "../service/records.ts";
 import { fixRoundBudget, ledgerBlockers } from "../tasks/findings.ts";
 import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
+import { WELCOME_TEXT } from "../terminal/welcome.ts";
 import type { ReplyUsage } from "../workers/terminal.ts";
 import { atCompactionBoundary, finishedTaskIds } from "./compaction.ts";
 import type {
@@ -35,6 +40,10 @@ export type CoordinatorDeps = SessionDeps &
     /** Called once, on first use, so a bad service configuration fails where it is needed. */
     createService(): TandemService;
     realpath(path: string): Promise<string>;
+    /** Whether this coordinator's project is the Tandem checkout itself. */
+    isTandemCheckout(): Promise<boolean>;
+    /** Opens the welcome popup over the Herdr session, pointed at this coordinator's pane. */
+    openWelcome(): Promise<void>;
     readReport: ResearchReportReader;
     appendUsage(entry: CoordinatorUsageEntry): Promise<void>;
     /** Context size that triggers early compaction; `0` leaves compaction to the harness. */
@@ -95,12 +104,14 @@ function errorMessage(error: unknown): string {
 /** The standing coordinator context: instructions, source boundary and freshness, and the digest. */
 function coordinatorContext(
   environment: TandemBoundaryEnvironment,
+  tandemCheckout: boolean,
   sourceStatus: string,
   digest: string,
 ): string[] {
   return [
     COORDINATOR_INSTRUCTIONS,
     COORDINATOR_TOOL_GUIDANCE,
+    ...(tandemCheckout ? [TANDEM_COORDINATOR_INSTRUCTIONS] : []),
     coordinatorSourceGuidance(environment),
     sourceStatus,
     digest,
@@ -247,6 +258,7 @@ export class CoordinatorSession {
   /** When the user last took part in the open thread; unset when no thread is open. */
   private threadActiveAt: number | undefined;
   private createdService: TandemService | undefined;
+  private isTandemCheckout: Promise<boolean> | undefined;
   private cancelTick: Cancel | undefined;
   private reconcileInFlight: Promise<void> | undefined;
   /** This project's "Needs you" rows at the last reconcile; unset until the first one. */
@@ -261,6 +273,11 @@ export class CoordinatorSession {
   service(): TandemService {
     this.createdService ??= this.deps.createService();
     return this.createdService;
+  }
+
+  private tandemCheckout(): Promise<boolean> {
+    this.isTandemCheckout ??= this.deps.isTandemCheckout();
+    return this.isTandemCheckout;
   }
 
   /** An unreadable task list counts as research running, so the guard fails closed. */
@@ -301,6 +318,29 @@ export class CoordinatorSession {
       });
     }
     await this.reconcile(true);
+    await this.welcome().catch((error) => this.deps.logError(OPERATION_FAILED, error));
+  }
+
+  /**
+   * The Tandem coordinator greets the user while no other project is set up. When the popup cannot
+   * open (an older Herdr, or the plugin is not linked), the same words arrive in the chat instead.
+   */
+  private async welcome(): Promise<void> {
+    if (!(await this.tandemCheckout())) return;
+    const repo = await this.deps.realpath(this.deps.environment.repo);
+    const { projects } = await this.service().board();
+    if (projects.some((project) => project !== repo)) return;
+    try {
+      await this.deps.openWelcome();
+    } catch {
+      await this.deps.host.perform({
+        type: "deliver",
+        source: "notification",
+        text: WELCOME_TEXT,
+        timing: "nextTurn",
+        triggerTurn: false,
+      });
+    }
   }
 
   async agentStart(): Promise<Reply<"agentStart">> {
@@ -315,7 +355,14 @@ export class CoordinatorSession {
     }
     this.status.report();
     const digest = buildDurableDigest(await service.list());
-    return { systemContext: coordinatorContext(this.deps.environment, this.sourceStatus, digest) };
+    return {
+      systemContext: coordinatorContext(
+        this.deps.environment,
+        await this.tandemCheckout(),
+        this.sourceStatus,
+        digest,
+      ),
+    };
   }
 
   turnStart(): void {
@@ -374,7 +421,12 @@ export class CoordinatorSession {
   async compacting(): Promise<Reply<"compacting">> {
     const digest = buildDurableDigest(await this.service().list());
     return {
-      context: coordinatorContext(this.deps.environment, this.sourceStatus, digest),
+      context: coordinatorContext(
+        this.deps.environment,
+        await this.tandemCheckout(),
+        this.sourceStatus,
+        digest,
+      ),
       preserve: { tandemDigest: digest },
     };
   }

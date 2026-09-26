@@ -127,12 +127,15 @@ test("an existing tab_bar_right or prefix+t binding is left alone, with the line
 
 const RUNNING = (version: string) => `status: running\nversion: ${version}\nsocket: /s\n`;
 
+const LINKED = "1 plugin installed:\n- tandem.ui (Tandem) enabled [local:/tandem/herdr-plugin]\n";
+
 function setup(
   overrides: Partial<HerdrSetupDependencies> & {
     readonly versions?: string[];
     readonly checks?: number[];
     readonly config?: string;
     readonly server?: string;
+    readonly plugins?: string;
   } = {},
 ) {
   const versions = [...(overrides.versions ?? ["herdr 0.9.1"])];
@@ -152,6 +155,9 @@ function setup(
     if (command === "herdr --session tandem status server") {
       return { code: 0, stdout: overrides.server ?? RUNNING("0.9.1"), stderr: "" };
     }
+    if (command === "herdr plugin list") {
+      return { code: 0, stdout: overrides.plugins ?? LINKED, stderr: "" };
+    }
     if (command === "brew upgrade herdr") {
       return { code: 0, stdout: "==> Upgrading herdr 0.8.0 -> 0.9.1", stderr: "" };
     }
@@ -161,6 +167,7 @@ function setup(
     run,
     environment: { HOME: "/Users/me" },
     commands: COMMANDS,
+    pluginDirectory: "/tandem/herdr-plugin",
     sessionId: "tandem",
     herdrBinary: "/Users/me/.local/bin/herdr",
     runningTasks: async () => 0,
@@ -204,6 +211,7 @@ test("setup updates an old Herdr, asks, writes the config, and reloads Tandem's 
     "herdr config check",
     "herdr --session tandem status server",
     "herdr --session tandem server reload-config",
+    "herdr plugin list",
   ]);
   expect(writes).toHaveLength(1);
   expect(parsed(writes[0] ?? "").ui?.sidebar_width).toBe(30);
@@ -240,7 +248,7 @@ test("re-running with the config already there still applies it to Tandem's sess
   const { deps, ran, writes } = setup({ config: done });
   expect(await setUpHerdrStatus(deps)).toBe(true);
   expect(writes).toEqual([]);
-  expect(ran.at(-1)).toBe("herdr --session tandem server reload-config");
+  expect(ran).toContain("herdr --session tandem server reload-config");
 });
 
 test("a session still on an old Herdr is restarted only when idle, asked, and not from inside it", async () => {
@@ -249,7 +257,7 @@ test("a session still on an old Herdr is restarted only when idle, asked, and no
 
   const restarted = setup({ config: done, server: stale });
   expect(await setUpHerdrStatus(restarted.deps)).toBe(true);
-  expect(restarted.ran.at(-1)).toBe("herdr session stop tandem");
+  expect(restarted.ran).toContain("herdr session stop tandem");
   expect(restarted.printed.join("")).toContain("run tandem to reopen your projects");
 
   const busy = setup({ config: done, server: stale, runningTasks: async () => 2 });
@@ -287,6 +295,21 @@ test("a session that isn't running picks the config up when it starts", async ()
   const { deps, ran } = setup({ server: "status: not running\nsocket: /s\n" });
   expect(await setUpHerdrStatus(deps)).toBe(true);
   expect(ran).not.toContain("herdr --session tandem server reload-config");
+});
+
+test("setup links Tandem's welcome popup plugin once, after asking", async () => {
+  const linked = setup({ plugins: "No plugins installed.\n" });
+  expect(await setUpHerdrStatus(linked.deps)).toBe(true);
+  expect(linked.ran).toContain("herdr --session tandem plugin link /tandem/herdr-plugin");
+  expect(linked.printed.join("")).toContain("✓ Tandem's welcome popup added to Herdr");
+
+  const already = setup();
+  expect(await setUpHerdrStatus(already.deps)).toBe(true);
+  expect(already.ran.some((command) => command.includes("plugin link"))).toBe(false);
+
+  const declined = setup({ plugins: "No plugins installed.\n", confirm: async () => false });
+  expect(await setUpHerdrStatus(declined.deps)).toBe(false);
+  expect(declined.ran.some((command) => command.includes("plugin link"))).toBe(false);
 });
 
 test("setup changes nothing when the user says no or there is no terminal", async () => {

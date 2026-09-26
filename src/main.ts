@@ -1,6 +1,4 @@
 #!/usr/bin/env bun
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
 import { listOmpMcpServers } from "./adapters/omp.ts";
@@ -12,6 +10,7 @@ import { type ReconcileReport, reconcileTandemResources } from "./coordinator/re
 import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { type RenestReport, renestWorkspaces } from "./coordinator/renest.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
+import { isTandemCheckout, TANDEM_CHECKOUT } from "./coordinator/tandem-checkout.ts";
 import { renderPrWatchView } from "./pr-watch/view.ts";
 import { type PublishedReport, publishReport } from "./report/publish.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
@@ -66,14 +65,13 @@ import {
   selectProjects,
 } from "./terminal/projects.ts";
 import { readTandemStatus, tandemCodeVersion } from "./terminal/status.ts";
-
-/** The checkout the `tandem` command runs from; coordinators load their extension from it. */
-const TANDEM_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { runWelcome } from "./terminal/welcome.ts";
 
 const HELP_TEXT = `Tandem
 
 Usage:
-  tandem [PATH ...]        Open your projects; resumes coordinator chats (--fresh starts new ones)
+  tandem [PATH ...]        Open your projects and Tandem's own chat, where you add more projects
+                           Resumes coordinator chats (--fresh starts new ones)
   tandem status [TASK_ID]  What needs you, what's running, and your PRs across projects
                            --watch keeps it live (Esc or q closes it); --line is a
                            one-line summary for Herdr's tab bar; --logs shows prompt routing
@@ -90,6 +88,7 @@ Usage:
   tandem reset --hard      Delete all Tandem state and worktrees; next run onboards from scratch
   tandem configure [PATH]  Inspect or save repository settings
   tandem config [PATH]     Open the project's settings file in $VISUAL/$EDITOR
+  tandem welcome           Show the welcome message again
 
 Options:
   --yes                    Skip the confirmation (fix, reset)
@@ -120,6 +119,8 @@ export type TerminalMainDependencies = Readonly<{
   readonly resetCoordinators?: typeof resetCoordinators;
   /** Lists a project's MCP servers for onboarding; tests inject one so they never read real config. */
   readonly listMcpServers?: (repoPath: string) => Promise<readonly string[]>;
+  /** The Tandem checkout, whose coordinator always opens; tests inject a temporary one. */
+  readonly tandemCheckout?: string;
   /** Sends Herdr's `workspace.move`; tests inject one so they never reach a live socket. */
   readonly moveWorkspace?: HerdrAdapterOptions["moveWorkspace"];
 }>;
@@ -269,7 +270,7 @@ async function handleStatus({
       return result;
     }
     const status = await readTandemStatus({
-      code: await tandemCodeVersion(run, TANDEM_ROOT),
+      code: await tandemCodeVersion(run, TANDEM_CHECKOUT),
       home: environment.home,
       sessionId: environment.sessionId,
     });
@@ -429,7 +430,7 @@ async function watchStatus(
   stdout: (text: string) => void,
   dependencies: TerminalMainDependencies,
 ): Promise<void> {
-  const code = await tandemCodeVersion(run, TANDEM_ROOT);
+  const code = await tandemCodeVersion(run, TANDEM_CHECKOUT);
   const style = () => statusStyle(environment, dependencies);
   const keys = watchCloseKeys(dependencies.input ?? process.stdin);
   try {
@@ -576,6 +577,16 @@ async function handleHardReset({
   return { exitCode: 0, status: "reset" };
 }
 
+async function tandemProjectAmong(
+  roots: readonly string[],
+  tandemCheckout: string,
+): Promise<string | undefined> {
+  for (const root of roots) {
+    if (await isTandemCheckout(root, tandemCheckout)) return root;
+  }
+  return undefined;
+}
+
 async function runProjectFlow({
   invocation,
   environment,
@@ -586,7 +597,15 @@ async function runProjectFlow({
   stdout,
   closeInteraction,
 }: ProjectFlowInputs): Promise<TerminalRunResult> {
-  const roots = await selectProjects(invocation, environment, run, interactive, prompter);
+  const tandemCheckout = dependencies.tandemCheckout ?? TANDEM_CHECKOUT;
+  const roots = await selectProjects(
+    invocation,
+    environment,
+    run,
+    interactive,
+    prompter,
+    tandemCheckout,
+  );
   if (roots === undefined) {
     stdout("Tandem cancelled; no settings were changed and no coordinator was launched.\n");
     return { exitCode: 0, status: "cancelled" };
@@ -626,6 +645,7 @@ async function runProjectFlow({
     prompter,
     interactive,
     dependencies.listMcpServers ?? listOmpMcpServers,
+    await tandemProjectAmong(roots, tandemCheckout),
   );
   if (prepared === undefined) {
     stdout("Tandem cancelled; no coordinator was launched.\n");
@@ -674,7 +694,7 @@ async function runProjectFlow({
     `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared Herdr session ${environment.sessionId}.\n`,
   );
   if (invocation.command === "update") {
-    stdout(`Coordinators now run ${await tandemCodeVersion(run, TANDEM_ROOT)}.\n`);
+    stdout(`Coordinators now run ${await tandemCodeVersion(run, TANDEM_CHECKOUT)}.\n`);
   }
   for (const [index, launch] of launches.entries()) {
     const repoPath = roots[index];
@@ -723,6 +743,16 @@ export async function runTerminal(
     }
     if (invocation.command === "watch") {
       return await handleWatch({ invocation, environment, dependencies, run, stdout });
+    }
+    if (invocation.command === "welcome") {
+      await runWelcome({
+        input: dependencies.input ?? process.stdin,
+        stdout,
+        run,
+        environment: environment.source,
+        cwd: environment.cwd,
+      });
+      return { exitCode: 0, status: "welcome" };
     }
     await assertNotInCoordinatorPane(invocation, environment);
     const interaction = createTerminalInteraction(dependencies, stdout);

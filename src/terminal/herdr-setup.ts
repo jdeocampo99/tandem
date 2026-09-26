@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { quoteShellArgument, runCommand } from "../adapters/commands.ts";
+import { TANDEM_HERDR_PLUGIN } from "../adapters/herdr.ts";
 import { readBoard } from "../board/read.ts";
 import { resolveTandemEnvironment } from "../config/environment.ts";
 import type { CommandResult, CommandRunner } from "../contracts.ts";
@@ -166,6 +167,8 @@ export type HerdrSetupDependencies = Readonly<{
   readonly run: CommandRunner;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly commands: HerdrStatusCommands;
+  /** Tandem's Herdr plugin (`herdr-plugin/`), which holds the welcome popup. */
+  readonly pluginDirectory: string;
   /** The Herdr session Tandem's panes run in; its server is the one to reload or restart. */
   readonly sessionId: string;
   /** Where the `herdr` binary resolves to, which says how it was installed. */
@@ -222,8 +225,30 @@ export async function setUpHerdrStatus(deps: HerdrSetupDependencies): Promise<bo
     return false;
   }
 
-  if (!(await writeHerdrConfig(deps, herdr))) return false;
-  return await applyToSession(deps, herdr);
+  const configured = (await writeHerdrConfig(deps, herdr)) && (await applyToSession(deps, herdr));
+  const linked = await linkTandemPlugin(deps, herdr);
+  return configured && linked;
+}
+
+/** Links Tandem's Herdr plugin after asking, so the Tandem coordinator can open its welcome popup. */
+async function linkTandemPlugin(deps: HerdrSetupDependencies, herdr: Herdr): Promise<boolean> {
+  const plugins = await herdr(["plugin", "list"]);
+  if (plugins?.stdout.includes(`- ${TANDEM_HERDR_PLUGIN} (`) === true) return true;
+  if (deps.confirm === undefined) {
+    deps.print("! Skipped Tandem's welcome popup: no terminal to ask in\n");
+    return false;
+  }
+  if (!(await deps.confirm("Add Tandem's welcome popup to Herdr?"))) {
+    deps.print("Skipped Tandem's welcome popup\n");
+    return false;
+  }
+  const linked = await herdr(["--session", deps.sessionId, "plugin", "link", deps.pluginDirectory]);
+  if (linked?.code === 0) {
+    deps.print("✓ Tandem's welcome popup added to Herdr\n");
+    return true;
+  }
+  deps.print(`! Add it by hand: herdr plugin link ${deps.pluginDirectory}\n`);
+  return false;
 }
 
 type Herdr = (argv: readonly string[]) => Promise<CommandResult | undefined>;
@@ -328,6 +353,7 @@ async function main(): Promise<void> {
     run: runCommand,
     environment: process.env,
     commands: herdrStatusCommands(process.execPath, tandemMain),
+    pluginDirectory: fileURLToPath(new URL("../../herdr-plugin", import.meta.url)),
     sessionId: tandem.sessionId,
     herdrBinary: binary === null ? undefined : await realpath(binary).catch(() => binary),
     runningTasks: async () => {

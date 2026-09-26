@@ -340,6 +340,46 @@ test("extension setup approval preserves the write boundary and metadata", async
   expect(savedValue.written).toBe(true);
 });
 
+test("open-project opens a project's chat only after the user approves it", async () => {
+  const prompts: Array<{ readonly title: string; readonly message: string }> = [];
+  const opened: string[] = [];
+  let allow = false;
+  const service = {
+    openProject: async (repoPath: string) => {
+      opened.push(repoPath);
+      return { repoPath };
+    },
+  } as unknown as TandemService;
+  const context = {
+    confirm: async (title: string, message: string) => {
+      prompts.push({ title, message });
+      return allow;
+    },
+  };
+
+  const refused = await executeTandemAction(
+    { action: "open-project", repoPath: "/code/app" },
+    service,
+    context,
+  );
+  expect(refused.approved).toBe(false);
+  expect(opened).toEqual([]);
+  expect(prompts[0]?.title).toBe("Open app in Tandem?");
+
+  allow = true;
+  const done = await executeTandemAction(
+    { action: "open-project", repoPath: "/code/app" },
+    service,
+    context,
+  );
+  expect(done.approved).toBe(true);
+  expect(opened).toEqual(["/code/app"]);
+  expect(parseTandemCommand("open-project /code/app")).toEqual({
+    action: "open-project",
+    repoPath: "/code/app",
+  });
+});
+
 test("model listing is read-only and model changes require approval", async () => {
   const modelOptions = {
     modelSettings: {
