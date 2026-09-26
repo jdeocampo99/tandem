@@ -164,9 +164,12 @@ Agents run with your local permissions. Tandem is not a security sandbox.
 
 ## Install and first run
 
-From a clone of this repository:
+Clone Tandem and run its setup in one go. The `tandem` command only exists after `./setup.sh`, so
+don't skip it:
 
 ```sh
+git clone https://github.com/jdeocampo99/tandem.git
+cd tandem
 ./setup.sh
 ```
 
@@ -176,7 +179,7 @@ asks first). Read
 [setup.sh](setup.sh) first if you want to check; it is safe to run again. Keep Bun's global bin
 directory on your `PATH`.
 
-Then, from inside a repository:
+Then, from any folder:
 
 ```sh
 tandem
