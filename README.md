@@ -57,7 +57,8 @@ Tandem picks the playbook for you. Say "treat this as a refactor" to change it.
 
 Every change runs your project's tests, types, and lint, then goes to a separate reviewer agent
 that didn't write it. Findings go back to the implementer as a fix round. Work is only ready when
-both pass, and after three rounds without passing Tandem stops and asks you.
+both pass. After two fix rounds without passing (configurable), Tandem stops and asks whether to
+keep going.
 
 ### The whole pull request lifecycle
 
