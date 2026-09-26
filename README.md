@@ -1,210 +1,146 @@
 # Tandem
 
-Tandem lets you hand coding work to AI agents without babysitting them. You say what you want and
-approve the plan. Tandem handles the rest: it splits the work across agents, gives each one its own
-copy of the repository, checks and reviews every change, and remembers where everything stands. You
-stop juggling context windows, worktrees, and a mental list of half-finished tasks. You just ask.
+Tandem handles the tedious parts of building with coding agents. You chat with one agent about what
+you want, and Tandem takes it from idea to merged pull request: it researches the code, agrees on a
+plan with you, writes the change, tests and reviews it, opens the pull request, and sees it through
+CI and review. Every task is saved, so you can close the terminal and pick up where you left off.
 
-Tandem runs locally on your Mac.
+The parts it takes off your plate:
 
-## Why use it
+- **Slop.** Agents pad their writing and cut corners in code. Tandem holds every agent to shared
+  writing and code standards and a playbook for its kind of task, then has a fresh reviewer grade
+  the work against the same rules.
+- **Context windows and worktrees.** Each job gets a fresh agent with only the context it needs, in
+  its own worktree that Tandem creates, reuses, and cleans up. Your own checkout is never touched.
+- **Managing agents.** Tandem starts, schedules, and restarts research, coding, and review agents,
+  runs each on the model you picked for its role so research can use a cheaper one,
+  remembers where every task stands, and brings you only the questions that need you.
+- **Pull requests.** It opens them, carries them through flaky CI, conflicts, and merge queues, and
+  helps you review your teammates'.
 
-- **No context juggling.** Each job gets a fresh agent with only what it needs, so you're never
-  nursing one long chat that's losing the thread.
-- **No worktree chores.** Tandem creates, reuses, and cleans up worktrees for you. Your own checkout
-  is never touched, so it can stay messy.
-- **Nothing to remember.** Every task is saved with its plan, progress, and open questions. Close
-  the terminal, come back tomorrow, and ask "where are we?"
-- **Code you can trust.** Your project's own checks (tests, types, lint) run on every change, then a
-  separate agent that didn't write the code reviews it. Work is only called done when both pass.
-  If fixes go three rounds without passing, Tandem stops and asks instead of looping.
-- **Costs you control.** You pick a model for each job, so research and review can run on cheaper
-  models while coding gets a stronger one. Tandem never switches to a pricier model on its own, and
-  it can show what each request cost. When a task finishes and the coordinator's chat has grown
-  long, it compacts that chat so later turns don't keep paying for old history.
-- **You approve what matters.** Research starts on its own, but code changes and pull requests
-  each wait for your yes. Once you publish a pull request, Tandem merges it when its checks pass;
-  a draft is never merged.
-- **Several projects at once.** Open multiple repositories in one session; each gets its own
-  coordinator and agents.
+The orchestration behind all of this is deterministic code, and a small classifier answers routine
+questions, so **model tokens go only to the work that needs judgment**.
 
-## How a request flows
+## What it does
 
-1. **You ask.** Tell the coordinator what you want, for example "add dark mode to the settings
-   page".
-2. **It plans with you.** The coordinator may send a research agent to read the code first, asks
-   about anything unclear, and writes up a short brief: the goal, scope, how success will be
-   checked, and what you'll need to check by hand.
-3. **You approve.** Nothing is edited until you say yes to the brief. If you change your mind
-   later, running work pauses until you approve the new version.
-4. **Agents do the work.** A coding agent makes the change in its own worktree. Tandem runs your
-   checks, then a separate reviewer looks at the change. Fixes loop until both pass.
-5. **You deliver.** When the task is ready, the coordinator offers to open a pull request with a
-   summary, the check results, and a checklist of things to verify by hand. Once you publish it,
-   PR watch merges it when its checks pass, retrying flaky CI along the way.
+### Orchestration in code
 
-You can watch any agent in its own terminal pane, or chat with it directly.
+![How a request moves through Tandem: the model researches, plans, implements, and reviews; you approve and publish; code validates, opens the draft PR, and runs PR watch](docs/images/request-flow.svg)
 
-## Requirements
+Models do the judgment work: researching, planning, writing code, and reviewing it. Everything
+around them is ordinary TypeScript: task stages, scheduling, worktree allocation, approvals,
+validation, retries, recovery, and pull request decisions. Validation runs your project's checks
+with no model involved. PR watch decides what to do from a fixed decision table.
 
-- macOS (Tandem relies on a macOS file-locking feature; Linux and Windows aren't supported)
-- `git` (run `xcode-select --install` if it's missing)
-- [Bun](https://bun.com/docs/installation), the JavaScript runtime Tandem runs on
-- [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi), the AI coding agent each worker runs,
-  already set up with your model provider
-- [Herdr](https://herdr.dev/docs/install/), the terminal workspace manager that holds the agent panes
-- [Treehouse](https://github.com/kunchenguid/treehouse), which creates the separate worktrees
-- Optional: [`gh`](https://cli.github.com/), signed in, for pull requests and merges
-- Optional: `lavish-axi`, for visual presentations of work
+Keeping orchestration out of the model makes Tandem **faster and cheaper, since no tokens go to
+bookkeeping**, and predictable, since the same state always leads to the same next step.
 
-Tandem uses your existing logins and credentials. It is not a security sandbox: agents run with
-your local permissions.
+### Guardrails against slop
 
-## Install
+Models tend to over-explain, pad, and reach for the same handful of phrases. Tandem holds **every
+agent to a shared writing standard** that bans the usual tells (preambles, closing summaries, "not
+X, it's Y", filler words like "robust" and "leverage") across chat replies, code comments, docs,
+commit messages, and pull request text. Briefs have hard limits on list length and item size.
 
-From a clone of this repository:
-
-```sh
-./setup.sh
-```
-
-The script installs Bun, Herdr, Treehouse, OMP, `lavish-axi`, and `gh` (through Homebrew),
-skipping any you already have, then installs Tandem. It reminds you to run `gh auth login` if
-you aren't signed in. It's safe to run again. The tool installers run scripts from the linked projects; read
-[setup.sh](setup.sh) first if you want to check what they do. Keep Bun's global bin directory on
-your `PATH` so `tandem` works from any folder.
-
-## First run
-
-From inside a repository you want to work on:
-
-```sh
-tandem
-```
-
-The first time, Tandem looks at the project without changing anything, suggests settings (like
-which commands to run as checks), and asks you to pick a model and thinking level for each of its
-five roles: **Planning**, **Research**, **Coding**, **Review**, and **Presentations**. You approve
-the choices before anything is saved. Model choices apply to all your projects; you can change them
-later with `tandem configure`.
-
-Then Tandem opens a Herdr window with the coordinator for that project. Start typing what you want.
-
-To add more projects, pass their paths:
-
-```sh
-tandem /path/to/first-repo /path/to/second-repo
-```
-
-After that, plain `tandem` from any folder reopens every saved project, and each coordinator
-resumes its previous chat. Add `--fresh` to start new chats. Your tasks are kept either way.
-
-## Working with the coordinator
-
-Talk to it in plain language. Some things you can say:
-
-- "Fix the flaky login test."
-- "Research how we handle retries before we change anything."
-- "What's the status of the dark mode task?"
-- "How's it going?" (what needs you, what's running, and your pull requests, across projects)
-- "Also make the toggle remember the last choice." (a follow-up for work you already approved)
-- "Open a draft PR so I can see progress."
-- "Publish it." / "Merge it."
-- "Review https://github.com/acme/api/pull/7" (or "skim the idea behind …", or "check the migration in …")
-
-When a worker needs a decision, the coordinator relays the question and a recommendation. It will
-answer routine questions itself when your approved plan already settles them, and brings you
-anything involving product choices, scope changes, credentials, or publishing.
-
-The coordinator also has a `/tandem` command for direct actions (for example
-`/tandem restart TASK_ID` to restart one stuck worker). Type `/tandem` to see the list.
-
-### Using skills
-
-Invoke a skill the way you would in any agent session: `/skill:tdd fix the retry bug`, or "use
-the tdd skill for this". Tandem finds the skill in the repository first, then in your own skill
-folders, and gives the worker the whole thing, including the folder its reference files live in.
-The reviewer gets it too, to check the work followed it. If the name matches no skill, or two, you
-hear about it before any work starts. A task keeps the version it started with, and its status
-lists the skills it uses. Workers also pick up the repository's own skills without being asked;
-your personal skills reach a worker only when you name one.
+The same goes for code. Implementers write to a set of code standards (honest signatures, one level
+of abstraction per function, reuse before adding, plain names, comments that explain why) and
+**reviewers grade against the identical text**. A project that has its own conventions can turn these
+off with `standards = "none"`.
 
 ### Playbooks
 
-Every coding task follows a short playbook for its kind of job, so the agent doesn't skip the
-steps that catch the usual mistakes. You don't invoke anything: Tandem picks the playbook, the task
-status shows it (`Type: bug fix`), and you can say "treat this as a refactor" to change it.
+Every coding task follows a playbook for its kind of work, so **good practice happens by default on
+every task**. Tandem picks the playbook, and the agent can't finish until each step is done or it
+explains why one doesn't apply.
 
-| Playbook | Good for | What it makes the agent do |
-| --- | --- | --- |
-| Bug fix | Something behaves wrongly | Reproduce it in a failing test first, fix it where it starts, and commit the test before the fix |
-| Feature | New behavior | Reuse existing code, test through the public entry point, and check what happens if it runs twice or fails halfway |
-| Refactor | Same behavior, new structure | Confirm tests cover it first, move every caller, and delete the old version |
-| Perf | Making something faster | Measure before and after, and fix the cause |
-| General | Anything else | The feature steps, without naming the data first |
-| Fix round | Review found problems | Fix every finding, confirm each is gone, and question the first fix if one comes back |
+| Playbook | Main steps |
+| --- | --- |
+| Bug fix | Reproduce it in a failing test, fix the cause, commit the test before the fix |
+| Feature | Reuse existing code, test through the public entry point, check reruns and partial failures |
+| Refactor | Confirm coverage first, move every caller, delete the old version |
+| Perf | Measure before and after, fix the cause |
+| Fix round | Fix every finding, confirm each is gone |
 
-The agent works through the steps as its to-do list. It can skip a step that doesn't apply, but it
-has to say why, and it can't finish with a step left open.
+### Validation and independent review
 
-### Working in another repository
+Every change runs your project's tests, types, and lint first. Then **a fresh reviewer agent that
+didn't write the code** reads it through three lenses:
 
-Ask for research or a change in another repository ("how does acme/api handle retries?", "add the
-field in acme/api too"), and the coordinator runs it from that repository's default branch, found
-the same way as for reviews below, without touching your checkout of it. A change that spans
-several repositories becomes one task, and one pull request, per repository. If a repository isn't
-set up in Tandem, the coordinator asks you how to check work there and adds your answer to the
-brief.
+- **Behavior:** does it do what the approved brief says, including errors, edge cases, ordering,
+  and security.
+- **Design:** every changed function and its callers, graded against the same code standards and
+  principles the implementer followed.
+- **Coverage:** whether the changed behavior is tested, based on evidence in the diff.
 
-### Reviewing a teammate's pull request
+Each finding has to cite evidence. Findings go back to the implementer as a fix round, and the next
+review focuses on what changed since. After two fix rounds without a clean pass, Tandem stops and
+asks you whether to keep going.
 
-Paste a PR link and ask for a review. Tandem finds the repository on your machine (it looks under
-`~/Coding/Projects`, or the folders in `TANDEM_PROJECT_ROOTS`, and asks if it can't tell), checks out
-the PR in its own worktree without touching your branch, and comes back with what the PR does and
-why, the order to read it in, a diagram of the change when it helps, the concerns that matter, and
-draft comments written the way a teammate would write them. Bigger reviews open as a page you can
-leave notes on.
+### Watching pull requests until they merge
 
-Tell it what to change ("drop the nit", "make the first one blocking"), ask it questions about the
-code, and when you're happy, say whether to comment, approve, or request changes. It posts one
-review under your name only after you confirm. When the author pushes again, ask for a re-review:
-it looks only at what changed and tells you which of your comments were addressed.
+A ready task opens a draft pull request with a summary, check results, and a checklist of anything
+to verify by hand. From there PR watch **keeps it moving and only brings you the cases that need a
+person**. Hand it any other pull request with `tandem watch <link>`.
 
-### Keeping pull requests moving
+![How PR watch keeps a pull request moving: it fixes flaky checks, conflicts, stale branches, and queue kick-outs on its own, merges when everything is green, and comes to you only when a person is needed](docs/images/pr-watch.svg)
 
-CI takes a while and sometimes flakes. PR watch keeps an eye on every pull request Tandem opens, and
-any other you name with `tandem watch <link>`. When a required check fails, it reruns CI once with
-an empty commit, and waits instead when the same check is failing on `main` too. Once a pull
-request is published (not a draft), it turns on GitHub auto-merge, or adds your merge queue's label,
-and puts it back in the queue after a flaky kick-out. Merging is off for a repository until you say
-how it merges: onboarding asks, or Tandem asks the first time it watches one of your pull requests
-there, and "Not now" sticks. When a pull request Tandem opened has conflicts, its task
-merges the base branch in and pushes; for one of yours, Tandem asks once ("fix it?") and starts a
-task only on yes. It only interrupts you when a pull request needs you: a check failing twice on the
-same code, a stuck check, conflicts it could not fix, requested changes, or a lost approval. It
-acts only on its scheduled checks while Tandem is open; opening the view just reads. The view also
-lists your other open pull requests across repositories, untouched until you hand one over.
+### Reviewing other people's pull requests
 
-```
-PR watch · 3 open · checked 5s ago
+Paste a PR link and ask for a review. Tandem checks it out in its own worktree and comes back with
+what the change does, the order to read it in, the concerns that matter, and draft comments in a
+teammate's voice. Edit them in conversation, then say whether to comment, approve, or request
+changes. Nothing posts until you confirm. A re-review looks only at what changed since and tells
+you which comments were addressed.
 
-🔴 #409 refactor-cache   ❌ 15/16   ❌ failing    🙋 test_cache_evict failed twice → https://ci/…
-🟡 #412 fix-auth         ✅ 16/16   👀 review     ⏳ waiting on @reviewer
-🟢 #420 add-cache        ⏳ 12/16   ✅ approved   🔁 retried e2e/login (flaky?)
-⚪ #431 Bump parser               🟢 open       not watched; "watch #431" hands it over
-```
+### Jev routing
 
-Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #409" or run
-`tandem watch --stop 409` to stop watching one. It works while Tandem is open.
+Tandem uses [TypeSafe's Jev](docs/reference/policy.md#jev-prompt-routing), a small, fast
+classifier, to handle the parts of a conversation that **don't need a full model turn**. Jev input
+costs $0.042 per million tokens with output free.
 
-### Seeing everything at once
+![How Jev routes a prompt: a confident match runs in code with no model turn, anything else goes to the coordinator](docs/images/jev-routing.svg)
 
-`tandem status` shows all your projects in one place: what needs you (briefs to approve,
-questions, pull requests that need a person), what's running, and your watched pull requests.
-`tandem status --watch` keeps it live, refreshing every 2 seconds from what Tandem already saved,
-so it never calls GitHub; its pull request rows show when PR watch last checked. The coordinator
-opens the live view beside its chat when a brief, a question, a pull request, or finished work
-newly waits on you, and asking "how's it going?" shows the same thing in the chat.
+- Lookups like "how's it going?", "how are my PRs?", or "list my tasks" are answered instantly.
+- Short replies to Tandem's own questions ("yeah restart it") run directly. Approving a brief this
+  way still asks you to type `y`.
+- "Pull up the dark mode brief" and "why did that task take so long?" go straight to the right
+  action.
+- Each coding task's playbook is picked by Jev.
+
+Jev only chooses among options Tandem's code lists for it. It never authorizes anything, and any
+low-confidence or unclear prompt falls through to the coordinator. Without a `TYPESAFE_API_KEY`,
+everything goes to the coordinator and tasks use the General playbook.
+
+### Visual mockups
+
+With [Lavish](https://github.com/kunchenguid/lavish-axi) installed, a research agent can draw a
+mockup, wireframe, or explainer page and open it in your browser. Comment on the page and **your
+comment goes straight back to the agent**, which updates the page while the tab reloads. The agent
+stays open after its research, so you can settle on a design before any code is written.
+
+### Cost control
+
+You pick a model and thinking level for each role (planning, research, coding, review,
+presentations), so research can run on a cheaper model while coding and review get stronger ones.
+**Tandem never switches to a pricier model on its own.** Each request records its usage and cost, and
+the coordinator's chat is compacted after a task finishes so later turns don't pay for old history.
+
+### Everything else
+
+- **Approvals where they matter.** Research starts on its own. Code changes wait for you to approve
+  a short brief, and publishing waits for another yes.
+- **Several projects and repositories.** Open multiple projects in one session. Ask for work in
+  another repository and Tandem runs it there without touching your checkout, one pull request
+  per repository.
+- **Skills.** `/skill:tdd fix the retry bug` gives the worker and its reviewer the whole skill.
+- **Self-improvement.** When a task restarts twice or gets stuck, Tandem can investigate its own
+  source and propose a fix, or draft a scrubbed GitHub issue on machines that shouldn't push code.
+
+## One view of everything
+
+`tandem status` shows every project at once: what needs you, what's running, and your pull
+requests. `tandem status --watch` keeps it live, and the coordinator opens it beside the chat when
+something new waits on you.
 
 ```
 Projects: tandem, tagalingo · PRs checked 40s ago
@@ -220,102 +156,78 @@ PRs
 🟢 acme/app#420 add-cache ⏳ 12/16 ✅ approved
 
 This week: 7 done · 5 of 7 passed review first time · $14.20
-
-coordinators open: tandem, tagalingo
-Tandem code: 9618fa9 Merge pull request #188 (/Users/me/Coding_Projects/tandem)
-Ask the coordinator about any task, or run `tandem status --json` for task IDs · live view: tandem status --watch
 ```
 
-### Looking into Tandem's own problems
+## Requirements
 
-When a task restarts twice, needs three or more rounds of fixes, or stays stuck for over an hour,
-Tandem can ask whether you want it to look into why. You can also ask any time: "why did that task
-take so long?". On yes, a research agent reads what happened to the task and Tandem's own source,
-and the coordinator tells you the cause and what it would change.
+- macOS
+- `git`
+- [Bun](https://bun.com/docs/installation)
+- [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi), set up with your model provider
+- [Herdr](https://herdr.dev/docs/install/), which holds the agent panes
+- [Treehouse](https://github.com/kunchenguid/treehouse), which creates worktrees
+- Optional: [`gh`](https://cli.github.com/), signed in, for pull requests and PR watch
+- Optional: `lavish-axi` for presentations, `TYPESAFE_API_KEY` for Jev
 
-This is off until you turn it on for the machine in `~/.tandem/settings.toml`:
+Agents run with your local permissions. Tandem is not a security sandbox.
 
-- `selfImprovement = "fix"` offers to fix Tandem through the usual plan, approval, review, and draft
-  pull request on the Tandem repository. Run `tandem update` after it merges.
-- `selfImprovement = "report"` is for machines that must not push code, such as a work laptop. It
-  drafts a GitHub issue instead, with paths, code, and your task's text taken out, and shows it to
-  you with a warning if a check thinks something from your work is still in it. Nothing is filed
-  until you approve it.
+## Install and first run
 
-## Terminal commands
+From a clone of this repository:
+
+```sh
+./setup.sh
+```
+
+It installs whatever is missing (read [setup.sh](setup.sh) first if you want to check) and is safe
+to run again. Keep Bun's global bin directory on your `PATH`.
+
+Then, from inside a repository:
+
+```sh
+tandem
+```
+
+The first run looks at the project without changing anything, suggests check commands, and asks you
+to choose models for each role. After that, plain `tandem` from any folder reopens every saved
+project with its previous chat. Add more with `tandem /path/to/repo`.
+
+## Commands
 
 | Command | What it does |
 | --- | --- |
 | `tandem [PATH ...]` | Open or reconnect your projects |
-| `tandem status [TASK_ID]` | What needs you, what's running, and your pull requests across projects (`--watch` keeps it live); with a task ID, that task's full history |
-| `tandem trace [TASK_ID]` | What happened to a task and why, with its review, fix-round, blocked-time, and cost figures; without a task ID, the same figures across all tasks |
-| `tandem watch [PR]` | Your watched pull requests; with a PR link or number, start watching it (`--stop` to stop) |
+| `tandem status [TASK_ID]` | What needs you, what's running, and your pull requests; with a task ID, that task's history |
+| `tandem trace [TASK_ID]` | What happened to a task and why, with review, fix-round, blocked-time, and cost figures |
+| `tandem watch [PR]` | Your watched pull requests; with a link or number, start watching it (`--stop` to stop) |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
-| `tandem fix` | Find and clean up leftovers from a crash or failed launch (asks first) |
+| `tandem fix` | Clean up leftovers from a crash or failed launch (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |
-| `tandem config [PATH]` | Open the project's settings file in your editor |
+| `tandem config [PATH]` | Open the project's settings file |
 | `tandem reset` | Cancel all in-progress tasks and reopen fresh coordinators |
 | `tandem reset --hard` | Delete all Tandem state and start over |
 
-Common options: `--yes` skips confirmation (`fix`, `reset`), `--json` prints machine-readable
-output (`status`, `trace`, `watch`, `fix`), and `--home PATH` uses a different Tandem data folder. Run
-`tandem --help` for the full list.
+Run `tandem --help` for options.
 
 ## When something goes wrong
 
-Try these in order:
+Start with `tandem status`, then `tandem trace TASK_ID` to see why a task stalled. Ask the
+coordinator to restart a stuck task; it keeps its worktree and history. `tandem update` replaces a
+misbehaving coordinator without cancelling work, and `tandem fix` cleans up after a crash. Don't
+delete Tandem's files, panes, or worktrees by hand.
 
-1. **`tandem status`** shows what needs you and what every task is doing. It never changes anything.
-2. **A task restarted, blocked, or took many review rounds and you want to know why:**
-   `tandem trace TASK_ID` lists every stage change, restart, block, finding, question, and steer
-   with its cause, and where the worker's transcript and report are.
-3. **A task is stuck:** ask the coordinator to restart it, or run `/tandem restart TASK_ID`. The
-   worker keeps its worktree, history, and messages.
-4. **A coordinator is misbehaving or you pulled new Tandem code:** `tandem update` replaces the
-   coordinators without cancelling any work.
-5. **Leftover panes or worktrees after a crash:** `tandem fix` lists what it would clean and asks
-   first. Anything with unsaved or unmerged work is kept.
-6. **You want a clean slate for tasks:** `tandem reset` cancels in-progress tasks and reopens the
-   coordinators. Your files, worktrees, settings, and task history are kept.
-7. **You want to start completely over:** `tandem reset --hard` deletes all Tandem data, including
-   worktrees with work that was never pushed. It lists everything first and asks.
-
-Don't delete Tandem's files, panes, or worktrees by hand; the commands above check what's safe
-before touching anything.
-
-## Where things live
-
-Tandem stores its data in `~/.tandem` (tasks, settings, worktrees), not in your repository. A
-finished task's worker conversation is deleted 30 days after the task last changed; its reports
-are kept. Each
-project's settings file, including the check commands, opens with `tandem config`. Your default
-data folder and session name are remembered in `~/.config/tandem/config.json`.
-
-## Optional extras
-
-- **Faster answers to simple questions.** With a `TYPESAFE_API_KEY` set, Tandem uses the TypeSafe
-  Jev classifier to answer read-only lookups ("list my tasks", "how are my PRs?", "how's it going?") instantly without
-  a full model turn.
-  A short reply to one of Tandem's fixed-choice questions ("yeah restart it") is answered the same
-  way; approving a brief this way still asks you to type `y` first. Anything else that changes
-  state goes through the coordinator. See
-  [Jev prompt routing](docs/reference/policy.md#jev-prompt-routing). The same key lets Tandem
-  pick each coding task's [playbook](#playbooks); without it, tasks use General.
-- **Visual presentations.** With `lavish-axi` installed, a research task's agent can draw a mockup
-  or explainer page in its own pane, and Tandem opens it in Lavish. Your comments there go straight
-  back to that agent, which updates the same page while the tab reloads. The research agent stays
-  open after its research until you start building, so you can keep iterating.
-- **Conversational skills.** Three skills let any agent session explain Tandem, onboard a
-  repository, or report status. See
-  [installing the skills](skills/README.md).
+Tandem keeps its data in `~/.tandem`, never in your repository.
 
 ## Credits
 
-Tandem's playbooks and the principle rules its coding and review agents follow are adapted from
-[pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT).
+Tandem's playbooks and the principles its coding and review agents follow are adapted from
+[pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT). Worktrees come from
+[Treehouse](https://github.com/kunchenguid/treehouse) and visual mockups from
+[Lavish](https://github.com/kunchenguid/lavish-axi), both by Kun Chen.
 
 ## Learn more
 
-- [Reference](docs/reference/): the behavior contracts behind every command, setting, safety
-  check, and recovery rule.
-- [AGENTS.md](AGENTS.md): a guide for contributing to Tandem's code.
+- [Reference](docs/reference/): the behavior behind every command, setting, and safety check.
+- [AGENTS.md](AGENTS.md): contributing to Tandem.
+- [Skills](skills/README.md): let any agent session explain Tandem, onboard a repository, or
+  report status.

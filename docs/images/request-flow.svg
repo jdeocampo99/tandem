@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1012 320" role="img" aria-labelledby="t d">
+  <title id="t">How a request moves through Tandem</title>
+  <desc id="d">Nine stages from research to PR watch. The model researches, plans, implements, and reviews. You approve and publish. Code validates, opens the draft PR, and runs PR watch. A fix-round loop runs from review back to implement. All stages sit on a runtime written in TypeScript.</desc>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .muted { fill: #59636e; }
+    .tag { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+    .name { font-size: 15px; font-weight: 600; }
+    .sub { font-size: 11.5px; }
+    .model rect.box { fill: #f3eefe; stroke: #8b5cf6; }
+    .model .tag { fill: #6d28d9; }
+    .code rect.box { fill: #e7f6f3; stroke: #14b8a6; }
+    .code .tag { fill: #0f766e; }
+    .you rect.box { fill: #fdf3e2; stroke: #f59e0b; }
+    .you .tag { fill: #b45309; }
+    rect.box { stroke-width: 1.5; }
+    .band { fill: #e7f6f3; stroke: #14b8a6; stroke-width: 1.5; }
+    .band-title { font-size: 14px; font-weight: 600; fill: #0f766e; }
+    .line { stroke: #8c959f; stroke-width: 1.5; fill: none; }
+    .dash { stroke: #14b8a6; stroke-width: 1.2; stroke-dasharray: 3 4; }
+    .loop { stroke: #8b5cf6; stroke-width: 1.5; fill: none; }
+    .head { fill: #8c959f; }
+    .loophead { fill: #8b5cf6; }
+    .looplabel { font-size: 12px; fill: #6d28d9; font-weight: 600; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #e6edf3; }
+      .muted { fill: #9198a1; }
+      .model rect.box { fill: #251b3d; stroke: #a78bfa; }
+      .model .tag { fill: #c4b5fd; }
+      .code rect.box, .band { fill: #0d2b28; stroke: #2dd4bf; }
+      .code .tag, .band-title { fill: #5eead4; }
+      .you rect.box { fill: #2e230f; stroke: #fbbf24; }
+      .you .tag { fill: #fcd34d; }
+      .line { stroke: #6e7681; }
+      .head { fill: #6e7681; }
+      .dash { stroke: #2dd4bf; }
+      .loop { stroke: #a78bfa; }
+      .loophead { fill: #a78bfa; }
+      .looplabel { fill: #c4b5fd; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="looparrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="loophead" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <!-- legend -->
+  <g transform="translate(16,22)">
+    <g class="model"><rect class="box" width="14" height="14" rx="3"/></g><text x="22" y="11.5" font-size="12.5">Model</text>
+    <g class="code" transform="translate(84,0)"><rect class="box" width="14" height="14" rx="3"/></g><text x="106" y="11.5" font-size="12.5">Code</text>
+    <g class="you" transform="translate(164,0)"><rect class="box" width="14" height="14" rx="3"/></g><text x="186" y="11.5" font-size="12.5">You</text>
+  </g>
+
+  <!-- fix-round loop: review back to implement -->
+  <path class="loop" d="M616,108 C616,62 396,62 396,106" marker-end="url(#looparrow)"/>
+  <text class="looplabel" x="506" y="72" text-anchor="middle">fix rounds, up to 2</text>
+
+  <!-- stages -->
+  <g class="model" transform="translate(16,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="31" text-anchor="middle">MODEL</text><text class="name" x="50" y="55" text-anchor="middle">Research</text></g>
+  <g class="model" transform="translate(126,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="31" text-anchor="middle">MODEL</text><text class="name" x="50" y="55" text-anchor="middle">Plan</text></g>
+  <g class="you" transform="translate(236,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="31" text-anchor="middle">YOU</text><text class="name" x="50" y="55" text-anchor="middle">Approve</text></g>
+  <g class="model" transform="translate(346,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="22" text-anchor="middle">MODEL</text><text class="name" x="50" y="45" text-anchor="middle">Implement</text><text class="sub muted" x="50" y="64" text-anchor="middle">own worktree</text></g>
+  <g class="code" transform="translate(456,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="22" text-anchor="middle">CODE</text><text class="name" x="50" y="45" text-anchor="middle">Validate</text><text class="sub muted" x="50" y="64" text-anchor="middle">tests, types, lint</text></g>
+  <g class="model" transform="translate(566,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="22" text-anchor="middle">MODEL</text><text class="name" x="50" y="45" text-anchor="middle">Review</text><text class="sub muted" x="50" y="64" text-anchor="middle">fresh agent</text></g>
+  <g class="code" transform="translate(676,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="31" text-anchor="middle">CODE</text><text class="name" x="50" y="55" text-anchor="middle">Draft PR</text></g>
+  <g class="you" transform="translate(786,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="31" text-anchor="middle">YOU</text><text class="name" x="50" y="55" text-anchor="middle">Publish</text></g>
+  <g class="code" transform="translate(896,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="22" text-anchor="middle">CODE</text><text class="name" x="50" y="45" text-anchor="middle">PR watch</text><text class="sub muted" x="50" y="64" text-anchor="middle">CI through merge</text></g>
+
+  <!-- connectors -->
+  <g>
+    <line class="line" x1="117" y1="150" x2="124" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="227" y1="150" x2="234" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="337" y1="150" x2="344" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="447" y1="150" x2="454" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="557" y1="150" x2="564" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="667" y1="150" x2="674" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="777" y1="150" x2="784" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="887" y1="150" x2="894" y2="150" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- ties to the runtime -->
+  <g>
+    <line class="dash" x1="66" y1="192" x2="66" y2="232"/>
+    <line class="dash" x1="176" y1="192" x2="176" y2="232"/>
+    <line class="dash" x1="286" y1="192" x2="286" y2="232"/>
+    <line class="dash" x1="396" y1="192" x2="396" y2="232"/>
+    <line class="dash" x1="506" y1="192" x2="506" y2="232"/>
+    <line class="dash" x1="616" y1="192" x2="616" y2="232"/>
+    <line class="dash" x1="726" y1="192" x2="726" y2="232"/>
+    <line class="dash" x1="836" y1="192" x2="836" y2="232"/>
+    <line class="dash" x1="946" y1="192" x2="946" y2="232"/>
+  </g>
+
+  <!-- runtime band -->
+  <rect class="band" x="16" y="232" width="980" height="72" rx="12"/>
+  <text class="band-title" x="506" y="262" text-anchor="middle">Tandem runtime, written in TypeScript</text>
+  <text class="sub muted" x="506" y="284" text-anchor="middle" font-size="12.5">stage machine · scheduler · worktree pool · approval gates · recovery · saved task state</text>
+</svg>
