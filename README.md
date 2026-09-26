@@ -66,24 +66,13 @@ Each finding has to cite evidence. Findings go back to the implementer as a fix 
 review focuses on what changed since. After two fix rounds without a clean pass, Tandem stops and
 asks you whether to keep going.
 
-### The whole pull request lifecycle
+### Watching pull requests until they merge
 
-A ready task opens its own draft pull request with a summary, check results, and a checklist of
-anything you need to verify by hand. From there PR watch takes over, and **only brings you the
-cases that need a person**:
+A ready task opens a draft pull request with a summary, check results, and a checklist of anything
+to verify by hand. From there PR watch **keeps it moving and only brings you the cases that need a
+person**. Hand it any other pull request with `tandem watch <link>`.
 
-![What PR watch handles on its own and when it asks you](docs/images/pr-watch.svg)
-
-```
-PR watch · 3 open · checked 5s ago
-
-🔴 #409 refactor-cache   ❌ 15/16   ❌ failing    🙋 test_cache_evict failed twice → https://ci/…
-🟡 #412 fix-auth         ✅ 16/16   👀 review     ⏳ waiting on @reviewer
-🟢 #420 add-cache        ⏳ 12/16   ✅ approved   🔁 retried e2e/login (flaky?)
-⚪ #431 Bump parser               🟢 open       not watched; "watch #431" hands it over
-```
-
-It works on pull requests Tandem opened and any other you hand it with `tandem watch <link>`.
+![How PR watch keeps a pull request moving: it fixes flaky checks, conflicts, stale branches, and queue kick-outs on its own, merges when everything is green, and comes to you only when a person is needed](docs/images/pr-watch.svg)
 
 ### Reviewing other people's pull requests
 
