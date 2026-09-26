@@ -10,17 +10,16 @@ const WELCOME_BODY = `Tandem runs a team of agents on your repos. They
 research, write code, review it, and open draft PRs.
 You approve each step.
 
-To start, tell the agent behind this window which
-repos to set up, like "Set up api and web".
-
-You can also ask it to change how Tandem works.
 prefix+t shows status anytime.`;
 
-/** The welcome with its title, for places without the popup's frame: the chat and a plain terminal. */
-export const WELCOME_TEXT = `${WELCOME_TITLE}\n\n${WELCOME_BODY}`;
+/** What Enter sends to the Tandem coordinator; its setup context has it open the setup page. */
+export const WELCOME_PROMPT = "Onboard me to Tandem";
 
-/** What Enter sends to the Tandem coordinator, so the walkthrough starts without typing. */
-export const WELCOME_PROMPT = "Help me onboard my repos";
+/**
+ * The welcome with its title, for places without the popup's frame: the chat and a plain terminal.
+ * There is no Enter to press there, so it says what to type.
+ */
+export const WELCOME_TEXT = `${WELCOME_TITLE}\n\n${WELCOME_BODY}\n\nTo start, say "${WELCOME_PROMPT}".`;
 
 type WelcomeKey = "start" | "close";
 
