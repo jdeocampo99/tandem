@@ -147,6 +147,7 @@ function setup(
     run,
     environment: { HOME: "/Users/me" },
     commands: COMMANDS,
+    sessionId: "tandem",
     confirm: async () => true,
     print: (text) => printed.push(text),
     readConfig: async () => overrides.config,
@@ -171,7 +172,7 @@ test("setup updates an old Herdr, asks, writes the config, and reloads it", asyn
     "--version",
     "config check",
     "config check",
-    "server reload-config",
+    "--session tandem server reload-config",
   ]);
   expect(writes).toHaveLength(1);
   expect(parsed(writes[0] ?? "").ui?.sidebar_width).toBe(30);
@@ -194,7 +195,7 @@ test("setup puts the old config back when Herdr rejects the new one", async () =
   const { deps, writes, ran, printed } = setup({ config: original, checks: [0, 1] });
   expect(await setUpHerdrStatus(deps)).toBe(false);
   expect(writes.at(-1)).toBe(original);
-  expect(ran).not.toContain("server reload-config");
+  expect(ran).not.toContain("--session tandem server reload-config");
   expect(printed.join("")).toContain("the old one is back");
 });
 

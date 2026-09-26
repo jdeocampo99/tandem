@@ -4,7 +4,9 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { quoteShellArgument, runCommand } from "../adapters/commands.ts";
+import { resolveTandemEnvironment } from "../config/environment.ts";
 import type { CommandRunner } from "../contracts.ts";
+import { DEFAULT_TERMINAL_SESSION_ID } from "./environment.ts";
 
 /** The oldest Herdr with both popup keybindings (0.7.4) and command entries in the tab bar (0.8.2). */
 export const MIN_HERDR_VERSION = "0.8.2";
@@ -146,6 +148,8 @@ export type HerdrSetupDependencies = Readonly<{
   readonly run: CommandRunner;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly commands: HerdrStatusCommands;
+  /** The Herdr session Tandem's panes run in; its server is the one to reload. */
+  readonly sessionId: string;
   /** Asks a yes/no question; undefined when there is no terminal to ask in. */
   readonly confirm: ((question: string) => Promise<boolean>) | undefined;
   readonly print: (text: string) => void;
@@ -209,11 +213,13 @@ export async function setUpHerdrStatus(deps: HerdrSetupDependencies): Promise<bo
     return false;
   }
   deps.print(`✓ Added to ${path}${backup === undefined ? "" : ` (backup: ${backup})`}\n`);
-  const reloaded = (await herdr(["server", "reload-config"]))?.code === 0;
+  // Plain `herdr server reload-config` reloads the default session, not the one Tandem uses.
+  const reload = ["--session", deps.sessionId, "server", "reload-config"];
+  const reloaded = (await herdr(reload))?.code === 0;
   deps.print(
     reloaded
-      ? `✓ Herdr reloaded its config; press ${STATUS_POPUP_KEY} for the live status\n`
-      : `Herdr picks it up the next time it starts, or run: herdr server reload-config\n`,
+      ? `✓ Herdr's ${deps.sessionId} session reloaded its config; press ${STATUS_POPUP_KEY} for the live status\n`
+      : `Herdr's ${deps.sessionId} session picks it up when it starts, or run: herdr ${reload.join(" ")}\n`,
   );
   return true;
 }
@@ -225,6 +231,10 @@ async function main(): Promise<void> {
     run: runCommand,
     environment: process.env,
     commands: herdrStatusCommands(process.execPath, tandemMain),
+    sessionId: resolveTandemEnvironment(process.env, {
+      cwd: process.cwd(),
+      sessionId: DEFAULT_TERMINAL_SESSION_ID,
+    }).sessionId,
     confirm: interactive
       ? async (question) => {
           const readline = createInterface({ input: process.stdin, output: process.stdout });
