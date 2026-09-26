@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { renderStatus } from "../../src/board/terminal.ts";
+import { renderStatus, renderStatusLine } from "../../src/board/terminal.ts";
 import {
   type BoardState,
   boardView,
@@ -150,7 +150,7 @@ test("status puts what needs you first, then running work and pull requests, the
 test("an empty status says nothing needs you, that PR watch has not checked yet, and how to open a coordinator", () => {
   const view = boardView(state({ projects: [] }), NOW);
   expect(renderBoard(view)).toBe(
-    "Projects: none yet · PRs not checked yet\n\nNeeds you\nNothing needs you.\n",
+    "Projects: none yet · PRs not checked yet\n\nNeeds you\nNothing needs you.\n\nLive view: prefix+t in Herdr, or `tandem status --watch`\n",
   );
   const status = renderStatus(view, { code: "abc", coordinators: [] }, { color: false });
   expect(status).toStartWith(
@@ -295,7 +295,7 @@ test("the weekly line follows the PRs, counting finished tasks, first-pass revie
     }),
     NOW,
   );
-  expect(renderBoard(view).trimEnd().split("\n").at(-1)).toBe(
+  expect(renderBoard(view).trimEnd().split("\n").at(-3)).toBe(
     "This week: 3 done · 1 of 2 passed review first time · $14.20",
   );
   expect(renderBoard(boardView(state(), NOW))).not.toContain("This week");
@@ -314,4 +314,39 @@ test("a task counts for the week when its timeline last finished it within 7 day
   expect(finishedWithinWeek(finished("2029-12-26T12:00:00.000Z"), NOW)).toBe(true);
   expect(finishedWithinWeek(finished("2029-12-24T11:59:00.000Z"), NOW)).toBe(false);
   expect(finishedWithinWeek([], NOW)).toBe(false);
+});
+
+test("the one-line status leads with what needs you, then running work and pull request dots", () => {
+  const busy = boardView(
+    state({
+      briefs: [
+        createRequestBriefRecord(
+          { id: "req-1", repoPath: "/work/tandem", content: content("Dark mode") },
+          NOW,
+        ),
+      ],
+      tasks: [
+        task({ id: "t1", stage: "implementing" }),
+        task({ id: "t2", stage: "scouting" }),
+        task({ id: "t3", stage: "paused" }),
+      ],
+      watches: [
+        watch(409, { color: "red", status: "❌ failing", note: "" }),
+        watch(412, { color: "yellow", status: "👀 review", note: "" }),
+        watch(420, { color: "green", status: "✅ approved", note: "" }),
+        watch(421, { color: "green", status: "✅ approved", note: "" }),
+      ],
+    }),
+    NOW,
+  );
+  expect(renderStatusLine(busy)).toBe("🙋 2 need you · 🔨 2 running · 🔴 1 🟡 1 🟢 2");
+
+  const one = boardView(state({ tasks: [task({ id: "t1", stage: "ready" })] }), NOW);
+  expect(renderStatusLine(one)).toBe("🙋 1 needs you");
+
+  const calm = boardView(state({ tasks: [task({ id: "t1", stage: "implementing" })] }), NOW);
+  expect(renderStatusLine(calm)).toBe("✓ nothing needs you · 🔨 1 running");
+
+  const paused = boardView(state({ tasks: [task({ id: "t1", stage: "paused" })] }), NOW);
+  expect(renderStatusLine(paused)).toBe("✓ all quiet");
 });

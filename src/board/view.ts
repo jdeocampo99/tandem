@@ -141,6 +141,9 @@ export function opensBoard(row: BoardRow): boolean {
   );
 }
 
+/** Where the chat board points for the live view; setup.sh binds prefix+t in Herdr. */
+const LIVE_VIEW_HINT = "Live view: prefix+t in Herdr, or `tandem status --watch`";
+
 /** The board: header and sections, as "how's it going?" shows it in the chat. */
 export function renderBoard(view: BoardView): string {
   const header = [
@@ -158,6 +161,7 @@ export function renderBoard(view: BoardView): string {
       ? []
       : [["PRs", ...prWatchLines(view.pullRequests, true)].join("\n")]),
     ...(view.week === undefined ? [] : [weekLine(view.week)]),
+    LIVE_VIEW_HINT,
   ];
   return `${[header, ...sections].join("\n\n")}\n`;
 }

@@ -34,7 +34,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Artifacts, feedback, Lavish | [presentations/](src/presentations/) |
 | Research and changes in another repository, finding a repository's checkout | [repos/locate.ts](src/repos/locate.ts); `target` on tasks |
 | Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
-| `tandem status` and `--watch`, "Needs you", "how's it going?" | [board/](src/board/): `view.ts` (pure sections and rendering), `read.ts`, `pane.ts`; [terminal/status.ts](src/terminal/status.ts) |
+| `tandem status`, `--watch`, `--line`, "Needs you", "how's it going?" | [board/](src/board/): `view.ts` (pure sections and chat rendering), `terminal.ts` (terminal rendering and the one-line summary), `read.ts`, `pane.ts`; [terminal/status.ts](src/terminal/status.ts); Herdr tab bar and `prefix+t` popup setup: [terminal/herdr-setup.ts](src/terminal/herdr-setup.ts) |
 | PR watch: keeping open PRs moving until they merge, `tandem watch` | [pr-watch/](src/pr-watch/): `decide.ts` (pure decision table), `github.ts`, `watcher.ts`, `store.ts`, `view.ts` |
 | Self-improvement: trigger rules, investigations, report-mode issues | [self-improvement/](src/self-improvement/): `triggers.ts` (pure rules), `issue-draft.ts` (scrub and Jev check), `service.ts` |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |

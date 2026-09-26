@@ -1,13 +1,14 @@
 # Status
 
-What `tandem status` shows across projects, where its data comes from, its live view, and when
-the coordinator opens it.
+What `tandem status` shows across projects, where its data comes from, its live view, its
+one-line form in Herdr's tab bar, and when the coordinator opens it.
 
 Code: src/board/ (`view.ts` sections and the chat rendering, `terminal.ts` the terminal
 rendering, `read.ts` the state read and live loop,
 `pane.ts` the Herdr pane), src/terminal/status.ts (the footer's data), src/main.ts
 (`tandem status`), src/session/coordinator.ts (`showBoardOnArrival`),
-src/session/prompt-routing.ts (the `board` lookup). Tests: tests/board/,
+src/session/prompt-routing.ts (the `board` lookup), src/terminal/herdr-setup.ts (the Herdr
+config that setup.sh adds). Tests: tests/board/,
 tests/terminal/main.test.ts.
 
 ## What it shows
@@ -91,7 +92,42 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
   when the rendered text changed. It reads the terminal's width each round, so a resized pane is
   redrawn to fit. The code version is read once at start. A round that finds the
   state lock held by another Tandem is skipped.
-- Runs until Ctrl-C. It takes no task ID, `--json`, or `--logs`.
+- Runs until Esc, q, or Ctrl-C when its input is a terminal (read in raw mode, so arrow keys do
+  nothing), and until Ctrl-C otherwise. Closing cuts the wait between redraws short, so it exits at
+  once. Esc and q are what close it in Herdr's popup, which receives every key, including Herdr's
+  prefix, until its command exits. It takes no task ID, `--json`, `--logs`, or `--line`.
+
+## In Herdr: the tab bar and `prefix+t`
+
+- `tandem status --line` prints one line for Herdr's tab-bar status area (`ui.tab_bar_right`),
+  like `🙋 3 need you · 🔨 2 running · 🔴 1 🟡 1 🟢 1`:
+  - `🙋 N need(s) you` counts the Needs you rows, or `✓ nothing needs you` when there are none;
+  - `🔨 N running` counts Running rows other than paused ones, and is left out at zero;
+  - the dots count pull requests by PR watch color (red ones come from Needs you), each left out
+    at zero;
+  - with nothing needing you, running, or watched it prints `✓ all quiet`.
+  Herdr strips colors there, so emoji carry the meaning. It reads saved state like `tandem status`
+  (never GitHub, no footer, no git call) and takes no task ID, `--json`, `--logs`, or `--watch`.
+  A locked state or any other error exits non-zero with nothing on stdout, and Herdr clears the
+  entry until the next run.
+- `setup.sh` runs src/terminal/herdr-setup.ts, which:
+  - updates Herdr with `herdr update` when `herdr --version` is older than 0.8.2, the first
+    release with command entries in the tab bar (popup keybindings arrived in 0.7.4), and stops
+    with that message if Herdr is still older;
+  - plans additions to `$XDG_CONFIG_HOME/herdr/config.toml` (default `~/.config/herdr/`): a
+    `tab_bar_right` command entry running `status --line` every 5 seconds with a 10-second
+    timeout, and a `[[keys.command]]` popup on `prefix+t` (90% by 90%) running `status --watch`.
+    Both commands use absolute paths to Bun and `src/main.ts`, because Herdr runs them through
+    `/bin/sh -lc`, whose PATH may not include Bun's bin directory;
+  - leaves the user's settings alone: an existing `tab_bar_right`, a `ui` set without a `[ui]`
+    table, or another binding on `prefix+t` is skipped, and it prints the line to add by hand. An
+    existing `[ui]` table gets the entry inserted under its header; otherwise a `[ui]` table is
+    appended. Entries already running `status --line` or `status --watch` count as done, so
+    re-running adds nothing;
+  - shows the lines and asks before writing, and writes nothing without a terminal to ask in or
+    a yes. It copies the old file to `config.toml.before-tandem`, and if `herdr config check`
+    passed before and fails after, it writes the old file back. Then it runs
+    `herdr server reload-config`; if no server is running, Herdr reads the file when it starts.
 
 ## When the coordinator opens it
 
@@ -116,7 +152,8 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
   overall runs the read-only `board` action and shows the header and sections, without the footer,
   in a compact uncolored form for the chat (`renderBoard`: plain section titles, no column
   headers, checks as text, times after the stage like `implementing · 12m`),
-  with no coordinator turn (`board` in the lookup list, question schema version 5). If Jev fails or
+  with no coordinator turn (`board` in the lookup list, question schema version 5). The board ends
+  with a pointer to the live view: `prefix+t` in Herdr, or `tandem status --watch`. If Jev fails or
   is unsure, the message goes to the coordinator as before (see
   [policy.md](policy.md#jev-prompt-routing)).
 - The coordinator's `board` action returns the same view.

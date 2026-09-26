@@ -34,6 +34,9 @@ echo "→ installing Tandem"
 bun install
 bun link
 
+# Herdr >= 0.8.2 for the status popup and tab bar; asks before editing Herdr's config.
+bun src/terminal/herdr-setup.ts
+
 if ! grep -qs '.bun/bin' "$HOME/.zshrc"; then
   echo
   echo "Add this to ~/.zshrc so 'tandem' works in new terminals:"

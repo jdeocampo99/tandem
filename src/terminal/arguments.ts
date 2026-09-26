@@ -27,6 +27,7 @@ export type TerminalInvocation = Readonly<{
   readonly freeSuperseded: boolean;
   readonly stop: boolean;
   readonly watch: boolean;
+  readonly line: boolean;
 }>;
 
 export type TerminalRunResult = Readonly<{
@@ -106,6 +107,7 @@ const FLAGS = {
   "--no-attach": "noAttach",
   "--stop": "stop",
   "--watch": "watch",
+  "--line": "line",
 } as const;
 type Flag = (typeof FLAGS)[keyof typeof FLAGS];
 
@@ -114,7 +116,7 @@ const ALLOWED: Readonly<
   Record<TerminalCommand, Readonly<{ flags: readonly Flag[]; maxPaths: number }>>
 > = {
   launch: { flags: ["fresh", "headless", "noAttach"], maxPaths: Number.POSITIVE_INFINITY },
-  status: { flags: ["json", "logs", "watch"], maxPaths: 1 },
+  status: { flags: ["json", "logs", "watch", "line"], maxPaths: 1 },
   trace: { flags: ["json"], maxPaths: 1 },
   watch: { flags: ["json", "stop"], maxPaths: 1 },
   update: { flags: ["fresh", "headless", "noAttach"], maxPaths: 0 },
@@ -186,6 +188,14 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       "tandem status --watch shows every project; it takes no task, --json, or --logs",
     );
   }
+  if (
+    flags.has("line") &&
+    (paths.length > 0 || flags.has("json") || flags.has("logs") || flags.has("watch"))
+  ) {
+    throw new Error(
+      "tandem status --line is one line across every project; it takes no task, --json, --logs, or --watch",
+    );
+  }
   if (paths.length > allowed.maxPaths) {
     throw new Error(
       allowed.maxPaths === 0
@@ -208,6 +218,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     freeSuperseded: flags.has("freeSuperseded"),
     stop: flags.has("stop"),
     watch: flags.has("watch"),
+    line: flags.has("line"),
     ...(home === undefined ? {} : { home }),
     ...(sessionId === undefined ? {} : { sessionId }),
     ...(poolRoot === undefined ? {} : { poolRoot }),
