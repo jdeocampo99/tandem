@@ -15,7 +15,7 @@ Tandem runs locally on macOS.
 
 ### Orchestration in code
 
-![How a request moves through Tandem: the model plans, implements, and reviews; you approve and publish; code validates, opens the draft PR, and runs PR watch](docs/images/request-flow.svg)
+![How a request moves through Tandem: the model researches, plans, implements, and reviews; you approve and publish; code validates, opens the draft PR, and runs PR watch](docs/images/request-flow.svg)
 
 The coordinator is the only place a model makes judgment calls about your work. Everything around
 it is ordinary TypeScript: task stages, scheduling, worktree allocation, approvals, validation,

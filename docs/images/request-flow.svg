@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1012 320" role="img" aria-labelledby="t d">
   <title id="t">How a request moves through Tandem</title>
-  <desc id="d">Eight stages from plan to PR watch. The model plans, implements, and reviews. You approve and publish. Code validates, opens the draft PR, and runs PR watch. A fix-round loop runs from review back to implement. All stages sit on a runtime written in TypeScript.</desc>
+  <desc id="d">Nine stages from research to PR watch. The model researches, plans, implements, and reviews. You approve and publish. Code validates, opens the draft PR, and runs PR watch. A fix-round loop runs from review back to implement. All stages sit on a runtime written in TypeScript.</desc>
   <style>
     text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
     .muted { fill: #59636e; }
@@ -52,44 +52,47 @@
   </g>
 
   <!-- fix-round loop: review back to implement -->
-  <path class="loop" d="M532,108 C532,62 300,62 300,106" marker-end="url(#looparrow)"/>
-  <text class="looplabel" x="416" y="72" text-anchor="middle">fix rounds, up to 3</text>
+  <path class="loop" d="M616,108 C616,62 396,62 396,106" marker-end="url(#looparrow)"/>
+  <text class="looplabel" x="506" y="72" text-anchor="middle">fix rounds, up to 3</text>
 
   <!-- stages -->
-  <g class="model" transform="translate(16,110)"><rect class="box" width="104" height="80" rx="10"/><text class="tag" x="52" y="22" text-anchor="middle">MODEL</text><text class="name" x="52" y="45" text-anchor="middle">Plan</text><text class="sub muted" x="52" y="64" text-anchor="middle">writes the brief</text></g>
-  <g class="you" transform="translate(132,110)"><rect class="box" width="104" height="80" rx="10"/><text class="tag" x="52" y="22" text-anchor="middle">YOU</text><text class="name" x="52" y="45" text-anchor="middle">Approve</text><text class="sub muted" x="52" y="64" text-anchor="middle">scope and checks</text></g>
-  <g class="model" transform="translate(248,110)"><rect class="box" width="104" height="80" rx="10"/><text class="tag" x="52" y="22" text-anchor="middle">MODEL</text><text class="name" x="52" y="45" text-anchor="middle">Implement</text><text class="sub muted" x="52" y="64" text-anchor="middle">own worktree</text></g>
-  <g class="code" transform="translate(364,110)"><rect class="box" width="104" height="80" rx="10"/><text class="tag" x="52" y="22" text-anchor="middle">CODE</text><text class="name" x="52" y="45" text-anchor="middle">Validate</text><text class="sub muted" x="52" y="64" text-anchor="middle">tests, types, lint</text></g>
-  <g class="model" transform="translate(480,110)"><rect class="box" width="104" height="80" rx="10"/><text class="tag" x="52" y="22" text-anchor="middle">MODEL</text><text class="name" x="52" y="45" text-anchor="middle">Review</text><text class="sub muted" x="52" y="64" text-anchor="middle">fresh agent</text></g>
-  <g class="code" transform="translate(596,110)"><rect class="box" width="104" height="80" rx="10"/><text class="tag" x="52" y="22" text-anchor="middle">CODE</text><text class="name" x="52" y="45" text-anchor="middle">Draft PR</text><text class="sub muted" x="52" y="64" text-anchor="middle">opens when ready</text></g>
-  <g class="you" transform="translate(712,110)"><rect class="box" width="104" height="80" rx="10"/><text class="tag" x="52" y="22" text-anchor="middle">YOU</text><text class="name" x="52" y="45" text-anchor="middle">Publish</text><text class="sub muted" x="52" y="64" text-anchor="middle">one yes</text></g>
-  <g class="code" transform="translate(828,110)"><rect class="box" width="104" height="80" rx="10"/><text class="tag" x="52" y="22" text-anchor="middle">CODE</text><text class="name" x="52" y="45" text-anchor="middle">PR watch</text><text class="sub muted" x="52" y="64" text-anchor="middle">CI through merge</text></g>
+  <g class="model" transform="translate(16,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="31" text-anchor="middle">MODEL</text><text class="name" x="50" y="55" text-anchor="middle">Research</text></g>
+  <g class="model" transform="translate(126,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="31" text-anchor="middle">MODEL</text><text class="name" x="50" y="55" text-anchor="middle">Plan</text></g>
+  <g class="you" transform="translate(236,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="31" text-anchor="middle">YOU</text><text class="name" x="50" y="55" text-anchor="middle">Approve</text></g>
+  <g class="model" transform="translate(346,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="22" text-anchor="middle">MODEL</text><text class="name" x="50" y="45" text-anchor="middle">Implement</text><text class="sub muted" x="50" y="64" text-anchor="middle">own worktree</text></g>
+  <g class="code" transform="translate(456,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="22" text-anchor="middle">CODE</text><text class="name" x="50" y="45" text-anchor="middle">Validate</text><text class="sub muted" x="50" y="64" text-anchor="middle">tests, types, lint</text></g>
+  <g class="model" transform="translate(566,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="22" text-anchor="middle">MODEL</text><text class="name" x="50" y="45" text-anchor="middle">Review</text><text class="sub muted" x="50" y="64" text-anchor="middle">fresh agent</text></g>
+  <g class="code" transform="translate(676,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="31" text-anchor="middle">CODE</text><text class="name" x="50" y="55" text-anchor="middle">Draft PR</text></g>
+  <g class="you" transform="translate(786,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="31" text-anchor="middle">YOU</text><text class="name" x="50" y="55" text-anchor="middle">Publish</text></g>
+  <g class="code" transform="translate(896,110)"><rect class="box" width="100" height="80" rx="10"/><text class="tag" x="50" y="22" text-anchor="middle">CODE</text><text class="name" x="50" y="45" text-anchor="middle">PR watch</text><text class="sub muted" x="50" y="64" text-anchor="middle">CI through merge</text></g>
 
   <!-- connectors -->
   <g>
-    <line class="line" x1="121" y1="150" x2="130" y2="150" marker-end="url(#arrow)"/>
-    <line class="line" x1="237" y1="150" x2="246" y2="150" marker-end="url(#arrow)"/>
-    <line class="line" x1="353" y1="150" x2="362" y2="150" marker-end="url(#arrow)"/>
-    <line class="line" x1="469" y1="150" x2="478" y2="150" marker-end="url(#arrow)"/>
-    <line class="line" x1="585" y1="150" x2="594" y2="150" marker-end="url(#arrow)"/>
-    <line class="line" x1="701" y1="150" x2="710" y2="150" marker-end="url(#arrow)"/>
-    <line class="line" x1="817" y1="150" x2="826" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="117" y1="150" x2="124" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="227" y1="150" x2="234" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="337" y1="150" x2="344" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="447" y1="150" x2="454" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="557" y1="150" x2="564" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="667" y1="150" x2="674" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="777" y1="150" x2="784" y2="150" marker-end="url(#arrow)"/>
+    <line class="line" x1="887" y1="150" x2="894" y2="150" marker-end="url(#arrow)"/>
   </g>
 
   <!-- ties to the runtime -->
   <g>
-    <line class="dash" x1="68" y1="192" x2="68" y2="232"/>
-    <line class="dash" x1="184" y1="192" x2="184" y2="232"/>
-    <line class="dash" x1="300" y1="192" x2="300" y2="232"/>
-    <line class="dash" x1="416" y1="192" x2="416" y2="232"/>
-    <line class="dash" x1="532" y1="192" x2="532" y2="232"/>
-    <line class="dash" x1="648" y1="192" x2="648" y2="232"/>
-    <line class="dash" x1="764" y1="192" x2="764" y2="232"/>
-    <line class="dash" x1="880" y1="192" x2="880" y2="232"/>
+    <line class="dash" x1="66" y1="192" x2="66" y2="232"/>
+    <line class="dash" x1="176" y1="192" x2="176" y2="232"/>
+    <line class="dash" x1="286" y1="192" x2="286" y2="232"/>
+    <line class="dash" x1="396" y1="192" x2="396" y2="232"/>
+    <line class="dash" x1="506" y1="192" x2="506" y2="232"/>
+    <line class="dash" x1="616" y1="192" x2="616" y2="232"/>
+    <line class="dash" x1="726" y1="192" x2="726" y2="232"/>
+    <line class="dash" x1="836" y1="192" x2="836" y2="232"/>
+    <line class="dash" x1="946" y1="192" x2="946" y2="232"/>
   </g>
 
   <!-- runtime band -->
-  <rect class="band" x="16" y="232" width="916" height="72" rx="12"/>
-  <text class="band-title" x="474" y="262" text-anchor="middle">Tandem runtime, written in TypeScript</text>
-  <text class="sub muted" x="474" y="284" text-anchor="middle" font-size="12.5">stage machine · scheduler · worktree pool · approval gates · recovery · saved task state</text>
+  <rect class="band" x="16" y="232" width="980" height="72" rx="12"/>
+  <text class="band-title" x="506" y="262" text-anchor="middle">Tandem runtime, written in TypeScript</text>
+  <text class="sub muted" x="506" y="284" text-anchor="middle" font-size="12.5">stage machine · scheduler · worktree pool · approval gates · recovery · saved task state</text>
 </svg>
