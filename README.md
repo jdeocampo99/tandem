@@ -1,22 +1,24 @@
 # Tandem
 
-Tandem is an engineering partner that runs on your Mac. You chat with one agent about what you
-want, and Tandem takes it from idea to merged pull request: it researches the code, agrees on a plan
-with you, writes the change, tests and reviews it, opens the pull request, and sees it through CI and
-review. Every task is saved, so you can close the terminal and pick up where you left off.
+Tandem handles the tedious parts of building with coding agents. You chat with one agent about what
+you want, and Tandem takes it from idea to merged pull request: it researches the code, agrees on a
+plan with you, writes the change, tests and reviews it, opens the pull request, and sees it through
+CI and review. Every task is saved, so you can close the terminal and pick up where you left off.
 
-Most agent tools stop once the code is written and leave the rest to you. Tandem goes further:
+The parts it takes off your plate:
 
-- **It holds a standard.** Every task follows a playbook for its kind of work, writes to shared
-  code and writing standards, and passes a fresh reviewer that grades against the same rules. The
-  result reads like a careful engineer wrote it.
-- **It finishes the job.** It carries pull requests through flaky CI, conflicts, and merge queues,
-  and reviews your teammates' pull requests with you.
-- **Code runs the process.** Stages, approvals, and pull request decisions are deterministic
-  TypeScript, and a small classifier answers routine questions, so model tokens go only to work
-  that needs judgment.
-- **It improves itself.** When a task goes badly, Tandem can investigate its own source and propose
-  a fix.
+- **Slop.** Agents pad their writing and cut corners in code. Tandem holds every agent to shared
+  writing and code standards and a playbook for its kind of task, then has a fresh reviewer grade
+  the work against the same rules.
+- **Context windows and worktrees.** Each job gets a fresh agent with only the context it needs, in
+  its own worktree that Tandem creates, reuses, and cleans up. Your own checkout is never touched.
+- **Managing agents.** Tandem starts, schedules, and restarts research, coding, and review agents,
+  remembers where every task stands, and brings you only the questions that need you.
+- **Pull requests.** It opens them, carries them through flaky CI, conflicts, and merge queues, and
+  helps you review your teammates'.
+
+The orchestration behind all of this is deterministic code, and a small classifier answers routine
+questions, so **model tokens go only to the work that needs judgment**.
 
 ## What it does
 
@@ -25,8 +27,8 @@ Most agent tools stop once the code is written and leave the rest to you. Tandem
 ![How a request moves through Tandem: the model researches, plans, implements, and reviews; you approve and publish; code validates, opens the draft PR, and runs PR watch](docs/images/request-flow.svg)
 
 Models do the judgment work: researching, planning, writing code, and reviewing it. Everything
-around them is ordinary TypeScript: task stages, scheduling, worktree allocation, approvals, validation,
-retries, recovery, and pull request decisions. Validation runs your project's checks with no model
+around them is ordinary TypeScript: task stages, scheduling, worktree allocation, approvals,
+validation, retries, recovery, and pull request decisions. Validation runs your project's checks with no model
 involved. PR watch decides what to do from a fixed decision table.
 
 Keeping orchestration out of the model makes Tandem **faster and cheaper, since no tokens go to
