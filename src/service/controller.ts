@@ -9,7 +9,12 @@ import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
-import { type HomeSettings, readHomeSettings, saveWorkerSkills } from "../config/home-settings.ts";
+import {
+  type HomeSettings,
+  readHomeSettings,
+  type SelfImprovementMode,
+  saveWorkerSkills,
+} from "../config/home-settings.ts";
 import {
   type JevSetting,
   type ModelSettings,
@@ -133,6 +138,14 @@ import type {
 import { requestIntakeEvent } from "../runtime/usage-events.ts";
 import { createRequestUsageLedger, type RequestUsageLedger } from "../runtime/usage-ledger.ts";
 import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
+import { type IssueDraftChecker, issueDraftChecker } from "../self-improvement/issue-draft.ts";
+import {
+  type InvestigateInput,
+  type InvestigationQuestion,
+  type IssueInput,
+  type IssueReview,
+  SelfImprovement,
+} from "../self-improvement/service.ts";
 import { TaskControlWorkflow } from "../tasks/control.ts";
 import { KEEP_FIXING_QUESTION_ID_PREFIX, keepFixingGrant } from "../tasks/findings.ts";
 import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
@@ -273,6 +286,8 @@ export type TandemServiceOptions = Readonly<{
   readonly projectRoots?: readonly string[];
   /** The home folder whose skill folders hold the user's personal skills; defaults to the OS home. */
   readonly personalSkillsHome?: string;
+  /** The Jev check of a report-mode issue draft; without one, every draft is flagged. */
+  readonly checkIssueDraft?: IssueDraftChecker;
 }>;
 export type TandemService = Readonly<{
   readonly onboard: (
@@ -407,6 +422,16 @@ export type TandemService = Readonly<{
   readonly workerSkillOffer: () => Promise<readonly string[]>;
   /** Saves the user's answer to that offer, an empty list for no. */
   readonly saveWorkerSkills: (skills: readonly string[]) => Promise<HomeSettings>;
+  /** Whether this machine looks into Tandem's own problems, and what it does with the answer. */
+  readonly selfImprovementMode: () => Promise<SelfImprovementMode>;
+  /** Questions about open tasks that newly broke a trigger rule; each task is asked about once. */
+  readonly investigationQuestions: () => Promise<readonly InvestigationQuestion[]>;
+  /** Starts research in the Tandem repository into why a task went the way it did. */
+  readonly investigate: (input: InvestigateInput) => Promise<TaskRecord>;
+  /** A report-mode issue scrubbed of the task's work content, with its Jev check. */
+  readonly reviewIssue: (input: IssueInput) => Promise<IssueReview>;
+  /** Files the scrubbed issue on the Tandem repository; only after the user approved it. */
+  readonly fileIssue: (input: IssueInput) => Promise<Readonly<{ url: string }>>;
   readonly shutdown: () => Promise<void>;
 }>;
 
@@ -443,6 +468,7 @@ type ServiceDependencies = Readonly<{
   reviewAssistance: ReviewAssistanceRuntime;
   projectRoots: readonly string[];
   personalSkillsHome: string;
+  checkIssueDraft: IssueDraftChecker;
 }>;
 
 /** Why a task resumed after its question was answered, as its timeline records it. */
@@ -515,6 +541,7 @@ class TandemController {
   readonly #prReviews: PrReviewWorkflow;
   readonly #drafts: DraftRefreshWorkflow;
   readonly #prWatch: PrWatcher;
+  readonly #selfImprovement: SelfImprovement;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
@@ -529,6 +556,15 @@ class TandemController {
       run: deps.run,
       recordPullRequest: (taskId, expectedRevision, metadata) =>
         this.recordPullRequest(taskId, expectedRevision, metadata),
+    });
+    this.#selfImprovement = new SelfImprovement({
+      home: deps.home,
+      run: deps.run,
+      clock: deps.clock,
+      checkDraft: deps.checkIssueDraft,
+      getTask: (taskId) => this.get(taskId),
+      traceTask: (taskId) => this.trace(taskId),
+      createTask: (input) => this.create(input),
     });
     this.#prWatch = new PrWatcher({
       home: deps.home,
@@ -793,6 +829,11 @@ class TandemController {
       workerSkillOffer: () => this.workerSkillOffer(),
       saveWorkerSkills: (skills) =>
         saveWorkerSkills(this.#deps.home, readTextList(skills, "workerSkills")),
+      selfImprovementMode: () => this.#selfImprovement.mode(),
+      investigationQuestions: async () => this.#selfImprovement.takeQuestions(await this.list()),
+      investigate: (input) => this.#selfImprovement.investigate(input),
+      reviewIssue: (input) => this.#selfImprovement.reviewIssue(input),
+      fileIssue: (input) => this.#selfImprovement.fileIssue(input),
       shutdown: () => this.shutdown(),
     };
   }
@@ -2385,6 +2426,9 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
       }),
     projectRoots: options.projectRoots ?? defaultProjectRoots(process.env),
     personalSkillsHome: options.personalSkillsHome ?? homedir(),
+    checkIssueDraft:
+      options.checkIssueDraft ??
+      issueDraftChecker({ timeoutMs: DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS }),
   };
 }
 

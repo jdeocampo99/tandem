@@ -213,7 +213,7 @@ async function save(
  * The remote pointing at `repo`, preferring `origin` so fork setups with an `upstream` still work.
  * A folder that is gone or is not a git checkout simply does not match.
  */
-async function matchingRemote(
+export async function matchingRemote(
   path: string,
   repo: string,
   run: CommandRunner,

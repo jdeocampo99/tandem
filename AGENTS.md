@@ -35,6 +35,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Research and changes in another repository, finding a repository's checkout | [repos/locate.ts](src/repos/locate.ts); `target` on tasks |
 | Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
 | PR watch: keeping open PRs moving until they merge, `tandem watch` | [pr-watch/](src/pr-watch/): `decide.ts` (pure decision table), `github.ts`, `watcher.ts`, `store.ts`, `view.ts` |
+| Self-improvement: trigger rules, investigations, report-mode issues | [self-improvement/](src/self-improvement/): `triggers.ts` (pure rules), `issue-draft.ts` (scrub and Jev check), `service.ts` |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |
 
 ## Safety boundaries
@@ -104,6 +105,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - Tasks in another repository (`targetRepo`), finding checkouts: [other-repositories.md](docs/reference/other-repositories.md).
 - Reviewing someone else's PR (`pr-review` tasks): [pr-review.md](docs/reference/pr-review.md).
 - PR watch, its decision table, and `tandem watch`: [pr-watch.md](docs/reference/pr-watch.md).
+- Self-improvement modes, triggers, investigations, report-mode issues: [self-improvement.md](docs/reference/self-improvement.md).
 - Durable state, locking, restart, central recovery and its re-entry table: [recovery.md](docs/reference/recovery.md).
 - Block causes, stale records, panes, leases, `tandem fix`: [reconciliation.md](docs/reference/reconciliation.md).
 

@@ -5,6 +5,7 @@ import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
 import type { CommentEdit } from "../pr-review/service.ts";
+import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
@@ -188,6 +189,21 @@ export type TandemAction =
       /** A GitHub PR URL, `owner/repo#123`, or `#123` in `repoPath`. */
       readonly pullRequest: string;
       readonly repoPath?: string | undefined;
+    }>
+  | Readonly<{
+      readonly action: "investigate";
+      readonly taskId: string;
+      /** The user's own question about the task, when they asked one. */
+      readonly question?: string | undefined;
+      readonly targetCheckout?: string | undefined;
+      readonly targetClone?: boolean | undefined;
+    }>
+  | Readonly<{
+      readonly action: "report-issue";
+      /** The task the issue is about; its text and repository names are scrubbed out. */
+      readonly taskId: string;
+      readonly title: string;
+      readonly body: string;
     }>;
 
 export type TandemActionResult = Readonly<{
@@ -230,7 +246,8 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "merge" ||
     action.action === "review-post" ||
     action.action === "pr-watch-fix" ||
-    action.action === "pr-watch-merging"
+    action.action === "pr-watch-merging" ||
+    action.action === "report-issue"
   );
 }
 function capitalize(value: string): string {
@@ -292,6 +309,15 @@ async function approvalPrompt(
     return {
       title: `Fix the merge conflicts on ${action.pullRequest}?`,
       message: "Starts a task that merges the base into its branch and pushes. Never force-pushes.",
+    };
+  }
+  if (action.action === "report-issue") {
+    // The dialog shows exactly what gets filed, with the Jev warning first when it flagged it.
+    const { draft, check } = await service.reviewIssue(action);
+    const warning = check.flagged ? `Warning: ${check.warning} Read it before filing.\n\n` : "";
+    return {
+      title: `File this issue on ${TANDEM_REPOSITORY}?`,
+      message: `${warning}${draft.title}\n\n${draft.body}`,
     };
   }
   if (!("taskId" in action)) return { title: "Allow this Tandem action?", message: "" };
@@ -624,6 +650,24 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.prWatchFix(pullRequestInput(action)), action.action, {
       approved: true,
     }),
+  investigate: async (action, service) =>
+    actionResult(
+      await service.investigate({
+        taskId: action.taskId,
+        question: action.question,
+        targetCheckout: action.targetCheckout,
+        targetClone: action.targetClone,
+      }),
+      action.action,
+    ),
+  "report-issue": async (action, service) => {
+    const { url } = await service.fileIssue({
+      taskId: action.taskId,
+      title: action.title,
+      body: action.body,
+    });
+    return actionResult(`Filed ${url}`, action.action, { approved: true });
+  },
 };
 
 function mergingChoice(

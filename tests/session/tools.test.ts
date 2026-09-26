@@ -166,6 +166,9 @@ const validRequests: readonly Record<string, unknown>[] = [
   { action: "pr-watch-start", pullRequest: "o/r#1" },
   { action: "pr-watch-stop", pullRequest: "#1", repoPath: "/r" },
   { action: "pr-watch-fix", pullRequest: "https://github.com/o/r/pull/1" },
+  { action: "investigate", taskId: "t" },
+  { action: "investigate", taskId: "t", question: "why so slow?", targetClone: true },
+  { action: "report-issue", taskId: "t", title: "T", body: "B" },
 ];
 
 const invalidRequests: readonly [string, unknown][] = [
