@@ -130,7 +130,10 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
   - shows the lines and asks before writing, and writes nothing without a terminal to ask in or
     a yes. It copies the old file to `config.toml.before-tandem`, and if `herdr config check`
     passed before and fails after, it writes the old file back. Then it runs
-    `herdr server reload-config`; if no server is running, Herdr reads the file when it starts.
+    `herdr --session <session> server reload-config` for the Herdr session Tandem uses (resolved
+    like `tandem` does: `TANDEM_SESSION`, Herdr's session variables, the remembered setup, then
+    `tandem`); plain `herdr server reload-config` would reload only the default session. If that
+    session is not running, Herdr reads the file when it starts.
 
 ## The notification when something new needs you
 
