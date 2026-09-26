@@ -4,14 +4,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
-import { closeEndpoint } from "../adapters/herdr.ts";
+import { closeEndpoint, showNotification } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpModels } from "../adapters/omp.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
-import { showBoardPane } from "../board/pane.ts";
 import { readBoard } from "../board/read.ts";
-import type { BoardView } from "../board/view.ts";
+import { type BoardRow, type BoardView, needsYouNotice } from "../board/view.ts";
 import {
   type HomeSettings,
   readHomeSettings,
@@ -47,7 +46,6 @@ import type {
   Clock,
   CommandRunner,
   CreatableTaskKind,
-  Endpoint,
   IdFactory,
   IsoTimestamp,
   PullRequestMetadata,
@@ -415,8 +413,8 @@ export type TandemService = Readonly<{
   readonly reviewClose: (id: string) => Promise<TaskRecord>;
   /** The board across every onboarded project, from saved state only; it never reads GitHub. */
   readonly board: () => Promise<BoardView>;
-  /** Opens the live board beside the coordinator's pane, unless the one it opened is still there. */
-  readonly showBoard: (repoPath: string) => Promise<void>;
+  /** Tells the user through a Herdr notification that these rows just arrived in "Needs you". */
+  readonly notifyNeedsYou: (repoPath: string, rows: readonly BoardRow[]) => Promise<void>;
   /** The PR watch view, after reading GitHub unless another Tandem is reading it right now. */
   readonly prWatch: () => Promise<PrWatchView>;
   /** Watches a pull request: a link, `owner/repo#N`, or `#N` in `repoPath` (default: this project). */
@@ -560,7 +558,6 @@ class TandemController {
   readonly #prWatch: PrWatcher;
   readonly #selfImprovement: SelfImprovement;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
-  #boardPane: Endpoint | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
   #sourceRefreshError: string | undefined;
@@ -822,7 +819,7 @@ class TandemController {
       reviewAgain: (id) => this.#prReviews.again(assertTaskId(id)),
       reviewClose: (id) => this.#prReviews.close(assertTaskId(id)),
       board: () => readBoard(this.#deps.home, this.#deps.clock),
-      showBoard: (repoPath) => this.showBoard(repoPath),
+      notifyNeedsYou: (repoPath, rows) => this.notifyNeedsYou(repoPath, rows),
       prWatch: () => this.#prWatch.view(),
       prWatchStart: async (input) => this.#prWatch.start(await this.namedPullRequest(input)),
       prWatchStop: async (input) => this.#prWatch.stop((await this.namedPullRequest(input)).ref),
@@ -1209,19 +1206,14 @@ class TandemController {
     return this.#source.scopedTasks();
   }
 
-  /** Without a coordinator pane to split beside, there is nowhere to show the board. */
-  async showBoard(repoPath: string): Promise<void> {
-    const coordinatorPaneId = this.#deps.coordinatorPaneId;
-    if (coordinatorPaneId === undefined) return;
-    this.#boardPane = await showBoardPane(
-      {
-        run: this.#deps.run,
-        home: this.#deps.home,
-        sessionId: this.#deps.sessionId,
-        coordinatorPaneId,
-      },
+  /** Outside Herdr there is no coordinator pane, and nowhere to notify. */
+  async notifyNeedsYou(repoPath: string, rows: readonly BoardRow[]): Promise<void> {
+    if (this.#deps.coordinatorPaneId === undefined || rows.length === 0) return;
+    await showNotification(
+      this.#deps.run,
+      this.#deps.sessionId,
       absoluteDirectory(repoPath, "repoPath"),
-      this.#boardPane,
+      needsYouNotice(rows),
     );
   }
 

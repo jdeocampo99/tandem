@@ -14,6 +14,7 @@ import {
   createTaskEndpoint,
   inspectEndpoint,
   sendCommand,
+  showNotification,
   splitBesidePane,
   taskWorkspaceLabel,
 } from "../../src/adapters/herdr.ts";
@@ -1240,4 +1241,24 @@ test("readReferencingFiles surfaces a real git failure", async () => {
   await expect(
     readReferencingFiles(run, { repo: "/repo", ref: "head", files: ["src/a.ts"], maxResults: 5 }),
   ).rejects.toThrow();
+});
+
+test("a Herdr notification goes through the user's toast settings with the needs-input sound", async () => {
+  const runner = scriptedRunner([{ code: 0, stdout: "", stderr: "" }]);
+  await showNotification(runner.run, "session-1", "/repo", {
+    title: "Tandem: Dark mode",
+    body: "brief waiting for approval · prefix+t for status",
+  });
+  expect(runner.calls[0]?.argv).toEqual([
+    "herdr",
+    "--session",
+    "session-1",
+    "notification",
+    "show",
+    "Tandem: Dark mode",
+    "--body",
+    "brief waiting for approval · prefix+t for status",
+    "--sound",
+    "request",
+  ]);
 });

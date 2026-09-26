@@ -128,10 +128,10 @@ export function finishedWithinWeek(events: readonly TimelineEvent[], now: IsoTim
 }
 
 /**
- * Whether a "Needs you" row is worth opening the board for. A blocked task is not: recovery
- * restarts most blocks on its own, so the pane would pop for blocks that clear themselves.
+ * Whether a new "Needs you" row is worth a Herdr notification. A blocked task is not: recovery
+ * restarts most blocks on its own, so it would notify for blocks that clear themselves.
  */
-export function opensBoard(row: BoardRow): boolean {
+export function notifiesUser(row: BoardRow): boolean {
   return (
     row.cause === "brief" ||
     row.cause === "question" ||
@@ -140,6 +140,27 @@ export function opensBoard(row: BoardRow): boolean {
     row.cause === "ready"
   );
 }
+
+/** A Herdr notification: Herdr trims the title to 80 characters and the body to 240. */
+export type NeedsYouNotice = Readonly<{ readonly title: string; readonly body: string }>;
+
+/**
+ * The notification for rows that just arrived in "Needs you": one row names itself and why; more
+ * than one are counted and named. Both point at the live view.
+ */
+export function needsYouNotice(rows: readonly BoardRow[]): NeedsYouNotice {
+  const [only] = rows;
+  if (rows.length === 1 && only !== undefined) {
+    return { title: `Tandem: ${only.name}`, body: `${only.text} · prefix+t for status` };
+  }
+  return {
+    title: `Tandem: ${rows.length} things need you`,
+    body: `${rows.map((row) => row.name).join(", ")} · prefix+t for status`,
+  };
+}
+
+/** Where the chat board points for the live view; setup.sh binds prefix+t in Herdr. */
+const LIVE_VIEW_HINT = "Live view: prefix+t in Herdr, or `tandem status --watch`";
 
 /** The board: header and sections, as "how's it going?" shows it in the chat. */
 export function renderBoard(view: BoardView): string {
@@ -158,6 +179,7 @@ export function renderBoard(view: BoardView): string {
       ? []
       : [["PRs", ...prWatchLines(view.pullRequests, true)].join("\n")]),
     ...(view.week === undefined ? [] : [weekLine(view.week)]),
+    LIVE_VIEW_HINT,
   ];
   return `${[header, ...sections].join("\n\n")}\n`;
 }

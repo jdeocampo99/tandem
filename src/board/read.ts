@@ -60,27 +60,32 @@ async function weekRollups(
 }
 
 /**
- * Draws the board until the process is interrupted: renders it every {@link BOARD_REFRESH_MS} and
- * draws only when the text changed. A round that finds the state locked by another Tandem is
- * skipped; the next one reads again.
+ * Draws the board until `closed` settles, or forever without it: renders it every
+ * {@link BOARD_REFRESH_MS} and draws only when the text changed. A round that finds the state
+ * locked by another Tandem is skipped; the next one reads again. Closing cuts the current sleep
+ * short, so nothing keeps the process waiting.
  */
 export async function runLiveBoard(
   deps: Readonly<{
     readonly render: () => Promise<string>;
     readonly draw: (text: string) => void;
-    readonly sleep: (ms: number) => Promise<void>;
+    readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+    readonly closed?: Promise<void>;
   }>,
-): Promise<never> {
+): Promise<void> {
+  const close = new AbortController();
+  void deps.closed?.then(() => close.abort());
   let shown: string | undefined;
-  while (true) {
+  while (!close.signal.aborted) {
     const text = await deps.render().catch((error: unknown) => {
       if (error instanceof StoreLockTimeoutError) return shown;
       throw error;
     });
+    if (close.signal.aborted) return;
     if (text !== undefined && text !== shown) {
       deps.draw(text);
       shown = text;
     }
-    await deps.sleep(BOARD_REFRESH_MS);
+    await deps.sleep(BOARD_REFRESH_MS, close.signal);
   }
 }

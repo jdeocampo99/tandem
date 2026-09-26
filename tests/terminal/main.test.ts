@@ -1187,6 +1187,29 @@ test("terminal commands are subcommands whose flags and arguments are checked", 
     "tandem status --watch shows every project",
   );
   expect(() => parseTerminalArgs(["watch", "--watch"])).toThrow("does not accept --watch");
+  expect(parseTerminalArgs(["status", "--line"])).toMatchObject({ command: "status", line: true });
+  for (const argv of [
+    ["status", "--line", "--watch"],
+    ["status", "--line", "--json"],
+    ["status", "task-1", "--line"],
+  ]) {
+    expect(() => parseTerminalArgs(argv)).toThrow("tandem status --line is one line");
+  }
+  expect(() => parseTerminalArgs(["watch", "--line"])).toThrow("does not accept --line");
+});
+
+test("tandem status --line prints one line from saved state, for Herdr's tab bar", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-status-line-test-"));
+  try {
+    const output: string[] = [];
+    const shown = await runTerminal(["status", "--line", "--home", home], {
+      stdout: (text) => output.push(text),
+    });
+    expect(shown.exitCode).toBe(0);
+    expect(output.join("")).toBe("✓ all quiet\n");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test("tandem watch starts watching a pull request named from this directory and prints the view", async () => {

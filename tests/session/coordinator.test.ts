@@ -339,7 +339,7 @@ test("turn usage is recorded with the injected clock and the resolved repository
   ]);
 });
 
-test("the board opens when something of this project's lands in Needs you, not for what was already there or a block", async () => {
+test("one Herdr notification names what of this project's just landed in Needs you, not what was already there or a block", async () => {
   const row = (key: string, repoPath: string, cause: BoardRow["cause"] = "brief") => ({
     key,
     cause,
@@ -350,7 +350,7 @@ test("the board opens when something of this project's lands in Needs you, not f
     text: "",
   });
   let needsYou = [row("brief:req-old", "/repo")];
-  const opened: string[] = [];
+  const notified: [string, string[]][] = [];
   const session = new CoordinatorSession(
     coordinatorDeps({
       list: async () => [],
@@ -362,14 +362,14 @@ test("the board opens when something of this project's lands in Needs you, not f
         pullRequests: [],
         finished: 0,
       }),
-      showBoard: async (repoPath) => {
-        opened.push(repoPath);
+      notifyNeedsYou: async (repoPath, rows) => {
+        notified.push([repoPath, rows.map((each) => each.key)]);
       },
     }),
   );
 
   await session.reconcile(false);
-  expect(opened).toEqual([]);
+  expect(notified).toEqual([]);
 
   needsYou = [
     ...needsYou,
@@ -377,14 +377,18 @@ test("the board opens when something of this project's lands in Needs you, not f
     row("task:task-1:blocked", "/repo", "blocked"),
   ];
   await session.reconcile(false);
-  expect(opened).toEqual([]);
+  expect(notified).toEqual([]);
 
-  needsYou = [...needsYou, row("pr:acme/app#409", "/repo", "pull-request")];
+  needsYou = [
+    ...needsYou,
+    row("pr:acme/app#409", "/repo", "pull-request"),
+    row("task:task-2:ready", "/repo", "ready"),
+  ];
   await session.reconcile(false);
-  expect(opened).toEqual(["/repo"]);
+  expect(notified).toEqual([["/repo", ["pr:acme/app#409", "task:task-2:ready"]]]);
 
   await session.reconcile(false);
-  expect(opened).toEqual(["/repo"]);
+  expect(notified).toHaveLength(1);
 });
 
 test("while the user is in a thread, what needs the coordinator waits for the thread to end", async () => {

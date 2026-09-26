@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
 import { listOmpMcpServers } from "./adapters/omp.ts";
-import { runLiveBoard } from "./board/read.ts";
-import { renderStatus, type StatusStyle } from "./board/terminal.ts";
+import { readBoard, runLiveBoard } from "./board/read.ts";
+import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
@@ -56,6 +56,7 @@ import {
   createReadlineResources,
   type ReadlineResources,
   streamIsTTY,
+  watchCloseKeys,
   writeText,
 } from "./terminal/process.ts";
 import {
@@ -74,7 +75,8 @@ const HELP_TEXT = `Tandem
 Usage:
   tandem [PATH ...]        Open your projects; resumes coordinator chats (--fresh starts new ones)
   tandem status [TASK_ID]  What needs you, what's running, and your PRs across projects
-                           --watch keeps it live; --logs shows prompt routing
+                           --watch keeps it live (Esc or q closes it); --line is a
+                           one-line summary for Herdr's tab bar; --logs shows prompt routing
   tandem trace [TASK_ID]   What happened to a task and why; without one, quality across tasks
   tandem report            A page showing where each task's time went, opened in Lavish
                            --since DATE only tasks created since then; --no-open just writes it
@@ -92,7 +94,8 @@ Usage:
 Options:
   --yes                    Skip the confirmation (fix, reset)
   --json                   Machine-readable output (status, trace, report, watch, fix)
-  --watch                  Redraw every 2 seconds until Ctrl-C (status)
+  --watch                  Redraw every 2 seconds until Esc, q, or Ctrl-C (status)
+  --line                   One line: what needs you, what's running, PRs (status)
   --verbose                Full paths and reasons (fix)
   --free-superseded        With --yes, also free worktrees whose work is in other tasks (fix)
   --home PATH              Use a different Tandem home
@@ -249,9 +252,13 @@ async function handleStatus({
     return result;
   }
   if (invocation.watch) {
-    return await watchStatus(environment, run, stdout, () =>
-      statusStyle(environment, dependencies),
-    );
+    await watchStatus(environment, run, stdout, dependencies);
+    return result;
+  }
+  if (invocation.line) {
+    const board = await readBoard(environment.home, () => new Date().toISOString());
+    stdout(`${renderStatusLine(board)}\n`);
+    return result;
   }
   const service = createServiceFor(environment, run, dependencies);
   try {
@@ -410,28 +417,46 @@ function statusStyle(
 }
 
 /**
- * `tandem status --watch` redraws the status until Ctrl-C. It only reads saved state; pull
- * requests show what PR watch last read.
+ * `tandem status --watch` redraws the status until Esc, q, or Ctrl-C, which also closes it in a
+ * Herdr popup. It only reads saved state; pull requests show what PR watch last read.
  */
 async function watchStatus(
   environment: TerminalEnvironment,
   run: CommandRunner,
   stdout: (text: string) => void,
-  style: () => StatusStyle,
-): Promise<never> {
+  dependencies: TerminalMainDependencies,
+): Promise<void> {
   const code = await tandemCodeVersion(run, TANDEM_ROOT);
-  return runLiveBoard({
-    render: async () => {
-      const status = await readTandemStatus({
-        code,
-        home: environment.home,
-        sessionId: environment.sessionId,
-      });
-      return renderStatus(status.board, status, style());
-    },
-    draw: (text) => stdout(`\x1b[H\x1b[2J${text}`),
-    sleep: (ms) => Bun.sleep(ms),
-  });
+  const style = () => statusStyle(environment, dependencies);
+  const keys = watchCloseKeys(dependencies.input ?? process.stdin);
+  try {
+    await runLiveBoard({
+      render: async () => {
+        const status = await readTandemStatus({
+          code,
+          home: environment.home,
+          sessionId: environment.sessionId,
+        });
+        return renderStatus(status.board, status, style());
+      },
+      draw: (text) => stdout(`\x1b[H\x1b[2J${text}`),
+      sleep: (ms, signal) =>
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, ms);
+          signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            { once: true },
+          );
+        }),
+      closed: keys.closed,
+    });
+  } finally {
+    keys.release();
+  }
 }
 
 /**
