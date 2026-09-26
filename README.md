@@ -1,6 +1,6 @@
 # Tandem
 
-Tandem handles the tedious parts of building with coding agents. You chat with one agent about what
+Tandem is an agent orchestrator and toolkit for your agents that handles the tedious parts of building with coding agents. You chat with one agent about what
 you want, and Tandem takes it from idea to merged pull request: it researches the code, agrees on a
 plan with you, writes the change, tests and reviews it, opens the pull request, and sees it through
 CI and review. Every task is saved, so you can close the terminal and pick up where you left off.
