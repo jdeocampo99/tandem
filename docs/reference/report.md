@@ -4,7 +4,8 @@ What `tandem report` shows, where its numbers come from, how it names what held 
 where the page is written.
 
 Code: src/report/ (`model.ts` the view contract, `build.ts` pure assembly and choke rules,
-`render.ts` and `page.html` the page, `publish.ts` writing and opening it), `TaskService.report`
+`render.ts` and `page.html` the page, on the shared stylesheet src/pages/tandem.css, `publish.ts`
+writing and opening it), `TaskService.report`
 in src/service/controller.ts (reads records and calls `build.ts`), src/main.ts (`tandem report`),
 src/terminal/arguments.ts (`--since`). Tests: tests/report/, tests/terminal/main.test.ts.
 

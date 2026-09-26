@@ -1,0 +1,552 @@
+/*
+ * tandem.css: the tokens and components every Tandem page shares (the `tandem report` page, the
+ * setup page). Pages inline it at build time (src/pages/assemble.ts) and add only their own layout.
+ */
+:root {
+  color-scheme: dark;
+  --bg: #16161d;
+  --raise: #1e1e27;
+  --sunk: #23232e;
+  --line: #2a2a35;
+  --line2: #363644;
+  --ink: #ecebf3;
+  --muted: #a3a2b3;
+  --faint: #6f6e80;
+  --research: #8fd9bf;
+  --implement: #9fb3f7;
+  --validate: #b3b6c6;
+  --review: #d6aaf2;
+  --you: #f4c08a;
+  --tandem: #f27f93;
+  --done: #8fd1a8;
+  --merged: #c9a8f5;
+  --sans: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --rb: 3px;
+  --rp: 8px;
+  --rc: 6px;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --spring: cubic-bezier(0.34, 1.4, 0.5, 1);
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  padding-inline: 24px;
+  padding-block: 28px 64px;
+}
+.wrap {
+  max-width: 1040px;
+  margin: 0 auto;
+  display: grid;
+  gap: 40px;
+}
+.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+button {
+  font: inherit;
+  color: inherit;
+}
+:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+}
+svg {
+  display: block;
+  flex: none;
+}
+/* A hidden element stays hidden whatever display its component sets. */
+[hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: components set display, and hidden must win */
+  display: none !important;
+}
+h1 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin: 0;
+}
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* Panel: the raised card every list and form sits in. */
+.panel {
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+/* Link button: a quiet secondary action. */
+.link {
+  justify-self: start;
+  background: var(--line);
+  border: 0;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 12.5px;
+  padding: 4px 10px;
+  border-radius: var(--rc);
+  transition:
+    transform 0.12s var(--ease),
+    background 0.2s;
+}
+.link:hover {
+  background: var(--line2);
+}
+.link:active {
+  transform: scale(0.96);
+}
+
+/* Primary button: the one main action on a page. */
+.primary {
+  background: var(--you);
+  color: var(--bg);
+  border: 0;
+  border-radius: var(--rp);
+  padding: 8px 16px;
+  font-weight: 600;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: transform 0.12s var(--ease);
+}
+.primary:active {
+  transform: scale(0.96);
+}
+.primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Section heading and note. */
+.sec-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 70ch;
+}
+.tag {
+  font: 500 11px / 1 var(--mono);
+  padding: 3px 6px;
+  border-radius: var(--rb);
+  background: color-mix(in srgb, var(--you) 16%, transparent);
+  color: var(--you);
+}
+
+/* Form controls. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--you);
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+select,
+input[type="text"] {
+  width: 100%;
+  font: 13px / 1.2 var(--mono);
+  color: var(--ink);
+  background: var(--sunk);
+  border: 1px solid var(--line2);
+  border-radius: var(--rc);
+  padding: 7px 9px;
+}
+
+/* Field label: a name and one line of help beside a control. */
+.flabel {
+  display: grid;
+  gap: 2px;
+  padding-top: 4px;
+}
+.flabel b {
+  font-weight: 500;
+  font-size: 13px;
+}
+.flabel small {
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Checkbox chips. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: var(--rp);
+  padding: 8px 12px;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
+}
+.chip:has(input:checked) {
+  border-color: var(--line2);
+  background: var(--sunk);
+}
+.chip small {
+  font: 11.5px var(--mono);
+  color: var(--faint);
+}
+
+/* Removable pills. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--sunk);
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  padding: 3px 4px 3px 10px;
+  font: 12.5px var(--mono);
+}
+.pill button {
+  all: unset;
+  cursor: pointer;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--faint);
+}
+.pill button:hover {
+  background: var(--line2);
+  color: var(--ink);
+}
+.pill button:focus-visible {
+  outline: 2px solid var(--you);
+}
+
+/* Bottom bar: fixed at the foot of the page, a status line beside the page's buttons. */
+.bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--raise);
+  border-top: 1px solid var(--line);
+  padding: 12px 24px calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 30;
+}
+.bar-in {
+  max-width: 1040px;
+  margin: 0 auto;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.bar-in p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.bar-in b {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* Search and pick: a search box over a list of results, with picked items as pills. */
+.search {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+}
+.search input {
+  max-width: 360px;
+}
+.search span {
+  font-size: 12px;
+  color: var(--faint);
+}
+.bulk {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+  align-items: center;
+}
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  display: grid;
+  gap: 2px;
+}
+.results.static {
+  max-height: 264px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.res {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: var(--rc);
+  cursor: pointer;
+}
+.res:hover,
+.res:focus-visible,
+.res.active {
+  background: var(--sunk);
+}
+.res b {
+  font-weight: 500;
+  font-size: 13.5px;
+}
+.res .src {
+  font: 11.5px var(--mono);
+  color: var(--faint);
+  margin-left: 6px;
+}
+.res small {
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.res .add {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  font: 500 12px var(--mono);
+  color: var(--muted);
+}
+.res[aria-selected="true"] .add {
+  color: var(--done);
+}
+.empty-row {
+  padding: 8px 10px;
+  color: var(--faint);
+  font-size: 12.5px;
+}
+.chosen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 16px 0;
+}
+.chosen:empty {
+  display: none;
+}
+
+/* Stepper: numbered steps with a bar each; finished steps are buttons back to them. */
+.stepper {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--steps, 6), minmax(0, 1fr));
+  gap: 6px;
+}
+.stepper li {
+  display: grid;
+  gap: 6px;
+}
+.stepper button {
+  all: unset;
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+.stepper button:disabled {
+  cursor: default;
+}
+.stepper button:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.stepper i {
+  display: block;
+  height: 4px;
+  border-radius: var(--rb);
+  background: var(--line);
+  transition: background 0.3s var(--ease);
+}
+.stepper .done i {
+  background: var(--muted);
+}
+.stepper .done button {
+  color: var(--muted);
+}
+.stepper .now i {
+  background: var(--you);
+}
+.stepper .now button {
+  color: var(--ink);
+  font-weight: 500;
+}
+.stepper .num {
+  font: 11px var(--mono);
+  color: var(--faint);
+  margin-right: 4px;
+}
+@media (max-width: 620px) {
+  .stepper .label {
+    display: none;
+  }
+  .stepper .now .label {
+    display: inline;
+  }
+}
+
+/* Combobox: a searchable dropdown (TandemUI.combobox in components.js). */
+.combo {
+  position: relative;
+  min-width: 0;
+}
+.combo input {
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--faint) 50%),
+    linear-gradient(135deg, var(--faint) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+}
+.combo-list {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  min-width: max(100%, 340px);
+  max-width: calc(100vw - 48px);
+  top: calc(100% + 4px);
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--raise);
+  border: 1px solid var(--line2);
+  border-radius: var(--rp);
+  max-height: 240px;
+  overflow-y: auto;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.combo-list.up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+.combo-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 9px;
+  border-radius: var(--rc);
+  cursor: pointer;
+  font-size: 13px;
+}
+.combo-list li b {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.combo-list li .num {
+  font: 11.5px var(--mono);
+  color: var(--faint);
+}
+.combo-list li[aria-selected="true"] {
+  background: var(--sunk);
+}
+.combo-list li[aria-selected="true"] b {
+  color: var(--you);
+}
+.combo-list .none {
+  display: block;
+  color: var(--faint);
+  cursor: default;
+}
+
+/* Tabs with a sliding indicator (.tab-ind), positioned by the page's script. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  position: relative;
+}
+.tab {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  position: relative;
+  z-index: 1;
+}
+.tab span {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.tab:hover {
+  background: var(--raise);
+  color: var(--ink);
+}
+.tab[aria-selected="true"] {
+  background: transparent;
+  color: var(--ink);
+}
+.tab[aria-selected="true"] span {
+  color: var(--muted);
+}
+.tab:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+}
+.tab-ind {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: 6px;
+  background: var(--line2);
+  transition:
+    transform 0.35s var(--spring),
+    width 0.35s var(--spring);
+  z-index: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link,
+  .primary,
+  .chip,
+  .stepper i {
+    transition: none;
+  }
+}
