@@ -16,7 +16,7 @@ The parts it takes off your plate:
   which run on each on the model you picked for its role so research can use a cheaper one,
   remembers where every task stands, and brings you only the questions that need you.
 - **Pull requests.** It opens them, carries them through flaky CI, conflicts, and merge queues, and
-  helps you review your teammates'.
+  helps you review your teammates's code with an interactive view and interface to visually understand their code and leave comments.
 
 The orchestration behind all of this is deterministic code, and a small classifier answers routine
 questions, so **model tokens go only to the work that needs judgment**.
