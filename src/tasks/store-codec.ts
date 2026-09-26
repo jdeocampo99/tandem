@@ -33,6 +33,7 @@ import {
   type PullRequestMetadata,
   REVIEW_LEVEL_ORDER,
   type RepoPolicy,
+  type RequiredStages,
   type ResearchContinuation,
   type ResearchHandoff,
   type ResolvedGuidance,
@@ -133,6 +134,7 @@ const TOP_LEVEL_KEYS = [
   "fixRoundGrants",
   "reviewHead",
   "reviewSkippedHead",
+  "requiredStages",
   "iterationScope",
   "reviewLevel",
   "validationEvidence",
@@ -763,6 +765,17 @@ function parseFindingLedgerEntry(value: unknown, source: string): FindingLedgerE
   };
 }
 
+function parseRequiredStages(value: unknown, source: string): RequiredStages {
+  if (!isRecord(value)) {
+    failState(source, "required stages must be an object");
+  }
+  assertExactKeys(value, ["validation", "review"], source);
+  return {
+    validation: requiredBoolean(value, "validation", source),
+    review: requiredBoolean(value, "review", source),
+  };
+}
+
 function parseIterationScope(value: unknown, source: string): IterationScope {
   if (!isRecord(value)) {
     failState(source, "iteration scope must be an object");
@@ -1091,6 +1104,9 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
   }
   const fixRoundGrantEntries: readonly unknown[] =
     fixRoundGrantsValue === undefined ? [] : fixRoundGrantsValue;
+  const requiredStagesValue = Object.hasOwn(value, "requiredStages")
+    ? requiredValue(value, "requiredStages", source)
+    : undefined;
   const iterationScopeValue = Object.hasOwn(value, "iterationScope")
     ? requiredValue(value, "iterationScope", source)
     : undefined;
@@ -1181,6 +1197,11 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
         }),
     ...(reviewHead === undefined ? {} : { reviewHead }),
     ...(reviewSkippedHead === undefined ? {} : { reviewSkippedHead }),
+    ...(requiredStagesValue === undefined
+      ? {}
+      : {
+          requiredStages: parseRequiredStages(requiredStagesValue, `${source}.requiredStages`),
+        }),
     ...(iterationScopeValue === undefined
       ? {}
       : {

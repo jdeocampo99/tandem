@@ -155,7 +155,8 @@ import { TaskControlWorkflow } from "../tasks/control.ts";
 import { KEEP_FIXING_QUESTION_ID_PREFIX, keepFixingGrant } from "../tasks/findings.ts";
 import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
-import { transitionTask } from "../tasks/lifecycle.ts";
+import { isActiveTask, transitionTask } from "../tasks/lifecycle.ts";
+import { decideRequiredStages, pullRequestPublished } from "../tasks/required-stages.ts";
 import {
   DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS,
   type ResearchContinuationClassifier,
@@ -331,6 +332,8 @@ export type TandemService = Readonly<{
   readonly draftRequestBrief: (input: DraftRequestBriefInput) => Promise<RequestBriefView>;
   readonly reviewRequestBrief: (requestId: string) => Promise<RequestBriefView>;
   readonly approveRequestBrief: (intent: ApproveRequestBriefInput) => Promise<RequestBriefView>;
+  /** Drops a request whose brief was never approved, so it stops awaiting approval. */
+  readonly abandonRequestBrief: (requestId: string) => Promise<RequestBriefView>;
   /** The one request whose brief is awaiting approval; fails closed when that is not unambiguous. */
   readonly pendingBriefApprovalId: () => Promise<string>;
   readonly requestBrief: (requestId: string) => Promise<RequestBriefView>;
@@ -705,10 +708,6 @@ class TandemController {
       reviewAssistance: deps.reviewAssistance,
       recordRequestUsage: (events) => this.#accounting.record(events),
       readRequestUsage: (requestId) => deps.usageLedger.read(requestId),
-      briefSkipsReview: async (requestId) => {
-        const brief = await deps.requestStore.read(requestId);
-        return brief !== undefined && briefSkipsReview(brief);
-      },
       readModelCatalogue: (cwd) => this.readModelCatalogue(cwd),
     });
     this.#control = new TaskControlWorkflow({
@@ -730,6 +729,7 @@ class TandemController {
       publishTaskInbox: (task) => this.#source.publishTaskInbox(task),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       saveEndpoint: (taskId, endpoint, claim) => this.#worker.saveEndpoint(taskId, endpoint, claim),
+      briefSkipsReview: (requestId) => this.briefSkipsReview(requestId),
     });
     this.#requests = new RequestBriefWorkflow({
       home: deps.home,
@@ -803,7 +803,8 @@ class TandemController {
       approve: (id) => this.approve(id),
       draftRequestBrief: (input) => this.draftRequestBrief(input),
       reviewRequestBrief: (requestId) => this.#requests.review(requestId),
-      approveRequestBrief: (intent) => this.#requests.approve(intent),
+      approveRequestBrief: (intent) => this.approveRequestBrief(intent),
+      abandonRequestBrief: (requestId) => this.#requests.abandon(requestId),
       pendingBriefApprovalId: () => this.#requests.pendingApprovalId(),
       requestBrief: (requestId) => this.#requests.read(requestId),
       requestReceipt: (requestId) => this.#accounting.receipt(requestId),
@@ -1110,6 +1111,14 @@ class TandemController {
             : { researchContinuation: classifiedContinuation }),
           ...(pinned === undefined ? {} : { target: pinned.target }),
           ...(playbook === undefined ? {} : { playbook }),
+          ...(input.kind === "implementation"
+            ? {
+                requiredStages: decideRequiredStages({
+                  briefSkipsReview: brief !== undefined && briefSkipsReview(brief),
+                  pullRequestPublished: false,
+                }),
+              }
+            : {}),
           skills,
         },
         source.repoPath,
@@ -1770,13 +1779,18 @@ class TandemController {
   }
 
   private async advance(): Promise<readonly TaskRecord[]> {
+    await this.backfillRequiredStages(await this.#source.scopedTasks());
     const tasks = await this.#source.scopedTasks();
     for (const task of tasks) await this.reconcileOrBlock(task);
     await this.reconcilePresentations(new Set(tasks.map((task) => task.id)));
     const settled = await this.#source.scopedTasks();
     let draftRecorded = false;
     for (const task of settled) {
-      if ((await this.#drafts.openWhenReady(task)) || (await this.#drafts.refresh(task))) {
+      if (
+        (await this.#drafts.openWhenReady(task)) ||
+        (await this.#drafts.pushWhenReady(task)) ||
+        (await this.#drafts.refresh(task))
+      ) {
         draftRecorded = true;
       }
     }
@@ -2018,6 +2032,61 @@ class TandemController {
         );
       });
     });
+  }
+
+  /** Whether the request's approved brief says its work needs no code review. */
+  private async briefSkipsReview(requestId: string): Promise<boolean> {
+    const brief = await this.#deps.requestStore.read(requestId);
+    return brief !== undefined && briefSkipsReview(brief);
+  }
+
+  /**
+   * Approving a brief can change whether its work is reviewed, so the tasks already created under
+   * it record their required stages again.
+   */
+  private async approveRequestBrief(intent: ApproveRequestBriefInput): Promise<RequestBriefView> {
+    const view = await this.#requests.approve(intent);
+    const governed = (await this.#source.scopedTasks()).filter(
+      (task) =>
+        task.requestId === view.record.id && task.kind === "implementation" && isActiveTask(task),
+    );
+    await this.recordRequiredStages(governed, briefSkipsReview(view.record));
+    return view;
+  }
+
+  /** Records required stages on active implementation tasks saved before they existed. */
+  private async backfillRequiredStages(tasks: readonly TaskRecord[]): Promise<void> {
+    for (const task of tasks) {
+      if (task.kind !== "implementation" || task.requiredStages !== undefined) continue;
+      if (!isActiveTask(task)) continue;
+      const skips = task.requestId !== undefined && (await this.briefSkipsReview(task.requestId));
+      await this.recordRequiredStages([task], skips);
+    }
+  }
+
+  private async recordRequiredStages(
+    tasks: readonly TaskRecord[],
+    briefSkips: boolean,
+  ): Promise<void> {
+    for (const task of tasks) {
+      const requiredStages = decideRequiredStages({
+        briefSkipsReview: briefSkips,
+        pullRequestPublished: pullRequestPublished(task),
+      });
+      const recorded = task.requiredStages;
+      if (
+        recorded?.validation === requiredStages.validation &&
+        recorded.review === requiredStages.review
+      ) {
+        continue;
+      }
+      await this.updateTask(task.id, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        updatedAt: this.#deps.clock(),
+        requiredStages,
+      }));
+    }
   }
 
   private async recordPullRequest(

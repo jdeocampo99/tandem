@@ -2,7 +2,7 @@ import { basename } from "node:path";
 import type { IsoTimestamp, RequestBriefRecord, TaskRecord, TaskStage } from "../contracts.ts";
 import { type PrWatch, type PrWatchPoll, sameRef } from "../pr-watch/store.ts";
 import { elapsed, type PrWatchViewRow, pad, prWatchLines, prWatchView } from "../pr-watch/view.ts";
-import { requestApprovalState } from "../requests/brief.ts";
+import { awaitsApproval, requestApprovalState } from "../requests/brief.ts";
 import { isTerminalTask } from "../service/records.ts";
 import type { TimelineEvent } from "../tasks/timeline.ts";
 import { dollars, summarizeRollups, type TaskRollup, type TraceSummary } from "../tasks/trace.ts";
@@ -218,11 +218,6 @@ function boardLines(rows: readonly BoardRow[]): string[] {
 
 function needsYou(task: TaskRecord): boolean {
   return task.communication?.question !== undefined || NEEDS_YOU_STAGES.includes(task.stage);
-}
-
-/** A brief whose current draft nobody approved: new, or changed after approval. */
-function awaitsApproval(brief: RequestBriefRecord): boolean {
-  return requestApprovalState(brief) !== "current";
 }
 
 function briefRow(brief: RequestBriefRecord): BoardRow {

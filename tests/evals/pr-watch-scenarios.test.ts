@@ -667,7 +667,7 @@ test("a Tandem task resolves its pull request's conflicts, then it merges", asyn
       note: "🔀 resolving conflicts in auth/session.ts",
     });
     expect(steered).toEqual([
-      `${task.id}: Pull this branch from origin, merge origin/main into it, resolve the conflicts, commit, and push. Never force-push.`,
+      `${task.id}: Pull this branch from origin, merge origin/main into it, resolve the conflicts, and commit; Tandem pushes it. Never force-push.`,
     ]);
 
     world.github.push(pr);

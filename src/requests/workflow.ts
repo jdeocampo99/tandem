@@ -7,7 +7,9 @@ import type {
   TaskRecord,
 } from "../contracts.ts";
 import {
+  abandonRequestBriefRecord,
   approveRequestBriefRecord,
+  assertNotAbandoned,
   assertSafeRequestId,
   checkedRequestBriefContent,
   decideRequestDispatch,
@@ -127,6 +129,25 @@ export class RequestBriefWorkflow {
     return this.#view(settled, []);
   }
 
+  /**
+   * Records that the user dropped a request whose brief was never approved, so it stops counting
+   * as awaiting approval, then retires only the pane this request owns. The record and its history
+   * stay; a pane that cannot be closed safely leaves the abandonment standing.
+   */
+  async abandon(requestId: string): Promise<RequestBriefView> {
+    const current = await this.#require(requestId);
+    const tasks = await this.#deps.listTasks();
+    const abandoned = await this.#deps.store.update(current.id, current.revision, (record) =>
+      abandonRequestBriefRecord(record, tasks, this.#deps.clock()),
+    );
+    const pane = await closeRequestBriefPane(this.#paneDependencies(), abandoned);
+    if (pane === undefined) return this.#view(abandoned, []);
+    const settled = await this.#deps.store.update(abandoned.id, abandoned.revision, (record) =>
+      withRequestReviewPane(record, pane, this.#deps.clock()),
+    );
+    return this.#view(settled, []);
+  }
+
   async read(requestId: string): Promise<RequestBriefView> {
     return this.#view(await this.#require(requestId), []);
   }
@@ -179,6 +200,7 @@ export class RequestBriefWorkflow {
       return this.#deps.store.create({ repoPath: input.repoPath, content });
     }
     const current = await this.#require(input.requestId);
+    assertNotAbandoned(current);
     if (requestBriefDigests(content).contentDigest === current.draft.contentDigest) return current;
     return this.#deps.store.update(current.id, current.revision, (record) =>
       reviseRequestBriefRecord(record, content, this.#deps.clock()),

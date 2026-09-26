@@ -575,7 +575,7 @@ export class PrWatcher {
         return { row, entry: { ...logged, kind: "requeue" } };
       case "fix-conflicts": {
         const taskId = context.watch.taskId;
-        const text = `Pull this branch from origin, merge origin/${pr.base} into it, resolve the conflicts, commit, and push. Never force-push.`;
+        const text = `Pull this branch from origin, merge origin/${pr.base} into it, resolve the conflicts, and commit; Tandem pushes it. Never force-push.`;
         if (taskId === undefined || !(await this.#deps.steerTask(taskId, text))) {
           return {
             row: {

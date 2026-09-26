@@ -86,6 +86,7 @@ export type TandemAction =
     }>
   | Readonly<{ readonly action: "brief-review"; readonly requestId: string }>
   | Readonly<{ readonly action: "brief-show"; readonly requestId: string }>
+  | Readonly<{ readonly action: "brief-abandon"; readonly requestId: string }>
   | Readonly<{ readonly action: "request-receipt"; readonly requestId?: string | undefined }>
   | Readonly<{
       readonly action: "brief-approve";
@@ -522,6 +523,8 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.reviewRequestBrief(action.requestId), action.action),
   "brief-show": async (action, service) =>
     actionResult(await service.requestBrief(action.requestId), action.action),
+  "brief-abandon": async (action, service) =>
+    actionResult(await service.abandonRequestBrief(action.requestId), action.action),
   "request-receipt": async (action, service) =>
     actionResult(await service.requestReceipt(action.requestId), action.action),
   "brief-approve": async (action, service) =>
@@ -783,6 +786,7 @@ export async function executeTandemAction(
 const THREAD_ENDING_ACTIONS: ReadonlySet<TandemAction["action"]> = new Set([
   "thread-done",
   "brief-approve",
+  "brief-abandon",
   "approve",
   "answer",
   "review-post",
@@ -1158,6 +1162,10 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
       words.length > 1
         ? { action: "request-receipt", requestId: value(1, "request-receipt") }
         : { action: "request-receipt" },
+  },
+  "brief-abandon": {
+    arity: { min: 2, max: 2 },
+    parse: (_words, value) => ({ action: "brief-abandon", requestId: value(1, "brief-abandon") }),
   },
   "brief-review": {
     arity: { min: 2, max: 2 },

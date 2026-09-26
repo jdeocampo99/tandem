@@ -569,6 +569,35 @@ export async function publishReviewedTask(input: {
   );
 }
 
+/**
+ * Pushes a ready task's HEAD to its published pull request once its required stages pass. It
+ * never forces and never creates a pull request; it returns undefined when the recorded pull
+ * request is not open on the task branch any more.
+ */
+export async function pushPublishedTask(input: {
+  readonly task: TaskRecord;
+  readonly run: CommandRunner;
+}): Promise<PullRequestMetadata | undefined> {
+  const run = readRunner(input.run);
+  const recorded = input.task.pullRequest;
+  if (recorded === undefined || recorded.state !== "open") return undefined;
+  const ready = await assertReadyCheckout(run, input.task);
+  assertRepositoryIdentity(ready.remote, recorded.repository);
+  const observe = () =>
+    observeExistingPullRequest(run, ready.cwd, recorded.repository, ready.branch, recorded.base);
+  const existing = await observe();
+  if (existing === undefined || existing.number !== recorded.number || existing.state !== "open") {
+    return undefined;
+  }
+  if (existing.head === ready.head) return existing;
+  await pushExactBranch(run, ready.cwd, ready.branch, ready.head);
+  const refreshed = await observe();
+  if (refreshed === undefined || refreshed.head !== ready.head) {
+    throw new Error("pull request did not advance to the task HEAD after push");
+  }
+  return refreshed;
+}
+
 type DraftCheckout = Readonly<{
   readonly cwd: string;
   readonly branch: string;

@@ -25,6 +25,7 @@ import {
   TaskTransitionError,
   transitionTask,
 } from "../../src/tasks/lifecycle.ts";
+import { decideRequiredStages, pullRequestPublished } from "../../src/tasks/required-stages.ts";
 
 const models: RepoPolicy["models"] = {
   coordinator: { model: "coordinator-model", thinking: "high" },
@@ -1206,11 +1207,21 @@ function readyImplementation(): TaskRecord {
   return transitionTask(ready, { type: "finish-review", head: "head-1", generation: 0 }, context());
 }
 
-function followUpOn(state: "draft" | "open"): TaskRecord {
-  const published = {
+function followUpOn(
+  state: "draft" | "open",
+  stages: (task: TaskRecord) => TaskRecord = (task) => ({
+    ...task,
+    // What steering records from the pull request's state.
+    requiredStages: decideRequiredStages({
+      briefSkipsReview: false,
+      pullRequestPublished: pullRequestPublished(task),
+    }),
+  }),
+): TaskRecord {
+  const published = stages({
     ...readyImplementation(),
     pullRequest: { repository: "org/repo", number: 42, state, head: "head-1", base: "main" },
-  };
+  });
   const redirected = transitionTask(
     published,
     { type: "invalidate-evidence", head: "head-1", generation: published.generation },
@@ -1229,11 +1240,40 @@ test("a follow-up on an open pull request goes straight back to ready without ch
   expect(done.stage).toBe("ready");
   expect(done.reviewHead).toBe("head-2");
   expect(done.reviewSkippedHead).toBe("head-2");
-  expect(done.notifications.at(-1)?.message).toContain("follow-up on its open pull request");
+  expect(done.notifications.at(-1)?.message).toContain("Tandem pushes it to its pull request");
 });
 
 test("a follow-up on a draft pull request still runs checks", () => {
   expect(followUpOn("draft").stage).toBe("validating");
+});
+
+test("a task saved before required stages existed derives them from its open pull request", () => {
+  const legacy = followUpOn("open", ({ requiredStages: _stages, ...task }) => task);
+
+  expect(legacy.stage).toBe("ready");
+  expect(legacy.reviewSkippedHead).toBe("head-2");
+});
+
+test("the recorded required stages decide, not the pull request's state", () => {
+  const full = followUpOn("open", (task) => ({
+    ...task,
+    requiredStages: { validation: true, review: true },
+  }));
+
+  expect(full.stage).toBe("validating");
+});
+
+test("a new implementation task requires validation and review; research requires neither", () => {
+  expect(createTask(implementationInput, "2026-09-15T00:00:00.000Z").requiredStages).toEqual({
+    validation: true,
+    review: true,
+  });
+  expect(
+    createTask(
+      { ...implementationInput, requiredStages: { validation: true, review: false } },
+      "2026-09-15T00:00:00.000Z",
+    ).requiredStages,
+  ).toEqual({ validation: true, review: false });
 });
 
 test("a merge must land the pull request at the reviewed head", () => {

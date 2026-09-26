@@ -86,6 +86,10 @@ bun test
 bun run lint    # Biome
 ```
 
+On Linux (for example a Claude Code cloud session), store-backed tests need
+`TANDEM_IN_PROCESS_STORE_LOCK=1 bun test`: it swaps O_EXLOCK for an in-process lock
+(src/tasks/store-lock.ts). The real-lock tests still fail there; never set it for a real home.
+
 Format changed files with `bun run format <files>`. Pull request descriptions follow
 [.github/pull_request_template.md](.github/pull_request_template.md), including those opened with `gh pr create --body`. `bun run start` invokes the **advanced action CLI**,
 not the normal `tandem` front door.
