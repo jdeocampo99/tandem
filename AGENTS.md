@@ -83,7 +83,8 @@ bun test
 bun run lint    # Biome
 ```
 
-Format changed files with `bun run format <files>`. `bun run start` invokes the **advanced action CLI**,
+Format changed files with `bun run format <files>`. Pull request descriptions follow
+[.github/pull_request_template.md](.github/pull_request_template.md), including those opened with `gh pr create --body`. `bun run start` invokes the **advanced action CLI**,
 not the normal `tandem` front door.
 
 ## Read on demand
