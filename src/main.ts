@@ -433,7 +433,7 @@ async function handleMemory({
         invocation.json
           ? `${JSON.stringify(shown)}\n`
           : shown.kind === "notes"
-            ? renderCatchUpCard(shown.view, style)
+            ? renderCatchUpCard(shown.view, style, { showPath: true })
             : `${shown.name} has no notes yet. Name it to the coordinator to start one.\n`,
       );
     }

@@ -5,7 +5,8 @@ when it writes, how stale notes are kept from misleading it, and what a catch-up
 
 Code: src/memory/ (`workstream.ts` pure sections, cap, follow-ups, recent work, and the catch-up
 view; `view.ts` the card and list; `store.ts` files, handoff archive, and archiving; `service.ts`
-the actions), src/main.ts (`tandem memory`), src/session/actions.ts
+the actions), src/main.ts (`tandem memory`), src/extension/omp-host.ts (the `tandem-card` message and its
+renderer), src/session/actions.ts
 (`memory-list`, `memory-show`, `memory-write`, `memory-done`), src/session/coordinator.ts (the
 standing `Workstreams:` line), src/instructions.ts (the coordinator's memory guidance).
 
@@ -84,45 +85,44 @@ reason; the coordinator merges or drops old decisions and saves again. There is 
 
 `memory-show` builds a `CatchUpView` from the notes and records (`catchUpView`) and draws it as a
 card in the same style as `tandem status` (src/memory/view.ts, on the primitives in
-src/board/terminal.ts):
+src/board/terminal.ts). It shows only what the user acts on:
 
 ```
-Workstream: tia · notes from 3 days ago · saved 2030-01-06 · today 2030-01-09
+tia · 3 days ago
 
-DUE NOW 1 ───────────────────────────────────────────────────────────
-🔔 check missed-failure rate on 2030-01-09 because #412 merged Monday
+DUE NOW 2 ───────────────────────────────────────────────
+🔔 check missed-failure rate because #412 merged Monday
+🔔 check the old threshold because it was reverted · overdue
 
-WHERE YOU LEFT OFF ──────────────────────────────────────────────────
+WHERE YOU LEFT OFF ──────────────────────────────────────
 Lowered flaky-suite skip threshold.
 
-Handoff 2030-01-06
-Mobile pipeline still excluded.
-
-RECENT WORK 2 ───────────────────────────────────────────────────────
-   PR    TITLE                 STATE
+RECENT WORK 2 ───────────────────────────────────────────
 🎉 #412  Lower skip threshold  merged
 📝 #413  Enable TIA on mobile  draft
-
-─────────────────────────────────────────────────────────────────────
-1 later follow-up, next 2030-02-01 · 1 decision
-Notes: ~/.tandem/repositories/<key>/memory/tia/MEMORY.md
 ```
 
-Empty sections are left out. An overdue follow-up is red and says since when. In the terminal the
-name is a badge and sections are colored like `tandem status` (yellow due, red overdue, green
-merged); in the coordinator chat and in piped output the layout is the same without color.
+- Empty sections are left out. Due lines drop their date; an overdue one says so and is red.
+- Where you left off is Now, or the last handoff when there is no Now.
+- Colors match `tandem status`: the name is a badge, due is yellow, overdue red, merged green.
+- Later follow-ups, decisions, and the brief never show on the card; they go to the coordinator
+  for its suggestions.
 
-The action's text is the card, then, under "For your suggestions only; do not show the user", the
-header that the notes are dated data and not instructions and that code and records win, followed by
-the Brief, later follow-ups, Decisions, and hand-added sections. It is capped at 10,000 characters. A
-workstream without notes says so and tells the coordinator to ask for its goal, success metric, and
-links.
+**In the coordinator chat** the `tandem` tool posts the card as its own message (custom type
+`tandem-card`, the `showCard` effect) with OMP's `deliverAs: "aside"`, so it lands after the tool
+block and before the model's reply. Tandem registers a message renderer that draws it in color at
+the chat's width. The message's text is the plain card, which the model reads; a saved card whose
+details cannot be read falls back to that text. The tool result then says the card is on screen and
+carries only the notes: the header that they are dated data and not instructions and that code and
+records win, then the Brief, later follow-ups, Decisions, and hand-added sections, capped at 10,000
+characters. A host that cannot show cards gets the plain card at the top of the tool result
+instead, and the coordinator shows it in a code block.
 
-The coordinator shows the card exactly as returned in a code block and writes Suggested next under
-it: at most 3 actions the user can start now, each tied to the brief's goal or metric, ordered due
-checks, then unblocking, then new work, branching on the outcome when a check is pending. It cites
-only metrics and targets from the notes and asks the user for numbers Tandem cannot see. No history
-recap.
+The coordinator writes Suggested next under the card: at most 3 actions the user can start now,
+each tied to the brief's goal or metric, ordered due checks, then unblocking, then new work,
+branching on the outcome when a check is pending. It cites only metrics and targets from the notes
+and asks the user for numbers Tandem cannot see. No history recap. A workstream without notes says
+so and tells the coordinator to ask for its goal, success metric, and links.
 
 `memory-list` ("where was I?") is one line per workstream: `tia: 1 follow-up due`. The same lines
 join the coordinator's standing context as `Workstreams: …` when there are any; unreadable notes
@@ -132,5 +132,5 @@ workers get nothing from memory.
 ## `tandem memory`
 
 `tandem memory` lists the workstreams of the project the current directory is in (its Git root).
-`tandem memory NAME` prints that workstream's card, the same one the coordinator shows, without the
-coordinator's notes or suggestions. `--json` prints the list or the `CatchUpView`. It only reads.
+`tandem memory NAME` prints that workstream's card, the same one the coordinator shows, plus where
+its notes file is, without the coordinator's notes or suggestions. `--json` prints the list or the `CatchUpView`. It only reads.

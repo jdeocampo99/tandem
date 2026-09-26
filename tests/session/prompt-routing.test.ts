@@ -398,6 +398,7 @@ function registeredInputHook(
     },
     registerTool: () => undefined,
     registerCommand: () => undefined,
+    registerMessageRenderer: () => undefined,
     sendMessage: (message: unknown, options: unknown) => {
       sent.push({ message, options });
     },

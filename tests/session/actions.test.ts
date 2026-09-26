@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import type { RepoPolicy } from "../../src/contracts.ts";
-import { type MemoryShowResult, renderMemoryShow } from "../../src/memory/view.ts";
+import {
+  type MemoryShowResult,
+  renderCatchUpCard,
+  renderMemoryShow,
+} from "../../src/memory/view.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import {
@@ -1357,4 +1361,59 @@ test("memory actions run without an approval dialog and keep the notes' line bre
     noDialog,
   );
   expect(none.value).toBe("No workstreams yet.");
+});
+
+test("a catch-up goes on screen as its own card, and the tool result only carries the notes", async () => {
+  const view = {
+    name: "tia",
+    path: "/notes/tia/MEMORY.md",
+    savedOn: "2030-01-09",
+    age: "today",
+    today: "2030-01-09",
+    due: [],
+    later: [],
+    now: "Rolling out.",
+    brief: "Goal: skip safe suites.",
+    extra: [],
+    recent: [],
+  };
+  const service = {
+    memoryShow: async (_repoPath: string, workstream: string) =>
+      workstream === "tia" ? { kind: "notes", view } : { kind: "none", name: workstream },
+  } as unknown as TandemService;
+  const shown: unknown[] = [];
+  const dependencies: TandemCallDependencies = {
+    ...callDependencies(service, []),
+    showCard: async (effect) => {
+      shown.push(effect);
+    },
+  };
+
+  const outcome = await runTandemTool(
+    { action: "memory-show", repoPath: "/repo", workstream: "tia" },
+    dependencies,
+    undefined,
+  );
+  expect(shown).toEqual([
+    { type: "showCard", view, text: renderCatchUpCard(view, { color: false }).trimEnd() },
+  ]);
+  expect(outcome.text).toBe(
+    renderMemoryShow({ kind: "notes", view } as MemoryShowResult, { cardShown: true }),
+  );
+  expect(outcome.text).toContain("Goal: skip safe suites.");
+  expect(outcome.text).not.toContain("WHERE YOU LEFT OFF");
+
+  // Without notes there is no card, and without a host that shows cards the card stays in the text.
+  await runTandemTool(
+    { action: "memory-show", repoPath: "/repo", workstream: "billing" },
+    dependencies,
+    undefined,
+  );
+  expect(shown).toHaveLength(1);
+  const plain = await runTandemTool(
+    { action: "memory-show", repoPath: "/repo", workstream: "tia" },
+    callDependencies(service, []),
+    undefined,
+  );
+  expect(plain.text).toContain("WHERE YOU LEFT OFF");
 });

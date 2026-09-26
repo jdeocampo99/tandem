@@ -1,4 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, MessageRenderer } from "@oh-my-pi/pi-coding-agent";
+import { isCatchUpView, renderCatchUpCard } from "../memory/view.ts";
 import type { ApprovalDialog } from "../session/actions.ts";
 import type { SessionEffect, SessionHost, ToolCall, ToolKind } from "../session/events.ts";
 import { assertSelectedModel, expectedModelParts } from "../workers/protocol.ts";
@@ -11,6 +12,9 @@ const DELIVERY_MESSAGE_TYPE: Readonly<
   "prompt-route": "tandem-prompt-route",
   "stall-reminder": "tandem-stall-reminder",
 };
+
+/** The custom message type a catch-up card is saved under; its renderer draws it in color. */
+export const CARD_MESSAGE_TYPE = "tandem-card";
 
 const OMP_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   read: "read",
@@ -57,6 +61,38 @@ export function ompMcpToolPrefix(server: string): string {
     .replace(/^_+|_+$/gu, "");
   return `mcp__${sanitized.length > 0 ? sanitized : "server"}_`;
 }
+
+/**
+ * Draws a saved `tandem-card` message in color at the chat's width, the way `tandem status` looks
+ * in a terminal. A message whose details cannot be read falls back to OMP's plain-text card.
+ */
+export const renderCardMessage: MessageRenderer = (message) => {
+  const details = message.details as { readonly view?: unknown } | undefined;
+  const view = details?.view;
+  if (!isCatchUpView(view)) return undefined;
+  const color = (process.env.NO_COLOR ?? "").length === 0;
+  let drawn: Readonly<{ width: number; lines: readonly string[] }> | undefined;
+  return {
+    render(width) {
+      if (drawn?.width !== width) {
+        const text = renderCatchUpCard(view, { color, columns: Math.max(1, width - 2) });
+        const lines = [
+          "",
+          ...text
+            .trimEnd()
+            .split("\n")
+            .map((line) => ` ${line}`),
+          "",
+        ];
+        drawn = { width, lines };
+      }
+      return drawn.lines;
+    },
+    invalidate() {
+      drawn = undefined;
+    },
+  };
+};
 
 /** Only the TUI can show an approval dialog; elsewhere approval fails closed. */
 export function ompApprovalDialog(ctx: ExtensionContext): ApprovalDialog | undefined {
@@ -128,6 +164,20 @@ async function performOmpEffect(
       );
       return;
     }
+    case "showCard":
+      // Sent while the tool call runs, so "aside" places it after the tool block and before the
+      // model's reply. The model reads `content`; the renderer draws `details.view`.
+      pi.sendMessage(
+        {
+          customType: CARD_MESSAGE_TYPE,
+          content: effect.text,
+          display: true,
+          details: { view: effect.view },
+          attribution: "agent",
+        },
+        { deliverAs: "aside" },
+      );
+      return;
     case "promptAsUser":
       pi.sendUserMessage(effect.text);
       return;

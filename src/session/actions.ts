@@ -1,6 +1,7 @@
 import type { MergingChoice } from "../config/repositories.ts";
 import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
+import { type MemoryShowResult, renderCatchUpCard, renderMemoryShow } from "../memory/view.ts";
 import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
@@ -9,7 +10,7 @@ import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
-import type { SessionHost, ToolOutcome } from "./events.ts";
+import type { SessionEffect, SessionHost, ToolOutcome } from "./events.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -803,6 +804,8 @@ export type TandemCallDependencies = Readonly<{
   readonly postAction: () => Promise<void>;
   /** Ends the thread the user and the coordinator were working on; follows a thread-ending action. */
   readonly closeThread: () => void;
+  /** Puts a catch-up card on screen as its own message; absent where the host only shows text. */
+  readonly showCard?: (effect: Extract<SessionEffect, { type: "showCard" }>) => Promise<void>;
 }>;
 
 /** Runs one `tandem` tool request; a failure becomes an error outcome, never a throw. */
@@ -824,8 +827,11 @@ export async function runTandemTool(
     } else {
       await dependencies.postAction();
     }
+    const cardShown = await showCatchUpCard(result, dependencies.showCard);
     return {
-      text: renderActionResult(result),
+      text: cardShown
+        ? renderMemoryShow(result.value as MemoryShowResult, { cardShown })
+        : renderActionResult(result),
       isError: false,
       details: {
         action: result.action,
@@ -841,6 +847,23 @@ export async function runTandemTool(
       details: { action: action.action },
     };
   }
+}
+
+/** A catch-up with notes goes on screen as its own card when the host can show one. */
+async function showCatchUpCard(
+  result: TandemActionResult,
+  showCard: TandemCallDependencies["showCard"],
+): Promise<boolean> {
+  const value = result.value as MemoryShowResult | undefined;
+  if (result.action !== "memory-show" || value?.kind !== "notes" || showCard === undefined) {
+    return false;
+  }
+  await showCard({
+    type: "showCard",
+    view: value.view,
+    text: renderCatchUpCard(value.view, { color: false }).trimEnd(),
+  });
+  return true;
 }
 
 /**

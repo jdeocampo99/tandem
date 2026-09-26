@@ -16,7 +16,14 @@ import {
 } from "../session/prompt-routing.ts";
 import { coordinatorToolRefusal } from "../session/tool-guard.ts";
 import { tandemRequestSchema as tandemToolSchema } from "../session/tools.ts";
-import { ompApprovalDialog, ompMcpToolPrefix, ompSessionHost, ompToolCall } from "./omp-host.ts";
+import {
+  CARD_MESSAGE_TYPE,
+  ompApprovalDialog,
+  ompMcpToolPrefix,
+  ompSessionHost,
+  ompToolCall,
+  renderCardMessage,
+} from "./omp-host.ts";
 
 export type TandemOmpRegistrationDependencies = Readonly<{
   readonly getService: (ctx: ExtensionContext) => TandemService;
@@ -43,6 +50,7 @@ export function registerTandemOmp(
   registerCoordinatorToolGuard(pi, dependencies);
   registerTandemTool(pi, dependencies);
   registerTandemCommand(pi, dependencies);
+  pi.registerMessageRenderer(CARD_MESSAGE_TYPE, renderCardMessage);
 }
 
 function callDependencies(
@@ -120,7 +128,14 @@ function registerTandemTool(
     approval: "write",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const { request } = tandemToolSchema.parse(params);
-      const outcome = await runTandemTool(request, callDependencies(ctx, dependencies), signal);
+      const outcome = await runTandemTool(
+        request,
+        {
+          ...callDependencies(ctx, dependencies),
+          showCard: (effect) => ompSessionHost(pi, () => ctx).perform(effect),
+        },
+        signal,
+      );
       return {
         content: [{ type: "text", text: outcome.text }],
         details: outcome.details,

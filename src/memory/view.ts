@@ -36,11 +36,16 @@ const STATE_TONES: Readonly<Record<PullRequestState, readonly Tone[]>> = {
 };
 
 /**
- * The catch-up card, laid out like `tandem status`: a header with how old the notes are, then Due
- * now, Where you left off, and Recent work in titled sections, leaving out empty ones. Colors mark
- * what is due (yellow), overdue (red), and merged (green); without color the layout is the same.
+ * The catch-up card, laid out like `tandem status`: a one-line header with how old the notes are,
+ * then Due now, Where you left off, and Recent work, leaving out empty ones. Colors mark what is
+ * due (yellow), overdue (red), and merged (green); without color the layout is the same.
+ * `showPath` adds where the notes file is, for `tandem memory` in the terminal.
  */
-export function renderCatchUpCard(view: CatchUpView, style: StatusStyle): string {
+export function renderCatchUpCard(
+  view: CatchUpView,
+  style: StatusStyle,
+  options: Readonly<{ showPath?: boolean }> = {},
+): string {
   const sections = [
     { title: "DUE NOW", count: view.due.length, tone: "yellow", lines: dueLines(view) },
     { title: "WHERE YOU LEFT OFF", count: 0, tone: "cyan", lines: leftOffLines(view) },
@@ -49,12 +54,12 @@ export function renderCatchUpCard(view: CatchUpView, style: StatusStyle): string
   const shown = sections.filter((section) => section.lines.length > 0);
   const widest = Math.max(RULE_MIN, ...shown.flatMap((section) => section.lines.map(lineWidth)));
   const ruleWidth = style.columns === undefined ? widest : Math.min(widest, style.columns);
-  const lines: Line[] = [header(view, style.color), []];
+  const lines: Line[] = [header(view, style.color)];
   for (const { title, count, tone, lines: rows } of shown) {
-    lines.push(sectionHeading(title, count, tone, ruleWidth), ...rows, []);
+    lines.push([], sectionHeading(title, count, tone, ruleWidth), ...rows);
   }
-  if (shown.length === 0) lines.push([span("Nothing saved yet besides the brief.", "dim")], []);
-  lines.push([span("─".repeat(ruleWidth), "dim")], ...footerLines(view));
+  if (shown.length === 0) lines.push([], [span("Nothing saved yet besides the brief.", "dim")]);
+  if (options.showPath === true) lines.push([], [span("Notes: ", "dim"), span(view.path, "cyan")]);
   return `${lines.map((line) => draw(line, style)).join("\n")}\n`;
 }
 
@@ -93,7 +98,10 @@ export function renderWorkstreamList(
  * What the `memory-show` action hands the coordinator: the card to show as is, then what it needs
  * for Suggested next and never shows. Capped so a long file never floods the conversation.
  */
-export function renderMemoryShow(result: MemoryShowResult): string {
+export function renderMemoryShow(
+  result: MemoryShowResult,
+  options: Readonly<{ cardShown?: boolean }> = {},
+): string {
   if (result.kind === "none") {
     return `${result.name} has no notes yet. Ask the user for its goal, success metric, and links, then save them as its brief.`;
   }
@@ -105,8 +113,11 @@ export function renderMemoryShow(result: MemoryShowResult): string {
     ...block("Decisions", view.decisions),
     ...view.extra.flatMap(({ heading, text }) => block(heading, text)),
   ];
+  // When the host already put the card on screen, the model gets only what it needs to add.
   const text = [
-    renderCatchUpCard(view, { color: false }).trimEnd(),
+    options.cardShown === true
+      ? "The catch-up card is on screen above your reply; do not repeat it."
+      : renderCatchUpCard(view, { color: false }).trimEnd(),
     "",
     "For your suggestions only; do not show the user:",
     notes.join("\n\n"),
@@ -114,78 +125,66 @@ export function renderMemoryShow(result: MemoryShowResult): string {
   return text.length <= CATCH_UP_MAX_CHARS ? text : `${text.slice(0, CATCH_UP_MAX_CHARS - 1)}…`;
 }
 
-function header(view: CatchUpView, color: boolean): Line {
-  const title = color
-    ? [span(` ${view.name} `, "inverse", "bold"), span("  ")]
-    : [span(`Workstream: ${view.name} · `)];
-  return [
-    ...title,
-    span(`notes from ${view.age}`),
-    span(` · saved ${view.savedOn} · today ${view.today}`, "dim"),
-  ];
-}
-
-function dueLines(view: CatchUpView): Line[] {
-  return view.due.map((followUp) =>
-    followUp.due < view.today
-      ? [span("🔔 "), span(followUp.text, "red"), span(` (overdue since ${followUp.due})`, "dim")]
-      : [span("🔔 "), span(followUp.text, "yellow")],
+/**
+ * A catch-up view read back from a saved chat message, checked before it is drawn: an older or
+ * hand-edited session falls back to the message's plain text.
+ */
+export function isCatchUpView(value: unknown): value is CatchUpView {
+  if (typeof value !== "object" || value === null) return false;
+  const view = value as Record<string, unknown>;
+  const followUps = (list: unknown) =>
+    Array.isArray(list) &&
+    list.every((item) => typeof item?.text === "string" && typeof item?.due === "string");
+  return (
+    ["name", "path", "savedOn", "age", "today"].every((key) => typeof view[key] === "string") &&
+    followUps(view.due) &&
+    followUps(view.later) &&
+    Array.isArray(view.extra) &&
+    Array.isArray(view.recent) &&
+    view.recent.every(
+      (item) =>
+        typeof item?.number === "number" &&
+        typeof item?.title === "string" &&
+        Object.hasOwn(STATE_MARKS, String(item?.state)),
+    )
   );
 }
 
+function header(view: CatchUpView, color: boolean): Line {
+  const name = color ? [span(` ${view.name} `, "inverse", "bold")] : [span(view.name, "bold")];
+  return [...name, span(` · ${view.age === "today" ? "notes from today" : view.age}`, "dim")];
+}
+
+/** Each due follow-up without its date, which is today or past; an overdue one says so. */
+function dueLines(view: CatchUpView): Line[] {
+  return view.due.map((followUp) => {
+    const text = followUp.text.replace(` on ${followUp.due}`, "");
+    return followUp.due < view.today
+      ? [span("🔔 "), span(text, "red"), span(" · overdue", "dim")]
+      : [span("🔔 "), span(text, "yellow")];
+  });
+}
+
+/** Now, or the last handoff when there is no Now; the two mostly say the same thing. */
 function leftOffLines(view: CatchUpView): Line[] {
-  const lines = textLines(view.now);
-  if (view.handoff !== undefined) {
-    const label = view.handoff.date === undefined ? "Last handoff" : `Handoff ${view.handoff.date}`;
-    if (lines.length > 0) lines.push([]);
-    lines.push([span(label, "dim", "bold")], ...textLines(view.handoff.text, "dim"));
-  }
-  return lines;
+  const now = textLines(view.now);
+  return now.length > 0 ? now : textLines(view.handoff?.text);
 }
 
 function recentLines(view: CatchUpView): Line[] {
-  if (view.recent.length === 0) return [];
   const numbers = view.recent.map((pullRequest) => `#${pullRequest.number}`);
-  const numberWidth = columnWidth(["PR", ...numbers]);
-  const titleWidth = columnWidth(["TITLE", ...view.recent.map((pullRequest) => pullRequest.title)]);
-  const heading: Line = [
-    span("   "),
-    ...cell("PR", numberWidth, "dim"),
-    span("  "),
-    ...cell("TITLE", titleWidth, "dim"),
-    span("  "),
-    span("STATE", "dim"),
-  ];
-  return [
-    heading,
-    ...view.recent.map(
-      (pullRequest, index): Line => [
-        span(`${STATE_MARKS[pullRequest.state]} `),
-        ...cell(numbers[index] ?? "", numberWidth, "blue"),
-        span("  "),
-        ...cell(pullRequest.title, titleWidth),
-        span("  "),
-        span(pullRequest.state, ...STATE_TONES[pullRequest.state]),
-      ],
-    ),
-  ];
-}
-
-function footerLines(view: CatchUpView): Line[] {
-  const later = view.later.map((followUp) => followUp.due).toSorted()[0];
-  const decisions = textLines(view.decisions).length;
-  const counts = [
-    ...(later === undefined
-      ? []
-      : [
-          `${view.later.length} later follow-up${view.later.length === 1 ? "" : "s"}, next ${later}`,
-        ]),
-    ...(decisions === 0 ? [] : [`${decisions} decision${decisions === 1 ? "" : "s"}`]),
-  ];
-  return [
-    ...(counts.length === 0 ? [] : [[span(counts.join(" · "), "dim")]]),
-    [span("Notes: ", "dim"), span(view.path, "cyan")],
-  ];
+  const numberWidth = columnWidth(numbers);
+  const titleWidth = columnWidth(view.recent.map((pullRequest) => pullRequest.title));
+  return view.recent.map(
+    (pullRequest, index): Line => [
+      span(`${STATE_MARKS[pullRequest.state]} `),
+      ...cell(numbers[index] ?? "", numberWidth, "blue"),
+      span("  "),
+      ...cell(pullRequest.title, titleWidth),
+      span("  "),
+      span(pullRequest.state, ...STATE_TONES[pullRequest.state]),
+    ],
+  );
 }
 
 function textLines(text: string | undefined, ...tones: Tone[]): Line[] {

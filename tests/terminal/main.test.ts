@@ -1267,7 +1267,7 @@ test("tandem memory lists this project's workstreams, and with a name shows its 
     expect(listed.text).toContain("WORKSTREAMS 1");
     expect(listed.text).toContain("tia: 1 follow-up due");
     const shown = await run(["memory", "tia"]);
-    expect(shown.text).toStartWith("Workstream: tia · notes from today");
+    expect(shown.text).toStartWith("tia · notes from today");
     expect(shown.text).toContain("WHERE YOU LEFT OFF");
     expect(shown.text).toContain("Notes: /notes/tia/MEMORY.md");
     expect((await run(["memory", "billing"])).text).toBe(
