@@ -1,4 +1,5 @@
 import type { HerdrStatusReporter } from "../adapters/herdr-status.ts";
+import type { CatchUpView } from "../memory/workstream.ts";
 import type { TodoItem } from "../playbooks/progress.ts";
 import type { TaskMessageBatch } from "../tasks/communication-protocol.ts";
 import type { ReplyUsage } from "../workers/terminal.ts";
@@ -106,6 +107,15 @@ export type SessionEffect =
       details?: Readonly<Record<string, unknown>>;
       timing: "followUp" | "nextTurn";
       triggerTurn: boolean;
+    }>
+  | Readonly<{
+      /**
+       * A workstream's catch-up card as its own chat message, drawn in color where the host can.
+       * `text` is the same card without color, for the model and for hosts that only show text.
+       */
+      type: "showCard";
+      view: CatchUpView;
+      text: string;
     }>
   | Readonly<{ type: "promptAsUser"; text: string }>
   | Readonly<{ type: "notify"; text: string; level: "info" | "error" }>

@@ -2,6 +2,7 @@ import type { SelfImprovementMode } from "../config/home-settings.ts";
 import type { MergingChoice } from "../config/repositories.ts";
 import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
+import { type MemoryShowResult, renderCatchUpCard, renderMemoryShow } from "../memory/view.ts";
 import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
@@ -10,7 +11,7 @@ import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
-import type { SessionHost, ToolOutcome } from "./events.ts";
+import type { SessionEffect, SessionHost, ToolOutcome } from "./events.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -64,6 +65,7 @@ export type TandemAction =
       readonly targetCheckout?: string | undefined;
       readonly targetClone?: boolean | undefined;
       readonly validationCommands?: readonly string[] | undefined;
+      readonly workstream?: string | undefined;
     }>
   | Readonly<{ readonly action: "list" }>
   | Readonly<{ readonly action: "presentations" }>
@@ -208,6 +210,23 @@ export type TandemAction =
       /** A GitHub PR URL, `owner/repo#123`, or `#123` in `repoPath`. */
       readonly pullRequest: string;
       readonly repoPath?: string | undefined;
+    }>
+  | Readonly<{ readonly action: "memory-list"; readonly repoPath: string }>
+  | Readonly<{
+      readonly action: "memory-show" | "memory-done";
+      readonly repoPath: string;
+      readonly workstream: string;
+    }>
+  | Readonly<{
+      readonly action: "memory-write";
+      readonly repoPath: string;
+      readonly workstream: string;
+      /** Each given section replaces the saved one; an empty text removes it. */
+      readonly brief?: string | undefined;
+      readonly now?: string | undefined;
+      readonly followUps?: string | undefined;
+      readonly lastHandoff?: string | undefined;
+      readonly decisions?: string | undefined;
     }>
   | Readonly<{
       readonly action: "investigate";
@@ -496,6 +515,7 @@ function serviceCreateInput(
     ...(action.validationCommands === undefined
       ? {}
       : { validationCommands: action.validationCommands }),
+    ...(action.workstream === undefined ? {} : { workstream: action.workstream }),
   };
 }
 
@@ -765,6 +785,32 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.prWatchFix(pullRequestInput(action)), action.action, {
       approved: true,
     }),
+  "memory-list": async (action, service) => {
+    const lines = await service.memoryList(action.repoPath);
+    return actionResult(
+      lines.length === 0 ? "No workstreams yet." : lines.join("\n"),
+      action.action,
+    );
+  },
+  "memory-show": async (action, service) =>
+    actionResult(await service.memoryShow(action.repoPath, action.workstream), action.action),
+  "memory-write": async (action, service) =>
+    actionResult(
+      await service.memoryWrite({
+        repoPath: action.repoPath,
+        workstream: action.workstream,
+        changes: {
+          ...(action.brief === undefined ? {} : { brief: action.brief }),
+          ...(action.now === undefined ? {} : { now: action.now }),
+          ...(action.followUps === undefined ? {} : { "follow-ups": action.followUps }),
+          ...(action.lastHandoff === undefined ? {} : { "last-handoff": action.lastHandoff }),
+          ...(action.decisions === undefined ? {} : { decisions: action.decisions }),
+        },
+      }),
+      action.action,
+    ),
+  "memory-done": async (action, service) =>
+    actionResult(await service.memoryDone(action.repoPath, action.workstream), action.action),
   investigate: async (action, service) =>
     actionResult(
       await service.investigate({
@@ -864,6 +910,8 @@ export type TandemCallDependencies = Readonly<{
   readonly postAction: () => Promise<void>;
   /** Ends the thread the user and the coordinator were working on; follows a thread-ending action. */
   readonly closeThread: () => void;
+  /** Puts a catch-up card on screen as its own message; absent where the host only shows text. */
+  readonly showCard?: (effect: Extract<SessionEffect, { type: "showCard" }>) => Promise<void>;
 }>;
 
 /** Runs one `tandem` tool request; a failure becomes an error outcome, never a throw. */
@@ -885,8 +933,11 @@ export async function runTandemTool(
     } else {
       await dependencies.postAction();
     }
+    const cardShown = await showCatchUpCard(result, dependencies.showCard);
     return {
-      text: renderActionResult(result),
+      text: cardShown
+        ? renderMemoryShow(result.value as MemoryShowResult, { cardShown })
+        : renderActionResult(result),
       isError: false,
       details: {
         action: result.action,
@@ -902,6 +953,23 @@ export async function runTandemTool(
       details: { action: action.action },
     };
   }
+}
+
+/** A catch-up with notes goes on screen as its own card when the host can show one. */
+async function showCatchUpCard(
+  result: TandemActionResult,
+  showCard: TandemCallDependencies["showCard"],
+): Promise<boolean> {
+  const value = result.value as MemoryShowResult | undefined;
+  if (result.action !== "memory-show" || value?.kind !== "notes" || showCard === undefined) {
+    return false;
+  }
+  await showCard({
+    type: "showCard",
+    view: value.view,
+    text: renderCatchUpCard(value.view, { color: false }).trimEnd(),
+  });
+  return true;
 }
 
 /**

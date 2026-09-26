@@ -58,6 +58,7 @@ import {
   type ValidationCommand,
   type ValidationContractName,
   type ValidationEvidence,
+  WORKSTREAM_NAME_PATTERN,
   type WorktreeLease,
 } from "../contracts.ts";
 import { PLAYBOOK_IDS } from "../playbooks/catalog.ts";
@@ -154,6 +155,7 @@ const TOP_LEVEL_KEYS = [
   "cleanup",
   "prReview",
   "target",
+  "workstream",
 ] as const;
 const TASK_CLEANUP_STATUSES: readonly TaskCleanupStatus[] = [
   "released",
@@ -1224,7 +1226,16 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     ...(Object.hasOwn(value, "target")
       ? { target: parseTaskTarget(requiredValue(value, "target", source), `${source}.target`) }
       : {}),
+    ...(Object.hasOwn(value, "workstream") ? { workstream: parseWorkstream(value, source) } : {}),
   };
+}
+
+function parseWorkstream(value: UnknownRecord, source: string): string {
+  const workstream = requiredText(value, "workstream", source);
+  if (!WORKSTREAM_NAME_PATTERN.test(workstream)) {
+    failState(`${source}.workstream`, "workstream must be a lowercase name");
+  }
+  return workstream;
 }
 
 function parseTaskTarget(value: unknown, source: string): TaskTarget {

@@ -22,6 +22,7 @@ import {
   type TaskTarget,
   type ValidationContractName,
   type ValidationEvidence,
+  WORKSTREAM_NAME_PATTERN,
   type WorktreeLease,
 } from "../contracts.ts";
 import type { PlaybookId } from "../playbooks/catalog.ts";
@@ -65,6 +66,7 @@ export type TaskInput = Readonly<{
   /** Required for, and only for, a `pr-review` task. */
   readonly prReview?: PrReviewState;
   readonly target?: TaskTarget;
+  readonly workstream?: string;
   /** Implementation tasks only; decided by `decideRequiredStages` from the brief it runs under. */
   readonly requiredStages?: RequiredStages;
 }>;
@@ -190,6 +192,16 @@ type MergeEvent = Readonly<{
   readonly verified: boolean;
 }>;
 
+/**
+ * The task's own pull request merged on GitHub without the `merge` action: through PR watch's
+ * auto-merge or queue label, or by hand. GitHub's merged state is the evidence; the merged head
+ * may differ from the reviewed one when PR watch updated the branch or retried CI.
+ */
+type MergedOnGitHubEvent = Readonly<{
+  readonly type: "merged-on-github";
+  readonly pullRequest: PullRequestMetadata;
+}>;
+
 type AcknowledgeNotificationEvent = Readonly<{
   readonly type: "acknowledge-notification";
   readonly notificationId: string;
@@ -214,6 +226,7 @@ export type TaskEvent =
   | CancelEvent
   | BlockEvent
   | MergeEvent
+  | MergedOnGitHubEvent
   | AcknowledgeNotificationEvent;
 
 export type TaskTransitionErrorCode =
@@ -323,6 +336,9 @@ function assertTaskInput(input: TaskInput): void {
   assertTextList(input.surfaces, "surfaces");
   if (input.requestId !== undefined && !isSafeRequestId(input.requestId)) {
     throw new TypeError(`Unsafe request id: ${String(input.requestId)}`);
+  }
+  if (input.workstream !== undefined && !WORKSTREAM_NAME_PATTERN.test(input.workstream)) {
+    throw new TypeError(`Unsafe workstream name: ${String(input.workstream)}`);
   }
   assertResearchContinuationInput(input);
   assertSkillInput(input);
@@ -841,6 +857,7 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     ...(input.playbook === undefined ? {} : { playbook: input.playbook }),
     ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
     ...(input.target === undefined ? {} : { target: { ...input.target } }),
+    ...(input.workstream === undefined ? {} : { workstream: input.workstream }),
     ...(input.kind === "implementation"
       ? {
           requiredStages: {
@@ -1406,6 +1423,33 @@ function mergeTask(
   );
 }
 
+function recordMergedOnGitHub(
+  task: TaskRecord,
+  event: MergedOnGitHubEvent,
+  context: TaskTransitionContext,
+): TaskRecord {
+  if (task.stage !== "ready" || task.kind !== "implementation") {
+    invalidStage(task, event.type, ["ready"]);
+  }
+  const own = task.pullRequest;
+  const merged = event.pullRequest;
+  if (
+    own === undefined ||
+    merged?.state !== "merged" ||
+    !isNonEmptyText(merged.head) ||
+    merged.repository.toLowerCase() !== own.repository.toLowerCase() ||
+    merged.number !== own.number
+  ) {
+    throw new TaskTransitionError(
+      "merge-not-verified",
+      task,
+      "Only the task's own pull request, merged on GitHub, marks it merged",
+    );
+  }
+  // PR watch already told the user it merged, so this adds no notification of its own.
+  return commitTask(task, context.now, { stage: "merged", pullRequest: merged });
+}
+
 function acknowledgeNotification(
   task: TaskRecord,
   event: AcknowledgeNotificationEvent,
@@ -1493,6 +1537,8 @@ export function transitionTask(
       return blockTask(task, event, context);
     case "merge":
       return mergeTask(task, event, context);
+    case "merged-on-github":
+      return recordMergedOnGitHub(task, event, context);
     case "acknowledge-notification":
       return acknowledgeNotification(task, event, context);
     default: {

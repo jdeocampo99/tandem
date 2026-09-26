@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { basename } from "node:path";
+import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
 import { listOmpMcpServers } from "./adapters/omp.ts";
@@ -11,6 +13,7 @@ import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { type RenestReport, renestWorkspaces } from "./coordinator/renest.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
 import { isTandemCheckout, TANDEM_CHECKOUT } from "./coordinator/tandem-checkout.ts";
+import { renderCatchUpCard, renderWorkstreamList } from "./memory/view.ts";
 import { renderPrWatchView } from "./pr-watch/view.ts";
 import { type PublishedReport, publishReport } from "./report/publish.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
@@ -59,6 +62,7 @@ import {
   writeText,
 } from "./terminal/process.ts";
 import {
+  gitRootForPath,
   interactiveFor,
   noTtyError,
   readRegisteredProjects,
@@ -80,6 +84,7 @@ Usage:
                            --since DATE only tasks created since then; --no-open just writes it
   tandem watch [PR]        Your watched pull requests; with a PR link or number, watch it
                            --stop PR stops watching it
+  tandem memory [NAME]     This project's workstreams; with a name, its catch-up and notes file
   tandem update            Load your latest local Tandem code into every coordinator
                            Keeps chats and tasks; --fresh starts new chats
   tandem fix               Find stale Tandem resources and offer the repair
@@ -92,7 +97,7 @@ Usage:
 
 Options:
   --yes                    Skip the confirmation (fix, reset)
-  --json                   Machine-readable output (status, trace, report, watch, fix)
+  --json                   Machine-readable output (status, trace, report, watch, memory, fix)
   --watch                  Redraw every 2 seconds until Esc, q, or Ctrl-C (status)
   --line                   One line: what needs you, what's running, PRs (status)
   --verbose                Full paths and reasons (fix)
@@ -398,6 +403,56 @@ async function handleWatch({
           : await service.prWatchStart(input);
     stdout(invocation.json ? `${JSON.stringify(view)}\n` : renderPrWatchView(view));
     return { exitCode: 0, status: "watch" };
+  } finally {
+    await service.shutdown();
+  }
+}
+
+/**
+ * `tandem memory` lists the workstreams of the project the current directory is in; with a name it
+ * shows that workstream's catch-up card and where its notes file is. It only reads.
+ */
+async function handleMemory({
+  invocation,
+  environment,
+  dependencies,
+  run,
+  stdout,
+}: Readonly<{
+  readonly invocation: TerminalInvocation;
+  readonly environment: TerminalEnvironment;
+  readonly dependencies: TerminalMainDependencies;
+  readonly run: CommandRunner;
+  readonly stdout: (text: string) => void;
+}>): Promise<TerminalRunResult> {
+  const project = await gitRootForPath(".", environment.cwd, run);
+  if (project === undefined) {
+    throw new Error("tandem memory runs inside a project; cd into one of your repositories");
+  }
+  const service = createServiceFor(environment, run, dependencies);
+  try {
+    const [workstream] = invocation.paths;
+    const colors = statusStyle(environment, dependencies);
+    // Links only where colors are on (a terminal, no NO_COLOR), and only if it opens OSC 8 links.
+    const style = { ...colors, links: colors.color && TERMINAL.hyperlinks };
+    if (workstream === undefined) {
+      const lines = await service.memoryList(project);
+      stdout(
+        invocation.json
+          ? `${JSON.stringify(lines)}\n`
+          : renderWorkstreamList(basename(project), lines, style),
+      );
+    } else {
+      const shown = await service.memoryShow(project, workstream);
+      stdout(
+        invocation.json
+          ? `${JSON.stringify(shown)}\n`
+          : shown.kind === "notes"
+            ? renderCatchUpCard(shown.view, style, { showPath: true })
+            : `${shown.name} has no notes yet. Name it to the coordinator to start one.\n`,
+      );
+    }
+    return { exitCode: 0, status: "memory" };
   } finally {
     await service.shutdown();
   }
@@ -743,6 +798,9 @@ export async function runTerminal(
     }
     if (invocation.command === "watch") {
       return await handleWatch({ invocation, environment, dependencies, run, stdout });
+    }
+    if (invocation.command === "memory") {
+      return await handleMemory({ invocation, environment, dependencies, run, stdout });
     }
     if (invocation.command === "welcome") {
       await runWelcome({

@@ -40,7 +40,7 @@ src/session/worker.ts, src/session/worker-steering.ts, src/workers/terminal-exte
 | `ready` | The task's [required stages](#required-stages) passed at the current HEAD (the final manifest and all required lenses, when both are required), or the user chose [publish now](delivery.md) at that HEAD. |
 | `paused` | Stopped with a resumable previous stage. |
 | `blocked` | Cannot safely proceed; durable reason, surfaced as an actionable blocker. |
-| `cancelled` / `completed` / `merged` | Terminal. A scout is research-complete only when `completed` with its report; `merged` only after verified delivery. |
+| `cancelled` / `completed` / `merged` | Terminal. A scout is research-complete only when `completed` with its report; `merged` only after verified delivery: the `merge` action at the reviewed HEAD, or PR watch seeing the task's own pull request merged on GitHub. |
 
 ## Required stages
 

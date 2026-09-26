@@ -9,6 +9,7 @@ export type TerminalCommand =
   | "reset"
   | "config"
   | "configure"
+  | "memory"
   | "welcome";
 
 export type TerminalInvocation = Readonly<{
@@ -45,6 +46,7 @@ export type TerminalRunResult = Readonly<{
     | "trace"
     | "report"
     | "watch"
+    | "memory"
     | "fixed"
     | "reset"
     | "welcome"
@@ -86,6 +88,7 @@ const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
   reset: "reset",
   config: "config",
   configure: "configure",
+  memory: "memory",
   welcome: "welcome",
 };
 
@@ -135,6 +138,7 @@ const ALLOWED: Readonly<
   reset: { flags: ["yes", "hard", "headless", "noAttach"], maxPaths: 0 },
   config: { flags: [], maxPaths: 1 },
   configure: { flags: [], maxPaths: 1 },
+  memory: { flags: ["json"], maxPaths: 1 },
   welcome: { flags: [], maxPaths: 0 },
 };
 

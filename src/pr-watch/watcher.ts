@@ -30,6 +30,7 @@ import {
 } from "./github.ts";
 import { checkMerging } from "./merging-check.ts";
 import {
+  isMerged,
   type PrWatch,
   type PrWatchNotice,
   type PrWatchPoll,
@@ -50,6 +51,11 @@ export type PrWatcherDependencies = Readonly<{
    * project's coordinator does), so a later check tries again.
    */
   readonly steerTask: (taskId: string, text: string) => Promise<boolean>;
+  /**
+   * Marks a ready task merged because its pull request merged on GitHub, at `head` when known.
+   * Does nothing for a task this Tandem does not run; that project's coordinator records it.
+   */
+  readonly recordMerged: (taskId: string, head: string | undefined) => Promise<void>;
 }>;
 
 /** Task stages in which a task is still working on what it was last told. */
@@ -235,6 +241,27 @@ export class PrWatcher {
    * records when GitHub was read, or GitHub's rate limit.
    */
   private async check(mode: "act" | "read"): Promise<void> {
+    await this.poll(mode);
+    await this.recordMerges();
+  }
+
+  /**
+   * A merge PR watch saw moves its ready task to merged. It runs on every check, so a merge that
+   * could not be recorded (another project's task, a concurrent update) is tried again.
+   */
+  private async recordMerges(): Promise<void> {
+    const tasks = await this.#deps.listTasks();
+    const watches = await withPrWatches(this.#deps.home, (transaction) => transaction.watches);
+    for (const watch of watches) {
+      if (!isMerged(watch)) continue;
+      const task = tasks.find((candidate) => candidate.id === watch.taskId);
+      if (task?.stage !== "ready") continue;
+      // A failure here leaves the task ready; the next check tries again.
+      await this.#deps.recordMerged(task.id, watch.head?.oid).catch(() => undefined);
+    }
+  }
+
+  private async poll(mode: "act" | "read"): Promise<void> {
     const { home } = this.#deps;
     const now = this.#deps.clock();
     const tasks = await this.#deps.listTasks();
@@ -371,6 +398,9 @@ export class PrWatcher {
       log: outcome.entry === undefined ? current.log : [...current.log, outcome.entry],
       ...(outcome.row.color === "done" && current.finishedAt === undefined
         ? { finishedAt: now }
+        : {}),
+      ...(pr.state === "merged" && current.mergedAt === undefined
+        ? { mergedAt: pr.mergedAt ?? now }
         : {}),
       ...withRow(current, outcome.row, outcome.notice),
     });

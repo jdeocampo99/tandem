@@ -1296,3 +1296,74 @@ test("a merge must land the pull request at the reviewed head", () => {
     ),
   ).toThrow(/must match the reviewed head/u);
 });
+
+test("a ready task becomes merged when its own pull request merged on GitHub, at any head", () => {
+  let ready = implementationToReviewing();
+  for (const lens of ALL_REVIEW_LENSES) {
+    ready = transitionTask(ready, { type: "record-review", review: review(lens) }, context());
+  }
+  ready = transitionTask(
+    ready,
+    { type: "finish-review", head: "head-1", generation: 0 },
+    context(),
+  );
+  const published: TaskRecord = {
+    ...ready,
+    pullRequest: {
+      repository: "Org/Repo",
+      number: 42,
+      state: "open",
+      head: "head-1",
+      base: "main",
+    },
+  };
+  const mergedPullRequest = {
+    repository: "org/repo",
+    number: 42,
+    state: "merged" as const,
+    // PR watch updated the branch after review, so the merged head is not the reviewed one.
+    head: "head-2",
+    base: "main",
+  };
+  const merged = transitionTask(
+    published,
+    { type: "merged-on-github", pullRequest: mergedPullRequest },
+    context(),
+  );
+  expect(merged.stage).toBe("merged");
+  expect(merged.pullRequest).toEqual(mergedPullRequest);
+  expect(merged.notifications).toEqual(published.notifications);
+
+  expect(() =>
+    transitionTask(
+      published,
+      { type: "merged-on-github", pullRequest: { ...mergedPullRequest, number: 43 } },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+  expect(() =>
+    transitionTask(
+      published,
+      { type: "merged-on-github", pullRequest: { ...mergedPullRequest, state: "open" } },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+  expect(() =>
+    transitionTask(
+      { ...published, stage: "reviewing" },
+      { type: "merged-on-github", pullRequest: mergedPullRequest },
+      context(),
+    ),
+  ).toThrow(TaskTransitionError);
+});
+
+test("a task records a valid workstream name and refuses anything else", () => {
+  expect(
+    createTask({ ...implementationInput, workstream: "billing" }, "2026-09-15T00:00:00.000Z")
+      .workstream,
+  ).toBe("billing");
+  expect(createTask(implementationInput, "2026-09-15T00:00:00.000Z").workstream).toBeUndefined();
+  expect(() =>
+    createTask({ ...implementationInput, workstream: "../billing" }, "2026-09-15T00:00:00.000Z"),
+  ).toThrow("Unsafe workstream name");
+});
