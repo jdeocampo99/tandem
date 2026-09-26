@@ -365,9 +365,108 @@ function summarizeOnboard(value: unknown, action: "onboard" | "setup"): string {
       );
     }
   }
+  lines.push(...projectSetupLines(record, existing || written));
   lines.push("This did not change the app or start any work.");
   if (unresolved.length > 0)
     lines.push(`Readiness still needs attention: ${compactList(unresolved, 3, 150)}`);
+  return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
+}
+
+function commandNames(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const name = summaryRecord(entry)?.name;
+    return typeof name === "string" ? [name] : [];
+  });
+}
+
+function stringList(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+/** What onboarding found for one project, for the user to confirm or change before setup. */
+function projectSetupLines(record: Record<string, unknown>, saved: boolean): readonly string[] {
+  const lines: string[] = [];
+  const checks = commandNames(record.validationCommands);
+  const install = commandNames(record.setupCommands);
+  const verb = saved ? "runs" : "would run";
+  lines.push(
+    checks.length === 0
+      ? "Checks: none found; ask the user which commands prove a change works."
+      : `Checks it ${verb} before calling work done: ${checks.join("; ")}`,
+  );
+  lines.push(
+    install.length === 0
+      ? "Install step for fresh copies: none."
+      : `Install step for fresh copies: ${install.join("; ")}`,
+  );
+  if (!saved) {
+    lines.push(
+      "The user may change either list; pass their lists to setup as validationCommands and setupCommands.",
+    );
+  }
+  if (Array.isArray(record.mcpServers)) {
+    const servers = stringList(record.mcpServers);
+    lines.push(
+      servers.length === 0
+        ? "MCP tools: none configured for this project."
+        : `MCP tools its chat could use (ask which, default none; pass to setup as coordinatorMcpServers): ${servers.join(", ")}`,
+    );
+  }
+  const merging = summaryRecord(record.merging);
+  if (merging !== undefined) {
+    if (merging.readable === true) {
+      const proposal =
+        merging.proposal === undefined ? "" : ` Proposal: ${JSON.stringify(merging.proposal)}.`;
+      lines.push(
+        `Merging: ${recordText(merging, "method") ?? "unknown"} on ${recordText(merging, "branch") ?? "the default branch"}.${proposal} Ask how pull requests should merge and save it with pr-watch-merging after setup.`,
+      );
+    } else {
+      const message = recordText(merging, "message");
+      if (message !== undefined) lines.push(`Merging: ${message}`);
+    }
+  }
+  return lines;
+}
+
+function summarizeFoundRepos(value: unknown): string {
+  const record = summaryRecord(value);
+  const name = record === undefined ? "that" : (recordText(record, "name") ?? "that");
+  const matches = Array.isArray(record?.matches) ? record.matches : [];
+  if (matches.length === 0) {
+    return `No checkout named ${name} in the code folders. Ask the user for its folder path, or where they keep code (save-code-folders), then find-repo again.`;
+  }
+  const lines = matches.flatMap((entry) => {
+    const match = summaryRecord(entry);
+    const path = match === undefined ? undefined : recordText(match, "path");
+    if (match === undefined || path === undefined) return [];
+    const repo = recordText(match, "repo");
+    const setUp = match.setUp === true ? " (already set up)" : "";
+    return [`- ${path}${repo === undefined ? "" : ` (${repo})`}${setUp}`];
+  });
+  const lead =
+    lines.length === 1
+      ? `Found ${name}:`
+      : `Found ${lines.length} checkouts named ${name}; ask the user which one:`;
+  const details = summaryRecord(record?.details);
+  const found = details === undefined ? [] : projectSetupLines(details, false);
+  return boundedOutput([lead, ...lines, ...found].join("\n"), ACTION_RESULT_MAX_CHARS);
+}
+
+function summarizeToolChecks(value: unknown): string {
+  if (!Array.isArray(value)) return boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  const lines = value.flatMap((entry) => {
+    const check = summaryRecord(entry);
+    const name = check === undefined ? undefined : recordText(check, "name");
+    if (check === undefined || name === undefined) return [];
+    const detail = recordText(check, "detail") ?? "";
+    if (check.ok === true) return [`✓ ${name}: ${detail}`];
+    const fix = recordText(check, "fix");
+    const optional = check.optional === true ? " (optional)" : "";
+    return [`✗ ${name}${optional}: ${detail}${fix === undefined ? "" : `. Fix: ${fix}`}`];
+  });
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
@@ -929,6 +1028,15 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
       : boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
   if (action === "onboard" || action === "setup") return summarizeOnboard(value, action);
+  if (action === "find-repo") return summarizeFoundRepos(value);
+  if (action === "check-tools") return summarizeToolChecks(value);
+  if (
+    action === "save-code-folders" ||
+    action === "worker-skills" ||
+    action === "self-improvement"
+  ) {
+    return "Saved.";
+  }
   if (action === "models") return summarizeModels(value);
   if (action === "configure-models") return summarizeConfiguredModels(value);
   if (action === "steer" || action === "answer") {

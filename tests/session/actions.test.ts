@@ -314,6 +314,7 @@ test("extension setup approval preserves the write boundary and metadata", async
         policy: policyConfig,
         proposedPolicy: policyConfig,
         validationCommands: [],
+        setupCommands: [],
         unresolved: [],
       };
     },
@@ -383,6 +384,118 @@ test("open-project opens a project's chat only after the user approves it", asyn
     action: "open-project",
     repoPath: "/code/app",
   });
+});
+
+test("setup's approval shows the checks, install step, and tools the user chose", async () => {
+  const prompts: Array<{ readonly title: string; readonly message: string }> = [];
+  const writes: unknown[][] = [];
+  const service = {
+    onboard: async (repoPath: string, write = false, servers?: unknown, commands?: unknown) => {
+      if (write) writes.push([repoPath, servers, commands]);
+      return {
+        repoPath,
+        existingConfig: false,
+        written: write,
+        modelSettings: { configured: true },
+        validationCommands: [{ name: "make check" }],
+        setupCommands: [{ name: "make deps" }],
+        unresolved: [],
+      };
+    },
+  } as unknown as TandemService;
+  const action = {
+    action: "setup",
+    repoPath: "/code/api",
+    validationCommands: ["make check"],
+    setupCommands: ["make deps"],
+    coordinatorMcpServers: ["linear"],
+  } as const;
+  const result = await executeTandemAction(action, service, {
+    confirm: async (title: string, message: string) => {
+      prompts.push({ title, message });
+      return true;
+    },
+  });
+  expect(result.approved).toBe(true);
+  expect(prompts[0]?.title).toBe("Save Tandem settings for api?");
+  expect(prompts[0]?.message).toContain("Checks: make check");
+  expect(prompts[0]?.message).toContain("Install in fresh copies: make deps");
+  expect(prompts[0]?.message).toContain("Tools its chat may use: linear");
+  expect(writes).toEqual([["/code/api", ["linear"], action]]);
+});
+
+test("onboarding saves ask first, and lookups do not", async () => {
+  const prompts: string[] = [];
+  const calls: string[] = [];
+  const service = {
+    saveProjectRoots: async (roots: readonly string[]) => calls.push(`roots ${roots.join(",")}`),
+    saveWorkerSkills: async (skills: readonly string[]) => calls.push(`skills ${skills.length}`),
+    saveSelfImprovement: async (mode: string) => calls.push(`self ${mode}`),
+    findRepo: async () => [{ path: "/code/api", repo: "acme/api", setUp: true }],
+    checkTools: async () => [
+      { name: "OMP", ok: false, detail: "not found", fix: "bun install -g omp" },
+    ],
+  } as unknown as TandemService;
+  const context = {
+    confirm: async (title: string) => {
+      prompts.push(title);
+      return true;
+    },
+  };
+  await executeTandemAction(
+    { action: "save-code-folders", folders: ["/Users/me/code"] },
+    service,
+    context,
+  );
+  await executeTandemAction({ action: "worker-skills", skills: [] }, service, context);
+  await executeTandemAction({ action: "self-improvement", mode: "fix" }, service, context);
+  expect(prompts).toEqual([
+    "Look for your repos in these folders?",
+    "Give tasks none of your plugin skills?",
+    "Let Tandem look into its own problems and offer fixes?",
+  ]);
+  expect(calls).toEqual(["roots /Users/me/code", "skills 0", "self fix"]);
+
+  const found = await executeTandemAction({ action: "find-repo", name: "api" }, service, context);
+  const tools = await executeTandemAction({ action: "check-tools" }, service, context);
+  expect(prompts).toHaveLength(3);
+  expect(summarizeTandemActionValue("find-repo", found.value)).toBe(
+    "Found api:\n- /code/api (acme/api) (already set up)",
+  );
+  expect(summarizeTandemActionValue("check-tools", tools.value)).toBe(
+    "✗ OMP: not found. Fix: bun install -g omp",
+  );
+  expect(summarizeTandemActionValue("find-repo", { name: "web", matches: [] })).toContain(
+    "No checkout named web",
+  );
+});
+
+test("find-repo with one new checkout also says what Tandem found there", async () => {
+  const service = {
+    findRepo: async () => [{ path: "/code/api", repo: "acme/api", setUp: false }],
+    onboard: async (repoPath: string) => ({
+      repoPath,
+      existingConfig: false,
+      written: false,
+      modelSettings: { configured: true },
+      validationCommands: [{ name: "bun run check" }],
+      setupCommands: [{ name: "bun install --frozen-lockfile" }],
+      unresolved: [],
+    }),
+    mcpServers: async () => ["linear"],
+    mergingCheck: async () => {
+      throw new Error("gh is not signed in");
+    },
+  } as unknown as TandemService;
+  const found = await executeTandemAction({ action: "find-repo", name: "api" }, service, {
+    confirm: undefined,
+  });
+  const summary = summarizeTandemActionValue("find-repo", found.value);
+  expect(summary).toContain("- /code/api (acme/api)");
+  expect(summary).toContain("Checks it would run before calling work done: bun run check");
+  expect(summary).toContain("Install step for fresh copies: bun install --frozen-lockfile");
+  expect(summary).toContain("could use (ask which, default none");
+  expect(summary).not.toContain("Merging");
 });
 
 test("model listing is read-only and model changes require approval", async () => {

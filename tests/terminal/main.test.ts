@@ -735,7 +735,7 @@ test("returning onboarding shows the saved enabled providers and Keep all stays 
   await rm(join(repo, ".."), { recursive: true, force: true });
 });
 
-test("bare launch with no saved projects opens only the Tandem coordinator, without its settings", async () => {
+test("bare launch with no saved projects opens only the Tandem coordinator and asks nothing", async () => {
   const [repo, tandemCheckout] = await gitProjects(2);
   if (repo === undefined || tandemCheckout === undefined)
     throw new Error("test projects were not created");
@@ -756,8 +756,9 @@ test("bare launch with no saved projects opens only the Tandem coordinator, with
     stderr: () => undefined,
   });
   expect(result.status).toBe("launched");
-  expect(fake.configureCalls).toHaveLength(1);
+  expect(fake.configureCalls).toHaveLength(0);
   expect(fake.writeCalls).toHaveLength(0);
+  expect(answers).toHaveLength(12);
   expect(invocations.map((invocation) => invocation.options.repo)).toEqual([tandemCheckout]);
   await rm(join(repo, ".."), { recursive: true, force: true });
 });

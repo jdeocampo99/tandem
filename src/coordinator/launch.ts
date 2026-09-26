@@ -55,7 +55,8 @@ function defaultClock(): string {
 
 export type CoordinatorLaunchInput = Readonly<{
   readonly cwd: string;
-  readonly model: ModelSpec;
+  /** Unset runs OMP's own default model: the Tandem coordinator before any model is chosen. */
+  readonly model: ModelSpec | undefined;
   readonly configPath: string;
   readonly extensionPath: string;
   readonly continueSession?: boolean;
@@ -71,7 +72,8 @@ export type CoordinatorLaunchRequest = Readonly<{
   readonly home: string;
   readonly poolRoot: string;
   readonly sessionId: string;
-  readonly model: ModelSpec;
+  /** Unset runs OMP's own default model: the Tandem coordinator before any model is chosen. */
+  readonly model: ModelSpec | undefined;
   readonly configPath: string;
   readonly extensionPath: string;
   readonly continueSession: boolean;
@@ -129,14 +131,18 @@ export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly st
   const cwd = checkLaunchPath(input.cwd, "cwd");
   const configPath = checkLaunchPath(input.configPath, "configPath");
   const extensionPath = checkLaunchPath(input.extensionPath, "extensionPath");
-  const model = checkLaunchText(input.model.model, "model.model");
-  parseThinking(input.model.thinking);
+  const model =
+    input.model === undefined
+      ? []
+      : [
+          "--model",
+          checkLaunchText(input.model.model, "model.model"),
+          "--thinking",
+          parseThinking(input.model.thinking),
+        ];
   const argv = [
     "omp",
-    "--model",
-    model,
-    "--thinking",
-    input.model.thinking,
+    ...model,
     "--config",
     configPath,
     "--no-extensions",

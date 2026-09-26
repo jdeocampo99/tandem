@@ -9,6 +9,7 @@ import {
 } from "../coordinator/launch.ts";
 import { renestWorkspaces } from "../coordinator/renest.ts";
 import { restartCoordinator } from "../coordinator/restart.ts";
+import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
 import type { TandemService } from "../service/controller.ts";
 import {
   type CliCommand,
@@ -111,8 +112,16 @@ async function launch(context: CliCommandContext): Promise<CliCommandOutcome> {
   await verifyRegularPath(statPath, files.extensionPath, "extensionPath");
   await verifyRegularPath(statPath, files.configPath, "configPath");
   const onboarded = await context.service().onboard(environment.repo, false);
-  const model = modelForPolicy(onboarded.policy.models.coordinator, invocation.options);
-  await validateModel(run, { cwd: environment.repo, model });
+  // The Tandem coordinator is where models get chosen, so until then it runs OMP's own default.
+  const ompDefault =
+    !onboarded.modelSettings.configured &&
+    invocation.options.model === undefined &&
+    invocation.options.thinking === undefined &&
+    (await isTandemCheckout(environment.repo));
+  const model = ompDefault
+    ? undefined
+    : modelForPolicy(onboarded.policy.models.coordinator, invocation.options);
+  if (model !== undefined) await validateModel(run, { cwd: environment.repo, model });
   const launchDependencies: CoordinatorLaunchDependencies = {
     run,
     startPersistent: capabilities.startPersistent,

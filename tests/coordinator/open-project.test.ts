@@ -6,6 +6,7 @@ import { runCommand } from "../../src/adapters/commands.ts";
 import type { CommandRequest } from "../../src/contracts.ts";
 import { openProject, openProjectCommand } from "../../src/coordinator/open-project.ts";
 import { createTandemService } from "../../src/service/controller.ts";
+import { saveCoordinator } from "./fake-workspace-order.ts";
 
 const input = {
   repoPath: "/code/app",
@@ -42,6 +43,25 @@ test("opening a project runs the front door without this coordinator's pane or c
     ],
     cwd: "/code/app",
   });
+});
+
+test("an opened project's workspace is brought forward", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-open-project-")));
+  try {
+    const home = join(root, "home");
+    const repo = join(root, "api");
+    const ran: string[][] = [];
+    const run = async (request: CommandRequest) => {
+      ran.push([...request.argv]);
+      if (request.argv[0] === "env") await saveCoordinator(home, repo, "w-api");
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const opened = await openProject(run, { ...input, repoPath: repo, home });
+    expect(opened).toEqual({ focused: true });
+    expect(ran.at(-1)).toEqual(["herdr", "--session", "tandem", "workspace", "focus", "w-api"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("a failed open names the project and the front door's reason", async () => {

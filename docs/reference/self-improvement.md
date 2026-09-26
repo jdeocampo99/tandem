@@ -18,7 +18,8 @@ src/session/investigate-route.ts, src/session/actions.ts (`investigate`, `report
 | `fix` | The research ends by asking whether to fix it. A yes is a normal task in the Tandem repository: brief, approval, implement, review, draft pull request. `tandem update` reloads coordinators once it merges. |
 | `report` | The research ends with a draft GitHub issue. The coordinator files it through `report-issue` only after the user approves it. |
 
-The mode is set by hand only. Tandem never infers it from GitHub push rights: the same account can
+The user sets the mode, by hand or by answering onboarding's question in Tandem's own chat (the
+`self-improvement` action, with approval). Tandem never infers it from GitHub push rights: the same account can
 push from a machine whose company policy forbids it.
 
 ## Triggers

@@ -1,7 +1,8 @@
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { readGitText, runChecked } from "../adapters/primitives.ts";
+import { readHomeSettings } from "../config/home-settings.ts";
 import type { Clock, CommandRunner } from "../contracts.ts";
 import {
   deleteRepoLocation,
@@ -108,14 +109,85 @@ export function checkoutQuestion(
     : `${named} isn't a checkout of ${repo}. Where is it? Or say "clone it".`;
 }
 
-/** `~/Coding/Projects` unless `TANDEM_PROJECT_ROOTS` names other folders, separated by colons. */
-export function defaultProjectRoots(
+/** Where people usually keep code, under their home folder; searched until they name their own. */
+const COMMON_CODE_FOLDERS: readonly string[] = [
+  "Coding/Projects",
+  "code",
+  "Code",
+  "Projects",
+  "projects",
+  "src",
+  "dev",
+  "Developer",
+  "git",
+  "repos",
+  "workspace",
+  "GitHub",
+  "Documents/GitHub",
+];
+
+/**
+ * The folders crawled for checkouts: `TANDEM_PROJECT_ROOTS` (colon-separated) when set, then the
+ * code folders saved in the home settings, then the usual places under the home folder.
+ */
+export async function projectRoots(
+  home: string,
   environment: Readonly<Record<string, string | undefined>>,
-): readonly string[] {
+): Promise<readonly string[]> {
   const configured = environment.TANDEM_PROJECT_ROOTS?.split(":").filter((root) => root.length > 0);
-  return configured !== undefined && configured.length > 0
-    ? configured
-    : [join(homedir(), "Coding", "Projects")];
+  if (configured !== undefined && configured.length > 0) return configured;
+  const saved = (await readHomeSettings(home)).projectRoots;
+  if (saved.length > 0) return saved;
+  return COMMON_CODE_FOLDERS.map((folder) => join(homedir(), folder));
+}
+
+/** A checkout found by name, with the GitHub repository its `origin` names, when there is one. */
+export type NamedCheckout = Readonly<{ path: string; repo?: string }>;
+
+/** `~` or `~/...` under the home folder; any other path unchanged. */
+export function expandHome(path: string): string {
+  return path.replace(/^~(?=\/|$)/u, homedir());
+}
+
+/**
+ * Checkouts the user could mean by `name`: a path (starting with `/`, `~`, or `.`) is resolved to
+ * its Git root; anything else matches a checkout's folder name, its GitHub repository name, or its
+ * `owner/repo`, ignoring case. The caller asks the user when there is not exactly one.
+ */
+export async function findCheckoutsByName(
+  name: string,
+  roots: readonly string[],
+  run: CommandRunner,
+): Promise<readonly NamedCheckout[]> {
+  const wanted = name.trim();
+  if (/^[/~.]/u.test(wanted)) {
+    const path = resolve(expandHome(wanted));
+    if (!(await isDirectory(path))) return [];
+    const root = await run({
+      argv: ["git", "-C", path, "rev-parse", "--show-toplevel"],
+      cwd: path,
+    });
+    if (root.code !== 0) return [];
+    const checkout = await realpath(root.stdout.trim());
+    return [await describeCheckout(checkout, run)];
+  }
+  const lowered = wanted.toLowerCase();
+  const found: NamedCheckout[] = [];
+  for (const checkout of await crawlCheckouts(roots)) {
+    const described = await describeCheckout(checkout, run);
+    const matches =
+      basename(checkout).toLowerCase() === lowered ||
+      described.repo === lowered ||
+      described.repo?.split("/")[1] === lowered;
+    if (matches) found.push(described);
+  }
+  return found;
+}
+
+async function describeCheckout(path: string, run: CommandRunner): Promise<NamedCheckout> {
+  const result = await run({ argv: ["git", "-C", path, "remote", "get-url", "origin"], cwd: path });
+  const repo = result.code === 0 ? githubRepoFromRemote(result.stdout) : undefined;
+  return repo === undefined ? { path } : { path, repo };
 }
 
 /**
@@ -231,16 +303,19 @@ export async function matchingRemote(
   return remotes.has("origin") ? "origin" : [...remotes].sort()[0];
 }
 
-/** Folders holding a `.git` entry; hidden folders, `node_modules`, and symlinks are not followed. */
+/**
+ * Folders holding a `.git` entry; hidden folders, `node_modules`, and symlinks are not followed.
+ * Each checkout appears once, even when two roots reach it (`~/code` and `~/Code` on macOS).
+ */
 async function crawlCheckouts(roots: readonly string[]): Promise<readonly string[]> {
-  const checkouts: string[] = [];
+  const checkouts = new Set<string>();
   let level = roots.map((root) => resolve(root));
   for (let depth = 0; depth <= MAX_CRAWL_DEPTH && level.length > 0; depth += 1) {
     const next: string[] = [];
     for (const folder of level) {
       const entries = await readdir(folder, { withFileTypes: true }).catch(() => []);
       if (entries.some((entry) => entry.name === ".git")) {
-        checkouts.push(folder);
+        checkouts.add(await realpath(folder).catch(() => folder));
         continue;
       }
       for (const entry of entries) {
@@ -251,7 +326,7 @@ async function crawlCheckouts(roots: readonly string[]): Promise<readonly string
     }
     level = next;
   }
-  return checkouts.sort();
+  return [...checkouts].sort();
 }
 
 async function isDirectory(path: string): Promise<boolean> {

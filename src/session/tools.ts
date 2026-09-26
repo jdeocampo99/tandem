@@ -46,8 +46,22 @@ export const tandemRequestSchema = z.strictObject({
   request: z.union([
     z.strictObject({ action: z.literal("restart"), taskId: z.string() }),
     z.strictObject({ action: z.literal("onboard"), repoPath: z.string() }),
-    z.strictObject({ action: z.literal("setup"), repoPath: z.string() }),
+    z.strictObject({
+      action: z.literal("setup"),
+      repoPath: z.string(),
+      validationCommands: z.array(z.string()).optional(),
+      setupCommands: z.array(z.string()).optional(),
+      coordinatorMcpServers: z.array(z.string()).optional(),
+    }),
     z.strictObject({ action: z.literal("open-project"), repoPath: z.string() }),
+    z.strictObject({ action: z.literal("find-repo"), name: z.string() }),
+    z.strictObject({ action: z.literal("save-code-folders"), folders: z.array(z.string()) }),
+    z.strictObject({ action: z.literal("worker-skills"), skills: z.array(z.string()) }),
+    z.strictObject({
+      action: z.literal("self-improvement"),
+      mode: z.enum(["off", "fix", "report"]),
+    }),
+    z.strictObject({ action: z.literal("check-tools") }),
     z.strictObject({ action: z.literal("models"), repoPath: z.string() }),
     z.strictObject({
       action: z.literal("configure-models"),

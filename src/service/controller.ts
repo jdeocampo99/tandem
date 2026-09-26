@@ -6,7 +6,7 @@ import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, showNotification } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
-import { listOmpModels } from "../adapters/omp.ts";
+import { listOmpMcpServers, listOmpModels } from "../adapters/omp.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
 import { readBoard } from "../board/read.ts";
@@ -15,6 +15,8 @@ import {
   type HomeSettings,
   readHomeSettings,
   type SelfImprovementMode,
+  saveProjectRoots,
+  saveSelfImprovement,
   saveWorkerSkills,
 } from "../config/home-settings.ts";
 import {
@@ -68,6 +70,8 @@ import {
 } from "../delivery/pull-requests.ts";
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
 import type { MemoryShowResult } from "../memory/view.ts";
+import type { OnboardingFacts } from "../onboarding/checklist.ts";
+import { checkTools, type ToolCheck } from "../onboarding/tools.ts";
 import {
   PINNABLE_PLAYBOOK_IDS,
   type PinnablePlaybookId,
@@ -112,9 +116,12 @@ import { buildReportView, buildTaskReport, reportScopeLabel } from "../report/bu
 import type { ReportTask, ReportView } from "../report/model.ts";
 import {
   checkoutQuestion,
-  defaultProjectRoots,
+  expandHome,
   findCheckout,
+  findCheckoutsByName,
+  type NamedCheckout,
   pinDefaultBranch,
+  projectRoots,
   repoName,
 } from "../repos/locate.ts";
 import { briefSkipsReview } from "../requests/brief.ts";
@@ -183,6 +190,7 @@ import {
   taskCost,
   taskRollup,
 } from "../tasks/trace.ts";
+import { readRegisteredProjects } from "../terminal/projects.ts";
 import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { claimOf, ownsOperation } from "../workers/operation-claim.ts";
@@ -298,22 +306,46 @@ export type TandemServiceOptions = Readonly<{
   readonly classifyPlaybook?: PlaybookClassifier;
   /** The Jev transport, cache, and diagnostics sink review-level assistance is allowed to use. */
   readonly reviewAssistance?: ReviewAssistanceRuntime;
-  /** Folders crawled for another repository's checkout; see `defaultProjectRoots`. */
+  /** Folders crawled for another repository's checkout; unset reads `projectRoots` on each use. */
   readonly projectRoots?: readonly string[];
   /** The home folder whose skill folders hold the user's personal skills; defaults to the OS home. */
   readonly personalSkillsHome?: string;
   /** The Jev check of a report-mode issue draft; without one, every draft is flagged. */
   readonly checkIssueDraft?: IssueDraftChecker;
 }>;
+/** A checkout onboarding found by name, and whether it already has saved Tandem settings. */
+export type FoundRepo = NamedCheckout & Readonly<{ readonly setUp: boolean }>;
+
+/** The user's edits to a project's discovered commands, saved by setup in their place. */
+export type SetupCommandEdits = Readonly<{
+  readonly validationCommands?: readonly string[] | undefined;
+  readonly setupCommands?: readonly string[] | undefined;
+}>;
+
 export type TandemService = Readonly<{
   readonly onboard: (
     repoPath: string,
     write?: boolean,
     coordinatorMcpServers?: readonly string[],
+    commands?: SetupCommandEdits,
   ) => Promise<OnboardRepoResult>;
+  /** The MCP servers OMP would load in a project, which its coordinator may be allowed to use. */
+  readonly mcpServers: (repoPath: string) => Promise<readonly string[]>;
+  /** Checkouts the user could mean by a name or path, and whether each is already set up. */
+  readonly findRepo: (name: string) => Promise<readonly FoundRepo[]>;
+  /** Saves the folders the user keeps code in, for finding repositories by name. */
+  readonly saveProjectRoots: (roots: readonly string[]) => Promise<HomeSettings>;
+  /** Saves the self-improvement mode the user chose during onboarding. */
+  readonly saveSelfImprovement: (mode: SelfImprovementMode) => Promise<HomeSettings>;
+  /** Checks the tools onboarding depends on, without changing anything. */
+  readonly checkTools: () => Promise<readonly ToolCheck[]>;
+  /** What first-time setup still needs, for the Tandem coordinator at `repoPath`. */
+  readonly onboardingFacts: (repoPath: string) => Promise<OnboardingFacts>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
   /** Opens a saved project's coordinator in this Herdr session; refuses one not yet set up. */
-  readonly openProject: (repoPath: string) => Promise<Readonly<{ readonly repoPath: string }>>;
+  readonly openProject: (
+    repoPath: string,
+  ) => Promise<Readonly<{ readonly repoPath: string; readonly focused: boolean }>>;
   readonly configureModels: (
     input: Readonly<{
       readonly repoPath: string;
@@ -500,7 +532,7 @@ type ServiceDependencies = Readonly<{
   workerPath: string;
   validationWorkerPath: string;
   reviewAssistance: ReviewAssistanceRuntime;
-  projectRoots: readonly string[];
+  projectRoots: () => Promise<readonly string[]>;
   personalSkillsHome: string;
   checkIssueDraft: IssueDraftChecker;
 }>;
@@ -796,8 +828,19 @@ class TandemController {
 
   api(): TandemService {
     return {
-      onboard: (repoPath, write, coordinatorMcpServers) =>
-        this.onboard(repoPath, write, coordinatorMcpServers),
+      onboard: (repoPath, write, coordinatorMcpServers, commands) =>
+        this.onboard(repoPath, write, coordinatorMcpServers, commands),
+      mcpServers: (repoPath) => listOmpMcpServers(repoPath),
+      findRepo: (name) => this.findRepo(name),
+      saveProjectRoots: (roots) =>
+        saveProjectRoots(
+          this.#deps.home,
+          readTextList(roots, "projectRoots").map((root) => expandHome(root)),
+        ),
+      saveSelfImprovement: (mode) => saveSelfImprovement(this.#deps.home, mode),
+      checkTools: () =>
+        checkTools(this.#deps.run, { cwd: this.#deps.home, sessionId: this.#deps.sessionId }),
+      onboardingFacts: (repoPath) => this.onboardingFacts(repoPath),
       inspect: (id) => this.inspect(id),
       trace: (id) => this.trace(id),
       traceSummary: () => this.traceSummary(),
@@ -898,6 +941,7 @@ class TandemController {
     repoPath: string,
     write = false,
     coordinatorMcpServers?: readonly string[],
+    commands: SetupCommandEdits = {},
   ): Promise<OnboardRepoResult> {
     const source = await mapTaskSource(this.#deps.run, repoPath, this.#deps.sourceWorkspace);
     return onboardRepo({
@@ -905,10 +949,41 @@ class TandemController {
       home: this.#deps.home,
       write,
       ...(coordinatorMcpServers === undefined ? {} : { coordinatorMcpServers }),
+      ...(commands.validationCommands === undefined
+        ? {}
+        : { validationCommands: readTextList(commands.validationCommands, "validationCommands") }),
+      ...(commands.setupCommands === undefined
+        ? {}
+        : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
       ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
     });
   }
-  async openProject(repoPath: string): Promise<Readonly<{ readonly repoPath: string }>> {
+  private async findRepo(name: string): Promise<readonly FoundRepo[]> {
+    const found = await findCheckoutsByName(name, await this.#deps.projectRoots(), this.#deps.run);
+    const saved = new Set(await readRegisteredProjects(this.#deps.home));
+    return found.map((checkout) => ({ ...checkout, setUp: saved.has(checkout.path) }));
+  }
+
+  private async onboardingFacts(repoPath: string): Promise<OnboardingFacts> {
+    const [models, settings, registered, offer, tandem] = await Promise.all([
+      readModelSettings({ repoPath, home: this.#deps.home }),
+      readHomeSettings(this.#deps.home),
+      readRegisteredProjects(this.#deps.home),
+      this.workerSkillOffer(),
+      realpath(repoPath),
+    ]);
+    return {
+      modelsChosen: models.configured,
+      codeFolders: settings.projectRoots,
+      projects: registered.filter((project) => project !== tandem),
+      workerSkillOffer: offer,
+      selfImprovementChosen: settings.selfImprovementChosen,
+    };
+  }
+
+  async openProject(
+    repoPath: string,
+  ): Promise<Readonly<{ readonly repoPath: string; readonly focused: boolean }>> {
     const onboarded = await this.onboard(repoPath, false);
     if (!onboarded.existingConfig) {
       throw new Error(`${onboarded.repoPath} has no saved Tandem settings yet; save them first`);
@@ -916,13 +991,13 @@ class TandemController {
     if (!onboarded.modelSettings.configured) {
       throw new Error("no model choices are saved yet; save them first");
     }
-    await openProject(this.#deps.run, {
+    const { focused } = await openProject(this.#deps.run, {
       repoPath: onboarded.repoPath,
       home: this.#deps.home,
       sessionId: this.#deps.sessionId,
       poolRoot: this.#deps.poolRoot,
     });
-    return { repoPath: onboarded.repoPath };
+    return { repoPath: onboarded.repoPath, focused };
   }
 
   /**
@@ -1212,7 +1287,7 @@ class TandemController {
         home: this.#deps.home,
         run: this.#deps.run,
         clock: this.#deps.clock,
-        roots: this.#deps.projectRoots,
+        roots: await this.#deps.projectRoots(),
       },
     );
     if (location.kind !== "found") {
@@ -2630,7 +2705,10 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
           }
         },
       }),
-    projectRoots: options.projectRoots ?? defaultProjectRoots(process.env),
+    projectRoots:
+      options.projectRoots === undefined
+        ? () => projectRoots(home, process.env)
+        : async () => options.projectRoots ?? [],
     personalSkillsHome: options.personalSkillsHome ?? homedir(),
     checkIssueDraft:
       options.checkIssueDraft ??
