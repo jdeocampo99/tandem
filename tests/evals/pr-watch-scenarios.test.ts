@@ -309,9 +309,14 @@ test("a tagged task's pull request merged through PR watch marks it merged and s
     const [watch] = await withPrWatches(world.home, (transaction) => transaction.watches);
     expect(watch?.mergedAt).toBe(pr.mergedAt);
     const catchUp = await service.memoryShow(world.repoPath, "tia");
-    expect(catchUp).toStartWith("tia · notes from today");
-    expect(catchUp).toContain("Now\nLowered the flaky-suite skip threshold.");
-    expect(catchUp).toContain("Recent work\n#7 Pull request 7 (merged)");
+    expect(catchUp).toMatchObject({
+      kind: "notes",
+      view: {
+        age: "today",
+        now: "Lowered the flaky-suite skip threshold.",
+        recent: [{ number: 7, title: "Pull request 7", state: "merged" }],
+      },
+    });
   }, ORIGIN);
 });
 

@@ -88,8 +88,9 @@ person**. Hand it any other pull request with `tandem watch <link>`.
 
 Name a line of work ("wrapping up billing", "now onboarding") and Tandem keeps short notes for it:
 the goal, where you left off, decisions and why, and checks to make on a date. Say "catch up on
-billing" and it tells you in a few lines what's due, where you were, and what to do next, with the
-pull requests that merged since. "Where was I?" lists each one. The notes are plain Markdown in the
+billing" and it shows a card like `tandem status`: what's due, where you were, and the pull
+requests that merged since, then suggests what to do next. "Where was I?" lists each one, and
+`tandem memory billing` shows the same card in your terminal. The notes are plain Markdown in the
 Tandem home, never in your repository, and nothing is kept until you name one.
 
 ### Reviewing other people's pull requests
@@ -197,6 +198,7 @@ project with its previous chat. Add more with `tandem /path/to/repo`.
 | `tandem status [TASK_ID]` | What needs you, what's running, and your pull requests; with a task ID, that task's history |
 | `tandem trace [TASK_ID]` | What happened to a task and why, with review, fix-round, blocked-time, and cost figures |
 | `tandem watch [PR]` | Your watched pull requests; with a link or number, start watching it (`--stop` to stop) |
+| `tandem memory [NAME]` | This project's workstreams; with a name, its catch-up and where its notes file is |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Clean up leftovers from a crash or failed launch (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |

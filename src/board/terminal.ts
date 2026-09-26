@@ -24,7 +24,7 @@ export type StatusStyle = Readonly<{
   readonly columns?: number;
 }>;
 
-type Tone =
+export type Tone =
   | "bold"
   | "dim"
   | "underline"
@@ -37,8 +37,8 @@ type Tone =
   | "magenta";
 
 /** A run of text drawn in one style. */
-type Span = Readonly<{ readonly text: string; readonly tones: readonly Tone[] }>;
-type Line = readonly Span[];
+export type Span = Readonly<{ readonly text: string; readonly tones: readonly Tone[] }>;
+export type Line = readonly Span[];
 type Section = Readonly<{
   readonly title: string;
   readonly count: number;
@@ -46,7 +46,7 @@ type Section = Readonly<{
   readonly lines: readonly Line[];
 }>;
 
-const RULE_MIN = 40;
+export const RULE_MIN = 40;
 const TIME_WIDTH = 4;
 const CHECK_BAR = 8;
 const STAGE_TONES: Readonly<Record<string, readonly Tone[]>> = {
@@ -66,7 +66,7 @@ const PR_TONES: Readonly<Record<PrWatchViewRow["color"], readonly Tone[]>> = {
   unwatched: ["dim"],
 };
 
-function span(text: string, ...tones: Tone[]): Span {
+export function span(text: string, ...tones: Tone[]): Span {
   return { text, tones };
 }
 
@@ -108,8 +108,7 @@ export function renderStatus(view: BoardView, footer: StatusFooter, style: Statu
   const ruleWidth = style.columns === undefined ? widest : Math.min(widest, style.columns);
   const lines: Line[] = [header(view, style.color), []];
   for (const { title, count, tone, lines: rows } of sections) {
-    const heading = [span(title, "bold", tone), span(count === 0 ? " " : ` ${count} `, "dim")];
-    lines.push([...heading, span("─".repeat(Math.max(0, ruleWidth - lineWidth(heading))), "dim")]);
+    lines.push(sectionHeading(title, count, tone, ruleWidth));
     // Only Needs you is shown empty; the other sections are left out.
     lines.push(...(rows.length === 0 ? [[span("Nothing needs you.", "dim")]] : rows), []);
   }
@@ -117,6 +116,12 @@ export function renderStatus(view: BoardView, footer: StatusFooter, style: Statu
     lines.push([span("THIS WEEK  ", "bold"), ...weekSpans(view.week)], []);
   lines.push([span("─".repeat(ruleWidth), "dim")], ...footerLines(view, footer));
   return `${lines.map((line) => draw(line, style)).join("\n")}\n`;
+}
+
+/** A bold, colored section title with its count, ruled out to `width`. */
+export function sectionHeading(title: string, count: number, tone: Tone, width: number): Line {
+  const heading = [span(title, "bold", tone), span(count === 0 ? " " : ` ${count} `, "dim")];
+  return [...heading, span("─".repeat(Math.max(0, width - lineWidth(heading))), "dim")];
 }
 
 function header(view: BoardView, color: boolean): Line {
@@ -300,7 +305,7 @@ function footerLines(view: BoardView, footer: StatusFooter): Line[] {
   ];
 }
 
-function cell(text: string, width: number, ...tones: Tone[]): Line {
+export function cell(text: string, width: number, ...tones: Tone[]): Line {
   return pad([span(text, ...tones)], width);
 }
 
@@ -313,7 +318,7 @@ function pad(line: Line, width: number): Line {
   return missing > 0 ? [...line, span(" ".repeat(missing))] : line;
 }
 
-function columnWidth(values: readonly string[]): number {
+export function columnWidth(values: readonly string[]): number {
   return Math.max(0, ...values.map(textWidth));
 }
 
@@ -322,12 +327,12 @@ function textWidth(text: string): number {
   return Bun.stringWidth(text);
 }
 
-function lineWidth(line: Line): number {
+export function lineWidth(line: Line): number {
   return line.reduce((total, part) => total + textWidth(part.text), 0);
 }
 
 /** One line as terminal text: cut to the terminal's width, then colored when color is on. */
-function draw(line: Line, style: StatusStyle): string {
+export function draw(line: Line, style: StatusStyle): string {
   const fitted = style.columns === undefined ? line : fit(line, style.columns);
   return fitted
     .map((part) =>

@@ -36,7 +36,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
 | `tandem status` and `--watch`, "Needs you", "how's it going?" | [board/](src/board/): `view.ts` (pure sections and rendering), `read.ts`, `pane.ts`; [terminal/status.ts](src/terminal/status.ts) |
 | PR watch: keeping open PRs moving until they merge, `tandem watch` | [pr-watch/](src/pr-watch/): `decide.ts` (pure decision table), `github.ts`, `watcher.ts`, `store.ts`, `view.ts` |
-| Workstream memory: catch-ups, handoffs, follow-ups | [memory/](src/memory/): `workstream.ts` (pure sections, cap, catch-up), `store.ts` (files in the home), `service.ts` |
+| Workstream memory: catch-ups, handoffs, follow-ups | [memory/](src/memory/): `workstream.ts` (pure sections, cap, catch-up view), `view.ts` (card and list), `store.ts` (files in the home), `service.ts`; `tandem memory` in [main.ts](src/main.ts) |
 | Self-improvement: trigger rules, investigations, report-mode issues | [self-improvement/](src/self-improvement/): `triggers.ts` (pure rules), `issue-draft.ts` (scrub and Jev check), `service.ts` |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |
 

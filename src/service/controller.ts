@@ -67,6 +67,7 @@ import {
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
+import type { MemoryShowResult } from "../memory/view.ts";
 import {
   PINNABLE_PLAYBOOK_IDS,
   type PinnablePlaybookId,
@@ -429,8 +430,8 @@ export type TandemService = Readonly<{
   readonly prWatchFix: (input: PullRequestInput) => Promise<TaskRecord>;
   /** One line per workstream in the project with what is due; empty when there are none. */
   readonly memoryList: (repoPath: string) => Promise<readonly string[]>;
-  /** What the coordinator reads to catch the user up on one workstream. */
-  readonly memoryShow: (repoPath: string, workstream: string) => Promise<string>;
+  /** One workstream's catch-up, or that it has no notes yet. */
+  readonly memoryShow: (repoPath: string, workstream: string) => Promise<MemoryShowResult>;
   /** Replaces sections of a workstream's notes; refused when the file would pass its size cap. */
   readonly memoryWrite: (input: MemoryWriteInput) => Promise<string>;
   /** Archives a finished workstream, keeping its notes. */

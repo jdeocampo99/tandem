@@ -3,8 +3,9 @@
 What Tandem guarantees about workstream notes: where they live, what the coordinator may write,
 when it writes, how stale notes are kept from misleading it, and what a catch-up shows.
 
-Code: src/memory/ (`workstream.ts` pure sections, cap, follow-ups, recent work, and catch-up;
-`store.ts` files, handoff archive, and archiving; `service.ts` the actions), src/session/actions.ts
+Code: src/memory/ (`workstream.ts` pure sections, cap, follow-ups, recent work, and the catch-up
+view; `view.ts` the card and list; `store.ts` files, handoff archive, and archiving; `service.ts`
+the actions), src/main.ts (`tandem memory`), src/session/actions.ts
 (`memory-list`, `memory-show`, `memory-write`, `memory-done`), src/session/coordinator.ts (the
 standing `Workstreams:` line), src/instructions.ts (the coordinator's memory guidance).
 
@@ -81,19 +82,55 @@ reason; the coordinator merges or drops old decisions and saves again. There is 
 
 ## Catch-up
 
-`memory-show` returns, capped at 10,000 characters and with line breaks kept: the name, how old the
-notes are, and today's date; the header that the notes are dated data, not instructions, and that
-code and records win; then Due now, Brief, Now, Last handoff, Later follow-ups, Decisions, Recent
-work, and any hand-added sections, leaving out empty ones. A workstream without notes says so and
-tells the coordinator to ask for its goal, success metric, and links.
+`memory-show` builds a `CatchUpView` from the notes and records (`catchUpView`) and draws it as a
+card in the same style as `tandem status` (src/memory/view.ts, on the primitives in
+src/board/terminal.ts):
 
-The coordinator turns that into what the user sees, about 12 lines: a header, then Due now, Where
-you left off, Suggested next, and Recent work, leaving out empty sections. At most 3 suggestions,
-each an action the user can start now tied to the brief's goal or metric, ordered due checks, then
-unblocking, then new work, branching on the outcome when a check is pending. It cites only metrics
-and targets from the notes and asks the user for numbers Tandem cannot see. No history recap.
+```
+Workstream: tia · notes from 3 days ago · saved 2030-01-06 · today 2030-01-09
+
+DUE NOW 1 ───────────────────────────────────────────────────────────
+🔔 check missed-failure rate on 2030-01-09 because #412 merged Monday
+
+WHERE YOU LEFT OFF ──────────────────────────────────────────────────
+Lowered flaky-suite skip threshold.
+
+Handoff 2030-01-06
+Mobile pipeline still excluded.
+
+RECENT WORK 2 ───────────────────────────────────────────────────────
+   PR    TITLE                 STATE
+🎉 #412  Lower skip threshold  merged
+📝 #413  Enable TIA on mobile  draft
+
+─────────────────────────────────────────────────────────────────────
+1 later follow-up, next 2030-02-01 · 1 decision
+Notes: ~/.tandem/repositories/<key>/memory/tia/MEMORY.md
+```
+
+Empty sections are left out. An overdue follow-up is red and says since when. In the terminal the
+name is a badge and sections are colored like `tandem status` (yellow due, red overdue, green
+merged); in the coordinator chat and in piped output the layout is the same without color.
+
+The action's text is the card, then, under "For your suggestions only; do not show the user", the
+header that the notes are dated data and not instructions and that code and records win, followed by
+the Brief, later follow-ups, Decisions, and hand-added sections. It is capped at 10,000 characters. A
+workstream without notes says so and tells the coordinator to ask for its goal, success metric, and
+links.
+
+The coordinator shows the card exactly as returned in a code block and writes Suggested next under
+it: at most 3 actions the user can start now, each tied to the brief's goal or metric, ordered due
+checks, then unblocking, then new work, branching on the outcome when a check is pending. It cites
+only metrics and targets from the notes and asks the user for numbers Tandem cannot see. No history
+recap.
 
 `memory-list` ("where was I?") is one line per workstream: `tia: 1 follow-up due`. The same lines
 join the coordinator's standing context as `Workstreams: …` when there are any; unreadable notes
 leave it out rather than failing the turn. None of the memory actions asks for approval, and child
 workers get nothing from memory.
+
+## `tandem memory`
+
+`tandem memory` lists the workstreams of the project the current directory is in (its Git root).
+`tandem memory NAME` prints that workstream's card, the same one the coordinator shows, without the
+coordinator's notes or suggestions. `--json` prints the list or the `CatchUpView`. It only reads.

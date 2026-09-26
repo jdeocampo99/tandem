@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { RepoPolicy } from "../../src/contracts.ts";
+import { type MemoryShowResult, renderMemoryShow } from "../../src/memory/view.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import {
@@ -1279,7 +1280,20 @@ test("create forwards the workstream the work belongs to", async () => {
 
 test("memory actions run without an approval dialog and keep the notes' line breaks", async () => {
   const writes: unknown[] = [];
-  const catchUp = "tia · notes from today\n\nDue now\n- check the rate on 2030-01-09 because x";
+  const catchUp: MemoryShowResult = {
+    kind: "notes",
+    view: {
+      name: "tia",
+      path: "/notes/tia/MEMORY.md",
+      savedOn: "2030-01-09",
+      age: "today",
+      today: "2030-01-09",
+      due: [{ text: "check the rate on 2030-01-09 because x", due: "2030-01-09" }],
+      later: [],
+      extra: [],
+      recent: [],
+    },
+  };
   const service = {
     memoryList: async () => ["tia: 1 follow-up due", "billing: nothing due"],
     memoryShow: async () => catchUp,
@@ -1304,7 +1318,7 @@ test("memory actions run without an approval dialog and keep the notes' line bre
     service,
     noDialog,
   );
-  expect(summarizeTandemActionValue(shown.action, shown.value)).toBe(catchUp);
+  expect(summarizeTandemActionValue(shown.action, shown.value)).toBe(renderMemoryShow(catchUp));
   const written = await executeTandemAction(
     {
       action: "memory-write",

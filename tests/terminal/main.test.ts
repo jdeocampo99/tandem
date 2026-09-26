@@ -1214,6 +1214,72 @@ test("tandem watch starts watching a pull request named from this directory and 
   expect((await runTerminal(["watch", "--stop"], { service, stderr: () => {} })).exitCode).toBe(1);
 });
 
+test("tandem memory lists this project's workstreams, and with a name shows its catch-up card", async () => {
+  const project = await realpath(await mkdtemp(join(tmpdir(), "tandem-memory-project-")));
+  const gitRoot = async (request: CommandRequest): Promise<CommandResult> => ({
+    code: request.argv.includes("--show-toplevel") ? 0 : 1,
+    stdout: `${project}\n`,
+    stderr: "",
+  });
+  const asked: unknown[] = [];
+  const service = {
+    memoryList: async (repoPath: string) => {
+      asked.push(repoPath);
+      return ["tia: 1 follow-up due"];
+    },
+    memoryShow: async (repoPath: string, workstream: string) => {
+      asked.push([repoPath, workstream]);
+      return workstream === "tia"
+        ? {
+            kind: "notes",
+            view: {
+              name: "tia",
+              path: "/notes/tia/MEMORY.md",
+              savedOn: "2030-01-09",
+              age: "today",
+              today: "2030-01-09",
+              due: [],
+              later: [],
+              now: "Rolling out.",
+              extra: [],
+              recent: [],
+            },
+          }
+        : { kind: "none", name: workstream };
+    },
+    shutdown: async () => undefined,
+  } as unknown as TandemService;
+  const run = async (argv: readonly string[]) => {
+    const output: string[] = [];
+    const result = await runTerminal(argv, {
+      cwd: project,
+      processEnvironment: { TANDEM_HOME: "/tmp/tandem-memory-test" },
+      run: gitRoot,
+      service,
+      stdout: (text) => output.push(text),
+      stderr: (text) => output.push(text),
+    });
+    return { result, text: output.join("") };
+  };
+  try {
+    const listed = await run(["memory"]);
+    expect(listed.result).toEqual({ exitCode: 0, status: "memory" });
+    expect(listed.text).toContain("WORKSTREAMS 1");
+    expect(listed.text).toContain("tia: 1 follow-up due");
+    const shown = await run(["memory", "tia"]);
+    expect(shown.text).toStartWith("Workstream: tia · notes from today");
+    expect(shown.text).toContain("WHERE YOU LEFT OFF");
+    expect(shown.text).toContain("Notes: /notes/tia/MEMORY.md");
+    expect((await run(["memory", "billing"])).text).toBe(
+      "billing has no notes yet. Name it to the coordinator to start one.\n",
+    );
+    expect(JSON.parse((await run(["memory", "--json"])).text)).toEqual(["tia: 1 follow-up due"]);
+    expect(asked).toEqual([project, [project, "tia"], [project, "billing"], project]);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+});
+
 test("tandem status shows the board from saved state, and --json adds tasks with their IDs", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-status-test-"));
   const gitLog = async (request: CommandRequest): Promise<CommandResult> => ({

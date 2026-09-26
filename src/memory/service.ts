@@ -3,15 +3,17 @@ import type { PrWatch } from "../pr-watch/store.ts";
 import {
   archiveWorkstream,
   listWorkstreams,
+  memoryPath,
   memoryRoot,
   readWorkstream,
   saveWorkstream,
 } from "./store.ts";
+import type { MemoryShowResult } from "./view.ts";
 import {
+  catchUpView,
   MEMORY_SECTIONS,
   type MemorySection,
   recentWork,
-  renderCatchUp,
   type SectionChanges,
   workstreamLine,
   workstreamName,
@@ -47,21 +49,27 @@ export class ProjectMemory {
     return saved.map(({ memory }) => workstreamLine(memory, now));
   }
 
-  /** The catch-up material for one workstream, or how to start one that has no notes yet. */
-  async show(repoPath: string, workstream: string): Promise<string> {
+  /** One workstream's catch-up, or that it has no notes yet. */
+  async show(repoPath: string, workstream: string): Promise<MemoryShowResult> {
     const name = workstreamName(workstream);
     const now = this.#deps.clock();
+    const root = await this.root(repoPath);
     const [saved, tasks, watches] = await Promise.all([
-      readWorkstream(await this.root(repoPath), name),
+      readWorkstream(root, name),
       this.#deps.listTasks(),
       this.#deps.listWatches(),
     ]);
-    const recent = recentWork(tasks, watches, name);
-    if (saved === undefined) {
-      const work = recent.length === 0 ? "" : `\nRecent work: ${recent.join(" · ")}`;
-      return `${name} has no notes yet. Ask the user for its goal, success metric, and links, then save them as its brief.${work}`;
-    }
-    return renderCatchUp({ memory: saved.memory, savedAt: saved.savedAt, now, recent });
+    if (saved === undefined) return { kind: "none", name };
+    return {
+      kind: "notes",
+      view: catchUpView({
+        memory: saved.memory,
+        path: memoryPath(root, name),
+        savedAt: saved.savedAt,
+        now,
+        recent: recentWork(tasks, watches, name),
+      }),
+    };
   }
 
   async write(input: MemoryWriteInput): Promise<string> {

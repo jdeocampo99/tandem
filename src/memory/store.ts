@@ -126,7 +126,8 @@ export async function archiveWorkstream(
   }
 }
 
-function memoryPath(root: string, name: string): string {
+/** Where a workstream's MEMORY.md is, whether or not it exists yet. */
+export function memoryPath(root: string, name: string): string {
   return join(root, workstreamName(name), MEMORY_FILE);
 }
 
