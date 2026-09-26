@@ -2,7 +2,7 @@
 
 Task stages, approvals, fix rounds, post-research continuation, child terminals, and Herdr status.
 
-Code: src/tasks/lifecycle.ts, src/tasks/findings.ts, src/tasks/timeline.ts, src/tasks/timeline-store.ts,
+Code: src/tasks/lifecycle.ts, src/tasks/required-stages.ts, src/tasks/findings.ts, src/tasks/timeline.ts, src/tasks/timeline-store.ts,
 src/tasks/trace.ts, src/tasks/research-continuation.ts,
 src/tasks/research-continuation-classifier.ts, src/session/research-follow-up.ts,
 src/service/source.ts, src/adapters/herdr.ts, src/adapters/herdr-status.ts,
@@ -37,10 +37,38 @@ src/session/worker.ts, src/session/worker-steering.ts, src/workers/terminal-exte
 | `validating` | One named validation contract runs at that exact HEAD: iteration checks between fix rounds, or the full final manifest once otherwise ready. |
 | `reviewing` | Checks passed or were skipped ([Review and validation](review-and-validation.md)); fresh reviewers record lenses. |
 | `awaiting-fixes` | Validation or review failed; a bounded fix round may start. |
-| `ready` | Final manifest and all required lenses pass at the current HEAD, or the user chose [publish now](delivery.md) at that HEAD, or a [follow-up on an open PR](delivery.md#follow-ups-on-an-open-pr) finished there. |
+| `ready` | The task's [required stages](#required-stages) passed at the current HEAD (the final manifest and all required lenses, when both are required), or the user chose [publish now](delivery.md) at that HEAD. |
 | `paused` | Stopped with a resumable previous stage. |
 | `blocked` | Cannot safely proceed; durable reason, surfaced as an actionable blocker. |
 | `cancelled` / `completed` / `merged` | Terminal. A scout is research-complete only when `completed` with its report; `merged` only after verified delivery. |
+
+## Required stages
+
+An implementation task records `requiredStages` (`{ validation, review }`): which stages run after
+implementation. `decideRequiredStages` in src/tasks/required-stages.ts is the only place that
+decides them; the lifecycle and the review stage read the record and never re-derive it.
+
+| Situation | validation | review |
+| --- | --- | --- |
+| Normal new task | ✓ | ✓ |
+| Brief approved with `skipReview` | ✓ | ✗ |
+| Steering a task whose PR is open (not a draft) | ✗ | ✗ |
+
+- Recorded at creation (from the brief the task runs under), again on every `steer` with a new
+  direction (from the brief and the PR's state at that moment), and again on the governed tasks
+  when a brief is approved.
+- `implementation-complete` goes to `validating` when validation is required (or straight to
+  `reviewing` when passing pinned checks at that HEAD still hold). With nothing required it goes
+  straight to `ready`, recording `reviewSkippedHead` at that HEAD.
+- With review not required, the review stage records the review level (so the PR names any safety
+  floors the diff tripped) and applies `skip-review` instead of launching a reviewer.
+- Tandem always pushes, once the required stages pass: a draft through its refresh, a published PR
+  by pushing the ready HEAD to the task branch without forcing (see
+  [delivery.md](delivery.md#follow-ups-on-an-open-pr)). Agents commit; they don't push.
+- Records saved before required stages existed derive them from their own PR state when read; on
+  its next tick the service records them on active tasks, including the brief's `skipReview`.
+- [Publish now](delivery.md#publish-now-user-skips-review) is not a required-stages choice: it is a
+  user action that cuts a running task short.
 
 ## Fix rounds
 

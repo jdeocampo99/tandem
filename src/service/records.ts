@@ -48,6 +48,7 @@ export type TaskCreationRequest = Readonly<{
   readonly playbook?: TaskRecord["playbook"];
   readonly prReview?: TaskRecord["prReview"];
   readonly target?: TaskRecord["target"];
+  readonly requiredStages?: TaskRecord["requiredStages"];
 }>;
 
 export function isTerminalTask(task: TaskRecord): boolean {
@@ -571,5 +572,6 @@ export function taskInputFor(
     ...(request.playbook === undefined ? {} : { playbook: request.playbook }),
     ...(request.prReview === undefined ? {} : { prReview: request.prReview }),
     ...(request.target === undefined ? {} : { target: request.target }),
+    ...(request.requiredStages === undefined ? {} : { requiredStages: request.requiredStages }),
   };
 }

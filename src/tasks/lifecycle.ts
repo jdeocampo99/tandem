@@ -9,6 +9,7 @@ import {
   isSafeRequestId,
   type Notification,
   type PullRequestMetadata,
+  type RequiredStages,
   type ResearchContinuation,
   type ResearchHandoff,
   type ResolvedGuidance,
@@ -38,6 +39,7 @@ import {
   ledgerSuggestions,
   recordReviewFindings,
 } from "./findings.ts";
+import { decideRequiredStages, requiredStagesOf } from "./required-stages.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
 import { checkSkillInvocations } from "./skill-invocation.ts";
@@ -63,6 +65,8 @@ export type TaskInput = Readonly<{
   /** Required for, and only for, a `pr-review` task. */
   readonly prReview?: PrReviewState;
   readonly target?: TaskTarget;
+  /** Implementation tasks only; decided by `decideRequiredStages` from the brief it runs under. */
+  readonly requiredStages?: RequiredStages;
 }>;
 
 export type TaskTransitionContext = Readonly<{
@@ -305,6 +309,9 @@ function assertTaskInput(input: TaskInput): void {
   }
   if (input.target !== undefined && input.kind === "pr-review") {
     throw new TypeError("a pr-review task records its repository in prReview, not target");
+  }
+  if (input.requiredStages !== undefined && input.kind !== "implementation") {
+    throw new TypeError("only implementation tasks record required stages");
   }
   if (!isNonEmptyText(input.objective)) {
     throw new TypeError("Task objective must be a non-empty string");
@@ -834,6 +841,14 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     ...(input.playbook === undefined ? {} : { playbook: input.playbook }),
     ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
     ...(input.target === undefined ? {} : { target: { ...input.target } }),
+    ...(input.kind === "implementation"
+      ? {
+          requiredStages: {
+            ...(input.requiredStages ??
+              decideRequiredStages({ briefSkipsReview: false, pullRequestPublished: false })),
+          },
+        }
+      : {}),
     ...(input.kind === "scout"
       ? {
           researchContinuation:
@@ -964,9 +979,10 @@ function completeImplementation(
       "Implementation reportPath must be non-empty when supplied",
     );
   }
-  // Once the pull request is open, a follow-up the user asked for goes straight back to ready:
-  // the implementer pushed it to the pull request, whose own CI checks it.
-  if (task.pullRequest?.state === "open") {
+  const required = requiredStagesOf(task);
+  // With nothing left to run, the work is ready at once and Tandem pushes it; a published pull
+  // request's own CI checks it.
+  if (!required.validation && !required.review) {
     return commitWithNotification(
       task,
       context,
@@ -976,7 +992,7 @@ function completeImplementation(
         reviewSkippedHead: event.head,
         ...(event.reportPath === undefined ? {} : { reportPath: event.reportPath }),
       },
-      `Task ${task.id} finished a follow-up on its open pull request and pushed it. Follow-ups skip Tandem's checks and review; the pull request's own CI checks them.`,
+      `Task ${task.id} finished and needs no Tandem checks or review; Tandem pushes it to its pull request, whose own CI checks it.`,
       "coordinator",
     );
   }
@@ -988,7 +1004,8 @@ function completeImplementation(
   const validationEvidence = task.validationEvidence.filter(
     (entry) => isPinnedEvidence(entry) && entry.head === event.head && entry.exitCode === 0,
   );
-  const skipValidation = canSkipValidation({ ...task, validationEvidence }, event.head);
+  const skipValidation =
+    !required.validation || canSkipValidation({ ...task, validationEvidence }, event.head);
   return commitTask(task, context.now, {
     stage: skipValidation ? "reviewing" : "validating",
     reviewHead: event.head,

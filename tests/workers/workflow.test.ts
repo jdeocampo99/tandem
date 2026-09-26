@@ -70,7 +70,6 @@ function workflowFor(world: ScenarioWorld, blocks: RecordedBlock[]): WorkerWorkf
     reviewAssistance: reviewAssistanceRuntime({ timeoutMs: 1 }),
     recordRequestUsage: async () => {},
     readRequestUsage: unused("readRequestUsage"),
-    briefSkipsReview: async () => false,
     readModelCatalogue: unused("readModelCatalogue"),
   });
 }

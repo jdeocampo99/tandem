@@ -190,8 +190,6 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly recordRequestUsage: (events: readonly RequestUsageEvent[]) => Promise<void>;
   /** The accounting ledger's own rows for one request, read for economical routing's usage check. */
   readonly readRequestUsage: (requestId: string) => Promise<RequestUsageReadout>;
-  /** Whether the request's approved brief says its work needs no code review. */
-  readonly briefSkipsReview: (requestId: string) => Promise<boolean>;
   /** Reads catalogue tier evidence at an execution boundary; it never enables a provider. */
   readonly readModelCatalogue: ModelCatalogueReader;
 }>;

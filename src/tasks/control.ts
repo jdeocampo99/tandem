@@ -47,6 +47,7 @@ import {
   type TaskTransitionContext,
   transitionTask,
 } from "./lifecycle.ts";
+import { decideRequiredStages, pullRequestPublished } from "./required-stages.ts";
 import type { TaskStore, TaskStoreTransaction } from "./store.ts";
 
 type ControlAction = "pause" | "cancel";
@@ -110,11 +111,13 @@ export type TaskControlDependencies = Readonly<{
     claim?: OperationClaim,
   ) => Promise<void>;
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
+  /** Whether the request's approved brief says its work needs no code review. */
+  readonly briefSkipsReview: (requestId: string) => Promise<boolean>;
 }>;
 
-/** Added to a direction for a task whose pull request is open, since no one else pushes it. */
+/** Added to a direction for a task whose pull request is open: Tandem pushes, the agent commits. */
 const OPEN_PR_FOLLOW_UP =
-  "This task's pull request is already open. If you change code, commit it and push the branch to origin (never force-push) before you submit.";
+  "This task's pull request is already open. If you change code, commit it before you submit; Tandem pushes the branch to the pull request, so don't push it yourself.";
 
 const REDIRECT_STAGES: readonly TaskRecord["stage"][] = [
   "validating",
@@ -910,6 +913,10 @@ export class TaskControlWorkflow {
     taskId: string,
     instruction?: Readonly<{ text: string; supersedes?: readonly string[] }>,
   ): Promise<TaskRecord> {
+    // Read before the lock: the brief lives in the same database, and a task's request never changes.
+    const requestId = (await this.#deps.store.read(taskId))?.requestId;
+    const briefSkipsReview =
+      requestId !== undefined && (await this.#deps.briefSkipsReview(requestId));
     return this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
       if (task === undefined || !(await this.#deps.taskInScope(task))) {
@@ -924,19 +931,30 @@ export class TaskControlWorkflow {
           : appendTaskMessage(task.communication, {
               id: singleLine(this.#deps.idFactory(), "message id"),
               kind: "instruction",
-              text:
-                task.pullRequest?.state === "open"
-                  ? `${instruction.text} ${OPEN_PR_FOLLOW_UP}`
-                  : instruction.text,
+              text: pullRequestPublished(task)
+                ? `${instruction.text} ${OPEN_PR_FOLLOW_UP}`
+                : instruction.text,
               createdAt: this.#deps.clock(),
               ...(instruction.supersedes === undefined
                 ? {}
                 : { supersedes: instruction.supersedes }),
             });
+      // Steering records which stages the new work runs, from the facts as they stand now.
+      const requiredStages =
+        instruction === undefined || task.kind !== "implementation"
+          ? undefined
+          : decideRequiredStages({
+              briefSkipsReview,
+              pullRequestPublished: pullRequestPublished(task),
+            });
       const withInstruction = (candidate: TaskRecord): TaskRecord =>
         instruction === undefined || communication === undefined
           ? candidate
-          : { ...candidate, communication };
+          : {
+              ...candidate,
+              communication,
+              ...(requiredStages === undefined ? {} : { requiredStages }),
+            };
       const commitBlock = async (cause: BlockCause): Promise<TaskRecord> => {
         const blocked = withInstruction(
           transitionTask(
@@ -956,6 +974,7 @@ export class TaskControlWorkflow {
           revision: current.revision + 1,
           updatedAt: this.#deps.clock(),
           ...(communication === undefined ? {} : { communication }),
+          ...(requiredStages === undefined ? {} : { requiredStages }),
         }));
         await this.#deps.publishTaskInbox(updated);
         return updated;

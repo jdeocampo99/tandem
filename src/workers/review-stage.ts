@@ -32,6 +32,7 @@ import {
 } from "../service/records.ts";
 import { taskInboxPath, workerReceiptPath } from "../tasks/communication-persistence.ts";
 import type { TaskEvent } from "../tasks/lifecycle.ts";
+import { requiredStagesOf } from "../tasks/required-stages.ts";
 import { buildReviewBrief, renderReviewBrief } from "../tasks/review-brief.ts";
 import { requiredReviewLenses } from "../tasks/review-levels.ts";
 import type { ReservationResult } from "./admission.ts";
@@ -117,8 +118,6 @@ export type ReviewStageDependencies = ReviewClassificationDependencies &
     readonly transition: (taskId: string, event: TaskEvent) => Promise<TaskRecord>;
     readonly blockTask: (taskId: string, reason: string, cause?: BlockCause) => Promise<TaskRecord>;
     readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
-    /** Whether the request's approved brief says its work needs no code review. */
-    readonly briefSkipsReview: (requestId: string) => Promise<boolean>;
     readonly records: OperationRecords;
     readonly launcher: JobLauncher;
     readonly reservations: TaskReservations;
@@ -214,8 +213,8 @@ export class ReviewStage {
     });
     const classified = await classifyReviewRound(this.#deps, { task, head, facts });
     const leveledTask = await this.recordReviewLevel(task, classified.record);
-    // The user's approved "no review" wins over the risk classification recorded just above.
-    if (task.requestId !== undefined && (await this.#deps.briefSkipsReview(task.requestId))) {
+    // Recorded above so the pull request still names the risk checks the change tripped.
+    if (!requiredStagesOf(leveledTask).review) {
       await this.#deps.transition(task.id, { type: "skip-review", head });
       return undefined;
     }
