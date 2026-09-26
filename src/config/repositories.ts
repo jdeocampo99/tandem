@@ -70,6 +70,10 @@ export type OnboardRepoOptions = Readonly<{
   write?: boolean;
   /** MCP servers the user let the coordinator use; written only with write=true. */
   coordinatorMcpServers?: readonly string[];
+  /** The user's own check commands, replacing the discovered ones in the proposal and the write. */
+  validationCommands?: readonly string[];
+  /** The user's own install commands, replacing the discovered one likewise. */
+  setupCommands?: readonly string[];
 }>;
 
 /** Onboarding proposal and durable-write outcome; unresolved is never represented as a passing check. */
@@ -779,8 +783,13 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     false,
   );
   const manager = await detectPackageManager(checkoutRoot, options.readText);
-  const proposal = proposeValidationCommands(packageText, manager?.runner ?? "bun");
-  const setupCommands = manager === undefined ? [] : [manager.install];
+  const discovered = proposeValidationCommands(packageText, manager?.runner ?? "bun");
+  // Commands the user chose are theirs to vouch for, so they leave nothing unresolved.
+  const proposal: ValidationProposal =
+    options.validationCommands === undefined
+      ? discovered
+      : { commands: options.validationCommands, unresolved: [], approvalRequired: true };
+  const setupCommands = options.setupCommands ?? (manager === undefined ? [] : [manager.install]);
   const proposedPolicy = existingConfig
     ? copyPolicy(currentPolicy)
     : parsePolicyOverride({ setupCommands, validationCommands: proposal.commands }, global);

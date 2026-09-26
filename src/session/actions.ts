@@ -1,3 +1,4 @@
+import type { SelfImprovementMode } from "../config/home-settings.ts";
 import type { MergingChoice } from "../config/repositories.ts";
 import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
@@ -22,10 +23,24 @@ import {
 
 export type TandemAction =
   | Readonly<{ readonly action: "restart"; readonly taskId: string }>
-  | Readonly<{ readonly action: "setup"; readonly repoPath: string }>
+  | Readonly<{
+      readonly action: "setup";
+      readonly repoPath: string;
+      /** The user's own check commands, replacing what onboard found. */
+      readonly validationCommands?: readonly string[] | undefined;
+      /** The user's own install commands, replacing what onboard found. */
+      readonly setupCommands?: readonly string[] | undefined;
+      /** MCP servers the user lets this project's coordinator use. */
+      readonly coordinatorMcpServers?: readonly string[] | undefined;
+    }>
   | Readonly<{ readonly action: "models"; readonly repoPath: string }>
   | Readonly<{ readonly action: "onboard"; readonly repoPath: string }>
   | Readonly<{ readonly action: "open-project"; readonly repoPath: string }>
+  | Readonly<{ readonly action: "find-repo"; readonly name: string }>
+  | Readonly<{ readonly action: "save-code-folders"; readonly folders: readonly string[] }>
+  | Readonly<{ readonly action: "worker-skills"; readonly skills: readonly string[] }>
+  | Readonly<{ readonly action: "self-improvement"; readonly mode: SelfImprovementMode }>
+  | Readonly<{ readonly action: "check-tools" }>
   | Readonly<{
       readonly action: "configure-models";
       readonly repoPath: string;
@@ -236,11 +251,40 @@ function actionResult(
   };
 }
 
+const SELF_IMPROVEMENT_TITLES: Readonly<Record<SelfImprovementMode, string>> = {
+  off: "Leave Tandem's own problems alone?",
+  fix: "Let Tandem look into its own problems and offer fixes?",
+  report: "Let Tandem look into its own problems and draft issues for you to file?",
+};
+
+/**
+ * Everything the onboarding conversation needs about one project, read-only: the proposal, the
+ * MCP servers its chat could use, how its pull requests would merge, and plugin skills to offer.
+ * GitHub or OMP being unreachable leaves that part out rather than failing the whole look.
+ */
+async function onboardingDetails(repoPath: string, service: TandemService) {
+  const onboarded = await service.onboard(repoPath, false);
+  const [mcpServers, merging, workerSkillOffer] = await Promise.all([
+    service.mcpServers(onboarded.repoPath).catch(() => undefined),
+    service.mergingCheck(onboarded.repoPath).catch(() => undefined),
+    service.workerSkillOffer(),
+  ]);
+  return {
+    ...onboarded,
+    ...(mcpServers === undefined ? {} : { mcpServers }),
+    ...(merging === undefined ? {} : { merging }),
+    workerSkillOffer,
+  };
+}
+
 function requiresHumanApproval(action: TandemAction): boolean {
   if (action.action === "cleanup") return action.discard === true;
   return (
     action.action === "setup" ||
     action.action === "open-project" ||
+    action.action === "save-code-folders" ||
+    action.action === "worker-skills" ||
+    action.action === "self-improvement" ||
     action.action === "configure-models" ||
     action.action === "approve" ||
     action.action === "brief-approve" ||
@@ -275,10 +319,37 @@ async function approvalPrompt(
     };
   }
   if (action.action === "setup") {
-    const onboarded = await service.onboard(action.repoPath, false);
+    const onboarded = await service.onboard(action.repoPath, false, undefined, action);
+    const listed = (values: readonly string[]) =>
+      values.length === 0 ? "none" : values.join("; ");
     return {
       title: `Save Tandem settings for ${projectName(onboarded.repoPath)}?`,
-      message: "Saved outside the project.",
+      message: [
+        `Checks: ${listed(onboarded.validationCommands.map((command) => command.name))}`,
+        `Install in fresh copies: ${listed(onboarded.setupCommands.map((command) => command.name))}`,
+        `Tools its chat may use: ${listed(action.coordinatorMcpServers ?? [])}`,
+        "Saved outside the project.",
+      ].join("\n"),
+    };
+  }
+  if (action.action === "save-code-folders") {
+    return {
+      title: "Look for your repos in these folders?",
+      message: action.folders.map((folder) => `- ${folder}`).join("\n"),
+    };
+  }
+  if (action.action === "worker-skills") {
+    return action.skills.length === 0
+      ? { title: "Give tasks none of your plugin skills?", message: "You won't be asked again." }
+      : {
+          title: "Give every task these skills?",
+          message: action.skills.map((skill) => `- ${skill}`).join("\n"),
+        };
+  }
+  if (action.action === "self-improvement") {
+    return {
+      title: SELF_IMPROVEMENT_TITLES[action.mode],
+      message: "Change it any time in Tandem's settings.",
     };
   }
   if (action.action === "open-project") {
@@ -445,11 +516,31 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   restart: async (action, service) =>
     actionResult(await service.restart(action.taskId), action.action),
   onboard: async (action, service) =>
-    actionResult(await service.onboard(action.repoPath, false), action.action),
+    actionResult(await onboardingDetails(action.repoPath, service), action.action),
   "open-project": async (action, service) =>
     actionResult(await service.openProject(action.repoPath), action.action, { approved: true }),
   setup: async (action, service) =>
-    actionResult(await service.onboard(action.repoPath, true), action.action, { approved: true }),
+    actionResult(
+      await service.onboard(action.repoPath, true, action.coordinatorMcpServers ?? [], action),
+      action.action,
+      { approved: true },
+    ),
+  "find-repo": async (action, service) =>
+    actionResult(
+      { name: action.name, matches: await service.findRepo(action.name) },
+      action.action,
+    ),
+  "save-code-folders": async (action, service) =>
+    actionResult(await service.saveProjectRoots(action.folders), action.action, {
+      approved: true,
+    }),
+  "worker-skills": async (action, service) =>
+    actionResult(await service.saveWorkerSkills(action.skills), action.action, { approved: true }),
+  "self-improvement": async (action, service) =>
+    actionResult(await service.saveSelfImprovement(action.mode), action.action, {
+      approved: true,
+    }),
+  "check-tools": async (action, service) => actionResult(await service.checkTools(), action.action),
   models: async (action, service) =>
     actionResult(await service.models(action.repoPath), action.action),
   "configure-models": async (action, service) =>
@@ -1046,6 +1137,14 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
   "open-project": {
     arity: { min: 2, max: 2 },
     parse: (_words, value) => ({ action: "open-project", repoPath: value(1, "open-project") }),
+  },
+  "find-repo": {
+    arity: { min: 2, max: 2 },
+    parse: (_words, value) => ({ action: "find-repo", name: value(1, "find-repo") }),
+  },
+  "check-tools": {
+    arity: { min: 1, max: 1 },
+    parse: () => ({ action: "check-tools" }),
   },
   models: {
     arity: { min: 1, max: 2 },

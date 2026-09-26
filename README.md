@@ -185,10 +185,12 @@ Then, from any folder:
 tandem
 ```
 
-The first run asks you to choose models for each role, then opens Tandem's own chat with a welcome
-popup. Tell it which repos to set up ("Onboard ~/code/api and ~/code/web"): it looks at each one
-without changing anything, suggests check commands, and asks before saving settings and opening
-the project's own chat. Ask it to change how Tandem works, too; it tries settings first and makes
+The first run opens Tandem's own chat with a welcome popup; press Enter and it walks you through
+setup: it checks your tools, helps you pick models, asks where you keep code, and then sets up the
+repos you name ("api and web"). For each one it looks without changing anything, shows the checks
+and install step it found for you to confirm or change, asks how pull requests should merge, and
+asks before saving settings and opening the project's own chat. Leave halfway and it picks up where
+you stopped. Ask it to change how Tandem works, too; it tries settings first and makes
 code changes as ordinary tasks. After that, plain `tandem` from any folder reopens Tandem's chat and
 every saved project with its previous chat. `tandem /path/to/repo` still works.
 

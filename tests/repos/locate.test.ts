@@ -3,11 +3,14 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../src/adapters/commands.ts";
+import { saveProjectRoots } from "../../src/config/home-settings.ts";
 import type { Clock } from "../../src/contracts.ts";
 import {
+  findCheckoutsByName,
   githubRepoFromRemote,
   type LocateRepoOptions,
   locateRepo,
+  projectRoots,
   rememberRepoLocation,
 } from "../../src/repos/locate.ts";
 import { readRepoLocation, withStateTransaction } from "../../src/runtime/database.ts";
@@ -122,4 +125,41 @@ test("refuses to remember a folder that is not a checkout of the repository", as
     kind: "missing",
   });
   expect(await saved(home, "acme/api")).toBeUndefined();
+});
+
+test("a repository is found by folder name, GitHub name, owner/repo, or path", async () => {
+  const { root } = await scratch();
+  const api = await checkout(join(root, "work", "api"), {
+    origin: "git@github.com:acme/backend.git",
+  });
+  await checkout(join(root, "web"), {});
+  const find = (name: string) => findCheckoutsByName(name, [root, root], runCommand);
+
+  expect(await find("API")).toEqual([{ path: api, repo: "acme/backend" }]);
+  expect(await find("backend")).toEqual([{ path: api, repo: "acme/backend" }]);
+  expect(await find("acme/backend")).toEqual([{ path: api, repo: "acme/backend" }]);
+  expect(await find(join(api, "src", ".."))).toEqual([{ path: api, repo: "acme/backend" }]);
+  expect(await find("web")).toEqual([{ path: join(root, "web") }]);
+  expect(await find("nothing")).toEqual([]);
+});
+
+test("two checkouts with the same name are both returned for the user to pick", async () => {
+  const { root } = await scratch();
+  await checkout(join(root, "a", "app"), {});
+  await checkout(join(root, "b", "app"), {});
+  const found = await findCheckoutsByName("app", [root], runCommand);
+  expect(found.map((entry) => entry.path)).toEqual([
+    join(root, "a", "app"),
+    join(root, "b", "app"),
+  ]);
+});
+
+test("code folders come from the environment, then the saved setting, then the usual places", async () => {
+  const { home, root } = await scratch();
+  await mkdir(home, { recursive: true });
+  const usual = await projectRoots(home, {});
+  expect(usual.some((folder) => folder.endsWith("/code"))).toBe(true);
+  await saveProjectRoots(home, [root]);
+  expect(await projectRoots(home, {})).toEqual([root]);
+  expect(await projectRoots(home, { TANDEM_PROJECT_ROOTS: "/x:/y" })).toEqual(["/x", "/y"]);
 });

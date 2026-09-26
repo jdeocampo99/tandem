@@ -62,18 +62,37 @@ src/terminal/arguments.ts) instead of being read as a project path.
 The coordinator of the Tandem checkout the `tandem` command runs from (`TANDEM_CHECKOUT`,
 src/coordinator/tandem-checkout.ts). It is where a new user starts and where anyone changes Tandem.
 
-- It launches like any project, from a clean worktree of the Tandem checkout, but without saved
-  project settings: `prepareProjects` never asks **Save settings** for it. Model choices are still
-  asked in the terminal the first time, because a coordinator needs a model to start.
+- It launches like any project, from a clean worktree of the Tandem checkout, but the terminal asks
+  nothing for it: `prepareProjects` asks neither **Save settings** nor model choices when it is in
+  the launch set. While no model choices are saved, the CLI `launch` leaves out `--model` and
+  `--thinking` for it (and only for it), so OMP runs its own default model; saved choices apply
+  from its next launch. Projects opened by path still ask in the terminal.
 - `isTandemCheckout` compares canonical paths. When it holds, the coordinator's context adds
-  `TANDEM_COORDINATOR_INSTRUCTIONS` (src/instructions.ts): onboard repositories the user names
-  (`onboard`, `models`, `configure-models`, `setup`, then `open-project`), try settings before code
-  when the user wants Tandem changed, and route code changes through ordinary tasks in this project.
+  `TANDEM_COORDINATOR_INSTRUCTIONS` (src/instructions.ts), which walk first-time setup in chat, and
+  try settings before code when the user wants Tandem changed, routing code changes through
+  ordinary tasks in this project.
+- Setup steps, in order: `check-tools` (Herdr, the welcome plugin, OMP, Git, and a signed-in `gh`,
+  each with the command that fixes it; src/onboarding/tools.ts), models (`models`,
+  `configure-models`), code folders (`save-code-folders`), each repository (`find-repo`, `onboard`,
+  `setup` with the user's commands and MCP tools, `pr-watch-merging`, `open-project`), plugin
+  skills (`worker-skills`), and the self-improvement mode (`self-improvement`). Every save asks for
+  approval; `find-repo`, `onboard`, and `check-tools` change nothing.
+- Where setup stands is worked out from saved state on every turn (`onboardingFacts` in the
+  service, `onboardingStatus` in src/onboarding/checklist.ts): saved model choices, saved code
+  folders, saved projects other than the Tandem checkout, a settled plugin-skill offer, and a
+  written `selfImprovement`. The status joins the Tandem coordinator's context, so leaving halfway
+  resumes at the first missing step.
+- `find-repo` takes a name or a path. A path (starting with `/`, `~`, or `.`) resolves to its Git
+  root; a name matches a checkout under the code folders by folder name, GitHub repository name,
+  or `owner/repo`, ignoring case (`findCheckoutsByName` in src/repos/locate.ts). Each match says
+  whether it is already set up; several matches are a question for the user.
 - `open-project` (approval required) runs the front door for one saved project, `tandem PATH
   --no-attach` in the same home and session (src/coordinator/open-project.ts), with the calling
   pane's `TANDEM_REPO`, `TANDEM_SOURCE_REPO`, `TANDEM_PARENT_WORKSPACE`, `HERDR_PANE_ID`, and
   `HERDR_WORKSPACE_ID` removed so the launch claims nothing of this coordinator. It refuses a
-  project without saved settings or saved model choices, before running anything.
+  project without saved settings or saved model choices, before running anything. Afterwards it
+  focuses the project's coordinator workspace from its record; a failed focus is reported, not an
+  error.
 - At each session start, while no saved project other than the Tandem checkout exists, it opens
   the welcome popup: `herdr plugin pane open --plugin tandem.ui --entrypoint welcome` with
   `TANDEM_WELCOME_PANE` set to its own pane. The popup runs `tandem welcome`

@@ -10,6 +10,7 @@ import {
   COORDINATOR_TOOL_GUIDANCE,
   TANDEM_COORDINATOR_INSTRUCTIONS,
 } from "../instructions.ts";
+import { onboardingStatus } from "../onboarding/checklist.ts";
 import type { CoordinatorUsageEntry } from "../runtime/usage-receipt.ts";
 import type { SourceRefreshResult, TandemService } from "../service/controller.ts";
 import { isMissing, isTerminalTask } from "../service/records.ts";
@@ -104,14 +105,14 @@ function errorMessage(error: unknown): string {
 /** The standing coordinator context: instructions, source boundary and freshness, and the digest. */
 function coordinatorContext(
   environment: TandemBoundaryEnvironment,
-  tandemCheckout: boolean,
+  tandemContext: readonly string[],
   sourceStatus: string,
   digest: string,
 ): string[] {
   return [
     COORDINATOR_INSTRUCTIONS,
     COORDINATOR_TOOL_GUIDANCE,
-    ...(tandemCheckout ? [TANDEM_COORDINATOR_INSTRUCTIONS] : []),
+    ...tandemContext,
     coordinatorSourceGuidance(environment),
     sourceStatus,
     digest,
@@ -275,6 +276,21 @@ export class CoordinatorSession {
     return this.createdService;
   }
 
+  /**
+   * What only the Tandem coordinator reads: its instructions, and where first-time setup stands,
+   * read fresh each time. Setup state that cannot be read is left out rather than guessed.
+   */
+  private async tandemContext(): Promise<readonly string[]> {
+    if (!(await this.tandemCheckout())) return [];
+    const facts = await this.service()
+      .onboardingFacts(this.deps.environment.repo)
+      .catch(() => undefined);
+    return [
+      TANDEM_COORDINATOR_INSTRUCTIONS,
+      ...(facts === undefined ? [] : [onboardingStatus(facts)]),
+    ];
+  }
+
   private tandemCheckout(): Promise<boolean> {
     this.isTandemCheckout ??= this.deps.isTandemCheckout();
     return this.isTandemCheckout;
@@ -358,7 +374,7 @@ export class CoordinatorSession {
     return {
       systemContext: coordinatorContext(
         this.deps.environment,
-        await this.tandemCheckout(),
+        await this.tandemContext(),
         this.sourceStatus,
         digest,
       ),
@@ -423,7 +439,7 @@ export class CoordinatorSession {
     return {
       context: coordinatorContext(
         this.deps.environment,
-        await this.tandemCheckout(),
+        await this.tandemContext(),
         this.sourceStatus,
         digest,
       ),

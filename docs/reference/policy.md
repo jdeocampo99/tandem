@@ -41,7 +41,13 @@ src/adapters/typesafe.ts, src/instructions.ts
   mismatched record is refused, never repaired or replaced. The CLI has no custom-command override.
 - In chat, the Tandem coordinator runs the same steps with the same approvals (see
   [coordinator.md](coordinator.md#the-tandem-coordinator)); `open-project` then opens the saved
-  project's own coordinator.
+  project's own coordinator. Before that first write the user may replace the discovered commands:
+  `setup` takes `validationCommands` and `setupCommands`, which replace the proposal (and leave
+  nothing unresolved), and `coordinatorMcpServers`. The write is still the one exclusive create.
+- Two more home settings come from onboarding answers, each with its own approval, through
+  `saveHomeSetting` in src/config/home-settings.ts (a one-line value is replaced, a missing key is
+  added first, a multi-line value or a file changed since reading is refused): `projectRoots`, the
+  absolute folders searched for checkouts by name, and `selfImprovement`.
 - The native terminal asks **Save settings** / **Not now** before writing; **Not now** or Ctrl+C
   creates no project record and leaves saved model choices intact. The interview text and choice
   rules live in `src/terminal/onboarding.ts` and `src/instructions.ts`.
