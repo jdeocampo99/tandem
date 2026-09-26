@@ -14,6 +14,7 @@ import type {
 } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
 import { type AgentBriefReview, buildAgentBrief } from "../instructions.ts";
+import { workstreamName } from "../memory/workstream.ts";
 import type { PlaybookId } from "../playbooks/catalog.ts";
 import { activeRuntimeJob } from "../runtime/activity.ts";
 import { taskJobsDirectory } from "../runtime/persistence.ts";
@@ -47,6 +48,7 @@ export type TaskCreationRequest = Readonly<{
   readonly skills?: TaskRecord["skills"];
   readonly playbook?: TaskRecord["playbook"];
   readonly prReview?: TaskRecord["prReview"];
+  readonly workstream?: TaskRecord["workstream"];
   readonly target?: TaskRecord["target"];
 }>;
 
@@ -571,5 +573,6 @@ export function taskInputFor(
     ...(request.playbook === undefined ? {} : { playbook: request.playbook }),
     ...(request.prReview === undefined ? {} : { prReview: request.prReview }),
     ...(request.target === undefined ? {} : { target: request.target }),
+    ...(request.workstream === undefined ? {} : { workstream: workstreamName(request.workstream) }),
   };
 }

@@ -37,6 +37,7 @@ function watcherFor(
     clock: world.clock,
     listTasks: () => world.store.list(),
     steerTask,
+    recordMerged: async () => undefined,
   });
 }
 
@@ -270,6 +271,73 @@ test("a Tandem task's pull request is watched without anyone asking", async () =
     await watcher.tick();
     expect(await storedRows(world)).toMatchObject([{ repo: REPO, number: 7, status: "📝 draft" }]);
     expect(emptyCommits(world)).toBe(0);
+  });
+});
+
+test("a tagged task's pull request merged through PR watch marks it merged and shows in its catch-up", async () => {
+  await watching(async (world, service) => {
+    await saveMergingSettings(world, AUTO_MERGE);
+    const pr = world.github.openPullRequest({
+      repo: REPO,
+      number: 7,
+      checks: [{ name: "unit", state: "pass" }],
+    });
+    const seeded = await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "ready",
+      reviewHead: pr.head,
+      workstream: "tia",
+      pullRequest: { repository: REPO, number: 7, state: "open", head: pr.head, base: "main" },
+    });
+    await service.memoryWrite({
+      repoPath: world.repoPath,
+      workstream: "tia",
+      changes: { now: "Lowered the flaky-suite skip threshold." },
+    });
+
+    await service.prWatch();
+    expect((await service.get(seeded.id)).stage).toBe("ready");
+    // PR watch updated the branch before it merged, so the merged head is not the reviewed one.
+    world.github.push(pr);
+    pr.state = "MERGED";
+    pr.mergedAt = world.clock();
+    await service.prWatch();
+
+    const merged = await service.get(seeded.id);
+    expect(merged.stage).toBe("merged");
+    expect(merged.pullRequest).toMatchObject({ state: "merged", head: pr.head });
+    const [watch] = await withPrWatches(world.home, (transaction) => transaction.watches);
+    expect(watch?.mergedAt).toBe(pr.mergedAt);
+    const catchUp = await service.memoryShow(world.repoPath, "tia");
+    expect(catchUp).toStartWith("tia · notes from today");
+    expect(catchUp).toContain("Now\nLowered the flaky-suite skip threshold.");
+    expect(catchUp).toContain("Recent work\n#7 Pull request 7 (merged)");
+  }, ORIGIN);
+});
+
+test("a task left ready by a merge PR watch saw before this was recorded is marked merged", async () => {
+  await watching(async (world, service) => {
+    const seeded = await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "ready",
+      pullRequest: { repository: REPO, number: 7, state: "open", head: "head-1", base: "main" },
+    });
+    await withPrWatches(world.home, (transaction) =>
+      transaction.put({
+        ref: { repo: REPO, number: 7 },
+        origin: "task",
+        taskId: seeded.id,
+        startedAt: world.clock(),
+        finishedAt: world.clock(),
+        head: { oid: "head-2", tree: "tree-2", seenAt: world.clock() },
+        row: { color: "done", status: "🎉 merged 09:14", note: "" },
+        log: [],
+      }),
+    );
+    await service.prWatch();
+    const merged = await service.get(seeded.id);
+    expect(merged.stage).toBe("merged");
+    expect(merged.pullRequest).toMatchObject({ state: "merged", head: "head-2" });
   });
 });
 

@@ -40,7 +40,7 @@ src/session/worker.ts, src/session/worker-steering.ts, src/workers/terminal-exte
 | `ready` | Final manifest and all required lenses pass at the current HEAD, or the user chose [publish now](delivery.md) at that HEAD, or a [follow-up on an open PR](delivery.md#follow-ups-on-an-open-pr) finished there. |
 | `paused` | Stopped with a resumable previous stage. |
 | `blocked` | Cannot safely proceed; durable reason, surfaced as an actionable blocker. |
-| `cancelled` / `completed` / `merged` | Terminal. A scout is research-complete only when `completed` with its report; `merged` only after verified delivery. |
+| `cancelled` / `completed` / `merged` | Terminal. A scout is research-complete only when `completed` with its report; `merged` only after verified delivery: the `merge` action at the reviewed HEAD, or PR watch seeing the task's own pull request merged on GitHub. |
 
 ## Fix rounds
 

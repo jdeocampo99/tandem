@@ -84,6 +84,14 @@ person**. Hand it any other pull request with `tandem watch <link>`.
 
 ![How PR watch keeps a pull request moving: it fixes flaky checks, conflicts, stale branches, and queue kick-outs on its own, merges when everything is green, and comes to you only when a person is needed](docs/images/pr-watch.svg)
 
+### Picking up where you left off
+
+Name a line of work ("wrapping up billing", "now onboarding") and Tandem keeps short notes for it:
+the goal, where you left off, decisions and why, and checks to make on a date. Say "catch up on
+billing" and it tells you in a few lines what's due, where you were, and what to do next, with the
+pull requests that merged since. "Where was I?" lists each one. The notes are plain Markdown in the
+Tandem home, never in your repository, and nothing is kept until you name one.
+
 ### Reviewing other people's pull requests
 
 Paste a PR link and ask for a review. Tandem checks it out in its own worktree and comes back with

@@ -17,7 +17,14 @@ tests/evals/pr-watch-scenarios.test.ts.
 | It is published (draft to ready; Tandem's `publish` marks its draft ready) | Also merged: auto-merge is armed or the queue label added. |
 | `tandem watch <link, owner/repo#N, or N>` or the `pr-watch-start` action ("watch #N") | Watched. `N` means a pull request in the current directory's repository (the coordinator's project for the action). Naming one already watched starts it over (see [Conflicts](#conflicts)). |
 | `tandem watch --stop PR`, the `pr-watch-stop` action ("hands off #N") | Stopped. The record stays, so its task never picks it up again; watching it by name starts it again. |
-| GitHub reports it merged or closed | Done. It stays in the view as ⚪ for the rest of that day. |
+| GitHub reports it merged or closed | Done. It stays in the view as ⚪ for the rest of that day. A merge records `mergedAt`, and the task's pull request, if it is `ready`, moves it to `merged`. |
+
+Every check (the tick or opening the view) also moves each `ready` task whose watched pull request
+merged to `merged`, at the head PR watch last saw, through the `merged-on-github` transition. That
+head may differ from the reviewed one, since PR watch can update the branch or push an empty commit.
+Only the coordinator whose project owns the task records it; watches that finished before `mergedAt`
+was kept count as merged by their 🎉 row. A failed attempt leaves the task `ready` and the next check
+tries again.
 
 A cancelled task's pull request is not picked up. Whether to merge follows GitHub's draft flag on
 every read, so a pull request watched by name merges once it is not a draft.

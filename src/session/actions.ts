@@ -48,6 +48,7 @@ export type TandemAction =
       readonly targetCheckout?: string | undefined;
       readonly targetClone?: boolean | undefined;
       readonly validationCommands?: readonly string[] | undefined;
+      readonly workstream?: string | undefined;
     }>
   | Readonly<{ readonly action: "list" }>
   | Readonly<{ readonly action: "presentations" }>
@@ -191,6 +192,23 @@ export type TandemAction =
       /** A GitHub PR URL, `owner/repo#123`, or `#123` in `repoPath`. */
       readonly pullRequest: string;
       readonly repoPath?: string | undefined;
+    }>
+  | Readonly<{ readonly action: "memory-list"; readonly repoPath: string }>
+  | Readonly<{
+      readonly action: "memory-show" | "memory-done";
+      readonly repoPath: string;
+      readonly workstream: string;
+    }>
+  | Readonly<{
+      readonly action: "memory-write";
+      readonly repoPath: string;
+      readonly workstream: string;
+      /** Each given section replaces the saved one; an empty text removes it. */
+      readonly brief?: string | undefined;
+      readonly now?: string | undefined;
+      readonly followUps?: string | undefined;
+      readonly lastHandoff?: string | undefined;
+      readonly decisions?: string | undefined;
     }>
   | Readonly<{
       readonly action: "investigate";
@@ -419,6 +437,7 @@ function serviceCreateInput(
     ...(action.validationCommands === undefined
       ? {}
       : { validationCommands: action.validationCommands }),
+    ...(action.workstream === undefined ? {} : { workstream: action.workstream }),
   };
 }
 
@@ -656,6 +675,32 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.prWatchFix(pullRequestInput(action)), action.action, {
       approved: true,
     }),
+  "memory-list": async (action, service) => {
+    const lines = await service.memoryList(action.repoPath);
+    return actionResult(
+      lines.length === 0 ? "No workstreams yet." : lines.join("\n"),
+      action.action,
+    );
+  },
+  "memory-show": async (action, service) =>
+    actionResult(await service.memoryShow(action.repoPath, action.workstream), action.action),
+  "memory-write": async (action, service) =>
+    actionResult(
+      await service.memoryWrite({
+        repoPath: action.repoPath,
+        workstream: action.workstream,
+        changes: {
+          ...(action.brief === undefined ? {} : { brief: action.brief }),
+          ...(action.now === undefined ? {} : { now: action.now }),
+          ...(action.followUps === undefined ? {} : { "follow-ups": action.followUps }),
+          ...(action.lastHandoff === undefined ? {} : { "last-handoff": action.lastHandoff }),
+          ...(action.decisions === undefined ? {} : { decisions: action.decisions }),
+        },
+      }),
+      action.action,
+    ),
+  "memory-done": async (action, service) =>
+    actionResult(await service.memoryDone(action.repoPath, action.workstream), action.action),
   investigate: async (action, service) =>
     actionResult(
       await service.investigate({

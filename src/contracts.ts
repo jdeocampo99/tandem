@@ -458,6 +458,8 @@ export type ResearchHandoff = {
 };
 
 export const MAX_SKILL_NAME_CHARS = 100;
+/** A workstream's name: lowercase words joined by hyphens, as the user says it ("tia", "billing"). */
+export const WORKSTREAM_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/u;
 /** Every skill a task carries goes into each of its worker briefs, so together they stay well inside the brief budget. */
 export const MAX_TASK_SKILLS_BYTES = 32 * 1024;
 export const SKILL_ORIGINS = ["repository", "personal", "summary"] as const;
@@ -786,6 +788,8 @@ export type TaskRecord = {
   readonly prReview?: PrReviewState;
   /** The other repository this task works in; absent when it works in the coordinator's own. */
   readonly target?: TaskTarget;
+  /** The workstream the user filed this work under, such as "billing"; see project-memory.md. */
+  readonly workstream?: string;
 };
 
 /**

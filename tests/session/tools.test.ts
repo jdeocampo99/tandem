@@ -167,6 +167,19 @@ const validRequests: readonly Record<string, unknown>[] = [
   { action: "pr-watch-start", pullRequest: "o/r#1" },
   { action: "pr-watch-stop", pullRequest: "#1", repoPath: "/r" },
   { action: "pr-watch-fix", pullRequest: "https://github.com/o/r/pull/1" },
+  { action: "memory-list", repoPath: "/r" },
+  { action: "memory-show", repoPath: "/r", workstream: "tia" },
+  { action: "memory-done", repoPath: "/r", workstream: "tia" },
+  { action: "memory-write", repoPath: "/r", workstream: "tia", now: "n", lastHandoff: "h" },
+  {
+    action: "create",
+    repoPath: "/r",
+    kind: "implementation",
+    objective: "o",
+    acceptanceCriteria: [],
+    surfaces: [],
+    workstream: "billing",
+  },
   { action: "investigate", taskId: "t" },
   { action: "investigate", taskId: "t", question: "why so slow?", targetClone: true },
   { action: "report-issue", taskId: "t", title: "T", body: "B" },
@@ -272,6 +285,11 @@ const invalidRequests: readonly [string, unknown][] = [
     { request: { action: "pr-watch-merging", repoPath: "/r", mergeWith: "rebase" } },
   ],
   ["pr-watch-start without a pull request", { request: { action: "pr-watch-start" } }],
+  ["memory-show without a workstream", { request: { action: "memory-show", repoPath: "/r" } }],
+  [
+    "memory-write with an unknown section",
+    { request: { action: "memory-write", repoPath: "/r", workstream: "t", history: "h" } },
+  ],
   ["request as a string", { request: "list" }],
 ];
 

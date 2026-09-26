@@ -444,3 +444,34 @@ test("while the user is in a thread, what needs the coordinator waits for the th
   expect(wakes()).toHaveLength(3);
   expect(wakes()[2]?.hidden?.text).not.toContain("came in while");
 });
+
+test("the standing context lists the project's workstreams once there are any", async () => {
+  const asked: string[] = [];
+  const withNotes = new CoordinatorSession(
+    coordinatorDeps({
+      list: async () => [],
+      memoryList: async (repoPath) => {
+        asked.push(repoPath);
+        return ["tia: 1 follow-up due", "billing: nothing due"];
+      },
+    }),
+  );
+  const context = (await withNotes.agentStart()).systemContext;
+  expect(context.at(-1)).toBe("Workstreams: tia: 1 follow-up due · billing: nothing due");
+  expect(asked).toEqual(["/repo"]);
+
+  const without = new CoordinatorSession(
+    coordinatorDeps({ list: async () => [], memoryList: async () => [] }),
+  );
+  const unreadable = new CoordinatorSession(
+    coordinatorDeps({
+      list: async () => [],
+      memoryList: async () => {
+        throw new Error("unreadable notes");
+      },
+    }),
+  );
+  const plain = (await without.agentStart()).systemContext;
+  expect(plain.some((part) => part.startsWith("Workstreams:"))).toBe(false);
+  expect((await unreadable.agentStart()).systemContext).toEqual(plain);
+});

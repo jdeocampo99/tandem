@@ -433,6 +433,21 @@ test("round-trips a pinned playbook, loads older tasks without one, and rejects 
   });
 });
 
+test("round-trips a workstream, loads older tasks without one, and rejects an unsafe one", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const older = await store.create({ ...input, id: "older" });
+    const tagged = await store.create({ ...input, id: "tagged", workstream: "billing" });
+    expect((await store.read(older.id))?.workstream).toBeUndefined();
+    expect((await makeStore(directory, "reloaded").read(tagged.id))?.workstream).toBe("billing");
+
+    rewritePayload(directory, tagged.id, (payload) => {
+      payload.workstream = "../billing";
+    });
+    await expect(store.read(tagged.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
 test("fails closed on a persisted skill with an unexpected field or both skill fields", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);

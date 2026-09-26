@@ -1252,3 +1252,95 @@ test("a report-mode issue is filed only after the user approves the cleaned-up d
     { taskId: "task-1", title: "Reviewer times out on acme", body: "It restarted twice." },
   ]);
 });
+
+test("create forwards the workstream the work belongs to", async () => {
+  const createCalls: unknown[] = [];
+  const service = {
+    create: async (input: unknown) => {
+      createCalls.push(input);
+      return task({});
+    },
+  } as unknown as TandemService;
+  await executeTandemAction(
+    {
+      action: "create",
+      repoPath: "/repo",
+      kind: "implementation",
+      objective: "ship feature",
+      acceptanceCriteria: ["behavior"],
+      surfaces: ["src"],
+      workstream: "billing",
+    },
+    service,
+    { confirm: undefined },
+  );
+  expect(createCalls).toMatchObject([{ workstream: "billing" }]);
+});
+
+test("memory actions run without an approval dialog and keep the notes' line breaks", async () => {
+  const writes: unknown[] = [];
+  const catchUp = "tia · notes from today\n\nDue now\n- check the rate on 2030-01-09 because x";
+  const service = {
+    memoryList: async () => ["tia: 1 follow-up due", "billing: nothing due"],
+    memoryShow: async () => catchUp,
+    memoryWrite: async (input: unknown) => {
+      writes.push(input);
+      return "Saved tia: now, last handoff.";
+    },
+    memoryDone: async () => "Archived tia.",
+  } as unknown as TandemService;
+  const noDialog = { confirm: undefined };
+
+  const listed = await executeTandemAction(
+    { action: "memory-list", repoPath: "/repo" },
+    service,
+    noDialog,
+  );
+  expect(summarizeTandemActionValue(listed.action, listed.value)).toBe(
+    "tia: 1 follow-up due\nbilling: nothing due",
+  );
+  const shown = await executeTandemAction(
+    { action: "memory-show", repoPath: "/repo", workstream: "tia" },
+    service,
+    noDialog,
+  );
+  expect(summarizeTandemActionValue(shown.action, shown.value)).toBe(catchUp);
+  const written = await executeTandemAction(
+    {
+      action: "memory-write",
+      repoPath: "/repo",
+      workstream: "tia",
+      now: "Mobile left.",
+      lastHandoff: "Lowered the threshold.",
+      followUps: "- check the rate on 2030-01-09 because #412 merged",
+    },
+    service,
+    noDialog,
+  );
+  expect(written.value).toBe("Saved tia: now, last handoff.");
+  expect(writes).toEqual([
+    {
+      repoPath: "/repo",
+      workstream: "tia",
+      changes: {
+        now: "Mobile left.",
+        "follow-ups": "- check the rate on 2030-01-09 because #412 merged",
+        "last-handoff": "Lowered the threshold.",
+      },
+    },
+  ]);
+  const done = await executeTandemAction(
+    { action: "memory-done", repoPath: "/repo", workstream: "tia" },
+    service,
+    noDialog,
+  );
+  expect(done.value).toBe("Archived tia.");
+
+  const empty = { ...service, memoryList: async () => [] } as unknown as TandemService;
+  const none = await executeTandemAction(
+    { action: "memory-list", repoPath: "/repo" },
+    empty,
+    noDialog,
+  );
+  expect(none.value).toBe("No workstreams yet.");
+});

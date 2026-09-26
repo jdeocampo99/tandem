@@ -27,6 +27,8 @@ export type PrWatch = Readonly<{
   readonly stoppedAt?: IsoTimestamp;
   /** When it merged or closed; the view keeps it for the rest of that day. */
   readonly finishedAt?: IsoTimestamp;
+  /** When GitHub says it merged; absent on a closed one and on watches finished before this was kept. */
+  readonly mergedAt?: IsoTimestamp;
   readonly checkedAt?: IsoTimestamp;
   /** Which of the head's checks are required, as last read. */
   readonly required?: RequiredChecks;
@@ -108,6 +110,11 @@ export function withPrWatches<Result>(
 
 export function watchKey(ref: PullRequestRef): string {
   return `${ref.repo}#${ref.number}`;
+}
+
+/** Merged on GitHub; watches finished before `mergedAt` was kept show it only in their row. */
+export function isMerged(watch: PrWatch): boolean {
+  return watch.mergedAt !== undefined || watch.row?.status.startsWith("🎉") === true;
 }
 
 export function sameRef(left: PullRequestRef, right: PullRequestRef): boolean {
