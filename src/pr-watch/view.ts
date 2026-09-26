@@ -22,12 +22,20 @@ export type PrWatchViewRow = Readonly<{
   readonly color: PrWatchColor | "unwatched";
   /** Like `✅ 16/16`: passed checks out of all of them, marked by the worst. */
   readonly checks: string;
+  /** The counts behind `checks`, when it shows them. */
+  readonly checkCounts?: PrWatchCheckCounts;
   readonly status: string;
   readonly note: string;
   readonly link?: string;
 }>;
 
-const COLOR_MARKS: Readonly<Record<PrWatchViewRow["color"], string>> = {
+export type PrWatchCheckCounts = Readonly<{
+  readonly passed: number;
+  readonly failed: number;
+  readonly pending: number;
+}>;
+
+export const PR_MARKS: Readonly<Record<PrWatchViewRow["color"], string>> = {
   red: "🔴",
   yellow: "🟡",
   green: "🟢",
@@ -102,7 +110,7 @@ export function prWatchLines(rows: readonly PrWatchViewRow[], nameRepo: boolean)
   const statusWidth = width(rows.map((row) => row.status));
   return rows.map((row, index) =>
     [
-      COLOR_MARKS[row.color],
+      PR_MARKS[row.color],
       pad(names[index] ?? "", nameWidth),
       pad(row.branch, branchWidth),
       pad(row.checks, checksWidth),
@@ -131,6 +139,7 @@ function unwatchedRow(mine: AuthoredPullRequest): PrWatchViewRow {
 
 function viewRow(watch: PrWatch): PrWatchViewRow {
   const row = watch.row ?? { color: "green" as const, status: "⏳ not checked yet", note: "" };
+  const counts = checkCounts(watch);
   return {
     repo: watch.ref.repo,
     number: watch.ref.number,
@@ -138,10 +147,19 @@ function viewRow(watch: PrWatch): PrWatchViewRow {
     url: watch.summary?.url ?? "",
     color: row.color,
     checks: checksColumn(watch),
+    ...(counts === undefined ? {} : { checkCounts: counts }),
     status: row.status,
     note: row.note,
     ...(row.link === undefined ? {} : { link: row.link }),
   };
+}
+
+/** The counts `checksColumn` shows as passed out of all, when it shows them. */
+function checkCounts(watch: PrWatch): PrWatchCheckCounts | undefined {
+  const checks = watch.summary?.checks;
+  if (checks === undefined || watch.row?.status.startsWith("⚠") === true) return undefined;
+  if (watch.row?.color === "done") return undefined;
+  return checks.passed + checks.failed + checks.pending === 0 ? undefined : checks;
 }
 
 function checksColumn(watch: PrWatch): string {

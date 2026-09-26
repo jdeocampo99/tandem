@@ -143,20 +143,25 @@ requests. `tandem status --watch` keeps it live, and the coordinator opens it be
 something new waits on you.
 
 ```
-Projects: tandem, tagalingo · PRs checked 40s ago
+ tandem   tandem, tagalingo · PRs checked 40s ago
 
-Needs you
+NEEDS YOU 2 ──────────────────────────────────────────────────────────────────────────────
 🙋 tandem     Dark mode                    brief waiting for approval
 🔴 tagalingo  acme/app#409 refactor-cache  🙋 test_cache_evict failed twice → https://ci/…
 
-Running
-🔨 tandem     Fix the flaky login  implementing · 12m
+RUNNING 1 ────────────────────────────────────────────────────────────────────────────────
+   PROJECT    TASK                 STAGE         TIME
+🔨 tandem     Fix the flaky login  implementing   12m
 
-PRs
-🟢 acme/app#420 add-cache ⏳ 12/16 ✅ approved
+PRS 1 ────────────────────────────────────────────────────────────────────────────────────
+   PULL REQUEST            CHECKS          STATUS       NEXT
+🟢 acme/app#420 add-cache  ██████░░ 12/16  ✅ approved
 
-This week: 7 done · 5 of 7 passed review first time · $14.20
+THIS WEEK  7 done · 5 of 7 passed review first time · $14.20
 ```
+
+In a terminal, sections are colored by what they mean: yellow waits on you, red failed, cyan is
+in progress, green is done.
 
 ## Requirements
 

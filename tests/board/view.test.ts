@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
+import { renderStatus } from "../../src/board/terminal.ts";
 import {
   type BoardState,
   boardView,
   finishedWithinWeek,
   opensBoard,
   renderBoard,
-  renderStatus,
 } from "../../src/board/view.ts";
 import type { RequestBriefContent } from "../../src/contracts.ts";
 import type { PrWatch } from "../../src/pr-watch/store.ts";
@@ -112,30 +113,33 @@ test("status puts what needs you first, then running work and pull requests, the
     NOW,
   );
 
-  expect(
-    renderStatus(view, { code: "9618fa9 Merge (/src/tandem)", coordinators: ["/work/tandem"] }),
-  ).toBe(
+  const footer = { code: "9618fa9 Merge (/src/tandem)", coordinators: ["/work/tandem"] };
+  expect(renderStatus(view, footer, { color: false })).toBe(
     [
       "Projects: tandem, app · PRs checked 40s ago",
       "",
-      "Needs you",
+      `NEEDS YOU 3 ${"─".repeat(62)}`,
       "🙋 tandem  Dark mode                brief waiting for approval",
       "🙋 app     Refactor the cache       question: Keep the old eviction order?",
       "🔴 app     acme/app#409 branch-409  🙋 test_cache_evict failed twice",
       "",
-      "Running",
-      "🔨 tandem  Fix the flaky login test  implementing · 12m",
-      "⏸️ app     Dark mode tokens          paused · 2h",
+      `RUNNING 2 ${"─".repeat(64)}`,
+      "   PROJECT  TASK                      STAGE         TIME",
+      "🔨 tandem   Fix the flaky login test  implementing   12m",
+      "⏸️ app      Dark mode tokens          paused          2h",
       "",
-      "PRs",
-      "🟢 acme/app#420 branch-420 ⏳ 12/16 ✅ approved",
+      `PRS 1 ${"─".repeat(68)}`,
+      "   PULL REQUEST             CHECKS          STATUS       NEXT",
+      "🟢 acme/app#420 branch-420  ██████░░ 12/16  ✅ approved",
       "",
+      "─".repeat(74),
       "1 finished task hidden · coordinators open: tandem",
       "Tandem code: 9618fa9 Merge (/src/tandem)",
-      "Ask the coordinator about any task, or run `tandem status --json` for task IDs · live view: tandem status --watch",
+      "Ask the coordinator about any task · tandem status --json for task IDs · tandem status --watch for the live view",
       "",
     ].join("\n"),
   );
+  expect(renderBoard(view)).toContain("🔨 tandem  Fix the flaky login test  implementing · 12m");
   expect(view.needsYou.map((row) => [row.key, row.repoPath])).toEqual([
     ["brief:req-1", "/work/tandem"],
     ["question:q-1", "/work/app"],
@@ -148,9 +152,45 @@ test("an empty status says nothing needs you, that PR watch has not checked yet,
   expect(renderBoard(view)).toBe(
     "Projects: none yet · PRs not checked yet\n\nNeeds you\nNothing needs you.\n",
   );
-  expect(renderStatus(view, { code: "abc", coordinators: [] })).toContain(
-    "\nno coordinators open, run `tandem`\n",
+  const status = renderStatus(view, { code: "abc", coordinators: [] }, { color: false });
+  expect(status).toStartWith(
+    `Projects: none yet · PRs not checked yet\n\nNEEDS YOU ${"─".repeat(30)}\nNothing needs you.\n`,
   );
+  expect(status).toContain("\nno coordinators open, run `tandem`\n");
+});
+
+test("on a terminal, status colors sections by meaning and cuts lines to the terminal's width", () => {
+  const view = boardView(
+    state({
+      tasks: [
+        task({
+          id: "t1",
+          repoPath: "/work/tandem",
+          stage: "blocked",
+          blockReason: "worker exited",
+        }),
+        task({ id: "t2", repoPath: "/work/tandem", stage: "implementing", objective: "Fix login" }),
+      ],
+      watches: [watch(420, { color: "yellow", status: "👀 review", note: "" })],
+    }),
+    NOW,
+  );
+  const footer = { code: "abc", coordinators: [] };
+  const colored = renderStatus(view, footer, { color: true });
+  expect(colored).toContain("\x1b[1m\x1b[33mNEEDS YOU\x1b[39m\x1b[22m");
+  expect(colored).toContain("\x1b[31m\x1b[1mblocked: \x1b[22m\x1b[39mworker exited");
+  expect(colored).toContain("\x1b[36mimplementing\x1b[39m");
+  expect(colored).toContain("\x1b[33m██████\x1b[39m\x1b[2m░░\x1b[22m\x1b[33m 12/16\x1b[39m");
+  expect(stripVTControlCharacters(colored)).toBe(
+    renderStatus(view, footer, { color: false }).replace("Projects: ", " tandem   "),
+  );
+
+  const narrow = renderStatus(view, footer, { color: false, columns: 30 });
+  for (const line of narrow.trimEnd().split("\n")) {
+    expect(Bun.stringWidth(line)).toBeLessThanOrEqual(30);
+  }
+  expect(narrow).toContain(`NEEDS YOU 1 ${"─".repeat(18)}\n`);
+  expect(narrow).toContain("🙋 tandem  Implement the requ…");
 });
 
 test("an approved brief leaves the board, and a blocked task says why", () => {
@@ -203,8 +243,8 @@ test("a paused task shows under Running, and a blocked task is the only row that
     }),
     NOW,
   );
-  expect(view.running.map((row) => [row.key, row.text])).toEqual([
-    ["task:task-paused:paused", "paused · 0s"],
+  expect(view.running.map((row) => [row.key, row.text, row.since])).toEqual([
+    ["task:task-paused:paused", "paused", "0s"],
   ]);
   expect(view.needsYou.map((row) => [row.key, opensBoard(row)])).toEqual([
     ["brief:req-1", true],

@@ -53,14 +53,6 @@ export type WeekSummary = Pick<
   "tasks" | "reviewedTasks" | "firstPassReviews" | "costMicros" | "unpricedSamples"
 >;
 
-/** What only `tandem status` adds below the board. */
-export type StatusFooter = Readonly<{
-  /** The commit the `tandem` command runs from, as `tandemCodeVersion` reads it. */
-  readonly code: string;
-  /** Projects with an open coordinator. */
-  readonly coordinators: readonly string[];
-}>;
-
 export type BoardRow = Readonly<{
   /** Stays the same while the row stands for the same thing, so a new arrival can be noticed. */
   readonly key: string;
@@ -72,6 +64,8 @@ export type BoardRow = Readonly<{
   readonly mark: string;
   readonly name: string;
   readonly text: string;
+  /** How long a running task has existed, like 12m. */
+  readonly since?: string;
 }>;
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -168,25 +162,6 @@ export function renderBoard(view: BoardView): string {
   return `${[header, ...sections].join("\n\n")}\n`;
 }
 
-/** `tandem status`: the board, then what was finished, which coordinators are open, and how to go on. */
-export function renderStatus(view: BoardView, footer: StatusFooter): string {
-  const coordinators =
-    footer.coordinators.length === 0
-      ? "no coordinators open, run `tandem`"
-      : `coordinators open: ${footer.coordinators.map((path) => basename(path)).join(", ")}`;
-  const plural = view.finished === 1 ? "" : "s";
-  return [
-    renderBoard(view),
-    [
-      ...(view.finished === 0 ? [] : [`${view.finished} finished task${plural} hidden`]),
-      coordinators,
-    ].join(" · "),
-    `Tandem code: ${footer.code}`,
-    "Ask the coordinator about any task, or run `tandem status --json` for task IDs · live view: tandem status --watch",
-    "",
-  ].join("\n");
-}
-
 /** Like "This week: 7 done · 5 of 7 passed review first time · $14.20". */
 function weekLine(week: WeekSummary): string {
   const unpriced = week.unpricedSamples === 0 ? "" : " + unpriced usage";
@@ -212,8 +187,12 @@ function boardLines(rows: readonly BoardRow[]): string[] {
   const projectWidth = width(rows.map((row) => row.project));
   const nameWidth = width(rows.map((row) => row.name));
   return rows.map((row) =>
-    `${row.mark} ${[pad(row.project, projectWidth), pad(row.name, nameWidth), row.text].join("  ")}`.trimEnd(),
+    `${row.mark} ${[pad(row.project, projectWidth), pad(row.name, nameWidth), rowText(row)].join("  ")}`.trimEnd(),
   );
+}
+
+function rowText(row: BoardRow): string {
+  return row.since === undefined ? row.text : `${row.text} · ${row.since}`;
 }
 
 function needsYou(task: TaskRecord): boolean {
@@ -264,7 +243,8 @@ function runningRow(task: TaskRecord, now: IsoTimestamp): BoardRow {
     cause: task.stage,
     ...taskIdentity(task),
     mark,
-    text: `${label} · ${elapsed(task.createdAt, now)}`,
+    text: label,
+    since: elapsed(task.createdAt, now),
   };
 }
 
