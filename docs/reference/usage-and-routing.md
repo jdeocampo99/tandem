@@ -16,6 +16,11 @@ src/workers/execution-routing.ts, src/service/request-accounting.ts
 - Events are `intake` (brief became durable; the clock starts), `work` (one settled operation; work in
   flight is never recorded), `provider-sample` (one provider call, as reported), and `terminal`
   (the delivery, cancellation, or failure that settled the request).
+- A `work` event names the provider and model from the routing transition recorded on its operation
+  at admission (`operation.routing`), so it is the model actually routed, not the pinned default.
+  Validation runs no model and a legacy operation without routing names none; a name longer than
+  the label bound is left off. The model is not part of a `work` event's key, so a span recorded
+  before it was attributed is not counted again.
 - Each event key derives from durable records, never observation time, so a replay after restart,
   reconciliation, or compaction counts once. A distinct attempt has a distinct operation or attempt
   identity.

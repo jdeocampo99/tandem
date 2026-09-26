@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
 import type { TaskRecord } from "../../src/contracts.ts";
 import type {
+  DurableExecutionRouting,
   DurableJob,
   DurableOperation,
   RuntimePresentation,
   RuntimeTaskState,
 } from "../../src/runtime/schema.ts";
 import { JEV_PRICING_SNAPSHOT, type UsageRecord } from "../../src/runtime/usage.ts";
+import { parseRequestUsageEvent } from "../../src/runtime/usage-codec.ts";
 import {
   providerSampleEvent,
   requestIntakeEvent,
@@ -34,6 +36,33 @@ function operation(overrides: Partial<DurableOperation> = {}): DurableOperation 
     createdAt: "2030-01-01T00:10:00.000Z",
     effects: [],
     resultConsumedAt: "2030-01-01T00:40:00.000Z",
+    ...overrides,
+  };
+}
+
+function routing(overrides: Partial<DurableExecutionRouting> = {}): DurableExecutionRouting {
+  return {
+    schemaVersion: 1,
+    decisionId: "decision-1",
+    basis: "comparable-reassignment",
+    taskId: "task-1",
+    jobId: "job-1",
+    operationId: "op-1",
+    role: "implementer",
+    generation: 2,
+    attempt: 1,
+    policyDigest: "digest",
+    inputHead: "a".repeat(40),
+    provider: "anthropic",
+    selector: "anthropic/claude-routed",
+    thinking: "high",
+    replaces: { selector: "anthropic/claude-pinned", thinking: "high" },
+    evidence: {
+      source: "catalogue-read",
+      enabledProviders: ["anthropic"],
+      usageSource: "request-ledger",
+    },
+    resolvedAt: "2030-01-01T00:09:00.000Z",
     ...overrides,
   };
 }
@@ -331,4 +360,73 @@ test("a settled worker's token tally becomes actual tokens and an estimated list
   });
   // The tally never changes the span's identity, so a later pass cannot record it twice.
   expect(withTally?.eventKey).toBe(withoutTally?.eventKey);
+});
+
+test("a work span names the provider and model its operation was routed to at admission", () => {
+  const [event] = settledWorkEvents({
+    requestId: REQUEST_ID,
+    runtime: runtime({ operationHistory: [operation({ routing: routing() })] }),
+    presentations: [],
+  });
+
+  expect(event?.identity).toMatchObject({
+    provider: "anthropic",
+    model: "anthropic/claude-routed",
+  });
+});
+
+test("validation work and a legacy operation without routing carry no model", () => {
+  const events = settledWorkEvents({
+    requestId: REQUEST_ID,
+    runtime: runtime({
+      operationHistory: [
+        operation({
+          id: "op-validate",
+          jobId: "job-validate",
+          kind: "validation",
+          role: "validation",
+        }),
+        operation(),
+      ],
+      jobs: [job({ id: "job-validate", role: "validation", kind: "validation" }), job()],
+    }),
+    presentations: [],
+  });
+
+  expect(
+    events.map((event) => [event.workKind, event.identity.model, event.identity.provider]),
+  ).toEqual([
+    ["validation", undefined, undefined],
+    ["implementation", undefined, undefined],
+  ]);
+});
+
+test("attributing the model keeps a span's event key, so an earlier record is not counted twice", () => {
+  const [unattributed] = settledWorkEvents({
+    requestId: REQUEST_ID,
+    runtime: runtime({ operationHistory: [operation()] }),
+    presentations: [],
+  });
+  const [attributed] = settledWorkEvents({
+    requestId: REQUEST_ID,
+    runtime: runtime({ operationHistory: [operation({ routing: routing() })] }),
+    presentations: [],
+  });
+
+  expect(attributed?.identity.model).toBe("anthropic/claude-routed");
+  expect(attributed?.eventKey).toBe(unattributed?.eventKey ?? "");
+});
+
+test("a model name too long to store as a label is left off rather than failing the record", () => {
+  const [event] = settledWorkEvents({
+    requestId: REQUEST_ID,
+    runtime: runtime({
+      operationHistory: [operation({ routing: routing({ selector: "m".repeat(500) }) })],
+    }),
+    presentations: [],
+  });
+
+  expect(event?.identity.provider).toBe("anthropic");
+  expect(event?.identity.model).toBeUndefined();
+  expect(() => parseRequestUsageEvent(event)).not.toThrow();
 });
