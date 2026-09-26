@@ -127,6 +127,38 @@ export function finishedWithinWeek(events: readonly TimelineEvent[], now: IsoTim
   return finished !== undefined && withinWeek(finished.at, now);
 }
 
+/**
+ * Whether a new "Needs you" row is worth a Herdr notification. A blocked task is not: recovery
+ * restarts most blocks on its own, so it would notify for blocks that clear themselves.
+ */
+export function notifiesUser(row: BoardRow): boolean {
+  return (
+    row.cause === "brief" ||
+    row.cause === "question" ||
+    row.cause === "pull-request" ||
+    row.cause === "awaiting-approval" ||
+    row.cause === "ready"
+  );
+}
+
+/** A Herdr notification: Herdr trims the title to 80 characters and the body to 240. */
+export type NeedsYouNotice = Readonly<{ readonly title: string; readonly body: string }>;
+
+/**
+ * The notification for rows that just arrived in "Needs you": one row names itself and why; more
+ * than one are counted and named. Both point at the live view.
+ */
+export function needsYouNotice(rows: readonly BoardRow[]): NeedsYouNotice {
+  const [only] = rows;
+  if (rows.length === 1 && only !== undefined) {
+    return { title: `Tandem: ${only.name}`, body: `${only.text} · prefix+t for status` };
+  }
+  return {
+    title: `Tandem: ${rows.length} things need you`,
+    body: `${rows.map((row) => row.name).join(", ")} · prefix+t for status`,
+  };
+}
+
 /** Where the chat board points for the live view; setup.sh binds prefix+t in Herdr. */
 const LIVE_VIEW_HINT = "Live view: prefix+t in Herdr, or `tandem status --watch`";
 

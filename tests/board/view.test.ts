@@ -5,6 +5,8 @@ import {
   type BoardState,
   boardView,
   finishedWithinWeek,
+  needsYouNotice,
+  notifiesUser,
   renderBoard,
 } from "../../src/board/view.ts";
 import type { RequestBriefContent } from "../../src/contracts.ts";
@@ -227,7 +229,7 @@ test("an approved brief leaves the board, and a blocked task says why", () => {
   expect(view.needsYou.map((row) => row.text)).toEqual(["blocked: validation failed twice"]);
 });
 
-test("a paused task shows under Running, and every kind of Needs you row is listed", () => {
+test("a paused task shows under Running, and every Needs you row but a block notifies", () => {
   const view = boardView(
     state({
       briefs: [
@@ -254,14 +256,19 @@ test("a paused task shows under Running, and every kind of Needs you row is list
   expect(view.running.map((row) => [row.key, row.text, row.since])).toEqual([
     ["task:task-paused:paused", "paused", "0s"],
   ]);
-  expect(view.needsYou.map((row) => row.key)).toEqual([
-    "brief:req-1",
-    "task:task-blocked:blocked",
-    "task:task-approval:awaiting-approval",
-    "task:task-ready:ready",
-    "question:q-1",
-    "pr:acme/app#409",
+  expect(view.needsYou.map((row) => [row.key, notifiesUser(row)])).toEqual([
+    ["brief:req-1", true],
+    ["task:task-blocked:blocked", false],
+    ["task:task-approval:awaiting-approval", true],
+    ["task:task-ready:ready", true],
+    ["question:q-1", true],
+    ["pr:acme/app#409", true],
   ]);
+  expect(needsYouNotice(view.needsYou.slice(0, 1))).toEqual({
+    title: "Tandem: Dark mode",
+    body: "brief waiting for approval · prefix+t for status",
+  });
+  expect(needsYouNotice(view.needsYou.slice(0, 2)).title).toBe("Tandem: 2 things need you");
 });
 
 test("the weekly line follows the PRs, counting finished tasks, first-pass reviews, and cost", () => {

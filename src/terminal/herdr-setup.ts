@@ -60,8 +60,8 @@ export function herdrConfigPath(environment: Readonly<Record<string, string | un
 }
 
 /**
- * Adds the tab-bar summary and the status popup to a Herdr config, leaving everything the user
- * wrote untouched. Anything Tandem cannot add without editing the user's own settings, such as an
+ * Adds the tab-bar summary, in-app notifications (off in Herdr by default), and the status popup
+ * to a Herdr config, leaving everything the user wrote untouched. Anything Tandem cannot add without editing the user's own settings, such as an
  * existing `tab_bar_right` list or another binding on the popup key, is skipped with the line to
  * add by hand.
  */
@@ -90,6 +90,23 @@ export function planHerdrConfig(text: string, commands: HerdrStatusCommands): He
       next = `${next.slice(0, end)}\n${line}${next.slice(end)}`;
       added.push(`${line}   (under your [ui] table)`);
     }
+  }
+
+  // Herdr's toasts are off by default; Tandem's "needs you" notifications use them.
+  if (/^\s*delivery\s*=/mu.test(text) && /toast/u.test(text)) {
+    skipped.push("Herdr notifications are already set up; Tandem's use the same setting.");
+  } else if (/toast/u.test(text)) {
+    skipped.push(
+      'To see Tandem\'s notifications, set delivery = "herdr" under [ui.toast] in your config.',
+    );
+  } else {
+    const toast = [
+      "# Herdr notifications, used when something new needs you",
+      "[ui.toast]",
+      'delivery = "herdr"',
+    ];
+    next = `${withBlankLine(next)}${toast.join("\n")}\n`;
+    added.push(...toast);
   }
 
   const binding = [
@@ -169,7 +186,7 @@ export async function setUpHerdrStatus(deps: HerdrSetupDependencies): Promise<bo
   if (plan.added.length === 0) return true;
 
   deps.print(
-    `\nTandem can show its status in Herdr: a one-line summary in the tab bar, and the full view with ${STATUS_POPUP_KEY}.\nIt would add to ${path}:\n\n${plan.added.map((line) => `  ${line}`).join("\n")}\n\n`,
+    `\nTandem can show its status in Herdr: a one-line summary in the tab bar, a notification when something new needs you, and the full view with ${STATUS_POPUP_KEY}.\nIt would add to ${path}:\n\n${plan.added.map((line) => `  ${line}`).join("\n")}\n\n`,
   );
   if (deps.confirm === undefined) {
     deps.print("! Skipped: no terminal to ask in. Run ./setup.sh in a terminal to add it.\n");

@@ -1,4 +1,5 @@
 import type { HerdrAgentState, HerdrStatusReporter } from "../adapters/herdr-status.ts";
+import { type BoardRow, notifiesUser } from "../board/view.ts";
 import {
   coordinatorSourceGuidance,
   type TandemBoundaryEnvironment,
@@ -241,6 +242,8 @@ export class CoordinatorSession {
   private readonly unacknowledgedNotifications = new Set<string>();
   /** Notifications held back while a thread is open, which the user was told are waiting. */
   private readonly heldNotifications = new Set<string>();
+  /** "Needs you" keys already notified or there at start; unset until the first reconcile. */
+  private needsYouSeen: ReadonlySet<string> | undefined;
   /** When the user last took part in the open thread; unset when no thread is open. */
   private threadActiveAt: number | undefined;
   private createdService: TandemService | undefined;
@@ -402,6 +405,33 @@ export class CoordinatorSession {
     }
   }
 
+  /**
+   * Sends one Herdr notification when rows of this project's that {@link notifiesUser} accepts
+   * land in "Needs you". What was already there when the coordinator started counts as seen, so a
+   * relaunch notifies nothing.
+   */
+  private async notifyOnArrival(service: TandemService): Promise<void> {
+    const rows = (await service.board()).needsYou;
+    const current = new Map<string, BoardRow>();
+    if (rows.length > 0) {
+      const repo = await this.deps.realpath(this.deps.environment.repo);
+      for (const row of rows) {
+        if (row.repoPath === undefined || !notifiesUser(row)) continue;
+        if (await isInRepository(row.repoPath, repo, this.deps.realpath)) current.set(row.key, row);
+      }
+    }
+    const seen = this.needsYouSeen;
+    this.needsYouSeen = new Set(current.keys());
+    if (seen === undefined) return;
+    const arrived = [...current.values()].filter((row) => !seen.has(row.key));
+    if (arrived.length === 0) return;
+    await service
+      .notifyNeedsYou(this.deps.environment.repo, arrived)
+      .catch((error: unknown) =>
+        this.deps.logError("Tandem could not show a Herdr notification", error),
+      );
+  }
+
   private async reconcileOnce(runTick: boolean): Promise<void> {
     try {
       const service = this.service();
@@ -421,6 +451,7 @@ export class CoordinatorSession {
         thread: { open: this.threadOpen(), held: this.heldNotifications },
       });
       await deliverPrWatchNotices({ host: this.deps.host, service });
+      await this.notifyOnArrival(service);
       await deliverInvestigationQuestions({ host: this.deps.host, service });
       const idle =
         !this.status.agentActive &&

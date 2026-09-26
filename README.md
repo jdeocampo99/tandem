@@ -141,7 +141,8 @@ the coordinator's chat is compacted after a task finishes so later turns don't p
 `tandem status` shows every project at once: what needs you, what's running, and your pull
 requests. In Herdr you don't have to ask: the tab bar always shows a one-line summary like
 `🙋 3 need you · 🔨 2 running · 🟡 1 🟢 1`, and `prefix+t` pops up the full view, live, from any
-pane (Esc or q closes it). `tandem status --watch` does the same in any terminal.
+pane (Esc or q closes it). When something new needs you, Herdr shows a notification.
+`tandem status --watch` works in any terminal.
 
 ![tandem status in a terminal: a yellow Needs you section with briefs, questions, blocked tasks, and failing pull requests; Running and PRs sections with column headers and check progress bars; and a weekly summary](docs/images/status.svg)
 
@@ -170,7 +171,8 @@ From a clone of this repository:
 ```
 
 It installs whatever is missing, updates Herdr if it's older than 0.8.2, and offers to add Tandem's
-tab-bar summary and `prefix+t` popup to your Herdr config (it shows the lines and asks first). Read
+tab-bar summary, notifications, and `prefix+t` popup to your Herdr config (it shows the lines and
+asks first). Read
 [setup.sh](setup.sh) first if you want to check; it is safe to run again. Keep Bun's global bin
 directory on your `PATH`.
 

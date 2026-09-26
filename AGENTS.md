@@ -110,7 +110,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - Tasks in another repository (`targetRepo`), finding checkouts: [other-repositories.md](docs/reference/other-repositories.md).
 - Reviewing someone else's PR (`pr-review` tasks): [pr-review.md](docs/reference/pr-review.md).
 - PR watch, its decision table, and `tandem watch`: [pr-watch.md](docs/reference/pr-watch.md).
-- `tandem status`, "Needs you", the live view, and Herdr's tab bar and popup: [status.md](docs/reference/status.md).
+- `tandem status`, "Needs you", the live view, and Herdr's tab bar, popup, and notification: [status.md](docs/reference/status.md).
 - Self-improvement modes, triggers, investigations, report-mode issues: [self-improvement.md](docs/reference/self-improvement.md).
 - Durable state, locking, restart, central recovery and its re-entry table: [recovery.md](docs/reference/recovery.md).
 - Block causes, stale records, panes, leases, `tandem fix`: [reconciliation.md](docs/reference/reconciliation.md).

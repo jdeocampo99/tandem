@@ -27,7 +27,7 @@ type KeyCommand = {
   height?: string;
 };
 type HerdrConfig = {
-  ui?: { tab_bar_right?: TabBarEntry[]; sidebar_width?: number };
+  ui?: { tab_bar_right?: TabBarEntry[]; sidebar_width?: number; toast?: { delivery?: string } };
   keys?: { command?: KeyCommand[] };
 };
 
@@ -62,6 +62,7 @@ test("an empty config gets the tab-bar entry and the prefix+t popup, as valid TO
   expect(config.ui?.tab_bar_right).toEqual([
     { type: "command", command: COMMANDS.line, interval_seconds: 5, timeout_seconds: 10 },
   ] satisfies TabBarEntry[]);
+  expect(config.ui?.toast?.delivery).toBe("herdr");
   expect(config.keys?.command).toEqual([
     {
       key: "prefix+t",
@@ -103,6 +104,9 @@ test("an existing tab_bar_right or prefix+t binding is left alone, with the line
     "[ui]",
     'tab_bar_right = [{ type = "hostname" }]',
     "",
+    "[ui.toast]",
+    'delivery = "off"',
+    "",
     "[[keys.command]]",
     'key = "prefix+t"',
     'type = "popup"',
@@ -114,7 +118,10 @@ test("an existing tab_bar_right or prefix+t binding is left alone, with the line
   expect(plan.added).toEqual([]);
   expect(plan.skipped[0]).toContain("You already set ui.tab_bar_right");
   expect(plan.skipped[0]).toContain(COMMANDS.line);
-  expect(plan.skipped[1]).toContain("prefix+t is already bound");
+  expect(plan.skipped[1]).toBe(
+    "Herdr notifications are already set up; Tandem's use the same setting.",
+  );
+  expect(plan.skipped[2]).toContain("prefix+t is already bound");
 });
 
 function setup(

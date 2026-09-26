@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { HerdrAgentState, HerdrStatusReporter } from "../../src/adapters/herdr-status.ts";
+import type { BoardRow } from "../../src/board/view.ts";
 import type { TaskRecord } from "../../src/contracts.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import {
@@ -336,6 +337,58 @@ test("turn usage is recorded with the injected clock and the resolved repository
       costUsd: 0.5,
     },
   ]);
+});
+
+test("one Herdr notification names what of this project's just landed in Needs you, not what was already there or a block", async () => {
+  const row = (key: string, repoPath: string, cause: BoardRow["cause"] = "brief") => ({
+    key,
+    cause,
+    repoPath,
+    project: "p",
+    mark: "🙋",
+    name: key,
+    text: "",
+  });
+  let needsYou = [row("brief:req-old", "/repo")];
+  const notified: [string, string[]][] = [];
+  const session = new CoordinatorSession(
+    coordinatorDeps({
+      list: async () => [],
+      board: async () => ({
+        now: "",
+        projects: [],
+        needsYou,
+        running: [],
+        pullRequests: [],
+        finished: 0,
+      }),
+      notifyNeedsYou: async (repoPath, rows) => {
+        notified.push([repoPath, rows.map((each) => each.key)]);
+      },
+    }),
+  );
+
+  await session.reconcile(false);
+  expect(notified).toEqual([]);
+
+  needsYou = [
+    ...needsYou,
+    row("question:q-1", "/other-project", "question"),
+    row("task:task-1:blocked", "/repo", "blocked"),
+  ];
+  await session.reconcile(false);
+  expect(notified).toEqual([]);
+
+  needsYou = [
+    ...needsYou,
+    row("pr:acme/app#409", "/repo", "pull-request"),
+    row("task:task-2:ready", "/repo", "ready"),
+  ];
+  await session.reconcile(false);
+  expect(notified).toEqual([["/repo", ["pr:acme/app#409", "task:task-2:ready"]]]);
+
+  await session.reconcile(false);
+  expect(notified).toHaveLength(1);
 });
 
 test("while the user is in a thread, what needs the coordinator waits for the thread to end", async () => {

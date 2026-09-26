@@ -1,11 +1,12 @@
 # Status
 
-What `tandem status` shows across projects, where its data comes from, its live view, and its
-one-line form in Herdr's tab bar.
+What `tandem status` shows across projects, where its data comes from, its live view, its
+one-line form in Herdr's tab bar, and the Herdr notification when something new needs you.
 
 Code: src/board/ (`view.ts` sections and the chat rendering, `terminal.ts` the terminal
 rendering, `read.ts` the state read and live loop), src/terminal/status.ts (the footer's
-data), src/main.ts (`tandem status`), src/session/prompt-routing.ts (the `board` lookup), src/terminal/herdr-setup.ts (the Herdr
+data), src/main.ts (`tandem status`), src/session/coordinator.ts (`notifyOnArrival`),
+src/session/prompt-routing.ts (the `board` lookup), src/terminal/herdr-setup.ts (the Herdr
 config that setup.sh adds). Tests: tests/board/,
 tests/terminal/main.test.ts.
 
@@ -114,7 +115,10 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
     with that message if Herdr is still older;
   - plans additions to `$XDG_CONFIG_HOME/herdr/config.toml` (default `~/.config/herdr/`): a
     `tab_bar_right` command entry running `status --line` every 5 seconds with a 10-second
-    timeout, and a `[[keys.command]]` popup on `prefix+t` (90% by 90%) running `status --watch`.
+    timeout, `[ui.toast]` with `delivery = "herdr"` (Herdr's notifications are off by default,
+    which would hide the notification below), and a `[[keys.command]]` popup on `prefix+t`
+    (90% by 90%) running `status --watch`. A config that mentions toasts at all keeps its own
+    setting, including `off`.
     Both commands use absolute paths to Bun and `src/main.ts`, because Herdr runs them through
     `/bin/sh -lc`, whose PATH may not include Bun's bin directory;
   - leaves the user's settings alone: an existing `tab_bar_right`, a `ui` set without a `[ui]`
@@ -126,6 +130,23 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
     a yes. It copies the old file to `config.toml.before-tandem`, and if `herdr config check`
     passed before and fails after, it writes the old file back. Then it runs
     `herdr server reload-config`; if no server is running, Herdr reads the file when it starts.
+
+## The notification when something new needs you
+
+- On each scheduler reconcile, a coordinator reads the board and keeps the keys of the "Needs you"
+  rows that belong to its own project (a pull request belongs to its task's project, or to the
+  checkout it was watched from) and that `notifiesUser` accepts: briefs awaiting approval, task
+  questions, red pull requests, and tasks awaiting approval or ready.
+- When keys appear that were not there on the last reconcile, it sends one
+  `herdr notification show` for all of them, with Herdr's needs-input sound. One new row reads
+  `Tandem: <name>` over `<reason> · prefix+t for status`; several read
+  `Tandem: N things need you` over their names.
+- Blocked tasks stay listed but never notify: recovery restarts most blocks on its own.
+- Rows already there when the coordinator started count as seen, so a relaunch or `tandem update`
+  notifies nothing.
+- Herdr delivers it through the user's `[ui.toast]` setting (in-app toast, system or terminal
+  notification, or off), and skips it for the tab the user is looking at. Without a coordinator
+  pane (no Herdr context) nothing is sent. A failure is logged and never blocks the reconcile.
 
 ## "How's it going?"
 
