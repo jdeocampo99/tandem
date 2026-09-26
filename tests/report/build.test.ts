@@ -160,6 +160,20 @@ test("an open task runs until now, and awaiting-fixes draws in the implement lan
   expect(report.lanes.find((lane) => lane.lane === "implement")?.durationMs).toBe(15 * MINUTE);
 });
 
+test("a ready task shows its draft pull request as open, not in progress", () => {
+  const report = buildTaskReport({
+    task: record({ stage: "ready" }),
+    timeline: timeline(
+      [0, { type: "created", stage: "implementing" }],
+      [30, stage("implementing", "ready")],
+    ),
+    usage: undefined,
+    now: at(90),
+  });
+  expect(report.status).toBe("pr-open");
+  expect(report.wallMs).toBe(30 * MINUTE);
+});
+
 test("a task with no events has no segments and ends at its last write when finished", () => {
   const finished = buildTaskReport({
     task: record({ stage: "completed", updatedAt: at(42) }),

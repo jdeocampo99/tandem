@@ -12,13 +12,18 @@ src/terminal/arguments.ts (`--since`). Tests: tests/report/, tests/terminal/main
 
 One static HTML page listing every task in scope, sorted by time lost (waiting on the user or held
 up, plus a review loop's span), largest first. For each task: its title (the objective's first
-line), kind, stage, status (merged, completed, cancelled, or in progress), a timeline of stage
+line), kind, stage, status (merged, completed, cancelled, PR open, or in progress), a timeline of stage
 segments, time split into working, waiting on you, and held up (queued or stuck), per-lane totals
 (research, implement, validate, review, queued, waiting on you, stuck) with cost where priced agent
 work ran, the settled agent runs, total cost, and at most one choke.
 
 A task's window runs from creation until it first reaches ready, completed, merged, or cancelled,
 or until the report's generation time. Time after ready is a person merging, not Tandem.
+
+Status comes from the task's current stage: `merged`, `completed`, and `cancelled` keep their
+names, `ready` is `pr-open` (its draft pull request is open and waiting on a person; the page draws
+a pull-request icon in the implement color with the tooltip "PR open"), and every other stage is
+`in-progress`.
 
 ## Data sources
 
@@ -61,5 +66,14 @@ Fixed rules name at most one choke per task (`build.ts`):
   replaced by `-`; directory `0700`, file `0600`) and opened with `lavish-axi <path>` through the
   injected command runner, with the reports directory as its working directory. Nothing polls it
   for feedback. If Lavish is missing, fails, or reports an error, the command still succeeds and
-  prints the path to open by hand. `--no-open` writes the file and runs nothing.
-- Old report files are kept; nothing prunes the reports directory.
+  prints the path to open by hand with one plain sentence: "Lavish isn't installed or couldn't
+  start." when the command could not start (spawn failure, `ENOENT`, exit 127), else "Lavish
+  couldn't open the page." Raw adapter text stays off that line; a short (at most 120 characters)
+  first line of Lavish's error or stderr, or a timeout, may follow on a `Details:` line.
+  `--no-open` writes the file and runs nothing.
+- After writing, the reports directory keeps the newest `REPORT_FILES_KEPT` (20) report pages,
+  counting the new one. Only regular files named like `report-*.html` count and are deleted, oldest
+  first by name (the name is the generation time); the page just written, other files,
+  directories, and symlinks are never touched. `publish.ts` decides the names from a listing
+  (`reportFilesToPrune`, pure) and then deletes them; a listing or delete that fails is skipped and
+  never fails the command. `--json` writes nothing, so it prunes nothing.

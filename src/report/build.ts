@@ -177,6 +177,7 @@ export function reportTitle(objective: string, fallback: string): string {
 
 function reportStatus(stage: TaskStage): ReportTaskStatus {
   if (stage === "merged" || stage === "completed" || stage === "cancelled") return stage;
+  if (stage === "ready") return "pr-open";
   return "in-progress";
 }
 

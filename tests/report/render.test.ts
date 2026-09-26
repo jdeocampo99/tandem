@@ -205,6 +205,20 @@ test("dates the range from the earliest task when no lower bound was given", () 
   );
 });
 
+test("a pr-open task has its own icon, periwinkle color, and PR open tooltip", () => {
+  const prOpen: ReportTask = { ...mergedTask, id: "t-pr01", status: "pr-open" };
+  const html = renderReportHtml(view([prOpen]));
+  expect(embeddedData(html)).toEqual(view([prOpen]));
+  const icons = /const ICON=\{([\s\S]*?)\};/u.exec(html)?.[1] ?? "";
+  const iconSvg = (status: string) =>
+    new RegExp(`"?${status}"?:\`(<svg[\\s\\S]*?</svg>)\``, "u").exec(icons)?.[1];
+  expect(iconSvg("pr-open")).toContain('stroke="currentColor"');
+  expect(iconSvg("pr-open")).not.toBe(iconSvg("merged"));
+  expect(iconSvg("pr-open")).not.toBe(iconSvg("in-progress"));
+  expect(html).toContain('"pr-open":"var(--implement)"');
+  expect(html).toContain('"pr-open":"PR open"');
+});
+
 test("shows one quiet line when no task has timeline history in range", () => {
   const html = renderReportHtml(view([]));
   expect(html).toContain("<h1>Tandem report</h1>");

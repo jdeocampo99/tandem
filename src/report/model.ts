@@ -67,7 +67,8 @@ export type ReportChoke = Readonly<{
   readonly explanation?: string;
 }>;
 
-export type ReportTaskStatus = "merged" | "completed" | "cancelled" | "in-progress";
+/** `pr-open` is a task at ready: its draft pull request is open and waiting on a person. */
+export type ReportTaskStatus = "merged" | "completed" | "cancelled" | "pr-open" | "in-progress";
 
 export type ReportTask = Readonly<{
   readonly id: string;
