@@ -196,7 +196,7 @@ function costText(cost: AdditionalCharges | undefined): string {
   return `${dollars(cost.amountMicros)}${cost.unavailableSamples === 0 ? "" : `, ${cost.unavailableSamples} samples unpriced`}`;
 }
 
-function dollars(micros: number): string {
+export function dollars(micros: number): string {
   return `$${(micros / 1_000_000).toFixed(2)}`;
 }
 

@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { type BoardView, renderBoard } from "../board/view.ts";
 import {
   type AgentRole,
   LEGACY_EVIDENCE_CONTRACT,
@@ -815,6 +816,17 @@ function isPrWatchView(value: unknown): value is PrWatchView {
   return record !== undefined && typeof record.now === "string" && Array.isArray(record.rows);
 }
 
+function isBoardView(value: unknown): value is BoardView {
+  const record = summaryRecord(value);
+  return (
+    record !== undefined &&
+    typeof record.now === "string" &&
+    Array.isArray(record.needsYou) &&
+    Array.isArray(record.running) &&
+    Array.isArray(record.pullRequests)
+  );
+}
+
 function isTaskArray(value: unknown): value is readonly TaskRecord[] {
   return Array.isArray(value) && value.every(isTaskRecord);
 }
@@ -957,6 +969,11 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     action === "presentation-open"
   ) {
     return summarizePresentations(action, value);
+  }
+  if (action === "board") {
+    return isBoardView(value)
+      ? boundedOutput(renderBoard(value), ACTION_RESULT_MAX_CHARS)
+      : boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
   if (action === "pr-watch" || action === "pr-watch-start" || action === "pr-watch-stop") {
     return isPrWatchView(value)

@@ -154,6 +154,7 @@ const validRequests: readonly Record<string, unknown>[] = [
   { action: "review-post", taskId: "t", verdict: "request-changes" },
   { action: "review-again", taskId: "t" },
   { action: "review-close", taskId: "t" },
+  { action: "board" },
   { action: "pr-watch" },
   { action: "pr-watch-merging", repoPath: "/r", mergeWith: "auto-merge" },
   {

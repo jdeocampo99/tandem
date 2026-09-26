@@ -71,8 +71,8 @@ reads them further and nothing acts on them.
 - A pass takes a 5-minute lease first; while another Tandem holds it, the others wait. A pass that
   outlives its lease leaves the schedule to whoever claimed it next. After the laptop sleeps, the
   next tick catches up and the header shows how old the data is.
-- Opening the view (`tandem watch`, `tandem status`, the coordinator's `pr-watch`, or the Jev
-  shortcut) reads GitHub first, unless another Tandem holds the lease or GitHub's rate limit is in
+- Opening the view (`tandem watch`, the coordinator's `pr-watch`, or the Jev shortcut) reads
+  GitHub first, unless another Tandem holds the lease or GitHub's rate limit is in
   effect, and records rows but never acts: no empty commits, labels, auto-merge, branch updates,
   steers, or fix questions. It does not move the tick's schedule.
 - A failed pass never holds up task work: the scheduler records a `pr-watch-failed` diagnostic
@@ -175,9 +175,9 @@ PR watch · 4 open · checked 5s ago
 - 🔴 needs you · 🟡 waiting on someone else · 🟢 moving · ⚪ done. Red rows come first.
 - A red row names the failing check and links its CI page, so the user can decide without opening
   GitHub. Rows name `owner/repo#N` when more than one repository is watched.
-- `tandem watch` prints it (`--json` for the structure); `tandem status` adds it below the tasks
-  when it has any rows; the coordinator's `pr-watch` action returns it for the coordinator to
-  show as-is. The header counts watched pull requests still open; the user's unwatched ones come
+- `tandem watch` prints it (`--json` for the structure); the coordinator's `pr-watch` action
+  returns it for the coordinator to show as-is. `tandem status` shows the saved rows without
+  reading GitHub: red rows under "Needs you", the rest under PRs (see [status.md](status.md)). The header counts watched pull requests still open; the user's unwatched ones come
   last.
 
 ## Coordinator shortcut

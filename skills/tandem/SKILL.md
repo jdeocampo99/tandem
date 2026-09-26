@@ -47,7 +47,7 @@ coordinator relays the question with a recommendation.
 | --- | --- |
 | `tandem` | Open or reconnect every saved project; with none saved, onboard the current repository |
 | `tandem PATH ...` | Open or add specific projects |
-| `tandem status [TASK_ID]` | What's running and what needs the user; read-only |
+| `tandem status [TASK_ID]` | What needs the user, what's running, and their pull requests across projects; `--watch` keeps it live; read-only |
 | `tandem watch [PR]` | The user's pull requests and what PR watch is doing; with a PR, watch it (`--stop` to stop) |
 | `tandem update` | Reload every coordinator with the latest local Tandem code, keeping chats and tasks |
 | `tandem fix` | Find leftovers from a crash or failed launch and offer to clean them (asks first) |

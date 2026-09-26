@@ -1,24 +1,10 @@
-import type { CommandRunner, TaskRecord, TaskStage } from "../contracts.ts";
+import { readBoard } from "../board/read.ts";
+import type { BoardView, StatusFooter } from "../board/view.ts";
+import type { CommandRunner } from "../contracts.ts";
 import { listCoordinatorRecords } from "../coordinator/registry.ts";
-import { type PrWatchView, renderPrWatchView } from "../pr-watch/view.ts";
-import type { TandemService } from "../service/controller.ts";
 
-const NEEDS_YOU: readonly TaskStage[] = ["awaiting-approval", "blocked", "paused", "ready"];
-const WORKING: readonly TaskStage[] = [
-  "queued",
-  "scouting",
-  "implementing",
-  "validating",
-  "reviewing",
-  "awaiting-fixes",
-];
-
-export type TandemStatus = Readonly<{
-  readonly code: string;
-  readonly coordinators: readonly string[];
-  readonly tasks: readonly TaskRecord[];
-  readonly pullRequests: PrWatchView;
-}>;
+/** What `tandem status` shows: the board across every project, plus its footer. */
+export type TandemStatus = StatusFooter & Readonly<{ readonly board: BoardView }>;
 
 /** The commit the `tandem` command runs from; `tandem update` loads this into coordinators. */
 export async function tandemCodeVersion(run: CommandRunner, tandemRoot: string): Promise<string> {
@@ -30,53 +16,19 @@ export async function tandemCodeVersion(run: CommandRunner, tandemRoot: string):
   return `${version.length > 0 ? version : "unknown commit"} (${tandemRoot})`;
 }
 
+/** Reads saved state only; pull requests are what PR watch last saved, never a fresh GitHub read. */
 export async function readTandemStatus(
   input: Readonly<{
-    readonly run: CommandRunner;
-    readonly tandemRoot: string;
+    readonly code: string;
     readonly home: string;
     readonly sessionId: string;
-    readonly service: TandemService;
   }>,
 ): Promise<TandemStatus> {
   return {
-    code: await tandemCodeVersion(input.run, input.tandemRoot),
+    code: input.code,
     coordinators: (await listCoordinatorRecords(input.home, input.sessionId)).map(
       (record) => record.repoPath,
     ),
-    tasks: await input.service.list(),
-    pullRequests: await input.service.prWatch(),
+    board: await readBoard(input.home, () => new Date().toISOString()),
   };
-}
-
-function taskLine(task: TaskRecord): string {
-  const objective = task.objective.replace(/\s+/gu, " ");
-  const short = objective.length > 70 ? `${objective.slice(0, 69)}…` : objective;
-  const reason = task.stage === "blocked" && task.blockReason ? `\n      ${task.blockReason}` : "";
-  return `  ${task.id}  ${task.stage}  ${short}${reason}`;
-}
-
-export function renderTandemStatus(status: TandemStatus): string {
-  const needsYou = status.tasks.filter((task) => NEEDS_YOU.includes(task.stage));
-  const working = status.tasks.filter((task) => WORKING.includes(task.stage));
-  const finished = status.tasks.length - needsYou.length - working.length;
-  const lines = [
-    `Tandem code: ${status.code}`,
-    "",
-    status.coordinators.length === 0 ? "No coordinators are open. Run `tandem`." : "Coordinators:",
-    ...status.coordinators.map((repo) => `  ${repo}`),
-    "",
-    needsYou.length === 0 ? "Nothing needs you." : "Needs you:",
-    ...needsYou.map(taskLine),
-    ...(working.length === 0 ? [] : ["", "Working:", ...working.map(taskLine)]),
-    ...(finished === 0
-      ? []
-      : ["", `${finished} finished task${finished === 1 ? "" : "s"} hidden.`]),
-    ...(status.pullRequests.rows.length === 0
-      ? []
-      : ["", renderPrWatchView(status.pullRequests).trimEnd()]),
-    "",
-    "Details for one task: tandem status TASK_ID",
-  ];
-  return `${lines.join("\n")}\n`;
 }

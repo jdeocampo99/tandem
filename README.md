@@ -106,6 +106,7 @@ Talk to it in plain language. Some things you can say:
 - "Fix the flaky login test."
 - "Research how we handle retries before we change anything."
 - "What's the status of the dark mode task?"
+- "How's it going?" (what needs you, what's running, and your pull requests, across projects)
 - "Also make the toggle remember the last choice." (a follow-up for work you already approved)
 - "Open a draft PR so I can see progress."
 - "Publish it." / "Merge it."
@@ -196,6 +197,35 @@ PR watch · 3 open · checked 5s ago
 Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #409" or run
 `tandem watch --stop 409` to stop watching one. It works while Tandem is open.
 
+### Seeing everything at once
+
+`tandem status` shows all your projects in one place: what needs you (briefs to approve,
+questions, pull requests that need a person), what's running, and your watched pull requests.
+`tandem status --watch` keeps it live, refreshing every 2 seconds from what Tandem already saved,
+so it never calls GitHub; its pull request rows show when PR watch last checked. The coordinator
+opens the live view beside its chat when a brief, a question, a pull request, or finished work
+newly waits on you, and asking "how's it going?" shows the same thing in the chat.
+
+```
+Projects: tandem, tagalingo · PRs checked 40s ago
+
+Needs you
+🙋 tandem     Dark mode                    brief waiting for approval
+🔴 tagalingo  acme/app#409 refactor-cache  🙋 test_cache_evict failed twice → https://ci/…
+
+Running
+🔨 tandem     Fix the flaky login  implementing · 12m
+
+PRs
+🟢 acme/app#420 add-cache ⏳ 12/16 ✅ approved
+
+This week: 7 done · 5 of 7 passed review first time · $14.20
+
+coordinators open: tandem, tagalingo
+Tandem code: 9618fa9 Merge pull request #188 (/Users/me/Coding_Projects/tandem)
+Ask the coordinator about any task, or run `tandem status --json` for task IDs · live view: tandem status --watch
+```
+
 ### Looking into Tandem's own problems
 
 When a task restarts twice, needs three or more rounds of fixes, or stays stuck for over an hour,
@@ -217,7 +247,7 @@ This is off until you turn it on for the machine in `~/.tandem/settings.toml`:
 | Command | What it does |
 | --- | --- |
 | `tandem [PATH ...]` | Open or reconnect your projects |
-| `tandem status [TASK_ID]` | What's running and what needs you; with a task ID, that task's full history |
+| `tandem status [TASK_ID]` | What needs you, what's running, and your pull requests across projects (`--watch` keeps it live); with a task ID, that task's full history |
 | `tandem trace [TASK_ID]` | What happened to a task and why, with its review, fix-round, blocked-time, and cost figures; without a task ID, the same figures across all tasks |
 | `tandem watch [PR]` | Your watched pull requests; with a PR link or number, start watching it (`--stop` to stop) |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
@@ -235,7 +265,7 @@ output (`status`, `trace`, `watch`, `fix`), and `--home PATH` uses a different T
 
 Try these in order:
 
-1. **`tandem status`** shows what every task is doing and what needs you. It never changes anything.
+1. **`tandem status`** shows what needs you and what every task is doing. It never changes anything.
 2. **A task restarted, blocked, or took many review rounds and you want to know why:**
    `tandem trace TASK_ID` lists every stage change, restart, block, finding, question, and steer
    with its cause, and where the worker's transcript and report are.
@@ -264,7 +294,7 @@ data folder and session name are remembered in `~/.config/tandem/config.json`.
 ## Optional extras
 
 - **Faster answers to simple questions.** With a `TYPESAFE_API_KEY` set, Tandem uses the TypeSafe
-  Jev classifier to answer read-only lookups ("list my tasks", "how are my PRs?") instantly without
+  Jev classifier to answer read-only lookups ("list my tasks", "how are my PRs?", "how's it going?") instantly without
   a full model turn.
   A short reply to one of Tandem's fixed-choice questions ("yeah restart it") is answered the same
   way; approving a brief this way still asks you to type `y` first. Anything else that changes

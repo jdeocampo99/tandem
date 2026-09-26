@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
 import { listOmpMcpServers } from "./adapters/omp.ts";
+import { runLiveBoard } from "./board/read.ts";
+import { renderStatus } from "./board/view.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
@@ -56,7 +58,7 @@ import {
   readRegisteredProjects,
   selectProjects,
 } from "./terminal/projects.ts";
-import { readTandemStatus, renderTandemStatus, tandemCodeVersion } from "./terminal/status.ts";
+import { readTandemStatus, tandemCodeVersion } from "./terminal/status.ts";
 
 /** The checkout the `tandem` command runs from; coordinators load their extension from it. */
 const TANDEM_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -65,7 +67,8 @@ const HELP_TEXT = `Tandem
 
 Usage:
   tandem [PATH ...]        Open your projects; resumes coordinator chats (--fresh starts new ones)
-  tandem status [TASK_ID]  What's running and what needs you; --logs shows prompt routing
+  tandem status [TASK_ID]  What needs you, what's running, and your PRs across projects
+                           --watch keeps it live; --logs shows prompt routing
   tandem trace [TASK_ID]   What happened to a task and why; without one, quality across tasks
   tandem watch [PR]        Your watched pull requests; with a PR link or number, watch it
                            --stop PR stops watching it
@@ -81,6 +84,7 @@ Usage:
 Options:
   --yes                    Skip the confirmation (fix, reset)
   --json                   Machine-readable output (status, trace, watch, fix)
+  --watch                  Redraw every 2 seconds until Ctrl-C (status)
   --verbose                Full paths and reasons (fix)
   --free-superseded        With --yes, also free worktrees whose work is in other tasks (fix)
   --home PATH              Use a different Tandem home
@@ -236,6 +240,7 @@ async function handleStatus({
     }
     return result;
   }
+  if (invocation.watch) return await watchStatus(environment, run, stdout);
   const service = createServiceFor(environment, run, dependencies);
   try {
     const [taskId] = invocation.paths;
@@ -245,13 +250,15 @@ async function handleStatus({
       return result;
     }
     const status = await readTandemStatus({
-      run,
-      tandemRoot: TANDEM_ROOT,
+      code: await tandemCodeVersion(run, TANDEM_ROOT),
       home: environment.home,
       sessionId: environment.sessionId,
-      service,
     });
-    stdout(invocation.json ? `${JSON.stringify(status)}\n` : renderTandemStatus(status));
+    stdout(
+      invocation.json
+        ? `${JSON.stringify({ ...status, tasks: await service.list() })}\n`
+        : renderStatus(status.board, status),
+    );
     return result;
   } finally {
     await service.shutdown();
@@ -323,6 +330,30 @@ async function handleWatch({
   } finally {
     await service.shutdown();
   }
+}
+
+/**
+ * `tandem status --watch` redraws the status until Ctrl-C. It only reads saved state; pull
+ * requests show what PR watch last read.
+ */
+async function watchStatus(
+  environment: TerminalEnvironment,
+  run: CommandRunner,
+  stdout: (text: string) => void,
+): Promise<never> {
+  const code = await tandemCodeVersion(run, TANDEM_ROOT);
+  return runLiveBoard({
+    render: async () => {
+      const status = await readTandemStatus({
+        code,
+        home: environment.home,
+        sessionId: environment.sessionId,
+      });
+      return renderStatus(status.board, status);
+    },
+    draw: (text) => stdout(`\x1b[H\x1b[2J${text}`),
+    sleep: (ms) => Bun.sleep(ms),
+  });
 }
 
 /**

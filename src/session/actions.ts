@@ -175,6 +175,7 @@ export type TandemAction =
     }>
   | Readonly<{ readonly action: "review-again"; readonly taskId: string }>
   | Readonly<{ readonly action: "review-close"; readonly taskId: string }>
+  | Readonly<{ readonly action: "board" }>
   | Readonly<{ readonly action: "pr-watch" }>
   | Readonly<{
       readonly action: "pr-watch-merging";
@@ -635,6 +636,7 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.reviewAgain(action.taskId), action.action),
   "review-close": async (action, service) =>
     actionResult(await service.reviewClose(action.taskId), action.action),
+  board: async (action, service) => actionResult(await service.board(), action.action),
   "pr-watch": async (action, service) => actionResult(await service.prWatch(), action.action),
   "pr-watch-start": async (action, service) =>
     actionResult(await service.prWatchStart(pullRequestInput(action)), action.action),

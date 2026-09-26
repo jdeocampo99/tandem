@@ -1175,6 +1175,18 @@ test("terminal commands are subcommands whose flags and arguments are checked", 
     stop: true,
   });
   expect(() => parseTerminalArgs(["status", "--stop"])).toThrow("does not accept --stop");
+  expect(parseTerminalArgs(["status", "--watch", "--home", "/h"])).toMatchObject({
+    command: "status",
+    watch: true,
+    home: "/h",
+  });
+  expect(() => parseTerminalArgs(["status", "--watch", "--json"])).toThrow(
+    "tandem status --watch shows every project",
+  );
+  expect(() => parseTerminalArgs(["status", "task-1", "--watch"])).toThrow(
+    "tandem status --watch shows every project",
+  );
+  expect(() => parseTerminalArgs(["watch", "--watch"])).toThrow("does not accept --watch");
 });
 
 test("tandem watch starts watching a pull request named from this directory and prints the view", async () => {
@@ -1200,6 +1212,50 @@ test("tandem watch starts watching a pull request named from this directory and 
     "PR watch · 0 open · checked 5s ago\n\nNo pull requests are watched.\n",
   );
   expect((await runTerminal(["watch", "--stop"], { service, stderr: () => {} })).exitCode).toBe(1);
+});
+
+test("tandem status shows the board from saved state, and --json adds tasks with their IDs", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-status-test-"));
+  const gitLog = async (request: CommandRequest): Promise<CommandResult> => ({
+    code: request.argv[0] === "git" ? 0 : 1,
+    stdout: "abc1234 feat: board\n",
+    stderr: "",
+  });
+  let listed = 0;
+  const service = {
+    list: async () => {
+      listed += 1;
+      return [{ id: "task-1", stage: "implementing" }];
+    },
+    shutdown: async () => undefined,
+  } as unknown as TandemService;
+  try {
+    const output: string[] = [];
+    const shown = await runTerminal(["status", "--home", home], {
+      run: gitLog,
+      service,
+      stdout: (text) => output.push(text),
+    });
+    expect(shown.exitCode).toBe(0);
+    expect(output.join("")).toStartWith(
+      "Projects: none yet · PRs not checked yet\n\nNeeds you\nNothing needs you.\n",
+    );
+    expect(output.join("")).toContain("Tandem code: abc1234 feat: board");
+    expect(listed).toBe(0);
+
+    const json: string[] = [];
+    await runTerminal(["status", "--json", "--home", home], {
+      run: gitLog,
+      service,
+      stdout: (text) => json.push(text),
+    });
+    const parsed = JSON.parse(json.join(""));
+    expect(parsed.tasks).toEqual([{ id: "task-1", stage: "implementing" }]);
+    expect(parsed.board.needsYou).toEqual([]);
+    expect(parsed.coordinators).toEqual([]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test("tandem trace prints one task's timeline, or the rollup across tasks", async () => {
@@ -1256,6 +1312,7 @@ test("old command spellings name their replacement instead of opening a project"
   expect(() => parseTerminalArgs(["reconcile-resources"])).toThrow("is now `tandem fix`");
   expect(() => parseTerminalArgs(["logs"])).toThrow("is now `tandem status --logs`");
   expect(() => parseTerminalArgs(["inspect", "task-1"])).toThrow("tandem status TASK_ID");
+  expect(() => parseTerminalArgs(["board"])).toThrow("is now `tandem status --watch`");
   expect(parseTerminalArgs(["--", "restart"]).paths).toEqual(["restart"]);
 });
 

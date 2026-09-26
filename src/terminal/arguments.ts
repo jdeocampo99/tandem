@@ -26,6 +26,7 @@ export type TerminalInvocation = Readonly<{
   readonly verbose: boolean;
   readonly freeSuperseded: boolean;
   readonly stop: boolean;
+  readonly watch: boolean;
 }>;
 
 export type TerminalRunResult = Readonly<{
@@ -88,6 +89,7 @@ const RENAMED: Readonly<Record<string, string>> = {
   logs: "tandem status --logs",
   "reconcile-resources": "tandem fix",
   inspect: "tandem status TASK_ID",
+  board: "tandem status --watch",
 };
 
 const FLAGS = {
@@ -103,6 +105,7 @@ const FLAGS = {
   "--headless": "headless",
   "--no-attach": "noAttach",
   "--stop": "stop",
+  "--watch": "watch",
 } as const;
 type Flag = (typeof FLAGS)[keyof typeof FLAGS];
 
@@ -111,7 +114,7 @@ const ALLOWED: Readonly<
   Record<TerminalCommand, Readonly<{ flags: readonly Flag[]; maxPaths: number }>>
 > = {
   launch: { flags: ["fresh", "headless", "noAttach"], maxPaths: Number.POSITIVE_INFINITY },
-  status: { flags: ["json", "logs"], maxPaths: 1 },
+  status: { flags: ["json", "logs", "watch"], maxPaths: 1 },
   trace: { flags: ["json"], maxPaths: 1 },
   watch: { flags: ["json", "stop"], maxPaths: 1 },
   update: { flags: ["fresh", "headless", "noAttach"], maxPaths: 0 },
@@ -178,6 +181,11 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       throw new Error(`${label} does not accept ${spelling}`);
     }
   }
+  if (flags.has("watch") && (paths.length > 0 || flags.has("json") || flags.has("logs"))) {
+    throw new Error(
+      "tandem status --watch shows every project; it takes no task, --json, or --logs",
+    );
+  }
   if (paths.length > allowed.maxPaths) {
     throw new Error(
       allowed.maxPaths === 0
@@ -199,6 +207,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     verbose: flags.has("verbose"),
     freeSuperseded: flags.has("freeSuperseded"),
     stop: flags.has("stop"),
+    watch: flags.has("watch"),
     ...(home === undefined ? {} : { home }),
     ...(sessionId === undefined ? {} : { sessionId }),
     ...(poolRoot === undefined ? {} : { poolRoot }),

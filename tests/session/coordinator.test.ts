@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { HerdrAgentState, HerdrStatusReporter } from "../../src/adapters/herdr-status.ts";
+import type { BoardRow } from "../../src/board/view.ts";
 import type { TaskRecord } from "../../src/contracts.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import {
@@ -32,6 +33,7 @@ function coordinatorDeps(
     createService: () =>
       ({
         prWatchNotices: async () => [],
+        board: async () => ({ now: "", projects: [], needsYou: [], running: [], pullRequests: [] }),
         investigationQuestions: async () => [],
         ...service,
       }) as TandemService,
@@ -335,4 +337,52 @@ test("turn usage is recorded with the injected clock and the resolved repository
       costUsd: 0.5,
     },
   ]);
+});
+
+test("the board opens when something of this project's lands in Needs you, not for what was already there or a block", async () => {
+  const row = (key: string, repoPath: string, cause: BoardRow["cause"] = "brief") => ({
+    key,
+    cause,
+    repoPath,
+    project: "p",
+    mark: "🙋",
+    name: key,
+    text: "",
+  });
+  let needsYou = [row("brief:req-old", "/repo")];
+  const opened: string[] = [];
+  const session = new CoordinatorSession(
+    coordinatorDeps({
+      list: async () => [],
+      board: async () => ({
+        now: "",
+        projects: [],
+        needsYou,
+        running: [],
+        pullRequests: [],
+        finished: 0,
+      }),
+      showBoard: async (repoPath) => {
+        opened.push(repoPath);
+      },
+    }),
+  );
+
+  await session.reconcile(false);
+  expect(opened).toEqual([]);
+
+  needsYou = [
+    ...needsYou,
+    row("question:q-1", "/other-project", "question"),
+    row("task:task-1:blocked", "/repo", "blocked"),
+  ];
+  await session.reconcile(false);
+  expect(opened).toEqual([]);
+
+  needsYou = [...needsYou, row("pr:acme/app#409", "/repo", "pull-request")];
+  await session.reconcile(false);
+  expect(opened).toEqual(["/repo"]);
+
+  await session.reconcile(false);
+  expect(opened).toEqual(["/repo"]);
 });
