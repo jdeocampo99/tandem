@@ -111,29 +111,36 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
   A locked state or any other error exits non-zero with nothing on stdout, and Herdr clears the
   entry until the next run.
 - `setup.sh` runs src/terminal/herdr-setup.ts, which:
-  - updates Herdr with `herdr update` when `herdr --version` is older than 0.8.2, the first
-    release with command entries in the tab bar (popup keybindings arrived in 0.7.4), and stops
-    with that message if Herdr is still older;
-  - plans additions to `$XDG_CONFIG_HOME/herdr/config.toml` (default `~/.config/herdr/`): a
-    `tab_bar_right` command entry running `status --line` every 5 seconds with a 10-second
-    timeout, `[ui.toast]` with `delivery = "herdr"` (Herdr's notifications are off by default,
-    which would hide the notification below), and a `[[keys.command]]` popup on `prefix+t`
-    (90% by 90%) running `status --watch`. A config that mentions toasts at all keeps its own
-    setting, including `off`.
-    Both commands use absolute paths to Bun and `src/main.ts`, because Herdr runs them through
-    `/bin/sh -lc`, whose PATH may not include Bun's bin directory;
+  - updates Herdr when `herdr --version` is older than 0.8.2, the first release with command
+    entries in the tab bar (popup keybindings arrived in 0.7.4): `brew upgrade herdr` when the
+    binary resolves under Homebrew, `herdr update` otherwise, showing the command's output. A
+    mise or Nix install is left to its package manager with a message; setup stops if Herdr is
+    still older;
+  - plans additions to `$XDG_CONFIG_HOME/herdr/config.toml` (default `~/.config/herdr/`; one file
+    for every Herdr session): a `tab_bar_right` command entry running `status --line` every 5
+    seconds with a 10-second timeout, `[ui.toast]` with `delivery = "herdr"` (Herdr's
+    notifications are off by default), and a `[[keys.command]]` popup on `prefix+t` (90% by 90%)
+    running `status --watch`. Both commands use absolute paths to Bun and `src/main.ts`, because
+    Herdr runs them through `/bin/sh -lc`, whose PATH may not include Bun's bin directory;
   - leaves the user's settings alone: an existing `tab_bar_right`, a `ui` set without a `[ui]`
-    table, or another binding on `prefix+t` is skipped, and it prints the line to add by hand. An
-    existing `[ui]` table gets the entry inserted under its header; otherwise a `[ui]` table is
-    appended. Entries already running `status --line` or `status --watch` count as done, so
-    re-running adds nothing;
+    table, a config that mentions toasts at all (including `off`), or another binding on
+    `prefix+t` is skipped, and it prints the line to add by hand. An existing `[ui]` table gets
+    the entry inserted under its header; otherwise a `[ui]` table is appended. Entries already
+    running `status --line` or `status --watch` count as done, so re-running adds nothing;
   - shows the lines and asks before writing, and writes nothing without a terminal to ask in or
     a yes. It copies the old file to `config.toml.before-tandem`, and if `herdr config check`
-    passed before and fails after, it writes the old file back. Then it runs
-    `herdr --session <session> server reload-config` for the Herdr session Tandem uses (resolved
-    like `tandem` does: `TANDEM_SESSION`, Herdr's session variables, the remembered setup, then
-    `tandem`); plain `herdr server reload-config` would reload only the default session. If that
-    session is not running, Herdr reads the file when it starts.
+    passed before and fails after, it writes the old file back;
+  - then, on every run, applies the config to the Herdr session Tandem uses (resolved like
+    `tandem` does: `TANDEM_SESSION`, Herdr's session variables, the remembered setup, then
+    `tandem`), read with `herdr --session <session> status server`:
+    - not running: it reads the config when `tandem` next starts it;
+    - running Herdr 0.8.2 or newer: `herdr --session <session> server reload-config` (plain
+      `herdr server reload-config` would reach only the default session);
+    - still running an older Herdr, which an update does not replace: only a restart helps, and
+      it closes the session's panes. Setup offers `herdr session stop <session>` only when it
+      runs outside that session, the board shows no running task (a board it cannot read counts
+      as busy), and the user says yes; then the user runs `tandem` to reopen projects.
+      Otherwise it prints the command to run later.
 
 ## The notification when something new needs you
 
