@@ -170,8 +170,9 @@ export async function runOpenConfig(
 }
 
 /**
- * Asks for model choices and each new project's settings before launch. The Tandem checkout opens
- * without saved settings, so its coordinator can onboard the other projects in chat.
+ * Asks for model choices and each new project's settings before launch, for projects named by path.
+ * When the Tandem checkout opens, models and project settings are left to its coordinator, which
+ * walks the user through them in chat on OMP's default model.
  */
 export async function prepareProjects(
   states: readonly ProjectState[],
@@ -186,7 +187,8 @@ export async function prepareProjects(
   const needsSettings = (state: ProjectState) =>
     !state.existingConfig && state.repoPath !== tandemProject;
   const needsNewProjectChoice = states.some(needsSettings);
-  if (!settings.configured || needsNewProjectChoice) {
+  const modelsInChat = tandemProject !== undefined;
+  if ((!settings.configured && !modelsInChat) || needsNewProjectChoice) {
     if (!interactive || prompter === undefined) throw noTtyError("Tandem onboarding");
     const anchor = states[0];
     if (anchor === undefined) throw new Error("Tandem could not inspect the selected project");
