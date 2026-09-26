@@ -256,7 +256,17 @@ export type PendingNotificationDelivery = Readonly<{
    */
   readonly unacknowledged: Set<string>;
   readonly readReport: ResearchReportReader;
+  /**
+   * While the user and the coordinator are in the middle of something (`open`), judgment-needed
+   * notifications stay pending instead of waking the model; `held` is what the user has already
+   * been told is waiting. Absent means never hold.
+   */
+  readonly thread?: Readonly<{ readonly open: boolean; readonly held: Set<string> }>;
 }>;
+
+/** Tells the model why a batch arrives late and what to do with it; never displayed. */
+const HELD_WAKE_INSTRUCTION =
+  "Some of these came in while you and the user were working on something else, and that just finished. List them in a short line each and offer to start with one, blocked tasks and questions first. Do not start any until the user picks.";
 
 /**
  * Deliver pending notifications without turning routine scheduler work into model input. A failed
@@ -265,13 +275,17 @@ export type PendingNotificationDelivery = Readonly<{
 export async function deliverPendingNotifications(
   delivery: PendingNotificationDelivery,
 ): Promise<void> {
-  const { host, tasks, delivered, unacknowledged } = delivery;
+  const { host, tasks, delivered, unacknowledged, thread } = delivery;
   const pending = await allPendingNotifications(tasks, delivery.readReport);
   if (pending.length === 0) return;
-  const batch = pending
-    .filter((notification) => !delivered.has(deliveryKey(notification)))
+  const undelivered = pending.filter((notification) => !delivered.has(deliveryKey(notification)));
+  const holding = thread?.open === true;
+  if (holding) await tellWhatIsWaiting(host, undelivered, thread.held);
+  const batch = undelivered
+    .filter((notification) => !(holding && notification.judgmentNeeded))
     .slice(0, MAX_NOTIFICATION_BATCH);
   const actionable = batch.filter((notification) => notification.judgmentNeeded);
+  const wasHeld = actionable.some((notification) => thread?.held.has(deliveryKey(notification)));
   const routine = await withReceiptTables(
     batch.filter((notification) => !notification.judgmentNeeded),
     delivery.service,
@@ -298,12 +312,15 @@ export async function deliverPendingNotifications(
         source: "notification",
         text: judgmentDisplayContent(actionable),
         hidden: {
-          text: judgmentIdentifiers(actionable),
+          text: wasHeld
+            ? `${HELD_WAKE_INSTRUCTION}\n\n${judgmentIdentifiers(actionable)}`
+            : judgmentIdentifiers(actionable),
           details: { notifications: actionable.map(withoutReportText) },
         },
         timing: "followUp",
         triggerTurn: true,
       });
+      for (const notification of actionable) thread?.held.delete(deliveryKey(notification));
     }
   } catch (error) {
     for (const notification of batch) {
@@ -313,6 +330,23 @@ export async function deliverPendingNotifications(
     throw error;
   }
   await acknowledgeDelivered(delivery, pending);
+}
+
+/** A quiet count, with no model turn, whenever something new starts waiting for the thread to end. */
+async function tellWhatIsWaiting(
+  host: Pick<SessionHost, "perform">,
+  undelivered: readonly NotificationRef[],
+  held: Set<string>,
+): Promise<void> {
+  const waiting = undelivered.filter((notification) => notification.judgmentNeeded);
+  const fresh = waiting.filter((notification) => !held.has(deliveryKey(notification)));
+  if (fresh.length === 0) return;
+  for (const notification of fresh) held.add(deliveryKey(notification));
+  await host.perform({
+    type: "notify",
+    text: `${waiting.length} waiting for when you finish this. Ask "what's waiting?" to see them.`,
+    level: "info",
+  });
 }
 
 /**

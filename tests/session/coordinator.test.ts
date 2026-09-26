@@ -386,3 +386,61 @@ test("the board opens when something of this project's lands in Needs you, not f
   await session.reconcile(false);
   expect(opened).toEqual(["/repo"]);
 });
+
+test("while the user is in a thread, what needs the coordinator waits for the thread to end", async () => {
+  const blocked = (id: string): TaskRecord =>
+    task({
+      id,
+      stage: "blocked",
+      notifications: [
+        { id: `${id}-n`, message: `${id} is blocked.`, acknowledged: false, kind: "coordinator" },
+      ],
+    });
+  let tasks: TaskRecord[] = [blocked("a")];
+  let now = 0;
+  const { host, effects } = recordingSessionHost();
+  const session = new CoordinatorSession(
+    coordinatorDeps(
+      { list: async () => tasks, acknowledge: async () => task({}) },
+      { host, clock: { now: () => now, monotonic: () => now } },
+    ),
+  );
+  const wakes = () =>
+    effects.flatMap((effect) => (effect.type === "deliver" && effect.triggerTurn ? [effect] : []));
+  const toasts = () => effects.flatMap((effect) => (effect.type === "notify" ? [effect.text] : []));
+
+  session.userPrompt();
+  await session.agentEnd(false);
+  await session.agentEnd(false);
+  expect(wakes()).toEqual([]);
+  expect(toasts()).toEqual([
+    `1 waiting for when you finish this. Ask "what's waiting?" to see them.`,
+  ]);
+
+  tasks = [blocked("a"), blocked("b")];
+  await session.agentEnd(false);
+  expect(wakes()).toEqual([]);
+  expect(toasts().at(-1)).toStartWith("2 waiting");
+
+  session.closeThread();
+  await session.agentEnd(false);
+  expect(wakes()).toHaveLength(1);
+  expect(wakes()[0]?.text).toContain("a is blocked.");
+  expect(wakes()[0]?.text).toContain("b is blocked.");
+  expect(wakes()[0]?.hidden?.text).toStartWith("Some of these came in while you and the user");
+
+  // A thread the model never closed ends after the user has been quiet long enough.
+  tasks = [blocked("c")];
+  session.userPrompt();
+  await session.agentEnd(false);
+  expect(wakes()).toHaveLength(1);
+  now += 30 * 60 * 1_000;
+  await session.agentEnd(false);
+  expect(wakes()).toHaveLength(2);
+
+  // With no thread open, it wakes the coordinator right away, as before.
+  tasks = [blocked("d")];
+  await session.agentEnd(false);
+  expect(wakes()).toHaveLength(3);
+  expect(wakes()[2]?.hidden?.text).not.toContain("came in while");
+});

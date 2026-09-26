@@ -172,6 +172,8 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       promptRouting: promptRoutingConfig(environmentSnapshot),
       reconcile: (ctx, runTick) => session(ctx).reconcile(runTick),
       postAction: (ctx) => session(ctx).reconcile(false),
+      userPrompt: (ctx) => session(ctx).userPrompt(),
+      closeThread: (ctx) => session(ctx).closeThread(),
       researchRunning: (ctx) => session(ctx).researchRunning(),
       // An unreadable settings file allows no servers, so the guard fails closed.
       coordinatorMcpServers: (ctx) => {

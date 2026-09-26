@@ -1063,6 +1063,9 @@ function callDependencies(service: TandemService, followUps: string[]): TandemCa
     reconcile: async () => {
       followUps.push("reconcile");
     },
+    closeThread: () => {
+      followUps.push("closeThread");
+    },
     postAction: async () => {
       followUps.push("postAction");
     },

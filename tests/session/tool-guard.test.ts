@@ -151,6 +151,8 @@ test("the registered OMP tool_call hook blocks with the guard's reason", async (
     promptRouting: { timeoutMs: 1_500 },
     reconcile: async () => undefined,
     postAction: async () => undefined,
+    userPrompt: () => undefined,
+    closeThread: () => undefined,
     coordinatorMcpServers: async () => ["linear"],
     researchRunning: async () => false,
   });

@@ -78,6 +78,12 @@ const INITIAL_SOURCE_STATUS =
 
 const OPERATION_FAILED = "Tandem extension operation failed";
 
+/**
+ * A thread the model never closed counts as over once the user has been quiet this long, so what
+ * is waiting reaches them when they are most likely away.
+ */
+export const THREAD_IDLE_MS = 30 * 60 * 1_000;
+
 function sourceRefreshBlockedStatus(message: string): string {
   return `SOURCE REFRESH BLOCKED: ${message}. Do not create or launch new work until the coordinator source refresh succeeds.`;
 }
@@ -234,6 +240,10 @@ export class CoordinatorSession {
   private readonly compaction: EarlyCompaction;
   private readonly deliveredNotifications = new Set<string>();
   private readonly unacknowledgedNotifications = new Set<string>();
+  /** Notifications held back while a thread is open, which the user was told are waiting. */
+  private readonly heldNotifications = new Set<string>();
+  /** When the user last took part in the open thread; unset when no thread is open. */
+  private threadActiveAt: number | undefined;
   private createdService: TandemService | undefined;
   private cancelTick: Cancel | undefined;
   private reconcileInFlight: Promise<void> | undefined;
@@ -318,6 +328,25 @@ export class CoordinatorSession {
 
   toolEnd(call: ToolCall): void {
     this.status.toolEnded(call);
+    // Answering the model's question is taking part, like typing a message.
+    if (call.kind === "ask") this.userPrompt();
+  }
+
+  /** The user's message reached the model: a thread opens, or the open one continues. */
+  userPrompt(): void {
+    this.threadActiveAt = this.deps.clock.now();
+  }
+
+  /** The model finished the thread; what waited for it arrives at the next reconcile. */
+  closeThread(): void {
+    this.threadActiveAt = undefined;
+  }
+
+  private threadOpen(): boolean {
+    return (
+      this.threadActiveAt !== undefined &&
+      this.deps.clock.now() - this.threadActiveAt < THREAD_IDLE_MS
+    );
   }
 
   /** Records the coordinator's own model usage; a failed ledger write is ignored. */
@@ -413,6 +442,7 @@ export class CoordinatorSession {
         delivered: this.deliveredNotifications,
         unacknowledged: this.unacknowledgedNotifications,
         readReport: this.deps.readReport,
+        thread: { open: this.threadOpen(), held: this.heldNotifications },
       });
       await deliverPrWatchNotices({ host: this.deps.host, service });
       await this.showBoardOnArrival(service);

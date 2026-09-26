@@ -408,6 +408,8 @@ function registeredInputHook(
     promptRouting,
     reconcile: async () => undefined,
     postAction: async () => undefined,
+    userPrompt: () => undefined,
+    closeThread: () => undefined,
     coordinatorMcpServers: async () => [],
     researchRunning: async () => false,
   });
