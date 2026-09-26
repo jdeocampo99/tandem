@@ -950,7 +950,7 @@ class TandemController {
       modelsChosen: models.configured,
       codeFolders: settings.projectRoots,
       projects: registered.filter((project) => project !== tandem),
-      workerSkillsSettled: settings.workerSkillsChosen || offer.length === 0,
+      workerSkillOffer: offer,
       selfImprovementChosen: settings.selfImprovementChosen,
     };
   }

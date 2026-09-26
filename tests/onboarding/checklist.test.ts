@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import {
   type OnboardingFacts,
-  onboardingStatus,
+  onboardingContext,
+  onboardingQuestion,
   remainingOnboardingSteps,
 } from "../../src/onboarding/checklist.ts";
 
@@ -9,37 +10,45 @@ const fresh: OnboardingFacts = {
   modelsChosen: false,
   codeFolders: [],
   projects: [],
-  workerSkillsSettled: false,
+  workerSkillOffer: ["buildkite"],
   selfImprovementChosen: false,
 };
 
-test("a fresh home has every setup step left, in the order the chat walks them", () => {
+const done: OnboardingFacts = {
+  modelsChosen: true,
+  codeFolders: ["/Users/me/code"],
+  projects: ["/Users/me/code/api"],
+  workerSkillOffer: [],
+  selfImprovementChosen: true,
+};
+
+test("setup walks the plain choices before repositories, so the first repository finishes it", () => {
   expect(remainingOnboardingSteps(fresh)).toEqual([
     "models",
     "code-folders",
-    "repositories",
     "worker-skills",
     "self-improvement",
+    "repositories",
   ]);
-  expect(onboardingStatus(fresh)).toContain("1. choose models");
+  expect(remainingOnboardingSteps({ ...fresh, workerSkillOffer: [] })).not.toContain(
+    "worker-skills",
+  );
 });
 
-test("setup resumes at the first step saved state does not cover", () => {
+test("the chat reads only the current step's guidance, and nothing once setup is done", () => {
   const halfway = { ...fresh, modelsChosen: true, codeFolders: ["/Users/me/code"] };
-  expect(remainingOnboardingSteps(halfway)[0]).toBe("repositories");
-  const status = onboardingStatus(halfway);
-  expect(status).toContain("1. set up at least one repository");
-  expect(status).not.toContain("choose models");
+  const context = onboardingContext(halfway) ?? "";
+  expect(context).toStartWith(
+    "Setup is unfinished. Current step: Tandem asked about plugin skills",
+  );
+  expect(context).toEndWith("Then: self-improvement, repositories.");
+  expect(context).not.toContain("configure-models");
+  expect(onboardingContext(done)).toBeUndefined();
 });
 
-test("setup is done once every step is covered", () => {
-  const done: OnboardingFacts = {
-    modelsChosen: true,
-    codeFolders: ["/Users/me/code"],
-    projects: ["/Users/me/code/api"],
-    workerSkillsSettled: true,
-    selfImprovementChosen: true,
-  };
-  expect(remainingOnboardingSteps(done)).toEqual([]);
-  expect(onboardingStatus(done)).toStartWith("Onboarding is done (repositories: 1 set up)");
+test("plain-choice steps have fixed wording; open-ended steps have none", () => {
+  expect(onboardingQuestion("worker-skills", fresh)?.text).toContain("skills: buildkite.");
+  expect(onboardingQuestion("self-improvement", fresh)?.hidden).toContain("self-improvement");
+  expect(onboardingQuestion("models", fresh)).toBeUndefined();
+  expect(onboardingQuestion("repositories", fresh)).toBeUndefined();
 });

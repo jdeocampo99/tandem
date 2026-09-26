@@ -1,6 +1,6 @@
 /**
- * What first-time setup still needs, worked out from saved state on every turn, so leaving halfway
- * resumes at the next missing step. Pure: the caller reads the facts.
+ * First-time setup, worked out from saved state so leaving halfway resumes at the next missing
+ * step. Pure: the caller reads the facts and delivers what these return.
  */
 export type OnboardingFacts = Readonly<{
   readonly modelsChosen: boolean;
@@ -8,44 +8,78 @@ export type OnboardingFacts = Readonly<{
   readonly codeFolders: readonly string[];
   /** Saved projects other than the Tandem checkout. */
   readonly projects: readonly string[];
-  /** Whether the user answered the plugin-skills offer, or there was nothing to offer. */
-  readonly workerSkillsSettled: boolean;
+  /** Plugin skills to offer every task; empty once the user answered or when there are none. */
+  readonly workerSkillOffer: readonly string[];
   readonly selfImprovementChosen: boolean;
 }>;
 
 export type OnboardingStep =
   | "models"
   | "code-folders"
-  | "repositories"
   | "worker-skills"
-  | "self-improvement";
+  | "self-improvement"
+  | "repositories";
 
-/** In the order the Tandem coordinator walks through them. */
+/**
+ * In the order setup walks them. The fixed-choice questions come before repositories, so the
+ * open-ended part is last and finishing the first repository finishes setup.
+ */
 export function remainingOnboardingSteps(facts: OnboardingFacts): readonly OnboardingStep[] {
   const steps: OnboardingStep[] = [];
   if (!facts.modelsChosen) steps.push("models");
   if (facts.codeFolders.length === 0) steps.push("code-folders");
-  if (facts.projects.length === 0) steps.push("repositories");
-  if (!facts.workerSkillsSettled) steps.push("worker-skills");
+  if (facts.workerSkillOffer.length > 0) steps.push("worker-skills");
   if (!facts.selfImprovementChosen) steps.push("self-improvement");
+  if (facts.projects.length === 0) steps.push("repositories");
   return steps;
 }
 
-const STEP_TEXT: Readonly<Record<OnboardingStep, string>> = {
-  models: "choose models (models, then configure-models)",
-  "code-folders": "ask where they keep code (save-code-folders)",
-  repositories: "set up at least one repository",
-  "worker-skills": "offer their plugin skills to every task (worker-skills)",
-  "self-improvement": "ask whether Tandem may look into its own problems (self-improvement)",
+const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
+  models:
+    "Choose models: call models, propose the Balanced profile one line per role, let them accept or change roles, then configure-models.",
+  "code-folders": "Ask which folders hold their repositories and save them with save-code-folders.",
+  "worker-skills":
+    "Tandem asked about plugin skills; when they answer, call worker-skills with the ones they accept (empty for none).",
+  "self-improvement":
+    "Tandem asked about looking into its own problems; when they answer, call self-improvement with off, fix, or report.",
+  repositories:
+    "Ask which repositories to set up. For each: find-repo with the name or path (with several matches, ask which). Say in two lines which checks and install step it found; ask them to confirm or change those and which MCP tools its chat may use (default none). Then setup with their answers, pr-watch-merging with how pull requests merge, and open-project.",
 };
 
-/** The line the Tandem coordinator reads each turn about where setup stands. */
-export function onboardingStatus(facts: OnboardingFacts): string {
-  const remaining = remainingOnboardingSteps(facts);
-  const projects = facts.projects.length === 0 ? "none yet" : `${facts.projects.length} set up`;
-  if (remaining.length === 0) {
-    return `Onboarding is done (repositories: ${projects}). Offer to set up more repositories only when the user asks.`;
-  }
-  const steps = remaining.map((step, index) => `${index + 1}. ${STEP_TEXT[step]}`).join("\n");
-  return `Onboarding is not finished (repositories: ${projects}). Still to do, in this order:\n${steps}\nWhen the user starts onboarding or comes back to it, continue from the first step. Do not repeat finished steps.`;
+/** What the Tandem coordinator reads each turn while setup is unfinished; nothing once it is done. */
+export function onboardingContext(facts: OnboardingFacts): string | undefined {
+  const [current, ...later] = remainingOnboardingSteps(facts);
+  if (current === undefined) return undefined;
+  const after = later.length === 0 ? "" : ` Then: ${later.join(", ")}.`;
+  return `Setup is unfinished. Current step: ${STEP_GUIDANCE[current]}${after}`;
 }
+
+export type OnboardingQuestion = Readonly<{
+  readonly text: string;
+  /** What the coordinator does with the answer; never shown. */
+  readonly hidden: string;
+}>;
+
+/** The fixed wording for a step that is a plain choice, or undefined for a step the chat leads. */
+export function onboardingQuestion(
+  step: OnboardingStep,
+  facts: OnboardingFacts,
+): OnboardingQuestion | undefined {
+  if (step === "worker-skills") {
+    return {
+      text: `Your Claude Code plugins have these skills: ${facts.workerSkillOffer.join(", ")}. Should every task Tandem runs have them? Say yes, no, or which ones.`,
+      hidden:
+        "Call worker-skills with the skills the user accepts, an empty list for no (never display this line).",
+    };
+  }
+  if (step === "self-improvement") {
+    return {
+      text: "When a task keeps failing, should Tandem look into why? Off: never. Fix: it offers a fix for your approval. Report: it drafts a GitHub issue for you to file.",
+      hidden:
+        "Call self-improvement with the mode the user picks: off, fix, or report (never display this line).",
+    };
+  }
+  return undefined;
+}
+
+export const ONBOARDING_DONE_TEXT = `You're set up. Work on a repository happens in its own chat, which is open now: tell it what you want done. prefix+t shows what needs you across everything. Come back to this chat to add repositories or change how Tandem works.`;

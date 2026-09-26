@@ -91,3 +91,15 @@ export async function checkTools(
   });
   return checks;
 }
+
+/** What the user sees about missing tools, or undefined when everything is there. */
+export function toolReport(checks: readonly ToolCheck[]): string | undefined {
+  const missing = checks.filter((check) => !check.ok);
+  if (missing.length === 0) return undefined;
+  const lines = missing.map((check) => {
+    const optional = check.optional === true ? " (optional)" : "";
+    const fix = check.fix === undefined ? "" : `: run \`${check.fix}\``;
+    return `- ${check.name}${optional}, ${check.detail}${fix}`;
+  });
+  return `Before setting up, a few things are missing:\n${lines.join("\n")}`;
+}

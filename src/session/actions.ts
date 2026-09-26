@@ -259,21 +259,18 @@ const SELF_IMPROVEMENT_TITLES: Readonly<Record<SelfImprovementMode, string>> = {
 
 /**
  * Everything the onboarding conversation needs about one project, read-only: the proposal, the
- * MCP servers its chat could use, how its pull requests would merge, and plugin skills to offer.
- * GitHub or OMP being unreachable leaves that part out rather than failing the whole look.
+ * MCP servers its chat could use, and how its pull requests would merge. GitHub or OMP being unreachable leaves that part out rather than failing the whole look.
  */
 async function onboardingDetails(repoPath: string, service: TandemService) {
   const onboarded = await service.onboard(repoPath, false);
-  const [mcpServers, merging, workerSkillOffer] = await Promise.all([
+  const [mcpServers, merging] = await Promise.all([
     service.mcpServers(onboarded.repoPath).catch(() => undefined),
     service.mergingCheck(onboarded.repoPath).catch(() => undefined),
-    service.workerSkillOffer(),
   ]);
   return {
     ...onboarded,
     ...(mcpServers === undefined ? {} : { mcpServers }),
     ...(merging === undefined ? {} : { merging }),
-    workerSkillOffer,
   };
 }
 
@@ -525,11 +522,19 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       action.action,
       { approved: true },
     ),
-  "find-repo": async (action, service) =>
-    actionResult(
-      { name: action.name, matches: await service.findRepo(action.name) },
+  "find-repo": async (action, service) => {
+    const matches = await service.findRepo(action.name);
+    const [only] = matches;
+    // One checkout not yet set up: look at it now, saving the separate onboard call.
+    const details =
+      only !== undefined && matches.length === 1 && !only.setUp
+        ? await onboardingDetails(only.path, service)
+        : undefined;
+    return actionResult(
+      { name: action.name, matches, ...(details === undefined ? {} : { details }) },
       action.action,
-    ),
+    );
+  },
   "save-code-folders": async (action, service) =>
     actionResult(await service.saveProjectRoots(action.folders), action.action, {
       approved: true,

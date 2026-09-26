@@ -10,7 +10,6 @@ import {
   COORDINATOR_TOOL_GUIDANCE,
   TANDEM_COORDINATOR_INSTRUCTIONS,
 } from "../instructions.ts";
-import { onboardingStatus } from "../onboarding/checklist.ts";
 import type { CoordinatorUsageEntry } from "../runtime/usage-receipt.ts";
 import type { SourceRefreshResult, TandemService } from "../service/controller.ts";
 import { isMissing, isTerminalTask } from "../service/records.ts";
@@ -33,6 +32,7 @@ import {
   deliverPrWatchNotices,
   type ResearchReportReader,
 } from "./notifications.ts";
+import { OnboardingGuide } from "./onboarding-guide.ts";
 import { buildDurableDigest } from "./summary.ts";
 
 export type CoordinatorDeps = SessionDeps &
@@ -260,6 +260,7 @@ export class CoordinatorSession {
   private threadActiveAt: number | undefined;
   private createdService: TandemService | undefined;
   private isTandemCheckout: Promise<boolean> | undefined;
+  private onboardingGuide: OnboardingGuide | undefined;
   private cancelTick: Cancel | undefined;
   private reconcileInFlight: Promise<void> | undefined;
   /** This project's "Needs you" rows at the last reconcile; unset until the first one. */
@@ -282,13 +283,19 @@ export class CoordinatorSession {
    */
   private async tandemContext(): Promise<readonly string[]> {
     if (!(await this.tandemCheckout())) return [];
-    const facts = await this.service()
-      .onboardingFacts(this.deps.environment.repo)
-      .catch(() => undefined);
-    return [
-      TANDEM_COORDINATOR_INSTRUCTIONS,
-      ...(facts === undefined ? [] : [onboardingStatus(facts)]),
-    ];
+    const setup = await this.onboarding()
+      .context()
+      .catch(() => []);
+    return [TANDEM_COORDINATOR_INSTRUCTIONS, ...setup];
+  }
+
+  private onboarding(): OnboardingGuide {
+    this.onboardingGuide ??= new OnboardingGuide({
+      host: this.deps.host,
+      service: () => this.service(),
+      repo: this.deps.environment.repo,
+    });
+    return this.onboardingGuide;
   }
 
   private tandemCheckout(): Promise<boolean> {
@@ -335,6 +342,11 @@ export class CoordinatorSession {
     }
     await this.reconcile(true);
     await this.welcome().catch((error) => this.deps.logError(OPERATION_FAILED, error));
+    if (await this.tandemCheckout()) {
+      await this.onboarding()
+        .sessionStart()
+        .catch((error) => this.deps.logError(OPERATION_FAILED, error));
+    }
   }
 
   /**
@@ -521,6 +533,8 @@ export class CoordinatorSession {
       await deliverPrWatchNotices({ host: this.deps.host, service });
       await this.notifyOnArrival(service);
       await deliverInvestigationQuestions({ host: this.deps.host, service });
+      // Setup moves on after the user's actions, not on the timer.
+      if (!runTick && (await this.tandemCheckout())) await this.onboarding().afterAction();
       const idle =
         !this.status.agentActive &&
         !this.status.waitingForInput &&

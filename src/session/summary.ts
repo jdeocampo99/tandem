@@ -426,10 +426,6 @@ function projectSetupLines(record: Record<string, unknown>, saved: boolean): rea
       if (message !== undefined) lines.push(`Merging: ${message}`);
     }
   }
-  const skills = stringList(record.workerSkillOffer);
-  if (skills.length > 0) {
-    lines.push(`Plugin skills to offer every task (worker-skills): ${skills.join(", ")}`);
-  }
   return lines;
 }
 
@@ -452,7 +448,9 @@ function summarizeFoundRepos(value: unknown): string {
     lines.length === 1
       ? `Found ${name}:`
       : `Found ${lines.length} checkouts named ${name}; ask the user which one:`;
-  return boundedOutput([lead, ...lines].join("\n"), ACTION_RESULT_MAX_CHARS);
+  const details = summaryRecord(record?.details);
+  const found = details === undefined ? [] : projectSetupLines(details, false);
+  return boundedOutput([lead, ...lines, ...found].join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
 function summarizeToolChecks(value: unknown): string {

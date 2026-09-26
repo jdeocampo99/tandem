@@ -67,22 +67,31 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   the launch set. While no model choices are saved, the CLI `launch` leaves out `--model` and
   `--thinking` for it (and only for it), so OMP runs its own default model; saved choices apply
   from its next launch. Projects opened by path still ask in the terminal.
-- `isTandemCheckout` compares canonical paths. When it holds, the coordinator's context adds
-  `TANDEM_COORDINATOR_INSTRUCTIONS` (src/instructions.ts), which walk first-time setup in chat, and
-  try settings before code when the user wants Tandem changed, routing code changes through
-  ordinary tasks in this project.
-- Setup steps, in order: `check-tools` (Herdr, the welcome plugin, OMP, Git, and a signed-in `gh`,
-  each with the command that fixes it; src/onboarding/tools.ts), models (`models`,
-  `configure-models`), code folders (`save-code-folders`), each repository (`find-repo`, `onboard`,
-  `setup` with the user's commands and MCP tools, `pr-watch-merging`, `open-project`), plugin
-  skills (`worker-skills`), and the self-improvement mode (`self-improvement`). Every save asks for
+- `isTandemCheckout` compares canonical paths. When it holds, the coordinator's context adds the
+  short `TANDEM_COORDINATOR_INSTRUCTIONS` (src/instructions.ts: follow the setup step it is given;
+  try settings before code when the user wants Tandem changed, and route code changes through
+  ordinary tasks in this project).
+- Setup steps, in order (src/onboarding/checklist.ts): models (`models`, `configure-models`), code
+  folders (`save-code-folders`), plugin skills (`worker-skills`, only when the user has any to
+  offer), the self-improvement mode (`self-improvement`), and repositories (`find-repo`, `setup`
+  with the user's commands and MCP tools, `pr-watch-merging`, `open-project`). The plain choices
+  come before repositories, so opening the first repository finishes setup. Every save asks for
   approval; `find-repo`, `onboard`, and `check-tools` change nothing.
-- Where setup stands is worked out from saved state on every turn (`onboardingFacts` in the
-  service, `onboardingStatus` in src/onboarding/checklist.ts): saved model choices, saved code
-  folders, saved projects other than the Tandem checkout, a settled plugin-skill offer, and a
-  written `selfImprovement`. The status joins the Tandem coordinator's context, so leaving halfway
-  resumes at the first missing step.
-- `find-repo` takes a name or a path. A path (starting with `/`, `~`, or `.`) resolves to its Git
+- Where setup stands is worked out from saved state (`onboardingFacts` in the service): saved model
+  choices, saved code folders, saved projects other than the Tandem checkout, an unanswered
+  plugin-skill offer, and a written `selfImprovement`. Leaving halfway resumes at the first missing
+  step.
+- Fixed wording wherever a step allows, delivered by code without a model turn
+  (src/session/onboarding-guide.ts): at each session start while setup is unfinished, the missing
+  tools (`checkTools`: Herdr, the welcome plugin, OMP, Git, a signed-in `gh`, each with the
+  command that fixes it); the plugin-skills and self-improvement questions once each, when their
+  step comes up, with a hidden line naming the action for the answer; and `ONBOARDING_DONE_TEXT`
+  once, after the action that finishes setup. Steps move on after actions (a reconcile without a
+  tick), never on the timer.
+- The model reads only the current step's guidance (`onboardingContext`) while setup is
+  unfinished, and nothing about setup once it is done.
+- `find-repo` takes a name or a path; one match not yet set up also returns what `onboard` would
+  (the proposal, the project's MCP servers, how its pull requests merge), saving a call. A path (starting with `/`, `~`, or `.`) resolves to its Git
   root; a name matches a checkout under the code folders by folder name, GitHub repository name,
   or `owner/repo`, ignoring case (`findCheckoutsByName` in src/repos/locate.ts). Each match says
   whether it is already set up; several matches are a question for the user.

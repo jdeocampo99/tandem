@@ -472,7 +472,7 @@ function welcomeSession(
           modelsChosen: false,
           codeFolders: [],
           projects: options.projects.filter((project) => project !== "/repo"),
-          workerSkillsSettled: true,
+          workerSkillOffer: [],
           selfImprovementChosen: false,
         }),
         board: async () => ({
@@ -504,8 +504,7 @@ test("the Tandem coordinator opens the welcome popup until another project is se
   expect(alone.opened()).toBe(1);
   const context = (await alone.session.agentStart()).systemContext.join("\n");
   expect(context).toContain(TANDEM_COORDINATOR_INSTRUCTIONS);
-  expect(context).toContain("Onboarding is not finished");
-  expect(context).toContain("1. choose models");
+  expect(context).toContain("Current step: Choose models");
   await alone.session.shutdown();
 
   const onboarded = welcomeSession({ tandemCheckout: true, projects: ["/repo", "/code/app"] });
