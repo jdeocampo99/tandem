@@ -144,6 +144,7 @@ test("the registered OMP tool_call hook blocks with the guard's reason", async (
     },
     registerTool: () => undefined,
     registerCommand: () => undefined,
+    registerMessageRenderer: () => undefined,
   } as unknown as ExtensionAPI;
   registerTandemOmp(pi, {
     getService: () => ({}) as TandemService,

@@ -149,6 +149,8 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
   branch, an open non-draft state, a non-empty set of required CI checks, and all of them passing.
 - It rechecks the local reviewed HEAD and passes it as `--match-head-commit`, then re-observes. The
   task becomes `merged` only when the remote reports `merged` at that SHA.
+- A pull request that merges any other way (PR watch's auto-merge or queue label, or by hand) moves
+  its `ready` task to `merged` once PR watch sees it merged ([pr-watch.md](pr-watch.md#what-is-watched)).
 
 ## Presentations and Lavish
 

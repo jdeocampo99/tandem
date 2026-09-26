@@ -1197,6 +1197,7 @@ export type SeedTaskInput = Readonly<{
   readonly researchContinuation?: ResearchContinuation;
   readonly manualVerification?: readonly string[];
   readonly pullRequest?: PullRequestMetadata;
+  readonly workstream?: string;
 }>;
 
 /** Seeds one durable task in the scenario home, bypassing approval prompts the scenario is not testing. */
@@ -1219,6 +1220,7 @@ export async function seedScenarioTask(
     ...(input.researchContinuation === undefined
       ? {}
       : { researchContinuation: input.researchContinuation }),
+    ...(input.workstream === undefined ? {} : { workstream: input.workstream }),
   });
   if (
     task.stage === "awaiting-approval" &&

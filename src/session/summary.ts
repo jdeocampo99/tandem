@@ -8,6 +8,8 @@ import {
   type SkillOrigin,
   type TaskRecord,
 } from "../contracts.ts";
+import { type MemoryShowResult, renderMemoryShow } from "../memory/view.ts";
+import { CATCH_UP_MAX_CHARS } from "../memory/workstream.ts";
 import { PLAYBOOKS } from "../playbooks/catalog.ts";
 import { type PrWatchView, renderPrWatchView } from "../pr-watch/view.ts";
 import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
@@ -910,6 +912,14 @@ function isTaskRecord(value: unknown): value is TaskRecord {
   );
 }
 
+function isMemoryShowResult(value: unknown): value is MemoryShowResult {
+  const record = summaryRecord(value);
+  return (
+    (record?.kind === "notes" && summaryRecord(record.view) !== undefined) ||
+    (record?.kind === "none" && typeof record.name === "string")
+  );
+}
+
 function isPrWatchView(value: unknown): value is PrWatchView {
   const record = summaryRecord(value);
   return record !== undefined && typeof record.now === "string" && Array.isArray(record.rows);
@@ -1094,6 +1104,11 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     return isPrWatchView(value)
       ? boundedOutput(renderPrWatchView(value), ACTION_RESULT_MAX_CHARS)
       : boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  }
+  if (action === "memory-show" && isMemoryShowResult(value)) return renderMemoryShow(value);
+  // Workstream notes are Markdown whose line breaks carry meaning, so they are never collapsed.
+  if (action.startsWith("memory-") && typeof value === "string") {
+    return boundedOutput(value, CATCH_UP_MAX_CHARS);
   }
   if (typeof value === "string")
     return boundedOutput(compactText(value, ACTION_RESULT_MAX_CHARS), ACTION_RESULT_MAX_CHARS);

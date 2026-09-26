@@ -116,6 +116,12 @@ export const tandemRequestSchema = z.strictObject({
         .describe(
           "Commands that check work in a target repository with none saved, e.g. bun test.",
         ),
+      workstream: z
+        .string()
+        .optional()
+        .describe(
+          "The workstream this work belongs to, e.g. billing. Leave out when there is none.",
+        ),
     }),
     z.strictObject({ action: z.literal("list") }),
     z.strictObject({ action: z.literal("presentations") }),
@@ -275,6 +281,33 @@ export const tandemRequestSchema = z.strictObject({
         repoPath: z.string().optional().describe("Where #123 is; defaults to this project."),
       }),
     ),
+    z.strictObject({ action: z.literal("memory-list"), repoPath: z.string() }),
+    ...(["memory-show", "memory-done"] as const).map((action) =>
+      z.strictObject({
+        action: z.literal(action),
+        repoPath: z.string(),
+        workstream: z.string().describe("Lowercase with hyphens, e.g. billing or test-impact."),
+      }),
+    ),
+    z.strictObject({
+      action: z.literal("memory-write"),
+      repoPath: z.string(),
+      workstream: z.string().describe("Lowercase with hyphens, e.g. billing or test-impact."),
+      brief: z.string().optional().describe("Goal, success metric, and links."),
+      now: z.string().optional().describe("Current focus and agreed next steps."),
+      followUps: z
+        .string()
+        .optional()
+        .describe("The whole list, one per line: check <what> on YYYY-MM-DD because <why>."),
+      lastHandoff: z
+        .string()
+        .optional()
+        .describe("Where the user left off; the previous handoff is archived."),
+      decisions: z
+        .string()
+        .optional()
+        .describe("The whole list, one line each: YYYY-MM-DD <decision> because <why>."),
+    }),
     z.strictObject({
       action: z.literal("investigate"),
       taskId: z.string(),

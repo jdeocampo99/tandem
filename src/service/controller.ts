@@ -69,6 +69,8 @@ import {
   publishReviewedTask,
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
+import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
+import type { MemoryShowResult } from "../memory/view.ts";
 import type { OnboardingFacts } from "../onboarding/checklist.ts";
 import {
   type SetupPageEvent,
@@ -98,7 +100,7 @@ import type { PrReviewState } from "../pr-review/state.ts";
 import { removeReviewWorktree } from "../pr-review/worktree.ts";
 import type { PrObservation } from "../pr-watch/decide.ts";
 import { checkProjectMerging, type MergingCheck } from "../pr-watch/merging-check.ts";
-import type { PrWatchNotice } from "../pr-watch/store.ts";
+import { type PrWatchNotice, withPrWatches } from "../pr-watch/store.ts";
 import type { PrWatchView } from "../pr-watch/view.ts";
 import {
   conflictFixObjective,
@@ -267,6 +269,8 @@ export type CreateTaskRequest = Readonly<{
   readonly targetClone?: boolean;
   /** How to check work in a target repository with no saved validation commands, from the brief. */
   readonly validationCommands?: readonly string[];
+  /** The workstream this work belongs to, such as "billing"; its catch-up lists the task's PR. */
+  readonly workstream?: string;
 }>;
 /** The internal create request behind `reviewPr`; the generic create action never takes it. */
 type PrReviewTaskRequest = Omit<CreateTaskRequest, "kind"> &
@@ -487,6 +491,14 @@ export type TandemService = Readonly<{
    * its base into its branch and pushes, never force-pushing.
    */
   readonly prWatchFix: (input: PullRequestInput) => Promise<TaskRecord>;
+  /** One line per workstream in the project with what is due; empty when there are none. */
+  readonly memoryList: (repoPath: string) => Promise<readonly string[]>;
+  /** One workstream's catch-up, or that it has no notes yet. */
+  readonly memoryShow: (repoPath: string, workstream: string) => Promise<MemoryShowResult>;
+  /** Replaces sections of a workstream's notes; refused when the file would pass its size cap. */
+  readonly memoryWrite: (input: MemoryWriteInput) => Promise<string>;
+  /** Archives a finished workstream, keeping its notes. */
+  readonly memoryDone: (repoPath: string, workstream: string) => Promise<string>;
   /** Read-only: how this project's pull requests would merge, for onboarding and PR watch. */
   readonly mergingCheck: (repoPath: string) => Promise<MergingCheck>;
   /** Saves the user's answer about merging into the project's settings (see pr-watch.md). */
@@ -616,6 +628,7 @@ class TandemController {
   readonly #prReviews: PrReviewWorkflow;
   readonly #drafts: DraftRefreshWorkflow;
   readonly #prWatch: PrWatcher;
+  readonly #memory: ProjectMemory;
   readonly #selfImprovement: SelfImprovement;
   readonly #setupPage: SetupPageWorkflow;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
@@ -686,6 +699,15 @@ class TandemController {
       clock: deps.clock,
       listTasks: () => deps.store.list(),
       steerTask: (taskId, text) => this.steerForPrWatch(taskId, text),
+      recordMerged: (taskId, head) => this.recordMergedOnGitHub(taskId, head),
+    });
+    this.#memory = new ProjectMemory({
+      home: deps.home,
+      clock: deps.clock,
+      projectPath: async (repoPath) =>
+        (await mapTaskSource(deps.run, repoPath, deps.sourceWorkspace)).repoPath,
+      listTasks: () => deps.store.list(),
+      listWatches: () => withPrWatches(deps.home, (transaction) => transaction.watches),
     });
     this.#accounting = new RequestAccountingWorkflow({
       home: deps.home,
@@ -946,6 +968,10 @@ class TandemController {
           this.startConflictFix(named, pr, files),
         );
       },
+      memoryList: (repoPath) => this.#memory.lines(repoPath),
+      memoryShow: (repoPath, workstream) => this.#memory.show(repoPath, workstream),
+      memoryWrite: (input) => this.#memory.write(input),
+      memoryDone: (repoPath, workstream) => this.#memory.done(repoPath, workstream),
       mergingCheck: (repoPath) =>
         checkProjectMerging(
           this.#deps.run,
@@ -2007,6 +2033,17 @@ class TandemController {
     if (task === undefined || !(await this.#source.taskInScope(task))) return false;
     await this.steer({ taskId, text });
     return true;
+  }
+
+  /** A ready task in this project whose pull request PR watch saw merge becomes merged. */
+  private async recordMergedOnGitHub(taskId: string, head: string | undefined): Promise<void> {
+    const task = await this.#deps.store.read(taskId);
+    if (task === undefined || !(await this.#source.taskInScope(task))) return;
+    if (task.stage !== "ready" || task.pullRequest === undefined) return;
+    await this.transition(task.id, {
+      type: "merged-on-github",
+      pullRequest: { ...task.pullRequest, state: "merged", head: head ?? task.pullRequest.head },
+    });
   }
 
   /**

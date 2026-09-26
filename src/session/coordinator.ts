@@ -102,12 +102,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The standing coordinator context: instructions, source boundary and freshness, and the digest. */
+/**
+ * The standing coordinator context: instructions, source boundary and freshness, the digest, and
+ * one line listing the project's workstreams once the user has named any.
+ */
 function coordinatorContext(
   environment: TandemBoundaryEnvironment,
   tandemContext: readonly string[],
   sourceStatus: string,
   digest: string,
+  workstreams: readonly string[],
 ): string[] {
   return [
     COORDINATOR_INSTRUCTIONS,
@@ -116,7 +120,17 @@ function coordinatorContext(
     coordinatorSourceGuidance(environment),
     sourceStatus,
     digest,
+    ...(workstreams.length === 0 ? [] : [`Workstreams: ${workstreams.join(" · ")}`]),
   ];
+}
+
+/** Workstream notes only add context, so notes that cannot be read never hold up a turn. */
+async function workstreamLines(service: TandemService, repo: string): Promise<readonly string[]> {
+  try {
+    return await service.memoryList(repo);
+  } catch {
+    return [];
+  }
 }
 
 /** Whether a path is this already-resolved repository; a missing checkout is not. */
@@ -384,12 +398,14 @@ export class CoordinatorSession {
     }
     this.status.report();
     const digest = buildDurableDigest(await service.list());
+    const workstreams = await workstreamLines(service, this.deps.environment.repo);
     return {
       systemContext: coordinatorContext(
         this.deps.environment,
         await this.tandemContext(),
         this.sourceStatus,
         digest,
+        workstreams,
       ),
     };
   }
@@ -449,12 +465,14 @@ export class CoordinatorSession {
 
   async compacting(): Promise<Reply<"compacting">> {
     const digest = buildDurableDigest(await this.service().list());
+    const workstreams = await workstreamLines(this.service(), this.deps.environment.repo);
     return {
       context: coordinatorContext(
         this.deps.environment,
         await this.tandemContext(),
         this.sourceStatus,
         digest,
+        workstreams,
       ),
       preserve: { tandemDigest: digest },
     };

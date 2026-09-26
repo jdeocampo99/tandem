@@ -22,9 +22,11 @@ export type StatusStyle = Readonly<{
   readonly color: boolean;
   /** The terminal's width; absent when unknown, and then lines are never cut. */
   readonly columns?: number;
+  /** The terminal opens OSC 8 links, so linked spans are clickable; plain text otherwise. */
+  readonly links?: boolean;
 }>;
 
-type Tone =
+export type Tone =
   | "bold"
   | "dim"
   | "underline"
@@ -37,8 +39,13 @@ type Tone =
   | "magenta";
 
 /** A run of text drawn in one style. */
-type Span = Readonly<{ readonly text: string; readonly tones: readonly Tone[] }>;
-type Line = readonly Span[];
+export type Span = Readonly<{
+  readonly text: string;
+  readonly tones: readonly Tone[];
+  /** Where clicking the text goes, when the terminal opens links. */
+  readonly link?: string;
+}>;
+export type Line = readonly Span[];
 type Section = Readonly<{
   readonly title: string;
   readonly count: number;
@@ -46,7 +53,7 @@ type Section = Readonly<{
   readonly lines: readonly Line[];
 }>;
 
-const RULE_MIN = 40;
+export const RULE_MIN = 40;
 const TIME_WIDTH = 4;
 const CHECK_BAR = 8;
 const STAGE_TONES: Readonly<Record<string, readonly Tone[]>> = {
@@ -66,8 +73,13 @@ const PR_TONES: Readonly<Record<PrWatchViewRow["color"], readonly Tone[]>> = {
   unwatched: ["dim"],
 };
 
-function span(text: string, ...tones: Tone[]): Span {
+export function span(text: string, ...tones: Tone[]): Span {
   return { text, tones };
+}
+
+/** The same text, clickable where the terminal opens links. */
+export function linked(part: Span, link: string): Span {
+  return { ...part, link };
 }
 
 /**
@@ -108,8 +120,7 @@ export function renderStatus(view: BoardView, footer: StatusFooter, style: Statu
   const ruleWidth = style.columns === undefined ? widest : Math.min(widest, style.columns);
   const lines: Line[] = [header(view, style.color), []];
   for (const { title, count, tone, lines: rows } of sections) {
-    const heading = [span(title, "bold", tone), span(count === 0 ? " " : ` ${count} `, "dim")];
-    lines.push([...heading, span("─".repeat(Math.max(0, ruleWidth - lineWidth(heading))), "dim")]);
+    lines.push(sectionHeading(title, count, tone, ruleWidth));
     // Only Needs you is shown empty; the other sections are left out.
     lines.push(...(rows.length === 0 ? [[span("Nothing needs you.", "dim")]] : rows), []);
   }
@@ -117,6 +128,12 @@ export function renderStatus(view: BoardView, footer: StatusFooter, style: Statu
     lines.push([span("THIS WEEK  ", "bold"), ...weekSpans(view.week)], []);
   lines.push([span("─".repeat(ruleWidth), "dim")], ...footerLines(view, footer));
   return `${lines.map((line) => draw(line, style)).join("\n")}\n`;
+}
+
+/** A bold, colored section title with its count, ruled out to `width`. */
+export function sectionHeading(title: string, count: number, tone: Tone, width: number): Line {
+  const heading = [span(title, "bold", tone), span(count === 0 ? " " : ` ${count} `, "dim")];
+  return [...heading, span("─".repeat(Math.max(0, width - lineWidth(heading))), "dim")];
 }
 
 /**
@@ -324,7 +341,7 @@ function footerLines(view: BoardView, footer: StatusFooter): Line[] {
   ];
 }
 
-function cell(text: string, width: number, ...tones: Tone[]): Line {
+export function cell(text: string, width: number, ...tones: Tone[]): Line {
   return pad([span(text, ...tones)], width);
 }
 
@@ -337,7 +354,7 @@ function pad(line: Line, width: number): Line {
   return missing > 0 ? [...line, span(" ".repeat(missing))] : line;
 }
 
-function columnWidth(values: readonly string[]): number {
+export function columnWidth(values: readonly string[]): number {
   return Math.max(0, ...values.map(textWidth));
 }
 
@@ -346,21 +363,33 @@ function textWidth(text: string): number {
   return Bun.stringWidth(text);
 }
 
-function lineWidth(line: Line): number {
+export function lineWidth(line: Line): number {
   return line.reduce((total, part) => total + textWidth(part.text), 0);
 }
 
 /** One line as terminal text: cut to the terminal's width, then colored when color is on. */
-function draw(line: Line, style: StatusStyle): string {
+export function draw(line: Line, style: StatusStyle): string {
   const fitted = style.columns === undefined ? line : fit(line, style.columns);
   return fitted
-    .map((part) =>
-      style.color && part.tones.length > 0 && part.text.trim().length > 0
-        ? styleText([...part.tones], part.text, { validateStream: false })
-        : part.text,
-    )
+    .map((part) => {
+      const text =
+        style.color && part.tones.length > 0 && part.text.trim().length > 0
+          ? styleText([...part.tones], part.text, { validateStream: false })
+          : part.text;
+      return style.links === true && part.link !== undefined ? osc8(part.link, text) : text;
+    })
     .join("")
     .trimEnd();
+}
+
+/** An OSC 8 hyperlink; a link holding control characters is left as plain text. */
+function osc8(link: string, text: string): string {
+  const control = [...link].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 0x20 || code === 0x7f;
+  });
+  if (control) return text;
+  return `\u001b]8;;${link}\u001b\\${text}\u001b]8;;\u001b\\`;
 }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -375,13 +404,13 @@ function fit(line: Line, columns: number): Line {
     for (const { segment } of graphemes.segment(part.text)) {
       const width = textWidth(segment);
       if (width > room) {
-        fitted.push(span(text, ...part.tones), span("…", ...part.tones));
+        fitted.push({ ...part, text }, span("…", ...part.tones));
         return fitted;
       }
       text += segment;
       room -= width;
     }
-    fitted.push(span(text, ...part.tones));
+    fitted.push({ ...part, text });
   }
   return fitted;
 }

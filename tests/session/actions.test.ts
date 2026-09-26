@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
 import type { RepoPolicy } from "../../src/contracts.ts";
+import {
+  type MemoryShowResult,
+  renderCatchUpCard,
+  renderMemoryShow,
+} from "../../src/memory/view.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import {
@@ -1456,4 +1461,164 @@ test("the setup page opens without approval, and saving its answer takes one app
     "Saved the model choices and providers.\nSaved the skills every task gets.",
   );
   expect(calls).toEqual(["open /tandem", "recap a-1", "recap a-1", "apply a-1"]);
+});
+
+test("create forwards the workstream the work belongs to", async () => {
+  const createCalls: unknown[] = [];
+  const service = {
+    create: async (input: unknown) => {
+      createCalls.push(input);
+      return task({});
+    },
+  } as unknown as TandemService;
+  await executeTandemAction(
+    {
+      action: "create",
+      repoPath: "/repo",
+      kind: "implementation",
+      objective: "ship feature",
+      acceptanceCriteria: ["behavior"],
+      surfaces: ["src"],
+      workstream: "billing",
+    },
+    service,
+    { confirm: undefined },
+  );
+  expect(createCalls).toMatchObject([{ workstream: "billing" }]);
+});
+
+test("memory actions run without an approval dialog and keep the notes' line breaks", async () => {
+  const writes: unknown[] = [];
+  const catchUp: MemoryShowResult = {
+    kind: "notes",
+    view: {
+      name: "tia",
+      path: "/notes/tia/MEMORY.md",
+      savedOn: "2030-01-09",
+      age: "today",
+      today: "2030-01-09",
+      due: [{ text: "check the rate on 2030-01-09 because x", due: "2030-01-09" }],
+      later: [],
+      extra: [],
+      recent: [],
+    },
+  };
+  const service = {
+    memoryList: async () => ["tia: 1 follow-up due", "billing: nothing due"],
+    memoryShow: async () => catchUp,
+    memoryWrite: async (input: unknown) => {
+      writes.push(input);
+      return "Saved tia: now, last handoff.";
+    },
+    memoryDone: async () => "Archived tia.",
+  } as unknown as TandemService;
+  const noDialog = { confirm: undefined };
+
+  const listed = await executeTandemAction(
+    { action: "memory-list", repoPath: "/repo" },
+    service,
+    noDialog,
+  );
+  expect(summarizeTandemActionValue(listed.action, listed.value)).toBe(
+    "tia: 1 follow-up due\nbilling: nothing due",
+  );
+  const shown = await executeTandemAction(
+    { action: "memory-show", repoPath: "/repo", workstream: "tia" },
+    service,
+    noDialog,
+  );
+  expect(summarizeTandemActionValue(shown.action, shown.value)).toBe(renderMemoryShow(catchUp));
+  const written = await executeTandemAction(
+    {
+      action: "memory-write",
+      repoPath: "/repo",
+      workstream: "tia",
+      now: "Mobile left.",
+      lastHandoff: "Lowered the threshold.",
+      followUps: "- check the rate on 2030-01-09 because #412 merged",
+    },
+    service,
+    noDialog,
+  );
+  expect(written.value).toBe("Saved tia: now, last handoff.");
+  expect(writes).toEqual([
+    {
+      repoPath: "/repo",
+      workstream: "tia",
+      changes: {
+        now: "Mobile left.",
+        "follow-ups": "- check the rate on 2030-01-09 because #412 merged",
+        "last-handoff": "Lowered the threshold.",
+      },
+    },
+  ]);
+  const done = await executeTandemAction(
+    { action: "memory-done", repoPath: "/repo", workstream: "tia" },
+    service,
+    noDialog,
+  );
+  expect(done.value).toBe("Archived tia.");
+
+  const empty = { ...service, memoryList: async () => [] } as unknown as TandemService;
+  const none = await executeTandemAction(
+    { action: "memory-list", repoPath: "/repo" },
+    empty,
+    noDialog,
+  );
+  expect(none.value).toBe("No workstreams yet.");
+});
+
+test("a catch-up goes on screen as its own card, and the tool result only carries the notes", async () => {
+  const view = {
+    name: "tia",
+    path: "/notes/tia/MEMORY.md",
+    savedOn: "2030-01-09",
+    age: "today",
+    today: "2030-01-09",
+    due: [],
+    later: [],
+    now: "Rolling out.",
+    brief: "Goal: skip safe suites.",
+    extra: [],
+    recent: [],
+  };
+  const service = {
+    memoryShow: async (_repoPath: string, workstream: string) =>
+      workstream === "tia" ? { kind: "notes", view } : { kind: "none", name: workstream },
+  } as unknown as TandemService;
+  const shown: unknown[] = [];
+  const dependencies: TandemCallDependencies = {
+    ...callDependencies(service, []),
+    showCard: async (effect) => {
+      shown.push(effect);
+    },
+  };
+
+  const outcome = await runTandemTool(
+    { action: "memory-show", repoPath: "/repo", workstream: "tia" },
+    dependencies,
+    undefined,
+  );
+  expect(shown).toEqual([
+    { type: "showCard", view, text: renderCatchUpCard(view, { color: false }).trimEnd() },
+  ]);
+  expect(outcome.text).toBe(
+    renderMemoryShow({ kind: "notes", view } as MemoryShowResult, { cardShown: true }),
+  );
+  expect(outcome.text).toContain("Goal: skip safe suites.");
+  expect(outcome.text).not.toContain("WHERE YOU LEFT OFF");
+
+  // Without notes there is no card, and without a host that shows cards the card stays in the text.
+  await runTandemTool(
+    { action: "memory-show", repoPath: "/repo", workstream: "billing" },
+    dependencies,
+    undefined,
+  );
+  expect(shown).toHaveLength(1);
+  const plain = await runTandemTool(
+    { action: "memory-show", repoPath: "/repo", workstream: "tia" },
+    callDependencies(service, []),
+    undefined,
+  );
+  expect(plain.text).toContain("WHERE YOU LEFT OFF");
 });

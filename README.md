@@ -84,6 +84,15 @@ person**. Hand it any other pull request with `tandem watch <link>`.
 
 ![How PR watch keeps a pull request moving: it fixes flaky checks, conflicts, stale branches, and queue kick-outs on its own, merges when everything is green, and comes to you only when a person is needed](docs/images/pr-watch.svg)
 
+### Picking up where you left off
+
+Name a line of work ("wrapping up billing", "now onboarding") and Tandem keeps short notes for it:
+the goal, where you left off, decisions and why, and checks to make on a date. Say "catch up on
+billing" and it shows a card like `tandem status`: what's due, where you were, and the pull
+requests that merged since, then suggests what to do next. "Where was I?" lists each one, and
+`tandem memory billing` shows the same card in your terminal. The notes are plain Markdown in the
+Tandem home, never in your repository, and nothing is kept until you name one.
+
 ### Reviewing other people's pull requests
 
 Paste a PR link and ask for a review. Tandem checks it out in its own worktree and comes back with
@@ -208,6 +217,7 @@ every saved project with its previous chat. `tandem /path/to/repo` still works.
 | `tandem trace [TASK_ID]` | What happened to a task and why, with review, fix-round, blocked-time, and cost figures |
 | `tandem report` | A page in Lavish showing where each task's time and money went and what held it up (`--since DATE` to narrow it) |
 | `tandem watch [PR]` | Your watched pull requests; with a link or number, start watching it (`--stop` to stop) |
+| `tandem memory [NAME]` | This project's workstreams; with a name, its catch-up and where its notes file is |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Clean up leftovers from a crash or failed launch (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |

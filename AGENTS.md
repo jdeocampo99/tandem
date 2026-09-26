@@ -41,6 +41,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | `tandem report`, the HTML time/cost report | [report/](src/report/): `model.ts` (view contract), `build.ts` (pure assembly and choke rules), `render.ts` + `page.html` (on the shared [pages/tandem.css](src/pages/tandem.css)), `publish.ts` (write under the home, open in Lavish) |
 | `tandem status`, `--watch`, `--line`, "Needs you", "how's it going?" | [board/](src/board/): `view.ts` (pure sections and chat rendering), `terminal.ts` (terminal rendering and the one-line summary), `read.ts`; [terminal/status.ts](src/terminal/status.ts); Herdr tab bar and `prefix+t` popup setup: [terminal/herdr-setup.ts](src/terminal/herdr-setup.ts) |
 | PR watch: keeping open PRs moving until they merge, `tandem watch` | [pr-watch/](src/pr-watch/): `decide.ts` (pure decision table), `github.ts`, `watcher.ts`, `store.ts`, `view.ts` |
+| Workstream memory: catch-ups, handoffs, follow-ups | [memory/](src/memory/): `workstream.ts` (pure sections, cap, catch-up view), `view.ts` (card and list), `store.ts` (files in the home), `service.ts`; `tandem memory` in [main.ts](src/main.ts) |
 | Self-improvement: trigger rules, investigations, report-mode issues | [self-improvement/](src/self-improvement/): `triggers.ts` (pure rules), `issue-draft.ts` (scrub and Jev check), `service.ts` |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |
 
@@ -118,6 +119,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - `tandem status`, "Needs you", the live view, and Herdr's tab bar, popup, and notification: [status.md](docs/reference/status.md).
 - `tandem report`, its data sources, choke rules, and where the page is written: [report.md](docs/reference/report.md).
 - Self-improvement modes, triggers, investigations, report-mode issues: [self-improvement.md](docs/reference/self-improvement.md).
+- Workstreams, catch-ups, handoffs, and what the notes may hold: [project-memory.md](docs/reference/project-memory.md).
 - Durable state, locking, restart, central recovery and its re-entry table: [recovery.md](docs/reference/recovery.md).
 - Block causes, stale records, panes, leases, `tandem fix`: [reconciliation.md](docs/reference/reconciliation.md).
 
