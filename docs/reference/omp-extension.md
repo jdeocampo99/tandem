@@ -51,6 +51,15 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
 - Judgment-needed notices are coordinator-kind notifications: current blocked tasks, completed
   scout reports, and PR-ready notices. The newest ones in a delivery batch coalesce into at most
   one model wake; routine backlog is excluded, and a delivered wake is never repeated.
+- One thread at a time: an interactive user message that reaches the model (not one a prompt
+  route handled) opens a thread, and answering the model's `ask` keeps it open. While a thread is
+  open, judgment-needed notices stay pending with no model turn; each time something new starts
+  waiting, `ctx.ui.notify` shows how many are waiting. The model ends the thread with the
+  `thread-done` action when the work with the user is finished, or it ends after 30 minutes with no
+  user message (`THREAD_IDLE_MS`). The next reconcile delivers what waited as one wake whose hidden
+  part tells the model to list it and offer one item, starting none. With no thread open, notices
+  wake the model at once. Thread state is in memory only: the notices stay pending in durable state,
+  so a restarted coordinator delivers them with no thread open.
 - A judgment-needed scout notice carries that scout's post-research follow-up, rebuilt from the
   durable record on every delivery (see [task lifecycle](task-lifecycle.md)). When the follow-up
   asks for a summary and the report is at most 16,000 characters, its full text rides along in the

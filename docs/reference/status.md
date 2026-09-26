@@ -97,7 +97,7 @@ Ask the coordinator about any task, or run `tandem status --json` for task IDs Â
 
 - With Jev prompt routing on, a message Jev confidently classifies as asking how things are going
   overall runs the read-only `board` action and shows the header and sections, without the footer,
-  with no coordinator turn (`board` in the lookup list, question schema version 4). If Jev fails or
+  with no coordinator turn (`board` in the lookup list, question schema version 5). If Jev fails or
   is unsure, the message goes to the coordinator as before (see
   [policy.md](policy.md#jev-prompt-routing)).
 - The coordinator's `board` action returns the same view.

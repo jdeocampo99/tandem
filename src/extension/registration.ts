@@ -26,6 +26,9 @@ export type TandemOmpRegistrationDependencies = Readonly<{
   readonly promptRouting: PromptRoutingConfig;
   readonly reconcile: (ctx: ExtensionContext, runTick: boolean) => Promise<void>;
   readonly postAction: (ctx: ExtensionContext) => Promise<void>;
+  /** The user's message is going to the model, so a thread opens or continues. */
+  readonly userPrompt: (ctx: ExtensionContext) => void;
+  readonly closeThread: (ctx: ExtensionContext) => void;
   /** The MCP servers this project lets the coordinator use itself. */
   readonly coordinatorMcpServers: (ctx: ExtensionContext) => Promise<readonly string[]>;
   /** Whether a research task for this project is queued or running. */
@@ -51,6 +54,7 @@ function callDependencies(
     confirm: ompApprovalDialog(ctx),
     reconcile: () => dependencies.reconcile(ctx, false),
     postAction: () => dependencies.postAction(ctx),
+    closeThread: () => dependencies.closeThread(ctx),
   };
 }
 
@@ -78,7 +82,9 @@ function registerPromptRouting(
         diagnostics: (entry) => appendDiagnosticEvent(dependencies.getHome(ctx), entry),
       },
     );
-    return reply.handled ? { handled: true } : undefined;
+    if (reply.handled) return { handled: true };
+    if (event.source === "interactive") dependencies.userPrompt(ctx);
+    return undefined;
   });
 }
 

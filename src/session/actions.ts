@@ -176,6 +176,7 @@ export type TandemAction =
   | Readonly<{ readonly action: "review-again"; readonly taskId: string }>
   | Readonly<{ readonly action: "review-close"; readonly taskId: string }>
   | Readonly<{ readonly action: "board" }>
+  | Readonly<{ readonly action: "thread-done" }>
   | Readonly<{ readonly action: "pr-watch" }>
   | Readonly<{
       readonly action: "pr-watch-merging";
@@ -637,6 +638,9 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   "review-close": async (action, service) =>
     actionResult(await service.reviewClose(action.taskId), action.action),
   board: async (action, service) => actionResult(await service.board(), action.action),
+  // The coordinator session closes the thread itself (see runTandemTool); nothing is stored.
+  "thread-done": async (action) =>
+    actionResult("Thread closed. Anything that waited for it arrives next.", action.action),
   "pr-watch": async (action, service) => actionResult(await service.prWatch(), action.action),
   "pr-watch-start": async (action, service) =>
     actionResult(await service.prWatchStart(pullRequestInput(action)), action.action),
@@ -736,6 +740,8 @@ export type TandemCallDependencies = Readonly<{
   readonly reconcile: () => Promise<void>;
   /** Follows every other action. */
   readonly postAction: () => Promise<void>;
+  /** Ends the thread the user and the coordinator were working on; follows `thread-done`. */
+  readonly closeThread: () => void;
 }>;
 
 /** Runs one `tandem` tool request; a failure becomes an error outcome, never a throw. */
@@ -749,6 +755,7 @@ export async function runTandemTool(
       confirm: dependencies.confirm,
       signal,
     });
+    if (action.action === "thread-done") dependencies.closeThread();
     if (action.action === "tick") {
       await dependencies.reconcile();
     } else {
@@ -780,7 +787,7 @@ export async function runTandemTool(
 export async function runTandemCommand(
   args: string,
   cwd: string,
-  dependencies: Omit<TandemCallDependencies, "reconcile">,
+  dependencies: Omit<TandemCallDependencies, "reconcile" | "closeThread">,
   host: Pick<SessionHost, "perform">,
 ): Promise<void> {
   try {

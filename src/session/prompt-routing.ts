@@ -122,7 +122,7 @@ export type PromptRoutingDependencies = Readonly<{
 export type ChoiceConfirmation = { pending?: OpenChoice | undefined };
 
 /** Bumped whenever the shape or meaning of {@link ROUTING_QUESTIONS} changes. */
-export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 4;
+export const PROMPT_ROUTING_QUESTION_SCHEMA_VERSION = 5;
 
 const ROUTING_QUESTIONS: JevQuestions = {
   action: {
@@ -138,7 +138,7 @@ const ROUTING_QUESTIONS: JevQuestions = {
       receipt:
         "The user asks how much time, how many tokens, or how much money the current request has used so far.",
       board:
-        'The user asks how Tandem or their work is going overall, like "how\'s it going?": what needs them, what is running, and their pull requests at a glance.',
+        'The user asks how Tandem or their work is going overall, like "how\'s it going?" or "what\'s waiting?": what needs them, what is running, and their pull requests at a glance.',
       "pr-watch":
         "The user asks how their pull requests are doing: CI, review, merge status, or whether one merged.",
       none: "The request is not exactly one supported read-only lookup.",
