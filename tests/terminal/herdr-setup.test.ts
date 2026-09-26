@@ -118,12 +118,11 @@ test("an existing tab_bar_right or prefix+t binding is left alone, with the line
   const plan = planHerdrConfig(text, COMMANDS);
   expect(plan.text).toBe(text);
   expect(plan.added).toEqual([]);
-  expect(plan.skipped[0]).toContain("You already set ui.tab_bar_right");
-  expect(plan.skipped[0]).toContain(COMMANDS.line);
-  expect(plan.skipped[1]).toBe(
-    "Herdr notifications are already set up; Tandem's use the same setting.",
-  );
-  expect(plan.skipped[2]).toContain("prefix+t is already bound");
+  // The user's toast choice needs nothing; the other two are theirs to add by hand.
+  expect(plan.skipped).toEqual([
+    expect.stringContaining(`Add to your ui.tab_bar_right: { type = "command"`),
+    `prefix+t is taken; bind another key to: ${COMMANDS.popup}`,
+  ]);
 });
 
 const RUNNING = (version: string) => `status: running\nversion: ${version}\nsocket: /s\n`;
@@ -208,17 +207,32 @@ test("setup updates an old Herdr, asks, writes the config, and reloads Tandem's 
   ]);
   expect(writes).toHaveLength(1);
   expect(parsed(writes[0] ?? "").ui?.sidebar_width).toBe(30);
-  expect(printed.join("")).toContain("backup: /Users/me/.config/herdr/config.toml.before-tandem");
+  expect(printed.join("")).toBe(
+    [
+      "→ updating Herdr 0.7.5",
+      "✓ Herdr 0.9.1",
+      "✓ Herdr config updated (backup: config.toml.before-tandem)",
+      "✓ Herdr reloaded; prefix+t shows Tandem's status",
+      "",
+    ].join("\n"),
+  );
 });
 
-test("a Homebrew Herdr is upgraded with brew, and its output is shown", async () => {
+test("a Homebrew Herdr is upgraded with brew, and a failed update shows its output", async () => {
   const { deps, ran, printed } = setup({
     versions: ["herdr 0.8.0", "herdr 0.9.1"],
     herdrBinary: "/opt/homebrew/Cellar/herdr/0.8.0/bin/herdr",
   });
   expect(await setUpHerdrStatus(deps)).toBe(true);
   expect(ran.slice(0, 3)).toEqual(["herdr --version", "brew upgrade herdr", "herdr --version"]);
-  expect(printed.join("")).toContain("  ==> Upgrading herdr 0.8.0 -> 0.9.1");
+  expect(printed.join("")).not.toContain("==> Upgrading");
+
+  const failed = setup({
+    versions: ["herdr 0.8.0", "herdr 0.8.0"],
+    herdrBinary: "/opt/homebrew/Cellar/herdr/0.8.0/bin/herdr",
+  });
+  expect(await setUpHerdrStatus(failed.deps)).toBe(false);
+  expect(failed.printed.join("")).toContain("  ==> Upgrading herdr 0.8.0 -> 0.9.1");
 });
 
 test("re-running with the config already there still applies it to Tandem's session", async () => {
@@ -236,12 +250,14 @@ test("a session still on an old Herdr is restarted only when idle, asked, and no
   const restarted = setup({ config: done, server: stale });
   expect(await setUpHerdrStatus(restarted.deps)).toBe(true);
   expect(restarted.ran.at(-1)).toBe("herdr session stop tandem");
-  expect(restarted.printed.join("")).toContain("Then run tandem to reopen your projects.");
+  expect(restarted.printed.join("")).toContain("run tandem to reopen your projects");
 
   const busy = setup({ config: done, server: stale, runningTasks: async () => 2 });
   expect(await setUpHerdrStatus(busy.deps)).toBe(false);
   expect(busy.ran).not.toContain("herdr session stop tandem");
-  expect(busy.printed.join("")).toContain("2 tasks are running");
+  expect(busy.printed.join("")).toBe(
+    "! Herdr's tandem session still runs 0.8.0 and needs a restart (2 running); when idle, run: herdr session stop tandem && tandem\n",
+  );
 
   const unknown = setup({
     config: done,
@@ -264,7 +280,7 @@ test("a session still on an old Herdr is restarted only when idle, asked, and no
   });
   expect(await setUpHerdrStatus(inside.deps)).toBe(false);
   expect(inside.ran).not.toContain("herdr session stop tandem");
-  expect(inside.printed.join("")).toContain("inside that session");
+  expect(inside.printed.join("")).toContain("from outside Herdr");
 });
 
 test("a session that isn't running picks the config up when it starts", async () => {
@@ -290,7 +306,7 @@ test("setup puts the old config back when Herdr rejects the new one", async () =
   expect(await setUpHerdrStatus(deps)).toBe(false);
   expect(writes.at(-1)).toBe(original);
   expect(ran).not.toContain("herdr --session tandem server reload-config");
-  expect(printed.join("")).toContain("the old one is back");
+  expect(printed.join("")).toContain("the old config is back");
 });
 
 test("setup stops when Herdr is missing, still too old after updating, or needs its package manager", async () => {
@@ -300,7 +316,7 @@ test("setup stops when Herdr is missing, still too old after updating, or needs 
 
   const old = setup({ versions: ["herdr 0.7.5", "herdr 0.7.5"] });
   expect(await setUpHerdrStatus(old.deps)).toBe(false);
-  expect(old.printed.join("")).toContain("(you have 0.7.5); the update above did not install it");
+  expect(old.printed.join("")).toContain("needs Herdr 0.8.2+ (you have 0.7.5)");
   expect(old.writes).toEqual([]);
 
   const mise = setup({
