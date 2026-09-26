@@ -6,8 +6,8 @@ checks and reviews every change, opens the pull request, and keeps that pull req
 it merges. Every task is saved, so you can close the terminal and pick up where you left off.
 
 Most agent harnesses give you a capable model and leave the rest to you: keeping the output clean,
-enforcing good practice, and chasing pull requests through CI and review. Tandem takes on that
-work itself.
+enforcing good practice, and chasing pull requests through CI and review. **Tandem takes on that
+work itself.**
 
 Tandem runs locally on macOS.
 
@@ -22,26 +22,26 @@ it is ordinary TypeScript: task stages, scheduling, worktree allocation, approva
 retries, recovery, and pull request decisions. Validation runs your project's checks with no model
 involved. PR watch decides what to do from a fixed decision table.
 
-Keeping orchestration out of the model makes Tandem faster and cheaper, since no tokens go to
-bookkeeping, and predictable, since the same state always leads to the same next step.
+Keeping orchestration out of the model makes Tandem **faster and cheaper, since no tokens go to
+bookkeeping**, and predictable, since the same state always leads to the same next step.
 
 ### Guardrails against slop
 
-Models tend to over-explain, pad, and reach for the same handful of phrases. Tandem holds every
-agent to a shared writing standard that bans the usual tells (preambles, closing summaries, "not
+Models tend to over-explain, pad, and reach for the same handful of phrases. Tandem holds **every
+agent to a shared writing standard** that bans the usual tells (preambles, closing summaries, "not
 X, it's Y", filler words like "robust" and "leverage") across chat replies, code comments, docs,
 commit messages, and pull request text. Briefs have hard limits on list length and item size.
 
 The same goes for code. Implementers write to a set of code standards (honest signatures, one level
 of abstraction per function, reuse before adding, plain names, comments that explain why) and
-reviewers grade against the identical text. A project that has its own conventions can turn these
+**reviewers grade against the identical text**. A project that has its own conventions can turn these
 off with `standards = "none"`.
 
 ### Playbooks
 
 Each coding task follows a short playbook for its kind of job, which the agent works through as its
-to-do list. It can skip a step that doesn't apply by saying why, but it can't finish with one left
-open.
+to-do list. It can skip a step that doesn't apply by saying why, but **it can't finish with one left
+open**.
 
 | Playbook | Main steps |
 | --- | --- |
@@ -55,16 +55,16 @@ Tandem picks the playbook for you. Say "treat this as a refactor" to change it.
 
 ### Validation and independent review
 
-Every change runs your project's tests, types, and lint, then goes to a separate reviewer agent
-that didn't write it. Findings go back to the implementer as a fix round. Work is only ready when
+Every change runs your project's tests, types, and lint, then goes to **a separate reviewer agent
+that didn't write it**. Findings go back to the implementer as a fix round. Work is only ready when
 both pass. After two fix rounds without passing (configurable), Tandem stops and asks whether to
 keep going.
 
 ### The whole pull request lifecycle
 
 A ready task opens its own draft pull request with a summary, check results, and a checklist of
-anything you need to verify by hand. From there PR watch takes over, and only brings you the
-cases that need a person:
+anything you need to verify by hand. From there PR watch takes over, and **only brings you the
+cases that need a person**:
 
 ![What PR watch handles on its own and when it asks you](docs/images/pr-watch.svg)
 
@@ -90,7 +90,7 @@ you which comments were addressed.
 ### Jev routing
 
 Tandem uses [TypeSafe's Jev](docs/reference/policy.md#jev-prompt-routing), a small, fast
-classifier, to handle the parts of a conversation that don't need a full model turn. Jev input
+classifier, to handle the parts of a conversation that **don't need a full model turn**. Jev input
 costs $0.042 per million tokens with output free.
 
 ![How Jev routes a prompt: a confident match runs in code with no model turn, anything else goes to the coordinator](docs/images/jev-routing.svg)
@@ -110,7 +110,7 @@ everything goes to the coordinator and tasks use the General playbook.
 
 You pick a model and thinking level for each role (planning, research, coding, review,
 presentations), so cheaper models can handle research and review while coding gets a stronger one.
-Tandem never switches to a pricier model on its own. Each request records its usage and cost, and
+**Tandem never switches to a pricier model on its own.** Each request records its usage and cost, and
 the coordinator's chat is compacted after a task finishes so later turns don't pay for old history.
 
 ### Everything else
