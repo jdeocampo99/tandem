@@ -928,6 +928,24 @@ test("a record written before setup commands existed loads with none", async () 
   });
 });
 
+test("a record pinned with standards none keeps it and its digest across reloads", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "standards-none" });
+    let pinnedDigest = "";
+    rewritePayload(directory, created.id, (payload) => {
+      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
+      policyValue.config = { ...policyValue.config, standards: "none" };
+      pinnedDigest = createHash("sha256").update(JSON.stringify(policyValue)).digest("hex");
+    });
+
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("the record did not reload");
+    expect(reloaded.policy.config.standards).toBe("none");
+    expect(policyIdentity(reloaded.policy)).toBe(pinnedDigest);
+  });
+});
+
 test("a recorded review level round-trips with its reason, floors, and shadow assistance", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);

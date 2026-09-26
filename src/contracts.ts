@@ -213,6 +213,12 @@ export type RepoPolicy = {
   readonly maxWorkers?: number;
   readonly maxFixRounds: number;
   readonly reviewLevels: ReviewLevelPolicy;
+  /**
+   * `none` leaves Tandem's code standards and principles out of implementer and reviewer briefs, so
+   * the repository's own guidance governs. Absent means Tandem's; it is never written as "tandem",
+   * so policies pinned before this setting keep their digest.
+   */
+  readonly standards?: "none";
 };
 
 export type GuidanceProvenance = {

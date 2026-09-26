@@ -39,6 +39,7 @@ const POLICY_KEYS: Readonly<Record<string, true>> = {
   maxWorkers: true,
   maxFixRounds: true,
   reviewLevels: true,
+  standards: true,
   requestBudget: true,
 };
 
@@ -288,6 +289,7 @@ export function copyPolicy(policy: PolicyBase): RepoPolicy {
     })),
     maxFixRounds: policy.maxFixRounds,
     reviewLevels: { ...policy.reviewLevels },
+    ...(policy.standards === undefined ? {} : { standards: policy.standards }),
   };
 }
 
@@ -343,6 +345,7 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
   const reviewLevels = hasKey(input, "reviewLevels")
     ? readReviewLevels(input.reviewLevels, base.reviewLevels)
     : { ...base.reviewLevels };
+  const standards = hasKey(input, "standards") ? readStandards(input.standards) : base.standards;
 
   return {
     version: 1,
@@ -353,7 +356,14 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     setupCommands,
     maxFixRounds,
     reviewLevels,
+    ...(standards === undefined ? {} : { standards }),
   };
+}
+
+function readStandards(value: unknown): "none" | undefined {
+  if (value === "tandem") return undefined;
+  if (value === "none") return "none";
+  throw new TypeError('standards must be "tandem" or "none"');
 }
 
 function buildDefaultPolicy(): RepoPolicy {

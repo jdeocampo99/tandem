@@ -25,6 +25,8 @@ export type AgentBriefInput = Readonly<{
   readonly skills?: readonly SkillInvocation[];
   /** The playbook an implementer loads into its to-do list. */
   readonly playbook?: PlaybookId;
+  /** `none` leaves out Tandem's code standards and principles. */
+  readonly standards?: "none";
 }>;
 
 export type ReviewLensId = "review";
@@ -446,7 +448,8 @@ export function buildAgentBrief(input: AgentBriefInput): string {
 
   lines.push("", "## Role requirements", ...formatBullets(ROLE_INSTRUCTIONS[input.role]));
 
-  if (input.role === "implementer") {
+  const withStandards = input.standards !== "none";
+  if (input.role === "implementer" && withStandards) {
     lines.push("", CODE_STANDARDS, "", IMPLEMENTER_PRINCIPLES);
   }
 
@@ -464,7 +467,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
         );
       } else {
         lines.push(`## Selected lens: ${selectedLens.title}`, selectedLens.instructions);
-        lines.push("", CODE_STANDARDS, "", REVIEWER_PRINCIPLES);
+        if (withStandards) lines.push("", CODE_STANDARDS, "", REVIEWER_PRINCIPLES);
       }
     }
   }
