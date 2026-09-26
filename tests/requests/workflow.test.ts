@@ -205,3 +205,33 @@ test("a changed brief pauses affected work with a plain-English reason naming th
     await close();
   }
 });
+
+test("abandoning a stale draft lets a no-id approval land on the one brief still pending", async () => {
+  const { workflow, close } = await fixture();
+  try {
+    const stale = await workflow.draft({
+      repoPath: "/repo",
+      content: content({ goal: "A request the user walked away from" }),
+      reviewPane: false,
+    });
+    const current = await workflow.draft({
+      repoPath: "/repo",
+      content: content({ goal: "The request in view" }),
+      reviewPane: false,
+    });
+    const abandoned = await workflow.abandon(stale.record.id);
+    expect(abandoned.record.abandonedAt).toBe(NOW);
+    expect((await workflow.read(stale.record.id)).record.abandonedAt).toBe(NOW);
+    expect(await workflow.pendingApprovalId()).toBe(current.record.id);
+    await expect(
+      workflow.draft({
+        repoPath: "/repo",
+        requestId: stale.record.id,
+        content: stale.record.draft.content,
+        reviewPane: false,
+      }),
+    ).rejects.toMatchObject({ code: "request-abandoned" });
+  } finally {
+    await close();
+  }
+});

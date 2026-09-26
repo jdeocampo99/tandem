@@ -32,6 +32,11 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   draft, so it never carries to another revision or request.
 - An agreement change makes approval non-current: dispatch is refused and running work is paused
   via ownership-safe pause until reapproval. Annotation-only edits keep approval current.
+- `brief-abandon` records `abandonedAt` when the user drops a request before approving it. Only a
+  brief awaiting approval with no unfinished task under it can be abandoned; an approved request is
+  ended by cancelling its work. An abandoned brief is final: it no longer counts as awaiting
+  approval (so a no-id `brief-approve` and the status board's "Needs you" skip it), dispatch, revision,
+  and approval are refused, and its owned review pane is retired. The record and history stay.
 - Brief approval is agreement only; scope approval, publish, merge, deploy, and destructive actions
   stay separate.
 

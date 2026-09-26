@@ -153,6 +153,15 @@ test("an empty status says nothing needs you, that PR watch has not checked yet,
   );
 });
 
+test("an abandoned brief leaves the board", () => {
+  const brief = createRequestBriefRecord(
+    { id: "req-1", repoPath: "/work/tandem", content: content("Dark mode") },
+    NOW,
+  );
+  const view = boardView(state({ briefs: [{ ...brief, abandonedAt: NOW }] }), NOW);
+  expect(view.needsYou).toEqual([]);
+});
+
 test("an approved brief leaves the board, and a blocked task says why", () => {
   const brief = createRequestBriefRecord(
     { id: "req-1", repoPath: "/work/tandem", content: content("Dark mode") },

@@ -24,6 +24,7 @@ const RECORD_KEYS = [
   "history",
   "approval",
   "reviewPane",
+  "abandonedAt",
 ] as const;
 
 const REVISION_KEYS = [
@@ -92,6 +93,9 @@ export function parseRequestBriefRecord(
   assertMonotonicHistory(history, draft, source);
   const approval = optionalSection(record, "approval");
   const reviewPane = optionalSection(record, "reviewPane");
+  const abandonedAt = Object.hasOwn(record, "abandonedAt")
+    ? requiredText(record, "abandonedAt", source)
+    : undefined;
   return {
     schemaVersion: 1,
     id,
@@ -107,6 +111,7 @@ export function parseRequestBriefRecord(
     ...(reviewPane === undefined
       ? {}
       : { reviewPane: parseReviewPane(reviewPane, `${source}.reviewPane`) }),
+    ...(abandonedAt === undefined ? {} : { abandonedAt }),
   };
 }
 
