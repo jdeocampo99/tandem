@@ -358,6 +358,7 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       "maxWorkers",
       "maxFixRounds",
       "reviewLevels",
+      "standards",
       "requestBudget",
     ],
     source,
@@ -421,6 +422,7 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       : {}),
     maxFixRounds: requiredInteger(value, "maxFixRounds", source, 0),
     reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`),
+    ...(Object.hasOwn(value, "standards") ? { standards: parseStandards(value, source) } : {}),
   };
 }
 
@@ -452,6 +454,12 @@ function parseSetupCommands(record: UnknownRecord, source: string): readonly Set
  * existed carries none, and it loads with every opt-in off, which is exactly the review behavior
  * that record was pinned under. A present but malformed section fails closed.
  */
+function parseStandards(record: UnknownRecord, source: string): "none" {
+  const value = requiredValue(record, "standards", source);
+  if (value !== "none") failState(`${source}.standards`, 'standards must be "none" when present');
+  return value;
+}
+
 function parseReviewLevelPolicy(record: UnknownRecord, source: string): ReviewLevelPolicy {
   if (!Object.hasOwn(record, "reviewLevels")) return { ...DEFAULT_REVIEW_LEVEL_POLICY };
   const value = requiredValue(record, "reviewLevels", source);

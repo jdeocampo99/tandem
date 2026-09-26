@@ -702,6 +702,10 @@ ${setting(coordinatorMcpServers, "coordinatorMcpServers", '["linear"]')}
 # How many times reviewers may send a change back for fixes before Tandem asks you.
 # maxFixRounds = ${defaults.maxFixRounds}
 
+# Tandem gives coding agents and reviewers its own code standards and principles. Set "none" to
+# leave them out and let this repository's AGENTS.md, CLAUDE.md, and instructions govern.
+# standards = "tandem"
+
 # Extra instructions for agents at each stage. Keep this section below the settings above.
 # [instructions]
 # implementation = ["Keep changes small and match the surrounding code."]

@@ -438,7 +438,7 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       surfaces,
       acceptanceCriteria: criteria,
       manualVerification,
-      principles: CODE_STANDARD_NAMES,
+      principles: task.policy.config.standards === "none" ? [] : CODE_STANDARD_NAMES,
       nonGoals,
     },
     identities: {
@@ -547,9 +547,13 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
           `- manual verification (${MANUAL_VERIFICATION_REVIEWER}):`,
           ...brief.scope.manualVerification.map((entry) => `  - ${entry}`),
         ]),
-    "",
-    "## Applicable principles (mandatory; a violation blocks regardless of suggestion status)",
-    ...bullets(brief.scope.principles),
+    ...(brief.scope.principles.length === 0
+      ? []
+      : [
+          "",
+          "## Applicable principles (mandatory; a violation blocks regardless of suggestion status)",
+          ...bullets(brief.scope.principles),
+        ]),
     "",
     "## Non-goals",
     ...bullets(brief.scope.nonGoals),

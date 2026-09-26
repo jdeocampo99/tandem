@@ -198,6 +198,27 @@ test("gives implementers the same code standards the reviewer grades against", (
   expect(buildAgentBrief({ ...input, role: "scout" })).not.toContain(CODE_STANDARDS);
 });
 
+test("standards none leaves Tandem's standards and principles out of every brief", () => {
+  const input = {
+    objective: "Change the parser",
+    acceptanceCriteria: ["Keep behavior identical."],
+    instructions: ["Follow the guidance channel."],
+    reportPath: "/tmp/report.txt",
+    standards: "none",
+  } as const;
+  const implementer = buildAgentBrief({ ...input, role: "implementer" });
+  const reviewer = buildAgentBrief({
+    ...input,
+    role: "reviewer",
+    review: { head: "abc123", pass: "review" },
+  });
+  for (const brief of [implementer, reviewer]) {
+    expect(brief).not.toContain(CODE_STANDARDS);
+    expect(brief).not.toContain("# Principles");
+    expect(brief).toContain("Follow the guidance channel.");
+  }
+});
+
 test("holds worker prose to the coordinator's writing bans as a blocking standard", () => {
   const bans = "no em dashes, no closing summary";
   expect(COORDINATOR_INSTRUCTIONS).toContain(bans);

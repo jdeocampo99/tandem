@@ -180,6 +180,13 @@ test("parsePolicy accepts exact custom provider selectors but rejects fuzzy alia
   ).toThrow(TypeError);
 });
 
+test("standards defaults to Tandem's and is pinned only when turned off", () => {
+  expect("standards" in parsePolicy({})).toBe(false);
+  expect("standards" in parsePolicy({ standards: "tandem" })).toBe(false);
+  expect(parsePolicy({ standards: "none" }).standards).toBe("none");
+  expect(() => parsePolicy({ standards: "strict" })).toThrow(TypeError);
+});
+
 test("parsePolicy rejects unknown keys, invalid pins, invalid limits, and unsafe file references", () => {
   expect(() => parsePolicy({ unexpected: true })).toThrow(TypeError);
   expect(() => parsePolicy({ models: { scout: { model: "gpt-5.6-luna" } } })).toThrow(TypeError);
@@ -517,6 +524,7 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
       "repoPath",
       "reviewLevels",
       "setupCommands",
+      "standards",
       "validationCommands",
     ]);
     const { repoPath, coordinatorMcpServers, cleanupCommands, merging, ...policy } = settings;

@@ -355,6 +355,9 @@ export function buildPrompt(
     ...(artifacts.length === 0 ? {} : { artifacts }),
     ...(skills === undefined ? {} : { skills }),
     ...(playbook === undefined ? {} : { playbook }),
+    ...(task.policy.config.standards === undefined
+      ? {}
+      : { standards: task.policy.config.standards }),
   });
 }
 

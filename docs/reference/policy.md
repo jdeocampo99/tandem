@@ -143,6 +143,10 @@ Contracts the parser does not make obvious:
 - `reviewLevels.jevAssistance` is `"off"` or `"shadow"`. Moving any review level past its default
   requires the documented evaluation first; see
   [Review levels](review-and-validation.md#review-levels).
+- `standards` is `"tandem"` (default) or `"none"`. `"none"` leaves Tandem's code standards and
+  principles (`src/instructions.ts`) out of implementer and reviewer briefs and the review brief's
+  mandatory principles, so the repository's own guidance governs. It is pinned only when `"none"`,
+  so policies pinned before the setting keep their digest.
 - Legacy keys `requestBudget` and `reviewLevels.reducedRouting` decode but are ignored.
 - Existing valid settings are preserved; an invalid file (bad TOML or JSON, unknown fields, wrong
   schema version, mismatched `repoPath`, invalid policy, symlink) blocks while the raw file stays
