@@ -2,7 +2,8 @@
 
 Task stages, approvals, fix rounds, post-research continuation, child terminals, and Herdr status.
 
-Code: src/tasks/lifecycle.ts, src/tasks/findings.ts, src/tasks/research-continuation.ts,
+Code: src/tasks/lifecycle.ts, src/tasks/findings.ts, src/tasks/timeline.ts, src/tasks/timeline-store.ts,
+src/tasks/trace.ts, src/tasks/research-continuation.ts,
 src/tasks/research-continuation-classifier.ts, src/session/research-follow-up.ts,
 src/service/source.ts, src/adapters/herdr.ts, src/adapters/herdr-status.ts,
 src/session/worker.ts, src/session/worker-steering.ts, src/workers/terminal-extension.ts
@@ -61,6 +62,27 @@ src/session/worker.ts, src/session/worker-steering.ts, src/workers/terminal-exte
   only once the final manifest is satisfied and names lenses, review level, accepted HEAD, any
   P2/P3 known issues, and that ready is not publish/merge/deploy approval. Exhaustion names rounds
   used and asks `Keep fixing?`.
+
+## Timeline and trace
+
+- Every task change appends events to the `task_events` table in `state.sqlite`, in the same
+  transaction as the change, so an event exists exactly when its change committed. Rows are never
+  updated or deleted.
+- The task store derives events by comparing the record before and after each write
+  (`timelineEventsForChange`): `created`, `stage-changed`, `blocked` (with the block kind) and
+  `unblocked`, `fix-round`, `finding-raised` and `finding-settled`, `question-asked` and
+  `question-answered`, and `steered`. Central recovery adds `restarted` in the write that spends the
+  restart.
+- An event holds its type, task, time, a one-line cause (at most 200 characters), and references:
+  the transcript file and entry id the worker submitted from, the commit, the report path, and the
+  job. It never copies message, finding, transcript, or report text.
+- The cause comes from the caller when it knows one (a pause reason, "The user restarted it.",
+  automatic recovery), else from the record (a block's summary).
+- `tandem trace` computes rollups when read; there are no metrics tables. First-pass review: the
+  first time a task left `reviewing`, whether it went to `ready`/`completed` (pass) or
+  `awaiting-fixes` (fail). Fix rounds: `fix-round` events. Time blocked: `blocked` to `unblocked`,
+  an open block counting to now. Cost: the task's own samples in its request's usage ledger; a task
+  with no request has none.
 
 ## Research continuation
 

@@ -15,6 +15,7 @@ import { ompSessionHost, ompToolCall } from "./extension/omp-host.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { type PlaybookClassifier, playbookClassifier } from "./playbooks/classify.ts";
 import { appendCoordinatorUsage } from "./runtime/usage-ledger.ts";
+import { type IssueDraftChecker, issueDraftChecker } from "./self-improvement/issue-draft.ts";
 import {
   createTandemService,
   type TandemService,
@@ -48,6 +49,7 @@ function createCoordinatorService(
   environment: TandemBoundaryEnvironment,
   classifyResearchContinuation: ResearchContinuationClassifier,
   classifyPlaybook: PlaybookClassifier,
+  checkIssueDraft: IssueDraftChecker,
 ): TandemService {
   if (options.service !== undefined) return options.service;
   const sourceRepo = environment.sourceRepo;
@@ -64,6 +66,7 @@ function createCoordinatorService(
     poolRoot: environment.poolRoot,
     classifyResearchContinuation,
     classifyPlaybook,
+    checkIssueDraft,
     ...(sourceRepo === undefined
       ? {}
       : {
@@ -104,6 +107,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     const jevConfig = researchContinuationClassifierConfig(environmentSnapshot);
     const classifyResearchContinuation = researchContinuationClassifier(jevConfig);
     const classifyPlaybook = playbookClassifier(jevConfig);
+    const checkIssueDraft = issueDraftChecker(jevConfig);
     let latestContext: ExtensionContext;
     let bound: BoundCoordinator | undefined;
 
@@ -144,6 +148,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             environment,
             classifyResearchContinuation,
             classifyPlaybook,
+            checkIssueDraft,
           ),
         realpath: (path) => realpath(path),
         readReport: readResearchReport,

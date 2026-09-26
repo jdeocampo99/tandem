@@ -1258,6 +1258,54 @@ test("tandem status shows the board from saved state, and --json adds tasks with
   }
 });
 
+test("tandem trace prints one task's timeline, or the rollup across tasks", async () => {
+  const rollup = { taskId: "task-1", firstPassReview: true, fixRounds: 0, blockedMs: 0 };
+  const service = {
+    trace: async (id: string) => ({
+      events: [
+        {
+          seq: 1,
+          taskId: id,
+          at: "2030-01-01T00:00:00.000Z",
+          type: "created",
+          stage: "awaiting-approval",
+        },
+      ],
+      unreadableEvents: 0,
+      rollup,
+    }),
+    traceSummary: async () => ({
+      tasks: 1,
+      reviewedTasks: 1,
+      firstPassReviews: 1,
+      fixRounds: 0,
+      blockedMs: 0,
+      costMicros: 0,
+      unpricedSamples: 0,
+      rollups: [rollup],
+    }),
+    shutdown: async () => undefined,
+  } as unknown as TandemService;
+  const run = async (argv: readonly string[]) => {
+    const output: string[] = [];
+    const result = await runTerminal(argv, {
+      processEnvironment: { TANDEM_HOME: "/tmp/tandem-trace-test" },
+      service,
+      stdout: (text) => output.push(text),
+      stderr: (text) => output.push(text),
+    });
+    return { result, text: output.join("") };
+  };
+
+  const one = await run(["trace", "task-1"]);
+  expect(one.result).toEqual({ exitCode: 0, status: "trace" });
+  expect(one.text).toContain("2030-01-01T00:00:00.000Z  created at awaiting-approval");
+  expect(one.text).toContain("First review: passed");
+  expect(JSON.parse((await run(["trace", "task-1", "--json"])).text).rollup).toEqual(rollup);
+  expect((await run(["trace"])).text).toContain("First-pass review rate: 100% (1 of 1)");
+  expect(() => parseTerminalArgs(["trace", "a", "b"])).toThrow("at most 1 argument");
+});
+
 test("old command spellings name their replacement instead of opening a project", () => {
   expect(() => parseTerminalArgs(["restart"])).toThrow("`tandem restart` is now `tandem update`");
   expect(() => parseTerminalArgs(["--reset", "--force"])).toThrow("is now `tandem reset`");

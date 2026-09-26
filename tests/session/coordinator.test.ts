@@ -34,6 +34,7 @@ function coordinatorDeps(
       ({
         prWatchNotices: async () => [],
         board: async () => ({ now: "", projects: [], needsYou: [], running: [], pullRequests: [] }),
+        investigationQuestions: async () => [],
         ...service,
       }) as TandemService,
     realpath: async (path) => path,

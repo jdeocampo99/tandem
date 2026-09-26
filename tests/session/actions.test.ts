@@ -1181,3 +1181,46 @@ test("/tandem models . resolves to the coordinator's own checkout, and nothing e
     repoPath: ".",
   });
 });
+
+test("a report-mode issue is filed only after the user approves the cleaned-up draft", async () => {
+  const reviewed = {
+    draft: { title: "Reviewer times out", body: "It restarted twice." },
+    check: { flagged: true, warning: "It may still contain work code, paths, or secrets." },
+  };
+  const filed: unknown[] = [];
+  const service = {
+    reviewIssue: async () => reviewed,
+    fileIssue: async (input: unknown) => {
+      filed.push(input);
+      return { url: "https://github.com/jdeocampo99/tandem/issues/7" };
+    },
+  } as unknown as TandemService;
+  const action = {
+    action: "report-issue",
+    taskId: "task-1",
+    title: "Reviewer times out on acme",
+    body: "It restarted twice.",
+  } as const;
+  const dialogs: { title: string; message: string }[] = [];
+  const answering = (allow: boolean) => ({
+    confirm: async (title: string, message: string) => {
+      dialogs.push({ title, message });
+      return allow;
+    },
+  });
+
+  expect((await executeTandemAction(action, service, answering(false))).approved).toBe(false);
+  expect((await executeTandemAction(action, service, { confirm: undefined })).approved).toBe(false);
+  expect(filed).toEqual([]);
+  expect(dialogs[0]).toEqual({
+    title: "File this issue on jdeocampo99/tandem?",
+    message:
+      "Warning: It may still contain work code, paths, or secrets. Read it before filing.\n\nReviewer times out\n\nIt restarted twice.",
+  });
+
+  const accepted = await executeTandemAction(action, service, answering(true));
+  expect(accepted.value).toBe("Filed https://github.com/jdeocampo99/tandem/issues/7");
+  expect(filed).toEqual([
+    { taskId: "task-1", title: "Reviewer times out on acme", body: "It restarted twice." },
+  ]);
+});

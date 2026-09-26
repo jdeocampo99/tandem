@@ -167,6 +167,9 @@ const validRequests: readonly Record<string, unknown>[] = [
   { action: "pr-watch-start", pullRequest: "o/r#1" },
   { action: "pr-watch-stop", pullRequest: "#1", repoPath: "/r" },
   { action: "pr-watch-fix", pullRequest: "https://github.com/o/r/pull/1" },
+  { action: "investigate", taskId: "t" },
+  { action: "investigate", taskId: "t", question: "why so slow?", targetClone: true },
+  { action: "report-issue", taskId: "t", title: "T", body: "B" },
 ];
 
 const invalidRequests: readonly [string, unknown][] = [
@@ -290,8 +293,17 @@ const review = {
       file: "src/a.ts",
       line: 3,
       description: "Broken.",
+      category: "correctness",
+      catchStage: "validation",
     },
-    { id: "f2", severity: "P3", verdict: "plausible", description: "Maybe." },
+    {
+      id: "f2",
+      severity: "P3",
+      verdict: "plausible",
+      description: "Maybe.",
+      category: "docs",
+      catchStage: "review",
+    },
   ],
   summary: "One issue.",
 };
@@ -339,6 +351,14 @@ function submitReportCases(role: WorkerRole): readonly Case[] {
     {
       name: "review with an extra field",
       input: { outcome: done, review: { ...review, passed: true } },
+      valid: false,
+    },
+    {
+      name: "review finding without a category",
+      input: {
+        outcome: done,
+        review: { ...review, findings: [{ ...review.findings[1], category: undefined }] },
+      },
       valid: false,
     },
     {

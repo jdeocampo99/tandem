@@ -1,5 +1,10 @@
 import { z } from "zod/v4";
-import { type AgentRole, MODEL_ROLE_ORDER } from "../contracts.ts";
+import {
+  type AgentRole,
+  FINDING_CATCH_STAGES,
+  FINDING_CATEGORIES,
+  MODEL_ROLE_ORDER,
+} from "../contracts.ts";
 import { PINNABLE_PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 import { outcomesFor } from "../workers/protocol.ts";
@@ -247,6 +252,19 @@ export const tandemRequestSchema = z.strictObject({
         repoPath: z.string().optional().describe("Where #123 is; defaults to this project."),
       }),
     ),
+    z.strictObject({
+      action: z.literal("investigate"),
+      taskId: z.string(),
+      question: z.string().optional().describe("The user's question, in their words."),
+      targetCheckout: z.string().optional().describe("Where the user said Tandem is checked out."),
+      targetClone: z.boolean().optional().describe("True when the user said to clone Tandem."),
+    }),
+    z.strictObject({
+      action: z.literal("report-issue"),
+      taskId: z.string().describe("The task the investigation was about."),
+      title: z.string(),
+      body: z.string(),
+    }),
   ]),
 });
 
@@ -259,6 +277,8 @@ export const reviewResultSchema = z.strictObject({
       file: z.string().optional(),
       line: z.number().int().positive().optional(),
       description: z.string(),
+      category: z.enum(FINDING_CATEGORIES),
+      catchStage: z.enum(FINDING_CATCH_STAGES),
     }),
   ),
   summary: z.string(),

@@ -22,7 +22,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `registry.ts`, `restart.ts` (`tandem update`), `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
 | Models, environment, policy, skill lookup | [config/](src/config/); skills: `skills.ts` |
 | Request briefs, approval revisions, review pane | [requests/](src/requests/): `brief.ts`, `store.ts`, `store-codec.ts`, `markdown.ts`, `review-pane.ts`, `workflow.ts` |
-| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts`, `question.ts`, `communication-protocol.ts`, `inspection.ts` (`tandem status TASK_ID`) |
+| Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts`, `question.ts`, `communication-protocol.ts`, `inspection.ts` (`tandem status TASK_ID`), `timeline.ts` / `timeline-store.ts` (task events), `trace.ts` (`tandem trace`) |
 | Durable jobs, reservations, reconciliation, recovery | [runtime/](src/runtime/) + [service/](src/service/) + [recovery/](src/recovery/): `central.ts` (stop/save/re-enter effects), `central-reentry.ts` (pure re-entry table and decisions), `central-review.ts` |
 | Request usage, cost, quota, elapsed-time receipts | [runtime/](src/runtime/): `usage.ts`, `usage-events.ts`, `usage-ledger.ts`, `usage-codec.ts`, `usage-receipt.ts` |
 | Model tier evidence and economical routing | [config/model-tier.ts](src/config/model-tier.ts), [workers/execution-routing.ts](src/workers/execution-routing.ts) |
@@ -36,6 +36,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
 | `tandem status` and `--watch`, "Needs you", "how's it going?" | [board/](src/board/): `view.ts` (pure sections and rendering), `read.ts`, `pane.ts`; [terminal/status.ts](src/terminal/status.ts) |
 | PR watch: keeping open PRs moving until they merge, `tandem watch` | [pr-watch/](src/pr-watch/): `decide.ts` (pure decision table), `github.ts`, `watcher.ts`, `store.ts`, `view.ts` |
+| Self-improvement: trigger rules, investigations, report-mode issues | [self-improvement/](src/self-improvement/): `triggers.ts` (pure rules), `issue-draft.ts` (scrub and Jev check), `service.ts` |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |
 
 ## Safety boundaries
@@ -84,7 +85,8 @@ bun test
 bun run lint    # Biome
 ```
 
-Format changed files with `bun run format <files>`. `bun run start` invokes the **advanced action CLI**,
+Format changed files with `bun run format <files>`. Pull request descriptions follow
+[.github/pull_request_template.md](.github/pull_request_template.md), including those opened with `gh pr create --body`. `bun run start` invokes the **advanced action CLI**,
 not the normal `tandem` front door.
 
 ## Read on demand
@@ -105,6 +107,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - Reviewing someone else's PR (`pr-review` tasks): [pr-review.md](docs/reference/pr-review.md).
 - PR watch, its decision table, and `tandem watch`: [pr-watch.md](docs/reference/pr-watch.md).
 - `tandem status`, "Needs you", and when the coordinator opens the live view: [status.md](docs/reference/status.md).
+- Self-improvement modes, triggers, investigations, report-mode issues: [self-improvement.md](docs/reference/self-improvement.md).
 - Durable state, locking, restart, central recovery and its re-entry table: [recovery.md](docs/reference/recovery.md).
 - Block causes, stale records, panes, leases, `tandem fix`: [reconciliation.md](docs/reference/reconciliation.md).
 

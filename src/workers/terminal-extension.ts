@@ -21,6 +21,7 @@ import type {
 import { copyAssetSchema, submitReportSchema } from "../session/tools.ts";
 import { type WorkerHost, WorkerSession } from "../session/worker.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
+import type { TranscriptRef } from "../tasks/timeline.ts";
 import { parseWorkerJob, persistWorkerResult, type WorkerJob } from "./jobs.ts";
 import {
   assertSelectedModel,
@@ -129,6 +130,14 @@ export class OmpWorkerPane {
       return () => ctx.clearTimer(timer);
     },
   };
+
+  /** The conversation entry the worker is at now, when OMP keeps a transcript for it. */
+  transcript(): TranscriptRef | undefined {
+    const sessions = this.current().sessionManager;
+    const file = sessions.getSessionFile();
+    const entryId = sessions.getLeafId();
+    return file === undefined || entryId === null ? undefined : { file, entryId };
+  }
 
   private current(): ExtensionContext {
     if (this.context === undefined) throw new Error("no OMP context has reached the worker yet");
@@ -271,7 +280,13 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       writeState: (state) => writeWorkerTerminal(jobPath, state),
       writeTokenTally: (tally) => writeWorkerTokenTally(jobPath, tally),
     },
-    persistResult: (result) => persistWorkerResult(job.resultPath, result),
+    persistResult: (result) => {
+      const transcript = pane.transcript();
+      return persistWorkerResult(
+        job.resultPath,
+        transcript === undefined ? result : { ...result, transcript },
+      );
+    },
     readReceipt: (receiptPath) =>
       readWorkerReceipt(receiptPath, {
         jobId: job.id,

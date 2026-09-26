@@ -14,6 +14,7 @@ import {
   jevGateway,
   jevUsageRecord,
 } from "../adapters/typesafe.ts";
+import type { TaskRecord } from "../contracts.ts";
 import { findPullRequestRef } from "../pr-review/pull-request.ts";
 import { classifyPrReviewPrompt, PR_REVIEW_ROUTE_QUESTION_VERSION } from "../pr-review/route.ts";
 import type { DiagnosticEvent, DiagnosticValue } from "../runtime/diagnostics.ts";
@@ -28,6 +29,12 @@ import {
   openChoices,
 } from "./choice-reply-route.ts";
 import type { SessionEvent, SessionHost } from "./events.ts";
+import {
+  classifyInvestigatePrompt,
+  INVESTIGATE_ROUTE_QUESTION_VERSION,
+  investigateCandidates,
+  mentionsInvestigation,
+} from "./investigate-route.ts";
 import {
   classifyPullUpPrompt,
   MAX_PULL_UP_CANDIDATES,
@@ -480,9 +487,9 @@ async function deliverReply(
 }
 
 /**
- * Answers an interactive prompt in code when it is a lookup, a PR review, a pull-up, or a reply to
- * a fixed-choice question, delivering the reply through the host. `handled: false` leaves the
- * prompt to the coordinator.
+ * Answers an interactive prompt in code when it is a lookup, a PR review, a pull-up, an
+ * investigation, or a reply to a fixed-choice question, delivering the reply through the host.
+ * `handled: false` leaves the prompt to the coordinator.
  */
 export async function routeUserPrompt(
   event: UserPrompt,
@@ -542,6 +549,13 @@ export async function routeUserPrompt(
     deps.config.apiKey !== undefined &&
     mentionsPullUp(prompt) &&
     (await routePullUp(prompt, deps))
+  ) {
+    return { handled: true };
+  }
+  if (
+    deps.config.apiKey !== undefined &&
+    mentionsInvestigation(prompt) &&
+    (await routeInvestigate(prompt, deps))
   ) {
     return { handled: true };
   }
@@ -780,5 +794,53 @@ async function routeChoiceReply(prompt: string, deps: PromptRoutingDependencies)
     promptHash: promptHash(prompt),
     action: choice.action.action,
   });
+  return true;
+}
+
+/**
+ * Starts an investigation when self-improvement is on and Jev names the one task a "why did that
+ * take so long?" prompt asks about. Returns false, with nothing started, when the prompt should
+ * route on.
+ */
+async function routeInvestigate(prompt: string, deps: PromptRoutingDependencies): Promise<boolean> {
+  let candidates: readonly TaskRecord[];
+  try {
+    const service = deps.service();
+    if ((await service.selfImprovementMode()) === "off") return false;
+    candidates = investigateCandidates(await service.list());
+  } catch {
+    await recordDiagnostic(deps, "prompt-route-fallback", {
+      promptHash: promptHash(prompt),
+      reason: "investigate-candidates-unavailable",
+    });
+    return false;
+  }
+  const evaluation = await classifyInvestigatePrompt(
+    prompt,
+    candidates,
+    deps.config,
+    deps.evaluate,
+    deps.now,
+  );
+  await recordDiagnostic(
+    deps,
+    "prompt-route-evaluated",
+    {
+      promptHash: promptHash(prompt),
+      classifier: "jev",
+      reason: evaluation.reason,
+      durationMs: evaluation.durationMs,
+      questionVersion: INVESTIGATE_ROUTE_QUESTION_VERSION,
+      candidates: candidates.length,
+    },
+    evaluation.usage,
+  );
+  if (evaluation.taskId === undefined) return false;
+  await dispatchRoutedAction(
+    prompt,
+    { action: "investigate", taskId: evaluation.taskId, question: prompt },
+    deps,
+    { details: { taskId: evaluation.taskId } },
+  );
   return true;
 }

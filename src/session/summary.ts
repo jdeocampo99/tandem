@@ -927,6 +927,7 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   }
   if (
     action === "create" ||
+    action === "investigate" ||
     action === "pr-watch-fix" ||
     action === "show" ||
     action === "approve" ||

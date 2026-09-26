@@ -12,7 +12,12 @@ import { releaseWorktree } from "../adapters/treehouse.ts";
 import { showBoardPane } from "../board/pane.ts";
 import { readBoard } from "../board/read.ts";
 import type { BoardView } from "../board/view.ts";
-import { type HomeSettings, readHomeSettings, saveWorkerSkills } from "../config/home-settings.ts";
+import {
+  type HomeSettings,
+  readHomeSettings,
+  type SelfImprovementMode,
+  saveWorkerSkills,
+} from "../config/home-settings.ts";
 import {
   type JevSetting,
   type ModelSettings,
@@ -137,6 +142,14 @@ import type {
 import { requestIntakeEvent } from "../runtime/usage-events.ts";
 import { createRequestUsageLedger, type RequestUsageLedger } from "../runtime/usage-ledger.ts";
 import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
+import { type IssueDraftChecker, issueDraftChecker } from "../self-improvement/issue-draft.ts";
+import {
+  type InvestigateInput,
+  type InvestigationQuestion,
+  type IssueInput,
+  type IssueReview,
+  SelfImprovement,
+} from "../self-improvement/service.ts";
 import { TaskControlWorkflow } from "../tasks/control.ts";
 import { KEEP_FIXING_QUESTION_ID_PREFIX, keepFixingGrant } from "../tasks/findings.ts";
 import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
@@ -153,6 +166,14 @@ import {
   reviewAssistanceRuntime,
 } from "../tasks/review-assistance.ts";
 import { createTaskStore, type TaskStore, transitionStoredTask } from "../tasks/store.ts";
+import { readTimeline } from "../tasks/timeline-store.ts";
+import {
+  summarizeRollups,
+  type TaskTrace,
+  type TraceSummary,
+  taskCost,
+  taskRollup,
+} from "../tasks/trace.ts";
 import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { claimOf, ownsOperation } from "../workers/operation-claim.ts";
@@ -194,6 +215,7 @@ import {
   type TerminalTaskCleanupOptions,
 } from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskCheckoutPath, taskSourcePath } from "./source.ts";
+import { pruneTranscripts, transcriptsToPrune } from "./transcript-pruning.ts";
 
 // ponytail: a fixed count of ready idle worktree copies per repository, removed first under disk
 // pressure. Size it from recent task starts if copies are too often missing or left unused.
@@ -269,6 +291,8 @@ export type TandemServiceOptions = Readonly<{
   readonly projectRoots?: readonly string[];
   /** The home folder whose skill folders hold the user's personal skills; defaults to the OS home. */
   readonly personalSkillsHome?: string;
+  /** The Jev check of a report-mode issue draft; without one, every draft is flagged. */
+  readonly checkIssueDraft?: IssueDraftChecker;
 }>;
 export type TandemService = Readonly<{
   readonly onboard: (
@@ -292,6 +316,10 @@ export type TandemService = Readonly<{
   readonly list: () => Promise<readonly TaskRecord[]>;
   readonly get: (id: string) => Promise<TaskRecord>;
   readonly inspect: (id: string) => Promise<TaskInspection>;
+  /** One task's timeline and rollup. */
+  readonly trace: (id: string) => Promise<TaskTrace>;
+  /** The rollups across every task in scope. */
+  readonly traceSummary: () => Promise<TraceSummary>;
   readonly deliveryPreflight: (
     id: string,
     input: { readonly base: string },
@@ -403,6 +431,16 @@ export type TandemService = Readonly<{
   readonly workerSkillOffer: () => Promise<readonly string[]>;
   /** Saves the user's answer to that offer, an empty list for no. */
   readonly saveWorkerSkills: (skills: readonly string[]) => Promise<HomeSettings>;
+  /** Whether this machine looks into Tandem's own problems, and what it does with the answer. */
+  readonly selfImprovementMode: () => Promise<SelfImprovementMode>;
+  /** Questions about open tasks that newly broke a trigger rule; each task is asked about once. */
+  readonly investigationQuestions: () => Promise<readonly InvestigationQuestion[]>;
+  /** Starts research in the Tandem repository into why a task went the way it did. */
+  readonly investigate: (input: InvestigateInput) => Promise<TaskRecord>;
+  /** A report-mode issue scrubbed of the task's work content, with its Jev check. */
+  readonly reviewIssue: (input: IssueInput) => Promise<IssueReview>;
+  /** Files the scrubbed issue on the Tandem repository; only after the user approved it. */
+  readonly fileIssue: (input: IssueInput) => Promise<Readonly<{ url: string }>>;
   readonly shutdown: () => Promise<void>;
 }>;
 
@@ -439,7 +477,11 @@ type ServiceDependencies = Readonly<{
   reviewAssistance: ReviewAssistanceRuntime;
   projectRoots: readonly string[];
   personalSkillsHome: string;
+  checkIssueDraft: IssueDraftChecker;
 }>;
+
+/** Why a task resumed after its question was answered, as its timeline records it. */
+const QUESTION_ANSWERED = "Its question was answered.";
 
 function assertTaskId(id: unknown): string {
   return singleLine(id, "task id");
@@ -508,6 +550,7 @@ class TandemController {
   readonly #prReviews: PrReviewWorkflow;
   readonly #drafts: DraftRefreshWorkflow;
   readonly #prWatch: PrWatcher;
+  readonly #selfImprovement: SelfImprovement;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #boardPane: Endpoint | undefined;
   #shutdownPromise: Promise<void> | undefined;
@@ -523,6 +566,15 @@ class TandemController {
       run: deps.run,
       recordPullRequest: (taskId, expectedRevision, metadata) =>
         this.recordPullRequest(taskId, expectedRevision, metadata),
+    });
+    this.#selfImprovement = new SelfImprovement({
+      home: deps.home,
+      run: deps.run,
+      clock: deps.clock,
+      checkDraft: deps.checkIssueDraft,
+      getTask: (taskId) => this.get(taskId),
+      traceTask: (taskId) => this.trace(taskId),
+      createTask: (input) => this.create(input),
     });
     this.#prWatch = new PrWatcher({
       home: deps.home,
@@ -716,6 +768,8 @@ class TandemController {
       onboard: (repoPath, write, coordinatorMcpServers) =>
         this.onboard(repoPath, write, coordinatorMcpServers),
       inspect: (id) => this.inspect(id),
+      trace: (id) => this.trace(id),
+      traceSummary: () => this.traceSummary(),
       deliveryPreflight: (id, input) => this.deliveryPreflight(id, input.base),
       models: (repoPath) => this.models(repoPath),
       configureModels: (input) => this.configureModels(input),
@@ -787,6 +841,11 @@ class TandemController {
       workerSkillOffer: () => this.workerSkillOffer(),
       saveWorkerSkills: (skills) =>
         saveWorkerSkills(this.#deps.home, readTextList(skills, "workerSkills")),
+      selfImprovementMode: () => this.#selfImprovement.mode(),
+      investigationQuestions: async () => this.#selfImprovement.takeQuestions(await this.list()),
+      investigate: (input) => this.#selfImprovement.investigate(input),
+      reviewIssue: (input) => this.#selfImprovement.reviewIssue(input),
+      fileIssue: (input) => this.#selfImprovement.fileIssue(input),
       shutdown: () => this.shutdown(),
     };
   }
@@ -1201,12 +1260,37 @@ class TandemController {
     return inspectTask(this.#deps, task);
   }
 
+  async trace(id: string): Promise<TaskTrace> {
+    const task = await this.get(assertTaskId(id));
+    if (!(await this.#source.taskInScope(task))) {
+      throw new Error(`task ${task.id} is outside the repository scope`);
+    }
+    return this.traceOf(task);
+  }
+
+  async traceSummary(): Promise<TraceSummary> {
+    const traces = await Promise.all((await this.list()).map((task) => this.traceOf(task)));
+    return summarizeRollups(traces.map((trace) => trace.rollup));
+  }
+
+  private async traceOf(task: TaskRecord): Promise<TaskTrace> {
+    const timeline = await readTimeline(this.#deps.home, task.id);
+    const cost =
+      task.requestId === undefined
+        ? undefined
+        : taskCost(await this.#deps.usageLedger.read(task.requestId), task.requestId, task.id);
+    return {
+      ...timeline,
+      rollup: taskRollup(task.id, timeline.events, this.#deps.clock(), cost),
+    };
+  }
+
   async deliveryPreflight(id: string, base: string): Promise<DeliveryPreflightResult> {
     return deliveryPreflight(this.#deps, await this.get(assertTaskId(id)), base);
   }
 
   async resume(id: string): Promise<TaskRecord> {
-    return this.#control.resumeTask(assertTaskId(id));
+    return this.#control.resumeTask(assertTaskId(id), "The user resumed it.");
   }
   async restart(id: string): Promise<TaskRecord> {
     const taskId = assertTaskId(id);
@@ -1280,7 +1364,7 @@ class TandemController {
       return this.messages(taskId);
     }
     const result = await this.#source.appendAnswer(taskId, questionId, answer);
-    if (result.resumed) await this.#control.resumeTask(taskId);
+    if (result.resumed) await this.#control.resumeTask(taskId, QUESTION_ANSWERED);
     return this.messages(taskId);
   }
 
@@ -1306,7 +1390,7 @@ class TandemController {
     }
     const result = await this.#source.appendAnswer(taskId, questionId, answer);
     if (!result.resumed) return;
-    const resumed = await this.#control.resumeTask(taskId);
+    const resumed = await this.#control.resumeTask(taskId, QUESTION_ANSWERED);
     if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage)) {
       await this.reconcileTask(resumed);
     }
@@ -1339,7 +1423,7 @@ class TandemController {
       }));
     });
     if (choice === "no") return;
-    const resumed = await this.#control.resumeTask(taskId);
+    const resumed = await this.#control.resumeTask(taskId, "The user chose to keep fixing.");
     if (resumed.stage === "awaiting-fixes") await this.reconcileTask(resumed);
   }
 
@@ -1673,9 +1757,23 @@ class TandemController {
     }
     const current = draftRecorded ? await this.#source.scopedTasks() : settled;
     await this.#accounting.recordSettledTasks(current);
+    await this.pruneFinishedTranscripts(current);
     // Not awaited: reading GitHub takes seconds and must not hold up task work.
     void this.#prWatch.tick().catch((error: unknown) => this.recordPrWatchFailure(error));
     return current;
+  }
+
+  /** Pruning never holds up task work; a failure is recorded and the next tick retries. */
+  private async pruneFinishedTranscripts(tasks: readonly TaskRecord[]): Promise<void> {
+    try {
+      await pruneTranscripts(this.#deps.home, transcriptsToPrune(tasks, this.#deps.clock()));
+    } catch (error) {
+      await appendDiagnosticEvent(
+        this.#deps.home,
+        { event: "transcript-prune-failed", details: { errorClass: errorClassName(error) } },
+        this.#deps.clock,
+      );
+    }
   }
 
   /** PR watch never holds up task work; a failed check is recorded and the next one retries. */
@@ -2370,6 +2468,9 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
       }),
     projectRoots: options.projectRoots ?? defaultProjectRoots(process.env),
     personalSkillsHome: options.personalSkillsHome ?? homedir(),
+    checkIssueDraft:
+      options.checkIssueDraft ??
+      issueDraftChecker({ timeoutMs: DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS }),
   };
 }
 

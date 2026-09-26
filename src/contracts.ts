@@ -275,6 +275,28 @@ export type StoredReviewLens = ReviewLens | (typeof LEGACY_REVIEW_LENSES)[number
 export const ALL_REVIEW_LENSES: readonly StoredReviewLens[] = ["review", ...LEGACY_REVIEW_LENSES];
 export type ReviewMode = "review_changed_diff" | "review_existing_head";
 
+/** What kind of defect a finding is, as the reviewer tags it. */
+export const FINDING_CATEGORIES = [
+  "correctness",
+  "error-handling",
+  "security",
+  "tests",
+  "design",
+  "requirements",
+  "docs",
+] as const;
+
+export type FindingCategory = (typeof FINDING_CATEGORIES)[number];
+
+/**
+ * The earliest stage that should have caught a finding: `planning` (the brief missed it),
+ * `implementation` (the implementer should have noticed), `validation` (a test or check should have
+ * failed), or `review` (only a reviewer could see it).
+ */
+export const FINDING_CATCH_STAGES = ["planning", "implementation", "validation", "review"] as const;
+
+export type FindingCatchStage = (typeof FINDING_CATCH_STAGES)[number];
+
 export type Finding = {
   readonly id: string;
   readonly severity: FindingSeverity;
@@ -282,6 +304,9 @@ export type Finding = {
   readonly file?: string;
   readonly line?: number;
   readonly description: string;
+  /** Absent on findings recorded before reviewers tagged them. */
+  readonly category?: FindingCategory;
+  readonly catchStage?: FindingCatchStage;
 };
 
 /** Where a finding status was established: the reviewed code and the fix round that observed it. */
@@ -319,6 +344,8 @@ export type FindingLedgerEntry = {
   readonly description: string;
   readonly file?: string;
   readonly line?: number;
+  readonly category?: FindingCategory;
+  readonly catchStage?: FindingCatchStage;
   readonly status: FindingStatus;
   readonly raisedAt: FindingObservation;
   readonly statusAt: FindingObservation;

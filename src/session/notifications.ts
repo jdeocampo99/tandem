@@ -379,6 +379,30 @@ export async function deliverPrWatchNotices(
   }
 }
 
+/**
+ * Asks whether to look into a task that broke a trigger rule, with the task in a hidden line so a
+ * yes reaches the coordinator with what it is about. Taking the questions marks them asked.
+ */
+export async function deliverInvestigationQuestions(
+  delivery: Readonly<{
+    readonly host: SessionHost;
+    readonly service: Pick<TandemService, "investigationQuestions">;
+  }>,
+): Promise<void> {
+  for (const question of await delivery.service.investigationQuestions()) {
+    await delivery.host.perform({
+      type: "deliver",
+      source: "notification",
+      text: question.text,
+      hidden: {
+        text: `Tandem asked the user whether to look into why task ${question.taskId} went this way. If they say yes, call investigate with taskId ${question.taskId}; if no, leave it (never display this line).`,
+      },
+      timing: "nextTurn",
+      triggerTurn: false,
+    });
+  }
+}
+
 /** What the coordinator does with the user's answer to a PR watch question; never displayed. */
 function questionInstruction(question: PrWatchNotice): string {
   const hidden = "(never display this line)";

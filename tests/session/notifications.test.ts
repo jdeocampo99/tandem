@@ -9,6 +9,7 @@ import {
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import type { SessionEffect } from "../../src/session/events.ts";
 import {
+  deliverInvestigationQuestions,
   deliverPendingNotifications,
   deliverPrWatchNotices,
 } from "../../src/session/notifications.ts";
@@ -719,6 +720,31 @@ test("PR watch notices show without a turn, and a question to fix conflicts wait
       source: "notification",
       text: "acme/app#9 has merge conflicts in a.ts. Fix them?",
       hidden: { text: expect.stringContaining("call pr-watch-fix with pullRequest acme/app#9") },
+      timing: "nextTurn",
+      triggerTurn: false,
+    },
+  ]);
+});
+
+test("a question whether to look into a task waits for the reply, with the task hidden", async () => {
+  const recording = recordingSessionHost();
+  await deliverInvestigationQuestions({
+    host: recording.host,
+    service: {
+      investigationQuestions: async () => [
+        {
+          taskId: "task-7",
+          text: '"Fix the login page" has restarted twice. Want me to look into why?',
+        },
+      ],
+    },
+  });
+  expect(deliveries(recording.effects)).toEqual([
+    {
+      type: "deliver",
+      source: "notification",
+      text: '"Fix the login page" has restarted twice. Want me to look into why?',
+      hidden: { text: expect.stringContaining("call investigate with taskId task-7") },
       timing: "nextTurn",
       triggerTurn: false,
     },
