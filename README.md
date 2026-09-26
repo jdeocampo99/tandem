@@ -15,6 +15,8 @@ Tandem runs locally on macOS.
 
 ### Orchestration in code
 
+![How a request moves through Tandem: the model plans, implements, and reviews; you approve and publish; code validates, opens the draft PR, and runs PR watch](docs/images/request-flow.svg)
+
 The coordinator is the only place a model makes judgment calls about your work. Everything around
 it is ordinary TypeScript: task stages, scheduling, worktree allocation, approvals, validation,
 retries, recovery, and pull request decisions. Validation runs your project's checks with no model
@@ -60,15 +62,10 @@ both pass, and after three rounds without passing Tandem stops and asks you.
 ### The whole pull request lifecycle
 
 A ready task opens its own draft pull request with a summary, check results, and a checklist of
-anything you need to verify by hand. From there PR watch takes over:
+anything you need to verify by hand. From there PR watch takes over, and only brings you the
+cases that need a person:
 
-- Reruns CI once when a check fails, and waits instead if the same check is failing on `main`.
-- Merges the base branch in when conflicts appear.
-- Updates the branch when GitHub requires it to be current.
-- Once you publish, arms GitHub auto-merge or adds your merge queue label, and requeues it after a
-  flaky kick-out.
-- Tells you only when a person is needed: a check failing twice on the same code, a stuck check,
-  conflicts it couldn't resolve, a reviewer asking for changes, or a lost approval.
+![What PR watch handles on its own and when it asks you](docs/images/pr-watch.svg)
 
 ```
 PR watch · 3 open · checked 5s ago
@@ -94,6 +91,8 @@ you which comments were addressed.
 Tandem uses [TypeSafe's Jev](docs/reference/policy.md#jev-prompt-routing), a small, fast
 classifier, to handle the parts of a conversation that don't need a full model turn. Jev input
 costs $0.042 per million tokens with output free.
+
+![How Jev routes a prompt: a confident match runs in code with no model turn, anything else goes to the coordinator](docs/images/jev-routing.svg)
 
 - Lookups like "how's it going?", "how are my PRs?", or "list my tasks" are answered instantly.
 - Short replies to Tandem's own questions ("yeah restart it") run directly. Approving a brief this

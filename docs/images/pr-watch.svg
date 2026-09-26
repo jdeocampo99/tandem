@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 456" role="img" aria-labelledby="t d">
+  <title id="t">What PR watch handles</title>
+  <desc id="d">For each thing GitHub reports on a pull request, what PR watch does on its own and when it asks you instead.</desc>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; font-size: 13.5px; }
+    .hdr { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; }
+    .hdr-gh { fill: #59636e; } .hdr-code { fill: #0f766e; } .hdr-you { fill: #b45309; }
+    .ev { fill: #f6f8fa; stroke: #d1d9e0; stroke-width: 1.2; }
+    .code { fill: #e7f6f3; stroke: #14b8a6; stroke-width: 1.5; }
+    .you { fill: #fdf3e2; stroke: #f59e0b; stroke-width: 1.5; }
+    .none { fill: none; stroke: #d1d9e0; stroke-width: 1.2; stroke-dasharray: 4 4; }
+    .nonetext { fill: #8c959f; font-size: 12.5px; }
+    .line { stroke: #8c959f; stroke-width: 1.5; }
+    .head { fill: #8c959f; }
+    .strong { font-weight: 600; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #e6edf3; }
+      .hdr-gh { fill: #9198a1; } .hdr-code { fill: #5eead4; } .hdr-you { fill: #fcd34d; }
+      .ev { fill: #151b23; stroke: #3d444d; }
+      .code { fill: #0d2b28; stroke: #2dd4bf; }
+      .you { fill: #2e230f; stroke: #fbbf24; }
+      .none { stroke: #3d444d; }
+      .nonetext { fill: #6e7681; }
+      .line { stroke: #6e7681; } .head { fill: #6e7681; }
+    }
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <text class="hdr hdr-gh" x="16" y="48">GITHUB REPORTS</text>
+  <text class="hdr hdr-code" x="286" y="48">PR WATCH DOES, ON ITS OWN</text>
+  <text class="hdr hdr-you" x="664" y="48">ASKS YOU WHEN</text>
+  <rect class="ev" x="16" y="72" width="238" height="44" rx="9"/><text class="strong" x="32" y="99.0">A check fails</text>
+  <line class="line" x1="256" y1="94.0" x2="282" y2="94.0" marker-end="url(#arrow)"/>
+  <rect class="code" x="286" y="72" width="348" height="44" rx="9"/><text x="302" y="99.0">Reruns CI once, or waits if main is red too</text>
+  <line class="line" x1="636" y1="94.0" x2="660" y2="94.0" marker-end="url(#arrow)"/>
+  <rect class="you" x="664" y="72" width="280" height="44" rx="9"/><text x="680" y="99.0">It fails again on the same code</text>
+  <rect class="ev" x="16" y="126" width="238" height="44" rx="9"/><text class="strong" x="32" y="153.0">A check hangs</text>
+  <line class="line" x1="256" y1="148.0" x2="282" y2="148.0" marker-end="url(#arrow)"/>
+  <rect class="code" x="286" y="126" width="348" height="44" rx="9"/><text x="302" y="153.0">Tracks how long it has been pending</text>
+  <line class="line" x1="636" y1="148.0" x2="660" y2="148.0" marker-end="url(#arrow)"/>
+  <rect class="you" x="664" y="126" width="280" height="44" rx="9"/><text x="680" y="153.0">It passes the stuck limit</text>
+  <rect class="ev" x="16" y="180" width="238" height="44" rx="9"/><text class="strong" x="32" y="207.0">Merge conflict</text>
+  <line class="line" x1="256" y1="202.0" x2="282" y2="202.0" marker-end="url(#arrow)"/>
+  <rect class="code" x="286" y="180" width="348" height="44" rx="9"/><text x="302" y="207.0">Merges the base in and pushes</text>
+  <line class="line" x1="636" y1="202.0" x2="660" y2="202.0" marker-end="url(#arrow)"/>
+  <rect class="you" x="664" y="180" width="280" height="44" rx="9"/><text x="680" y="207.0">It can&#8217;t resolve the conflict</text>
+  <rect class="ev" x="16" y="234" width="238" height="44" rx="9"/><text class="strong" x="32" y="261.0">Branch falls behind</text>
+  <line class="line" x1="256" y1="256.0" x2="282" y2="256.0" marker-end="url(#arrow)"/>
+  <rect class="code" x="286" y="234" width="348" height="44" rx="9"/><text x="302" y="261.0">Updates the branch</text>
+  <rect class="none" x="664" y="234" width="280" height="44" rx="9"/><text class="nonetext" x="680" y="261.0">Handled without you</text>
+  <rect class="ev" x="16" y="288" width="238" height="44" rx="9"/><text class="strong" x="32" y="315.0">You publish</text>
+  <line class="line" x1="256" y1="310.0" x2="282" y2="310.0" marker-end="url(#arrow)"/>
+  <rect class="code" x="286" y="288" width="348" height="44" rx="9"/><text x="302" y="315.0">Arms auto-merge or adds your queue label</text>
+  <rect class="none" x="664" y="288" width="280" height="44" rx="9"/><text class="nonetext" x="680" y="315.0">Handled without you</text>
+  <rect class="ev" x="16" y="342" width="238" height="44" rx="9"/><text class="strong" x="32" y="369.0">Merge queue kicks it out</text>
+  <line class="line" x1="256" y1="364.0" x2="282" y2="364.0" marker-end="url(#arrow)"/>
+  <rect class="code" x="286" y="342" width="348" height="44" rx="9"/><text x="302" y="369.0">Puts it back in the queue</text>
+  <line class="line" x1="636" y1="364.0" x2="660" y2="364.0" marker-end="url(#arrow)"/>
+  <rect class="you" x="664" y="342" width="280" height="44" rx="9"/><text x="680" y="369.0">It&#8217;s kicked out twice at one commit</text>
+  <rect class="ev" x="16" y="396" width="238" height="44" rx="9"/><text class="strong" x="32" y="423.0">Reviewer requests changes</text>
+  <line class="line" x1="256" y1="418.0" x2="282" y2="418.0" marker-end="url(#arrow)"/>
+  <rect class="code" x="286" y="396" width="348" height="44" rx="9"/><text x="302" y="423.0">Marks it red on the board</text>
+  <line class="line" x1="636" y1="418.0" x2="660" y2="418.0" marker-end="url(#arrow)"/>
+  <rect class="you" x="664" y="396" width="280" height="44" rx="9"/><text x="680" y="423.0">Always, you choose the fix</text>
+</svg>
