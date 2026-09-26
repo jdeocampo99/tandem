@@ -1349,6 +1349,7 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
   const service: TandemService = {
     onboard: unused,
     models: unused,
+    openProject: unused,
     configureModels: unused,
     create: unused,
     list: unused,

@@ -1,0 +1,15 @@
+# Tandem's Herdr plugin. ./setup.sh links it; the Tandem coordinator opens the welcome popup.
+id = "tandem.ui"
+name = "Tandem"
+version = "0.1.0"
+min_herdr_version = "0.8.2"
+description = "Tandem's welcome popup"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "welcome"
+title = "Welcome to Tandem"
+placement = "popup"
+width = 70
+height = 18
+command = ["sh", "welcome.sh"]

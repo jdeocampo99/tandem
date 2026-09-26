@@ -554,10 +554,11 @@ test("multiple explicit projects use one selected session without inheriting ano
   await rm(join(first, ".."), { recursive: true, force: true });
 });
 
-test("bare launch opens all saved projects from an unrelated cwd and attaches once", async () => {
-  const projects = await gitProjects(2);
-  const first = projects[0];
-  if (first === undefined) throw new Error("test project was not created");
+test("bare launch opens all saved projects and the Tandem coordinator, and attaches once", async () => {
+  const [first, second, tandemCheckout] = await gitProjects(3);
+  if (first === undefined || second === undefined || tandemCheckout === undefined)
+    throw new Error("test projects were not created");
+  const projects = [first, second];
   const parent = join(first, "..");
   const cwd = join(parent, "outside");
   const home = join(parent, "home");
@@ -585,6 +586,7 @@ test("bare launch opens all saved projects from an unrelated cwd and attaches on
   };
   const result = await runTerminal(["--home", home], {
     cwd,
+    tandemCheckout,
     processEnvironment: {},
     run,
     service: fake.service,
@@ -602,9 +604,13 @@ test("bare launch opens all saved projects from an unrelated cwd and attaches on
     stderr: () => undefined,
   });
   expect(result.status).toBe("launched");
-  expect(result.projects).toEqual(projects);
-  expect(invocations.map((invocation) => invocation.options.repo)).toEqual([...projects]);
+  expect(result.projects).toEqual([...projects, tandemCheckout]);
+  expect(invocations.map((invocation) => invocation.options.repo)).toEqual([
+    ...projects,
+    tandemCheckout,
+  ]);
   expect(invocations.map((invocation) => invocation.options.sessionId)).toEqual([
+    "tandem",
     "tandem",
     "tandem",
   ]);
@@ -617,15 +623,17 @@ test("bare launch opens all saved projects from an unrelated cwd and attaches on
 });
 
 test("bare non-TTY launch inside a saved repo opens every saved project", async () => {
-  const projects = await gitProjects(2);
-  const first = projects[0];
-  if (first === undefined) throw new Error("test project was not created");
+  const [first, second, tandemCheckout] = await gitProjects(3);
+  if (first === undefined || second === undefined || tandemCheckout === undefined)
+    throw new Error("test projects were not created");
+  const projects = [first, second];
   const home = join(first, "..", "home");
   await registerProjects(home, projects);
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   const result = await runTerminal(["--home", home], {
     cwd: first,
+    tandemCheckout,
     run: runCommand,
     service: fake.service,
     application: fakeApplication(invocations),
@@ -634,8 +642,11 @@ test("bare non-TTY launch inside a saved repo opens every saved project", async 
     stderr: () => undefined,
   });
   expect(result.status).toBe("launched");
-  expect(result.projects).toEqual(projects);
-  expect(invocations.map((invocation) => invocation.options.repo)).toEqual([...projects]);
+  expect(result.projects).toEqual([...projects, tandemCheckout]);
+  expect(invocations.map((invocation) => invocation.options.repo)).toEqual([
+    ...projects,
+    tandemCheckout,
+  ]);
   await rm(join(first, ".."), { recursive: true, force: true });
 });
 
@@ -724,16 +735,18 @@ test("returning onboarding shows the saved enabled providers and Keep all stays 
   await rm(join(repo, ".."), { recursive: true, force: true });
 });
 
-test("bare launch with an empty registry keeps current-Git onboarding", async () => {
-  const [repo] = await gitProjects(1);
-  if (repo === undefined) throw new Error("test project was not created");
+test("bare launch with no saved projects opens only the Tandem coordinator, without its settings", async () => {
+  const [repo, tandemCheckout] = await gitProjects(2);
+  if (repo === undefined || tandemCheckout === undefined)
+    throw new Error("test projects were not created");
   const home = join(repo, "..", "home");
-  const fake = onboardingService({ existingConfig: true, configured: false });
+  const fake = onboardingService({ existingConfig: false, configured: false });
   const invocations: CliInvocation[] = [];
   const answers = ["enable", ...roles.flatMap(() => ["test/model", "low"])];
   answers.push("save");
   const result = await runTerminal(["--home", home, "--headless"], {
     cwd: repo,
+    tandemCheckout,
     run: runCommand,
     service: fake.service,
     application: fakeApplication(invocations),
@@ -744,7 +757,8 @@ test("bare launch with an empty registry keeps current-Git onboarding", async ()
   });
   expect(result.status).toBe("launched");
   expect(fake.configureCalls).toHaveLength(1);
-  expect(invocations.map((invocation) => invocation.options.repo)).toEqual([repo]);
+  expect(fake.writeCalls).toHaveLength(0);
+  expect(invocations.map((invocation) => invocation.options.repo)).toEqual([tandemCheckout]);
   await rm(join(repo, ".."), { recursive: true, force: true });
 });
 
@@ -986,13 +1000,12 @@ test("cancelling keyboard onboarding before the first selection does not configu
   }
 });
 
-test("reset cancels work in the current project, then launches fresh chats and attaches once", async () => {
-  const projects = await gitProjects(2);
-  const first = projects[0];
-  const second = projects[1];
-  if (first === undefined || second === undefined)
+test("reset cancels work in saved projects and the Tandem coordinator, then launches fresh chats", async () => {
+  const [first, tandemCheckout] = await gitProjects(2);
+  if (first === undefined || tandemCheckout === undefined)
     throw new Error("test projects were not created");
   const home = join(first, "..", "home");
+  await registerProjects(home, [first]);
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   const events: string[] = [];
@@ -1001,6 +1014,7 @@ test("reset cancels work in the current project, then launches fresh chats and a
   const output: string[] = [];
   const result = await runTerminal(["reset", "--yes", "--home", home], {
     cwd: first,
+    tandemCheckout,
     processEnvironment: {},
     run: async (request) => {
       if (
@@ -1044,10 +1058,16 @@ test("reset cancels work in the current project, then launches fresh chats and a
     stderr: (text) => output.push(text),
   });
   expect(result.status).toBe("launched");
-  expect(resetPaths).toEqual([[first]]);
+  expect(resetPaths).toEqual([[first, tandemCheckout]]);
   expect(forced).toEqual([true]);
-  expect(events).toEqual(["reset", `launch:${first}`, "focus", "attach"]);
-  expect(invocations).toHaveLength(1);
+  expect(events).toEqual([
+    "reset",
+    `launch:${first}`,
+    `launch:${tandemCheckout}`,
+    "focus",
+    "attach",
+  ]);
+  expect(invocations).toHaveLength(2);
   expect(invocations[0]?.options.continueSession).toBe(false);
   await rm(join(first, ".."), { recursive: true, force: true });
 });
@@ -1101,6 +1121,7 @@ test("reset prints a notice when a coordinator's workspace is quarantined", asyn
   const output: string[] = [];
   const result = await runTerminal(["reset", "--yes", "--home", home], {
     cwd: repo,
+    tandemCheckout: repo,
     run: runCommand,
     service: fake.service,
     application: fakeApplication(invocations),
@@ -1148,6 +1169,8 @@ test("reset prints a notice when a coordinator's workspace is quarantined", asyn
 
 test("terminal commands are subcommands whose flags and arguments are checked", () => {
   expect(parseTerminalArgs([])).toMatchObject({ command: "launch", paths: [], fresh: false });
+  expect(parseTerminalArgs(["welcome"])).toMatchObject({ command: "welcome", paths: [] });
+  expect(() => parseTerminalArgs(["welcome", "/repo"])).toThrow();
   expect(parseTerminalArgs(["/repo", "--fresh"])).toMatchObject({ paths: ["/repo"], fresh: true });
   expect(parseTerminalArgs(["update", "--fresh"])).toMatchObject({
     command: "update",
@@ -1545,6 +1568,7 @@ test("a reset refusal prevents every coordinator launch", async () => {
   let resetCalls = 0;
   const result = await runTerminal(["reset", "--yes", "--home", home, "--headless"], {
     cwd: repo,
+    tandemCheckout: repo,
     processEnvironment: {},
     run: runCommand,
     service: fake.service,
@@ -1600,6 +1624,7 @@ test("update refuses only from the coordinator pane it would close", async () =>
   const inPane = (paneId: string) =>
     runTerminal(["update", "--home", home], {
       cwd: repo,
+      tandemCheckout: repo,
       processEnvironment: {
         HERDR_ENV: "1",
         HERDR_SESSION: "tandem",
@@ -1635,6 +1660,7 @@ test("reset without a terminal needs --yes and changes nothing", async () => {
   const invocations: CliInvocation[] = [];
   const result = await runTerminal(["reset", "--home", home], {
     cwd: repo,
+    tandemCheckout: repo,
     processEnvironment: {},
     run: runCommand,
     service: fake.service,
@@ -1761,6 +1787,7 @@ test("update puts task workspaces back under the replacement coordinator", async
   };
   const result = await runTerminal(["update", "--home", home], {
     cwd: repo,
+    tandemCheckout: repo,
     processEnvironment: {},
     run: (request) => (request.argv[0] === "herdr" ? sidebar.run(request) : runCommand(request)),
     moveWorkspace: sidebar.moveWorkspace,
@@ -1802,6 +1829,7 @@ test("update re-nests before attaching to Herdr and prints every re-nest warning
   const output: string[] = [];
   const result = await runTerminal(["update", "--home", home], {
     cwd: repo,
+    tandemCheckout: repo,
     processEnvironment: {},
     run: (request) =>
       request.argv[0] !== "herdr"

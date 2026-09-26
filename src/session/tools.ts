@@ -47,6 +47,7 @@ export const tandemRequestSchema = z.strictObject({
     z.strictObject({ action: z.literal("restart"), taskId: z.string() }),
     z.strictObject({ action: z.literal("onboard"), repoPath: z.string() }),
     z.strictObject({ action: z.literal("setup"), repoPath: z.string() }),
+    z.strictObject({ action: z.literal("open-project"), repoPath: z.string() }),
     z.strictObject({ action: z.literal("models"), repoPath: z.string() }),
     z.strictObject({
       action: z.literal("configure-models"),

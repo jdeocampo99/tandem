@@ -39,12 +39,13 @@ checkout itself. Its `--extension` and `--config` must be Tandem's checked-in fi
 ## Project selection
 
 - Explicit `PATH ...` overrides the registry and opens only those canonical Git roots.
-- With no paths and saved projects under `<home>/repositories`, the launch set is exactly the valid
-  saved projects. No disk crawling, auto-registration, picker, or path prompt, including in non-TTY,
-  `--headless`, and `--no-attach` launches.
-- Only with an empty registry: inside Git, onboard and open the cwd project; outside Git, the
-  interactive project-selection fallback (which needs a TTY).
-- `configure` and `config` are single-project and never expand to all saved projects. `config`
+- With no paths, `tandem`, `update`, and `reset` open the valid saved projects under
+  `<home>/repositories` plus the Tandem checkout (see [The Tandem coordinator](#the-tandem-coordinator)),
+  last so an existing user still lands on their first project. With no saved projects that is the
+  Tandem checkout alone, wherever `tandem` runs. No disk crawling, auto-registration, picker, or
+  path prompt, including in non-TTY, `--headless`, and `--no-attach` launches.
+- `configure` and `config` are single-project and never expand to all saved projects: the cwd's Git
+  project, or the interactive project-selection fallback outside Git (which needs a TTY). `config`
   refuses a project without saved settings.
 - All projects share one Herdr session, but each gets its own coordinator workspace, clean source
   worktree, and child-worker group. Coordinators scope durable task operations to their original
@@ -55,6 +56,32 @@ checkout itself. Its `--extension` and `--config` must be Tandem's checked-in fi
 Old spellings (`restart`, `--restart`, `--reset`, `--force`, `--continue`, `logs`,
 `reconcile-resources`, `inspect`) exit with an error naming the replacement (`RENAMED` in
 src/terminal/arguments.ts) instead of being read as a project path.
+
+## The Tandem coordinator
+
+The coordinator of the Tandem checkout the `tandem` command runs from (`TANDEM_CHECKOUT`,
+src/coordinator/tandem-checkout.ts). It is where a new user starts and where anyone changes Tandem.
+
+- It launches like any project, from a clean worktree of the Tandem checkout, but without saved
+  project settings: `prepareProjects` never asks **Save settings** for it. Model choices are still
+  asked in the terminal the first time, because a coordinator needs a model to start.
+- `isTandemCheckout` compares canonical paths. When it holds, the coordinator's context adds
+  `TANDEM_COORDINATOR_INSTRUCTIONS` (src/instructions.ts): onboard repositories the user names
+  (`onboard`, `models`, `configure-models`, `setup`, then `open-project`), try settings before code
+  when the user wants Tandem changed, and route code changes through ordinary tasks in this project.
+- `open-project` (approval required) runs the front door for one saved project, `tandem PATH
+  --no-attach` in the same home and session (src/coordinator/open-project.ts), with the calling
+  pane's `TANDEM_REPO`, `TANDEM_SOURCE_REPO`, `TANDEM_PARENT_WORKSPACE`, `HERDR_PANE_ID`, and
+  `HERDR_WORKSPACE_ID` removed so the launch claims nothing of this coordinator. It refuses a
+  project without saved settings or saved model choices, before running anything.
+- At each session start, while no saved project other than the Tandem checkout exists, it opens
+  the welcome popup: `herdr plugin pane open --plugin tandem.ui --entrypoint welcome` with
+  `TANDEM_WELCOME_PANE` set to its own pane. The popup runs `tandem welcome`
+  (src/terminal/welcome.ts): Enter sends "Help me onboard my repos" to that pane (`herdr agent
+  prompt`, or `pane send-text` and Enter when Herdr sees no agent there); Esc or q closes it. When
+  the popup cannot open (plugin not linked, Herdr too old, no Tandem pane), the same text is
+  delivered in the chat without a model turn.
+- The plugin lives in `herdr-plugin/`; `setup.sh` links it (see [status.md](status.md)).
 
 ## Source worktree and identity
 

@@ -143,6 +143,11 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
       runs outside that session, the board shows no running task (a board it cannot read counts
       as busy), and the user says yes; then the user runs `tandem` to reopen projects.
       Otherwise it prints the command to run later.
+  - then, whatever happened above, links Tandem's Herdr plugin (`herdr-plugin/`, id `tandem.ui`,
+    which holds the welcome popup; see [coordinator.md](coordinator.md#the-tandem-coordinator))
+    with `herdr --session <session> plugin link` after asking "Add Tandem's welcome popup to
+    Herdr?". A plugin already in `herdr plugin list` counts as done; no terminal or a no links
+    nothing.
 
 ## The notification when something new needs you
 

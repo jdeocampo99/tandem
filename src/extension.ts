@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@oh-my-pi/pi-coding-agent";
 import { runCommand } from "./adapters/commands.ts";
+import { openWelcomePopup } from "./adapters/herdr.ts";
 import { createHerdrStatusReporter } from "./adapters/herdr-status.ts";
 import {
   environmentForContext,
@@ -11,6 +12,7 @@ import {
 import { readCoordinatorMcpServers } from "./config/repositories.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
+import { isTandemCheckout } from "./coordinator/tandem-checkout.ts";
 import { ompSessionHost, ompToolCall } from "./extension/omp-host.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { type PlaybookClassifier, playbookClassifier } from "./playbooks/classify.ts";
@@ -151,6 +153,17 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             checkIssueDraft,
           ),
         realpath: (path) => realpath(path),
+        isTandemCheckout: () => isTandemCheckout(environment.repo),
+        openWelcome: async () => {
+          if (environment.coordinatorPaneId === undefined) {
+            throw new Error("the coordinator is not running in a Tandem Herdr pane");
+          }
+          await openWelcomePopup(options.run ?? runCommand, {
+            sessionId: environment.sessionId,
+            cwd: ctx.cwd,
+            paneId: environment.coordinatorPaneId,
+          });
+        },
         readReport: readResearchReport,
         appendUsage: (entry) => appendCoordinatorUsage(environment.home, entry),
         compactTokens: coordinatorCompactTokens(environmentSnapshot),
