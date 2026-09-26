@@ -4,7 +4,7 @@ import {
   buildRequestUsageReceipt,
   type RequestUsageReadout,
 } from "../runtime/usage-receipt.ts";
-import type { StoredTimelineEvent, TimelineEvent } from "./timeline.ts";
+import type { AdmissionWaitReason, StoredTimelineEvent, TimelineEvent } from "./timeline.ts";
 import type { TimelineReadout } from "./timeline-store.ts";
 
 /** The quality figures one task's timeline adds up to, computed when read. */
@@ -183,8 +183,16 @@ function eventText(event: TimelineEvent): string {
       return `question ${event.questionId} answered`;
     case "steered":
       return `steered (message ${event.messageId})`;
+    case "admission-waiting":
+      return `waiting for admission (${ADMISSION_WAIT_WORDS[event.reason]})`;
   }
 }
+
+const ADMISSION_WAIT_WORDS: Readonly<Record<AdmissionWaitReason, string>> = {
+  "worktree-disk-space": "worktree disk space",
+  "worktree-capacity-unknown": "worktree capacity unknown",
+  "routing-question": "routing question",
+};
 
 function firstReviewText(verdict: boolean | undefined): string {
   if (verdict === undefined) return "not reviewed yet";

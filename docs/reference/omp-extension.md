@@ -195,6 +195,8 @@ A missing note loads unchanged; a present but malformed note fails the read as s
   removes the warm copies one at a time, rechecking capacity after each.
 - If free space is unknown or still too low, the task stays queued, its reservation is released,
   and a durable blocker/notification says to verify capacity or free disk. The next pass retries.
+  The task's timeline records an `admission-waiting` event when the reason is new or changes (see
+  task-lifecycle.md), so `tandem trace` and `tandem report` can say what the queue waited for.
 - Admission is governed by the disk threshold alone; there is no worker limit or fixed worktree count.
 
 ## Discard

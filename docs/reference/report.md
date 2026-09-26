@@ -43,6 +43,12 @@ Fixed rules name at most one choke per task (`build.ts`):
 - Or a review loop: review sent the task back for fixes `REVIEW_LOOP_MIN_ROUNDS` (2) or more times,
   compared by its span from the first review exit to the window's end. The round count matches
   `tandem trace`.
+- A queued stretch with `admission-waiting` events inside it names the reason that covered most of
+  it: each event covers the stretch until the next one or the stretch's end, time before the first
+  is no reason's, and ties go to the reason recorded first. The headline then ends "waiting for
+  disk space for a new worktree", "waiting for a worktree capacity check", or "waiting on a model
+  routing question", and the explanation says how long of it (for example "Queued 26m, 20m of it
+  waiting for disk space for a new worktree."). With no such events the headline is "Queued 26m".
 - Ties go to the earlier rule in that order, then the earlier stretch. The choke carries a short
   headline and, when the records say more, one plain sentence: the block's cause and any restart,
   the work before a wait, the stage a queue led into, or the findings review raised.

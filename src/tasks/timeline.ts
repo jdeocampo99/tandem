@@ -28,9 +28,23 @@ export const TIMELINE_EVENT_TYPES = [
   "question-asked",
   "question-answered",
   "steered",
+  "admission-waiting",
 ] as const;
 
 export type TimelineEventType = (typeof TIMELINE_EVENT_TYPES)[number];
+
+/**
+ * Why a queued task is not admitted yet. `worktree-disk-space`: the pool's free space is below the
+ * minimum for a new worktree. `worktree-capacity-unknown`: free space could not be checked, or pool
+ * maintenance failed. `routing-question`: a model routing question is waiting for an answer.
+ */
+export const ADMISSION_WAIT_REASONS = [
+  "worktree-disk-space",
+  "worktree-capacity-unknown",
+  "routing-question",
+] as const;
+
+export type AdmissionWaitReason = (typeof ADMISSION_WAIT_REASONS)[number];
 
 /** One entry in an OMP conversation file. */
 export type TranscriptRef = Readonly<{
@@ -50,6 +64,8 @@ export type TimelineRefs = Readonly<{
 export type TimelineNote = Readonly<{
   readonly cause?: string;
   readonly refs?: TimelineRefs;
+  /** A queued task started waiting for admission for this reason (see `admissionWaitToRecord`). */
+  readonly admissionWait?: AdmissionWaitReason;
 }>;
 
 type TimelineFacts =
@@ -83,7 +99,8 @@ type TimelineFacts =
       /** Absent when the question was cleared without a stored answer message. */
       readonly messageId?: string;
     }>
-  | Readonly<{ readonly type: "steered"; readonly messageId: string }>;
+  | Readonly<{ readonly type: "steered"; readonly messageId: string }>
+  | Readonly<{ readonly type: "admission-waiting"; readonly reason: AdmissionWaitReason }>;
 
 /** A finding's identity and tags, without its description. */
 export type TimelineFinding = Readonly<{
@@ -127,6 +144,7 @@ export function timelineEventsForChange(
           ...fixRoundFacts(before, after),
           ...findingFacts(before.findingLedger ?? [], after.findingLedger ?? []),
           ...communicationFacts(before, after),
+          ...admissionFacts(after, note.admissionWait),
         ];
   return facts.map(({ fact, cause }) => {
     const chosenCause = note.cause ?? cause;
@@ -228,6 +246,27 @@ function communicationFacts(before: TaskRecord, after: TaskRecord): readonly Der
     }
   }
   return facts;
+}
+
+/**
+ * The admission wait to record, or undefined when there is none or it repeats the latest one
+ * recorded. Only a queued task waits for admission; leaving `queued` is the admission itself.
+ */
+export function admissionWaitToRecord(
+  stage: TaskStage,
+  latest: AdmissionWaitReason | undefined,
+  next: AdmissionWaitReason | undefined,
+): AdmissionWaitReason | undefined {
+  if (stage !== "queued" || next === undefined || next === latest) return undefined;
+  return next;
+}
+
+function admissionFacts(
+  after: TaskRecord,
+  reason: AdmissionWaitReason | undefined,
+): readonly DerivedFact[] {
+  if (reason === undefined || after.stage !== "queued") return [];
+  return [{ fact: { type: "admission-waiting", reason } }];
 }
 
 function boundedCause(cause: string): string {
