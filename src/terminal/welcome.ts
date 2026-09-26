@@ -3,16 +3,21 @@ import type { TandemEnvironmentSource } from "../config/environment.ts";
 import type { CommandRunner } from "../contracts.ts";
 import { isCloseKey } from "./process.ts";
 
-export const WELCOME_TEXT = `Welcome to Tandem
+/** The popup's frame shows this as its title (`herdr-plugin/herdr-plugin.toml`), so it prints once. */
+const WELCOME_TITLE = "Welcome to Tandem";
 
-Tandem runs a team of agents on your repos. They research, write code,
-review it, and open draft PRs. You approve each step.
+const WELCOME_BODY = `Tandem runs a team of agents on your repos. They
+research, write code, review it, and open draft PRs.
+You approve each step.
 
-To start, tell the agent behind this window which repos to set up:
-  "Onboard ~/code/api and ~/code/web"
+To start, tell the agent behind this window which
+repos to set up, like "Set up api and web".
 
 You can also ask it to change how Tandem works.
 prefix+t shows status anytime.`;
+
+/** The welcome with its title, for places without the popup's frame: the chat and a plain terminal. */
+export const WELCOME_TEXT = `${WELCOME_TITLE}\n\n${WELCOME_BODY}`;
 
 /** What Enter sends to the Tandem coordinator, so the walkthrough starts without typing. */
 export const WELCOME_PROMPT = "Help me onboard my repos";
@@ -65,7 +70,7 @@ export async function runWelcome(
     deps.stdout(`${WELCOME_TEXT}\n`);
     return;
   }
-  deps.stdout(`${WELCOME_TEXT}\n\nPress Enter to start, or Esc to close.`);
+  deps.stdout(`${WELCOME_BODY}\n\nPress Enter to start, or Esc to close.`);
   if ((await readWelcomeKey(deps.input)) === "close") return;
   await promptPane(deps.run, { sessionId, cwd: deps.cwd, paneId, text: WELCOME_PROMPT });
 }

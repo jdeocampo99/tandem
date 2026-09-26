@@ -151,7 +151,7 @@ function registerTandemCommand(
 ): void {
   pi.registerCommand("tandem", {
     description:
-      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, open-project, find-repo, save-code-folders, worker-skills, self-improvement, check-tools, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
+      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, open-project, find-repo, save-code-folders, worker-skills, self-improvement, check-tools, setup-page, apply-setup, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
     handler: (args, ctx) =>
       runTandemCommand(
         args,

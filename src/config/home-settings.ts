@@ -173,6 +173,19 @@ export async function saveWorkerSkills(
   return saved;
 }
 
+/**
+ * Saves `workerSkills` whether or not it was written before, for the setup page, where the user
+ * sees the saved list and may change it. Same guard as the other home settings: a one-line value
+ * is replaced in place, a multi-line value or a file changed since reading is refused.
+ */
+export async function replaceWorkerSkills(
+  home: string,
+  skills: readonly string[],
+): Promise<HomeSettings> {
+  const names = skills.map((skill) => JSON.stringify(readNonEmptyString(skill, "skill")));
+  return saveHomeSetting(home, "workerSkills", `[${names.join(", ")}]`);
+}
+
 function readNameList(value: unknown, field: string): readonly string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new TypeError(`${field} must be an array of names`);

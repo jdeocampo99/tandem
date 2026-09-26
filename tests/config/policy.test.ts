@@ -464,8 +464,15 @@ test("onboardRepo proposes a frozen install from the lockfile and saves it", asy
   await withFixture("lockfile-repo", async ({ repo, home }) => {
     await writeFile(join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
 
+    await writeFile(
+      join(repo, "package.json"),
+      JSON.stringify({ scripts: { lint: "biome", test: "vitest", build: "tsc" } }),
+      "utf8",
+    );
+
     const proposal = await onboardRepo({ repoPath: repo, home });
     expect(proposal.approvalRequired).toBe(true);
+    expect(proposal.discovery).toEqual({ scripts: ["lint", "test"], lockfile: "pnpm-lock.yaml" });
     const install = ["/bin/sh", "-c", "pnpm install --frozen-lockfile"];
     expect(proposal.setupCommands.map((entry) => entry.argv)).toEqual([install]);
 
@@ -483,6 +490,7 @@ test("onboardRepo proposes no setup without a lockfile", async () => {
   await withFixture("no-lockfile-repo", async ({ repo, home }) => {
     const proposal = await onboardRepo({ repoPath: repo, home });
     expect(proposal.setupCommands).toEqual([]);
+    expect(proposal.discovery.lockfile).toBeUndefined();
   });
 });
 

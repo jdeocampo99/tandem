@@ -1411,6 +1411,58 @@ test("a report-mode issue is filed only after the user approves the cleaned-up d
   ]);
 });
 
+test("the setup page opens without approval, and saving its answer takes one approval", async () => {
+  const calls: string[] = [];
+  const prompts: { title: string; message: string }[] = [];
+  const service = {
+    openSetupPage: async (repoPath: string) => {
+      calls.push(`open ${repoPath}`);
+      return { path: "/home/setup/tandem-setup.html", url: "http://127.0.0.1:4387/session/a" };
+    },
+    setupRecap: async (_repoPath: string, answerId: string) => {
+      calls.push(`recap ${answerId}`);
+      return ["Providers: anthropic", "Repos: none yet"];
+    },
+    applySetup: async (_repoPath: string, answerId: string) => {
+      calls.push(`apply ${answerId}`);
+      return "Saved the model choices and providers.\nSaved the skills every task gets.";
+    },
+  } as unknown as TandemService;
+
+  const opened = await executeTandemAction({ action: "setup-page", repoPath: "/tandem" }, service, {
+    confirm: undefined,
+  });
+  expect(opened.value).toBe(
+    "The setup page is open in Lavish (http://127.0.0.1:4387/session/a). Its answer comes back to this chat by itself; wait for it.",
+  );
+  expect(parseTandemCommand("setup-page")).toEqual({ action: "setup-page", repoPath: "." });
+
+  const apply = { action: "apply-setup", repoPath: "/tandem", answerId: "a-1" } as const;
+  const refused = await executeTandemAction(apply, service, {
+    confirm: async () => false,
+  });
+  expect(refused.approved).toBe(false);
+  expect(calls).not.toContain("apply a-1");
+
+  const applied = await executeTandemAction(apply, service, {
+    confirm: async (title: string, message: string) => {
+      prompts.push({ title, message });
+      return true;
+    },
+  });
+  expect(prompts).toEqual([
+    {
+      title: "Save this setup?",
+      message: "Providers: anthropic\nRepos: none yet\nYou can change any of it later.",
+    },
+  ]);
+  expect(applied.approved).toBe(true);
+  expect(summarizeTandemActionValue("apply-setup", applied.value)).toBe(
+    "Saved the model choices and providers.\nSaved the skills every task gets.",
+  );
+  expect(calls).toEqual(["open /tandem", "recap a-1", "recap a-1", "apply a-1"]);
+});
+
 test("create forwards the workstream the work belongs to", async () => {
   const createCalls: unknown[] = [];
   const service = {

@@ -1,10 +1,11 @@
-import { readFileSync } from "node:fs";
+import { assemblePage, embedJson, escapeHtml } from "../pages/assemble.ts";
 import type { ReportView } from "./model.ts";
 
 /**
  * Turns the report view model into one self-contained HTML page. The page template, with its
  * styles and the small script that draws the task list from the embedded view, lives next to
- * this file so the markup stays readable; only the header text and the data are filled in here.
+ * this file so the markup stays readable; the shared tokens and components come from
+ * src/pages/tandem.css, and only the header text and the data are filled in here.
  */
 const PAGE_TEMPLATE_URL = new URL("./page.html", import.meta.url);
 
@@ -37,17 +38,11 @@ const MONTHS = [
 ] as const;
 
 export function renderReportHtml(view: ReportView): string {
-  const template = readFileSync(PAGE_TEMPLATE_URL, "utf8");
-  const fills: Readonly<Record<string, string>> = {
+  return assemblePage(PAGE_TEMPLATE_URL, {
     scope: escapeHtml(view.scopeLabel),
     range: escapeHtml(formatDateRange(reportStart(view), new Date(view.generatedAt))),
     main: view.tasks.length > 0 ? MAIN : EMPTY,
     data: `<script type="application/json" id="report-data">${embedJson(view)}</script>`,
-  };
-  return template.replace(/\{\{(scope|range|main|data)\}\}/g, (_match, key: string) => {
-    const fill = fills[key];
-    if (fill === undefined) throw new Error(`Report template has no value for ${key}`);
-    return fill;
   });
 }
 
@@ -69,23 +64,4 @@ function formatDateRange(start: Date, end: Date): string {
   }
   const endText = sameMonth ? String(end.getDate()) : endLabel;
   return `${MONTHS[start.getMonth()]} ${start.getDate()} – ${endText}`;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-/** JSON safe inside a `<script>` element: no `<`, `>`, or `&` can close it or open a comment. */
-function embedJson(view: ReportView): string {
-  return JSON.stringify(view)
-    .replaceAll("<", "\\u003c")
-    .replaceAll(">", "\\u003e")
-    .replaceAll("&", "\\u0026")
-    .replaceAll(" ", "\\u2028")
-    .replaceAll(" ", "\\u2029");
 }

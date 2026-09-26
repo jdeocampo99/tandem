@@ -90,6 +90,41 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   tick), never on the timer.
 - The model reads only the current step's guidance (`onboardingContext`) while setup is
   unfinished, and nothing about setup once it is done.
+- The setup page comes first when `lavish-axi` is installed (`setupPage` in the facts:
+  `unavailable` without Lavish, `ready`, `open`, or `done` once this session's page was answered,
+  closed, or failed to open; src/onboarding/setup-page.ts). While it is `ready`, the guidance tells
+  the model to call `setup-page` (no approval) when the user wants to set up, with the chat steps as
+  the fallback; while it is `ready` or `open`, the plain-choice questions are not asked in the chat.
+  `unavailable` and `done` leave setup to the chat steps above.
+- `setup-page` builds one self-contained page from a pure view model (`buildSetupView` in
+  src/onboarding/setup-view.ts; `renderSetupHtml` with `setup-page.html`), writes it to
+  `<home>/setup/tandem-setup.html`, and opens it with `lavish-axi PATH --reopen` (the user asked for
+  it). Its six steps: providers from the OMP catalogue, pre-ticked from saved `enabledProviders`;
+  one model and thinking level per role, empty unless saved choices still hold (the "For example"
+  line is text, never a choice); repositories crawled from `projectRoots` (a pasted `~`, `/`, or
+  `.` path is offered too), each not yet set up with its discovered checks, install, and MCP
+  servers, all allowed by default; personal and plugin skills (`listSkillCatalog`), starting from
+  saved `workerSkills`; the self-improvement mode, `fix` unless one was saved; and a review. Save
+  queues one JSON answer (`tandemSetup: 1`) with `window.lavish.queuePrompt` and sends it.
+- Code, not the model, receives the answer: `OnboardingGuide` starts one listener after the action
+  that opened the page and runs `lavish-axi poll` in a loop. The answer is read from the poll's
+  prompts (`readSetupAnswerText`), parsed strictly (`parseSetupAnswer`), and checked against this
+  machine (`checkSetupAnswer`: models in the catalogue with a supported thinking level and a ticked
+  provider, known providers, existing skills, repositories that are Git roots and not already set
+  up, MCP servers the repository has). A valid answer is stored in `<home>/setup/answer.json` under a
+  new id and delivered as fixed text (the recap) with a hidden line naming `apply-setup` and that
+  id, triggering the model's turn; the browser shows a short reply. An invalid answer is reported
+  with every problem in the chat and the browser, and the page stays open. A comment that is not an
+  answer gets a reply pointing at Save. A page closed without an answer says so once and hands
+  setup to the chat.
+- `apply-setup` (approval required) re-checks the stored answer, shows it in one dialog, then saves
+  in order: models and enabled providers (`configureModels`), `workerSkills` (replaced, see
+  [policy.md](policy.md#where-settings-live)), `selfImprovement`, the searched folders that hold a
+  repository as `projectRoots` when none are saved, then each repository's `setup` with its commands
+  and MCP servers followed by `open-project`. A failed step is reported and undoes nothing; a
+  repository whose settings failed is not opened. A stale or replaced answer id is refused.
+  Afterwards the answer file is removed and the Lavish session is ended.
+  How pull requests merge is not on the page; PR watch asks the first time it watches one.
 - `find-repo` takes a name or a path; one match not yet set up also returns what `onboard` would
   (the proposal, the project's MCP servers, how its pull requests merge), saving a call. A path (starting with `/`, `~`, or `.`) resolves to its Git
   root; a name matches a checkout under the code folders by folder name, GitHub repository name,

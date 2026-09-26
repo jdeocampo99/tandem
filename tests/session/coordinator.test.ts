@@ -505,6 +505,7 @@ function welcomeSession(
           projects: options.projects.filter((project) => project !== "/repo"),
           workerSkillOffer: [],
           selfImprovementChosen: false,
+          setupPage: "unavailable",
         }),
         board: async () => ({
           now: "",

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   readHomeSettings,
+  replaceWorkerSkills,
   saveProjectRoots,
   saveSelfImprovement,
   saveWorkerSkills,
@@ -71,6 +72,24 @@ test("code folders and the self-improvement mode are saved, replacing a one-line
     expect(await readFile(join(home, "settings.toml"), "utf8")).toBe(
       'projectRoots = [\n  "/a",\n]\n',
     );
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("the setup page replaces saved worker skills in place, still refusing a multi-line value", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-home-settings-"));
+  try {
+    await writeFile(join(home, "settings.toml"), '# mine\nworkerSkills = ["old"]\n');
+    expect((await replaceWorkerSkills(home, ["tdd", "ci:buildkite"])).workerSkills).toEqual([
+      "tdd",
+      "ci:buildkite",
+    ]);
+    expect(await readFile(join(home, "settings.toml"), "utf8")).toBe(
+      '# mine\nworkerSkills = ["tdd", "ci:buildkite"]\n',
+    );
+    await writeFile(join(home, "settings.toml"), 'workerSkills = [\n  "old",\n]\n');
+    await expect(replaceWorkerSkills(home, [])).rejects.toThrow("over several lines");
   } finally {
     await rm(home, { recursive: true, force: true });
   }

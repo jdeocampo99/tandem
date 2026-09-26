@@ -9,6 +9,7 @@ import {
   findCheckoutsByName,
   githubRepoFromRemote,
   type LocateRepoOptions,
+  listCheckouts,
   locateRepo,
   projectRoots,
   rememberRepoLocation,
@@ -141,6 +142,18 @@ test("a repository is found by folder name, GitHub name, owner/repo, or path", a
   expect(await find(join(api, "src", ".."))).toEqual([{ path: api, repo: "acme/backend" }]);
   expect(await find("web")).toEqual([{ path: join(root, "web") }]);
   expect(await find("nothing")).toEqual([]);
+});
+
+test("the setup page lists every checkout under the code folders once", async () => {
+  const { root } = await scratch();
+  const api = await checkout(join(root, "work", "api"), {
+    origin: "git@github.com:acme/backend.git",
+  });
+  await checkout(join(root, "web"), {});
+  expect(await listCheckouts([root, root], runCommand)).toEqual([
+    { path: join(root, "web") },
+    { path: api, repo: "acme/backend" },
+  ]);
 });
 
 test("two checkouts with the same name are both returned for the user to pick", async () => {
