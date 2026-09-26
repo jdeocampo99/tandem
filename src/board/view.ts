@@ -1,7 +1,14 @@
 import { basename } from "node:path";
 import type { IsoTimestamp, RequestBriefRecord, TaskRecord, TaskStage } from "../contracts.ts";
 import { type PrWatch, type PrWatchPoll, sameRef } from "../pr-watch/store.ts";
-import { elapsed, type PrWatchViewRow, pad, prWatchLines, prWatchView } from "../pr-watch/view.ts";
+import {
+  elapsed,
+  linked,
+  type PrWatchViewRow,
+  pad,
+  prWatchLines,
+  prWatchView,
+} from "../pr-watch/view.ts";
 import { requestApprovalState } from "../requests/brief.ts";
 import { isTerminalTask } from "../service/records.ts";
 import type { TimelineEvent } from "../tasks/timeline.ts";
@@ -72,6 +79,8 @@ export type BoardRow = Readonly<{
   readonly mark: string;
   readonly name: string;
   readonly text: string;
+  /** A pull request row's page, which a terminal can show as a link on the name. */
+  readonly url?: string;
 }>;
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -147,8 +156,11 @@ export function opensBoard(row: BoardRow): boolean {
   );
 }
 
-/** The board: header and sections, as "how's it going?" shows it in the chat. */
-export function renderBoard(view: BoardView): string {
+/**
+ * The board: header and sections, as "how's it going?" shows it in the chat. `links` makes pull
+ * request names terminal hyperlinks; only a real terminal gets them.
+ */
+export function renderBoard(view: BoardView, links = false): string {
   const header = [
     `Projects: ${view.projects.length === 0 ? "none yet" : view.projects.join(", ")}`,
     view.checkedAt === undefined
@@ -157,26 +169,26 @@ export function renderBoard(view: BoardView): string {
   ].join(" · ");
   const sections = [
     ["Needs you", ...(view.needsYou.length === 0 ? ["Nothing needs you."] : [])]
-      .concat(boardLines(view.needsYou))
+      .concat(boardLines(view.needsYou, links))
       .join("\n"),
     ...(view.running.length === 0 ? [] : [["Running", ...boardLines(view.running)].join("\n")]),
     ...(view.pullRequests.length === 0
       ? []
-      : [["PRs", ...prWatchLines(view.pullRequests, true)].join("\n")]),
+      : [["PRs", ...prWatchLines(view.pullRequests, true, links)].join("\n")]),
     ...(view.week === undefined ? [] : [weekLine(view.week)]),
   ];
   return `${[header, ...sections].join("\n\n")}\n`;
 }
 
 /** `tandem status`: the board, then what was finished, which coordinators are open, and how to go on. */
-export function renderStatus(view: BoardView, footer: StatusFooter): string {
+export function renderStatus(view: BoardView, footer: StatusFooter, links = false): string {
   const coordinators =
     footer.coordinators.length === 0
       ? "no coordinators open, run `tandem`"
       : `coordinators open: ${footer.coordinators.map((path) => basename(path)).join(", ")}`;
   const plural = view.finished === 1 ? "" : "s";
   return [
-    renderBoard(view),
+    renderBoard(view, links),
     [
       ...(view.finished === 0 ? [] : [`${view.finished} finished task${plural} hidden`]),
       coordinators,
@@ -205,14 +217,14 @@ function weekSummary(rollups: readonly TaskRollup[]): WeekSummary {
   return { tasks, reviewedTasks, firstPassReviews, costMicros, unpricedSamples };
 }
 
-/** Aligned rows, two spaces between columns. */
-function boardLines(rows: readonly BoardRow[]): string[] {
+/** Aligned rows, two spaces between columns; `links` links a pull request row's name. */
+function boardLines(rows: readonly BoardRow[], links = false): string[] {
   const width = (values: readonly string[]) =>
     Math.max(0, ...values.map((value) => [...value].length));
   const projectWidth = width(rows.map((row) => row.project));
   const nameWidth = width(rows.map((row) => row.name));
   return rows.map((row) =>
-    `${row.mark} ${[pad(row.project, projectWidth), pad(row.name, nameWidth), row.text].join("  ")}`.trimEnd(),
+    `${row.mark} ${[pad(row.project, projectWidth), linked(pad(row.name, nameWidth), links ? (row.url ?? "") : ""), row.text].join("  ")}`.trimEnd(),
   );
 }
 
@@ -291,6 +303,7 @@ function pullRequestRow(row: PrWatchViewRow, state: BoardState): BoardRow {
     mark: "🔴",
     name: `${row.repo}#${row.number} ${row.branch}`.trimEnd(),
     text: note.length > 0 ? note : row.status,
+    ...(row.url === "" ? {} : { url: row.url }),
   };
 }
 

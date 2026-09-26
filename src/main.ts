@@ -51,7 +51,12 @@ import {
   runConfigure,
   runOpenConfig,
 } from "./terminal/preparation.ts";
-import { createReadlineResources, type ReadlineResources, writeText } from "./terminal/process.ts";
+import {
+  createReadlineResources,
+  type ReadlineResources,
+  streamIsTTY,
+  writeText,
+} from "./terminal/process.ts";
 import {
   interactiveFor,
   noTtyError,
@@ -240,7 +245,9 @@ async function handleStatus({
     }
     return result;
   }
-  if (invocation.watch) return await watchStatus(environment, run, stdout);
+  if (invocation.watch) {
+    return await watchStatus(environment, run, stdout, linksFor(dependencies));
+  }
   const service = createServiceFor(environment, run, dependencies);
   try {
     const [taskId] = invocation.paths;
@@ -257,7 +264,7 @@ async function handleStatus({
     stdout(
       invocation.json
         ? `${JSON.stringify({ ...status, tasks: await service.list() })}\n`
-        : renderStatus(status.board, status),
+        : renderStatus(status.board, status, linksFor(dependencies)),
     );
     return result;
   } finally {
@@ -325,11 +332,20 @@ async function handleWatch({
         : invocation.stop
           ? await service.prWatchStop(input)
           : await service.prWatchStart(input);
-    stdout(invocation.json ? `${JSON.stringify(view)}\n` : renderPrWatchView(view));
+    stdout(
+      invocation.json
+        ? `${JSON.stringify(view)}\n`
+        : renderPrWatchView(view, linksFor(dependencies)),
+    );
     return { exitCode: 0, status: "watch" };
   } finally {
     await service.shutdown();
   }
+}
+
+/** Pull request names become clickable links only when the output is a real terminal. */
+function linksFor(dependencies: TerminalMainDependencies): boolean {
+  return dependencies.isTTY ?? streamIsTTY(dependencies.output ?? process.stdout);
 }
 
 /**
@@ -340,6 +356,7 @@ async function watchStatus(
   environment: TerminalEnvironment,
   run: CommandRunner,
   stdout: (text: string) => void,
+  links: boolean,
 ): Promise<never> {
   const code = await tandemCodeVersion(run, TANDEM_ROOT);
   return runLiveBoard({
@@ -349,7 +366,7 @@ async function watchStatus(
         home: environment.home,
         sessionId: environment.sessionId,
       });
-      return renderStatus(status.board, status);
+      return renderStatus(status.board, status, links);
     },
     draw: (text) => stdout(`\x1b[H\x1b[2J${text}`),
     sleep: (ms) => Bun.sleep(ms),

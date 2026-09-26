@@ -50,6 +50,8 @@ Ask the coordinator about any task, or run `tandem status --json` for task IDs Â
 - The footer counts finished tasks (completed, merged, cancelled), which are not listed, names the
   projects with an open coordinator, and gives the commit `tandem` runs from.
 - "Needs you" is plain saved state; no model or Jev decides it.
+- In a terminal, each pull request name (in "Needs you" and PRs, and in `tandem watch`) is a
+  clickable link to its page (OSC 8). Piped output, `--json`, and the chat get plain text.
 - `tandem status --json` prints `code`, `coordinators`, `board` (the view above as data), and
   `tasks` (every task record, with IDs). `tandem status TASK_ID` is unchanged: one task's full
   inspection.

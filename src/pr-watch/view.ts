@@ -76,7 +76,8 @@ export function prWatchView(
   };
 }
 
-export function renderPrWatchView(view: PrWatchView): string {
+/** `links` makes each pull request's name a terminal hyperlink (OSC 8) to its page. */
+export function renderPrWatchView(view: PrWatchView, links = false): string {
   const open = view.rows.filter((row) => row.color !== "done" && row.color !== "unwatched").length;
   const header = [
     "PR watch",
@@ -88,11 +89,18 @@ export function renderPrWatchView(view: PrWatchView): string {
   ].join(" · ");
   if (view.rows.length === 0) return `${header}\n\nNo pull requests are watched.\n`;
   const repos = new Set(view.rows.map((row) => row.repo));
-  return `${header}\n\n${prWatchLines(view.rows, repos.size > 1).join("\n")}\n`;
+  return `${header}\n\n${prWatchLines(view.rows, repos.size > 1, links).join("\n")}\n`;
 }
 
-/** One aligned line per row; `nameRepo` names each pull request `owner/repo#N` instead of `#N`. */
-export function prWatchLines(rows: readonly PrWatchViewRow[], nameRepo: boolean): string[] {
+/**
+ * One aligned line per row; `nameRepo` names each pull request `owner/repo#N` instead of `#N`, and
+ * `links` makes that name a terminal hyperlink to the pull request.
+ */
+export function prWatchLines(
+  rows: readonly PrWatchViewRow[],
+  nameRepo: boolean,
+  links = false,
+): string[] {
   const names = rows.map((row) => (nameRepo ? `${row.repo}#${row.number}` : `#${row.number}`));
   const width = (values: readonly string[]) =>
     Math.max(...values.map((value) => [...value].length));
@@ -103,7 +111,7 @@ export function prWatchLines(rows: readonly PrWatchViewRow[], nameRepo: boolean)
   return rows.map((row, index) =>
     [
       COLOR_MARKS[row.color],
-      pad(names[index] ?? "", nameWidth),
+      linked(pad(names[index] ?? "", nameWidth), links ? row.url : ""),
       pad(row.branch, branchWidth),
       pad(row.checks, checksWidth),
       pad(row.status, statusWidth),
@@ -153,6 +161,13 @@ function checksColumn(watch: PrWatch): string {
   if (total === 0) return "no CI";
   const mark = checks.failed > 0 ? "❌" : checks.pending > 0 ? "⏳" : "✅";
   return `${mark} ${checks.passed}/${total}`;
+}
+
+/** Wraps the name, not its padding, so the link codes never count toward column width. */
+export function linked(padded: string, url: string): string {
+  if (url === "") return padded;
+  const name = padded.trimEnd();
+  return `\x1b]8;;${url}\x1b\\${name}\x1b]8;;\x1b\\${padded.slice(name.length)}`;
 }
 
 export function pad(value: string, width: number): string {

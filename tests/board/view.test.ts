@@ -13,6 +13,7 @@ import { createRequestBriefRecord } from "../../src/requests/brief.ts";
 import { task } from "../session/fixtures.ts";
 
 const NOW = "2030-01-01T12:00:00.000Z";
+const ESC = "\x1b";
 
 function content(goal: string): RequestBriefContent {
   return {
@@ -141,6 +142,30 @@ test("status puts what needs you first, then running work and pull requests, the
     ["question:q-1", "/work/app"],
     ["pr:acme/app#409", "/work/app"],
   ]);
+});
+
+test("in a terminal, pull request names link to their pages without shifting the columns", () => {
+  const view = boardView(
+    state({
+      watches: [
+        watch(420, { color: "green", status: "✅ approved", note: "" }),
+        watch(409, { color: "red", status: "❌ failing", note: "" }),
+      ],
+    }),
+    NOW,
+  );
+  const link = (name: string, url: string) => `\x1b]8;;${url}\x1b\\${name}\x1b]8;;\x1b\\`;
+  const linkedText = renderBoard(view, true);
+  expect(linkedText).toContain(
+    `${link("acme/app#409 branch-409", "https://github.com/acme/app/pull/409")}  ❌ failing`,
+  );
+  expect(linkedText).toContain(
+    `🟢 ${link("acme/app#420", "https://github.com/acme/app/pull/420")} branch-420`,
+  );
+  const osc8 = new RegExp(`${ESC}\\]8;;[^${ESC}]*${ESC}\\\\`, "gu");
+  const plain = (text: string) => text.replace(osc8, "");
+  expect(plain(linkedText)).toBe(renderBoard(view));
+  expect(renderBoard(view)).not.toContain("\x1b");
 });
 
 test("an empty status says nothing needs you, that PR watch has not checked yet, and how to open a coordinator", () => {
