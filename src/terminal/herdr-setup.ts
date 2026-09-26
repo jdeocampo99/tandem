@@ -1,11 +1,12 @@
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { quoteShellArgument, runCommand } from "../adapters/commands.ts";
+import { readBoard } from "../board/read.ts";
 import { resolveTandemEnvironment } from "../config/environment.ts";
-import type { CommandRunner } from "../contracts.ts";
+import type { CommandResult, CommandRunner } from "../contracts.ts";
 import { DEFAULT_TERMINAL_SESSION_ID } from "./environment.ts";
 
 /** The oldest Herdr with both popup keybindings (0.7.4) and command entries in the tab bar (0.8.2). */
@@ -144,12 +145,33 @@ function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
+/** How to update Herdr, from where its binary lives; undefined when only its package manager can. */
+export function herdrUpdateCommand(binary: string | undefined): readonly string[] | undefined {
+  if (binary === undefined) return ["herdr", "update"];
+  if (/\/(Cellar|homebrew|linuxbrew)\//u.test(binary)) return ["brew", "upgrade", "herdr"];
+  if (/\/(mise|nix)\//u.test(binary) || binary.startsWith("/nix/")) return undefined;
+  return ["herdr", "update"];
+}
+
+/** The running server of a Herdr session: its version, or undefined when it is not running. */
+export function parseServerStatus(
+  output: string,
+): Readonly<{ running: boolean; version?: string }> {
+  const running = /^status:\s*running\s*$/mu.test(output);
+  const version = /^version:\s*v?(\d+\.\d+\.\d+)/mu.exec(output)?.[1];
+  return { running, ...(version === undefined ? {} : { version }) };
+}
+
 export type HerdrSetupDependencies = Readonly<{
   readonly run: CommandRunner;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly commands: HerdrStatusCommands;
-  /** The Herdr session Tandem's panes run in; its server is the one to reload. */
+  /** The Herdr session Tandem's panes run in; its server is the one to reload or restart. */
   readonly sessionId: string;
+  /** Where the `herdr` binary resolves to, which says how it was installed. */
+  readonly herdrBinary: string | undefined;
+  /** Tasks Tandem is working on; restarting the session would stop them. Throws when unknown. */
+  readonly runningTasks: () => Promise<number>;
   /** Asks a yes/no question; undefined when there is no terminal to ask in. */
   readonly confirm: ((question: string) => Promise<boolean>) | undefined;
   readonly print: (text: string) => void;
@@ -159,30 +181,50 @@ export type HerdrSetupDependencies = Readonly<{
 }>;
 
 /**
- * Updates Herdr when it is older than {@link MIN_HERDR_VERSION}, then offers to add Tandem's status to its config. Changes nothing
- * without a yes, keeps a backup, and puts the old config back if `herdr config check` rejects the
- * new one. Returns whether Herdr is ready for the status popup and tab bar.
+ * Gets Herdr ready for Tandem's status: updates an older Herdr with its own installer or Homebrew,
+ * offers to add Tandem's settings to its config (nothing changes without a yes; a backup is kept,
+ * and the old config comes back if `herdr config check` rejects the new one), then makes Tandem's
+ * Herdr session use them: a reload when its server is current, or, when the server still runs an
+ * older Herdr and no task is running, a restart after asking. Returns whether everything is in
+ * place.
  */
 export async function setUpHerdrStatus(deps: HerdrSetupDependencies): Promise<boolean> {
   const cwd = deps.environment.HOME ?? homedir();
-  const herdr = (argv: readonly string[]) =>
-    deps.run({ argv: ["herdr", ...argv], cwd }).catch(() => undefined);
+  const run = (argv: readonly string[]) => deps.run({ argv, cwd }).catch(() => undefined);
+  const herdr = (argv: readonly string[]) => run(["herdr", ...argv]);
 
   const installed = async () => parseHerdrVersion((await herdr(["--version"]))?.stdout ?? "");
   let version = await installed();
   if (version !== undefined && !versionAtLeast(version, MIN_HERDR_VERSION)) {
-    deps.print(`→ updating Herdr ${version}; Tandem needs ${MIN_HERDR_VERSION} or newer\n`);
-    await herdr(["update"]);
+    const update = herdrUpdateCommand(deps.herdrBinary);
+    if (update === undefined) {
+      deps.print(
+        `! Herdr ${version} is older than ${MIN_HERDR_VERSION}; update it with the package manager that installed it (${deps.herdrBinary}), then run ./setup.sh again\n`,
+      );
+      return false;
+    }
+    deps.print(`→ updating Herdr ${version} with: ${update.join(" ")}\n`);
+    const result = await run(update);
+    const output = `${result?.stdout ?? ""}${result?.stderr ?? ""}`.trim();
+    if (output.length > 0) deps.print(`${output.replace(/^/gmu, "  ")}\n`);
     version = await installed();
   }
   if (version === undefined || !versionAtLeast(version, MIN_HERDR_VERSION)) {
     deps.print(
-      `! Tandem's status popup and tab bar need Herdr ${MIN_HERDR_VERSION} or newer${version === undefined ? "" : ` (you have ${version})`}; update with: herdr update\n`,
+      `! Tandem's status popup and tab bar need Herdr ${MIN_HERDR_VERSION} or newer${version === undefined ? "" : ` (you have ${version})`}; the update above did not install it\n`,
     );
     return false;
   }
   deps.print(`✓ herdr ${version}\n`);
 
+  if (!(await writeHerdrConfig(deps, herdr))) return false;
+  return await applyToSession(deps, herdr);
+}
+
+type Herdr = (argv: readonly string[]) => Promise<CommandResult | undefined>;
+
+/** Adds Tandem's settings to Herdr's config after asking; true when they are there. */
+async function writeHerdrConfig(deps: HerdrSetupDependencies, herdr: Herdr): Promise<boolean> {
   const path = herdrConfigPath(deps.environment);
   const original = await deps.readConfig(path);
   const plan = planHerdrConfig(original ?? "", deps.commands);
@@ -213,28 +255,86 @@ export async function setUpHerdrStatus(deps: HerdrSetupDependencies): Promise<bo
     return false;
   }
   deps.print(`✓ Added to ${path}${backup === undefined ? "" : ` (backup: ${backup})`}\n`);
-  // Plain `herdr server reload-config` reloads the default session, not the one Tandem uses.
-  const reload = ["--session", deps.sessionId, "server", "reload-config"];
-  const reloaded = (await herdr(reload))?.code === 0;
-  deps.print(
-    reloaded
-      ? `✓ Herdr's ${deps.sessionId} session reloaded its config; press ${STATUS_POPUP_KEY} for the live status\n`
-      : `Herdr's ${deps.sessionId} session picks it up when it starts, or run: herdr ${reload.join(" ")}\n`,
+  return true;
+}
+
+/**
+ * Makes Tandem's Herdr session use the config. Plain `herdr server reload-config` would reach only
+ * the default session. A server still on an older Herdr cannot run the tab-bar entry, and only a
+ * restart updates it; that closes the session's panes, so it waits for idle tasks and a yes.
+ */
+async function applyToSession(deps: HerdrSetupDependencies, herdr: Herdr): Promise<boolean> {
+  const session = deps.sessionId;
+  const server = parseServerStatus(
+    (await herdr(["--session", session, "status", "server"]))?.stdout ?? "",
   );
+  const later = `Then run tandem to reopen your projects.`;
+  if (!server.running) {
+    deps.print(`✓ Herdr's ${session} session starts with it the next time you run tandem\n`);
+    return true;
+  }
+  if (server.version === undefined || versionAtLeast(server.version, MIN_HERDR_VERSION)) {
+    const reloaded = (await herdr(["--session", session, "server", "reload-config"]))?.code === 0;
+    deps.print(
+      reloaded
+        ? `✓ Herdr's ${session} session reloaded its config; press ${STATUS_POPUP_KEY} for the live status\n`
+        : `! Could not reload Herdr's ${session} session; run: herdr --session ${session} server reload-config\n`,
+    );
+    return reloaded;
+  }
+
+  const restart = `herdr session stop ${session}`;
+  deps.print(
+    `\nHerdr's ${session} session still runs Herdr ${server.version}, which can't show Tandem's status. Restarting it closes its panes, coordinators included; chats and tasks are saved and reopen with tandem.\n`,
+  );
+  const inside =
+    (deps.environment.HERDR_SESSION ?? deps.environment.HERDR_SESSION_NAME) === session;
+  if (inside) {
+    deps.print(
+      `! This terminal is inside that session, so setup can't restart it. From a terminal outside Herdr: ${restart}. ${later}\n`,
+    );
+    return false;
+  }
+  const running = await deps.runningTasks().catch(() => undefined);
+  if (running === undefined || running > 0) {
+    deps.print(
+      `! ${running === undefined ? "Could not tell whether tasks are running" : `${running} task${running === 1 ? " is" : "s are"} running`}, so it was left alone. When nothing is running: ${restart}. ${later}\n`,
+    );
+    return false;
+  }
+  if (
+    deps.confirm === undefined ||
+    !(await deps.confirm(`Restart Herdr's ${session} session now?`))
+  ) {
+    deps.print(`Left running. When you're ready: ${restart}. ${later}\n`);
+    return false;
+  }
+  if ((await herdr(["session", "stop", session]))?.code !== 0) {
+    deps.print(`! Could not stop it; run: ${restart}. ${later}\n`);
+    return false;
+  }
+  deps.print(`✓ Stopped Herdr's ${session} session. ${later}\n`);
   return true;
 }
 
 async function main(): Promise<void> {
   const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
   const tandemMain = fileURLToPath(new URL("../main.ts", import.meta.url));
+  const tandem = resolveTandemEnvironment(process.env, {
+    cwd: process.cwd(),
+    sessionId: DEFAULT_TERMINAL_SESSION_ID,
+  });
+  const binary = Bun.which("herdr");
   await setUpHerdrStatus({
     run: runCommand,
     environment: process.env,
     commands: herdrStatusCommands(process.execPath, tandemMain),
-    sessionId: resolveTandemEnvironment(process.env, {
-      cwd: process.cwd(),
-      sessionId: DEFAULT_TERMINAL_SESSION_ID,
-    }).sessionId,
+    sessionId: tandem.sessionId,
+    herdrBinary: binary === null ? undefined : await realpath(binary).catch(() => binary),
+    runningTasks: async () => {
+      const board = await readBoard(tandem.home, () => new Date().toISOString());
+      return board.running.filter((row) => row.cause !== "paused").length;
+    },
     confirm: interactive
       ? async (question) => {
           const readline = createInterface({ input: process.stdin, output: process.stdout });
