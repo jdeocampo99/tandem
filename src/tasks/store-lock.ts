@@ -34,12 +34,37 @@ function pauseFor(milliseconds: number): Promise<void> {
   return promise;
 }
 
+/** Leases held by the in-process test lock, keyed by lock path. */
+const inProcessLeases = new Map<string, Promise<void>>();
+
+/**
+ * Test-only stand-in for O_EXLOCK on machines without it (Linux cloud sessions), opted into with
+ * `TANDEM_IN_PROCESS_STORE_LOCK=1`. It serializes callers in this process only, so it never
+ * protects against another process and must not be set for a real Tandem home.
+ */
+function inProcessLockEnabled(): boolean {
+  return process.platform !== "darwin" && process.env.TANDEM_IN_PROCESS_STORE_LOCK === "1";
+}
+
+async function acquireInProcessLock(path: string): Promise<() => Promise<void>> {
+  for (let held = inProcessLeases.get(path); held !== undefined; held = inProcessLeases.get(path)) {
+    await held;
+  }
+  const lease = Promise.withResolvers<void>();
+  inProcessLeases.set(path, lease.promise);
+  return async () => {
+    if (inProcessLeases.get(path) === lease.promise) inProcessLeases.delete(path);
+    lease.resolve();
+  };
+}
+
 export async function acquireDarwinFileLock(
   path: string,
   timeoutMs: number,
   pollMs: number,
   signal?: AbortSignal,
 ): Promise<(relocatedPath?: string) => Promise<void>> {
+  if (inProcessLockEnabled()) return acquireInProcessLock(path);
   assertNativeRepositoryLock();
   const assertNotAborted = (): void => {
     if (signal?.aborted) {
