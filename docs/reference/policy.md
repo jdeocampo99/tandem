@@ -39,6 +39,9 @@ src/adapters/typesafe.ts, src/instructions.ts
 - The write (`setup --yes`, or `onboard --write --yes`) creates only a missing record, exclusively
   (`wx`), re-checking for either settings file just before writing. An existing, malformed, or
   mismatched record is refused, never repaired or replaced. The CLI has no custom-command override.
+- In chat, the Tandem coordinator runs the same steps with the same approvals (see
+  [coordinator.md](coordinator.md#the-tandem-coordinator)); `open-project` then opens the saved
+  project's own coordinator.
 - The native terminal asks **Save settings** / **Not now** before writing; **Not now** or Ctrl+C
   creates no project record and leaves saved model choices intact. The interview text and choice
   rules live in `src/terminal/onboarding.ts` and `src/instructions.ts`.

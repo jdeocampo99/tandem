@@ -58,6 +58,7 @@ import type {
   TaskTarget,
 } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
+import { openProject } from "../coordinator/open-project.ts";
 import { describeTaskPr, type PrSummary } from "../delivery/evidence.ts";
 import { type DeliveryPreflightResult, deliveryPreflight } from "../delivery/preflight.ts";
 import {
@@ -311,6 +312,8 @@ export type TandemService = Readonly<{
     coordinatorMcpServers?: readonly string[],
   ) => Promise<OnboardRepoResult>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
+  /** Opens a saved project's coordinator in this Herdr session; refuses one not yet set up. */
+  readonly openProject: (repoPath: string) => Promise<Readonly<{ readonly repoPath: string }>>;
   readonly configureModels: (
     input: Readonly<{
       readonly repoPath: string;
@@ -801,6 +804,7 @@ class TandemController {
       report: (options) => this.report(options),
       deliveryPreflight: (id, input) => this.deliveryPreflight(id, input.base),
       models: (repoPath) => this.models(repoPath),
+      openProject: (repoPath) => this.openProject(repoPath),
       configureModels: (input) => this.configureModels(input),
       create: (input) => this.create(input),
       ...(this.#deps.refreshSource === undefined
@@ -904,6 +908,23 @@ class TandemController {
       ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
     });
   }
+  async openProject(repoPath: string): Promise<Readonly<{ readonly repoPath: string }>> {
+    const onboarded = await this.onboard(repoPath, false);
+    if (!onboarded.existingConfig) {
+      throw new Error(`${onboarded.repoPath} has no saved Tandem settings yet; save them first`);
+    }
+    if (!onboarded.modelSettings.configured) {
+      throw new Error("no model choices are saved yet; save them first");
+    }
+    await openProject(this.#deps.run, {
+      repoPath: onboarded.repoPath,
+      home: this.#deps.home,
+      sessionId: this.#deps.sessionId,
+      poolRoot: this.#deps.poolRoot,
+    });
+    return { repoPath: onboarded.repoPath };
+  }
+
   /**
    * Catalogue tier evidence for one checkout, read fresh at an execution boundary. A catalogue it
    * cannot read is reported as unavailable rather than as an empty catalogue, because an empty one

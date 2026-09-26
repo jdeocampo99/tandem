@@ -191,15 +191,18 @@ Then, from inside a repository:
 tandem
 ```
 
-The first run looks at the project without changing anything, suggests check commands, and asks you
-to choose models for each role. After that, plain `tandem` from any folder reopens every saved
-project with its previous chat. Add more with `tandem /path/to/repo`.
+The first run asks you to choose models for each role, then opens Tandem's own chat with a welcome
+popup. Tell it which repos to set up ("Onboard ~/code/api and ~/code/web"): it looks at each one
+without changing anything, suggests check commands, and asks before saving settings and opening
+the project's own chat. Ask it to change how Tandem works, too; it tries settings first and makes
+code changes as ordinary tasks. After that, plain `tandem` from any folder reopens Tandem's chat and
+every saved project with its previous chat. `tandem /path/to/repo` still works.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `tandem [PATH ...]` | Open or reconnect your projects |
+| `tandem [PATH ...]` | Open Tandem's chat and your projects, resuming their chats |
 | `tandem status [TASK_ID]` | What needs you, what's running, and your pull requests; with a task ID, that task's history |
 | `tandem trace [TASK_ID]` | What happened to a task and why, with review, fix-round, blocked-time, and cost figures |
 | `tandem report` | A page in Lavish showing where each task's time and money went and what held it up (`--since DATE` to narrow it) |
@@ -209,6 +212,7 @@ project with its previous chat. Add more with `tandem /path/to/repo`.
 | `tandem fix` | Clean up leftovers from a crash or failed launch (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |
 | `tandem config [PATH]` | Open the project's settings file |
+| `tandem welcome` | Show the welcome message again |
 | `tandem reset` | Cancel all in-progress tasks and reopen fresh coordinators |
 | `tandem reset --hard` | Delete all Tandem state and start over |
 

@@ -169,6 +169,10 @@ export async function runOpenConfig(
   return { exitCode: 0, status: "configured", projects: [root] };
 }
 
+/**
+ * Asks for model choices and each new project's settings before launch. The Tandem checkout opens
+ * without saved settings, so its coordinator can onboard the other projects in chat.
+ */
 export async function prepareProjects(
   states: readonly ProjectState[],
   environment: TerminalEnvironment,
@@ -176,9 +180,12 @@ export async function prepareProjects(
   prompter: TerminalPrompter | undefined,
   interactive: boolean,
   listMcpServers: (repoPath: string) => Promise<readonly string[]>,
+  tandemProject: string | undefined,
 ): Promise<readonly ProjectState[] | undefined> {
   const settings = firstModelSettings(states);
-  const needsNewProjectChoice = states.some((state) => !state.existingConfig);
+  const needsSettings = (state: ProjectState) =>
+    !state.existingConfig && state.repoPath !== tandemProject;
+  const needsNewProjectChoice = states.some(needsSettings);
   if (!settings.configured || needsNewProjectChoice) {
     if (!interactive || prompter === undefined) throw noTtyError("Tandem onboarding");
     const anchor = states[0];
@@ -212,7 +219,7 @@ export async function prepareProjects(
   }
 
   for (const state of states) {
-    if (state.existingConfig) continue;
+    if (!needsSettings(state)) continue;
     if (!interactive || prompter === undefined) throw noTtyError("project settings approval");
     const approved = await askProjectSettingsApproval(prompter, state.repoPath, state.configPath);
     if (!approved) return undefined;

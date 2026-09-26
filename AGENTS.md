@@ -20,6 +20,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | `tandem` terminal command, onboarding, project selection | [main.ts](src/main.ts) → [terminal/](src/terminal/) |
 | Action CLI / JSON automation | [cli.ts](src/cli.ts) → [terminal/cli-application.ts](src/terminal/cli-application.ts), per-command handlers in [terminal/cli-commands.ts](src/terminal/cli-commands.ts) |
 | Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `registry.ts`, `restart.ts` (`tandem update`), `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
+| The Tandem coordinator (Tandem's own chat), `open-project`, the welcome popup | [coordinator/tandem-checkout.ts](src/coordinator/tandem-checkout.ts), [coordinator/open-project.ts](src/coordinator/open-project.ts), [terminal/welcome.ts](src/terminal/welcome.ts), [herdr-plugin/](herdr-plugin/) |
 | Models, environment, policy, skill lookup | [config/](src/config/); skills: `skills.ts` |
 | Request briefs, approval revisions, review pane | [requests/](src/requests/): `brief.ts`, `store.ts`, `store-codec.ts`, `markdown.ts`, `review-pane.ts`, `workflow.ts` |
 | Transitions, approvals, storage, communication | [tasks/](src/tasks/): `lifecycle.ts`, `acceptance.ts`, `findings.ts`, `review-brief.ts`, `review-levels.ts`, `review-assistance.ts`, `store.ts`, `control.ts`, `question.ts`, `communication-protocol.ts`, `inspection.ts` (`tandem status TASK_ID`), `timeline.ts` / `timeline-store.ts` (task events), `trace.ts` (`tandem trace`) |

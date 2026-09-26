@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { HerdrAgentState, HerdrStatusReporter } from "../../src/adapters/herdr-status.ts";
 import type { BoardRow } from "../../src/board/view.ts";
 import type { TaskRecord } from "../../src/contracts.ts";
+import { TANDEM_COORDINATOR_INSTRUCTIONS } from "../../src/instructions.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import {
   type CoordinatorDeps,
@@ -10,6 +11,7 @@ import {
   sourceRefreshStatus,
 } from "../../src/session/coordinator.ts";
 import type { SessionHost } from "../../src/session/events.ts";
+import { WELCOME_TEXT } from "../../src/terminal/welcome.ts";
 import { fakeSessionTime, recordingSessionHost } from "../evals/scenario.ts";
 import { task } from "./fixtures.ts";
 
@@ -38,6 +40,8 @@ function coordinatorDeps(
         ...service,
       }) as TandemService,
     realpath: async (path) => path,
+    isTandemCheckout: async () => false,
+    openWelcome: async () => undefined,
     readReport: async () => undefined,
     appendUsage: async () => undefined,
     compactTokens: 128_000,
@@ -478,4 +482,83 @@ test("the standing context lists the project's workstreams once there are any", 
   const plain = (await without.agentStart()).systemContext;
   expect(plain.some((part) => part.startsWith("Workstreams:"))).toBe(false);
   expect((await unreadable.agentStart()).systemContext).toEqual(plain);
+});
+
+function welcomeSession(
+  options: Readonly<{
+    tandemCheckout: boolean;
+    projects: readonly string[];
+    openWelcome?: () => Promise<void>;
+  }>,
+) {
+  const { host, effects } = recordingSessionHost();
+  let opened = 0;
+  const session = new CoordinatorSession(
+    coordinatorDeps(
+      {
+        tick: async () => [],
+        list: async () => [],
+        shutdown: async () => undefined,
+        board: async () => ({
+          now: "",
+          projects: options.projects,
+          needsYou: [],
+          running: [],
+          finished: 0,
+          pullRequests: [],
+        }),
+      },
+      {
+        host,
+        isTandemCheckout: async () => options.tandemCheckout,
+        openWelcome:
+          options.openWelcome ??
+          (async () => {
+            opened += 1;
+          }),
+      },
+    ),
+  );
+  return { session, effects, opened: () => opened };
+}
+
+test("the Tandem coordinator opens the welcome popup until another project is set up", async () => {
+  const alone = welcomeSession({ tandemCheckout: true, projects: ["/repo"] });
+  await alone.session.sessionStart();
+  expect(alone.opened()).toBe(1);
+  const context = (await alone.session.agentStart()).systemContext.join("\n");
+  expect(context).toContain(TANDEM_COORDINATOR_INSTRUCTIONS);
+  await alone.session.shutdown();
+
+  const onboarded = welcomeSession({ tandemCheckout: true, projects: ["/repo", "/code/app"] });
+  await onboarded.session.sessionStart();
+  expect(onboarded.opened()).toBe(0);
+  await onboarded.session.shutdown();
+});
+
+test("another project's coordinator never welcomes and has no Tandem-only instructions", async () => {
+  const project = welcomeSession({ tandemCheckout: false, projects: [] });
+  await project.session.sessionStart();
+  expect(project.opened()).toBe(0);
+  const context = (await project.session.agentStart()).systemContext.join("\n");
+  expect(context).not.toContain(TANDEM_COORDINATOR_INSTRUCTIONS);
+  await project.session.shutdown();
+});
+
+test("when the popup cannot open, the welcome arrives in the chat without a model turn", async () => {
+  const fallback = welcomeSession({
+    tandemCheckout: true,
+    projects: [],
+    openWelcome: async () => {
+      throw new Error("plugin not found");
+    },
+  });
+  await fallback.session.sessionStart();
+  const delivered = fallback.effects.flatMap((effect) =>
+    effect.type === "deliver" ? [effect] : [],
+  );
+  expect(delivered).toHaveLength(1);
+  expect(delivered[0]?.text).toBe(WELCOME_TEXT);
+  expect(delivered[0]?.triggerTurn).toBe(false);
+  await fallback.session.shutdown();
 });

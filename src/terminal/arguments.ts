@@ -9,7 +9,8 @@ export type TerminalCommand =
   | "reset"
   | "config"
   | "configure"
-  | "memory";
+  | "memory"
+  | "welcome";
 
 export type TerminalInvocation = Readonly<{
   readonly command: TerminalCommand;
@@ -48,6 +49,7 @@ export type TerminalRunResult = Readonly<{
     | "memory"
     | "fixed"
     | "reset"
+    | "welcome"
     | "cancelled"
     | "error";
   readonly reconciliation?: unknown;
@@ -87,6 +89,7 @@ const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
   config: "config",
   configure: "configure",
   memory: "memory",
+  welcome: "welcome",
 };
 
 /** Old spellings name their replacement instead of being mistaken for a project path. */
@@ -136,6 +139,7 @@ const ALLOWED: Readonly<
   config: { flags: [], maxPaths: 1 },
   configure: { flags: [], maxPaths: 1 },
   memory: { flags: ["json"], maxPaths: 1 },
+  welcome: { flags: [], maxPaths: 0 },
 };
 
 /** Parses the small user-facing terminal command without executing anything. */

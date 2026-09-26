@@ -1164,3 +1164,62 @@ export async function closeEndpoint(
   await verifyPaneClosed(run, input);
   return { endpoint: input.endpoint, closed: true };
 }
+
+/** The Herdr plugin Tandem ships (`herdr-plugin/`), and its welcome popup entrypoint. */
+export const TANDEM_HERDR_PLUGIN = "tandem.ui";
+export const WELCOME_ENTRYPOINT = "welcome";
+/** How the welcome popup learns which pane to prompt: a popup has no `HERDR_PANE_ID`. */
+export const WELCOME_PANE_VARIABLE = "TANDEM_WELCOME_PANE";
+
+/** Opens the welcome popup over the session; it prompts `paneId` when the user presses Enter. */
+export async function openWelcomePopup(
+  run: CommandRunner,
+  input: Readonly<{ readonly sessionId: string; readonly cwd: string; readonly paneId: string }>,
+): Promise<void> {
+  const paneId = checkedText(input.paneId, "paneId");
+  await runChecked(
+    run,
+    herdrRequest(input.sessionId, input.cwd, [
+      "plugin",
+      "pane",
+      "open",
+      "--plugin",
+      TANDEM_HERDR_PLUGIN,
+      "--entrypoint",
+      WELCOME_ENTRYPOINT,
+      "--env",
+      `${WELCOME_PANE_VARIABLE}=${paneId}`,
+    ]),
+    "herdr plugin pane open",
+  );
+}
+
+/**
+ * Submits a prompt to the agent in a pane. When Herdr does not see an agent there, types the text
+ * and presses Enter instead.
+ */
+export async function promptPane(
+  run: CommandRunner,
+  input: Readonly<{
+    readonly sessionId: string;
+    readonly cwd: string;
+    readonly paneId: string;
+    readonly text: string;
+  }>,
+): Promise<void> {
+  const paneId = checkedText(input.paneId, "paneId");
+  const prompted = await run(
+    herdrRequest(input.sessionId, input.cwd, ["agent", "prompt", paneId, input.text]),
+  );
+  if (prompted.code === 0) return;
+  await runChecked(
+    run,
+    herdrRequest(input.sessionId, input.cwd, ["pane", "send-text", paneId, input.text]),
+    "herdr pane send-text",
+  );
+  await runChecked(
+    run,
+    herdrRequest(input.sessionId, input.cwd, ["pane", "send-keys", paneId, "enter"]),
+    "herdr pane send-keys",
+  );
+}

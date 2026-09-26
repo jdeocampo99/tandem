@@ -4,7 +4,9 @@ import {
   type HerdrSetupDependencies,
   herdrConfigPath,
   herdrStatusCommands,
+  herdrUpdateCommand,
   parseHerdrVersion,
+  parseServerStatus,
   planHerdrConfig,
   setUpHerdrStatus,
   versionAtLeast,
@@ -116,19 +118,24 @@ test("an existing tab_bar_right or prefix+t binding is left alone, with the line
   const plan = planHerdrConfig(text, COMMANDS);
   expect(plan.text).toBe(text);
   expect(plan.added).toEqual([]);
-  expect(plan.skipped[0]).toContain("You already set ui.tab_bar_right");
-  expect(plan.skipped[0]).toContain(COMMANDS.line);
-  expect(plan.skipped[1]).toBe(
-    "Herdr notifications are already set up; Tandem's use the same setting.",
-  );
-  expect(plan.skipped[2]).toContain("prefix+t is already bound");
+  // The user's toast choice needs nothing; the other two are theirs to add by hand.
+  expect(plan.skipped).toEqual([
+    expect.stringContaining(`Add to your ui.tab_bar_right: { type = "command"`),
+    `prefix+t is taken; bind another key to: ${COMMANDS.popup}`,
+  ]);
 });
+
+const RUNNING = (version: string) => `status: running\nversion: ${version}\nsocket: /s\n`;
+
+const LINKED = "1 plugin installed:\n- tandem.ui (Tandem) enabled [local:/tandem/herdr-plugin]\n";
 
 function setup(
   overrides: Partial<HerdrSetupDependencies> & {
     readonly versions?: string[];
     readonly checks?: number[];
     readonly config?: string;
+    readonly server?: string;
+    readonly plugins?: string;
   } = {},
 ) {
   const versions = [...(overrides.versions ?? ["herdr 0.9.1"])];
@@ -137,16 +144,33 @@ function setup(
   const printed: string[] = [];
   const writes: string[] = [];
   const run = async (request: CommandRequest): Promise<CommandResult> => {
-    const command = request.argv.slice(1).join(" ");
+    const command = request.argv.join(" ");
     ran.push(command);
-    if (command === "--version") return { code: 0, stdout: versions.shift() ?? "", stderr: "" };
-    if (command === "config check") return { code: checks.shift() ?? 0, stdout: "", stderr: "" };
+    if (command === "herdr --version") {
+      return { code: 0, stdout: versions.shift() ?? "", stderr: "" };
+    }
+    if (command === "herdr config check") {
+      return { code: checks.shift() ?? 0, stdout: "", stderr: "" };
+    }
+    if (command === "herdr --session tandem status server") {
+      return { code: 0, stdout: overrides.server ?? RUNNING("0.9.1"), stderr: "" };
+    }
+    if (command === "herdr plugin list") {
+      return { code: 0, stdout: overrides.plugins ?? LINKED, stderr: "" };
+    }
+    if (command === "brew upgrade herdr") {
+      return { code: 0, stdout: "==> Upgrading herdr 0.8.0 -> 0.9.1", stderr: "" };
+    }
     return { code: 0, stdout: "", stderr: "" };
   };
   const deps: HerdrSetupDependencies = {
     run,
     environment: { HOME: "/Users/me" },
     commands: COMMANDS,
+    pluginDirectory: "/tandem/herdr-plugin",
+    sessionId: "tandem",
+    herdrBinary: "/Users/me/.local/bin/herdr",
+    runningTasks: async () => 0,
     confirm: async () => true,
     print: (text) => printed.push(text),
     readConfig: async () => overrides.config,
@@ -159,23 +183,133 @@ function setup(
   return { deps, ran, printed, writes };
 }
 
-test("setup updates an old Herdr, asks, writes the config, and reloads it", async () => {
+test("Herdr is updated the way it was installed, and a running server's version is read", () => {
+  expect(herdrUpdateCommand("/opt/homebrew/Cellar/herdr/0.8.0/bin/herdr")).toEqual([
+    "brew",
+    "upgrade",
+    "herdr",
+  ]);
+  expect(herdrUpdateCommand("/Users/me/.local/bin/herdr")).toEqual(["herdr", "update"]);
+  expect(
+    herdrUpdateCommand("/Users/me/.local/share/mise/installs/herdr/bin/herdr"),
+  ).toBeUndefined();
+  expect(parseServerStatus(RUNNING("0.8.0"))).toEqual({ running: true, version: "0.8.0" });
+  expect(parseServerStatus("status: not running\nsocket: /s\n")).toEqual({ running: false });
+});
+
+test("setup updates an old Herdr, asks, writes the config, and reloads Tandem's session", async () => {
   const { deps, ran, printed, writes } = setup({
     versions: ["herdr 0.7.5", "herdr 0.9.1"],
     config: "[ui]\nsidebar_width = 30\n",
   });
   expect(await setUpHerdrStatus(deps)).toBe(true);
   expect(ran).toEqual([
-    "--version",
-    "update",
-    "--version",
-    "config check",
-    "config check",
-    "server reload-config",
+    "herdr --version",
+    "herdr update",
+    "herdr --version",
+    "herdr config check",
+    "herdr config check",
+    "herdr --session tandem status server",
+    "herdr --session tandem server reload-config",
+    "herdr plugin list",
   ]);
   expect(writes).toHaveLength(1);
   expect(parsed(writes[0] ?? "").ui?.sidebar_width).toBe(30);
-  expect(printed.join("")).toContain("backup: /Users/me/.config/herdr/config.toml.before-tandem");
+  expect(printed.join("")).toBe(
+    [
+      "→ updating Herdr 0.7.5",
+      "✓ Herdr 0.9.1",
+      "✓ Herdr config updated (backup: config.toml.before-tandem)",
+      "✓ Herdr reloaded; prefix+t shows Tandem's status",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("a Homebrew Herdr is upgraded with brew, and a failed update shows its output", async () => {
+  const { deps, ran, printed } = setup({
+    versions: ["herdr 0.8.0", "herdr 0.9.1"],
+    herdrBinary: "/opt/homebrew/Cellar/herdr/0.8.0/bin/herdr",
+  });
+  expect(await setUpHerdrStatus(deps)).toBe(true);
+  expect(ran.slice(0, 3)).toEqual(["herdr --version", "brew upgrade herdr", "herdr --version"]);
+  expect(printed.join("")).not.toContain("==> Upgrading");
+
+  const failed = setup({
+    versions: ["herdr 0.8.0", "herdr 0.8.0"],
+    herdrBinary: "/opt/homebrew/Cellar/herdr/0.8.0/bin/herdr",
+  });
+  expect(await setUpHerdrStatus(failed.deps)).toBe(false);
+  expect(failed.printed.join("")).toContain("  ==> Upgrading herdr 0.8.0 -> 0.9.1");
+});
+
+test("re-running with the config already there still applies it to Tandem's session", async () => {
+  const done = planHerdrConfig("", COMMANDS).text;
+  const { deps, ran, writes } = setup({ config: done });
+  expect(await setUpHerdrStatus(deps)).toBe(true);
+  expect(writes).toEqual([]);
+  expect(ran).toContain("herdr --session tandem server reload-config");
+});
+
+test("a session still on an old Herdr is restarted only when idle, asked, and not from inside it", async () => {
+  const done = planHerdrConfig("", COMMANDS).text;
+  const stale = RUNNING("0.8.0");
+
+  const restarted = setup({ config: done, server: stale });
+  expect(await setUpHerdrStatus(restarted.deps)).toBe(true);
+  expect(restarted.ran).toContain("herdr session stop tandem");
+  expect(restarted.printed.join("")).toContain("run tandem to reopen your projects");
+
+  const busy = setup({ config: done, server: stale, runningTasks: async () => 2 });
+  expect(await setUpHerdrStatus(busy.deps)).toBe(false);
+  expect(busy.ran).not.toContain("herdr session stop tandem");
+  expect(busy.printed.join("")).toBe(
+    "! Herdr's tandem session still runs 0.8.0 and needs a restart (2 running); when idle, run: herdr session stop tandem && tandem\n",
+  );
+
+  const unknown = setup({
+    config: done,
+    server: stale,
+    runningTasks: async () => {
+      throw new Error("state locked");
+    },
+  });
+  expect(await setUpHerdrStatus(unknown.deps)).toBe(false);
+  expect(unknown.ran).not.toContain("herdr session stop tandem");
+
+  const declined = setup({ config: done, server: stale, confirm: async () => false });
+  expect(await setUpHerdrStatus(declined.deps)).toBe(false);
+  expect(declined.ran).not.toContain("herdr session stop tandem");
+
+  const inside = setup({
+    config: done,
+    server: stale,
+    environment: { HOME: "/Users/me", HERDR_SESSION: "tandem" },
+  });
+  expect(await setUpHerdrStatus(inside.deps)).toBe(false);
+  expect(inside.ran).not.toContain("herdr session stop tandem");
+  expect(inside.printed.join("")).toContain("from outside Herdr");
+});
+
+test("a session that isn't running picks the config up when it starts", async () => {
+  const { deps, ran } = setup({ server: "status: not running\nsocket: /s\n" });
+  expect(await setUpHerdrStatus(deps)).toBe(true);
+  expect(ran).not.toContain("herdr --session tandem server reload-config");
+});
+
+test("setup links Tandem's welcome popup plugin once, after asking", async () => {
+  const linked = setup({ plugins: "No plugins installed.\n" });
+  expect(await setUpHerdrStatus(linked.deps)).toBe(true);
+  expect(linked.ran).toContain("herdr --session tandem plugin link /tandem/herdr-plugin");
+  expect(linked.printed.join("")).toContain("✓ Tandem's welcome popup added to Herdr");
+
+  const already = setup();
+  expect(await setUpHerdrStatus(already.deps)).toBe(true);
+  expect(already.ran.some((command) => command.includes("plugin link"))).toBe(false);
+
+  const declined = setup({ plugins: "No plugins installed.\n", confirm: async () => false });
+  expect(await setUpHerdrStatus(declined.deps)).toBe(false);
+  expect(declined.ran.some((command) => command.includes("plugin link"))).toBe(false);
 });
 
 test("setup changes nothing when the user says no or there is no terminal", async () => {
@@ -194,17 +328,25 @@ test("setup puts the old config back when Herdr rejects the new one", async () =
   const { deps, writes, ran, printed } = setup({ config: original, checks: [0, 1] });
   expect(await setUpHerdrStatus(deps)).toBe(false);
   expect(writes.at(-1)).toBe(original);
-  expect(ran).not.toContain("server reload-config");
-  expect(printed.join("")).toContain("the old one is back");
+  expect(ran).not.toContain("herdr --session tandem server reload-config");
+  expect(printed.join("")).toContain("the old config is back");
 });
 
-test("setup stops when Herdr is missing or still too old after updating", async () => {
+test("setup stops when Herdr is missing, still too old after updating, or needs its package manager", async () => {
   const missing = setup({ versions: [""] });
   expect(await setUpHerdrStatus(missing.deps)).toBe(false);
-  expect(missing.ran).toEqual(["--version"]);
+  expect(missing.ran).toEqual(["herdr --version"]);
 
   const old = setup({ versions: ["herdr 0.7.5", "herdr 0.7.5"] });
   expect(await setUpHerdrStatus(old.deps)).toBe(false);
-  expect(old.printed.join("")).toContain("(you have 0.7.5); update with: herdr update");
+  expect(old.printed.join("")).toContain("needs Herdr 0.8.2+ (you have 0.7.5)");
   expect(old.writes).toEqual([]);
+
+  const mise = setup({
+    versions: ["herdr 0.7.5"],
+    herdrBinary: "/Users/me/.local/share/mise/installs/herdr/bin/herdr",
+  });
+  expect(await setUpHerdrStatus(mise.deps)).toBe(false);
+  expect(mise.ran).toEqual(["herdr --version"]);
+  expect(mise.printed.join("")).toContain("package manager that installed it");
 });
