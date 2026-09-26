@@ -52,6 +52,7 @@ export async function classifyPlaybook(
       {
         apiKey: config.apiKey,
         timeoutMs: config.timeoutMs,
+        ...(config.gateway === undefined ? {} : { gateway: config.gateway }),
         ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
       },
     );

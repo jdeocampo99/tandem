@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { JevEvaluationResponse } from "../../src/adapters/typesafe.ts";
+import type { JevEvaluationResponse, JevGateway } from "../../src/adapters/typesafe.ts";
 import { buildAgentBrief } from "../../src/instructions.ts";
 import { PLAYBOOKS } from "../../src/playbooks/catalog.ts";
 import { classifyPlaybook } from "../../src/playbooks/classify.ts";
@@ -55,6 +55,20 @@ test("classification asks Jev once and falls back to general without a key, on f
     throw new Error("down");
   };
   expect(await classifyPlaybook("Fix it", config, failing)).toBe("general");
+});
+
+test("classification goes through the configured Jev gateway", async () => {
+  const gateway: JevGateway = { url: "https://gateway.example/v1", model: "jev", headers: {} };
+  let used: JevGateway | undefined;
+  await classifyPlaybook(
+    "Fix the crash",
+    { apiKey: "key", timeoutMs: 1_000, gateway },
+    async (_, options) => {
+      used = options.gateway;
+      return answer("bug-fix", 0.95);
+    },
+  );
+  expect(used).toEqual(gateway);
 });
 
 const steps = ["Measure a baseline", "Find the cause", "Measure again"];
