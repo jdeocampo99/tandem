@@ -65,6 +65,7 @@ export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
 }
 
 function approvalLine(record: RequestBriefRecord): string {
+  if (record.abandonedAt !== undefined) return `abandoned on ${record.abandonedAt}`;
   const state = requestApprovalState(record);
   if (state === "unapproved" || record.approval === undefined) return "not approved yet";
   if (state === "current") {

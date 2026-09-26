@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { RequestBriefContent, RequestBriefRecord, TaskRecord } from "../../src/contracts.ts";
 import {
+  abandonRequestBriefRecord,
   approveRequestBriefRecord,
   briefSkipsReview,
   checkedRequestBriefContent,
@@ -11,6 +12,7 @@ import {
   requestApprovalState,
   requestBriefDigests,
   reviseRequestBriefRecord,
+  singlePendingApprovalId,
   tasksAwaitingReapproval,
 } from "../../src/requests/brief.ts";
 import { renderRequestBriefMarkdown } from "../../src/requests/markdown.ts";
@@ -344,4 +346,52 @@ test("an approved request with no task after three days no longer counts as open
   expect(openRequestForNewWork([approved], [], "/repo", at(3.01))).toBeUndefined();
   const started = [{ requestId: "req-old", stage: "ready" as const }];
   expect(openRequestForNewWork([approved], started, "/repo", at(10))).toBe("req-old");
+});
+
+test("an abandoned brief stops awaiting approval and refuses revision, approval, and dispatch", () => {
+  const stale = seeded();
+  const current = createRequestBriefRecord(
+    { id: "req-2", repoPath: "/repo", content: content({ goal: "The brief in view" }) },
+    NOW,
+  );
+  expect(() => singlePendingApprovalId([stale, current])).toThrow(RequestBriefError);
+
+  const abandoned = abandonRequestBriefRecord(stale, [task({ stage: "cancelled" })], LATER);
+  expect(abandoned.abandonedAt).toBe(LATER);
+  expect(abandoned.revision).toBe(stale.revision + 1);
+  expect(singlePendingApprovalId([abandoned, current])).toBe("req-2");
+  expect(decideRequestDispatch(abandoned).allowed).toBe(false);
+  expect(renderRequestBriefMarkdown(abandoned)).toContain(`abandoned on ${LATER}`);
+  const refusals = [
+    () => reviseRequestBriefRecord(abandoned, content({ goal: "Changed my mind" }), LATER),
+    () =>
+      approveRequestBriefRecord(
+        abandoned,
+        {
+          requestId: abandoned.id,
+          briefRevision: abandoned.draft.revision,
+          contentDigest: abandoned.draft.contentDigest,
+        },
+        LATER,
+      ),
+    () => abandonRequestBriefRecord(abandoned, [], LATER),
+  ];
+  for (const refused of refusals) {
+    expect(refused).toThrow(expect.objectContaining({ code: "request-abandoned" }));
+  }
+});
+
+test("a brief that is approved or still has unfinished work cannot be abandoned", () => {
+  const record = seeded();
+  expect(() => abandonRequestBriefRecord(record, [task({ stage: "paused" })], LATER)).toThrow(
+    expect.objectContaining({ code: "request-in-use" }),
+  );
+  const approved = approveRequestBriefRecord(
+    record,
+    { requestId: record.id, briefRevision: 1, contentDigest: record.draft.contentDigest },
+    LATER,
+  );
+  expect(() => abandonRequestBriefRecord(approved, [], LATER)).toThrow(
+    expect.objectContaining({ code: "request-in-use" }),
+  );
 });

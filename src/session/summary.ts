@@ -860,6 +860,9 @@ function summarizeRequestBrief(value: unknown): string {
           }`
     }`,
   ];
+  const abandonedAt = recordText(record, "abandonedAt");
+  if (abandonedAt !== undefined)
+    lines.push(`Abandoned on ${abandonedAt}; it no longer awaits approval`);
   if (paused.length > 0) {
     lines.push(
       `Paused until reapproved (${paused.length}): ${compactList(paused, ACTION_SUMMARY_MAX_ITEMS, 100)}`,
@@ -945,6 +948,7 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     action === "brief-draft" ||
     action === "brief-review" ||
     action === "brief-show" ||
+    action === "brief-abandon" ||
     action === "brief-approve"
   ) {
     return summarizeRequestBrief(value);

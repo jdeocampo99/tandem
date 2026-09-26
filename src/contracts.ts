@@ -626,6 +626,8 @@ export type RequestBriefRecord = {
   readonly history: readonly RequestBriefRevision[];
   readonly approval?: RequestBriefApproval;
   readonly reviewPane?: RequestReviewPane;
+  /** Set when the user dropped the request before its brief was approved; final. */
+  readonly abandonedAt?: IsoTimestamp;
 };
 
 /**

@@ -133,6 +133,7 @@ export const tandemRequestSchema = z.strictObject({
     }),
     z.strictObject({ action: z.literal("brief-review"), requestId: z.string() }),
     z.strictObject({ action: z.literal("brief-show"), requestId: z.string() }),
+    z.strictObject({ action: z.literal("brief-abandon"), requestId: z.string() }),
     z.strictObject({ action: z.literal("request-receipt"), requestId: z.string().optional() }),
     z.strictObject({
       action: z.literal("brief-approve"),

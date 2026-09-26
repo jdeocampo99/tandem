@@ -23,7 +23,9 @@ export type RequestBriefErrorCode =
   | "stale-content"
   | "no-pending-approval"
   | "ambiguous-pending-approval"
-  | "ambiguous-open-request";
+  | "ambiguous-open-request"
+  | "request-abandoned"
+  | "request-in-use";
 
 export class RequestBriefError extends Error {
   readonly code: RequestBriefErrorCode;
@@ -102,6 +104,9 @@ const PAUSABLE_STAGES: readonly TaskRecord["stage"][] = [
   "reviewing",
   "awaiting-fixes",
 ];
+
+/** Stages whose work is over, so it no longer holds its request open. */
+const FINISHED_STAGES: readonly TaskRecord["stage"][] = ["cancelled", "completed", "merged"];
 
 export function assertSafeRequestId(value: unknown): asserts value is string {
   if (!isSafeRequestId(value)) {
@@ -209,6 +214,7 @@ export function reviseRequestBriefRecord(
   content: RequestBriefContent,
   now: IsoTimestamp,
 ): RequestBriefRecord {
+  assertNotAbandoned(record);
   const timestamp = checkedLine(now, "timestamp");
   const checked = checkedRequestBriefContent(content);
   const digests = requestBriefDigests(checked);
@@ -234,6 +240,7 @@ export function approveRequestBriefRecord(
   now: IsoTimestamp,
 ): RequestBriefRecord {
   const timestamp = checkedLine(now, "timestamp");
+  assertNotAbandoned(record);
   if (intent.requestId !== record.id) {
     throw new RequestBriefError(
       "request-mismatch",
@@ -265,6 +272,38 @@ export function approveRequestBriefRecord(
   return { ...record, revision: record.revision + 1, updatedAt: timestamp, approval };
 }
 
+/**
+ * Records that the user dropped this request. Only a brief awaiting approval with no unfinished
+ * work under it can be abandoned: an approved agreement, or one whose tasks still run, is ended by
+ * cancelling that work, so abandoning never strands a task under a request nobody owns.
+ */
+export function abandonRequestBriefRecord(
+  record: RequestBriefRecord,
+  tasks: readonly Pick<TaskRecord, "id" | "requestId" | "stage">[],
+  now: IsoTimestamp,
+): RequestBriefRecord {
+  const timestamp = checkedLine(now, "timestamp");
+  assertNotAbandoned(record);
+  if (requestApprovalState(record) === "current") {
+    throw new RequestBriefError(
+      "request-in-use",
+      `Request ${record.id} is approved; cancel its work instead of abandoning it`,
+      record.id,
+    );
+  }
+  const unfinished = tasks.filter(
+    (task) => task.requestId === record.id && !FINISHED_STAGES.includes(task.stage),
+  );
+  if (unfinished.length > 0) {
+    throw new RequestBriefError(
+      "request-in-use",
+      `Request ${record.id} still has unfinished tasks (${unfinished.map((task) => task.id).join(", ")}); cancel them first`,
+      record.id,
+    );
+  }
+  return { ...record, revision: record.revision + 1, updatedAt: timestamp, abandonedAt: timestamp };
+}
+
 export function withRequestReviewPane(
   record: RequestBriefRecord,
   pane: RequestReviewPane,
@@ -285,13 +324,18 @@ export function requestApprovalState(record: RequestBriefRecord): RequestApprova
     : "superseded";
 }
 
+/** A brief whose current draft nobody approved, new or changed after approval, and not dropped. */
+export function awaitsApproval(record: RequestBriefRecord): boolean {
+  return record.abandonedAt === undefined && requestApprovalState(record) !== "current";
+}
+
 /**
  * The one request whose brief is awaiting approval, so an approver need not name it. Fails closed
  * rather than guessing: an approval must never land on a request the caller did not mean, so zero
  * or several candidates are both refused with the exact ids, for the caller to name one explicitly.
  */
 export function singlePendingApprovalId(records: readonly RequestBriefRecord[]): string {
-  const pending = records.filter((record) => requestApprovalState(record) !== "current");
+  const pending = records.filter(awaitsApproval);
   if (pending.length === 0) {
     throw new RequestBriefError("no-pending-approval", "No request brief is awaiting approval");
   }
@@ -324,7 +368,7 @@ export function openRequestForNewWork(
   now: string,
 ): string | undefined {
   const finished = (task: Pick<TaskRecord, "stage">): boolean =>
-    task.stage === "cancelled" || task.stage === "completed" || task.stage === "merged";
+    FINISHED_STAGES.includes(task.stage);
   const open = records.filter((record) => {
     if (record.repoPath !== repoPath || requestApprovalState(record) !== "current") return false;
     const governed = tasks.filter((task) => task.requestId === record.id);
@@ -348,6 +392,12 @@ export function briefSkipsReview(record: RequestBriefRecord): boolean {
 }
 
 export function decideRequestDispatch(record: RequestBriefRecord): RequestDispatchDecision {
+  if (record.abandonedAt !== undefined) {
+    return {
+      allowed: false,
+      reason: `Request ${record.id} was abandoned on ${record.abandonedAt}`,
+    };
+  }
   const state = requestApprovalState(record);
   if (state === "current" && record.approval !== undefined) {
     return { allowed: true, approvedRevision: record.approval.briefRevision };
@@ -373,6 +423,16 @@ export function tasksAwaitingReapproval(
   return tasks
     .filter((task) => task.requestId === record.id && PAUSABLE_STAGES.includes(task.stage))
     .map((task) => task.id);
+}
+
+export function assertNotAbandoned(record: RequestBriefRecord): void {
+  if (record.abandonedAt !== undefined) {
+    throw new RequestBriefError(
+      "request-abandoned",
+      `Request ${record.id} was abandoned on ${record.abandonedAt}; draft a new request instead`,
+      record.id,
+    );
+  }
 }
 
 function digestOf(value: string): string {
