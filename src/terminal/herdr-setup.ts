@@ -1,6 +1,6 @@
 import { copyFile, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { quoteShellArgument, runCommand } from "../adapters/commands.ts";
@@ -25,9 +25,11 @@ export type HerdrStatusCommands = Readonly<{
 export type HerdrConfigPlan = Readonly<{
   /** The config after the additions; the same text when nothing is added. */
   readonly text: string;
-  /** What will be added, as the lines the user sees before agreeing. */
+  /** The lines that will be added. */
   readonly added: readonly string[];
-  /** What was left alone, and why. */
+  /** What will be added, in words, for the question before writing. */
+  readonly features: readonly string[];
+  /** What the user has to add by hand, because Tandem would have to change their own settings. */
   readonly skipped: readonly string[];
 }>;
 
@@ -70,18 +72,17 @@ export function herdrConfigPath(environment: Readonly<Record<string, string | un
  */
 export function planHerdrConfig(text: string, commands: HerdrStatusCommands): HerdrConfigPlan {
   const added: string[] = [];
+  const features: string[] = [];
   const skipped: string[] = [];
   let next = text;
 
   const entry = `{ type = "command", command = ${tomlString(commands.line)}, interval_seconds = 5, timeout_seconds = 10 }`;
   if (text.includes("status --line")) {
-    skipped.push("The tab bar already shows Tandem's status.");
+    // Already there.
   } else if (/^\s*tab_bar_right\s*=/mu.test(text)) {
-    skipped.push(`You already set ui.tab_bar_right; add this entry to it yourself:\n  ${entry}`);
+    skipped.push(`Add to your ui.tab_bar_right: ${entry}`);
   } else if (/^\s*ui\s*[.=]/mu.test(text)) {
-    skipped.push(
-      `Your config sets ui without a [ui] table; add this under ui yourself:\n  tab_bar_right = [${entry}]`,
-    );
+    skipped.push(`Add under ui: tab_bar_right = [${entry}]`);
   } else {
     const line = `tab_bar_right = [${entry}]`;
     const table = /^[ \t]*\[ui\][ \t]*(#.*)?$/mu.exec(next);
@@ -91,17 +92,16 @@ export function planHerdrConfig(text: string, commands: HerdrStatusCommands): He
     } else {
       const end = table.index + table[0].length;
       next = `${next.slice(0, end)}\n${line}${next.slice(end)}`;
-      added.push(`${line}   (under your [ui] table)`);
+      added.push(line);
     }
+    features.push("tab bar");
   }
 
   // Herdr's toasts are off by default; Tandem's "needs you" notifications use them.
   if (/^\s*delivery\s*=/mu.test(text) && /toast/u.test(text)) {
-    skipped.push("Herdr notifications are already set up; Tandem's use the same setting.");
+    // The user chose how notifications arrive, including off.
   } else if (/toast/u.test(text)) {
-    skipped.push(
-      'To see Tandem\'s notifications, set delivery = "herdr" under [ui.toast] in your config.',
-    );
+    skipped.push('For notifications, set delivery = "herdr" under [ui.toast]');
   } else {
     const toast = [
       "# Herdr notifications, used when something new needs you",
@@ -110,6 +110,7 @@ export function planHerdrConfig(text: string, commands: HerdrStatusCommands): He
     ];
     next = `${withBlankLine(next)}${toast.join("\n")}\n`;
     added.push(...toast);
+    features.push("notifications");
   }
 
   const binding = [
@@ -123,16 +124,15 @@ export function planHerdrConfig(text: string, commands: HerdrStatusCommands): He
     'height = "90%"',
   ];
   if (text.includes("status --watch")) {
-    skipped.push(`${STATUS_POPUP_KEY} already opens Tandem's status.`);
+    // Already there.
   } else if (text.includes(`"${STATUS_POPUP_KEY}"`)) {
-    skipped.push(
-      `${STATUS_POPUP_KEY} is already bound in your config; to use another key, add this with it:\n${binding.map((line) => `  ${line}`).join("\n")}`,
-    );
+    skipped.push(`${STATUS_POPUP_KEY} is taken; bind another key to: ${commands.popup}`);
   } else {
     next = `${withBlankLine(next)}${binding.join("\n")}\n`;
     added.push(...binding);
+    features.push(`${STATUS_POPUP_KEY} popup`);
   }
-  return { text: next, added, skipped };
+  return { text: next, added, features, skipped };
 }
 
 function withBlankLine(text: string): string {
@@ -199,23 +199,28 @@ export async function setUpHerdrStatus(deps: HerdrSetupDependencies): Promise<bo
     const update = herdrUpdateCommand(deps.herdrBinary);
     if (update === undefined) {
       deps.print(
-        `! Herdr ${version} is older than ${MIN_HERDR_VERSION}; update it with the package manager that installed it (${deps.herdrBinary}), then run ./setup.sh again\n`,
+        `! Update Herdr ${version} to ${MIN_HERDR_VERSION}+ with the package manager that installed it, then re-run ./setup.sh\n`,
       );
       return false;
     }
-    deps.print(`→ updating Herdr ${version} with: ${update.join(" ")}\n`);
+    deps.print(`→ updating Herdr ${version}\n`);
     const result = await run(update);
-    const output = `${result?.stdout ?? ""}${result?.stderr ?? ""}`.trim();
-    if (output.length > 0) deps.print(`${output.replace(/^/gmu, "  ")}\n`);
-    version = await installed();
+    const updated = await installed();
+    if (updated !== undefined && versionAtLeast(updated, MIN_HERDR_VERSION)) {
+      deps.print(`✓ Herdr ${updated}\n`);
+    } else {
+      // Only a failed update is worth its output.
+      const output = `${result?.stdout ?? ""}${result?.stderr ?? ""}`.trim();
+      if (output.length > 0) deps.print(`${output.replace(/^/gmu, "  ")}\n`);
+    }
+    version = updated;
   }
   if (version === undefined || !versionAtLeast(version, MIN_HERDR_VERSION)) {
     deps.print(
-      `! Tandem's status popup and tab bar need Herdr ${MIN_HERDR_VERSION} or newer${version === undefined ? "" : ` (you have ${version})`}; the update above did not install it\n`,
+      `! Tandem's Herdr status needs Herdr ${MIN_HERDR_VERSION}+${version === undefined ? "" : ` (you have ${version})`}\n`,
     );
     return false;
   }
-  deps.print(`✓ herdr ${version}\n`);
 
   if (!(await writeHerdrConfig(deps, herdr))) return false;
   return await applyToSession(deps, herdr);
@@ -228,18 +233,15 @@ async function writeHerdrConfig(deps: HerdrSetupDependencies, herdr: Herdr): Pro
   const path = herdrConfigPath(deps.environment);
   const original = await deps.readConfig(path);
   const plan = planHerdrConfig(original ?? "", deps.commands);
-  for (const reason of plan.skipped) deps.print(`✓ ${reason}\n`);
+  for (const reason of plan.skipped) deps.print(`! ${reason}\n`);
   if (plan.added.length === 0) return true;
 
-  deps.print(
-    `\nTandem can show its status in Herdr: a one-line summary in the tab bar, a notification when something new needs you, and the full view with ${STATUS_POPUP_KEY}.\nIt would add to ${path}:\n\n${plan.added.map((line) => `  ${line}`).join("\n")}\n\n`,
-  );
   if (deps.confirm === undefined) {
-    deps.print("! Skipped: no terminal to ask in. Run ./setup.sh in a terminal to add it.\n");
+    deps.print("! Skipped Herdr config: no terminal to ask in\n");
     return false;
   }
-  if (!(await deps.confirm(`Add this to ${path}?`))) {
-    deps.print("Skipped; your Herdr config is unchanged.\n");
+  if (!(await deps.confirm(`Add Tandem's ${listed(plan.features)} to Herdr?`))) {
+    deps.print("Skipped Herdr config\n");
     return false;
   }
 
@@ -250,12 +252,20 @@ async function writeHerdrConfig(deps: HerdrSetupDependencies, herdr: Herdr): Pro
   if (validBefore && !(await valid())) {
     await deps.writeConfig(path, original);
     deps.print(
-      `! Herdr rejected the new config, so the old one is back. Run herdr config check to see why.\n`,
+      "! Herdr rejected the change, so the old config is back (see: herdr config check)\n",
     );
     return false;
   }
-  deps.print(`✓ Added to ${path}${backup === undefined ? "" : ` (backup: ${backup})`}\n`);
+  deps.print(
+    `✓ Herdr config updated${backup === undefined ? "" : ` (backup: ${basename(backup)})`}\n`,
+  );
   return true;
+}
+
+/** "a", "a and b", "a, b, and c". */
+function listed(items: readonly string[]): string {
+  if (items.length <= 2) return items.join(" and ");
+  return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
 }
 
 /**
@@ -268,52 +278,41 @@ async function applyToSession(deps: HerdrSetupDependencies, herdr: Herdr): Promi
   const server = parseServerStatus(
     (await herdr(["--session", session, "status", "server"]))?.stdout ?? "",
   );
-  const later = `Then run tandem to reopen your projects.`;
-  if (!server.running) {
-    deps.print(`✓ Herdr's ${session} session starts with it the next time you run tandem\n`);
-    return true;
-  }
+  const later = `herdr session stop ${session} && tandem`;
+  if (!server.running) return true;
   if (server.version === undefined || versionAtLeast(server.version, MIN_HERDR_VERSION)) {
     const reloaded = (await herdr(["--session", session, "server", "reload-config"]))?.code === 0;
     deps.print(
       reloaded
-        ? `✓ Herdr's ${session} session reloaded its config; press ${STATUS_POPUP_KEY} for the live status\n`
-        : `! Could not reload Herdr's ${session} session; run: herdr --session ${session} server reload-config\n`,
+        ? `✓ Herdr reloaded; ${STATUS_POPUP_KEY} shows Tandem's status\n`
+        : `! Reload Herdr: herdr --session ${session} server reload-config\n`,
     );
     return reloaded;
   }
 
-  const restart = `herdr session stop ${session}`;
-  deps.print(
-    `\nHerdr's ${session} session still runs Herdr ${server.version}, which can't show Tandem's status. Restarting it closes its panes, coordinators included; chats and tasks are saved and reopen with tandem.\n`,
-  );
+  const stale = `Herdr's ${session} session still runs ${server.version} and needs a restart`;
   const inside =
     (deps.environment.HERDR_SESSION ?? deps.environment.HERDR_SESSION_NAME) === session;
   if (inside) {
-    deps.print(
-      `! This terminal is inside that session, so setup can't restart it. From a terminal outside Herdr: ${restart}. ${later}\n`,
-    );
+    deps.print(`! ${stale}; from outside Herdr, run: ${later}\n`);
     return false;
   }
   const running = await deps.runningTasks().catch(() => undefined);
   if (running === undefined || running > 0) {
-    deps.print(
-      `! ${running === undefined ? "Could not tell whether tasks are running" : `${running} task${running === 1 ? " is" : "s are"} running`}, so it was left alone. When nothing is running: ${restart}. ${later}\n`,
-    );
+    const why = running === undefined ? "tasks may be running" : `${running} running`;
+    deps.print(`! ${stale} (${why}); when idle, run: ${later}\n`);
     return false;
   }
-  if (
-    deps.confirm === undefined ||
-    !(await deps.confirm(`Restart Herdr's ${session} session now?`))
-  ) {
-    deps.print(`Left running. When you're ready: ${restart}. ${later}\n`);
+  const question = `${stale}. Restart it? Its panes close; tandem reopens your projects.`;
+  if (deps.confirm === undefined || !(await deps.confirm(question))) {
+    deps.print(`Later, run: ${later}\n`);
     return false;
   }
   if ((await herdr(["session", "stop", session]))?.code !== 0) {
-    deps.print(`! Could not stop it; run: ${restart}. ${later}\n`);
+    deps.print(`! Could not stop it; run: ${later}\n`);
     return false;
   }
-  deps.print(`✓ Stopped Herdr's ${session} session. ${later}\n`);
+  deps.print(`✓ Stopped Herdr's ${session} session; run tandem to reopen your projects\n`);
   return true;
 }
 

@@ -113,7 +113,8 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 - `setup.sh` runs src/terminal/herdr-setup.ts, which:
   - updates Herdr when `herdr --version` is older than 0.8.2, the first release with command
     entries in the tab bar (popup keybindings arrived in 0.7.4): `brew upgrade herdr` when the
-    binary resolves under Homebrew, `herdr update` otherwise, showing the command's output. A
+    binary resolves under Homebrew, `herdr update` otherwise, showing its output only if Herdr is
+    still too old afterwards. A
     mise or Nix install is left to its package manager with a message; setup stops if Herdr is
     still older;
   - plans additions to `$XDG_CONFIG_HOME/herdr/config.toml` (default `~/.config/herdr/`; one file
@@ -127,8 +128,9 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
     `prefix+t` is skipped, and it prints the line to add by hand. An existing `[ui]` table gets
     the entry inserted under its header; otherwise a `[ui]` table is appended. Entries already
     running `status --line` or `status --watch` count as done, so re-running adds nothing;
-  - shows the lines and asks before writing, and writes nothing without a terminal to ask in or
-    a yes. It copies the old file to `config.toml.before-tandem`, and if `herdr config check`
+  - names what it would add in one question (like "Add Tandem's tab bar and prefix+t popup to
+    Herdr?") and writes nothing without a terminal to ask in or a yes. Parts already there print
+    nothing; parts left to the user print one line each with what to add. It copies the old file to `config.toml.before-tandem`, and if `herdr config check`
     passed before and fails after, it writes the old file back;
   - then, on every run, applies the config to the Herdr session Tandem uses (resolved like
     `tandem` does: `TANDEM_SESSION`, Herdr's session variables, the remembered setup, then

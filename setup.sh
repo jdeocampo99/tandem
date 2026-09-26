@@ -8,13 +8,19 @@ command -v git >/dev/null || { echo "git is missing; run: xcode-select --install
 
 export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
 
+have=""
 need() { # need <command> <install command>
   if command -v "$1" >/dev/null; then
-    echo "✓ $1 already installed"
+    have="$have $1"
   else
     echo "→ installing $1"
     bash -c "$2"
   fi
+}
+
+quiet() { # quiet <command...>: prints its output only if it fails
+  local out
+  out="$("$@" 2>&1)" || { echo "$out" >&2; return 1; }
 }
 
 need bun       'curl -fsSL https://bun.com/install | bash'
@@ -29,12 +35,13 @@ if command -v gh >/dev/null || command -v brew >/dev/null; then
 else
   echo "! Install the GitHub CLI for pull requests: https://cli.github.com/"
 fi
+[[ -z "$have" ]] || echo "✓$have"
 
-echo "→ installing Tandem"
-bun install
-bun link
+quiet bun install
+quiet bun link
+echo "✓ tandem"
 
-# Herdr >= 0.8.2 for the status popup and tab bar; asks before editing Herdr's config.
+# Herdr >= 0.8.2 for the status popup, tab bar, and notifications; asks before editing its config.
 bun src/terminal/herdr-setup.ts
 
 if ! grep -qs '.bun/bin' "$HOME/.zshrc"; then
@@ -43,5 +50,4 @@ if ! grep -qs '.bun/bin' "$HOME/.zshrc"; then
   echo '  export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"'
 fi
 
-echo
 echo "Done. Run 'tandem' from inside a repository."
