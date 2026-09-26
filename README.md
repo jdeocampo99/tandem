@@ -1,15 +1,22 @@
 # Tandem
 
-Tandem is an engineering toolkit built around coding agents. You describe what you want in a chat
-with a coordinator. Tandem plans it with you, hands the work to agents in their own worktrees,
-checks and reviews every change, opens the pull request, and keeps that pull request moving until
-it merges. Every task is saved, so you can close the terminal and pick up where you left off.
+Tandem is an engineering partner that runs on your Mac. You chat with one agent about what you
+want, and Tandem takes it from idea to merged pull request: it researches the code, agrees on a plan
+with you, writes the change, tests and reviews it, opens the pull request, and sees it through CI and
+review. Every task is saved, so you can close the terminal and pick up where you left off.
 
-Most agent harnesses give you a capable model and leave the rest to you: keeping the output clean,
-enforcing good practice, and chasing pull requests through CI and review. **Tandem takes on that
-work itself.**
+Most agent tools stop once the code is written and leave the rest to you. Tandem goes further:
 
-Tandem runs locally on macOS.
+- **It holds a standard.** Every task follows a playbook for its kind of work, writes to shared
+  code and writing standards, and passes a fresh reviewer that grades against the same rules. The
+  result reads like a careful engineer wrote it.
+- **It finishes the job.** It carries pull requests through flaky CI, conflicts, and merge queues,
+  and reviews your teammates' pull requests with you.
+- **Code runs the process.** Stages, approvals, and pull request decisions are deterministic
+  TypeScript, and a small classifier answers routine questions, so model tokens go only to work
+  that needs judgment.
+- **It improves itself.** When a task goes badly, Tandem can investigate its own source and propose
+  a fix.
 
 ## What it does
 
@@ -17,8 +24,8 @@ Tandem runs locally on macOS.
 
 ![How a request moves through Tandem: the model researches, plans, implements, and reviews; you approve and publish; code validates, opens the draft PR, and runs PR watch](docs/images/request-flow.svg)
 
-The coordinator is the only place a model makes judgment calls about your work. Everything around
-it is ordinary TypeScript: task stages, scheduling, worktree allocation, approvals, validation,
+Models do the judgment work: researching, planning, writing code, and reviewing it. Everything
+around them is ordinary TypeScript: task stages, scheduling, worktree allocation, approvals, validation,
 retries, recovery, and pull request decisions. Validation runs your project's checks with no model
 involved. PR watch decides what to do from a fixed decision table.
 
@@ -101,6 +108,13 @@ Jev only chooses among options Tandem's code lists for it. It never authorizes a
 low-confidence or unclear prompt falls through to the coordinator. Without a `TYPESAFE_API_KEY`,
 everything goes to the coordinator and tasks use the General playbook.
 
+### Visual mockups
+
+With [Lavish](https://github.com/kunchenguid/lavish-axi) installed, a research agent can draw a
+mockup, wireframe, or explainer page and open it in your browser. Comment on the page and **your
+comment goes straight back to the agent**, which updates the page while the tab reloads. The agent
+stays open after its research, so you can settle on a design before any code is written.
+
 ### Cost control
 
 You pick a model and thinking level for each role (planning, research, coding, review,
@@ -116,8 +130,6 @@ the coordinator's chat is compacted after a task finishes so later turns don't p
   another repository and Tandem runs it there without touching your checkout, one pull request
   per repository.
 - **Skills.** `/skill:tdd fix the retry bug` gives the worker and its reviewer the whole skill.
-- **Visual presentations.** With `lavish-axi` installed, a research agent can draw a mockup or
-  explainer page, and your comments on it go straight back to that agent.
 - **Self-improvement.** When a task restarts twice or gets stuck, Tandem can investigate its own
   source and propose a fix, or draft a scrubbed GitHub issue on machines that shouldn't push code.
 
@@ -206,7 +218,9 @@ Tandem keeps its data in `~/.tandem`, never in your repository.
 ## Credits
 
 Tandem's playbooks and the principles its coding and review agents follow are adapted from
-[pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT).
+[pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT). Worktrees come from
+[Treehouse](https://github.com/kunchenguid/treehouse) and visual mockups from
+[Lavish](https://github.com/kunchenguid/lavish-axi), both by Kun Chen.
 
 ## Learn more
 
