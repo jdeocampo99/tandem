@@ -13,6 +13,7 @@ import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { type RenestReport, renestWorkspaces } from "./coordinator/renest.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
 import { renderPrWatchView } from "./pr-watch/view.ts";
+import { type PublishedReport, publishReport } from "./report/publish.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
 import type { TandemService, TandemServiceOptions } from "./service/controller.ts";
 import { renderTaskTrace, renderTraceSummary } from "./tasks/trace.ts";
@@ -75,6 +76,8 @@ Usage:
   tandem status [TASK_ID]  What needs you, what's running, and your PRs across projects
                            --watch keeps it live; --logs shows prompt routing
   tandem trace [TASK_ID]   What happened to a task and why; without one, quality across tasks
+  tandem report            A page showing where each task's time went, opened in Lavish
+                           --since DATE only tasks created since then; --no-open just writes it
   tandem watch [PR]        Your watched pull requests; with a PR link or number, watch it
                            --stop PR stops watching it
   tandem update            Load your latest local Tandem code into every coordinator
@@ -88,7 +91,7 @@ Usage:
 
 Options:
   --yes                    Skip the confirmation (fix, reset)
-  --json                   Machine-readable output (status, trace, watch, fix)
+  --json                   Machine-readable output (status, trace, report, watch, fix)
   --watch                  Redraw every 2 seconds until Ctrl-C (status)
   --verbose                Full paths and reasons (fix)
   --free-superseded        With --yes, also free worktrees whose work is in other tasks (fix)
@@ -302,6 +305,54 @@ async function handleTrace({
   } finally {
     await service.shutdown();
   }
+}
+
+/**
+ * `tandem report` writes the time report page under the Tandem home and opens it in Lavish;
+ * `--json` prints the view model instead and writes nothing.
+ */
+async function handleReport({
+  invocation,
+  environment,
+  dependencies,
+  run,
+  stdout,
+}: Readonly<{
+  readonly invocation: TerminalInvocation;
+  readonly environment: TerminalEnvironment;
+  readonly dependencies: TerminalMainDependencies;
+  readonly run: CommandRunner;
+  readonly stdout: (text: string) => void;
+}>): Promise<TerminalRunResult> {
+  const service = createServiceFor(environment, run, dependencies);
+  try {
+    const view = await service.report(
+      invocation.since === undefined ? {} : { since: invocation.since },
+    );
+    if (invocation.json) {
+      stdout(`${JSON.stringify(view)}\n`);
+    } else {
+      const published = await publishReport({
+        home: environment.home,
+        run,
+        view,
+        open: !invocation.noOpen,
+      });
+      stdout(renderPublishedReport(published, invocation.noOpen));
+    }
+    return { exitCode: 0, status: "report" };
+  } finally {
+    await service.shutdown();
+  }
+}
+
+function renderPublishedReport(published: PublishedReport, noOpen: boolean): string {
+  if (published.opened) {
+    const link = published.url === undefined ? "" : ` (${published.url})`;
+    return `Report opened in Lavish${link}: ${published.path}\n`;
+  }
+  if (noOpen) return `Report written: ${published.path}\n`;
+  return `Report written: ${published.path}\nLavish could not open it (${published.openError ?? "unknown error"}); open that file in a browser.\n`;
 }
 
 /**
@@ -638,6 +689,9 @@ export async function runTerminal(
     }
     if (invocation.command === "trace") {
       return await handleTrace({ invocation, environment, dependencies, run, stdout });
+    }
+    if (invocation.command === "report") {
+      return await handleReport({ invocation, environment, dependencies, run, stdout });
     }
     if (invocation.command === "watch") {
       return await handleWatch({ invocation, environment, dependencies, run, stdout });

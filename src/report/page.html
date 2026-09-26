@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tandem report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{color-scheme:dark;
+  --bg:#16161d;--raise:#1e1e27;--line:#2a2a35;--line2:#363644;
+  --ink:#ecebf3;--muted:#a3a2b3;--faint:#6f6e80;
+  --research:#8fd9bf;--implement:#9fb3f7;--validate:#b3b6c6;--review:#d6aaf2;--you:#f4c08a;--tandem:#f27f93;--done:#8fd1a8;--merged:#c9a8f5;
+  --sans:"Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --rb:3px;--rp:8px;--rc:6px;
+  --ease:cubic-bezier(.2,.8,.2,1);--spring:cubic-bezier(.34,1.4,.5,1)}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;padding-inline:24px;padding-block:28px 64px}
+.wrap{max-width:1040px;margin:0 auto;display:grid;gap:40px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--you);outline-offset:2px}
+svg{display:block;flex:none}
+
+.mast{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:13px;color:var(--faint)}
+.mast b{color:var(--muted);font-weight:500}
+h1{font-size:22px;font-weight:600;letter-spacing:-.01em;color:var(--ink);margin:0 0 2px}
+.empty{margin:0;color:var(--faint);font-size:13px}
+
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.stat{display:grid;gap:2px}
+.stat span{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted)}
+.stat .sw{display:block;width:8px;height:8px;border-radius:2px;background:var(--c)}
+.stat:nth-child(2) .sw{width:14px}
+.stat b{font-family:var(--mono);font-weight:500;font-size:22px}
+.split{display:flex;height:8px;gap:3px;margin-top:14px}
+.split i{display:block;border-radius:var(--rb)}
+@media (max-width:620px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.panel{background:var(--raise);border:1px solid var(--line);border-radius:10px}
+#stats{padding:18px 20px 20px}
+.scope{display:grid;gap:12px}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;position:relative}
+.tab{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:6px;font-size:13px;color:var(--muted);position:relative;z-index:1}
+.tab span{font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+.tab:hover{background:var(--raise);color:var(--ink)}
+.tab[aria-selected="true"]{background:transparent;color:var(--ink)}
+.tab[aria-selected="true"] span{color:var(--muted)}
+.tab:focus-visible{outline:2px solid var(--you);outline-offset:2px}
+.tab-ind{position:absolute;top:0;left:0;height:100%;border-radius:6px;background:var(--line2);transition:transform .35s var(--spring),width .35s var(--spring);z-index:0}
+.list{overflow:hidden}
+.cols{display:grid;grid-template-columns:minmax(0,260px) minmax(0,1fr) 64px 56px;gap:20px;padding:10px 14px;font-size:11.5px;color:var(--faint);border-bottom:1px solid var(--line)}
+.cols span:nth-child(n+3){text-align:right}
+@media (max-width:720px){.cols{display:none}}
+.rows{list-style:none;margin:0;padding:0}
+.row{border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.row[data-open="true"]{background:#23232e}
+.row-btn{all:unset;box-sizing:border-box;width:100%;cursor:pointer;display:grid;grid-template-columns:minmax(0,260px) minmax(0,1fr) 64px 56px;gap:4px 20px;align-items:center;padding:12px 14px}
+.row:not([data-open="true"]) .row-btn:hover{background:#21212b}
+.row-btn:focus-visible{outline:2px solid var(--you);outline-offset:-2px}
+.r-title{display:flex;gap:10px;align-items:flex-start;min-width:0}
+.r-title > div{display:grid;min-width:0}
+.r-title strong{font-weight:500;font-size:14px}
+.r-note{font-size:12.5px;color:var(--c)}
+.ico{margin-top:2px;color:var(--c)}
+.strip{position:relative;height:10px}
+.strip i{position:absolute;top:0;bottom:0;display:block;border-radius:var(--rb)}
+.strip u{position:absolute;bottom:-6px;height:2px;display:block;background:var(--c);border-radius:1px}
+.r-time,.r-cost{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:13px}
+.r-cost{color:var(--faint)}
+@media (max-width:720px){.row-btn{grid-template-columns:minmax(0,1fr) auto auto}.strip{grid-column:1/-1;grid-row:2}}
+
+.detail{padding:4px 14px 18px;display:grid;gap:14px}
+.why{margin:0;color:var(--muted);font-size:13px;max-width:70ch}
+.chart-scroll{overflow-x:auto}
+.chart{min-width:640px;display:grid;grid-template-columns:minmax(0,260px) minmax(0,1fr) 64px 56px;column-gap:20px}
+.lane-name{font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:8px;height:30px;padding-left:26px}
+.lane-name i{width:8px;height:8px;border-radius:2px;flex:none}
+.lane{position:relative;height:30px}
+.lane::after{content:"";position:absolute;left:0;right:0;top:50%;border-top:1px solid var(--line)}
+.lane i{position:absolute;top:10px;height:10px;display:block;border-radius:var(--rb);z-index:1}
+.lane-sep{grid-column:1/-1;height:1px;background:var(--line2);margin:6px 0}
+.band{position:absolute;top:0;bottom:0;background:var(--c);opacity:.08;pointer-events:none}
+.cell{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--muted);display:flex;align-items:center;justify-content:flex-end;height:30px}
+.cell.dim{color:var(--faint)}
+.axis{position:relative;height:20px;font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+.tick{position:absolute;top:5px;transform:translateX(-50%)}
+.tick:first-child{transform:none}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px;color:var(--faint)}
+.detail > .why,.detail > .foot{padding-left:26px}
+.link{background:var(--line);border:0;color:var(--ink);cursor:pointer;font-size:12.5px;padding:4px 10px;border-radius:var(--rc)}
+.link:hover{background:var(--line2)}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th{font-weight:500;font-size:11.5px;color:var(--faint);text-align:left;padding:6px 10px 6px 0;border-bottom:1px solid var(--line2)}
+td{padding:6px 10px 6px 0;border-bottom:1px solid var(--line);color:var(--muted)}
+td:first-child{color:var(--ink)}
+td.r,th.r{text-align:right;padding-right:0}
+
+.tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--bg);font-size:12px;padding:5px 9px;border-radius:6px;z-index:10;line-height:1.4}
+
+/* Motion */
+.tab:active,.link:active{transform:scale(.96)}
+.tab,.link{transition:transform .12s var(--ease),background .2s,color .2s}
+.split i{transition:flex-grow .6s var(--ease)}
+.row{animation:rowIn .45s var(--ease) both;animation-delay:calc(var(--i,0) * 45ms);transition:background .25s}
+@keyframes rowIn{from{opacity:0;transform:translateY(6px)}}
+.strip{animation:reveal .8s var(--ease) both;animation-delay:calc(var(--i,0) * 45ms + 120ms)}
+@keyframes reveal{from{clip-path:inset(-8px 100% -8px 0)}to{clip-path:inset(-8px 0 -8px 0)}}
+.drawer{display:grid;grid-template-rows:0fr;transition:grid-template-rows .4s var(--ease)}
+.drawer > div{overflow:hidden;min-height:0}
+.row[data-open="true"] > .drawer{grid-template-rows:1fr}
+.detail{opacity:0;transform:translateY(-4px);transition:opacity .3s var(--ease),transform .3s var(--ease)}
+.row[data-open="true"] .detail{opacity:1;transform:none;transition-delay:.08s}
+.lane i{transform:scaleX(0);transform-origin:left center;transition:transform .55s var(--ease);transition-delay:calc(var(--d,0) * 60ms + 150ms)}
+.row[data-open="true"] .lane i{transform:scaleX(1)}
+.band{opacity:0;transition:opacity .5s var(--ease) .55s}
+.row[data-open="true"] .band{opacity:.08}
+.agents.drawer{margin-top:-6px}
+.agents[data-open="true"]{grid-template-rows:1fr}
+.agents tbody tr{opacity:0;transform:translateX(-4px);transition:opacity .3s var(--ease),transform .3s var(--ease);transition-delay:calc(var(--i,0) * 30ms)}
+.agents[data-open="true"] tbody tr{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){.row,.strip{animation:none}.tab,.link,.tab-ind,.split i,.row,.drawer,.detail,.lane i,.band,.agents tbody tr{transition:none}.lane i{transform:none}.detail{opacity:1;transform:none}.band{opacity:.08}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="mast"><div><h1>Tandem report</h1><span><b>{{scope}}</b> · {{range}}</span></div></div>
+  {{main}}
+</div>
+<div class="tip" id="tip" hidden></div>
+{{data}}
+<script>
+const VIEW=JSON.parse(document.getElementById("report-data").textContent);
+const TASKS=VIEW.tasks;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+const fmt=ms=>{const m=Math.round(ms/60000);return m<60?`${m}m`:`${Math.floor(m/60)}h ${String(m%60).padStart(2,"0")}m`};
+const usd=micros=>micros===undefined?"–":`$${(micros/1e6).toFixed(2)}`;
+const median=a=>{if(!a.length)return 0;const b=[...a].sort((x,y)=>x-y),m=b.length>>1;return b.length%2?b[m]:(b[m-1]+b[m])/2};
+const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const day=iso=>{const d=new Date(iso);return`${MONTHS[d.getMonth()]} ${d.getDate()}`};
+
+const LANE={research:["Research","background:var(--research)"],implement:["Implement","background:var(--implement)"],validate:["Validate","background:var(--validate)"],review:["Review","background:var(--review)"],queued:["Queued","background:var(--tandem);opacity:.45"],"waiting-on-you":["Waiting on you","background:var(--you)"],stuck:["Stuck","background:var(--tandem)"]};
+const WAIT_LANES=["queued","waiting-on-you","stuck"];
+const CHOKE_C={stuck:"var(--tandem)",queued:"var(--tandem)","waiting-on-you":"var(--you)","review-loop":"var(--ink)"};
+const ICON={
+ merged:`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="4" cy="3.5" r="1.8"/><circle cx="4" cy="12.5" r="1.8"/><circle cx="12" cy="8" r="1.8"/><path d="M4 5.3v5.4M4 5.5c0 2.5 2 2.5 6.2 2.5"/></svg>`,
+ completed:`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.3"/><path d="M5.2 8.2l2 2 3.7-4"/></svg>`,
+ cancelled:`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="6.3"/><path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4"/></svg>`,
+ "in-progress":`<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.3" stroke-dasharray="3 2.2"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/></svg>`};
+const STATUS_C={merged:"var(--merged)",completed:"var(--done)",cancelled:"var(--faint)","in-progress":"var(--you)"};
+const STATUS_L={merged:"merged",completed:"completed",cancelled:"cancelled","in-progress":"in progress"};
+const ROLE_L={scout:"Scout",implementer:"Implementer",reviewer:"Reviewer",validation:"Validation",presentation:"Presentation",coordinator:"Coordinator"};
+const WORK_L={research:"Scout",implementation:"Implementer",review:"Reviewer",validation:"Validation",verification:"Verification",presentation:"Presentation",coordinator:"Coordinator"};
+function runLabel(r){const base=ROLE_L[r.role]??WORK_L[r.workKind]??r.workKind;
+  return r.workKind==="implementation"&&r.generation>1?`${base} · fix ${r.generation-1}`:base}
+
+let statsBuilt=false;
+function tween(el,to){const from=+el.dataset.v||0;el.dataset.v=to;
+  if(matchMedia("(prefers-reduced-motion: reduce)").matches||from===to){el.textContent=fmt(to);return}
+  const t0=performance.now(),d=600;const step=now=>{const k=Math.min(1,(now-t0)/d),e=1-(1-k)**3;el.textContent=fmt(from+(to-from)*e);if(k<1)requestAnimationFrame(step)};requestAnimationFrame(step)}
+const PARTS=[["research","research","var(--research)"],["implement","implement","var(--implement)"],["validate","validate","var(--validate)"],["review","review","var(--review)"],["you","waiting-on-you","var(--you)"],["q","queued","var(--tandem);opacity:.45"],["tandem","stuck","var(--tandem)"]];
+function renderStats(list){
+  const tot=b=>list.reduce((a,t)=>a+t.buckets[b],0);
+  const part={};for(const [k,lane] of PARTS)part[k]=list.reduce((a,t)=>a+(t.lanes.find(l=>l.lane===lane)?.durationMs??0),0);
+  if(!statsBuilt){
+    const stat=(id,label,c)=>`<div class="stat" style="--c:${c}"><span>${c?`<i class="sw"></i>`:""}${label}</span><b id="${id}" data-v="0">0m</b></div>`;
+    $("#stats").innerHTML=`<div class="stats">${stat("s-med","Median per task","")}${stat("s-w","Working","linear-gradient(90deg,var(--research) 0 25%,var(--implement) 25% 50%,var(--validate) 50% 75%,var(--review) 75%)")}${stat("s-y","Waiting on you","var(--you)")}${stat("s-t","Held up","var(--tandem)")}</div>
+      <div class="split">${PARTS.map(([k,,c])=>`<i id="sp-${k}" style="flex:0 1 0;background:${c}"></i>`).join("")}</div>`;
+    statsBuilt=true;}
+  tween($("#s-med"),median(list.map(t=>t.wallMs)));tween($("#s-w"),tot("working"));tween($("#s-y"),tot("waiting-on-you"));tween($("#s-t"),tot("held-up"));
+  requestAnimationFrame(()=>PARTS.forEach(([k,lane])=>{const el=$(`#sp-${k}`);el.style.flexGrow=part[k];el.dataset.tip=`${LANE[lane][0]} · ${fmt(part[k])}`;el.style.display=part[k]?"":"none"}));
+}
+
+const KINDS=["all","scout","implementation","pr-review"];
+const LABEL={all:"All",scout:"Research",implementation:"Implementation","pr-review":"PR review"};
+let filter="all",open=TASKS.find(t=>t.choke)?.id??null;
+const MAX=Math.max(1,...TASKS.map(t=>t.wallMs));
+const inKind=k=>TASKS.filter(t=>k==="all"||t.kind===k);
+function renderFilters(){$("#filters").innerHTML=`<span class="tab-ind" aria-hidden="true"></span>${KINDS.filter(k=>k==="all"||inKind(k).length).map(k=>
+    `<button class="tab" role="tab" aria-selected="${k===filter}" data-k="${k}">${LABEL[k]}<span>${inKind(k).length}</span></button>`).join("")}`;
+  for(const b of $("#filters").querySelectorAll(".tab"))b.onclick=()=>{if(filter===b.dataset.k)return;filter=b.dataset.k;
+    for(const x of $("#filters").querySelectorAll(".tab"))x.setAttribute("aria-selected",x===b);moveInd();renderStats(inKind(filter));renderRows()};
+  moveInd();}
+function moveInd(){const b=$('#filters .tab[aria-selected="true"]'),ind=$("#filters .tab-ind");if(!b)return;
+  ind.style.width=`${b.offsetWidth}px`;ind.style.height=`${b.offsetHeight}px`;ind.style.transform=`translate(${b.offsetLeft}px,${b.offsetTop}px)`}
+addEventListener("resize",moveInd);
+function strip(t){const c=t.choke;return t.segments.map(s=>`<i style="left:${s.startMs/MAX*100}%;width:calc(${(s.endMs-s.startMs)/MAX*100}% - 2px);${LANE[s.lane][1]}"></i>`).join("")+(c?`<u style="--c:${CHOKE_C[c.kind]};left:${c.startMs/MAX*100}%;width:${(c.endMs-c.startMs)/MAX*100}%"></u>`:"")}
+function renderRows(){
+  $("#rows").innerHTML=inKind(filter).map((t,i)=>{const c=t.choke;
+    return`<li class="row" style="--i:${i}" data-id="${esc(t.id)}" data-open="false"><button class="row-btn" aria-expanded="false">
+      <span class="r-title"><span class="ico" style="--c:${STATUS_C[t.status]}" data-tip="${STATUS_L[t.status]}">${ICON[t.status]}</span>
+        <div><strong>${esc(t.title)}</strong>${c?`<span class="r-note" style="--c:${CHOKE_C[c.kind]}">${esc(c.headline)}</span>`:""}</div></span>
+      <span class="strip">${strip(t)}</span>
+      <span class="r-time">${fmt(t.wallMs)}</span><span class="r-cost">${usd(t.costMicros)}</span></button>
+      <div class="drawer"><div><div class="detail">${detail(t)}</div></div></div></li>`}).join("");
+  $("#rows").querySelectorAll(".row").forEach(li=>{
+    li.querySelector(".row-btn").onclick=()=>toggleRow(li);
+    const link=li.querySelector(".link");
+    if(link)link.onclick=e=>{const d=li.querySelector(".agents"),on=d.dataset.open!=="true";d.dataset.open=on;e.currentTarget.textContent=`${on?"Hide":"Show"} agent runs`};});
+  const cur=[...$("#rows").querySelectorAll(".row")].find(li=>li.dataset.id===open);if(cur)setTimeout(()=>setOpen(cur,true),300);
+}
+function setOpen(li,on){li.dataset.open=on;li.querySelector(".row-btn").setAttribute("aria-expanded",on);
+  const a=li.querySelector(".agents");if(!on&&a){a.dataset.open=false;li.querySelector(".link").textContent="Show agent runs"}}
+function toggleRow(li){const id=li.dataset.id,was=open===id;
+  const prev=[...$("#rows").querySelectorAll(".row")].find(x=>x.dataset.id===open);if(prev)setOpen(prev,false);
+  open=was?null:id;if(!was)setOpen(li,true)}
+
+function detail(t){
+  const L=Math.max(1,t.wallMs),p=ms=>`${(ms/L*100).toFixed(3)}%`,c=t.choke,min=L/60000;
+  const step=[10,30,60,120,240,480,720,1440,2880,10080].find(s=>min/s<=6)??20160,ticks=[];for(let m=0;m<=min*0.95;m+=step)ticks.push(m*60000);
+  const band=c?`<div class="band" style="--c:${CHOKE_C[c.kind]};left:${p(c.startMs)};width:${p(c.endMs-c.startMs)}"></div>`:"";
+  let seenWork=false,sep=false;
+  const rows=t.lanes.map((l,li)=>{
+    const [name,fill]=LANE[l.lane],segs=t.segments.filter(s=>s.lane===l.lane),wait=WAIT_LANES.includes(l.lane);
+    const gap=wait&&seenWork&&!sep;if(gap)sep=true;if(!wait)seenWork=true;
+    const bars=segs.map(s=>`<i data-tip="${name} · ${fmt(s.endMs-s.startMs)}" style="--d:${li};left:${p(s.startMs)};width:calc(${p(s.endMs-s.startMs)} - 2px);${fill}"></i>`).join("");
+    return`${gap?`<div class="lane-sep"></div>`:""}<div class="lane-name"><i style="${fill}"></i>${name}</div><div class="lane">${band}${bars}</div><div class="cell">${fmt(l.durationMs)}</div><div class="cell dim">${usd(l.costMicros)}</div>`}).join("");
+  const runs=[...t.runs].sort((a,b)=>a.startMs-b.startMs);
+  const agents=runs.length?`<div class="drawer agents" data-open="false"><div><div class="chart-scroll"><table><thead><tr><th>Agent</th><th>Model</th><th class="r">Start</th><th class="r">Time</th><th class="r">Cost</th></tr></thead><tbody>
+    ${runs.map((r,i)=>`<tr style="--i:${i}"><td>${esc(runLabel(r))}${r.status!=="succeeded"?` <span style="color:var(--tandem)">· ${esc(r.status.replace("-"," "))}</span>`:""}</td><td class="num">${esc(r.model??"–")}</td><td class="num r">+${fmt(r.startMs)}</td><td class="num r">${fmt(r.endMs-r.startMs)}</td><td class="num r">${usd(r.costMicros)}</td></tr>`).join("")}</tbody></table></div></div></div>`:"";
+  return`${c?.explanation?`<p class="why">${esc(c.explanation)}</p>`:""}
+    <div class="chart-scroll"><div class="chart">
+      ${rows}
+      <div></div><div class="axis">${ticks.map(m=>`<span class="tick" style="left:${p(m)}">${fmt(m)}</span>`).join("")}</div><div></div><div></div>
+    </div></div>
+    <div class="foot"><span class="num">${esc(t.id)} · ${esc(t.kind)} · ${day(t.createdAt)}</span>${runs.length?`<button class="link">Show agent runs</button>`:""}</div>
+    ${agents}`;
+}
+
+const tip=$("#tip");
+document.addEventListener("mousemove",e=>{const el=e.target.closest("[data-tip]");if(!el){tip.hidden=true;return}
+  tip.textContent=el.dataset.tip;tip.hidden=false;tip.style.left=`${Math.min(e.clientX+12,innerWidth-tip.offsetWidth-8)}px`;tip.style.top=`${e.clientY+14}px`});
+if(TASKS.length){renderStats(TASKS);renderFilters();renderRows()}
+</script>
+</body>
+</html>

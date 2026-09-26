@@ -188,6 +188,7 @@ project with its previous chat. Add more with `tandem /path/to/repo`.
 | `tandem [PATH ...]` | Open or reconnect your projects |
 | `tandem status [TASK_ID]` | What needs you, what's running, and your pull requests; with a task ID, that task's history |
 | `tandem trace [TASK_ID]` | What happened to a task and why, with review, fix-round, blocked-time, and cost figures |
+| `tandem report` | A page in Lavish showing where each task's time and money went and what held it up (`--since DATE` to narrow it) |
 | `tandem watch [PR]` | Your watched pull requests; with a link or number, start watching it (`--stop` to stop) |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Clean up leftovers from a crash or failed launch (asks first) |
