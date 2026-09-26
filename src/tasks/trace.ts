@@ -1,8 +1,8 @@
 import type { IsoTimestamp } from "../contracts.ts";
 import {
   type AdditionalCharges,
-  buildRequestUsageReceipt,
   type RequestUsageReadout,
+  usageCharges,
 } from "../runtime/usage-receipt.ts";
 import type { AdmissionWaitReason, StoredTimelineEvent, TimelineEvent } from "./timeline.ts";
 import type { TimelineReadout } from "./timeline-store.ts";
@@ -14,7 +14,7 @@ export type TaskRollup = Readonly<{
   readonly firstPassReview?: boolean;
   readonly fixRounds: number;
   readonly blockedMs: number;
-  /** Absent when the task belongs to no request, so no usage was recorded for it. */
+  /** Absent when no usage was recorded for the task's own work. */
   readonly cost?: AdditionalCharges;
 }>;
 
@@ -49,14 +49,21 @@ export function taskRollup(
   };
 }
 
-/** What the task's own work cost, from its request's ledger: other tasks' samples are left out. */
+/**
+ * What the task's own work cost, from the readout that holds it (its request's, or its own task
+ * scope without one): other tasks' samples are left out. Undefined when nothing was recorded for
+ * the task, so an unmeasured task never reads as free.
+ */
 export function taskCost(
   readout: RequestUsageReadout,
-  requestId: string,
   taskId: string,
-): AdditionalCharges {
-  const own = readout.events.filter((event) => event.identity.taskId === taskId);
-  return buildRequestUsageReceipt(requestId, { events: own, malformedEvents: 0 }).charges;
+): AdditionalCharges | undefined {
+  const own = readout.events.filter(
+    (event) =>
+      event.identity.taskId === taskId &&
+      (event.kind === "work" || event.kind === "provider-sample"),
+  );
+  return own.length === 0 ? undefined : usageCharges(own);
 }
 
 export function summarizeRollups(rollups: readonly TaskRollup[]): TraceSummary {
@@ -200,7 +207,7 @@ function firstReviewText(verdict: boolean | undefined): string {
 }
 
 function costText(cost: AdditionalCharges | undefined): string {
-  if (cost === undefined) return "not recorded (no request)";
+  if (cost === undefined) return "not recorded";
   return `${dollars(cost.amountMicros)}${cost.unavailableSamples === 0 ? "" : `, ${cost.unavailableSamples} samples unpriced`}`;
 }
 

@@ -666,6 +666,18 @@ function providerTotals(accountable: readonly RequestUsageEvent[]): readonly Pro
 }
 
 /**
+ * What the given events charged, each distinct event once. Only work and provider samples carry
+ * usage; intake and terminal points add nothing.
+ */
+export function usageCharges(events: readonly RequestUsageEvent[]): AdditionalCharges {
+  const charges = newCharges();
+  for (const event of distinctEvents(events).events) {
+    if (event.kind === "work" || event.kind === "provider-sample") addCharge(charges, event.charge);
+  }
+  return chargeTotals(charges);
+}
+
+/**
  * Builds the compact receipt and its expandable breakdown from recorded events alone. It is a
  * report: it decides nothing about whether more work may run, and it never fails because the
  * telemetry behind an event was missing, stale, or malformed.

@@ -143,7 +143,11 @@ import type {
   RuntimeTaskState,
 } from "../runtime/schema.ts";
 import { requestIntakeEvent } from "../runtime/usage-events.ts";
-import { createRequestUsageLedger, type RequestUsageLedger } from "../runtime/usage-ledger.ts";
+import {
+  createRequestUsageLedger,
+  type RequestUsageLedger,
+  readTaskUsage,
+} from "../runtime/usage-ledger.ts";
 import type { RequestUsageReadout, RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import { type IssueDraftChecker, issueDraftChecker } from "../self-improvement/issue-draft.ts";
 import {
@@ -1304,13 +1308,11 @@ class TandemController {
     for (const task of tasks) {
       const timeline = await readTimeline(this.#deps.home, task.id);
       unreadableEvents += timeline.unreadableEvents;
-      let usage: RequestUsageReadout | undefined;
-      if (task.requestId !== undefined) {
-        usage = usageByRequest.get(task.requestId);
-        if (usage === undefined) {
-          usage = await this.#deps.usageLedger.read(task.requestId);
-          usageByRequest.set(task.requestId, usage);
-        }
+      // Tasks sharing a request share one readout; a task no request governs reads its own scope.
+      let usage = task.requestId === undefined ? undefined : usageByRequest.get(task.requestId);
+      if (usage === undefined) {
+        usage = await readTaskUsage(this.#deps.usageLedger, task);
+        if (task.requestId !== undefined) usageByRequest.set(task.requestId, usage);
       }
       reports.push(buildTaskReport({ task, timeline, usage, now }));
     }
@@ -1328,10 +1330,7 @@ class TandemController {
 
   private async traceOf(task: TaskRecord): Promise<TaskTrace> {
     const timeline = await readTimeline(this.#deps.home, task.id);
-    const cost =
-      task.requestId === undefined
-        ? undefined
-        : taskCost(await this.#deps.usageLedger.read(task.requestId), task.requestId, task.id);
+    const cost = taskCost(await readTaskUsage(this.#deps.usageLedger, task), task.id);
     return {
       ...timeline,
       rollup: taskRollup(task.id, timeline.events, this.#deps.clock(), cost),

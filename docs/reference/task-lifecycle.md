@@ -120,8 +120,9 @@ decides them; the lifecycle and the review stage read the record and never re-de
 - `tandem trace` computes rollups when read; there are no metrics tables. First-pass review: the
   first time a task left `reviewing`, whether it went to `ready`/`completed` (pass) or
   `awaiting-fixes` (fail). Fix rounds: `fix-round` events. Time blocked: `blocked` to `unblocked`,
-  an open block counting to now. Cost: the task's own samples in its request's usage ledger; a task
-  with no request has none.
+  an open block counting to now. Cost: the task's own samples in its request's usage ledger, or in
+  its task-scoped ledger when no request governs it (see usage-and-routing.md); a task with no
+  recorded work has none.
 
 ## Research continuation
 

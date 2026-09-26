@@ -241,7 +241,8 @@ test("runs, lane costs, and the task's cost come from its own work events", () =
     { lane: "implement", durationMs: 20 * MINUTE, costMicros: 1_000_000 },
     { lane: "validate", durationMs: 10 * MINUTE },
   ]);
-  const expected = taskCost(usage, REQUEST_ID, TASK_ID);
+  const expected = taskCost(usage, TASK_ID);
+  if (expected === undefined) throw new Error("the task's own usage was not found");
   expect(report.costMicros).toBe(expected.amountMicros);
   expect(report.costMicros).toBe(1_550_000);
   expect(report.unpricedSamples).toBe(expected.unavailableSamples);

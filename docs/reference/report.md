@@ -29,9 +29,11 @@ a pull-request icon in the implement color with the tooltip "PR open"), and ever
 
 - Stage segments come from the task's timeline events (`tasks/timeline-store.ts`), in `seq` order.
   Rows that cannot be decoded are skipped and counted in the page's `unreadableEvents`.
-- Agent runs and cost come from the task's request's usage `work` events
-  (`runtime/usage-ledger.ts`), filtered to the task's own `identity.taskId`. Each request is read
-  once even when several tasks share it. A task with no request has no cost, never zero cost.
+- Agent runs and cost come from the usage `work` events that hold the task's own work
+  (`runtime/usage-ledger.ts` `readTaskUsage`), filtered to the task's own `identity.taskId`: its
+  request's ledger, or, for a task no request governs (usually research and PR reviews), its
+  task-scoped ledger (see usage-and-routing.md, Task-scoped usage). Each request is read once even
+  when several tasks share it. A task with no recorded work has no cost, never zero cost.
 - Coordinator cost is recorded per request, not per task, so it is not split across tasks and is
   not shown. Coordinator and legacy verification work belongs to no lane.
 - Unpriced samples are counted; their cost is unknown, not zero.
