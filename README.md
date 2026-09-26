@@ -39,19 +39,12 @@ off with `standards = "none"`.
 
 ### Playbooks
 
-Each coding task follows a short playbook for its kind of job, which the agent works through as its
-to-do list. It can skip a step that doesn't apply by saying why, but **it can't finish with one left
-open**.
-
-| Playbook | Main steps |
-| --- | --- |
-| Bug fix | Reproduce it in a failing test, fix the cause, commit the test before the fix |
-| Feature | Reuse existing code, test through the public entry point, check reruns and partial failures |
-| Refactor | Confirm coverage first, move every caller, delete the old version |
-| Perf | Measure before and after, fix the cause |
-| Fix round | Fix every finding, confirm each is gone |
-
-Tandem picks the playbook for you. Say "treat this as a refactor" to change it.
+Every coding task follows a playbook for its kind of work: bug fix, feature, refactor, performance,
+or fix round. Each one encodes the steps an experienced engineer would take, like reproducing a bug
+in a test before fixing it or measuring before optimizing, so **good practice happens by default
+on every task**. Tandem picks the playbook for you, and the
+agent can't call the task finished until it has worked through every step or said why one doesn't
+apply.
 
 ### Validation and independent review
 
