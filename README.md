@@ -28,8 +28,8 @@ questions, so **model tokens go only to the work that needs judgment**.
 
 Models do the judgment work: researching, planning, writing code, and reviewing it. Everything
 around them is ordinary TypeScript: task stages, scheduling, worktree allocation, approvals,
-validation, retries, recovery, and pull request decisions. Validation runs your project's checks with no model
-involved. PR watch decides what to do from a fixed decision table.
+validation, retries, recovery, and pull request decisions. Validation runs your project's checks
+with no model involved. PR watch decides what to do from a fixed decision table.
 
 Keeping orchestration out of the model makes Tandem **faster and cheaper, since no tokens go to
 bookkeeping**, and predictable, since the same state always leads to the same next step.
