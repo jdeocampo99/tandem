@@ -114,7 +114,10 @@ test("recent work lists the workstream's pull requests newest first, merged by s
       workstream: "tia",
       stage: "merged",
       updatedAt: "2030-01-05T00:00:00.000Z",
-      pullRequest: pullRequest(409, "Metric label fix"),
+      pullRequest: {
+        ...pullRequest(409, "Metric label fix"),
+        url: "https://ghe.example/acme/app/pull/409",
+      },
     }),
     task({
       id: "by-watch",
@@ -142,15 +145,22 @@ test("recent work lists the workstream's pull requests newest first, merged by s
       pullRequest: pullRequest(500, "Billing"),
     }),
   ];
+  const github = (number: number) => `https://github.com/Acme/App/pull/${number}`;
   const watches = [
     watch(412, { taskId: "by-watch", mergedAt: "2030-01-08T00:00:00.000Z" }),
     watch(410, { row: { color: "done", status: "🎉 merged 09:14", note: "" } }),
   ];
   expect(recentWork(tasks, watches, "tia")).toEqual([
-    { number: 412, title: "Lower skip threshold", state: "merged" },
-    { number: 410, title: "Old merge", state: "merged" },
-    { number: 411, title: "Still open", state: "draft" },
-    { number: 409, title: "Metric label fix", state: "merged" },
+    { number: 412, title: "Lower skip threshold", state: "merged", url: github(412) },
+    { number: 410, title: "Old merge", state: "merged", url: github(410) },
+    { number: 411, title: "Still open", state: "draft", url: github(411) },
+    // A pull request's own URL wins, such as one on GitHub Enterprise.
+    {
+      number: 409,
+      title: "Metric label fix",
+      state: "merged",
+      url: "https://ghe.example/acme/app/pull/409",
+    },
   ]);
   expect(recentWork(tasks, watches, "onboarding")).toEqual([]);
 });
@@ -171,7 +181,14 @@ test("the catch-up view splits what is due from later follow-ups and strips the 
     ].join("\n"),
     "last-handoff": "Saved 2030-01-06.\nMobile pipeline still excluded.",
   });
-  const recent = [{ number: 412, title: "Lower skip threshold", state: "merged" as const }];
+  const recent = [
+    {
+      number: 412,
+      title: "Lower skip threshold",
+      state: "merged" as const,
+      url: "https://github.com/acme/app/pull/412",
+    },
+  ];
   expect(
     catchUpView({
       memory,

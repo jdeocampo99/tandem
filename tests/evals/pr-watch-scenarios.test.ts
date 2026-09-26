@@ -314,7 +314,7 @@ test("a tagged task's pull request merged through PR watch marks it merged and s
       view: {
         age: "today",
         now: "Lowered the flaky-suite skip threshold.",
-        recent: [{ number: 7, title: "Pull request 7", state: "merged" }],
+        recent: [{ number: 7, title: "Pull request 7", state: "merged", url: expect.any(String) }],
       },
     });
   }, ORIGIN);

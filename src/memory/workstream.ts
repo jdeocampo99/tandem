@@ -149,6 +149,8 @@ export type RecentPullRequest = Readonly<{
   readonly number: number;
   readonly title: string;
   readonly state: PullRequestState;
+  /** The pull request on GitHub, for a clickable number. */
+  readonly url: string;
 }>;
 
 /** Everything a catch-up shows or hands the coordinator, decided from the notes and records. */
@@ -199,6 +201,10 @@ export function recentWork(
         number: pullRequest.number,
         title: pullRequest.title ?? watch?.summary?.title ?? taskName(task.objective),
         state: pullRequestState(task, pullRequest, watch),
+        url:
+          pullRequest.url ??
+          watch?.summary?.url ??
+          `https://github.com/${pullRequest.repository}/pull/${pullRequest.number}`,
       };
     });
 }

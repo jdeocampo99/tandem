@@ -18,7 +18,14 @@ const VIEW: CatchUpView = {
   later: [],
   now: "Rolling out.",
   extra: [],
-  recent: [{ number: 412, title: "Lower skip threshold", state: "merged" }],
+  recent: [
+    {
+      number: 412,
+      title: "Lower skip threshold",
+      state: "merged",
+      url: "https://github.com/acme/app/pull/412",
+    },
+  ],
 };
 
 type Renderable = { render(width: number): readonly string[]; invalidate?(): void };

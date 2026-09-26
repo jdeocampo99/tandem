@@ -13,6 +13,7 @@ import {
 } from "../../src/memory/workstream.ts";
 
 const NOW = "2030-01-09T12:00:00.000Z";
+const PR = (number: number) => `https://github.com/acme/app/pull/${number}`;
 
 function view(changes: Parameters<typeof replaceSections>[1]): CatchUpView {
   const result = replaceSections(emptyMemory("tia"), changes);
@@ -23,8 +24,8 @@ function view(changes: Parameters<typeof replaceSections>[1]): CatchUpView {
     savedAt: "2030-01-06T12:00:00.000Z",
     now: NOW,
     recent: [
-      { number: 412, title: "Lower skip threshold", state: "merged" },
-      { number: 413, title: "Enable TIA on mobile", state: "draft" },
+      { number: 412, title: "Lower skip threshold", state: "merged", url: PR(412) },
+      { number: 413, title: "Enable TIA on mobile", state: "draft", url: PR(413) },
     ],
   });
 }
@@ -134,4 +135,12 @@ test("the workstream list names each one and what is due", () => {
     ].join("\n"),
   );
   expect(renderWorkstreamList("monorepo", [], { color: false })).toContain("No workstreams yet.");
+});
+
+test("pull request numbers are clickable where the terminal opens links", () => {
+  const linked = renderCatchUpCard(FULL, { color: false, links: true });
+  expect(linked).toContain(`\u001b]8;;${PR(412)}\u001b\\#412\u001b]8;;\u001b\\`);
+  // The link takes no room: without the escape codes the card is the same.
+  expect(Bun.stripANSI(linked)).toBe(renderCatchUpCard(FULL, { color: false }));
+  expect(renderCatchUpCard(FULL, { color: false, links: false })).not.toContain("\u001b]8;");
 });

@@ -22,6 +22,8 @@ export type StatusStyle = Readonly<{
   readonly color: boolean;
   /** The terminal's width; absent when unknown, and then lines are never cut. */
   readonly columns?: number;
+  /** The terminal opens OSC 8 links, so linked spans are clickable; plain text otherwise. */
+  readonly links?: boolean;
 }>;
 
 export type Tone =
@@ -37,7 +39,12 @@ export type Tone =
   | "magenta";
 
 /** A run of text drawn in one style. */
-export type Span = Readonly<{ readonly text: string; readonly tones: readonly Tone[] }>;
+export type Span = Readonly<{
+  readonly text: string;
+  readonly tones: readonly Tone[];
+  /** Where clicking the text goes, when the terminal opens links. */
+  readonly link?: string;
+}>;
 export type Line = readonly Span[];
 type Section = Readonly<{
   readonly title: string;
@@ -68,6 +75,11 @@ const PR_TONES: Readonly<Record<PrWatchViewRow["color"], readonly Tone[]>> = {
 
 export function span(text: string, ...tones: Tone[]): Span {
   return { text, tones };
+}
+
+/** The same text, clickable where the terminal opens links. */
+export function linked(part: Span, link: string): Span {
+  return { ...part, link };
 }
 
 /**
@@ -335,13 +347,25 @@ export function lineWidth(line: Line): number {
 export function draw(line: Line, style: StatusStyle): string {
   const fitted = style.columns === undefined ? line : fit(line, style.columns);
   return fitted
-    .map((part) =>
-      style.color && part.tones.length > 0 && part.text.trim().length > 0
-        ? styleText([...part.tones], part.text, { validateStream: false })
-        : part.text,
-    )
+    .map((part) => {
+      const text =
+        style.color && part.tones.length > 0 && part.text.trim().length > 0
+          ? styleText([...part.tones], part.text, { validateStream: false })
+          : part.text;
+      return style.links === true && part.link !== undefined ? osc8(part.link, text) : text;
+    })
     .join("")
     .trimEnd();
+}
+
+/** An OSC 8 hyperlink; a link holding control characters is left as plain text. */
+function osc8(link: string, text: string): string {
+  const control = [...link].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 0x20 || code === 0x7f;
+  });
+  if (control) return text;
+  return `\u001b]8;;${link}\u001b\\${text}\u001b]8;;\u001b\\`;
 }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -356,13 +380,13 @@ function fit(line: Line, columns: number): Line {
     for (const { segment } of graphemes.segment(part.text)) {
       const width = textWidth(segment);
       if (width > room) {
-        fitted.push(span(text, ...part.tones), span("…", ...part.tones));
+        fitted.push({ ...part, text }, span("…", ...part.tones));
         return fitted;
       }
       text += segment;
       room -= width;
     }
-    fitted.push(span(text, ...part.tones));
+    fitted.push({ ...part, text });
   }
   return fitted;
 }

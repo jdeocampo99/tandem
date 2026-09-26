@@ -4,6 +4,7 @@ import {
   draw,
   type Line,
   lineWidth,
+  linked,
   RULE_MIN,
   type StatusStyle,
   sectionHeading,
@@ -145,6 +146,7 @@ export function isCatchUpView(value: unknown): value is CatchUpView {
       (item) =>
         typeof item?.number === "number" &&
         typeof item?.title === "string" &&
+        typeof item?.url === "string" &&
         Object.hasOwn(STATE_MARKS, String(item?.state)),
     )
   );
@@ -178,7 +180,8 @@ function recentLines(view: CatchUpView): Line[] {
   return view.recent.map(
     (pullRequest, index): Line => [
       span(`${STATE_MARKS[pullRequest.state]} `),
-      ...cell(numbers[index] ?? "", numberWidth, "blue"),
+      linked(span(numbers[index] ?? "", "blue"), pullRequest.url),
+      span(" ".repeat(numberWidth - (numbers[index] ?? "").length)),
       span("  "),
       ...cell(pullRequest.title, titleWidth),
       span("  "),

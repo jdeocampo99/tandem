@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, MessageRenderer } from "@oh-my-pi/pi-coding-agent";
+import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { isCatchUpView, renderCatchUpCard } from "../memory/view.ts";
 import type { ApprovalDialog } from "../session/actions.ts";
 import type { SessionEffect, SessionHost, ToolCall, ToolKind } from "../session/events.ts";
@@ -75,7 +76,12 @@ export const renderCardMessage: MessageRenderer = (message) => {
   return {
     render(width) {
       if (drawn?.width !== width) {
-        const text = renderCatchUpCard(view, { color, columns: Math.max(1, width - 2) });
+        const text = renderCatchUpCard(view, {
+          color,
+          columns: Math.max(1, width - 2),
+          // OMP sets this from the user's tui.hyperlinks setting and what the terminal supports.
+          links: TERMINAL.hyperlinks,
+        });
         const lines = [
           "",
           ...text

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
 import { listOmpMcpServers } from "./adapters/omp.ts";
@@ -419,7 +420,9 @@ async function handleMemory({
   const service = createServiceFor(environment, run, dependencies);
   try {
     const [workstream] = invocation.paths;
-    const style = statusStyle(environment, dependencies);
+    const colors = statusStyle(environment, dependencies);
+    // Links only where colors are on (a terminal, no NO_COLOR), and only if it opens OSC 8 links.
+    const style = { ...colors, links: colors.color && TERMINAL.hyperlinks };
     if (workstream === undefined) {
       const lines = await service.memoryList(project);
       stdout(
