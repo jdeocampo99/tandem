@@ -637,3 +637,22 @@ test("saving how a project merges adds [merging] once and refuses stale or alrea
     );
   });
 });
+
+test("setup saves the user's own check and install commands in place of the discovered ones", async () => {
+  await withFixture("edited-commands-repo", async ({ repo, home }) => {
+    await writeFile(
+      join(repo, "package.json"),
+      JSON.stringify({ scripts: { test: "bun test" } }),
+      "utf8",
+    );
+    const edits = { validationCommands: ["make check"], setupCommands: ["make deps"] };
+    const preview = await onboardRepo({ repoPath: repo, home, ...edits });
+    expect(preview.validationCommands.map((command) => command.name)).toEqual(["make check"]);
+    expect(preview.unresolved).toEqual([]);
+
+    await onboardRepo({ repoPath: repo, home, write: true, ...edits });
+    const saved = await resolveRepoPolicy({ repoPath: repo, home });
+    expect(saved.config.validationCommands.map((command) => command.name)).toEqual(["make check"]);
+    expect(saved.config.setupCommands.map((command) => command.name)).toEqual(["make deps"]);
+  });
+});

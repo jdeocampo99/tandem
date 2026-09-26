@@ -468,6 +468,13 @@ function welcomeSession(
         tick: async () => [],
         list: async () => [],
         shutdown: async () => undefined,
+        onboardingFacts: async () => ({
+          modelsChosen: false,
+          codeFolders: [],
+          projects: options.projects.filter((project) => project !== "/repo"),
+          workerSkillOffer: [],
+          selfImprovementChosen: false,
+        }),
         board: async () => ({
           now: "",
           projects: options.projects,
@@ -497,6 +504,7 @@ test("the Tandem coordinator opens the welcome popup until another project is se
   expect(alone.opened()).toBe(1);
   const context = (await alone.session.agentStart()).systemContext.join("\n");
   expect(context).toContain(TANDEM_COORDINATOR_INSTRUCTIONS);
+  expect(context).toContain("Current step: Choose models");
   await alone.session.shutdown();
 
   const onboarded = welcomeSession({ tandemCheckout: true, projects: ["/repo", "/code/app"] });

@@ -50,4 +50,4 @@ if ! grep -qs '.bun/bin' "$HOME/.zshrc"; then
   echo '  export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"'
 fi
 
-echo "Done. Run 'tandem' from inside a repository."
+echo "Done. Run 'tandem' from any folder."

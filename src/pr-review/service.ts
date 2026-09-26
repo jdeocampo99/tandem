@@ -78,7 +78,8 @@ export type PrReviewDependencies = Readonly<{
   home: string;
   run: CommandRunner;
   clock: Clock;
-  projectRoots: readonly string[];
+  /** Folders crawled for a checkout, read on each use; see `projectRoots` in repos/locate.ts. */
+  projectRoots: () => Promise<readonly string[]>;
   listTasks: () => Promise<readonly TaskRecord[]>;
   getTask: (id: string) => Promise<TaskRecord>;
   createTask: (
@@ -118,7 +119,7 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       home: deps.home,
       run: deps.run,
       clock: deps.clock,
-      roots: deps.projectRoots,
+      roots: await deps.projectRoots(),
     });
     if (location.kind !== "found") {
       return {

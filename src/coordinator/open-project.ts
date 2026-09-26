@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { CommandRequest, CommandRunner } from "../contracts.ts";
+import { listCoordinatorRecords } from "./registry.ts";
 import { TANDEM_CHECKOUT } from "./tandem-checkout.ts";
 
 /**
@@ -44,12 +45,35 @@ export function openProjectCommand(input: OpenProjectInput): CommandRequest {
   };
 }
 
-/** Opens a saved project's coordinator beside the calling one, through the normal front door. */
-export async function openProject(run: CommandRunner, input: OpenProjectInput): Promise<void> {
+/**
+ * Opens a saved project's coordinator beside the calling one, through the normal front door, then
+ * brings its workspace forward so the user lands in the new chat. Whether it could be brought
+ * forward is reported, never a failure: the project is open either way.
+ */
+export async function openProject(
+  run: CommandRunner,
+  input: OpenProjectInput,
+): Promise<Readonly<{ readonly focused: boolean }>> {
   const result = await run(openProjectCommand(input));
-  if (result.code === 0) return;
-  const detail = (result.stderr.trim() || result.stdout.trim()).replace(/^tandem: /u, "");
-  throw new Error(
-    `Tandem could not open ${input.repoPath}${detail.length === 0 ? "" : `: ${detail}`}`,
-  );
+  if (result.code !== 0) {
+    const detail = (result.stderr.trim() || result.stdout.trim()).replace(/^tandem: /u, "");
+    throw new Error(
+      `Tandem could not open ${input.repoPath}${detail.length === 0 ? "" : `: ${detail}`}`,
+    );
+  }
+  const records = await listCoordinatorRecords(input.home, input.sessionId);
+  const record = records.find((candidate) => candidate.repoPath === input.repoPath);
+  if (record === undefined) return { focused: false };
+  const focus = await run({
+    argv: [
+      "herdr",
+      "--session",
+      input.sessionId,
+      "workspace",
+      "focus",
+      record.endpoint.workspaceId,
+    ],
+    cwd: input.repoPath,
+  });
+  return { focused: focus.code === 0 };
 }

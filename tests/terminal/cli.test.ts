@@ -448,6 +448,18 @@ test("buildCoordinatorArgv disables discovery and exposes only coordinator read/
   expect(argv).not.toContain("eval");
 });
 
+test("buildCoordinatorArgv leaves the model to OMP when none is given", () => {
+  const argv = buildCoordinatorArgv({
+    cwd: "/tandem",
+    model: undefined,
+    configPath: "/tandem/src/worker-config.yml",
+    extensionPath: "/tandem/src/extension.ts",
+  });
+  expect(argv).not.toContain("--model");
+  expect(argv).not.toContain("--thinking");
+  expect(argv).toContain("read,ask,tandem");
+});
+
 test("CLI approval refusal fails closed and never reaches the service", async () => {
   let serviceCreated = false;
   const dependencies: CliDependencies = {
@@ -779,13 +791,14 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
     await mkdir(cleanRepo, { recursive: true });
     const expectedCleanRepo = await realpath(cleanRepo);
     const outputPath = await writeOmpProbe(root);
+    const model = { model: "openai-codex/gpt-6-astra", thinking: "high" } as const;
     const request: CoordinatorLaunchRequest = {
       cwd: repo,
       repo,
       home,
       poolRoot,
       sessionId: "pane-session",
-      model: { model: "openai-codex/gpt-6-astra", thinking: "high" },
+      model,
       configPath: "/tandem/src/worker-config.yml",
       extensionPath: "/tandem/src/extension.ts",
       continueSession: true,
@@ -814,7 +827,7 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
       recordedCommand,
       poolRoot,
       cleanRepo,
-      model: request.model,
+      model,
       startServer: true,
       startupTransitionCount: 1,
       herdrEnvironment,
@@ -1350,6 +1363,12 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     onboard: unused,
     models: unused,
     openProject: unused,
+    mcpServers: unused,
+    findRepo: unused,
+    saveProjectRoots: unused,
+    saveSelfImprovement: unused,
+    checkTools: unused,
+    onboardingFacts: unused,
     configureModels: unused,
     create: unused,
     list: unused,

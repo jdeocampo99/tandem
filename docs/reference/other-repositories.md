@@ -23,7 +23,11 @@ Scenario: tests/evals/cross-repo-scenarios.test.ts.
 - Shared with PR review. A saved `repo_locations` row in `state.sqlite` is re-checked on every use
   (the folder exists and a remote still names the repository), then the project roots are crawled
   up to three levels deep, matching any remote and preferring `origin`.
-- Roots default to `~/Coding/Projects`; `TANDEM_PROJECT_ROOTS` (colon-separated) overrides them.
+- Roots are read on each use (`projectRoots` in src/repos/locate.ts): `TANDEM_PROJECT_ROOTS`
+  (colon-separated) when set, then `projectRoots` in `<home>/settings.toml` (saved during
+  onboarding), then the usual places under the home folder (`~/Coding/Projects`, `~/code`,
+  `~/Projects`, `~/src`, `~/dev`, `~/Developer`, `~/git`, `~/repos`, `~/workspace`, `~/GitHub`, and
+  a few spellings of these). A checkout two roots reach is counted once.
 - No match or several matches make `create` fail with the question to ask the user. The answer
   comes back as `targetCheckout` (re-checked, then saved) or `targetClone: true` (a blobless clone
   under `<home>/clones/owner/repo`).
