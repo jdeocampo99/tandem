@@ -1,5 +1,4 @@
 import type { HerdrAgentState, HerdrStatusReporter } from "../adapters/herdr-status.ts";
-import { opensBoard } from "../board/view.ts";
 import {
   coordinatorSourceGuidance,
   type TandemBoundaryEnvironment,
@@ -248,7 +247,6 @@ export class CoordinatorSession {
   private cancelTick: Cancel | undefined;
   private reconcileInFlight: Promise<void> | undefined;
   /** This project's "Needs you" rows at the last reconcile; unset until the first one. */
-  private needsYouSeen: ReadonlySet<string> | undefined;
   private sourceStatus = INITIAL_SOURCE_STATUS;
   private shuttingDown = false;
 
@@ -404,28 +402,6 @@ export class CoordinatorSession {
     }
   }
 
-  /**
-   * Opens the board when something of this project's that {@link opensBoard} lands in "Needs you".
-   * What was already there when the coordinator started counts as seen, so a relaunch opens nothing.
-   */
-  private async showBoardOnArrival(service: TandemService): Promise<void> {
-    const rows = (await service.board()).needsYou;
-    const current = new Set<string>();
-    if (rows.length > 0) {
-      const repo = await this.deps.realpath(this.deps.environment.repo);
-      for (const row of rows) {
-        if (row.repoPath === undefined || !opensBoard(row)) continue;
-        if (await isInRepository(row.repoPath, repo, this.deps.realpath)) current.add(row.key);
-      }
-    }
-    const seen = this.needsYouSeen;
-    this.needsYouSeen = current;
-    if (seen === undefined || [...current].every((key) => seen.has(key))) return;
-    await service
-      .showBoard(this.deps.environment.repo)
-      .catch((error: unknown) => this.deps.logError("Tandem could not open the board", error));
-  }
-
   private async reconcileOnce(runTick: boolean): Promise<void> {
     try {
       const service = this.service();
@@ -445,7 +421,6 @@ export class CoordinatorSession {
         thread: { open: this.threadOpen(), held: this.heldNotifications },
       });
       await deliverPrWatchNotices({ host: this.deps.host, service });
-      await this.showBoardOnArrival(service);
       await deliverInvestigationQuestions({ host: this.deps.host, service });
       const idle =
         !this.status.agentActive &&

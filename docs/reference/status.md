@@ -1,13 +1,11 @@
 # Status
 
-What `tandem status` shows across projects, where its data comes from, its live view, its
-one-line form in Herdr's tab bar, and when the coordinator opens it.
+What `tandem status` shows across projects, where its data comes from, its live view, and its
+one-line form in Herdr's tab bar.
 
 Code: src/board/ (`view.ts` sections and the chat rendering, `terminal.ts` the terminal
-rendering, `read.ts` the state read and live loop,
-`pane.ts` the Herdr pane), src/terminal/status.ts (the footer's data), src/main.ts
-(`tandem status`), src/session/coordinator.ts (`showBoardOnArrival`),
-src/session/prompt-routing.ts (the `board` lookup), src/terminal/herdr-setup.ts (the Herdr
+rendering, `read.ts` the state read and live loop), src/terminal/status.ts (the footer's
+data), src/main.ts (`tandem status`), src/session/prompt-routing.ts (the `board` lookup), src/terminal/herdr-setup.ts (the Herdr
 config that setup.sh adds). Tests: tests/board/,
 tests/terminal/main.test.ts.
 
@@ -128,23 +126,6 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
     a yes. It copies the old file to `config.toml.before-tandem`, and if `herdr config check`
     passed before and fails after, it writes the old file back. Then it runs
     `herdr server reload-config`; if no server is running, Herdr reads the file when it starts.
-
-## When the coordinator opens it
-
-- On each scheduler reconcile, a coordinator reads the board and keeps the keys of the "Needs you"
-  rows that belong to its own project (a pull request belongs to its task's project, or to the
-  checkout it was watched from) and that `opensBoard` accepts: briefs awaiting approval, task
-  questions, red pull requests, and tasks awaiting approval or ready. When such a key appears that
-  was not there on the last reconcile, it opens the live view.
-- Blocked tasks stay listed but never open it: recovery restarts most blocks on its own, so the
-  pane would pop for blocks that clear themselves.
-- Rows already there when the coordinator started count as seen, so a relaunch or `tandem update`
-  opens nothing.
-- It opens as an unfocused split beside the coordinator's pane, running
-  `tandem status --watch --home <home>`. While that pane still exists, whatever runs in it,
-  nothing new opens. The pane is remembered in memory only, and never closed by Tandem.
-- Without a coordinator pane (no Herdr context) nothing opens. A failure to open is logged and
-  never blocks the reconcile.
 
 ## "How's it going?"
 

@@ -141,8 +141,7 @@ the coordinator's chat is compacted after a task finishes so later turns don't p
 `tandem status` shows every project at once: what needs you, what's running, and your pull
 requests. In Herdr you don't have to ask: the tab bar always shows a one-line summary like
 `🙋 3 need you · 🔨 2 running · 🟡 1 🟢 1`, and `prefix+t` pops up the full view, live, from any
-pane (Esc or q closes it). `tandem status --watch` does the same in any terminal, and the
-coordinator opens it beside the chat when something new waits on you.
+pane (Esc or q closes it). `tandem status --watch` does the same in any terminal.
 
 ![tandem status in a terminal: a yellow Needs you section with briefs, questions, blocked tasks, and failing pull requests; Running and PRs sections with column headers and check progress bars; and a weekly summary](docs/images/status.svg)
 

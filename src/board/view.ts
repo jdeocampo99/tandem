@@ -127,20 +127,6 @@ export function finishedWithinWeek(events: readonly TimelineEvent[], now: IsoTim
   return finished !== undefined && withinWeek(finished.at, now);
 }
 
-/**
- * Whether a "Needs you" row is worth opening the board for. A blocked task is not: recovery
- * restarts most blocks on its own, so the pane would pop for blocks that clear themselves.
- */
-export function opensBoard(row: BoardRow): boolean {
-  return (
-    row.cause === "brief" ||
-    row.cause === "question" ||
-    row.cause === "pull-request" ||
-    row.cause === "awaiting-approval" ||
-    row.cause === "ready"
-  );
-}
-
 /** Where the chat board points for the live view; setup.sh binds prefix+t in Herdr. */
 const LIVE_VIEW_HINT = "Live view: prefix+t in Herdr, or `tandem status --watch`";
 
