@@ -13,6 +13,7 @@ The parts it takes off your plate:
 - **Context windows and worktrees.** Each job gets a fresh agent with only the context it needs, in
   its own worktree that Tandem creates, reuses, and cleans up. Your own checkout is never touched.
 - **Managing agents.** Tandem starts, schedules, and restarts research, coding, and review agents,
+  runs each on the model you picked for its role so cheaper models can take research and review,
   remembers where every task stands, and brings you only the questions that need you.
 - **Pull requests.** It opens them, carries them through flaky CI, conflicts, and merge queues, and
   helps you review your teammates'.
