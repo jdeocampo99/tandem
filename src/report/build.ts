@@ -2,7 +2,11 @@ import { basename } from "node:path";
 import type { FindingCategory, IsoTimestamp, TaskRecord, TaskStage } from "../contracts.ts";
 import type { RequestUsageEvent, RequestWorkKind } from "../runtime/usage.ts";
 import type { RequestUsageReadout } from "../runtime/usage-receipt.ts";
-import type { StoredTimelineEvent, TimelineFinding } from "../tasks/timeline.ts";
+import type {
+  AdmissionWaitReason,
+  StoredTimelineEvent,
+  TimelineFinding,
+} from "../tasks/timeline.ts";
 import type { TimelineReadout } from "../tasks/timeline-store.ts";
 import { taskCost } from "../tasks/trace.ts";
 import {
@@ -449,6 +453,13 @@ function workBefore(
   return durationMs > 0 ? { words, durationMs } : undefined;
 }
 
+/** What a queued task was waiting for, as it reads after "waiting". */
+const ADMISSION_WAIT_PHRASES: Readonly<Record<AdmissionWaitReason, string>> = {
+  "worktree-disk-space": "for disk space for a new worktree",
+  "worktree-capacity-unknown": "for a worktree capacity check",
+  "routing-question": "on a model routing question",
+};
+
 function queuedCandidates(walk: StageWalk): readonly ChokeCandidate[] {
   return walk.stretches.flatMap(({ segment }, index) => {
     if (segment.lane !== "queued") return [];
@@ -457,6 +468,19 @@ function queuedCandidates(walk: StageWalk): readonly ChokeCandidate[] {
       .slice(index + 1)
       .find((stretch) => LANE_WORDS[stretch.segment.lane] !== undefined);
     const nextWords = next === undefined ? undefined : LANE_WORDS[next.segment.lane];
+    const wait = longestAdmissionWait(walk, segment);
+    const waitPhrase = wait === undefined ? undefined : ADMISSION_WAIT_PHRASES[wait.reason];
+    const then =
+      next === undefined || nextWords === undefined
+        ? undefined
+        : `The ${nextWords} then took ${formatDuration(next.segment.endMs - next.segment.startMs)}.`;
+    const queued =
+      wait !== undefined && waitPhrase !== undefined
+        ? `Queued ${formatDuration(spanMs)}, ${formatDuration(wait.durationMs)} of it waiting ${waitPhrase}.`
+        : then === undefined
+          ? undefined
+          : `Queued ${formatDuration(spanMs)}.`;
+    const explanation = [queued, then].filter((part) => part !== undefined).join(" ");
     return [
       {
         spanMs,
@@ -464,16 +488,40 @@ function queuedCandidates(walk: StageWalk): readonly ChokeCandidate[] {
           kind: "queued",
           startMs: segment.startMs,
           endMs: segment.endMs,
-          headline: `Queued ${formatDuration(spanMs)}`,
-          ...(next === undefined || nextWords === undefined
-            ? {}
-            : {
-                explanation: `Queued ${formatDuration(spanMs)}. The ${nextWords} then took ${formatDuration(next.segment.endMs - next.segment.startMs)}.`,
-              }),
+          headline: `Queued ${formatDuration(spanMs)}${waitPhrase === undefined ? "" : ` waiting ${waitPhrase}`}`,
+          ...(explanation.length === 0 ? {} : { explanation }),
         },
       },
     ];
   });
+}
+
+/**
+ * The admission wait that covered the most of a queued stretch. Each `admission-waiting` event
+ * inside the stretch covers it until the next one or the stretch's end; time before the first is
+ * no reason's. Ties go to the reason recorded first.
+ */
+function longestAdmissionWait(
+  walk: StageWalk,
+  segment: ReportSegment,
+): Readonly<{ reason: AdmissionWaitReason; durationMs: number }> | undefined {
+  const waits = walk.events.flatMap((event) => {
+    if (event.type !== "admission-waiting") return [];
+    const atMs = walk.offset(event.at);
+    return atMs >= segment.startMs && atMs < segment.endMs ? [{ reason: event.reason, atMs }] : [];
+  });
+  const covered = new Map<AdmissionWaitReason, number>();
+  waits.forEach((wait, index) => {
+    const untilMs = waits[index + 1]?.atMs ?? segment.endMs;
+    covered.set(wait.reason, (covered.get(wait.reason) ?? 0) + Math.max(0, untilMs - wait.atMs));
+  });
+  let longest: { reason: AdmissionWaitReason; durationMs: number } | undefined;
+  for (const [reason, durationMs] of covered) {
+    if (durationMs > 0 && (longest === undefined || durationMs > longest.durationMs)) {
+      longest = { reason, durationMs };
+    }
+  }
+  return longest;
 }
 
 /**

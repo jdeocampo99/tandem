@@ -16,11 +16,13 @@ import { taskSourcePath } from "../service/source.ts";
 import { policyIdentity } from "../tasks/acceptance.ts";
 import type { TaskTransitionContext } from "../tasks/lifecycle.ts";
 import type { TaskStore, TaskStoreTransaction } from "../tasks/store.ts";
+import { admissionWaitToRecord } from "../tasks/timeline.ts";
 import {
   type AdmissionRole,
   attemptNumber,
   fixRoundTask,
   isFixAdmission,
+  latestAdmissionWait,
   operationKindFor,
   priorExecutionAttempt,
   type ReservationRefusal,
@@ -300,19 +302,31 @@ export class TaskReservations {
       replaceRuntimeTask(state, task.id, (current) => ({ ...current, routingPause: pause })),
     );
     if (runtime.routingPause?.decisionId === pause.decisionId) return;
-    await store.update(task.id, task.revision, (current) => ({
-      ...current,
-      revision: current.revision + 1,
-      updatedAt: this.#deps.clock(),
-      notifications: [
-        ...current.notifications,
-        {
-          id: singleLine(this.#deps.idFactory(), "routing decision notification id"),
-          message: describeExecutionRoutingDecision(pause, task.objective),
-          acknowledged: false,
-          kind: "coordinator" as const,
-        },
-      ],
-    }));
+    const wait = admissionWaitToRecord(
+      task.stage,
+      latestAdmissionWait(runtime),
+      "routing-question",
+    );
+    await store.update(
+      task.id,
+      task.revision,
+      (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        updatedAt: this.#deps.clock(),
+        notifications: [
+          ...current.notifications,
+          {
+            id: singleLine(this.#deps.idFactory(), "routing decision notification id"),
+            message: describeExecutionRoutingDecision(pause, task.objective),
+            acknowledged: false,
+            kind: "coordinator" as const,
+          },
+        ],
+      }),
+      wait === undefined
+        ? undefined
+        : { admissionWait: wait, cause: routingPauseExplanation(pause) },
+    );
   }
 }

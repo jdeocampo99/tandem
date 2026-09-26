@@ -2298,11 +2298,13 @@ class TandemController {
       if (task === undefined || !(await this.#source.taskInScope(task))) return;
       const state = await readRuntimeState(this.#deps.runtimePath);
       const runtime = taskRuntime(state, taskId);
-      const next = taskWithPoolAdmission(task, runtime?.poolAdmissionKey, result, {
+      const change = taskWithPoolAdmission(task, runtime, result, {
         clock: this.#deps.clock,
         notificationId: () => singleLine(this.#deps.idFactory(), "pool notification id"),
       });
-      if (next !== task) await store.update(task.id, task.revision, () => next);
+      if (change.task !== task) {
+        await store.update(task.id, task.revision, () => change.task, change.note);
+      }
       if (runtime !== undefined) {
         await writeRuntimeState(
           this.#deps.runtimePath,
