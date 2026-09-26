@@ -2,6 +2,7 @@ export type TerminalCommand =
   | "launch"
   | "status"
   | "trace"
+  | "report"
   | "watch"
   | "update"
   | "fix"
@@ -27,6 +28,9 @@ export type TerminalInvocation = Readonly<{
   readonly freeSuperseded: boolean;
   readonly stop: boolean;
   readonly watch: boolean;
+  readonly noOpen: boolean;
+  /** `tandem report --since`, as an ISO timestamp. */
+  readonly since?: string;
 }>;
 
 export type TerminalRunResult = Readonly<{
@@ -37,6 +41,7 @@ export type TerminalRunResult = Readonly<{
     | "configured"
     | "status"
     | "trace"
+    | "report"
     | "watch"
     | "fixed"
     | "reset"
@@ -71,6 +76,7 @@ function optionValue(
 const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
   status: "status",
   trace: "trace",
+  report: "report",
   watch: "watch",
   update: "update",
   fix: "fix",
@@ -106,6 +112,7 @@ const FLAGS = {
   "--no-attach": "noAttach",
   "--stop": "stop",
   "--watch": "watch",
+  "--no-open": "noOpen",
 } as const;
 type Flag = (typeof FLAGS)[keyof typeof FLAGS];
 
@@ -116,6 +123,7 @@ const ALLOWED: Readonly<
   launch: { flags: ["fresh", "headless", "noAttach"], maxPaths: Number.POSITIVE_INFINITY },
   status: { flags: ["json", "logs", "watch"], maxPaths: 1 },
   trace: { flags: ["json"], maxPaths: 1 },
+  report: { flags: ["json", "noOpen"], maxPaths: 0 },
   watch: { flags: ["json", "stop"], maxPaths: 1 },
   update: { flags: ["fresh", "headless", "noAttach"], maxPaths: 0 },
   fix: { flags: ["yes", "json", "verbose", "freeSuperseded"], maxPaths: 0 },
@@ -130,6 +138,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
   let home: string | undefined;
   let sessionId: string | undefined;
   let poolRoot: string | undefined;
+  let since: string | undefined;
   const flags = new Set<Flag>();
   const paths: string[] = [];
   let parseOptions = true;
@@ -159,6 +168,12 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       else poolRoot = parsed.value;
       continue;
     }
+    if (name === "--since") {
+      const parsed = optionValue(argv, index, name);
+      index = parsed.next;
+      since = parseReportSince(parsed.value);
+      continue;
+    }
     const renamed =
       (command === undefined && paths.length === 0) || token.startsWith("-")
         ? RENAMED[token]
@@ -180,6 +195,9 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
       const spelling = Object.entries(FLAGS).find(([, value]) => value === flag)?.[0];
       throw new Error(`${label} does not accept ${spelling}`);
     }
+  }
+  if (since !== undefined && resolved !== "report") {
+    throw new Error(`${label} does not accept --since`);
   }
   if (flags.has("watch") && (paths.length > 0 || flags.has("json") || flags.has("logs"))) {
     throw new Error(
@@ -208,8 +226,38 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     freeSuperseded: flags.has("freeSuperseded"),
     stop: flags.has("stop"),
     watch: flags.has("watch"),
+    noOpen: flags.has("noOpen"),
+    ...(since === undefined ? {} : { since }),
     ...(home === undefined ? {} : { home }),
     ...(sessionId === undefined ? {} : { sessionId }),
     ...(poolRoot === undefined ? {} : { poolRoot }),
   };
+}
+
+/**
+ * `--since` takes a calendar day, read as local midnight, or a full ISO timestamp with a time
+ * zone; either becomes a UTC ISO timestamp.
+ */
+export function parseReportSince(value: string): string {
+  const text = value.trim();
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(text);
+  if (day !== null) {
+    const [year, month, date] = [Number(day[1]), Number(day[2]), Number(day[3])];
+    const local = new Date(year, month - 1, date);
+    if (
+      local.getFullYear() === year &&
+      local.getMonth() === month - 1 &&
+      local.getDate() === date
+    ) {
+      return local.toISOString();
+    }
+  } else if (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/u.test(text)
+  ) {
+    const parsed = new Date(text);
+    if (Number.isFinite(parsed.getTime())) return parsed.toISOString();
+  }
+  throw new Error(
+    `--since needs a date like 2030-01-31 or a timestamp like 2030-01-31T09:00:00Z; received ${JSON.stringify(value)}`,
+  );
 }

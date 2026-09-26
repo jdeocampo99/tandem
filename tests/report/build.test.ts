@@ -4,6 +4,7 @@ import {
   buildReportView,
   buildTaskReport,
   formatDuration,
+  reportScopeLabel,
   reportTitle,
 } from "../../src/report/build.ts";
 import type { ReportTask } from "../../src/report/model.ts";
@@ -464,4 +465,11 @@ test("durations read in minutes, then hours with padded minutes", () => {
   expect(formatDuration(59 * MINUTE + 40_000)).toBe("1h 00m");
   expect(formatDuration(97 * MINUTE)).toBe("1h 37m");
   expect(formatDuration(605 * MINUTE)).toBe("10h 05m");
+});
+
+test("the scope label names the scoped repository, the one project, or all projects", () => {
+  expect(reportScopeLabel("/work/tandem", ["/work/other"])).toBe("tandem");
+  expect(reportScopeLabel(undefined, ["/work/tandem", "/work/tandem"])).toBe("tandem");
+  expect(reportScopeLabel(undefined, ["/work/tandem", "/work/other"])).toBe("All projects");
+  expect(reportScopeLabel(undefined, [])).toBe("All projects");
 });

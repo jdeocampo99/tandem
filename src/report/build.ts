@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { FindingCategory, IsoTimestamp, TaskRecord, TaskStage } from "../contracts.ts";
 import type { RequestUsageEvent, RequestWorkKind } from "../runtime/usage.ts";
 import type { RequestUsageReadout } from "../runtime/usage-receipt.ts";
@@ -544,4 +545,18 @@ function sentence(text: string): string {
 
 function capitalize(text: string): string {
   return text.length === 0 ? text : `${text[0]?.toUpperCase()}${text.slice(1)}`;
+}
+
+/**
+ * What the report covers: the scoped repository's folder name, the one project every task
+ * belongs to, or "All projects" when tasks span several or there are none.
+ */
+export function reportScopeLabel(
+  scopePath: string | undefined,
+  taskRepoPaths: readonly string[],
+): string {
+  if (scopePath !== undefined) return basename(scopePath);
+  const names = new Set(taskRepoPaths.map((path) => basename(path)));
+  const [only] = names;
+  return names.size === 1 && only !== undefined ? only : "All projects";
 }
