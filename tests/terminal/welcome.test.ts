@@ -35,7 +35,9 @@ test("Enter in the welcome popup asks the Tandem coordinator to start onboarding
   input.write("x");
   input.write("\r");
   await done;
-  expect(printed.join("")).toContain(WELCOME_TEXT);
+  // The popup's title bar already says "Welcome to Tandem", so the text starts after it.
+  expect(printed.join("")).toStartWith("Tandem runs a team of agents");
+  expect(printed.join("")).not.toContain("Welcome to Tandem");
   expect(printed.join("")).toContain("Press Enter to start");
   expect(ran).toEqual([
     ["herdr", "--session", "tandem", "agent", "prompt", "w1:p1", WELCOME_PROMPT],
@@ -75,4 +77,31 @@ test("outside the popup, tandem welcome only prints the message", async () => {
   });
   expect(printed).toEqual([`${WELCOME_TEXT}\n`]);
   expect(ran).toEqual([]);
+});
+
+test("every welcome line fits inside the popup without wrapping", async () => {
+  const manifest = Bun.TOML.parse(
+    await Bun.file(new URL("../../herdr-plugin/herdr-plugin.toml", import.meta.url)).text(),
+  ) as { panes: { width: number }[] };
+  const width = manifest.panes[0]?.width ?? 0;
+  // The border and Herdr's padding take a few cells on each side.
+  const usable = width - 6;
+  const input = keyboard();
+  const printed: string[] = [];
+  const done = runWelcome({
+    input,
+    stdout: (text) => printed.push(text),
+    run: recorder().run,
+    environment: popup,
+    cwd: "/tmp",
+  });
+  input.write("\x1b");
+  await done;
+  const longest = Math.max(
+    ...printed
+      .join("")
+      .split("\n")
+      .map((line) => line.length),
+  );
+  expect(longest).toBeLessThanOrEqual(usable);
 });
