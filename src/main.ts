@@ -359,7 +359,10 @@ function renderPublishedReport(published: PublishedReport, noOpen: boolean): str
     return `Report opened in Lavish${link}: ${published.path}\n`;
   }
   if (noOpen) return `Report written: ${published.path}\n`;
-  return `Report written: ${published.path}\nLavish could not open it (${published.openError ?? "unknown error"}); open that file in a browser.\n`;
+  const reason = published.openError ?? "Lavish couldn't open the page.";
+  const details =
+    published.openErrorDetail === undefined ? "" : `Details: ${published.openErrorDetail}\n`;
+  return `Report written: ${published.path}\n${reason} Open that file in a browser.\n${details}`;
 }
 
 /**

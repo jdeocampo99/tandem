@@ -1378,7 +1378,9 @@ test("tandem report writes the page, opens it in Lavish, and falls back to the p
     lavish = { code: 1, stdout: "error: no browser\ncode: INTERNAL\n", stderr: "" };
     const failed = await run(["report"]);
     expect(failed.result.exitCode).toBe(0);
-    expect(failed.text).toContain(`Report written: ${path}\nLavish could not open it`);
+    expect(failed.text).toBe(
+      `Report written: ${path}\nLavish couldn't open the page. Open that file in a browser.\nDetails: no browser\n`,
+    );
 
     commands.length = 0;
     expect((await run(["report", "--no-open"])).text).toBe(`Report written: ${path}\n`);

@@ -4,7 +4,7 @@ import { withPrWatches } from "../pr-watch/store.ts";
 import { createRequestBriefStore } from "../requests/store.ts";
 import { withStateTransaction } from "../runtime/database.ts";
 import { defaultIdFactory } from "../runtime/persistence.ts";
-import { createRequestUsageLedger } from "../runtime/usage-ledger.ts";
+import { createRequestUsageLedger, readTaskUsage } from "../runtime/usage-ledger.ts";
 import { createTaskStore } from "../tasks/store.ts";
 import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
 import { readTimeline } from "../tasks/timeline-store.ts";
@@ -50,10 +50,7 @@ async function weekRollups(
     if (!withinWeek(task.updatedAt, now)) continue;
     const { events } = await readTimeline(home, task.id);
     if (!finishedWithinWeek(events, now)) continue;
-    const cost =
-      task.requestId === undefined
-        ? undefined
-        : taskCost(await ledger.read(task.requestId), task.requestId, task.id);
+    const cost = taskCost(await readTaskUsage(ledger, task), task.id);
     rollups.push(taskRollup(task.id, events, now, cost));
   }
   return rollups;

@@ -72,11 +72,12 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 
 ## Where the data comes from
 
-- The weekly line is computed on read from each task's timeline and its request's usage ledger
+- The weekly line is computed on read from each task's timeline and the usage ledger scope that
+  holds its work (its request's, or its own task scope without one)
   (see [task-lifecycle.md](task-lifecycle.md#timeline-and-trace)),
   through `taskRollup`, `taskCost`, and `summarizeRollups` in src/tasks/trace.ts. Only completed
-  or merged tasks updated in the last 7 days have their timeline read. A task with no request has
-  no recorded cost; usage with no price shows as "+ unpriced usage".
+  or merged tasks updated in the last 7 days have their timeline read. A task with no recorded
+  work has no recorded cost; usage with no price shows as "+ unpriced usage".
 
 - `readBoard` reads tasks, briefs, and PR watch records from `<home>/state.sqlite` in one state
   transaction, plus the project list under `<home>/repositories`. Status never calls GitHub, so

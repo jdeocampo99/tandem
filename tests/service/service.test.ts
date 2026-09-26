@@ -65,6 +65,7 @@ import {
   requiredReviewLenses,
 } from "../../src/tasks/review-levels.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { readTimeline } from "../../src/tasks/timeline-store.ts";
 import { assertSourceUnchanged } from "../../src/workers/checkout.ts";
 import type { WorkerJob } from "../../src/workers/jobs.ts";
 import { type WorkerTerminalState, writeWorkerTerminal } from "../../src/workers/terminal.ts";
@@ -1851,6 +1852,12 @@ test("a catalogue that no longer lists the pinned model stops the task and asks 
       expect(questions).toHaveLength(1);
       expect(questions[0]?.kind).toBe("coordinator");
       expect(stopped.policy.config.models.implementer).toEqual(policy.config.models.implementer);
+      const waits = (await readTimeline(home, "task-1")).events.filter(
+        (event) => event.type === "admission-waiting",
+      );
+      expect(waits.map((event) => event.type === "admission-waiting" && event.reason)).toEqual([
+        "routing-question",
+      ]);
     },
   );
 });

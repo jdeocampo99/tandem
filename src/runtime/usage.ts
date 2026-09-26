@@ -202,12 +202,14 @@ export type QuotaMeasurement =
     }>;
 
 /**
- * The durable identities one accounting event is attributed to. Every field but the request is
+ * The durable identities one accounting event is attributed to. Every field but the scope is
  * optional because a boundary that never exposed an identity must stay silent about it rather
- * than have one inferred from process observations or text.
+ * than have one inferred from process observations or text. The scope is the governing request,
+ * or, for work no request governs, the task alone: an event without `requestId` always names its
+ * `taskId` and is kept in that task's own ledger scope, never on a request's receipt.
  */
 export type RequestWorkIdentity = Readonly<{
-  readonly requestId: string;
+  readonly requestId?: string;
   readonly taskId?: string;
   readonly jobId?: string;
   readonly operationId?: string;
@@ -291,7 +293,7 @@ export function requestUsageEventKey(origin: RequestUsageEventOrigin): string {
   const canonical = JSON.stringify([
     REQUEST_USAGE_EVENT_SCHEMA_VERSION,
     origin.kind,
-    origin.identity.requestId,
+    origin.identity.requestId ?? null,
     origin.identity.taskId ?? null,
     origin.identity.jobId ?? null,
     origin.identity.operationId ?? null,

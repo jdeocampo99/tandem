@@ -11,8 +11,12 @@ import {
 } from "../../src/contracts.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore, type TaskStore } from "../../src/tasks/store.ts";
-import { timelineEventsForChange } from "../../src/tasks/timeline.ts";
-import { readTimeline } from "../../src/tasks/timeline-store.ts";
+import {
+  admissionWaitToRecord,
+  type TimelineEvent,
+  timelineEventsForChange,
+} from "../../src/tasks/timeline.ts";
+import { readTimeline, recordTimelineEvents } from "../../src/tasks/timeline-store.ts";
 import {
   renderTaskTrace,
   renderTraceSummary,
@@ -208,6 +212,111 @@ test("findings, fix rounds, questions, answers, and steers become events without
   ]);
   expect(JSON.stringify(events)).not.toContain("Keep the old flag");
   expect(JSON.stringify(events)).not.toContain("lost on rollback");
+});
+
+test("an admission wait is recorded only for a queued task whose reason is new", () => {
+  expect(admissionWaitToRecord("queued", undefined, "worktree-disk-space")).toBe(
+    "worktree-disk-space",
+  );
+  expect(admissionWaitToRecord("queued", "worktree-disk-space", "worktree-capacity-unknown")).toBe(
+    "worktree-capacity-unknown",
+  );
+  expect(
+    admissionWaitToRecord("queued", "worktree-disk-space", "worktree-disk-space"),
+  ).toBeUndefined();
+  expect(admissionWaitToRecord("queued", "routing-question", undefined)).toBeUndefined();
+  expect(admissionWaitToRecord("implementing", undefined, "routing-question")).toBeUndefined();
+
+  const before = {
+    id: "task-1",
+    stage: "queued",
+    reviewRound: 0,
+    generation: 1,
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  } as unknown as TaskRecord;
+  const after = { ...before, updatedAt: "2026-09-01T00:05:00.000Z" };
+  const note = { admissionWait: "worktree-disk-space", cause: "pool is full" } as const;
+  expect(timelineEventsForChange(before, after, note)).toEqual([
+    {
+      type: "admission-waiting",
+      reason: "worktree-disk-space",
+      taskId: "task-1",
+      at: "2026-09-01T00:05:00.000Z",
+      cause: "pool is full",
+    },
+  ]);
+  expect(timelineEventsForChange(before, { ...after, stage: "scouting" }, note)).toEqual([
+    {
+      type: "stage-changed",
+      from: "queued",
+      to: "scouting",
+      taskId: "task-1",
+      at: "2026-09-01T00:05:00.000Z",
+      cause: "pool is full",
+    },
+  ]);
+});
+
+test("trace names the reason a queued task waited for admission", () => {
+  const events = [
+    {
+      taskId: "task-1",
+      at: "2026-09-01T00:00:00.000Z",
+      type: "admission-waiting",
+      reason: "worktree-disk-space",
+      seq: 1,
+    },
+    {
+      taskId: "task-1",
+      at: "2026-09-01T00:01:00.000Z",
+      type: "admission-waiting",
+      reason: "worktree-capacity-unknown",
+      seq: 2,
+    },
+    {
+      taskId: "task-1",
+      at: "2026-09-01T00:02:00.000Z",
+      type: "admission-waiting",
+      reason: "routing-question",
+      seq: 3,
+    },
+  ] as const;
+  const text = renderTaskTrace({
+    events,
+    unreadableEvents: 0,
+    rollup: taskRollup("task-1", events, "2026-09-01T00:03:00.000Z", undefined),
+  });
+  expect(text).toContain("waiting for admission (worktree disk space)");
+  expect(text).toContain("waiting for admission (worktree capacity unknown)");
+  expect(text).toContain("waiting for admission (routing question)");
+});
+
+test("a stored admission wait reads back, and one with an unknown reason is unreadable", async () => {
+  const created = await createTask();
+  const approved = await store.update(created.id, created.revision, (task) =>
+    transition(task, { type: "approve" }),
+  );
+  await store.update(
+    approved.id,
+    approved.revision,
+    (task) => ({ ...task, revision: task.revision + 1, updatedAt: clock() }),
+    { admissionWait: "worktree-disk-space" },
+  );
+  await recordTimelineEvents(home, [
+    {
+      taskId: "task-1",
+      at: clock(),
+      type: "admission-waiting",
+      reason: "a-free-lunch",
+    } as unknown as TimelineEvent,
+  ]);
+
+  const timeline = await readTimeline(home, "task-1");
+  expect(timeline.unreadableEvents).toBe(1);
+  expect(timeline.events.at(-1)).toMatchObject({
+    type: "admission-waiting",
+    reason: "worktree-disk-space",
+  });
 });
 
 test("rollups count the first review verdict, fix rounds, blocked time, and cost", () => {
