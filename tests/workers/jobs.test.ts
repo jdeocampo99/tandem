@@ -48,6 +48,10 @@ type Fixture = {
     readonly clearTimer: (timer: object) => void;
     readonly isIdle: () => boolean;
     readonly hasPendingMessages: () => boolean;
+    readonly sessionManager: {
+      readonly getSessionFile: () => string | undefined;
+      readonly getLeafId: () => string | null;
+    };
     readonly abort: () => void;
     readonly shutdown: () => void;
   };
@@ -81,6 +85,10 @@ function fixture(): Fixture {
     clearTimer(_timer: object): void {},
     isIdle: () => state.idle,
     hasPendingMessages: () => false,
+    sessionManager: {
+      getSessionFile: () => "/sessions/task-1/conversation.jsonl",
+      getLeafId: () => "entry-7",
+    },
     abort: () => {
       state.aborts += 1;
     },
@@ -142,7 +150,14 @@ function review(overrides: Record<string, unknown> = {}): Record<string, unknown
 }
 
 function finding(severity: string): Record<string, unknown> {
-  return { id: `f-${severity}`, severity, verdict: "confirmed", description: "Evidence." };
+  return {
+    id: `f-${severity}`,
+    severity,
+    verdict: "confirmed",
+    description: "Evidence.",
+    category: "correctness",
+    catchStage: "validation",
+  };
 }
 
 async function startExtension(
@@ -335,6 +350,16 @@ test("arguments outside the submit_report schema never reach the report contract
   const previous = process.env.TANDEM_WORKER_JOB_PATH;
   const cases: readonly { readonly role: WorkerJob["role"]; readonly bad: SubmittedReport }[] = [
     { role: "reviewer", bad: { outcome: "completed", review: { findings: [] } } },
+    {
+      role: "reviewer",
+      bad: {
+        outcome: "completed",
+        review: {
+          findings: [{ id: "f-P1", severity: "P1", verdict: "confirmed", description: "Bug." }],
+          summary: "A finding without a category or catch stage.",
+        },
+      },
+    },
     { role: "implementer", bad: { outcome: "completed", report: "Done." } },
     { role: "scout", bad: { outcome: "completed", report: "Done.", artifactPath: "/tmp/a" } },
   ];
@@ -431,6 +456,10 @@ test("Tandem binds a submitted review to its job and derives pass from the findi
           review: review({ findings: value.findings }),
         });
         const result = await readWorkerResult(job.resultPath, job);
+        expect(result.transcript).toEqual({
+          file: "/sessions/task-1/conversation.jsonl",
+          entryId: "entry-7",
+        });
         expect(result.review).toMatchObject({
           lens: "review",
           head: "abc123",

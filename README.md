@@ -202,6 +202,7 @@ Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #40
 | --- | --- |
 | `tandem [PATH ...]` | Open or reconnect your projects |
 | `tandem status [TASK_ID]` | What's running and what needs you; with a task ID, that task's full history |
+| `tandem trace [TASK_ID]` | What happened to a task and why, with its review, fix-round, blocked-time, and cost figures; without a task ID, the same figures across all tasks |
 | `tandem watch [PR]` | Your watched pull requests; with a PR link or number, start watching it (`--stop` to stop) |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Find and clean up leftovers from a crash or failed launch (asks first) |
@@ -211,7 +212,7 @@ Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #40
 | `tandem reset --hard` | Delete all Tandem state and start over |
 
 Common options: `--yes` skips confirmation (`fix`, `reset`), `--json` prints machine-readable
-output (`status`, `watch`, `fix`), and `--home PATH` uses a different Tandem data folder. Run
+output (`status`, `trace`, `watch`, `fix`), and `--home PATH` uses a different Tandem data folder. Run
 `tandem --help` for the full list.
 
 ## When something goes wrong
@@ -219,15 +220,18 @@ output (`status`, `watch`, `fix`), and `--home PATH` uses a different Tandem dat
 Try these in order:
 
 1. **`tandem status`** shows what every task is doing and what needs you. It never changes anything.
-2. **A task is stuck:** ask the coordinator to restart it, or run `/tandem restart TASK_ID`. The
+2. **A task restarted, blocked, or took many review rounds and you want to know why:**
+   `tandem trace TASK_ID` lists every stage change, restart, block, finding, question, and steer
+   with its cause, and where the worker's transcript and report are.
+3. **A task is stuck:** ask the coordinator to restart it, or run `/tandem restart TASK_ID`. The
    worker keeps its worktree, history, and messages.
-3. **A coordinator is misbehaving or you pulled new Tandem code:** `tandem update` replaces the
+4. **A coordinator is misbehaving or you pulled new Tandem code:** `tandem update` replaces the
    coordinators without cancelling any work.
-4. **Leftover panes or worktrees after a crash:** `tandem fix` lists what it would clean and asks
+5. **Leftover panes or worktrees after a crash:** `tandem fix` lists what it would clean and asks
    first. Anything with unsaved or unmerged work is kept.
-5. **You want a clean slate for tasks:** `tandem reset` cancels in-progress tasks and reopens the
+6. **You want a clean slate for tasks:** `tandem reset` cancels in-progress tasks and reopens the
    coordinators. Your files, worktrees, settings, and task history are kept.
-6. **You want to start completely over:** `tandem reset --hard` deletes all Tandem data, including
+7. **You want to start completely over:** `tandem reset --hard` deletes all Tandem data, including
    worktrees with work that was never pushed. It lists everything first and asks.
 
 Don't delete Tandem's files, panes, or worktrees by hand; the commands above check what's safe

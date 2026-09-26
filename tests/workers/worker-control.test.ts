@@ -270,6 +270,7 @@ test("the combined worker extension runs both its steering and terminal handlers
       clearTimer: () => {},
       isIdle: () => true,
       hasPendingMessages: () => false,
+      sessionManager: { getSessionFile: () => undefined, getLeafId: () => null },
       abort: () => {},
     };
     await workerControlExtension(fake.pi as never);

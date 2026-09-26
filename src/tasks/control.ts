@@ -265,6 +265,8 @@ function redirectedRuntime(
   };
 }
 
+const RESTARTED_BY_USER = "The user restarted it.";
+
 export class TaskControlWorkflow {
   readonly #deps: TaskControlDependencies;
 
@@ -403,7 +405,12 @@ export class TaskControlWorkflow {
           return this.blockUnstoppedTask(store, current, action, stopFailure);
         }
         const planned = transitionTask(current, event, this.#deps.context());
-        await store.update(current.id, current.revision, () => planned);
+        await store.update(
+          current.id,
+          current.revision,
+          () => planned,
+          reason === undefined ? undefined : { cause: reason },
+        );
         return planned;
       });
     });
@@ -523,8 +530,9 @@ export class TaskControlWorkflow {
     return blocked;
   }
 
-  async resumeTask(taskId: string): Promise<TaskRecord> {
-    const outcome = await this.releaseStoppedTask(taskId, { type: "resume" });
+  /** `cause` says on the task's timeline why it resumed. */
+  async resumeTask(taskId: string, cause: string): Promise<TaskRecord> {
+    const outcome = await this.releaseStoppedTask(taskId, { type: "resume" }, cause);
     if (!outcome.resumed) return outcome.task;
     const current = await this.#deps.getTask(taskId);
     const runtime = await this.#deps.runtimeFor(taskId);
@@ -568,10 +576,11 @@ export class TaskControlWorkflow {
         throw new Error(`Task ${taskId} could not be safely stopped to publish now`);
       }
     }
-    const outcome = await this.releaseStoppedTask(taskId, {
-      type: "skip-review",
-      head: checkout.head,
-    });
+    const outcome = await this.releaseStoppedTask(
+      taskId,
+      { type: "skip-review", head: checkout.head },
+      "The user chose to publish now.",
+    );
     return outcome.task;
   }
 
@@ -582,6 +591,7 @@ export class TaskControlWorkflow {
   private async releaseStoppedTask(
     taskId: string,
     event: TaskEvent,
+    cause: string,
   ): Promise<Readonly<{ readonly task: TaskRecord; readonly resumed: boolean }>> {
     return this.#deps.store.exclusive(async (store) => {
       const task = await store.read(taskId);
@@ -610,7 +620,7 @@ export class TaskControlWorkflow {
           releaseStoppedRuntime(current, resources, this.#deps.clock),
         ),
       );
-      await store.update(task.id, task.revision, () => resumed);
+      await store.update(task.id, task.revision, () => resumed, { cause });
       return { task: resumed, resumed: true };
     });
   }
@@ -634,7 +644,7 @@ export class TaskControlWorkflow {
       );
     }
     if (task.stage === "paused" || task.stage === "blocked") {
-      await this.resumeTask(taskId);
+      await this.resumeTask(taskId, RESTARTED_BY_USER);
       return this.continueAfterRestart(taskId);
     }
     if (task.stage === "queued") {
@@ -652,7 +662,7 @@ export class TaskControlWorkflow {
     if (paused.stage !== "paused") {
       throw new Error(`Task ${taskId} could not be safely paused for managed restart`);
     }
-    await this.resumeTask(taskId);
+    await this.resumeTask(taskId, RESTARTED_BY_USER);
     return this.continueAfterRestart(taskId);
   }
 

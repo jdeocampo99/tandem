@@ -29,6 +29,8 @@ import {
   TaskStoreError,
   UnsafeTaskIdError,
 } from "./store-errors.ts";
+import { type TimelineNote, timelineEventsForChange } from "./timeline.ts";
+import { appendTimelineEvents } from "./timeline-store.ts";
 
 export type StoreTaskInput = Readonly<Omit<TaskInput, "id"> & { readonly id?: string }>;
 export type TaskTransform = (task: TaskRecord) => TaskRecord | PromiseLike<TaskRecord>;
@@ -37,10 +39,12 @@ export type TaskStoreTransaction = Readonly<{
   readonly create: (input: StoreTaskInput) => Promise<TaskRecord>;
   readonly read: (id: string) => Promise<TaskRecord | undefined>;
   readonly list: () => Promise<readonly TaskRecord[]>;
+  /** `note` adds the cause and references to the timeline events this change records. */
   readonly update: (
     id: string,
     expectedRevision: number,
     transform: TaskTransform,
+    note?: TimelineNote,
   ) => Promise<TaskRecord>;
 }>;
 
@@ -194,6 +198,7 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
     };
     const task = createTask(taskInput, options.clock());
     writeTaskPayload(db, task.id, task.revision, task);
+    appendTimelineEvents(db, timelineEventsForChange(undefined, task));
     return task;
   }
 
@@ -211,6 +216,7 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
     id: string,
     expectedRevision: number,
     transform: TaskTransform,
+    note: TimelineNote | undefined,
   ): Promise<TaskRecord> {
     ensureSafeId(id);
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
@@ -243,6 +249,7 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
       );
     }
     writeTaskPayload(db, next.id, next.revision, next);
+    appendTimelineEvents(db, timelineEventsForChange(current, next, note));
     return next;
   }
 
@@ -250,8 +257,8 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
     create: async (input) => createInTransaction(databaseFor(directory), input),
     read: async (id) => readInTransaction(databaseFor(directory), id),
     list: async () => listInTransaction(databaseFor(directory)),
-    update: async (id, expectedRevision, transform) =>
-      updateInTransaction(databaseFor(directory), id, expectedRevision, transform),
+    update: async (id, expectedRevision, transform, note) =>
+      updateInTransaction(databaseFor(directory), id, expectedRevision, transform, note),
   };
 
   async function withLock<Result>(operation: () => Promise<Result>): Promise<Result> {
@@ -263,16 +270,20 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
     create: async (input) => withStateTransaction(home, (db) => createInTransaction(db, input)),
     read: async (id) => withStateTransaction(home, (db) => readInTransaction(db, id)),
     list: async () => withStateTransaction(home, (db) => listInTransaction(db)),
-    update: async (id, expectedRevision, transform) =>
-      withStateTransaction(home, (db) => updateInTransaction(db, id, expectedRevision, transform)),
+    update: async (id, expectedRevision, transform, note) =>
+      withStateTransaction(home, (db) =>
+        updateInTransaction(db, id, expectedRevision, transform, note),
+      ),
   };
 
   return {
     create: async (input) => withLock(() => createInTransaction(databaseFor(directory), input)),
     read: async (id) => withLock(() => readInTransaction(databaseFor(directory), id)),
     list: async () => withLock(() => listInTransaction(databaseFor(directory))),
-    update: async (id, expectedRevision, transform) =>
-      withLock(() => updateInTransaction(databaseFor(directory), id, expectedRevision, transform)),
+    update: async (id, expectedRevision, transform, note) =>
+      withLock(() =>
+        updateInTransaction(databaseFor(directory), id, expectedRevision, transform, note),
+      ),
     exclusive: async <Result>(
       operation: (store: TaskStoreTransaction) => Result | PromiseLike<Result>,
     ): Promise<Result> => {

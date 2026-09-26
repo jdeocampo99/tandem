@@ -13,6 +13,7 @@ import { resetCoordinators } from "./coordinator/reset.ts";
 import { renderPrWatchView } from "./pr-watch/view.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
 import type { TandemService, TandemServiceOptions } from "./service/controller.ts";
+import { renderTaskTrace, renderTraceSummary } from "./tasks/trace.ts";
 import {
   parseTerminalArgs,
   type TerminalInvocation,
@@ -65,6 +66,7 @@ const HELP_TEXT = `Tandem
 Usage:
   tandem [PATH ...]        Open your projects; resumes coordinator chats (--fresh starts new ones)
   tandem status [TASK_ID]  What's running and what needs you; --logs shows prompt routing
+  tandem trace [TASK_ID]   What happened to a task and why; without one, quality across tasks
   tandem watch [PR]        Your watched pull requests; with a PR link or number, watch it
                            --stop PR stops watching it
   tandem update            Load your latest local Tandem code into every coordinator
@@ -78,7 +80,7 @@ Usage:
 
 Options:
   --yes                    Skip the confirmation (fix, reset)
-  --json                   Machine-readable output (status, watch, fix)
+  --json                   Machine-readable output (status, trace, watch, fix)
   --verbose                Full paths and reasons (fix)
   --free-superseded        With --yes, also free worktrees whose work is in other tasks (fix)
   --home PATH              Use a different Tandem home
@@ -251,6 +253,36 @@ async function handleStatus({
     });
     stdout(invocation.json ? `${JSON.stringify(status)}\n` : renderTandemStatus(status));
     return result;
+  } finally {
+    await service.shutdown();
+  }
+}
+
+/** `tandem trace` prints one task's timeline and rollup, or the rollup across every task. */
+async function handleTrace({
+  invocation,
+  environment,
+  dependencies,
+  run,
+  stdout,
+}: Readonly<{
+  readonly invocation: TerminalInvocation;
+  readonly environment: TerminalEnvironment;
+  readonly dependencies: TerminalMainDependencies;
+  readonly run: CommandRunner;
+  readonly stdout: (text: string) => void;
+}>): Promise<TerminalRunResult> {
+  const service = createServiceFor(environment, run, dependencies);
+  try {
+    const [taskId] = invocation.paths;
+    if (taskId !== undefined) {
+      const trace = await service.trace(taskId);
+      stdout(invocation.json ? `${JSON.stringify(trace)}\n` : renderTaskTrace(trace));
+    } else {
+      const summary = await service.traceSummary();
+      stdout(invocation.json ? `${JSON.stringify(summary)}\n` : renderTraceSummary(summary));
+    }
+    return { exitCode: 0, status: "trace" };
   } finally {
     await service.shutdown();
   }
@@ -545,6 +577,9 @@ export async function runTerminal(
     const run = dependencies.run ?? runCommand;
     if (invocation.command === "status") {
       return await handleStatus({ invocation, environment, dependencies, run, stdout });
+    }
+    if (invocation.command === "trace") {
+      return await handleTrace({ invocation, environment, dependencies, run, stdout });
     }
     if (invocation.command === "watch") {
       return await handleWatch({ invocation, environment, dependencies, run, stdout });

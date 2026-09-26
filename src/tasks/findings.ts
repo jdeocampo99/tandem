@@ -73,6 +73,8 @@ function reportedEntry(
     description: reported.description,
     ...(reported.file === undefined ? {} : { file: reported.file }),
     ...(reported.line === undefined ? {} : { line: reported.line }),
+    ...(reported.category === undefined ? {} : { category: reported.category }),
+    ...(reported.catchStage === undefined ? {} : { catchStage: reported.catchStage }),
     status,
     raisedAt: previous?.raisedAt ?? observation,
     statusAt: observation,
