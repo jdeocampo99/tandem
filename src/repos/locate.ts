@@ -184,6 +184,16 @@ export async function findCheckoutsByName(
   return found;
 }
 
+/** Every checkout under the roots, with the GitHub repository each `origin` names. */
+export async function listCheckouts(
+  roots: readonly string[],
+  run: CommandRunner,
+): Promise<readonly NamedCheckout[]> {
+  return Promise.all(
+    (await crawlCheckouts(roots)).map((checkout) => describeCheckout(checkout, run)),
+  );
+}
+
 async function describeCheckout(path: string, run: CommandRunner): Promise<NamedCheckout> {
   const result = await run({ argv: ["git", "-C", path, "remote", "get-url", "origin"], cwd: path });
   const repo = result.code === 0 ? githubRepoFromRemote(result.stdout) : undefined;

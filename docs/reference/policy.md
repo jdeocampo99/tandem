@@ -35,7 +35,9 @@ src/adapters/typesafe.ts, src/instructions.ts
 - `onboard`, `doctor`, and `models` are read-only and create no directory or file. A read-only
   proposal is not a completed setup.
 - Discovery reads `package.json`, the lockfiles below, and the central record. It never executes
-  scripts or inspects CI. It reads from the source checkout when one is given.
+  scripts or inspects CI. It reads from the source checkout when one is given. `discovery` in the
+  result names the scripts behind the proposed checks and the lockfile behind the install, which
+  the setup page shows.
 - The write (`setup --yes`, or `onboard --write --yes`) creates only a missing record, exclusively
   (`wx`), re-checking for either settings file just before writing. An existing, malformed, or
   mismatched record is refused, never repaired or replaced. The CLI has no custom-command override.
@@ -48,11 +50,19 @@ src/adapters/typesafe.ts, src/instructions.ts
   `saveHomeSetting` in src/config/home-settings.ts (a one-line value is replaced, a missing key is
   added first, a multi-line value or a file changed since reading is refused): `projectRoots`, the
   absolute folders searched for checkouts by name, and `selfImprovement`.
+- The setup page (see [coordinator.md](coordinator.md#the-tandem-coordinator)) saves the same
+  settings after one approval of its whole answer. It shows saved choices and may change them, so
+  it writes `workerSkills` with `replaceWorkerSkills`, which goes through `saveHomeSetting` and its
+  guard; the chat's answer to the plugin-skill offer (`saveWorkerSkills`, `worker-skills`,
+  `configure-worker-skills`) still only adds the key and refuses once it is written.
 - The native terminal asks **Save settings** / **Not now** before writing; **Not now** or Ctrl+C
   creates no project record and leaves saved model choices intact. The interview text and choice
   rules live in `src/terminal/onboarding.ts` and `src/instructions.ts`.
-- After **Save settings**, each project MCP server is offered to the coordinator, defaulting to
-  **Skip**. Answers are saved as `coordinatorMcpServers` (see [Coordinator tool limits](#coordinator-tool-limits)).
+- After **Save settings**, the terminal offers each project MCP server to the coordinator,
+  defaulting to **Skip**. The setup page defaults the other way: every one of a repository's MCP
+  servers starts ticked, and a pasted path it could not look at in advance gets all of them at save.
+  The chat's `setup` saves only the servers it is given. Answers are saved as
+  `coordinatorMcpServers` (see [Coordinator tool limits](#coordinator-tool-limits)); unset means none.
 - A later custom policy edit requires approval scoped to the project and fields, a re-read
   immediately before writing (stale-snapshot guard for an existing file, exclusive create for a
   missing one), and refusal if a path or symlink could escape the home. Do not add a CLI flag for it.
@@ -204,6 +214,11 @@ user-level skill folders. The coordinator does not load it and keeps the user's 
   `<installPath>/skills/<name>/SKILL.md`. `plugin:name` looks only in that plugin (the install
   key without `@marketplace`). A repository skill wins over a personal one with the same name;
   linked copies of one folder count once. Matching is by folder name.
+- The setup page lists what `workerSkills` can name (`listSkillCatalog`): the personal folders
+  above and plugin skills, never repository skills, which every task in that repository loads
+  anyway. Each is listed by the name that finds it alone: a plugin skill is `plugin:name` when
+  another plugin or a personal skill shares its name; a personal name in two folders is listed once.
+  Its line is SKILL.md's frontmatter `description`, on one line and cut near 140 characters.
 - Create fails, with a message the coordinator puts to the user, when a name is not a plain folder
   name, matches nothing, matches two different folders in the same place, has an empty SKILL.md,
   or the skills together pass 32 KB (`MAX_TASK_SKILLS_BYTES`).

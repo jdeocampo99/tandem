@@ -25,7 +25,7 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   finding no saved validation commands for another repository.
 - `/tandem` parses arguments with shell-style quoting only; nothing runs in a shell.
 - The tool is registered with OMP `write` approval. `requiresHumanApproval` covers `setup`,
-  `open-project`, `save-code-folders`, `worker-skills`, `self-improvement`, `configure-models`, `approve`, `brief-approve`, `cancel` (with or without `discard`), `publish`,
+  `apply-setup` (one dialog recapping the whole setup page answer), `open-project`, `save-code-folders`, `worker-skills`, `self-improvement`, `configure-models`, `approve`, `brief-approve`, `cancel` (with or without `discard`), `publish`,
   `publish-now`, `draft`, `merge`, and `cleanup` with `discard`. Each needs a live TUI confirmation; without an
   interactive TUI they fail closed.
 - `configure-models` does not change existing task snapshots.

@@ -19,6 +19,7 @@ import {
   taskWorkspaceLabel,
 } from "../../src/adapters/herdr.ts";
 import {
+  endPresentation,
   listenPresentation,
   openPresentation,
   pollPresentation,
@@ -933,6 +934,21 @@ test("continuous presentation listening leaves the native command without a time
   expect(observation.status).toBe("waiting");
   expect(runner.calls[0]?.argv).toEqual(["lavish-axi", "poll", "/tmp/artifact.html"]);
   expect(runner.calls[0]?.timeoutMs).toBeUndefined();
+});
+
+test("listening can first show a reply in the browser, and the agent can end a session", async () => {
+  const runner = scriptedRunner([
+    result("session:\n  status: waiting\n  session_ended: false\n"),
+    result("session:\n  status: ended\n"),
+  ]);
+  await listenPresentation(runner.run, "/tmp/artifact.html", "/tmp/repo", {
+    agentReply: "Got it.",
+  });
+  await endPresentation(runner.run, "/tmp/artifact.html", "/tmp/repo");
+  expect(runner.calls.map((call) => call.argv)).toEqual([
+    ["lavish-axi", "poll", "/tmp/artifact.html", "--agent-reply", "Got it."],
+    ["lavish-axi", "end", "/tmp/artifact.html"],
+  ]);
 });
 
 test("accepts native opened, ready, and user-ended sessions as nonterminal observations", async () => {

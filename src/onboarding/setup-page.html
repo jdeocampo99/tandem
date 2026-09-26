@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tandem setup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/*{{tandem.css}}*/
+
+body{padding-block:28px 96px}
+.wrap{gap:36px}
+.mast{display:grid;gap:4px;font-size:13px;color:var(--faint)}
+.mast b{color:var(--muted);font-weight:500}
+section{display:grid;gap:12px}
+h2{font-size:15px;font-weight:600;margin:0}
+/* Role rows, the report page's list */
+.cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,220px) 110px;gap:20px;padding:10px 16px;font-size:11.5px;color:var(--faint);border-bottom:1px solid var(--line)}
+.role{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,220px) 110px;gap:6px 20px;align-items:start;padding:14px 16px;border-top:1px solid var(--line);animation:rowIn .45s var(--ease) both;animation-delay:calc(var(--i,0) * 45ms)}
+.role:first-of-type{border-top:0}
+/* Rows animate in, which makes each one its own layer; lift the row whose list is open above the rest. */
+.role:focus-within{z-index:20}
+.role.settled{animation:none}
+.r-title{display:flex;gap:10px;align-items:flex-start;min-width:0}
+.r-title .sw{width:8px;height:8px;border-radius:2px;background:var(--c);margin-top:7px;flex:none}
+.r-title strong{font-weight:500;font-size:14px}
+.r-what{color:var(--muted);font-size:13px}
+.hint{margin:2px 0 0;color:var(--muted);font-size:12.5px}
+.hint b{color:var(--c);font-weight:500}
+.meta{grid-column:2/-1;display:flex;flex-wrap:wrap;gap:4px 12px;margin:0;font:11.5px/1.4 var(--mono);color:var(--faint);font-variant-numeric:tabular-nums}
+.meta .example{color:var(--muted);font-style:italic}
+.meta .off{color:var(--tandem)}
+@media (max-width:720px){.cols{display:none}.role{grid-template-columns:minmax(0,1fr) 104px}.r-title{grid-column:1/-1}.meta{grid-column:1/-1}}
+/* Choice card */
+.card{padding:16px;display:grid;gap:10px;align-content:start}
+.opt{display:grid;grid-template-columns:15px 1fr;gap:2px 10px;align-items:start;cursor:pointer}
+.opt input{margin-top:3px}
+.opt span{font-weight:500;display:flex;gap:8px;align-items:center}
+.opt small{grid-column:2;color:var(--muted);font-size:12.5px}
+/* Repo cards */
+.tools .bulk{margin-left:4px}
+.repo{border-top:1px solid var(--line);padding:14px 16px;display:grid;gap:12px;animation:rowIn .35s var(--ease) both}
+.repo-head{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.repo-head b{font-weight:600;font-size:14px}
+.repo-head .src{font:11.5px var(--mono);color:var(--faint)}
+.repo-head .link{margin-left:auto}
+.fields{display:grid;grid-template-columns:minmax(0,230px) minmax(0,1fr);gap:14px 18px;align-items:start}
+.cmds{display:grid;gap:6px}
+.found{font:11.5px var(--mono);color:var(--faint)}
+.tools{display:flex;flex-wrap:wrap;gap:6px;padding-top:3px}
+.tools .chip{padding:4px 10px;font-size:12.5px}
+@media (max-width:620px){.fields{grid-template-columns:1fr}.flabel{padding-top:0}}
+/* Stages */
+.stage{animation:stageIn .35s var(--ease) both}
+@keyframes stageIn{from{opacity:0;transform:translateX(12px)}}
+.stage h2{font-size:18px}
+.review{padding:4px 16px}
+.rv{display:grid;grid-template-columns:minmax(0,150px) minmax(0,1fr) auto;gap:4px 16px;padding:12px 0;border-top:1px solid var(--line);font-size:13px;align-items:start}
+.rv:first-child{border-top:0}
+.rv > span{color:var(--muted)}
+.rv ul{margin:0;padding:0;list-style:none;display:grid;gap:2px}
+.rv .m{font-family:var(--mono);font-size:12.5px}
+.rv .dim{color:var(--faint)}
+.nav{display:flex;gap:8px;align-items:center}
+.sent{padding:14px 16px;display:grid;gap:8px}
+.sent p{margin:0;font-size:13px;color:var(--muted)}
+.sent p b{color:var(--done);font-weight:500}
+.sent pre{margin:0;overflow-x:auto;font:12px/1.5 var(--mono);color:var(--muted)}
+@media (prefers-reduced-motion:reduce){.stage,.role,.repo{animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="mast">
+    <h1>Tandem setup</h1>
+    <span><b>First run</b> · a few quick steps. Tandem asks you to approve everything in the chat at the end, and you can change any of it later.</span>
+  </div>
+
+  <ol class="stepper" id="stepper" aria-label="Setup steps"></ol>
+
+  <section class="stage" data-stage="providers" aria-labelledby="h-providers">
+    <h2 id="h-providers">Which providers may Tandem spend on?</h2>
+    <p class="sec-note">Found in your OMP models. Tandem only picks models from providers you tick.</p>
+    <div class="chips" id="providers"></div>
+  </section>
+
+  <section class="stage" data-stage="models" aria-labelledby="h-models" hidden>
+    <h2 id="h-models">Which model does each job?</h2>
+    <p class="sec-note">Pick from the models you have. Each job shows an example setup to give you an idea; use whatever you have access to and like.</p>
+    <div class="panel">
+      <div class="cols"><span>Job</span><span>Model</span><span>Thinking</span></div>
+      <div id="roles"></div>
+    </div>
+  </section>
+
+  <section class="stage" data-stage="repos" aria-labelledby="h-repos" hidden>
+    <h2 id="h-repos">Which repos should Tandem work on?</h2>
+    <p class="sec-note">Search the repos Tandem found on this machine, or paste a path. Each one gets its own chat when you save. You can add more later.</p>
+    <div class="panel">
+      <div class="search">
+        <input type="text" id="repo-q" placeholder="Search repos, e.g. api, or paste ~/code/api" aria-label="Search repos" autocomplete="off">
+        <span id="repo-count"></span>
+      </div>
+      <ul class="results" id="repo-results" hidden></ul>
+      <div id="repos"></div>
+    </div>
+  </section>
+
+  <section class="stage" data-stage="skills" aria-labelledby="h-skills" hidden>
+    <h2 id="h-skills">Skills every task gets</h2>
+    <p class="sec-note">Your personal skills and Claude Code plugin skills. Each repo's own skills load automatically, so they aren't listed. Tasks Tandem starts on its own, like fixing a failing PR, only get what you pick here. Most people pick a few.</p>
+    <div class="panel">
+      <div class="chosen" id="skill-chosen"></div>
+      <div class="search">
+        <input type="text" id="skill-q" placeholder="Search skills, e.g. ci" aria-label="Search skills" autocomplete="off">
+        <span id="skill-count"></span>
+        <span class="bulk"><button class="link" type="button" id="skill-all">Select all</button><button class="link" type="button" id="skill-none">Clear all</button></span>
+      </div>
+      <ul class="results static" id="skill-results"></ul>
+    </div>
+  </section>
+
+  <section class="stage" data-stage="issues" aria-labelledby="h-self" hidden>
+    <h2 id="h-self">When Tandem runs into an issue</h2>
+    <div class="panel card">
+      <p class="sec-note">Like a task that keeps failing or gets stuck. Should Tandem look into why?</p>
+      <label class="opt"><input type="radio" name="self" value="off"><span>Off</span><small>Never look into it.</small></label>
+      <label class="opt"><input type="radio" name="self" value="fix"><span>Fix <span class="tag">recommended</span></span><small>Look into it and offer a fix for your approval.</small></label>
+      <label class="opt"><input type="radio" name="self" value="report"><span>Report</span><small>Draft a GitHub issue for you to file.</small></label>
+    </div>
+  </section>
+
+  <section class="stage" data-stage="review" aria-labelledby="h-review" hidden>
+    <h2 id="h-review">Look it over</h2>
+    <p class="sec-note">Click any step above to change it. Save sends this to Tandem, which asks you to approve it in the chat.</p>
+    <div class="panel review" id="review"></div>
+    <div class="panel sent" id="sent" hidden>
+      <p><b>Sent to Tandem.</b> This is the answer the chat receives.</p>
+      <pre id="sent-json"></pre>
+    </div>
+  </section>
+</div>
+
+<div class="bar">
+  <div class="bar-in">
+    <p id="summary"></p>
+    <div class="nav">
+      <button class="link" id="back" type="button">Back</button>
+      <button class="primary" id="next" type="button">Next</button>
+    </div>
+  </div>
+</div>
+{{data}}
+<script>
+/*{{components.js}}*/
+</script>
+<script>
+const VIEW = JSON.parse(document.getElementById("setup-data").textContent);
+const { esc, words, combobox } = window.TandemUI;
+const $ = (s) => document.querySelector(s);
+const MODELS = VIEW.models;
+const ROLES = VIEW.roles;
+const NOTES = VIEW.thinkingNotes;
+const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
+const STAGES = [
+  { id: "providers", label: "Providers" },
+  { id: "models", label: "Models" },
+  { id: "repos", label: "Repos" },
+  { id: "skills", label: "Skills" },
+  { id: "issues", label: "Issues" },
+  { id: "review", label: "Review" },
+];
+const state = {
+  providers: new Set(VIEW.providers.filter((p) => p.enabled).map((p) => p.id)),
+  picks: Object.fromEntries(ROLES.filter((r) => r.pick).map((r) => [r.id, { ...r.pick }])),
+  stage: 0,
+  reached: 0,
+};
+const repos = [];
+const chosenSkills = new Set(VIEW.pickedSkills);
+document.querySelector(`input[name="self"][value="${VIEW.selfImprovement}"]`).checked = true;
+
+const allowed = () => MODELS.filter((m) => state.providers.has(m.provider));
+/** The supported level closest to the one wanted, so a new pick keeps the job's usual effort. */
+const nearest = (levels, want) =>
+  levels.includes(want)
+    ? want
+    : levels.slice().sort((a, b) => Math.abs(LEVELS.indexOf(a) - LEVELS.indexOf(want)) - Math.abs(LEVELS.indexOf(b) - LEVELS.indexOf(want)))[0];
+const money = (n) => `$${n.toFixed(2)}`;
+const fmtCtx = (n) => `${n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n)} context`;
+// Unticking a provider clears the jobs that used it.
+function dropUnticked() {
+  for (const role of ROLES) {
+    const pick = state.picks[role.id];
+    if (pick && !allowed().some((m) => m.selector === pick.model)) delete state.picks[role.id];
+  }
+}
+
+function renderProviders() {
+  const box = $("#providers");
+  box.innerHTML = VIEW.providers.length ? "" : '<p class="sec-note">No providers in your OMP models yet. Sign in to one in OMP, then open this page again.</p>';
+  for (const p of VIEW.providers) {
+    const l = document.createElement("label");
+    l.className = "chip";
+    l.innerHTML = `<input type="checkbox" ${state.providers.has(p.id) ? "checked" : ""}> ${esc(p.id)} <small>${p.models} model${p.models === 1 ? "" : "s"}</small>`;
+    l.querySelector("input").addEventListener("change", (e) => {
+      e.target.checked ? state.providers.add(p.id) : state.providers.delete(p.id);
+      dropUnticked();
+      renderRoles();
+      renderSummary();
+    });
+    box.appendChild(l);
+  }
+}
+
+function renderRoles() {
+  const box = $("#roles");
+  box.innerHTML = "";
+  for (const role of ROLES) box.appendChild(roleRow(role));
+}
+/** Redraws one job after a pick, without replaying the entrance animation on any row. */
+function rerow(role) {
+  const row = roleRow(role);
+  row.classList.add("settled");
+  document.querySelector(`.role[data-role="${role.id}"]`).replaceWith(row);
+  return row;
+}
+function roleRow(role) {
+  const pool = allowed();
+  const pick = state.picks[role.id];
+  const row = document.createElement("div");
+  row.className = "role";
+  row.dataset.role = role.id;
+  row.style.setProperty("--c", `var(${role.color})`);
+  row.style.setProperty("--i", String(ROLES.indexOf(role)));
+  const title = `<div class="r-title"><i class="sw"></i><div><strong>${esc(role.name)}</strong> <span class="r-what">(${esc(role.what)})</span><p class="hint"><b>${esc(role.hintLead)}</b> ${esc(role.hintRest)}</p></div></div>`;
+  if (pool.length === 0) {
+    row.innerHTML = `${title}<p class="meta"><span class="off">Tick a provider in step 1 to choose a model.</span></p>`;
+    return row;
+  }
+  const model = pick && pool.find((m) => m.selector === pick.model);
+  const levelOpts = model
+    ? model.thinking.map((t) => `<option value="${t}" ${t === pick.thinking ? "selected" : ""}>${t}</option>`).join("")
+    : '<option value="">—</option>';
+  const price = model?.cost ? `<span>${money(model.cost.input)} in · ${money(model.cost.output)} out / 1M tokens</span>` : "";
+  const context = model?.context ? `<span>${fmtCtx(model.context)}</span>` : "";
+  row.innerHTML = `${title}
+    <div class="combo-slot"></div>
+    <select id="t-${role.id}" aria-label="${esc(role.name)} thinking" ${model ? "" : "disabled"}>${levelOpts}</select>
+    <p class="meta">
+      ${model ? `${price}${context}<span>${esc(pick.thinking)}: ${esc(NOTES[pick.thinking])}</span>` : ""}
+      <span class="example">For example: ${esc(role.example)}</span>
+    </p>`;
+  const item = (m) => ({ model: m, label: m.name, search: `${m.name} ${m.selector}`, cells: [m.provider, m.cost ? money(m.cost.input) : "–"] });
+  row.querySelector(".combo-slot").replaceWith(
+    combobox({
+      id: `m-${role.id}`,
+      label: `${role.name} model`,
+      items: pool.map(item),
+      chosen: model ? item(model) : undefined,
+      placeholder: `Type to search ${pool.length} model${pool.length === 1 ? "" : "s"}`,
+      empty: "No model matches. Try part of the name.",
+      onPick: ({ model: m }) => {
+        state.picks[role.id] = { model: m.selector, thinking: nearest(m.thinking, pick ? pick.thinking : role.thinking) };
+        rerow(role).querySelector(`#t-${role.id}`).focus();
+        renderSummary();
+      },
+    }),
+  );
+  row.querySelector(`#t-${role.id}`).addEventListener("change", (e) => {
+    state.picks[role.id] = { model: pick.model, thinking: e.target.value };
+    rerow(role).querySelector(`#t-${role.id}`).focus();
+    renderSummary();
+  });
+  return row;
+}
+
+// Repos: search the found ones, or paste a path.
+let repoActive = 0;
+let repoHits = [];
+function repoMatches(q) {
+  const ws = words(q);
+  const hits = VIEW.repos.filter((r) => ws.every((w) => `${r.name} ${r.path} ${r.shownPath} ${r.repo ?? ""}`.toLowerCase().includes(w)));
+  if (/^[~/.]/.test(q) && !hits.some((r) => r.path === q || r.shownPath === q)) {
+    hits.push({ name: q.split("/").filter(Boolean).pop() || q, path: q, shownPath: q, setUp: false, validationCommands: [], install: "", mcpServers: [], pasted: true });
+  }
+  return hits;
+}
+function addRepo(r) {
+  if (r.setUp || repos.some((x) => x.path === r.path)) return;
+  repos.push({ ...r, checks: [...r.validationCommands], chosenTools: new Set(r.mcpServers) });
+  $("#repo-q").value = "";
+  renderRepoResults();
+  renderRepos();
+  renderSummary();
+}
+function renderRepoResults() {
+  const q = $("#repo-q").value.trim();
+  const list = $("#repo-results");
+  const folders = VIEW.searchedFolders.join(", ");
+  $("#repo-count").textContent = `${VIEW.repos.length} repo${VIEW.repos.length === 1 ? "" : "s"} found in ${folders || "no folders"}`;
+  if (!q) {
+    list.hidden = true;
+    repoHits = [];
+    return;
+  }
+  repoHits = repoMatches(q);
+  repoActive = Math.min(repoActive, Math.max(repoHits.length - 1, 0));
+  list.hidden = false;
+  list.innerHTML = "";
+  if (repoHits.length === 0) {
+    list.innerHTML = '<li class="empty-row">No repo by that name. Paste its folder path instead.</li>';
+    return;
+  }
+  repoHits.forEach((r, n) => {
+    const added = repos.some((x) => x.path === r.path);
+    const li = document.createElement("li");
+    li.className = `res${n === repoActive ? " active" : ""}`;
+    li.tabIndex = 0;
+    li.setAttribute("aria-selected", String(added || r.setUp));
+    li.innerHTML = `<span><b>${esc(r.name)}</b><span class="src">${esc(r.shownPath)}</span></span><small>${r.pasted ? "Add this path" : esc(r.repo ?? "No GitHub remote")}</small><span class="add">${r.setUp ? "already set up" : added ? "✓ added" : "+ add"}</span>`;
+    li.addEventListener("click", () => addRepo(r));
+    li.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addRepo(r);
+      }
+    });
+    list.appendChild(li);
+  });
+  list.querySelector(".res.active")?.scrollIntoView({ block: "nearest" });
+}
+$("#repo-q").addEventListener("input", () => {
+  repoActive = 0;
+  renderRepoResults();
+});
+$("#repo-q").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    repoActive = Math.max(0, Math.min(repoActive + step, repoHits.length - 1));
+    renderRepoResults();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const hit = repoHits[repoActive];
+    if (hit) addRepo(hit);
+  }
+});
+
+function renderRepos() {
+  const box = $("#repos");
+  box.innerHTML = "";
+  repos.forEach((r, n) => {
+    const card = document.createElement("div");
+    card.className = "repo";
+    const checks = r.checks.length ? r.checks : [""];
+    const checkSource = r.pasted ? "Tandem reads package.json when you save." : r.validationSource;
+    const installSource = r.pasted ? "Tandem picks this from the lockfile when you save." : r.installSource;
+    const tools = r.pasted
+      ? '<span class="found">Tandem allows all of its MCP servers when you save.</span>'
+      : r.mcpServers.length
+        ? `${r.mcpServers.map((t) => `<label class="chip"><input type="checkbox" data-tool="${esc(t)}" ${r.chosenTools.has(t) ? "checked" : ""}> ${esc(t)}</label>`).join("")}<span class="bulk"><button class="link" type="button" data-bulk="all">All</button><button class="link" type="button" data-bulk="none">None</button></span>`
+        : '<span class="found">No MCP servers configured for this repo.</span>';
+    card.innerHTML = `
+      <div class="repo-head"><b>${esc(r.name)}</b><span class="src">${esc(r.shownPath)}${r.repo ? ` · ${esc(r.repo)}` : ""}</span><button class="link" type="button" data-remove>Remove</button></div>
+      <div class="fields">
+        <div class="flabel"><b>Validation commands</b><small>Tandem runs these before it calls a change done.</small></div>
+        <div class="cmds">${checks.map((c, k) => `<input type="text" id="r${n}-check-${k}" value="${esc(c)}" placeholder="e.g. bun run test" aria-label="Validation command">`).join("")}
+          <button class="link" type="button" data-add-check>Add a command</button>
+          <span class="found">${esc(checkSource)}</span></div>
+        <div class="flabel"><b>Install command</b><small>Runs in each fresh copy of the repo before an agent starts, so dependencies are there.</small></div>
+        <div class="cmds"><input type="text" id="r${n}-install" value="${esc(r.install)}" placeholder="None needed" aria-label="Install command">
+          <span class="found">${esc(installSource)}</span></div>
+        <div class="flabel"><b>MCPs</b><small>Which of this repo's MCP servers its chat may use. Its tasks can always use all of them.</small></div>
+        <div class="tools">${tools}</div>
+      </div>`;
+    card.querySelector("[data-remove]").addEventListener("click", () => {
+      repos.splice(n, 1);
+      renderRepos();
+      renderRepoResults();
+      renderSummary();
+    });
+    card.querySelectorAll(".cmds input[id*='-check-']").forEach((inp, k) => {
+      inp.addEventListener("input", () => {
+        r.checks[k] = inp.value;
+      });
+    });
+    card.querySelector("[data-add-check]").addEventListener("click", () => {
+      r.checks = [...checks, ""];
+      renderRepos();
+      document.getElementById(`r${n}-check-${r.checks.length - 1}`)?.focus();
+    });
+    card.querySelector(`#r${n}-install`).addEventListener("input", (e) => {
+      r.install = e.target.value;
+    });
+    card.querySelectorAll("[data-tool]").forEach((c) => {
+      c.addEventListener("change", () => {
+        c.checked ? r.chosenTools.add(c.dataset.tool) : r.chosenTools.delete(c.dataset.tool);
+      });
+    });
+    card.querySelectorAll("[data-bulk]").forEach((b) => {
+      b.addEventListener("click", () => {
+        r.chosenTools = b.dataset.bulk === "all" ? new Set(r.mcpServers) : new Set();
+        card.querySelectorAll("[data-tool]").forEach((c) => {
+          c.checked = r.chosenTools.has(c.dataset.tool);
+        });
+      });
+    });
+    box.appendChild(card);
+  });
+}
+
+// Skills: Select all and Clear all act on what the search shows.
+const shownSkills = () => {
+  const ws = words($("#skill-q").value);
+  return VIEW.skills.filter((sk) => ws.every((w) => `${sk.name} ${sk.source} ${sk.description}`.toLowerCase().includes(w)));
+};
+function renderSkills() {
+  const filtering = $("#skill-q").value.trim().length > 0;
+  const hits = shownSkills();
+  const total = VIEW.skills.length;
+  $("#skill-count").textContent = `${chosenSkills.size} picked · ${filtering ? `${hits.length} of ${total} shown` : `${total} in your folders and plugins`}`;
+  $("#skill-all").textContent = filtering ? `Select ${hits.length} shown` : "Select all";
+  $("#skill-none").textContent = filtering ? "Clear shown" : "Clear all";
+  const list = $("#skill-results");
+  list.innerHTML = hits.length ? "" : `<li class="empty-row">${total ? "No skill matches that." : "No personal or plugin skills on this machine."}</li>`;
+  for (const sk of hits) {
+    const li = document.createElement("li");
+    const on = chosenSkills.has(sk.name);
+    li.className = "res";
+    li.tabIndex = 0;
+    li.setAttribute("aria-selected", String(on));
+    li.innerHTML = `<span><b>${esc(sk.name)}</b><span class="src">${esc(sk.source)}</span></span><small>${esc(sk.description)}</small><span class="add">${on ? "✓ added" : "+ add"}</span>`;
+    const toggle = () => {
+      on ? chosenSkills.delete(sk.name) : chosenSkills.add(sk.name);
+      renderSkills();
+    };
+    li.addEventListener("click", toggle);
+    li.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggle();
+      }
+    });
+    list.appendChild(li);
+  }
+  const chosen = $("#skill-chosen");
+  chosen.innerHTML = "";
+  for (const name of chosenSkills) {
+    const pill = document.createElement("span");
+    pill.className = "pill";
+    pill.innerHTML = `${esc(name)}<button type="button" aria-label="Remove ${esc(name)}">×</button>`;
+    pill.querySelector("button").addEventListener("click", () => {
+      chosenSkills.delete(name);
+      renderSkills();
+    });
+    chosen.appendChild(pill);
+  }
+}
+$("#skill-q").addEventListener("input", renderSkills);
+$("#skill-all").addEventListener("click", () => {
+  for (const sk of shownSkills()) chosenSkills.add(sk.name);
+  renderSkills();
+});
+$("#skill-none").addEventListener("click", () => {
+  for (const sk of shownSkills()) chosenSkills.delete(sk.name);
+  renderSkills();
+});
+
+// The bottom bar says what this step still needs, or what comes next.
+function stepBlocker() {
+  const stage = STAGES[state.stage].id;
+  if (stage === "providers" && state.providers.size === 0) return "Tick at least one provider.";
+  if (stage === "models") {
+    const left = ROLES.filter((r) => !state.picks[r.id]).length;
+    if (left > 0) return `Pick a model for ${left === ROLES.length ? "each job" : `${left} more job${left === 1 ? "" : "s"}`}.`;
+  }
+  return undefined;
+}
+let sent = false;
+function renderSummary() {
+  const blocker = stepBlocker();
+  const stage = STAGES[state.stage];
+  const next = STAGES[state.stage + 1];
+  const repoNote = stage.id === "repos" && repos.length === 0 ? "No repos yet. You can add them later in the chat." : undefined;
+  const last = sent ? "<b>Sent.</b> Approve it in Tandem's chat to save." : "Save sends this to Tandem for your approval.";
+  $("#summary").innerHTML = blocker
+    ? `<b>${esc(blocker)}</b>`
+    : repoNote ?? (next ? `Step ${state.stage + 1} of ${STAGES.length} · next: ${next.label}` : last);
+  const nextBtn = $("#next");
+  nextBtn.textContent = next ? "Next" : "Save and continue";
+  nextBtn.disabled = blocker !== undefined;
+  $("#back").hidden = state.stage === 0;
+}
+
+function renderStepper() {
+  const list = $("#stepper");
+  list.innerHTML = "";
+  STAGES.forEach((st, n) => {
+    const li = document.createElement("li");
+    li.className = n === state.stage ? "now" : n <= state.reached ? "done" : "";
+    li.innerHTML = `<button type="button" ${n > state.reached ? "disabled" : ""} ${n === state.stage ? 'aria-current="step"' : ""}><i></i><span><span class="num">${n + 1}</span><span class="label">${st.label}</span></span></button>`;
+    li.querySelector("button").addEventListener("click", () => go(n));
+    list.appendChild(li);
+  });
+}
+function go(n) {
+  state.stage = n;
+  state.reached = Math.max(state.reached, n);
+  document.querySelectorAll(".stage").forEach((el) => {
+    el.hidden = el.dataset.stage !== STAGES[n].id;
+  });
+  if (STAGES[n].id === "review") renderReview();
+  renderStepper();
+  renderSummary();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+/** The one answer the chat receives. A pasted path leaves out what Tandem finds when it saves. */
+function answer() {
+  return {
+    tandemSetup: 1,
+    enabledProviders: [...state.providers],
+    models: Object.fromEntries(ROLES.map((r) => [r.id, state.picks[r.id]])),
+    repositories: repos.map((r) => {
+      const checks = r.checks.map((c) => c.trim()).filter(Boolean);
+      const install = r.install.trim();
+      if (r.pasted) {
+        return { path: r.path, ...(checks.length ? { validationCommands: checks } : {}), ...(install ? { setupCommands: [install] } : {}) };
+      }
+      return { path: r.path, validationCommands: checks, setupCommands: install ? [install] : [], coordinatorMcpServers: [...r.chosenTools] };
+    }),
+    workerSkills: [...chosenSkills],
+    selfImprovement: document.querySelector('input[name="self"]:checked').value,
+  };
+}
+function renderReview() {
+  const a = answer();
+  const modelName = (sel) => MODELS.find((m) => m.selector === sel)?.name ?? sel;
+  const edit = (n) => `<button class="link" type="button" data-go="${n}">Change</button>`;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const rows = [
+    ["Providers", `<ul>${a.enabledProviders.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>`, 0],
+    ["Models", `<ul>${ROLES.map((r) => `<li>${esc(r.name)} <span class="m dim">${esc(modelName(a.models[r.id].model))}, ${esc(a.models[r.id].thinking)}</span></li>`).join("")}</ul>`, 1],
+    [
+      "Repos",
+      a.repositories.length
+        ? `<ul>${a.repositories.map((r) => `<li class="m">${esc(r.path)} <span class="dim">· ${r.validationCommands ? plural(r.validationCommands.length, "check") : "checks found on save"} · ${r.coordinatorMcpServers ? plural(r.coordinatorMcpServers.length, "MCP") : "all MCPs"}</span></li>`).join("")}</ul>`
+        : '<span class="dim">None yet. Add them later in the chat.</span>',
+      2,
+    ],
+    ["Skills", a.workerSkills.length ? `<span class="m">${esc(a.workerSkills.join(", "))}</span>` : '<span class="dim">None</span>', 3],
+    ["When Tandem runs into an issue", { off: "Off", fix: "Fix: look into it and offer a fix", report: "Report: draft a GitHub issue" }[a.selfImprovement], 4],
+  ];
+  const box = $("#review");
+  box.innerHTML = rows.map(([k, v, n]) => `<div class="rv"><span>${esc(k)}</span><div>${v}</div>${edit(n)}</div>`).join("");
+  for (const b of box.querySelectorAll("[data-go]")) b.addEventListener("click", () => go(Number(b.dataset.go)));
+}
+$("#back").addEventListener("click", () => go(state.stage - 1));
+$("#next").addEventListener("click", () => {
+  if (state.stage < STAGES.length - 1) {
+    go(state.stage + 1);
+    return;
+  }
+  const a = answer();
+  const text = JSON.stringify(a);
+  // One answer per save; saving again replaces the unsent one, and sending hands it to Tandem.
+  if (window.lavish && typeof window.lavish.queuePrompt === "function") {
+    window.lavish.queuePrompt(text, { tag: "tandem-setup", queueKey: "tandem-setup", text: "Tandem setup answer" });
+    if (typeof window.lavish.sendQueuedPrompts === "function") window.lavish.sendQueuedPrompts();
+  }
+  sent = true;
+  $("#sent-json").textContent = JSON.stringify(a, null, 2);
+  const panel = $("#sent");
+  panel.hidden = false;
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  renderSummary();
+});
+renderProviders();
+renderRoles();
+renderSkills();
+renderRepoResults();
+renderRepos();
+go(0);
+</script>
+</body>
+</html>

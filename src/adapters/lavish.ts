@@ -1,5 +1,10 @@
 import type { CommandRequest, CommandRunner } from "../contracts.ts";
-import { AdapterCommandError, AdapterProtocolError, checkedPath } from "./primitives.ts";
+import {
+  AdapterCommandError,
+  AdapterProtocolError,
+  checkedPath,
+  runChecked,
+} from "./primitives.ts";
 
 export type PresentationPollOptions = Readonly<{
   readonly timeoutMs: number;
@@ -225,16 +230,35 @@ export async function pollPresentation(
     { commandTimeoutMs },
   );
 }
+/** Waits for the user's next feedback; `agentReply` first shows a short reply in the browser. */
 export async function listenPresentation(
   run: CommandRunner,
   artifact: string,
   cwd: string,
+  options: Readonly<{ readonly agentReply?: string | undefined }> = {},
 ): Promise<PresentationObservation> {
+  const reply = options.agentReply === undefined ? [] : ["--agent-reply", options.agentReply];
   return runPresentation(
     run,
     artifact,
-    ["lavish-axi", "poll", checkedPath(artifact, "artifact")],
+    ["lavish-axi", "poll", checkedPath(artifact, "artifact"), ...reply],
     cwd,
     "lavish presentation listen",
+  );
+}
+
+/** Ends a session as the agent, which still allows a plain reopen later. */
+export async function endPresentation(
+  run: CommandRunner,
+  artifact: string,
+  cwd: string,
+): Promise<void> {
+  await runChecked(
+    run,
+    {
+      argv: ["lavish-axi", "end", checkedPath(artifact, "artifact")],
+      cwd: checkedPath(cwd, "cwd"),
+    },
+    "lavish presentation end",
   );
 }

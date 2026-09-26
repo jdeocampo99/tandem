@@ -14,6 +14,7 @@ import { type BoardRow, type BoardView, needsYouNotice } from "../board/view.ts"
 import {
   type HomeSettings,
   readHomeSettings,
+  replaceWorkerSkills,
   type SelfImprovementMode,
   saveProjectRoots,
   saveSelfImprovement,
@@ -41,7 +42,7 @@ import {
   resolveRepoPolicy,
   saveMergingChoice,
 } from "../config/repositories.ts";
-import { findSkills, listPluginSkills } from "../config/skills.ts";
+import { findSkills, listPluginSkills, listSkillCatalog } from "../config/skills.ts";
 import type {
   AnswerTaskInput,
   BlockCause,
@@ -69,6 +70,11 @@ import {
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
 import type { OnboardingFacts } from "../onboarding/checklist.ts";
+import {
+  type SetupPageEvent,
+  type SetupPageOpened,
+  SetupPageWorkflow,
+} from "../onboarding/setup-page.ts";
 import { checkTools, type ToolCheck } from "../onboarding/tools.ts";
 import {
   PINNABLE_PLAYBOOK_IDS,
@@ -337,6 +343,21 @@ export type TandemService = Readonly<{
   readonly checkTools: () => Promise<readonly ToolCheck[]>;
   /** What first-time setup still needs, for the Tandem coordinator at `repoPath`. */
   readonly onboardingFacts: (repoPath: string) => Promise<OnboardingFacts>;
+  /** Builds the setup page for the Tandem coordinator at `repoPath` and opens it in Lavish. */
+  readonly openSetupPage: (repoPath: string) => Promise<SetupPageOpened>;
+  /**
+   * Waits for the open setup page's next feedback, showing `reply` in the browser first. A valid
+   * answer is stored for `applySetup`; an invalid one comes back with its problems.
+   */
+  readonly awaitSetupAnswer: (
+    repoPath: string,
+    signal: AbortSignal,
+    reply?: string,
+  ) => Promise<SetupPageEvent>;
+  /** A stored setup answer as the approval dialog shows it, checked again first. */
+  readonly setupRecap: (repoPath: string, answerId: string) => Promise<readonly string[]>;
+  /** Saves an approved setup answer and opens each new project's chat; returns what happened. */
+  readonly applySetup: (repoPath: string, answerId: string) => Promise<string>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
   /** Opens a saved project's coordinator in this Herdr session; refuses one not yet set up. */
   readonly openProject: (
@@ -596,6 +617,7 @@ class TandemController {
   readonly #drafts: DraftRefreshWorkflow;
   readonly #prWatch: PrWatcher;
   readonly #selfImprovement: SelfImprovement;
+  readonly #setupPage: SetupPageWorkflow;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
@@ -619,6 +641,44 @@ class TandemController {
       getTask: (taskId) => this.get(taskId),
       traceTask: (taskId) => this.trace(taskId),
       createTask: (input) => this.create(input),
+    });
+    this.#setupPage = new SetupPageWorkflow({
+      home: deps.home,
+      homeFolder: homedir(),
+      run: deps.run,
+      clock: deps.clock,
+      idFactory: deps.idFactory,
+      models: (repoPath) => this.models(repoPath),
+      roots: () => deps.projectRoots(),
+      homeSettings: () => readHomeSettings(deps.home),
+      registeredProjects: () => readRegisteredProjects(deps.home),
+      inspectRepo: async (path) => {
+        const [onboarded, mcpServers] = await Promise.all([
+          this.onboard(path, false),
+          listOmpMcpServers(path).catch(() => []),
+        ]);
+        return {
+          validationCommands: onboarded.validationCommands.map((command) => command.name),
+          scripts: onboarded.discovery.scripts,
+          setupCommands: onboarded.setupCommands.map((command) => command.name),
+          ...(onboarded.discovery.lockfile === undefined
+            ? {}
+            : { lockfile: onboarded.discovery.lockfile }),
+          mcpServers,
+        };
+      },
+      mcpServers: (path) => listOmpMcpServers(path),
+      skills: () => listSkillCatalog(deps.personalSkillsHome),
+      saveModels: (input) => this.configureModels(input),
+      saveWorkerSkills: (skills) => replaceWorkerSkills(deps.home, skills),
+      saveSelfImprovement: (mode) => saveSelfImprovement(deps.home, mode),
+      saveCodeFolders: (folders) => saveProjectRoots(deps.home, folders),
+      setupRepo: (path, repo) =>
+        this.onboard(path, true, repo.coordinatorMcpServers, {
+          validationCommands: repo.validationCommands,
+          setupCommands: repo.setupCommands,
+        }),
+      openProject: (path) => this.openProject(path),
     });
     this.#prWatch = new PrWatcher({
       home: deps.home,
@@ -819,6 +879,11 @@ class TandemController {
       checkTools: () =>
         checkTools(this.#deps.run, { cwd: this.#deps.home, sessionId: this.#deps.sessionId }),
       onboardingFacts: (repoPath) => this.onboardingFacts(repoPath),
+      openSetupPage: (repoPath) => this.#setupPage.open(repoPath),
+      awaitSetupAnswer: (repoPath, signal, reply) =>
+        this.#setupPage.listen(repoPath, signal, reply),
+      setupRecap: (repoPath, answerId) => this.#setupPage.recap(repoPath, answerId),
+      applySetup: (repoPath, answerId) => this.#setupPage.apply(repoPath, answerId),
       inspect: (id) => this.inspect(id),
       trace: (id) => this.trace(id),
       traceSummary: () => this.traceSummary(),
@@ -939,12 +1004,13 @@ class TandemController {
   }
 
   private async onboardingFacts(repoPath: string): Promise<OnboardingFacts> {
-    const [models, settings, registered, offer, tandem] = await Promise.all([
+    const [models, settings, registered, offer, tandem, setupPage] = await Promise.all([
       readModelSettings({ repoPath, home: this.#deps.home }),
       readHomeSettings(this.#deps.home),
       readRegisteredProjects(this.#deps.home),
       this.workerSkillOffer(),
       realpath(repoPath),
+      this.#setupPage.status(),
     ]);
     return {
       modelsChosen: models.configured,
@@ -952,6 +1018,7 @@ class TandemController {
       projects: registered.filter((project) => project !== tandem),
       workerSkillOffer: offer,
       selfImprovementChosen: settings.selfImprovementChosen,
+      setupPage,
     };
   }
 

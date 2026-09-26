@@ -1,3 +1,5 @@
+import type { SetupPageStatus } from "./setup-page.ts";
+
 /**
  * First-time setup, worked out from saved state so leaving halfway resumes at the next missing
  * step. Pure: the caller reads the facts and delivers what these return.
@@ -11,6 +13,8 @@ export type OnboardingFacts = Readonly<{
   /** Plugin skills to offer every task; empty once the user answered or when there are none. */
   readonly workerSkillOffer: readonly string[];
   readonly selfImprovementChosen: boolean;
+  /** Whether the setup page can be, or is, the way through setup in this session. */
+  readonly setupPage: SetupPageStatus;
 }>;
 
 export type OnboardingStep =
@@ -46,12 +50,25 @@ const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
     "Ask which repositories to set up. For each: find-repo with the name or path (with several matches, ask which). Say in two lines which checks and install step it found; ask them to confirm or change those and which MCP tools its chat may use (default none). Then setup with their answers, pr-watch-merging with how pull requests merge, and open-project.",
 };
 
+const SETUP_PAGE_FIRST =
+  "Setup is unfinished. When the user wants to set up, call setup-page first: one page covers every step. If it fails, set up here instead.";
+const SETUP_PAGE_OPEN =
+  "Setup is unfinished. The setup page is open; its answer reaches you by itself. Only if the user would rather set up here:";
+
 /** What the Tandem coordinator reads each turn while setup is unfinished; nothing once it is done. */
 export function onboardingContext(facts: OnboardingFacts): string | undefined {
   const [current, ...later] = remainingOnboardingSteps(facts);
   if (current === undefined) return undefined;
   const after = later.length === 0 ? "" : ` Then: ${later.join(", ")}.`;
-  return `Setup is unfinished. Current step: ${STEP_GUIDANCE[current]}${after}`;
+  const step = `Current step: ${STEP_GUIDANCE[current]}${after}`;
+  if (facts.setupPage === "ready") return `${SETUP_PAGE_FIRST} ${step}`;
+  if (facts.setupPage === "open") return `${SETUP_PAGE_OPEN} ${step}`;
+  return `Setup is unfinished. ${step}`;
+}
+
+/** Whether setup's plain questions are asked in the chat: not while the setup page covers them. */
+export function chatAsksSetupQuestions(facts: OnboardingFacts): boolean {
+  return facts.setupPage === "unavailable" || facts.setupPage === "done";
 }
 
 export type OnboardingQuestion = Readonly<{

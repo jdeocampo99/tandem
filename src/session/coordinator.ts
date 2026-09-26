@@ -294,6 +294,7 @@ export class CoordinatorSession {
       host: this.deps.host,
       service: () => this.service(),
       repo: this.deps.environment.repo,
+      logError: (message, error) => this.deps.logError(message, error),
     });
     return this.onboardingGuide;
   }
@@ -472,6 +473,7 @@ export class CoordinatorSession {
   async shutdown(): Promise<void> {
     const inFlight = this.reconcileInFlight;
     this.shuttingDown = true;
+    this.onboardingGuide?.stop();
     this.cancelTick?.();
     this.cancelTick = undefined;
     try {

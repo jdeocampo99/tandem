@@ -185,7 +185,12 @@ Then, from any folder:
 tandem
 ```
 
-The first run opens Tandem's own chat with a welcome popup; press Enter and it walks you through
+The first run opens Tandem's own chat with a welcome popup; press Enter and, with Lavish installed,
+Tandem opens a one-page setup in your browser: tick the providers it may spend on, pick a model for
+each job, add repos (found on your machine, or paste a path) with their checks, install step, and
+which MCP servers their chat may use, choose skills every task gets, and decide what Tandem does when
+it runs into trouble. Save sends it to the chat, which asks you to approve it once, then saves
+everything and opens a chat for each repo. Without Lavish, the chat walks you through the same
 setup: it checks your tools, helps you pick models, asks where you keep code, and then sets up the
 repos you name ("api and web"). For each one it looks without changing anything, shows the checks
 and install step it found for you to confirm or change, asks how pull requests should merge, and

@@ -89,6 +89,14 @@ export type OnboardRepoResult = Readonly<{
   validationCommands: readonly ValidationCommand[];
   setupCommands: readonly SetupCommand[];
   unresolved: readonly string[];
+  /** Where the discovered commands came from, whether or not the user replaced them. */
+  discovery: OnboardingDiscovery;
+}>;
+
+/** The package.json scripts behind the discovered checks and the lockfile behind the install. */
+export type OnboardingDiscovery = Readonly<{
+  scripts: readonly string[];
+  lockfile?: string;
 }>;
 
 type CentralPaths = Readonly<{
@@ -555,6 +563,8 @@ export async function resolveRepoPolicy(options: PolicyResolutionOptions): Promi
 
 type ValidationProposal = Readonly<{
   commands: readonly string[];
+  /** The scripts the commands run, in order; empty when none were proposed. */
+  scripts: readonly string[];
   unresolved: readonly string[];
   approvalRequired: boolean;
 }>;
@@ -566,6 +576,7 @@ function proposeValidationCommands(
   if (packageText === undefined) {
     return {
       commands: [],
+      scripts: [],
       unresolved: ["package.json is missing; no validation commands were proposed"],
       approvalRequired: false,
     };
@@ -577,6 +588,7 @@ function proposeValidationCommands(
   } catch {
     return {
       commands: [],
+      scripts: [],
       unresolved: ["package.json is invalid JSON; no validation commands were proposed"],
       approvalRequired: false,
     };
@@ -584,6 +596,7 @@ function proposeValidationCommands(
   if (!isRecord(parsed)) {
     return {
       commands: [],
+      scripts: [],
       unresolved: ["package.json must be an object; no validation commands were proposed"],
       approvalRequired: false,
     };
@@ -592,6 +605,7 @@ function proposeValidationCommands(
   if (scripts === undefined) {
     return {
       commands: [],
+      scripts: [],
       unresolved: ["package.json has no scripts; no validation commands were proposed"],
       approvalRequired: false,
     };
@@ -599,6 +613,7 @@ function proposeValidationCommands(
   if (!isRecord(scripts)) {
     return {
       commands: [],
+      scripts: [],
       unresolved: ["package.json.scripts must be an object; no validation commands were proposed"],
       approvalRequired: false,
     };
@@ -610,9 +625,11 @@ function proposeValidationCommands(
     ? (["ci:local"] as const)
     : (["check", "typecheck", "lint", "test"] as const);
   const commands: string[] = [];
+  const found: string[] = [];
   for (const scriptName of scriptNames) {
     if (typeof scripts[scriptName] === "string" && scripts[scriptName].trim().length > 0) {
       commands.push(`${runner} run ${scriptName}`);
+      found.push(scriptName);
     }
   }
 
@@ -624,22 +641,24 @@ function proposeValidationCommands(
   }
   return {
     commands,
+    scripts: found,
     unresolved,
     approvalRequired: commands.length > 0,
   };
 }
 
-type PackageManager = Readonly<{ install: string; runner: string }>;
+type PackageManager = Readonly<{ install: string; runner: string; lockfile: string }>;
 
 /** Lockfile → the install that reproduces it exactly and the tool that runs package scripts. */
-const LOCKFILE_PACKAGE_MANAGERS: readonly (readonly [string, PackageManager])[] = [
-  ["bun.lock", { install: "bun install --frozen-lockfile", runner: "bun" }],
-  ["bun.lockb", { install: "bun install --frozen-lockfile", runner: "bun" }],
-  ["pnpm-lock.yaml", { install: "pnpm install --frozen-lockfile", runner: "pnpm" }],
-  ["yarn.lock", { install: "yarn install --immutable", runner: "yarn" }],
-  ["package-lock.json", { install: "npm ci", runner: "npm" }],
-  ["uv.lock", { install: "uv sync --frozen", runner: "bun" }],
-];
+const LOCKFILE_PACKAGE_MANAGERS: readonly (readonly [string, Omit<PackageManager, "lockfile">])[] =
+  [
+    ["bun.lock", { install: "bun install --frozen-lockfile", runner: "bun" }],
+    ["bun.lockb", { install: "bun install --frozen-lockfile", runner: "bun" }],
+    ["pnpm-lock.yaml", { install: "pnpm install --frozen-lockfile", runner: "pnpm" }],
+    ["yarn.lock", { install: "yarn install --immutable", runner: "yarn" }],
+    ["package-lock.json", { install: "npm ci", runner: "npm" }],
+    ["uv.lock", { install: "uv sync --frozen", runner: "bun" }],
+  ];
 
 /** The first lockfile found decides the package manager; none means no install and bun scripts. */
 async function detectPackageManager(
@@ -647,7 +666,9 @@ async function detectPackageManager(
   readText: PolicyTextReader | undefined,
 ): Promise<PackageManager | undefined> {
   for (const [lockfile, manager] of LOCKFILE_PACKAGE_MANAGERS) {
-    if ((await readRepositoryFile(root, lockfile, readText, false)) !== undefined) return manager;
+    if ((await readRepositoryFile(root, lockfile, readText, false)) !== undefined) {
+      return { ...manager, lockfile };
+    }
   }
   return undefined;
 }
@@ -788,7 +809,12 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
   const proposal: ValidationProposal =
     options.validationCommands === undefined
       ? discovered
-      : { commands: options.validationCommands, unresolved: [], approvalRequired: true };
+      : {
+          commands: options.validationCommands,
+          scripts: [],
+          unresolved: [],
+          approvalRequired: true,
+        };
   const setupCommands = options.setupCommands ?? (manager === undefined ? [] : [manager.install]);
   const proposedPolicy = existingConfig
     ? copyPolicy(currentPolicy)
@@ -822,5 +848,9 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     validationCommands: proposedPolicy.validationCommands,
     setupCommands: proposedPolicy.setupCommands,
     unresolved,
+    discovery: {
+      scripts: discovered.scripts,
+      ...(manager === undefined ? {} : { lockfile: manager.lockfile }),
+    },
   };
 }
