@@ -12,6 +12,7 @@ import {
 import {
   createRequestUsageLedger,
   type RequestUsageLedger,
+  readTaskUsage,
 } from "../../src/runtime/usage-ledger.ts";
 
 const REQUEST_ID = "req-ledger";
@@ -199,5 +200,61 @@ test("an event carrying unbounded or unknown content is refused before it is sto
 test("reading needs a durable request identity rather than any string", async () => {
   await withHome(async (_home, newLedger) => {
     expect(newLedger().read("task-1")).rejects.toThrow(TypeError);
+  });
+});
+
+function taskScopedWork(taskId: string, amountMicros: number): RequestUsageEvent {
+  const identity = { taskId, jobId: `job-${taskId}`, operationId: `op-${taskId}`, role: "scout" };
+  return {
+    schemaVersion: REQUEST_USAGE_EVENT_SCHEMA_VERSION,
+    eventKey: requestUsageEventKey({ kind: "work", identity, discriminator: "scout:settled" }),
+    kind: "work",
+    workKind: "research",
+    identity,
+    startedAt: at(5),
+    endedAt: at(15),
+    status: "succeeded",
+    tokens: { provenance: "actual", inputTokens: 2_000, outputTokens: 300 },
+    charge: {
+      provenance: "estimated",
+      currency: "USD",
+      amountMicros,
+      pricingSource: "omp-model-price-table",
+      pricingVersion: 1,
+    },
+    quota: { provenance: "unavailable", reason: "no-quota-contract" },
+  };
+}
+
+test("work no request governs is kept in its task's scope, apart from every request", async () => {
+  await withHome(async (_home, newLedger) => {
+    const ledger = newLedger();
+    await ledger.record([
+      intake(),
+      sample("first", 1, 42_000),
+      taskScopedWork("task-scout", 7_000),
+    ]);
+
+    const replay = await newLedger().record([taskScopedWork("task-scout", 7_000)]);
+    const scout = await newLedger().readTask("task-scout");
+    const request = await newLedger().read(REQUEST_ID);
+    const receipt = await newLedger().receipt(REQUEST_ID);
+
+    expect(replay).toMatchObject({ recorded: 0, duplicates: 1, added: [] });
+    expect(scout).toEqual({ events: [taskScopedWork("task-scout", 7_000)], malformedEvents: 0 });
+    expect(request.events.map((event) => event.kind).toSorted()).toEqual([
+      "intake",
+      "provider-sample",
+    ]);
+    expect(receipt.charges.amountMicros).toBe(42_000);
+    await expect(newLedger().readTask("task-1")).resolves.toEqual({
+      events: [],
+      malformedEvents: 0,
+    });
+    // A task reads the scope that holds its own work: its request's, or its own without one.
+    await expect(readTaskUsage(ledger, { id: "task-scout" })).resolves.toEqual(scout);
+    await expect(readTaskUsage(ledger, { id: "task-1", requestId: REQUEST_ID })).resolves.toEqual(
+      request,
+    );
   });
 });

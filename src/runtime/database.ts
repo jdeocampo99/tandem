@@ -89,6 +89,24 @@ function ensureRequestUsageTable(db: StateDatabase): void {
 }
 
 /**
+ * The task-scoped half of the accounting ledger: settled work of a task no request governs, such
+ * as standalone research or a PR review. It is kept apart from request rows so a request's receipt
+ * reads exactly what it read before, and is created on every open like the request tables.
+ */
+function ensureTaskUsageTable(db: StateDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_usage_events (
+      event_key TEXT PRIMARY KEY NOT NULL,
+      task_id TEXT NOT NULL,
+      recorded_at TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS task_usage_events_by_task
+      ON task_usage_events(task_id);
+  `);
+}
+
+/**
  * Where each GitHub repository was last found on disk, so a PR review skips the folder crawl. A row
  * is a hint: callers re-check the folder and its remotes before trusting it.
  */
@@ -171,6 +189,7 @@ async function openDatabase(home: string): Promise<StateDatabase> {
     }
     ensureRequestTables(db);
     ensureRequestUsageTable(db);
+    ensureTaskUsageTable(db);
     ensureRepoLocationsTable(db);
     ensurePrWatchTable(db);
     ensureTaskEventsTable(db);
@@ -381,6 +400,43 @@ export function readRequestUsagePayloads(
       "SELECT payload FROM request_usage_events WHERE request_id = ? ORDER BY recorded_at, event_key",
     )
     .all(requestId) as readonly { payload?: unknown }[];
+  return parsedPayloads(rows);
+}
+
+/** Appends one task-scoped usage event unless its key is already recorded. */
+export function insertTaskUsagePayload(
+  db: StateDatabase,
+  entry: Readonly<{
+    readonly eventKey: string;
+    readonly taskId: string;
+    readonly recordedAt: string;
+    readonly payload: unknown;
+  }>,
+): boolean {
+  const existing = db
+    .query("SELECT 1 AS present FROM task_usage_events WHERE event_key = ?")
+    .get(entry.eventKey) as { present?: unknown } | null | undefined;
+  if (existing !== null && existing !== undefined) return false;
+  db.query(
+    "INSERT INTO task_usage_events(event_key, task_id, recorded_at, payload) VALUES (?, ?, ?, ?)",
+  ).run(entry.eventKey, entry.taskId, entry.recordedAt, JSON.stringify(entry.payload));
+  return true;
+}
+
+/** One task's task-scoped rows, in the same order and with the same tolerance as a request's. */
+export function readTaskUsagePayloads(
+  db: StateDatabase,
+  taskId: string,
+): readonly (unknown | null)[] {
+  const rows = db
+    .query(
+      "SELECT payload FROM task_usage_events WHERE task_id = ? ORDER BY recorded_at, event_key",
+    )
+    .all(taskId) as readonly { payload?: unknown }[];
+  return parsedPayloads(rows);
+}
+
+function parsedPayloads(rows: readonly { payload?: unknown }[]): readonly (unknown | null)[] {
   return rows.map((row) => {
     if (typeof row.payload !== "string") return null;
     try {

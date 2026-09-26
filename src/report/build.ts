@@ -20,13 +20,16 @@ import {
 } from "./model.ts";
 
 /**
- * Builds the `tandem report` view model from a task's record, timeline, and its request's usage
- * events. Pure: the caller supplies `now` and every record.
+ * Builds the `tandem report` view model from a task's record, timeline, and the usage events that
+ * hold its own work. Pure: the caller supplies `now` and every record.
  */
 export type TaskReportInput = Readonly<{
   task: TaskRecord;
   timeline: TimelineReadout;
-  /** The request's usage events, or undefined when the task has no request. */
+  /**
+   * The readout holding the task's work: its request's, or its own task scope when no request
+   * governs it. Undefined when none was read.
+   */
   usage: RequestUsageReadout | undefined;
   now: IsoTimestamp;
 }>;
@@ -117,10 +120,7 @@ export function buildTaskReport(input: TaskReportInput): ReportTask {
   const runs = agentRuns(input.usage, task.id, offset);
   const buckets = bucketTotals(segments);
   const choke = chooseChoke(walk);
-  const cost =
-    input.usage === undefined || task.requestId === undefined
-      ? undefined
-      : taskCost(input.usage, task.requestId, task.id);
+  const cost = input.usage === undefined ? undefined : taskCost(input.usage, task.id);
   return {
     id: task.id,
     title: reportTitle(task.objective, task.id),
