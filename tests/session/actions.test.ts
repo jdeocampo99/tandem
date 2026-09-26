@@ -1100,6 +1100,31 @@ test("the tandem tool reconciles after a tick and runs the post-action step afte
   expect(listed.text).toContain("task-1");
 });
 
+test("finishing actions close the thread, but a refused approval does not", async () => {
+  const followUps: string[] = [];
+  const service = { answer: async () => task() } as unknown as TandemService;
+
+  await runTandemTool({ action: "thread-done" }, callDependencies(service, followUps), undefined);
+  await runTandemTool(
+    { action: "answer", taskId: "task-1", questionId: "q-1", text: "Yes." },
+    callDependencies(service, followUps),
+    undefined,
+  );
+  await runTandemTool(
+    { action: "approve", taskId: "task-1" },
+    callDependencies(service, followUps),
+    undefined,
+  );
+
+  expect(followUps).toEqual([
+    "closeThread",
+    "postAction",
+    "closeThread",
+    "postAction",
+    "postAction",
+  ]);
+});
+
 test("a tool approval that nobody can answer is refused and reported, not thrown", async () => {
   const followUps: string[] = [];
   const service = {

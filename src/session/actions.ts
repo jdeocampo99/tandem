@@ -638,7 +638,7 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   "review-close": async (action, service) =>
     actionResult(await service.reviewClose(action.taskId), action.action),
   board: async (action, service) => actionResult(await service.board(), action.action),
-  // The coordinator session closes the thread itself (see runTandemTool); nothing is stored.
+  // runTandemTool closes the thread (see THREAD_ENDING_ACTIONS); nothing is stored.
   "thread-done": async (action) =>
     actionResult("Thread closed. Anything that waited for it arrives next.", action.action),
   "pr-watch": async (action, service) => actionResult(await service.prWatch(), action.action),
@@ -731,6 +731,18 @@ export async function executeTandemAction(
   return runTandemAction(action.action, action, service, signal);
 }
 
+/**
+ * Actions that finish what the user and the coordinator were working on, so the thread closes
+ * without relying on the model to call `thread-done`.
+ */
+const THREAD_ENDING_ACTIONS: ReadonlySet<TandemAction["action"]> = new Set([
+  "thread-done",
+  "brief-approve",
+  "approve",
+  "answer",
+  "review-post",
+]);
+
 /** What the `tandem` tool and `/tandem` command need from the running coordinator. */
 export type TandemCallDependencies = Readonly<{
   /** Read lazily, so a service that cannot start fails the call instead of the hook. */
@@ -740,7 +752,7 @@ export type TandemCallDependencies = Readonly<{
   readonly reconcile: () => Promise<void>;
   /** Follows every other action. */
   readonly postAction: () => Promise<void>;
-  /** Ends the thread the user and the coordinator were working on; follows `thread-done`. */
+  /** Ends the thread the user and the coordinator were working on; follows a thread-ending action. */
   readonly closeThread: () => void;
 }>;
 
@@ -755,7 +767,9 @@ export async function runTandemTool(
       confirm: dependencies.confirm,
       signal,
     });
-    if (action.action === "thread-done") dependencies.closeThread();
+    // A refused approval finished nothing, so the thread stays open.
+    if (THREAD_ENDING_ACTIONS.has(action.action) && result.approved !== false)
+      dependencies.closeThread();
     if (action.action === "tick") {
       await dependencies.reconcile();
     } else {
