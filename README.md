@@ -53,10 +53,18 @@ explains why one doesn't apply.
 
 ### Validation and independent review
 
-Every change runs your project's tests, types, and lint, then goes to **a separate reviewer agent
-that didn't write it**. Findings go back to the implementer as a fix round. Work is only ready when
-both pass. After two fix rounds without passing (configurable), Tandem stops and asks whether to
-keep going.
+Every change runs your project's tests, types, and lint first. Then **a fresh reviewer agent that
+didn't write the code** reads it through three lenses:
+
+- **Behavior:** does it do what the approved brief says, including errors, edge cases, ordering,
+  and security.
+- **Design:** every changed function and its callers, graded against the same code standards and
+  principles the implementer followed.
+- **Coverage:** whether the changed behavior is tested, based on evidence in the diff.
+
+Each finding has to cite evidence. Findings go back to the implementer as a fix round, and the next
+review focuses on what changed since. After two fix rounds without a clean pass, Tandem stops and
+asks you whether to keep going.
 
 ### The whole pull request lifecycle
 
