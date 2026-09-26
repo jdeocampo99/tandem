@@ -117,8 +117,9 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
 - The `skip-review` lifecycle event makes the task `ready` at its current HEAD with
   `reviewSkippedHead` recorded. That record replaces the evidence, review, and final-acceptance
   checks at exactly that HEAD; any later fix round or evidence invalidation clears it.
-- A brief approved with `skipReview` applies the same event from `reviewing` once validation
-  passes, without the stop step (see [request-briefs.md](request-briefs.md#brief-record)).
+- A brief approved with `skipReview` gives its tasks required stages without review
+  ([task-lifecycle.md](task-lifecycle.md#required-stages)); the review stage then applies the same
+  event from `reviewing` once validation passes, without the stop step.
 - `# Validation` says review was skipped, names any safety floors the diff tripped, and lists the
   validation that passed before the skip. If publication fails after the skip, the task stays
   `ready` and a normal `publish` can retry. Merge stays separate.
@@ -127,11 +128,16 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
 
 - Once a task's PR is open (not a draft), the user's questions and changes about that work go to
   the same task with `steer`, in the same worktree; the coordinator never starts a new task for them.
-- The direction gets one added line: if the agent changes code, it commits and pushes the task
-  branch to `origin` itself, never force-pushing (`OPEN_PR_FOLLOW_UP` in src/tasks/control.ts).
+- Steering records the task's [required stages](task-lifecycle.md#required-stages) as none: no
+  Tandem validation or review. The PR's own CI is the check, and merge still verifies it.
+- The direction gets one added line: if the agent changes code, it commits and does not push;
+  Tandem pushes (`OPEN_PR_FOLLOW_UP` in src/tasks/control.ts).
 - When the agent submits, `implementation-complete` returns the task straight to `ready` with
-  `reviewSkippedHead` at the new HEAD: no Tandem validation or review. The PR's own CI is the
-  check, and merge still verifies it. The receipt is not repeated.
+  `reviewSkippedHead` at the new HEAD. The receipt is not repeated.
+- A ready task whose PR is open and behind its HEAD gets that exact HEAD pushed to the task branch,
+  never forced (`pushWhenReady` in src/service/draft-refresh.ts, `pushPublishedTask` in
+  src/delivery/pull-requests.ts). It re-observes the PR and records its new head. A refused push is
+  one diagnostic (`draft-refresh-failed`, step `push`) per task revision and never blocks the task.
 
 ## Merge
 

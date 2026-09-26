@@ -3,10 +3,12 @@ import { draftProgressDigest } from "../delivery/evidence.ts";
 import {
   type DraftPublication,
   publishTaskDraft,
+  pushPublishedTask,
   readGitText,
   refreshTaskDraft,
 } from "../delivery/pull-requests.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
+import { pullRequestPublished } from "../tasks/required-stages.ts";
 import { errorClassName } from "./records.ts";
 
 export type DraftRefreshDependencies = Readonly<{
@@ -20,14 +22,14 @@ export type DraftRefreshDependencies = Readonly<{
   ) => Promise<TaskRecord>;
 }>;
 
-type DraftRefreshStep = "digest" | "remote-refresh" | "record" | "open";
+type DraftRefreshStep = "digest" | "remote-refresh" | "record" | "open" | "push";
 
 const TITLE_MAX_CHARS = 72;
 
 /**
  * Opens a draft pull request when an implementation task becomes ready, then keeps it showing
- * current durable task state. It never blocks durable work when the remote is unavailable; the
- * next durable change retries.
+ * current durable task state, and pushes ready work to a published pull request. It never blocks
+ * durable work when the remote is unavailable; the next durable change retries.
  */
 export class DraftRefreshWorkflow {
   readonly #deps: DraftRefreshDependencies;
@@ -35,6 +37,8 @@ export class DraftRefreshWorkflow {
   readonly #digests = new Map<string, string>();
   /** Task revision each ready task's draft was last attempted at, so a failure is one attempt. */
   readonly #openAttempts = new Map<string, number>();
+  /** Task revision each ready task's push was last attempted at, so a failure is one attempt. */
+  readonly #pushAttempts = new Map<string, number>();
 
   constructor(deps: DraftRefreshDependencies) {
     this.#deps = deps;
@@ -77,6 +81,34 @@ export class DraftRefreshWorkflow {
     }
     this.published(task);
     return true;
+  }
+
+  /**
+   * Pushes a ready task's HEAD to its published pull request: Tandem, not the agent, pushes once
+   * the task's required stages pass. Answers whether the task record changed.
+   */
+  async pushWhenReady(task: TaskRecord): Promise<boolean> {
+    const recorded = task.pullRequest;
+    if (task.kind !== "implementation" || task.stage !== "ready") return false;
+    if (recorded === undefined || !pullRequestPublished(task)) return false;
+    if (task.reviewHead === undefined || recorded.head === task.reviewHead) return false;
+    if (this.#pushAttempts.get(task.id) === task.revision) return false;
+    this.#pushAttempts.set(task.id, task.revision);
+    let pushed: PullRequestMetadata | undefined;
+    try {
+      pushed = await pushPublishedTask({ task, run: this.#deps.run });
+    } catch (error) {
+      await this.recordFailure(task.id, "push", recorded.number, error);
+      return false;
+    }
+    if (pushed === undefined || samePullRequest(pushed, recorded)) return false;
+    try {
+      await this.#deps.recordPullRequest(task.id, task.revision, pushed);
+      return true;
+    } catch (error) {
+      await this.recordFailure(task.id, "record", pushed.number, error);
+      return false;
+    }
   }
 
   /** Answers whether the task record changed. */
