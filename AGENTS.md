@@ -34,7 +34,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Artifacts, feedback, Lavish | [presentations/](src/presentations/) |
 | Research and changes in another repository, finding a repository's checkout | [repos/locate.ts](src/repos/locate.ts); `target` on tasks |
 | Reviewing someone else's PR (`pr-review` tasks) | [pr-review/](src/pr-review/): `worktree.ts`, `run.ts`, `review.ts`, `post.ts`, `service.ts` |
-| The board: `tandem board`, "Needs you", "how's it going?" | [board/](src/board/): `view.ts` (pure sections and rendering), `read.ts`, `pane.ts` |
+| `tandem status` and `--watch`, "Needs you", "how's it going?" | [board/](src/board/): `view.ts` (pure sections and rendering), `read.ts`, `pane.ts`; [terminal/status.ts](src/terminal/status.ts) |
 | PR watch: keeping open PRs moving until they merge, `tandem watch` | [pr-watch/](src/pr-watch/): `decide.ts` (pure decision table), `github.ts`, `watcher.ts`, `store.ts`, `view.ts` |
 | Herdr, Treehouse, OMP, Lavish, Git/GitHub commands | [adapters/](src/adapters/) |
 
@@ -104,7 +104,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - Tasks in another repository (`targetRepo`), finding checkouts: [other-repositories.md](docs/reference/other-repositories.md).
 - Reviewing someone else's PR (`pr-review` tasks): [pr-review.md](docs/reference/pr-review.md).
 - PR watch, its decision table, and `tandem watch`: [pr-watch.md](docs/reference/pr-watch.md).
-- The board, "Needs you", and when the coordinator opens it: [board.md](docs/reference/board.md).
+- `tandem status`, "Needs you", and when the coordinator opens the live view: [status.md](docs/reference/status.md).
 - Durable state, locking, restart, central recovery and its re-entry table: [recovery.md](docs/reference/recovery.md).
 - Block causes, stale records, panes, leases, `tandem fix`: [reconciliation.md](docs/reference/reconciliation.md).
 

@@ -353,7 +353,14 @@ test("the board opens when something of this project's lands in Needs you, not f
   const session = new CoordinatorSession(
     coordinatorDeps({
       list: async () => [],
-      board: async () => ({ now: "", projects: [], needsYou, running: [], pullRequests: [] }),
+      board: async () => ({
+        now: "",
+        projects: [],
+        needsYou,
+        running: [],
+        pullRequests: [],
+        finished: 0,
+      }),
       showBoard: async (repoPath) => {
         opened.push(repoPath);
       },

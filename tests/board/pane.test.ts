@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { quoteShellCommand } from "../../src/adapters/commands.ts";
 import { closeEndpoint } from "../../src/adapters/herdr.ts";
-import { boardCommand, showBoardPane } from "../../src/board/pane.ts";
+import { liveStatusCommand, showBoardPane } from "../../src/board/pane.ts";
 import type { CommandRequest } from "../../src/contracts.ts";
 import { withScenario } from "../evals/scenario.ts";
 
@@ -25,7 +25,7 @@ test("the board opens once beside the coordinator and again only after its pane 
     expect(shown.paneId).not.toBe(coordinator.paneId);
     expect(shown.workspaceId).toBe(coordinator.workspaceId);
     expect(herdr("run").map((call) => call.argv.slice(5))).toEqual([
-      [shown.paneId, quoteShellCommand(boardCommand(world.home))],
+      [shown.paneId, quoteShellCommand(liveStatusCommand(world.home))],
     ]);
 
     expect(await showBoardPane(deps, world.repoPath, shown)).toEqual(shown);

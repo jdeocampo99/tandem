@@ -197,27 +197,31 @@ PR watch · 3 open · checked 5s ago
 Run `tandem watch`, or ask the coordinator "how are my PRs?". Say "hands off #409" or run
 `tandem watch --stop 409` to stop watching one. It works while Tandem is open.
 
-### The board
+### Seeing everything at once
 
-`tandem board` is a live view of all your projects in one pane: what needs you (briefs to approve,
-questions, pull requests that need a person), what's running, and your watched pull requests. It
-refreshes every 2 seconds from what Tandem already saved, so an open board never calls GitHub; its
-pull request rows show when PR watch last checked. The coordinator opens it beside its chat when a
-brief, a question, a pull request, or finished work newly waits on you, and asking "how's it
-going?" shows the same thing in the chat.
+`tandem status` shows all your projects in one place: what needs you (briefs to approve,
+questions, pull requests that need a person), what's running, and your watched pull requests.
+`tandem status --watch` keeps it live, refreshing every 2 seconds from what Tandem already saved,
+so it never calls GitHub; its pull request rows show when PR watch last checked. The coordinator
+opens the live view beside its chat when a brief, a question, a pull request, or finished work
+newly waits on you, and asking "how's it going?" shows the same thing in the chat.
 
 ```
-Tandem · tandem, tagalingo · checked 5s ago
+Projects: tandem, tagalingo · PRs checked 40s ago
 
 Needs you
-🙋 tandem    Dark mode           brief waiting for approval
-🙋 tagalingo #409 refactor-cache ❌ failing 🙋 test_cache_evict failed twice → https://ci/…
+🙋 tandem     Dark mode                    brief waiting for approval
+🔴 tagalingo  acme/app#409 refactor-cache  🙋 test_cache_evict failed twice → https://ci/…
 
 Running
-🔨 tandem    Fix the flaky login implementing · 12m
+🔨 tandem     Fix the flaky login  implementing · 12m
 
 PRs
 🟢 acme/app#420 add-cache ⏳ 12/16 ✅ approved
+
+coordinators open: tandem, tagalingo
+Tandem code: 9618fa9 Merge pull request #188 (/Users/me/Coding_Projects/tandem)
+Ask the coordinator about any task, or run `tandem status --json` for task IDs · live view: tandem status --watch
 ```
 
 ## Terminal commands
@@ -225,9 +229,8 @@ PRs
 | Command | What it does |
 | --- | --- |
 | `tandem [PATH ...]` | Open or reconnect your projects |
-| `tandem status [TASK_ID]` | What's running and what needs you; with a task ID, that task's full history |
+| `tandem status [TASK_ID]` | What needs you, what's running, and your pull requests across projects (`--watch` keeps it live); with a task ID, that task's full history |
 | `tandem watch [PR]` | Your watched pull requests; with a PR link or number, start watching it (`--stop` to stop) |
-| `tandem board` | Live view of what needs you, what's running, and your pull requests across projects |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Find and clean up leftovers from a crash or failed launch (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |
@@ -243,7 +246,7 @@ output (`status`, `watch`, `fix`), and `--home PATH` uses a different Tandem dat
 
 Try these in order:
 
-1. **`tandem status`** shows what every task is doing and what needs you. It never changes anything.
+1. **`tandem status`** shows what needs you and what every task is doing. It never changes anything.
 2. **A task is stuck:** ask the coordinator to restart it, or run `/tandem restart TASK_ID`. The
    worker keeps its worktree, history, and messages.
 3. **A coordinator is misbehaving or you pulled new Tandem code:** `tandem update` replaces the

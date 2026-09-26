@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { type BoardState, boardView, opensBoard, renderBoard } from "../../src/board/view.ts";
+import {
+  type BoardState,
+  boardView,
+  opensBoard,
+  renderBoard,
+  renderStatus,
+} from "../../src/board/view.ts";
 import type { RequestBriefContent } from "../../src/contracts.ts";
 import type { PrWatch } from "../../src/pr-watch/store.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
@@ -54,7 +60,7 @@ function state(overrides: Partial<BoardState> = {}): BoardState {
   };
 }
 
-test("the board puts what needs you first, then running work, then pull requests", () => {
+test("status puts what needs you first, then running work and pull requests, then the footer", () => {
   const view = boardView(
     state({
       briefs: [
@@ -82,6 +88,13 @@ test("the board puts what needs you first, then running work, then pull requests
           objective: "Fix the flaky login test",
           createdAt: "2030-01-01T11:48:00.000Z",
         }),
+        task({
+          id: "task-paused",
+          repoPath: "/work/app",
+          stage: "paused",
+          objective: "Dark mode tokens",
+          createdAt: "2030-01-01T10:00:00.000Z",
+        }),
         task({ id: "task-done", stage: "merged", objective: "Already merged" }),
       ],
       watches: [
@@ -97,20 +110,27 @@ test("the board puts what needs you first, then running work, then pull requests
     NOW,
   );
 
-  expect(renderBoard(view)).toBe(
+  expect(
+    renderStatus(view, { code: "9618fa9 Merge (/src/tandem)", coordinators: ["/work/tandem"] }),
+  ).toBe(
     [
-      "Tandem · tandem, app · checked 40s ago",
+      "Projects: tandem, app · PRs checked 40s ago",
       "",
       "Needs you",
-      "🙋 tandem Dark mode                brief waiting for approval",
-      "🙋 app    Refactor the cache       asks: Keep the old eviction order?",
-      "🙋 app    #409 branch-409          ❌ failing 🙋 test_cache_evict failed twice",
+      "🙋 tandem  Dark mode                brief waiting for approval",
+      "🙋 app     Refactor the cache       question: Keep the old eviction order?",
+      "🔴 app     acme/app#409 branch-409  🙋 test_cache_evict failed twice",
       "",
       "Running",
-      "🔨 tandem Fix the flaky login test implementing · 12m",
+      "🔨 tandem  Fix the flaky login test  implementing · 12m",
+      "⏸️ app     Dark mode tokens          paused · 2h",
       "",
       "PRs",
       "🟢 acme/app#420 branch-420 ⏳ 12/16 ✅ approved",
+      "",
+      "1 finished task hidden · coordinators open: tandem",
+      "Tandem code: 9618fa9 Merge (/src/tandem)",
+      "Ask the coordinator about any task, or run `tandem status --json` for task IDs · live view: tandem status --watch",
       "",
     ].join("\n"),
   );
@@ -121,9 +141,13 @@ test("the board puts what needs you first, then running work, then pull requests
   ]);
 });
 
-test("an empty board says nothing needs you and that PR watch has not checked yet", () => {
-  expect(renderBoard(boardView(state({ projects: [] }), NOW))).toBe(
-    "Tandem · PRs not checked yet\n\nNeeds you\nNothing needs you.\n",
+test("an empty status says nothing needs you, that PR watch has not checked yet, and how to open a coordinator", () => {
+  const view = boardView(state({ projects: [] }), NOW);
+  expect(renderBoard(view)).toBe(
+    "Projects: none yet · PRs not checked yet\n\nNeeds you\nNothing needs you.\n",
+  );
+  expect(renderStatus(view, { code: "abc", coordinators: [] })).toContain(
+    "\nno coordinators open, run `tandem`\n",
   );
 });
 

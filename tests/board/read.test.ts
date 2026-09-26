@@ -43,7 +43,7 @@ test("the board reads pull requests from what PR watch last saved", async () => 
     });
     const view = await readBoard(home, () => "2030-01-01T12:00:00.000Z");
     expect(renderBoard(view)).toBe(
-      "Tandem · checked 40s ago\n\nNeeds you\n🙋 app #409 ❌ failing e2e failed twice\n",
+      "Projects: none yet · PRs checked 40s ago\n\nNeeds you\n🔴 app  acme/app#409  e2e failed twice\n",
     );
   } finally {
     await rm(home, { recursive: true, force: true });

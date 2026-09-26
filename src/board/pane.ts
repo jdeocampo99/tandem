@@ -11,14 +11,21 @@ export type BoardPaneDependencies = Readonly<{
   readonly coordinatorPaneId: string;
 }>;
 
-/** The terminal command that draws the live board for this Tandem home. */
-export function boardCommand(home: string): readonly string[] {
-  return ["bun", fileURLToPath(new URL("../main.ts", import.meta.url)), "board", "--home", home];
+/** The terminal command that draws the live status for this Tandem home. */
+export function liveStatusCommand(home: string): readonly string[] {
+  return [
+    "bun",
+    fileURLToPath(new URL("../main.ts", import.meta.url)),
+    "status",
+    "--watch",
+    "--home",
+    home,
+  ];
 }
 
 /**
  * Makes sure the board is on screen: keeps `shown` while that pane still exists, whatever the user
- * left running in it, and otherwise opens `tandem board` in a new split beside the coordinator.
+ * left running in it, and otherwise opens `tandem status --watch` in a new split beside the coordinator.
  * Returns the pane showing the board.
  */
 export async function showBoardPane(
@@ -37,6 +44,6 @@ export async function showBoardPane(
     role: "coordinator",
     generation: 0,
   });
-  await sendCommand(deps.run, { endpoint, cwd, command: boardCommand(deps.home) });
+  await sendCommand(deps.run, { endpoint, cwd, command: liveStatusCommand(deps.home) });
   return endpoint;
 }

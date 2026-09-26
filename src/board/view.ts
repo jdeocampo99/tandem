@@ -6,9 +6,9 @@ import { requestApprovalState } from "../requests/brief.ts";
 import { isTerminalTask } from "../service/records.ts";
 
 /** Task stages that wait on the user. */
-export const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
+const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
 /** Task stages where Tandem is working on its own, or the user paused it. */
-export const RUNNING_STAGES: readonly TaskStage[] = [
+const RUNNING_STAGES: readonly TaskStage[] = [
   "paused",
   "queued",
   "scouting",
@@ -38,6 +38,16 @@ export type BoardView = Readonly<{
   readonly running: readonly BoardRow[];
   /** Watched pull requests that do not need the user. */
   readonly pullRequests: readonly PrWatchViewRow[];
+  /** Completed, merged, and cancelled tasks, which the board leaves out. */
+  readonly finished: number;
+}>;
+
+/** What only `tandem status` adds below the board. */
+export type StatusFooter = Readonly<{
+  /** The commit the `tandem` command runs from, as `tandemCodeVersion` reads it. */
+  readonly code: string;
+  /** Projects with an open coordinator. */
+  readonly coordinators: readonly string[];
 }>;
 
 export type BoardRow = Readonly<{
@@ -92,6 +102,7 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
       .filter((task) => !needsYou(task) && RUNNING_STAGES.includes(task.stage))
       .map((task) => runningRow(task, now)),
     pullRequests: pullRequests.rows.filter((row) => row.color !== "red"),
+    finished: state.tasks.length - live.length,
   };
 }
 
@@ -109,33 +120,54 @@ export function opensBoard(row: BoardRow): boolean {
   );
 }
 
+/** The board: header and sections, as "how's it going?" shows it in the chat. */
 export function renderBoard(view: BoardView): string {
   const header = [
-    "Tandem",
-    ...(view.projects.length === 0 ? [] : [view.projects.join(", ")]),
+    `Projects: ${view.projects.length === 0 ? "none yet" : view.projects.join(", ")}`,
     view.checkedAt === undefined
       ? "PRs not checked yet"
-      : `checked ${elapsed(view.checkedAt, view.now)} ago`,
+      : `PRs checked ${elapsed(view.checkedAt, view.now)} ago`,
   ].join(" · ");
-  const rows = [...view.needsYou, ...view.running];
-  const width = (values: readonly string[]) =>
-    Math.max(0, ...values.map((value) => [...value].length));
-  const projectWidth = width(rows.map((row) => row.project));
-  const nameWidth = width(rows.map((row) => row.name));
-  const line = (row: BoardRow) =>
-    [row.mark, pad(row.project, projectWidth), pad(row.name, nameWidth), row.text]
-      .join(" ")
-      .trimEnd();
   const sections = [
     ["Needs you", ...(view.needsYou.length === 0 ? ["Nothing needs you."] : [])]
-      .concat(view.needsYou.map(line))
+      .concat(boardLines(view.needsYou))
       .join("\n"),
-    ...(view.running.length === 0 ? [] : [["Running", ...view.running.map(line)].join("\n")]),
+    ...(view.running.length === 0 ? [] : [["Running", ...boardLines(view.running)].join("\n")]),
     ...(view.pullRequests.length === 0
       ? []
       : [["PRs", ...prWatchLines(view.pullRequests, true)].join("\n")]),
   ];
   return `${[header, ...sections].join("\n\n")}\n`;
+}
+
+/** `tandem status`: the board, then what was finished, which coordinators are open, and how to go on. */
+export function renderStatus(view: BoardView, footer: StatusFooter): string {
+  const coordinators =
+    footer.coordinators.length === 0
+      ? "no coordinators open, run `tandem`"
+      : `coordinators open: ${footer.coordinators.map((path) => basename(path)).join(", ")}`;
+  const plural = view.finished === 1 ? "" : "s";
+  return [
+    renderBoard(view),
+    [
+      ...(view.finished === 0 ? [] : [`${view.finished} finished task${plural} hidden`]),
+      coordinators,
+    ].join(" · "),
+    `Tandem code: ${footer.code}`,
+    "Ask the coordinator about any task, or run `tandem status --json` for task IDs · live view: tandem status --watch",
+    "",
+  ].join("\n");
+}
+
+/** Aligned rows, two spaces between columns. */
+function boardLines(rows: readonly BoardRow[]): string[] {
+  const width = (values: readonly string[]) =>
+    Math.max(0, ...values.map((value) => [...value].length));
+  const projectWidth = width(rows.map((row) => row.project));
+  const nameWidth = width(rows.map((row) => row.name));
+  return rows.map((row) =>
+    `${row.mark} ${[pad(row.project, projectWidth), pad(row.name, nameWidth), row.text].join("  ")}`.trimEnd(),
+  );
 }
 
 function needsYou(task: TaskRecord): boolean {
@@ -166,7 +198,7 @@ function taskNeedsYouRow(task: TaskRecord): BoardRow {
   const question = task.communication?.question;
   const text =
     question !== undefined
-      ? `asks: ${question.text}`
+      ? `question: ${question.text}`
       : task.stage === "blocked"
         ? `blocked: ${task.blockReason ?? "no reason recorded"}`
         : (NEEDS_YOU_LABELS[task.stage] ?? task.stage);
@@ -208,10 +240,11 @@ function pullRequestRow(row: PrWatchViewRow, state: BoardState): BoardRow {
     key: `pr:${row.repo}#${row.number}`,
     cause: "pull-request",
     ...(repoPath === undefined ? {} : { repoPath }),
-    project: row.repo.slice(row.repo.indexOf("/") + 1),
-    mark: "🙋",
-    name: shorten(`#${row.number} ${row.branch}`, NAME_CHARS),
-    text: [row.status, note].filter((part) => part.length > 0).join(" "),
+    project:
+      repoPath === undefined ? row.repo.slice(row.repo.indexOf("/") + 1) : basename(repoPath),
+    mark: "🔴",
+    name: `${row.repo}#${row.number} ${row.branch}`.trimEnd(),
+    text: note.length > 0 ? note : row.status,
   };
 }
 

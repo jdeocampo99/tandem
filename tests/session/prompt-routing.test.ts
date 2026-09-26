@@ -580,6 +580,7 @@ test("asking how it's going shows the board without a coordinator turn, and a Je
       ],
       running: [],
       pullRequests: [],
+      finished: 0,
     }),
   } as unknown as TandemService;
   try {
@@ -588,7 +589,7 @@ test("asking how it's going shows the board without a coordinator turn, and a Je
       handled: true,
     });
     expect(answered.sent()).toEqual([
-      "Tandem · app · PRs not checked yet\n\nNeeds you\n🙋 app Dark mode brief waiting for approval\n",
+      "Projects: app · PRs not checked yet\n\nNeeds you\n🙋 app  Dark mode  brief waiting for approval\n",
     ]);
 
     const failed = routing(home, service, {

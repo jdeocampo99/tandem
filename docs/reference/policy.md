@@ -223,7 +223,7 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
 - Jev returns action, target, effect, scope, and composition. Confidence is the minimum across
   the five; below 0.80 goes to the coordinator.
 - Direct dispatch is read-only through the existing service: `list`, `presentations`, `receipt`,
-  `board` ("how's it going?" prints the board, see [board.md](board.md#hows-it-going)), and
+  `board` ("how's it going?" prints the board, see [status.md](status.md#hows-it-going)), and
   `pr-watch` (repository-wide; questions like "how are my PRs?" or "did #409 merge?" print the
   PR watch view, see [pr-watch.md](pr-watch.md#coordinator-shortcut)), plus `show`, `messages`,
   `inspect`, which need an explicit `task-...` ID or UUID in the prompt.
