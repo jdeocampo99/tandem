@@ -31,6 +31,7 @@ import {
   USD_MICROS_PER_DOLLAR,
   type UsageRecord,
 } from "./usage.ts";
+import { MAX_USAGE_LABEL_CHARS } from "./usage-codec.ts";
 
 /** The durable work one request's accounting pass can see for a single task. */
 export type RequestWorkObservation = Readonly<{
@@ -306,7 +307,7 @@ function operationSpans(
     const job = jobs.find((candidate) => candidate.id === operation.jobId);
     const endedAt = operationEnd(operation, job);
     if (endedAt === undefined || !isTimestamp(operation.createdAt)) continue;
-    const identity: RequestWorkIdentity = {
+    const keyed: RequestWorkIdentity = {
       requestId,
       taskId: operation.taskId,
       jobId: operation.jobId,
@@ -317,14 +318,16 @@ function operationSpans(
     };
     events.push({
       schemaVersion: REQUEST_USAGE_EVENT_SCHEMA_VERSION,
+      // The operation alone identifies its span; the model describes it. Keying without the model
+      // keeps a span recorded before the model was attributed from being counted a second time.
       eventKey: requestUsageEventKey({
         kind: "work",
-        identity,
+        identity: keyed,
         discriminator: `${operation.kind}:settled`,
       }),
       kind: "work",
       workKind: OPERATION_WORK_KINDS[operation.kind],
-      identity,
+      identity: { ...keyed, ...routedModel(operation) },
       startedAt: operation.createdAt,
       endedAt,
       status,
@@ -333,6 +336,25 @@ function operationSpans(
     });
   }
   return events;
+}
+
+/**
+ * The provider and exact model the operation was admitted to run, from the routing transition
+ * recorded on it at admission. Validation is admitted without one because it runs no model, and a
+ * legacy operation without one stays unattributed rather than having a model inferred for it.
+ */
+function routedModel(operation: DurableOperation): Pick<RequestWorkIdentity, "provider" | "model"> {
+  const routing = operation.routing;
+  if (routing === undefined) return {};
+  return {
+    ...(fitsLabel(routing.provider) ? { provider: routing.provider } : {}),
+    ...(fitsLabel(routing.selector) ? { model: routing.selector } : {}),
+  };
+}
+
+/** Whether a value can be stored as an accounting label, so one long name never fails a record. */
+function fitsLabel(value: string): boolean {
+  return value.trim().length > 0 && value.length <= MAX_USAGE_LABEL_CHARS;
 }
 
 function measuredUsage(

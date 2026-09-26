@@ -49,6 +49,7 @@ import type {
   CreatableTaskKind,
   Endpoint,
   IdFactory,
+  IsoTimestamp,
   PullRequestMetadata,
   RepoPolicy,
   RequestBriefRecord,
@@ -108,6 +109,8 @@ import {
   reportBlock,
   VALIDATION_RETRY_QUESTION_ID_PREFIX,
 } from "../recovery/central.ts";
+import { buildReportView, buildTaskReport, reportScopeLabel } from "../report/build.ts";
+import type { ReportTask, ReportView } from "../report/model.ts";
 import {
   checkoutQuestion,
   defaultProjectRoots,
@@ -143,7 +146,7 @@ import type {
 } from "../runtime/schema.ts";
 import { requestIntakeEvent } from "../runtime/usage-events.ts";
 import { createRequestUsageLedger, type RequestUsageLedger } from "../runtime/usage-ledger.ts";
-import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
+import type { RequestUsageReadout, RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import { type IssueDraftChecker, issueDraftChecker } from "../self-improvement/issue-draft.ts";
 import {
   type InvestigateInput,
@@ -325,6 +328,8 @@ export type TandemService = Readonly<{
   readonly trace: (id: string) => Promise<TaskTrace>;
   /** The rollups across every task in scope. */
   readonly traceSummary: () => Promise<TraceSummary>;
+  /** Where each task in scope spent its time, for `tandem report`; `since` bounds task creation. */
+  readonly report: (options?: Readonly<{ readonly since?: IsoTimestamp }>) => Promise<ReportView>;
   readonly deliveryPreflight: (
     id: string,
     input: { readonly base: string },
@@ -792,6 +797,7 @@ class TandemController {
       inspect: (id) => this.inspect(id),
       trace: (id) => this.trace(id),
       traceSummary: () => this.traceSummary(),
+      report: (options) => this.report(options),
       deliveryPreflight: (id, input) => this.deliveryPreflight(id, input.base),
       models: (repoPath) => this.models(repoPath),
       configureModels: (input) => this.configureModels(input),
@@ -1306,6 +1312,44 @@ class TandemController {
   async traceSummary(): Promise<TraceSummary> {
     const traces = await Promise.all((await this.list()).map((task) => this.traceOf(task)));
     return summarizeRollups(traces.map((trace) => trace.rollup));
+  }
+
+  async report(options: Readonly<{ readonly since?: IsoTimestamp }> = {}): Promise<ReportView> {
+    const { since } = options;
+    const sinceMs = since === undefined ? undefined : Date.parse(since);
+    if (sinceMs !== undefined && !Number.isFinite(sinceMs)) {
+      throw new Error(`report since must be an ISO timestamp; received ${JSON.stringify(since)}`);
+    }
+    const tasks = (await this.list()).filter(
+      (task) => sinceMs === undefined || Date.parse(task.createdAt) >= sinceMs,
+    );
+    const now = this.#deps.clock();
+    const usageByRequest = new Map<string, RequestUsageReadout>();
+    const reports: ReportTask[] = [];
+    let unreadableEvents = 0;
+    for (const task of tasks) {
+      const timeline = await readTimeline(this.#deps.home, task.id);
+      unreadableEvents += timeline.unreadableEvents;
+      let usage: RequestUsageReadout | undefined;
+      if (task.requestId !== undefined) {
+        usage = usageByRequest.get(task.requestId);
+        if (usage === undefined) {
+          usage = await this.#deps.usageLedger.read(task.requestId);
+          usageByRequest.set(task.requestId, usage);
+        }
+      }
+      reports.push(buildTaskReport({ task, timeline, usage, now }));
+    }
+    return buildReportView({
+      tasks: reports,
+      generatedAt: now,
+      ...(since === undefined ? {} : { since }),
+      scopeLabel: reportScopeLabel(
+        await this.#source.repositoryScope(),
+        tasks.map((task) => task.repoPath),
+      ),
+      unreadableEvents,
+    });
   }
 
   private async traceOf(task: TaskRecord): Promise<TaskTrace> {

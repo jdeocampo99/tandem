@@ -11,7 +11,7 @@ import type { CommandRequest, CommandResult, ModelSpec, RepoPolicy } from "../..
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { runTerminal } from "../../src/main.ts";
 import type { TandemService } from "../../src/service/controller.ts";
-import { parseTerminalArgs } from "../../src/terminal/arguments.ts";
+import { parseReportSince, parseTerminalArgs } from "../../src/terminal/arguments.ts";
 import type { CliApplication } from "../../src/terminal/cli-application.ts";
 import type { CliInvocation } from "../../src/terminal/cli-arguments.ts";
 import { readRegisteredProjects } from "../../src/terminal/projects.ts";
@@ -1370,6 +1370,91 @@ test("tandem trace prints one task's timeline, or the rollup across tasks", asyn
   expect(JSON.parse((await run(["trace", "task-1", "--json"])).text).rollup).toEqual(rollup);
   expect((await run(["trace"])).text).toContain("First-pass review rate: 100% (1 of 1)");
   expect(() => parseTerminalArgs(["trace", "a", "b"])).toThrow("at most 1 argument");
+});
+
+test("tandem report writes the page, opens it in Lavish, and falls back to the path", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-report-test-"));
+  try {
+    const reportCalls: unknown[] = [];
+    const service = {
+      report: async (options: unknown) => {
+        reportCalls.push(options);
+        return {
+          schemaVersion: 1,
+          generatedAt: "2030-01-02T03:04:05.678Z",
+          scopeLabel: "tandem",
+          tasks: [],
+          unreadableEvents: 0,
+        };
+      },
+      shutdown: async () => undefined,
+    } as unknown as TandemService;
+    const commands: CommandRequest[] = [];
+    let lavish: CommandResult = {
+      code: 0,
+      stdout: "session:\n  status: opened\n",
+      stderr: "",
+    };
+    const run = async (argv: readonly string[]) => {
+      const output: string[] = [];
+      const result = await runTerminal(argv, {
+        processEnvironment: { TANDEM_HOME: home },
+        service,
+        run: async (request) => {
+          commands.push(request);
+          return lavish;
+        },
+        stdout: (text) => output.push(text),
+        stderr: (text) => output.push(text),
+      });
+      return { result, text: output.join("") };
+    };
+    const path = join(home, "reports", "report-2030-01-02T03-04-05-678Z.html");
+
+    const opened = await run(["report", "--since", "2030-01-01T00:00:00Z"]);
+    expect(opened.result).toEqual({ exitCode: 0, status: "report" });
+    expect(opened.text).toBe(`Report opened in Lavish: ${path}\n`);
+    expect(reportCalls).toEqual([{ since: "2030-01-01T00:00:00.000Z" }]);
+    expect(commands.map((request) => request.argv)).toEqual([["lavish-axi", path]]);
+    expect(existsSync(path)).toBe(true);
+
+    lavish = { code: 1, stdout: "error: no browser\ncode: INTERNAL\n", stderr: "" };
+    const failed = await run(["report"]);
+    expect(failed.result.exitCode).toBe(0);
+    expect(failed.text).toContain(`Report written: ${path}\nLavish could not open it`);
+
+    commands.length = 0;
+    expect((await run(["report", "--no-open"])).text).toBe(`Report written: ${path}\n`);
+    await rm(join(home, "reports"), { recursive: true, force: true });
+    const json = await run(["report", "--json"]);
+    expect(JSON.parse(json.text).scopeLabel).toBe("tandem");
+    expect(commands).toEqual([]);
+    expect(existsSync(join(home, "reports"))).toBe(false);
+
+    const invalid = await run(["report", "--since", "last week"]);
+    expect(invalid.result.exitCode).toBe(1);
+    expect(invalid.text).toContain("--since needs a date like 2030-01-31");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("report --since takes a local calendar day or a zoned timestamp, and only on report", () => {
+  expect(parseTerminalArgs(["report", "--since", "2030-01-31"]).since).toBe(
+    new Date(2030, 0, 31).toISOString(),
+  );
+  expect(parseTerminalArgs(["report", "--since=2030-01-31T09:30:00+02:00"]).since).toBe(
+    "2030-01-31T07:30:00.000Z",
+  );
+  expect(parseTerminalArgs(["report"]).since).toBeUndefined();
+  expect(() => parseReportSince("2030-02-30")).toThrow("--since needs a date");
+  expect(() => parseReportSince("2030-01-31T09:30")).toThrow("--since needs a date");
+  expect(() => parseTerminalArgs(["report", "--since"])).toThrow("--since requires");
+  expect(() => parseTerminalArgs(["trace", "--since", "2030-01-31"])).toThrow(
+    "tandem trace does not accept --since",
+  );
+  expect(() => parseTerminalArgs(["status", "--no-open"])).toThrow("does not accept --no-open");
+  expect(() => parseTerminalArgs(["report", "task-1"])).toThrow("takes no arguments");
 });
 
 test("old command spellings name their replacement instead of opening a project", () => {
