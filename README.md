@@ -39,12 +39,17 @@ off with `standards = "none"`.
 
 ### Playbooks
 
-Every coding task follows a playbook for its kind of work: bug fix, feature, refactor, performance,
-or fix round. Each one encodes the steps an experienced engineer would take, like reproducing a bug
-in a test before fixing it or measuring before optimizing, so **good practice happens by default
-on every task**. Tandem picks the playbook for you, and the
-agent can't call the task finished until it has worked through every step or said why one doesn't
-apply.
+Every coding task follows a playbook for its kind of work, so **good practice happens by default on
+every task**. Tandem picks the playbook, and the agent can't finish until each step is done or it
+explains why one doesn't apply.
+
+| Playbook | Main steps |
+| --- | --- |
+| Bug fix | Reproduce it in a failing test, fix the cause, commit the test before the fix |
+| Feature | Reuse existing code, test through the public entry point, check reruns and partial failures |
+| Refactor | Confirm coverage first, move every caller, delete the old version |
+| Perf | Measure before and after, fix the cause |
+| Fix round | Fix every finding, confirm each is gone |
 
 ### Validation and independent review
 
