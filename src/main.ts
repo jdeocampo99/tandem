@@ -5,7 +5,7 @@ import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
 import { listOmpMcpServers } from "./adapters/omp.ts";
 import { runLiveBoard } from "./board/read.ts";
-import { renderStatus } from "./board/view.ts";
+import { renderStatus, type StatusStyle } from "./board/terminal.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
@@ -51,7 +51,12 @@ import {
   runConfigure,
   runOpenConfig,
 } from "./terminal/preparation.ts";
-import { createReadlineResources, type ReadlineResources, writeText } from "./terminal/process.ts";
+import {
+  createReadlineResources,
+  type ReadlineResources,
+  streamIsTTY,
+  writeText,
+} from "./terminal/process.ts";
 import {
   interactiveFor,
   noTtyError,
@@ -240,7 +245,11 @@ async function handleStatus({
     }
     return result;
   }
-  if (invocation.watch) return await watchStatus(environment, run, stdout);
+  if (invocation.watch) {
+    return await watchStatus(environment, run, stdout, () =>
+      statusStyle(environment, dependencies),
+    );
+  }
   const service = createServiceFor(environment, run, dependencies);
   try {
     const [taskId] = invocation.paths;
@@ -257,7 +266,7 @@ async function handleStatus({
     stdout(
       invocation.json
         ? `${JSON.stringify({ ...status, tasks: await service.list() })}\n`
-        : renderStatus(status.board, status),
+        : renderStatus(status.board, status, statusStyle(environment, dependencies)),
     );
     return result;
   } finally {
@@ -333,6 +342,23 @@ async function handleWatch({
 }
 
 /**
+ * Colors only for a terminal that shows them: not when output is captured or piped, or `NO_COLOR`
+ * is set. The width is read each time, so `--watch` follows a resized pane.
+ */
+function statusStyle(
+  environment: TerminalEnvironment,
+  dependencies: TerminalMainDependencies,
+): StatusStyle {
+  const output = dependencies.output ?? process.stdout;
+  if (dependencies.stdout !== undefined || !streamIsTTY(output)) return { color: false };
+  const columns = (output as { readonly columns?: unknown }).columns;
+  return {
+    color: (environment.source.NO_COLOR ?? "").length === 0,
+    ...(typeof columns === "number" && columns > 0 ? { columns } : {}),
+  };
+}
+
+/**
  * `tandem status --watch` redraws the status until Ctrl-C. It only reads saved state; pull
  * requests show what PR watch last read.
  */
@@ -340,6 +366,7 @@ async function watchStatus(
   environment: TerminalEnvironment,
   run: CommandRunner,
   stdout: (text: string) => void,
+  style: () => StatusStyle,
 ): Promise<never> {
   const code = await tandemCodeVersion(run, TANDEM_ROOT);
   return runLiveBoard({
@@ -349,7 +376,7 @@ async function watchStatus(
         home: environment.home,
         sessionId: environment.sessionId,
       });
-      return renderStatus(status.board, status);
+      return renderStatus(status.board, status, style());
     },
     draw: (text) => stdout(`\x1b[H\x1b[2J${text}`),
     sleep: (ms) => Bun.sleep(ms),
