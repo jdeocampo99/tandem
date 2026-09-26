@@ -1,13 +1,16 @@
 import { join } from "node:path";
-import type { Clock } from "../contracts.ts";
+import type { Clock, TaskRecord } from "../contracts.ts";
 import { withPrWatches } from "../pr-watch/store.ts";
 import { createRequestBriefStore } from "../requests/store.ts";
 import { withStateTransaction } from "../runtime/database.ts";
 import { defaultIdFactory } from "../runtime/persistence.ts";
+import { createRequestUsageLedger } from "../runtime/usage-ledger.ts";
 import { createTaskStore } from "../tasks/store.ts";
 import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
+import { readTimeline } from "../tasks/timeline-store.ts";
+import { type TaskRollup, taskCost, taskRollup } from "../tasks/trace.ts";
 import { readRegisteredProjects } from "../terminal/projects.ts";
-import { type BoardView, boardView } from "./view.ts";
+import { type BoardView, boardView, finishedWithinWeek, withinWeek } from "./view.ts";
 
 /** How often the live board re-reads saved state. */
 const BOARD_REFRESH_MS = 2_000;
@@ -18,13 +21,42 @@ export async function readBoard(home: string, clock: Clock): Promise<BoardView> 
   const tasks = createTaskStore({ directory: join(home, "tasks"), clock, idFactory });
   const briefs = createRequestBriefStore({ home, clock, idFactory });
   const projects = await readRegisteredProjects(home);
-  const state = await withStateTransaction(home, async () => ({
-    projects,
-    tasks: await tasks.list(),
-    briefs: await briefs.list(),
-    ...(await withPrWatches(home, ({ watches, poll }) => ({ watches, poll }))),
-  }));
-  return boardView(state, clock());
+  const now = clock();
+  const state = await withStateTransaction(home, async () => {
+    const saved = await tasks.list();
+    return {
+      projects,
+      tasks: saved,
+      briefs: await briefs.list(),
+      ...(await withPrWatches(home, ({ watches, poll }) => ({ watches, poll }))),
+      finishedThisWeek: await weekRollups(home, clock, saved, now),
+    };
+  });
+  return boardView(state, now);
+}
+
+/** Rollups, with cost, of the tasks whose timeline says they finished in the last 7 days. */
+async function weekRollups(
+  home: string,
+  clock: Clock,
+  tasks: readonly TaskRecord[],
+  now: string,
+): Promise<readonly TaskRollup[]> {
+  const ledger = createRequestUsageLedger({ home, clock });
+  const rollups: TaskRollup[] = [];
+  // A task that finished this week was also updated this week, so older ones need no timeline read.
+  for (const task of tasks) {
+    if (task.stage !== "completed" && task.stage !== "merged") continue;
+    if (!withinWeek(task.updatedAt, now)) continue;
+    const { events } = await readTimeline(home, task.id);
+    if (!finishedWithinWeek(events, now)) continue;
+    const cost =
+      task.requestId === undefined
+        ? undefined
+        : taskCost(await ledger.read(task.requestId), task.requestId, task.id);
+    rollups.push(taskRollup(task.id, events, now, cost));
+  }
+  return rollups;
 }
 
 /**

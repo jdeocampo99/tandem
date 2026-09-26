@@ -4,6 +4,8 @@ import { type PrWatch, type PrWatchPoll, sameRef } from "../pr-watch/store.ts";
 import { elapsed, type PrWatchViewRow, pad, prWatchLines, prWatchView } from "../pr-watch/view.ts";
 import { requestApprovalState } from "../requests/brief.ts";
 import { isTerminalTask } from "../service/records.ts";
+import type { TimelineEvent } from "../tasks/timeline.ts";
+import { dollars, summarizeRollups, type TaskRollup, type TraceSummary } from "../tasks/trace.ts";
 
 /** Task stages that wait on the user. */
 const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
@@ -26,6 +28,8 @@ export type BoardState = Readonly<{
   readonly briefs: readonly RequestBriefRecord[];
   readonly watches: readonly PrWatch[];
   readonly poll: PrWatchPoll;
+  /** Rollups of the tasks {@link finishedWithinWeek} accepted, across every project. */
+  readonly finishedThisWeek: readonly TaskRollup[];
 }>;
 
 export type BoardView = Readonly<{
@@ -40,7 +44,14 @@ export type BoardView = Readonly<{
   readonly pullRequests: readonly PrWatchViewRow[];
   /** Completed, merged, and cancelled tasks, which the board leaves out. */
   readonly finished: number;
+  /** The last 7 days; absent when no task finished in them. */
+  readonly week?: WeekSummary;
 }>;
+
+export type WeekSummary = Pick<
+  TraceSummary,
+  "tasks" | "reviewedTasks" | "firstPassReviews" | "costMicros" | "unpricedSamples"
+>;
 
 /** What only `tandem status` adds below the board. */
 export type StatusFooter = Readonly<{
@@ -63,6 +74,7 @@ export type BoardRow = Readonly<{
   readonly text: string;
 }>;
 
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const NAME_CHARS = 30;
 const TEXT_CHARS = 80;
 
@@ -103,7 +115,22 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
       .map((task) => runningRow(task, now)),
     pullRequests: pullRequests.rows.filter((row) => row.color !== "red"),
     finished: state.tasks.length - live.length,
+    ...(state.finishedThisWeek.length === 0 ? {} : { week: weekSummary(state.finishedThisWeek) }),
   };
+}
+
+/** Whether a time falls in the 7 days before `now`. */
+export function withinWeek(at: IsoTimestamp, now: IsoTimestamp): boolean {
+  return Date.parse(now) - Date.parse(at) <= WEEK_MS;
+}
+
+/** Whether a task's timeline last marked it completed or merged within the 7 days before `now`. */
+export function finishedWithinWeek(events: readonly TimelineEvent[], now: IsoTimestamp): boolean {
+  const finished = events.findLast(
+    (event) =>
+      event.type === "stage-changed" && (event.to === "completed" || event.to === "merged"),
+  );
+  return finished !== undefined && withinWeek(finished.at, now);
 }
 
 /**
@@ -136,6 +163,7 @@ export function renderBoard(view: BoardView): string {
     ...(view.pullRequests.length === 0
       ? []
       : [["PRs", ...prWatchLines(view.pullRequests, true)].join("\n")]),
+    ...(view.week === undefined ? [] : [weekLine(view.week)]),
   ];
   return `${[header, ...sections].join("\n\n")}\n`;
 }
@@ -157,6 +185,24 @@ export function renderStatus(view: BoardView, footer: StatusFooter): string {
     "Ask the coordinator about any task, or run `tandem status --json` for task IDs · live view: tandem status --watch",
     "",
   ].join("\n");
+}
+
+/** Like "This week: 7 done · 5 of 7 passed review first time · $14.20". */
+function weekLine(week: WeekSummary): string {
+  const unpriced = week.unpricedSamples === 0 ? "" : " + unpriced usage";
+  return [
+    `This week: ${week.tasks} done`,
+    ...(week.reviewedTasks === 0
+      ? []
+      : [`${week.firstPassReviews} of ${week.reviewedTasks} passed review first time`]),
+    `${dollars(week.costMicros)}${unpriced}`,
+  ].join(" · ");
+}
+
+function weekSummary(rollups: readonly TaskRollup[]): WeekSummary {
+  const { tasks, reviewedTasks, firstPassReviews, costMicros, unpricedSamples } =
+    summarizeRollups(rollups);
+  return { tasks, reviewedTasks, firstPassReviews, costMicros, unpricedSamples };
 }
 
 /** Aligned rows, two spaces between columns. */

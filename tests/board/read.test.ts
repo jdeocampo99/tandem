@@ -6,6 +6,7 @@ import { readBoard, runLiveBoard } from "../../src/board/read.ts";
 import { renderBoard } from "../../src/board/view.ts";
 import { withPrWatches } from "../../src/pr-watch/store.ts";
 import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";
+import { seedScenarioTask, withScenario } from "../evals/scenario.ts";
 
 test("the live board redraws only when its text changed, and skips a round the state is locked", async () => {
   const frames = ["a", "a", "locked", "b", "b"];
@@ -48,4 +49,20 @@ test("the board reads pull requests from what PR watch last saved", async () => 
   } finally {
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test("a task the timeline shows finishing this week adds the weekly line", async () => {
+  await withScenario({}, async (world) => {
+    const reviewing = await seedScenarioTask(world, { kind: "implementation", stage: "reviewing" });
+    await world.store.update(reviewing.id, reviewing.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      updatedAt: world.clock(),
+      stage: "completed",
+    }));
+    const view = await readBoard(world.home, world.clock);
+    expect(renderBoard(view)).toContain(
+      "\nThis week: 1 done · 1 of 1 passed review first time · $0.00\n",
+    );
+  });
 });

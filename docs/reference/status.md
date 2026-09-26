@@ -31,6 +31,8 @@ PRs
 🟡 acme/app#412 fix-auth  ✅ 16/16 👀 review   ⏳ waiting on @reviewer
 🟢 acme/app#420 add-cache ⏳ 12/16 ✅ approved
 
+This week: 7 done · 5 of 7 passed review first time · $14.20
+
 3 finished tasks hidden · coordinators open: tandem, tagalingo
 Tandem code: 9618fa9 Merge pull request #188 (/Users/me/Coding_Projects/tandem)
 Ask the coordinator about any task, or run `tandem status --json` for task IDs · live view: tandem status --watch
@@ -41,6 +43,7 @@ Ask the coordinator about any task, or run `tandem status --json` for task IDs �
 | Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked red. Always shown; "Nothing needs you." when empty. |
 | Running | Tasks paused by the user, queued, researching, implementing, checking, in review, or fixing findings, with the time since the task was created. Left out when empty. |
 | PRs | Every other watched pull request, as PR watch's rows with `owner/repo#N`. Left out when empty. |
+| This week | One line for the 7 days before now, across every project: tasks whose timeline last moved them to completed or merged in that window, how many of those that went through review passed it the first time, and what those tasks cost. Left out when none finished. |
 
 - The header names the projects and how long ago PR watch last read GitHub ("PRs not checked
   yet" before the first read).
@@ -52,6 +55,12 @@ Ask the coordinator about any task, or run `tandem status --json` for task IDs �
   inspection.
 
 ## Where the data comes from
+
+- The weekly line is computed on read from each task's timeline and its request's usage ledger
+  (see [task-lifecycle.md](task-lifecycle.md#timeline-and-trace)),
+  through `taskRollup`, `taskCost`, and `summarizeRollups` in src/tasks/trace.ts. Only completed
+  or merged tasks updated in the last 7 days have their timeline read. A task with no request has
+  no recorded cost; usage with no price shows as "+ unpriced usage".
 
 - `readBoard` reads tasks, briefs, and PR watch records from `<home>/state.sqlite` in one state
   transaction, plus the project list under `<home>/repositories`. Status never calls GitHub, so

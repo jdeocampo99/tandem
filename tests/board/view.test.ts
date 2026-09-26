@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   type BoardState,
   boardView,
+  finishedWithinWeek,
   opensBoard,
   renderBoard,
   renderStatus,
@@ -56,6 +57,7 @@ function state(overrides: Partial<BoardState> = {}): BoardState {
     briefs: [],
     watches: [],
     poll: {},
+    finishedThisWeek: [],
     ...overrides,
   };
 }
@@ -212,4 +214,55 @@ test("a paused task shows under Running, and a blocked task is the only row that
     ["question:q-1", true],
     ["pr:acme/app#409", true],
   ]);
+});
+
+test("the weekly line follows the PRs, counting finished tasks, first-pass reviews, and cost", () => {
+  const cost = (amountMicros: number) => ({
+    currency: "USD" as const,
+    amountMicros,
+    actualSamples: 1,
+    estimatedSamples: 0,
+    unavailableSamples: 0,
+  });
+  const view = boardView(
+    state({
+      finishedThisWeek: [
+        {
+          taskId: "a",
+          firstPassReview: true,
+          fixRounds: 0,
+          blockedMs: 0,
+          cost: cost(9_000_000),
+        },
+        {
+          taskId: "b",
+          firstPassReview: false,
+          fixRounds: 1,
+          blockedMs: 0,
+          cost: cost(5_200_000),
+        },
+        { taskId: "c", fixRounds: 0, blockedMs: 0 },
+      ],
+    }),
+    NOW,
+  );
+  expect(renderBoard(view).trimEnd().split("\n").at(-1)).toBe(
+    "This week: 3 done · 1 of 2 passed review first time · $14.20",
+  );
+  expect(renderBoard(boardView(state(), NOW))).not.toContain("This week");
+});
+
+test("a task counts for the week when its timeline last finished it within 7 days", () => {
+  const finished = (at: string) => [
+    {
+      type: "stage-changed" as const,
+      from: "ready" as const,
+      to: "merged" as const,
+      taskId: "t",
+      at,
+    },
+  ];
+  expect(finishedWithinWeek(finished("2029-12-26T12:00:00.000Z"), NOW)).toBe(true);
+  expect(finishedWithinWeek(finished("2029-12-24T11:59:00.000Z"), NOW)).toBe(false);
+  expect(finishedWithinWeek([], NOW)).toBe(false);
 });

@@ -219,6 +219,8 @@ Running
 PRs
 🟢 acme/app#420 add-cache ⏳ 12/16 ✅ approved
 
+This week: 7 done · 5 of 7 passed review first time · $14.20
+
 coordinators open: tandem, tagalingo
 Tandem code: 9618fa9 Merge pull request #188 (/Users/me/Coding_Projects/tandem)
 Ask the coordinator about any task, or run `tandem status --json` for task IDs · live view: tandem status --watch
