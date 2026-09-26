@@ -140,10 +140,10 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
 - At each session start, while no saved project other than the Tandem checkout exists, it opens
   the welcome popup: `herdr plugin pane open --plugin tandem.ui --entrypoint welcome` with
   `TANDEM_WELCOME_PANE` set to its own pane. The popup runs `tandem welcome`
-  (src/terminal/welcome.ts): Enter sends "Help me onboard my repos" to that pane (`herdr agent
+  (src/terminal/welcome.ts): Enter sends "Onboard me to Tandem" to that pane (`herdr agent
   prompt`, or `pane send-text` and Enter when Herdr sees no agent there); Esc or q closes it. When
-  the popup cannot open (plugin not linked, Herdr too old, no Tandem pane), the same text is
-  delivered in the chat without a model turn.
+  the popup cannot open (plugin not linked, Herdr too old, no Tandem pane), the same text, plus
+  what to type to start, is delivered in the chat without a model turn.
 - The plugin lives in `herdr-plugin/`; `setup.sh` links it (see [status.md](status.md)).
 
 ## Source worktree and identity

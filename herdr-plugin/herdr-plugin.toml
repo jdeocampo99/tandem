@@ -11,5 +11,5 @@ id = "welcome"
 title = "Welcome to Tandem"
 placement = "popup"
 width = 70
-height = 18
+height = 12
 command = ["sh", "welcome.sh"]
