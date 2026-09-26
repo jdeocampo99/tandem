@@ -1312,7 +1312,6 @@ test("old command spellings name their replacement instead of opening a project"
   expect(() => parseTerminalArgs(["reconcile-resources"])).toThrow("is now `tandem fix`");
   expect(() => parseTerminalArgs(["logs"])).toThrow("is now `tandem status --logs`");
   expect(() => parseTerminalArgs(["inspect", "task-1"])).toThrow("tandem status TASK_ID");
-  expect(() => parseTerminalArgs(["board"])).toThrow("is now `tandem status --watch`");
   expect(parseTerminalArgs(["--", "restart"]).paths).toEqual(["restart"]);
 });
 

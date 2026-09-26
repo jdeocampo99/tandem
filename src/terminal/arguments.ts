@@ -89,7 +89,6 @@ const RENAMED: Readonly<Record<string, string>> = {
   logs: "tandem status --logs",
   "reconcile-resources": "tandem fix",
   inspect: "tandem status TASK_ID",
-  board: "tandem status --watch",
 };
 
 const FLAGS = {
