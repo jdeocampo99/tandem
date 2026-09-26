@@ -737,6 +737,17 @@ export function blockCause(
   };
 }
 
+/**
+ * The stages an implementation task runs after implementation, recorded when it is created or
+ * steered (src/tasks/required-stages.ts decides them). Tandem pushes once these pass.
+ */
+export type RequiredStages = {
+  /** Run the pinned validation commands. */
+  readonly validation: boolean;
+  /** Run a fresh reviewer. */
+  readonly review: boolean;
+};
+
 export type TaskRecord = {
   readonly schemaVersion: 1;
   readonly id: string;
@@ -763,8 +774,10 @@ export type TaskRecord = {
   readonly reviewRound: number;
   readonly fixRoundGrants?: readonly FixRoundGrant[];
   readonly reviewHead?: string;
-  /** The HEAD the user published without finishing review ("publish now"). Absent otherwise. */
+  /** The HEAD that became ready without a finished review. Absent otherwise. */
   readonly reviewSkippedHead?: string;
+  /** Implementation tasks only; absent on records saved before required stages existed. */
+  readonly requiredStages?: RequiredStages;
   readonly iterationScope?: IterationScope;
   readonly reviewLevel?: ReviewLevelRecord;
   readonly reportPath?: string;

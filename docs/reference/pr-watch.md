@@ -138,10 +138,10 @@ acting, the watcher checks the pull request is still watched. First match wins:
 - GitHub does not name conflicting files, so the row names the files both the pull request and its
   base changed since they split (`compare` both ways), the closest guess without a checkout.
 - **A Tandem task's pull request:** the task is steered: "Pull this branch from origin, merge
-  `origin/<base>` into it, resolve the conflicts, commit, and push. Never force-push." (It pulls
-  first because the watcher's own commits may be on the branch.) Merge instead of rebase, because
-  open-PR follow-ups never force-push (`OPEN_PR_FOLLOW_UP` in src/tasks/control.ts). CI checks
-  the result. The row shows `🔀 resolving conflicts in <files>` while the task works, then
+  `origin/<base>` into it, resolve the conflicts, and commit; Tandem pushes it. Never
+  force-push." (It pulls first because the watcher's own commits may be on the branch.) Merge
+  instead of rebase, because Tandem's push never forces. Tandem pushes the result once the task's
+  [required stages](task-lifecycle.md#required-stages) pass, and CI checks it. The row shows `🔀 resolving conflicts in <files>` while the task works, then
   `🔀 resolved conflicts in <files> · CI running`. Only the coordinator whose project the task
   belongs to steers it; elsewhere the row waits for it. A cancelled, merged, or completed task
   counts as no task.

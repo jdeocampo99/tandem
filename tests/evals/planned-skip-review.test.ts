@@ -45,24 +45,24 @@ function serviceFor(world: ScenarioWorld): TandemService {
   });
 }
 
-/** An approved brief and a task whose validation passed, now waiting for its first reviewer. */
+/**
+ * A task whose validation passed, now waiting for its first reviewer, under a brief approved after
+ * the task was created. `legacy` then drops its required stages, as a record saved before they
+ * existed.
+ */
 async function seedValidatedTask(
   world: ScenarioWorld,
   service: TandemService,
   skipReview: boolean,
+  legacy = false,
 ) {
   const drafted = await service.draftRequestBrief({
     repoPath: world.repoPath,
     content: skipReview ? { ...BRIEF, skipReview: true } : BRIEF,
     reviewPane: false,
   });
-  await service.approveRequestBrief({
-    requestId: drafted.record.id,
-    briefRevision: drafted.record.draft.revision,
-    contentDigest: drafted.record.draft.contentDigest,
-  });
   const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
-  await seedScenarioTask(world, {
+  const seeded = await seedScenarioTask(world, {
     kind: "implementation",
     stage: "reviewing",
     requestId: drafted.record.id,
@@ -70,10 +70,28 @@ async function seedValidatedTask(
     worktree: lease,
     policy: POLICY,
   });
+  expect(seeded.requiredStages).toEqual({ validation: true, review: true });
   await seedScenarioRuntime(
     world,
     scenarioRuntimeTask({ worktree: lease, endpoints: [], reviewMode: "review_existing_head" }),
   );
+  await service.approveRequestBrief({
+    requestId: drafted.record.id,
+    briefRevision: drafted.record.draft.revision,
+    contentDigest: drafted.record.draft.contentDigest,
+  });
+  const approved = await service.get(SCENARIO_TASK_ID);
+  expect(approved.requiredStages).toEqual({ validation: true, review: !skipReview });
+  if (legacy) {
+    await world.store.update(
+      approved.id,
+      approved.revision,
+      ({ requiredStages: _stages, ...task }) => ({
+        ...task,
+        revision: task.revision + 1,
+      }),
+    );
+  }
 }
 
 test("a brief approved without review makes validated work ready without launching a reviewer", async () => {
@@ -108,6 +126,22 @@ test("a brief that says nothing about review still reviews the work", async () =
     expect(task.reviewSkippedHead).toBeUndefined();
     const runtime = (await readRuntimeState(runtimeFile(world.home))).tasks[0];
     expect(runtime?.endpoints.some((endpoint) => endpoint.role === "reviewer")).toBe(true);
+    await service.shutdown();
+  });
+});
+
+test("a task saved before required stages existed still skips review under its brief", async () => {
+  await withScenario({}, async (world) => {
+    const service = serviceFor(world);
+    await seedValidatedTask(world, service, true, true);
+
+    await service.tick();
+
+    const task = await service.get(SCENARIO_TASK_ID);
+    expect(task.requiredStages).toEqual({ validation: true, review: false });
+    expect(task.stage).toBe("ready");
+    expect(task.reviewSkippedHead).toBe(SCENARIO_HEAD);
+    expect(task.reviews).toHaveLength(0);
     await service.shutdown();
   });
 });

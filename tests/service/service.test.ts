@@ -152,6 +152,8 @@ type DraftRemoteOptions = Readonly<{
   readonly branch: string;
   readonly base: string;
   readonly number: number;
+  /** An already published (not draft) pull request, at `head` until something pushes. */
+  readonly published?: { readonly head: string };
 }>;
 
 type DraftRemoteState = {
@@ -233,14 +235,15 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
 
   const draftRemote = options.draftRemote;
   const draftRemoteState: DraftRemoteState = { created: 0, editBodies: [], failEdit: false };
-  let draftRemoteOpen = false;
+  let draftRemoteOpen = draftRemote?.published !== undefined;
+  let draftRemoteHead = draftRemote?.published?.head ?? options.checkoutHead ?? "source-head";
   const draftRemoteJson = (): Record<string, unknown> => ({
     number: draftRemote?.number ?? 0,
     url: `https://github.com/${draftRemote?.repository ?? "acme/repo"}/pull/${draftRemote?.number ?? 0}`,
     state: "OPEN",
-    isDraft: true,
+    isDraft: draftRemote?.published === undefined,
     headRefName: draftRemote?.branch ?? "",
-    headRefOid: options.checkoutHead ?? "source-head",
+    headRefOid: draftRemoteHead,
     baseRefName: draftRemote?.base ?? "main",
     title: "Draft: exercise a durable service path",
   });
@@ -284,7 +287,10 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
       if (argv[0] === "git" && argv.includes("remote") && argv.includes("get-url")) {
         return commandResult(`git@github.com:${draftRemote.repository}.git\n`);
       }
-      if (argv[0] === "git" && argv.includes("push")) return commandResult();
+      if (argv[0] === "git" && argv.includes("push")) {
+        draftRemoteHead = argv.at(-1)?.split(":")[0] ?? draftRemoteHead;
+        return commandResult();
+      }
       if (argv[0] === "gh" && argv[1] === "pr") {
         if (argv[2] === "list") {
           return commandResult(JSON.stringify(draftRemoteOpen ? [draftRemoteJson()] : []));
@@ -530,6 +536,8 @@ type FixtureOptions = Readonly<{
     readonly stage?: TaskRecord["stage"];
     readonly previousStage?: TaskRecord["stage"];
     readonly reviewHead?: string;
+    readonly reviewSkippedHead?: string;
+    readonly requiredStages?: TaskRecord["requiredStages"];
     readonly reviewRound?: number;
     readonly reviews?: TaskRecord["reviews"];
     readonly pullRequest?: TaskRecord["pullRequest"];
@@ -594,6 +602,10 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
         ...(edits?.stage === undefined ? {} : { stage: edits.stage }),
         ...(edits?.previousStage === undefined ? {} : { previousStage: edits.previousStage }),
         ...(edits?.reviewHead === undefined ? {} : { reviewHead: edits.reviewHead }),
+        ...(edits?.reviewSkippedHead === undefined
+          ? {}
+          : { reviewSkippedHead: edits.reviewSkippedHead }),
+        ...(edits?.requiredStages === undefined ? {} : { requiredStages: edits.requiredStages }),
         ...(edits?.reviewRound === undefined ? {} : { reviewRound: edits.reviewRound }),
         ...(edits?.reviews === undefined ? {} : { reviews: edits.reviews }),
         ...(edits?.pullRequest === undefined ? {} : { pullRequest: edits.pullRequest }),
@@ -2729,7 +2741,7 @@ test("a direction arriving before worker completion survives an old-revision res
   );
 });
 
-test("a direction to a task with an open pull request tells its agent to push", async () => {
+test("a direction to a task with an open pull request needs no checks and leaves the push to Tandem", async () => {
   await withFixture(
     {
       kind: "implementation",
@@ -2743,7 +2755,11 @@ test("a direction to a task with an open pull request tells its agent to push", 
 
       const text = (await service.get("task-1")).communication?.messages[0]?.text ?? "";
       expect(text).toStartWith("Fix the Cloudflare build. ");
-      expect(text).toContain("push the branch to origin (never force-push)");
+      expect(text).toContain("commit it before you submit; Tandem pushes the branch");
+      expect((await service.get("task-1")).requiredStages).toEqual({
+        validation: false,
+        review: false,
+      });
     },
   );
 });
@@ -5154,6 +5170,54 @@ test("a ready task opens its own draft pull request once, against the default br
 
       await service.tick();
       expect(runnerState.draftRemote.created).toBe(1);
+    },
+  );
+});
+
+test("Tandem pushes a ready follow-up to its published pull request once", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "ready",
+      attachLease: true,
+      taskEdits: {
+        reviewHead: "source-head",
+        reviewSkippedHead: "source-head",
+        requiredStages: { validation: false, review: false },
+        pullRequest: {
+          repository: "acme/repo",
+          number: 12,
+          state: "open",
+          head: "old-head",
+          base: "main",
+        },
+      },
+      runner: {
+        draftRemote: {
+          repository: "acme/repo",
+          branch: "tandem/task-1",
+          base: "main",
+          number: 12,
+          published: { head: "old-head" },
+        },
+      },
+    },
+    async ({ home, service, runnerState }) => {
+      const pushes = () =>
+        runnerState.calls.filter((call) => call.argv[0] === "git" && call.argv.includes("push"));
+      await service.tick();
+
+      expect(pushes().map((call) => call.argv.at(-1))).toEqual([
+        "source-head:refs/heads/tandem/task-1",
+      ]);
+      const task = await service.get("task-1");
+      expect(task.stage).toBe("ready");
+      expect(task.pullRequest).toMatchObject({ number: 12, state: "open", head: "source-head" });
+      expect(runnerState.draftRemote.created).toBe(0);
+      expect(await draftRefreshFailures(home)).toHaveLength(0);
+
+      await service.tick();
+      expect(pushes()).toHaveLength(1);
     },
   );
 });
