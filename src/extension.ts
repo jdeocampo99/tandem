@@ -218,6 +218,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       promptRouting: promptRoutingConfig(environmentSnapshot),
       reconcile: (ctx, runTick) => session(ctx).reconcile(runTick),
       postAction: (ctx) => session(ctx).reconcile(false),
+      recordTurnAction: (ctx, action) => session(ctx).recordTurnAction(action),
       userPrompt: (ctx) => session(ctx).userPrompt(),
       closeThread: (ctx) => session(ctx).closeThread(),
       researchRunning: (ctx) => session(ctx).researchRunning(),

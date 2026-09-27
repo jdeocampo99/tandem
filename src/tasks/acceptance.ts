@@ -11,6 +11,7 @@ import type {
   ValidationEvidence,
 } from "../contracts.ts";
 import { LEGACY_EVIDENCE_CONTRACT } from "../contracts.ts";
+import { failedChecks } from "./findings.ts";
 
 /** The one reviewer session the final acceptance manifest requires per round. */
 export const FINAL_REVIEW_LENSES: readonly ReviewLens[] = ["review"];
@@ -154,11 +155,7 @@ function failingFindingIds(task: TaskRecord): readonly string[] {
 export function iterationScopeFor(task: TaskRecord): IterationScope | undefined {
   const head = task.reviewHead;
   if (head === undefined) return undefined;
-  const reproduces = deduplicate(
-    task.validationEvidence
-      .filter((entry) => entry.head === head && entry.exitCode !== 0)
-      .map((entry) => entry.name),
-  );
+  const reproduces = failedChecks(task);
   const findingIds = failingFindingIds(task);
   if (reproduces.length === 0 && findingIds.length === 0) return undefined;
   const targeted = task.policy.config.validationCommands.filter((command) =>

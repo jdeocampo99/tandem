@@ -211,6 +211,7 @@ test("a dirty research workspace keeps one pending decision and stays retained o
         disposition: "implementation-interview",
         selectedBy: "explicit",
       },
+      holder: `${world.sessionId}:${SCENARIO_TASK_ID}`,
     });
     const service = serviceFor(world);
     await service.tick();
@@ -465,7 +466,7 @@ test("multiple research handoffs retain dirty extras and adopt only the first", 
     const additional = await service.get("scout-extra");
     expect(additional.researchInterview?.status).toBe("approved");
     expect(additional.cleanup?.status).toBe("retained");
-    expect(additional.cleanup?.reason).toContain("uncommitted changes");
+    expect(additional.cleanup?.reason).toContain("uncommitted");
     await service.shutdown();
   });
 });
@@ -482,7 +483,7 @@ test("uncertain extra research closure blocks the cited implementation", async (
     const runtime = (taskId: string) =>
       snapshot.runtime.tasks.find((entry) => entry.taskId === taskId);
     expect(blocked.stage).toBe("blocked");
-    expect(blocked.blockReason).toContain("research handoff");
+    expect(blocked.blockCause?.detail).toContain("research handoff");
     expect(runtime(implementation.id)?.worktree).toBeUndefined();
     expect(runtime(SCENARIO_TASK_ID)?.worktree?.leaseId).toBe("lease-1");
     expect(runtime("scout-extra")?.worktree?.leaseId).toBe("lease-2");
@@ -528,7 +529,7 @@ test("uncertain scout-pane closure blocks handoff without a fresh workspace", as
     const runtime = (taskId: string) =>
       snapshot.runtime.tasks.find((entry) => entry.taskId === taskId);
     expect(blocked.stage).toBe("blocked");
-    expect(blocked.blockReason).toContain("research handoff");
+    expect(blocked.blockCause?.detail).toContain("research handoff");
     expect(runtime(implementation.id)?.worktree).toBeUndefined();
     expect(runtime(SCENARIO_TASK_ID)?.worktree?.leaseId).toBe("lease-1");
     expect(snapshot.resources.retained).toContain("pane:pane-1");

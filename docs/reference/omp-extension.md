@@ -20,6 +20,11 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   model call with a stray root field is still accepted; "unknown fields are rejected" is a property
   of the schema, not of every OMP tool call.
 - Tool text is a bounded summary; structured details stay in the tool result and durable reports.
+- `trace` reads one in-scope task's timeline without changing task or notification state. It returns
+  the full rollup and the newest events, at most 16, that fit the 12,000-character structured-result
+  cap; older events are dropped first and counted as omitted. Trace skips post-action reconciliation
+  and scheduler ticks, and an agent run whose only actions are traces also skips final agent-end
+  reconciliation. CLI `tandem trace` is unchanged.
 - A refusal the coordinator recovers from by asking the user carries its own next step, so the
   per-turn prompt does not: `create` and `review-pr` asking where a repository is, and `create`
   finding no saved validation commands for another repository.

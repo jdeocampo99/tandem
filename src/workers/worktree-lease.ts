@@ -324,10 +324,7 @@ export class WorktreeLeases {
     const scouts: TaskRecord[] = [];
     for (const handoff of handoffs) {
       const scout = await this.settleResearchHandoff(task, handoff.scoutTaskId);
-      if (researchInterviewFor(scout)?.status !== "approved") {
-        throw new Error(`research handoff ${scout.id} is not approved for implementation`);
-      }
-      scouts.push(scout);
+      if (scout !== undefined) scouts.push(scout);
     }
     for (const [index, scout] of scouts.entries()) {
       if (index === 0) continue;
@@ -370,18 +367,28 @@ export class WorktreeLeases {
     return lease;
   }
 
-  private async settleResearchHandoff(task: TaskRecord, scoutId: string): Promise<TaskRecord> {
+  /**
+   * The cited scout whose retained session this implementation takes over, approving an interview
+   * an older approval left open. `undefined` when the scout was stopped.
+   */
+  private async settleResearchHandoff(
+    task: TaskRecord,
+    scoutId: string,
+  ): Promise<TaskRecord | undefined> {
     const before = await this.#deps.getTask(scoutId);
     if (
       before.kind !== "scout" ||
       before.stage !== "completed" ||
-      before.target?.repo !== task.target?.repo ||
-      before.communication?.question !== undefined
+      before.target?.repo !== task.target?.repo
     ) {
-      throw new Error(`research handoff ${scoutId} is not an available completed scout`);
+      return undefined;
+    }
+    if (before.communication?.question !== undefined) {
+      throw new Error(`research handoff ${scoutId} has an unanswered question`);
     }
     const interview = researchInterviewFor(before);
-    if (interview?.status !== "open") return before;
+    if (interview?.status === "approved") return before;
+    if (interview?.status !== "open") return undefined;
     if (!task.scopeApproved || pendingResearchDecision(interview) !== undefined) {
       throw new Error(`research handoff ${scoutId} has an unanswered question`);
     }

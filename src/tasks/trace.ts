@@ -20,6 +20,9 @@ export type TaskRollup = Readonly<{
 
 export type TaskTrace = TimelineReadout & Readonly<{ readonly rollup: TaskRollup }>;
 
+/** A task trace excerpt; `omittedEvents` counts readable events excluded by either output bound. */
+export type BoundedTaskTrace = TaskTrace & Readonly<{ readonly omittedEvents: number }>;
+
 /** The same figures across many tasks. */
 export type TraceSummary = Readonly<{
   readonly tasks: number;
@@ -95,6 +98,56 @@ export function renderTaskTrace(trace: TaskTrace): string {
     `Cost: ${costText(trace.rollup.cost)}`,
   ];
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Keeps the newest events, up to `maxEvents`, whose structured result fits in `maxSerializedChars`.
+ * The rollup is always kept; older events are dropped first.
+ */
+export function boundTaskTrace(
+  trace: TaskTrace,
+  limits: Readonly<{ readonly maxEvents: number; readonly maxSerializedChars: number }>,
+): BoundedTaskTrace {
+  let events = trace.events.slice(-limits.maxEvents);
+  const bounded = (): BoundedTaskTrace => ({
+    ...trace,
+    events,
+    omittedEvents: trace.events.length - events.length,
+  });
+  while (
+    events.length > 0 &&
+    JSON.stringify({ action: "trace", value: bounded() }).length > limits.maxSerializedChars
+  ) {
+    events = events.slice(1);
+  }
+  return bounded();
+}
+
+/** The rollup, then as many of the newest events as fit in `maxChars`. */
+export function renderBoundedTaskTrace(trace: BoundedTaskTrace, maxChars: number): string {
+  const { rollup } = trace;
+  const cost = rollup.cost;
+  const totalEvents = trace.events.length + trace.omittedEvents;
+  const header = [
+    `Task ${rollup.taskId}`,
+    `First review: ${firstReviewText(rollup.firstPassReview)}`,
+    `Fix rounds: ${rollup.fixRounds}`,
+    `Time blocked: ${durationText(rollup.blockedMs)} (${rollup.blockedMs} ms)`,
+    `Cost: ${
+      cost === undefined
+        ? "not recorded"
+        : `${dollars(cost.amountMicros)} (${cost.actualSamples} actual, ${cost.estimatedSamples} estimated, ${cost.unavailableSamples} unpriced)`
+    }`,
+  ];
+  const render = (events: readonly string[]): string =>
+    [
+      ...header,
+      `Events: ${totalEvents} readable; showing ${events.length} newest; ${totalEvents - events.length} omitted; ${trace.unreadableEvents} unreadable.`,
+      ...events,
+    ].join("\n");
+  let lines = trace.events.map(eventLine);
+  while (lines.length > 0 && render(lines).length > maxChars) lines = lines.slice(1);
+  return render(lines);
 }
 
 export function renderTraceSummary(summary: TraceSummary): string {

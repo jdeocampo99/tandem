@@ -66,7 +66,7 @@ import { taskSourcePath } from "../service/source.ts";
 import { policyIdentity } from "../tasks/acceptance.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
-import { keepFixingQuestion } from "../tasks/findings.ts";
+import { type FixRoundGate, fixRoundGate } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
 import type { ReviewAssistanceRuntime } from "../tasks/review-assistance.ts";
 import type { TaskStore } from "../tasks/store.ts";
@@ -1262,9 +1262,9 @@ export class WorkerWorkflow {
       });
       return;
     }
-    const keepFixing = recoveryFix ? undefined : keepFixingQuestion(task);
-    if (keepFixing !== undefined) {
-      await this.askKeepFixing(task.id, keepFixing);
+    const gate = recoveryFix ? undefined : fixRoundGate(task);
+    if (gate !== undefined) {
+      await this.stopBeforeFixRound(task.id, gate);
       return;
     }
     const reservation = reserved ?? (await this.#reservations.reserveTask(task.id, "implementer"));
@@ -1352,32 +1352,30 @@ export class WorkerWorkflow {
   }
 
   /**
-   * Blocks a task in `awaiting-fixes` on the "Keep fixing?" question, so the person decides whether
-   * this same task and worktree get more fix rounds. Nothing is launched and no round is spent.
+   * Blocks a task in `awaiting-fixes` before another fix round: on the "Keep fixing?" question, so
+   * the person decides whether this same task and worktree get more fix rounds, or, once its one
+   * extension is spent, with the open findings and no question. Nothing is launched and no round is
+   * spent.
    */
-  private async askKeepFixing(taskId: string, question: TaskQuestion): Promise<void> {
+  private async stopBeforeFixRound(taskId: string, gate: FixRoundGate): Promise<void> {
+    const summary = gate.type === "ask" ? gate.question.text : gate.summary;
+    const detail =
+      gate.type === "ask" ? (gate.question.recommendation ?? gate.question.text) : gate.detail;
     await this.#deps.store.exclusive(async (store) => {
       const current = await store.read(taskId);
       if (current?.stage !== "awaiting-fixes") return;
-      await store.update(current.id, current.revision, (entry) =>
-        taskWithQuestion(
-          transitionTask(
-            entry,
-            {
-              type: "block",
-              reason: question.text,
-              cause: {
-                group: "user-decision",
-                kind: "fix-rounds-exhausted",
-                summary: question.text,
-                detail: question.recommendation ?? question.text,
-              },
-            },
-            this.#deps.context(),
-          ),
-          question,
-        ),
-      );
+      await store.update(current.id, current.revision, (entry) => {
+        const blocked = transitionTask(
+          entry,
+          {
+            type: "block",
+            reason: summary,
+            cause: { group: "user-decision", kind: "fix-rounds-exhausted", summary, detail },
+          },
+          this.#deps.context(),
+        );
+        return gate.type === "ask" ? taskWithQuestion(blocked, gate.question) : blocked;
+      });
     });
   }
 

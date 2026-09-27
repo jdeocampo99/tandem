@@ -836,6 +836,8 @@ test("bound coordinators scope tasks by physical original identity and reject fo
     await symlink(other, originalAlias);
     expect(await service.list()).toEqual([]);
     await expect(service.get("task-a")).rejects.toThrow("Task task-a was not found");
+    await expect(service.trace("task-a")).rejects.toThrow("Task task-a was not found");
+    await expect(service.trace("task-b")).rejects.toThrow("Task task-b was not found");
     await expect(service.cancel("task-a")).rejects.toThrow("task task-a is missing");
     await expect(service.get("task-b")).rejects.toThrow("Task task-b was not found");
     await expect(service.cancel("task-b")).rejects.toThrow("task task-b is missing");
@@ -2030,6 +2032,21 @@ test("a dispatched job carries the exact model its recorded execution transition
       expect(routing.evidence.source).toBe("catalogue-read");
       const spec = JSON.parse(await readFile(jobPath, "utf8")) as WorkerJob;
       expect(spec.model).toEqual({ model: routing.selector, thinking: routing.thinking });
+    },
+  );
+});
+
+test("an implementer job names the pinned validation commands it may not run", async () => {
+  await withFixture(
+    { kind: "implementation", runner: { ompModels: OMP_MODELS } },
+    async ({ home, lease, service }) => {
+      await approveWithWorktree(home, lease, service);
+      await service.tick();
+
+      const jobPath = (await readRuntime(home)).tasks[0]?.jobs[0]?.jobPath;
+      if (jobPath === undefined) throw new Error("implementer job was not persisted");
+      const spec = JSON.parse(await readFile(jobPath, "utf8")) as WorkerJob;
+      expect(spec.validationCommands).toEqual(["bun run check"]);
     },
   );
 });

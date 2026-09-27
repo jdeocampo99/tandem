@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 import type { IsoTimestamp, TaskRecord } from "../contracts.ts";
 import { taskSessionDirectory } from "../runtime/persistence.ts";
 import { researchInterviewFor } from "../tasks/research-interview.ts";
+import { isTerminalTask } from "./records.ts";
 
 /** How long a finished task keeps its worker conversation. Its timeline and reports are kept. */
 export const TRANSCRIPT_RETENTION_DAYS = 30;

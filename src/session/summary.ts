@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { type BoardView, renderBoard } from "../board/view.ts";
+import { isBoardView, renderBoard } from "../board/view.ts";
 import {
   type AgentRole,
   LEGACY_EVIDENCE_CONTRACT,
@@ -28,6 +28,7 @@ import {
   pendingResearchDecision,
   researchInterviewFor,
 } from "../tasks/research-interview.ts";
+import { type BoundedTaskTrace, renderBoundedTaskTrace } from "../tasks/trace.ts";
 import type { TandemAction } from "./actions.ts";
 import { describeResearchDisposition } from "./research-follow-up.ts";
 
@@ -37,6 +38,8 @@ export const DIGEST_MAX_CHARS = 8_000;
 export const ACTION_SUMMARY_MAX_TEXT = 220;
 export const ACTION_SUMMARY_MAX_ITEMS = 6;
 export const ACTION_RESULT_MAX_CHARS = 4_000;
+/** The structured trace retains only this many newest timeline events. */
+export const ACTION_TRACE_MAX_EVENTS = 16;
 /** A review with many comments runs long; it is still shown in full up to this bound. */
 const PR_REVIEW_RESULT_MAX_CHARS = 24_000;
 export const ACTION_FULL_RESULT_MAX_CHARS = 12_000;
@@ -968,17 +971,6 @@ function isPrWatchView(value: unknown): value is PrWatchView {
   return record !== undefined && typeof record.now === "string" && Array.isArray(record.rows);
 }
 
-function isBoardView(value: unknown): value is BoardView {
-  const record = summaryRecord(value);
-  return (
-    record !== undefined &&
-    typeof record.now === "string" &&
-    Array.isArray(record.needsYou) &&
-    Array.isArray(record.running) &&
-    Array.isArray(record.pullRequests)
-  );
-}
-
 function isTaskArray(value: unknown): value is readonly TaskRecord[] {
   return Array.isArray(value) && value.every(isTaskRecord);
 }
@@ -1064,10 +1056,25 @@ function summarizePrReview(result: unknown): string {
   return boundedOutput(parts.join("\n"), PR_REVIEW_RESULT_MAX_CHARS);
 }
 
+function isBoundedTaskTrace(value: unknown): value is BoundedTaskTrace {
+  const record = summaryRecord(value);
+  return (
+    record !== undefined &&
+    Array.isArray(record.events) &&
+    summaryRecord(record.rollup) !== undefined &&
+    recordNumber(record, "omittedEvents") !== undefined
+  );
+}
+
 export function summarizeTandemActionValue(action: TandemAction["action"], value: unknown): string {
   if (action === "list" || action === "tick") {
     return isTaskArray(value)
       ? summarizeTaskList(action, value)
+      : boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  }
+  if (action === "trace") {
+    return isBoundedTaskTrace(value)
+      ? renderBoundedTaskTrace(value, ACTION_RESULT_MAX_CHARS)
       : boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
   if (action === "onboard" || action === "setup") return summarizeOnboard(value, action);

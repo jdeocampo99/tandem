@@ -279,13 +279,14 @@ async function seedPendingScout(
       { now: TIMESTAMP, notificationId: "start-1" },
     ),
   );
-  const completed = await store.update(started.id, started.revision, (task) =>
-    transitionTask(
+  const completed = await store.update(started.id, started.revision, (task) => ({
+    ...transitionTask(
       task,
       { type: "scout-report-complete", reportPath, generation: 0 },
       { now: TIMESTAMP, notificationId: "complete-1" },
     ),
-  );
+    researchInterview: { schemaVersion: 1, status: "stopped", decisions: [] },
+  }));
   await writeRuntimeState(runtimeFile(test.home), {
     schemaVersion: 1,
     tasks: [

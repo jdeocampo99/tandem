@@ -35,6 +35,7 @@ import {
   isPinnedEvidence,
 } from "./acceptance.ts";
 import {
+  failedChecks,
   fixRoundBudget,
   isBlockingFinding,
   ledgerSuggestions,
@@ -42,11 +43,7 @@ import {
 } from "./findings.ts";
 import { decideRequiredStages, requiredStagesOf } from "./required-stages.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
-import {
-  createResearchInterview,
-  finishResearchInterview,
-  researchInterviewFor,
-} from "./research-interview.ts";
+import { createResearchInterview } from "./research-interview.ts";
 import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
 import { checkSkillInvocations } from "./skill-invocation.ts";
 
@@ -746,13 +743,6 @@ function readySummary(task: TaskRecord, head: string): string {
   ].join("\n");
 }
 
-/** Review may finish before any check ran at this HEAD; the final manifest runs after it passes. */
-function hasFailedCurrentValidation(task: TaskRecord): boolean {
-  return task.validationEvidence.some(
-    (entry) => entry.head === task.reviewHead && entry.exitCode !== 0,
-  );
-}
-
 function clearReviewHead(task: TaskRecord): Omit<TaskRecord, "reviewHead" | "reviewSkippedHead"> {
   const { reviewHead: _reviewHead, reviewSkippedHead: _reviewSkippedHead, ...rest } = task;
   return rest;
@@ -1021,7 +1011,11 @@ function completeImplementation(
   // A fix round that ends on an already-reviewed HEAD made no new commit, so it hands its
   // round back; the unchanged review that follows asks "Keep fixing?" instead of looping.
   const noCommit =
-    task.reviewRound > 0 && task.reviews.some((review) => review.head === event.head);
+    task.reviewRound > 0 &&
+    task.reviews.some((review) => review.head === event.head) &&
+    !(task.fixRoundGrants ?? []).some(
+      (grant) => grant.reason === "failed-checks" && grant.generation === task.generation,
+    );
   // Passing pinned checks at this exact HEAD still hold; everything else is stale.
   const validationEvidence = task.validationEvidence.filter(
     (entry) => isPinnedEvidence(entry) && entry.head === event.head && entry.exitCode === 0,
@@ -1137,7 +1131,7 @@ function finishReview(
   assertStageIn(task, event.type, ["reviewing"]);
   assertHeadEvent(task, event.head, event.generation, "Review completion");
   assertCurrentHead(task, event.head, "Review completion");
-  if (hasFailedCurrentValidation(task)) {
+  if (failedChecks(task).length > 0) {
     throw new TaskTransitionError(
       "validation-mismatch",
       task,
@@ -1246,11 +1240,21 @@ function beginFixes(
   if (event.iterationScope !== undefined) {
     assertIterationScope(task, event.iterationScope);
   }
+  // A round that fixes failed checks keeps its round: only review findings spend the budget.
+  const checksRound = failedChecks(task).length > 0;
   return commitTask(clearIterationScope(clearReviewHead(task)), context.now, {
     stage: "implementing",
     reviewRound: task.reviewRound + 1,
     generation: task.generation + 1,
     ...(event.iterationScope === undefined ? {} : { iterationScope: event.iterationScope }),
+    ...(checksRound
+      ? {
+          fixRoundGrants: [
+            ...(task.fixRoundGrants ?? []),
+            { generation: task.generation + 1, rounds: 1, reason: "failed-checks" as const },
+          ],
+        }
+      : {}),
   });
 }
 
@@ -1362,28 +1366,10 @@ function cancelTask(
       "Cancel reason must be non-empty when supplied",
     );
   }
-  const interview = researchInterviewFor(task);
-  const closedInterview =
-    interview?.status === "open"
-      ? finishResearchInterview(interview, "stopped", context.now)
-      : interview;
-  const cleanup =
-    task.kind === "scout" && task.cleanup?.status !== "quarantined"
-      ? {
-          schemaVersion: 1 as const,
-          status: "pending" as const,
-          reason: "scout was explicitly stopped; terminal and workspace cleanup is pending",
-          observedAt: context.now,
-        }
-      : undefined;
   return commitWithNotification(
     clearPreviousAndBlock(task),
     context,
-    {
-      stage: "cancelled",
-      ...(closedInterview === undefined ? {} : { researchInterview: closedInterview }),
-      ...(cleanup === undefined ? {} : { cleanup }),
-    },
+    { stage: "cancelled" },
     event.reason === undefined
       ? `Task ${task.id} cancelled`
       : `Task ${task.id} cancelled: ${event.reason}`,

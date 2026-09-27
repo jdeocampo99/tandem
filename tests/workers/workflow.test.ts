@@ -71,6 +71,7 @@ function workflowFor(world: ScenarioWorld, blocks: RecordedBlock[]): WorkerWorkf
     recordRequestUsage: async () => {},
     readRequestUsage: unused("readRequestUsage"),
     readModelCatalogue: unused("readModelCatalogue"),
+    cleanupNonAdoptedResearchHandoff: unused("cleanupNonAdoptedResearchHandoff"),
   });
 }
 

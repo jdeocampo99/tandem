@@ -113,6 +113,8 @@ test("a lease whose recorded holder no longer matches is retained rather than re
 
     await service.tick();
     await service.tick();
+    // Completed research stays open until the user stops it; stopping attempts the release.
+    await service.cleanup(SCENARIO_TASK_ID);
 
     const snapshot = await world.snapshot();
     const task = await service.get(SCENARIO_TASK_ID);

@@ -1661,7 +1661,6 @@ class TandemController {
 
   async approve(id: string): Promise<TaskRecord> {
     const task = await this.get(id);
-    if (task.scopeApproved && task.stage !== "awaiting-approval") return task;
     const dispatch = await this.#requests.dispatchDecisionForTask(task);
     if (dispatch !== undefined && !dispatch.allowed) {
       throw new Error(`Task ${task.id} cannot be dispatched: ${dispatch.reason}`);
@@ -1681,27 +1680,18 @@ class TandemController {
     const approved = await this.#deps.store.exclusive(async (store) => {
       const current = await store.read(task.id);
       if (current === undefined) throw new Error(`Task ${task.id} was not found`);
-      if (current.scopeApproved && current.stage !== "awaiting-approval") return current;
       const nextTask = transitionTask(current, { type: "approve" }, context);
       for (const handoff of current.researchHandoffs ?? []) {
         const scout = await store.read(handoff.scoutTaskId);
-        if (scout?.kind !== "scout" || scout.stage !== "completed") {
-          throw new Error(`Research task ${handoff.scoutTaskId} is no longer a completed scout`);
-        }
+        // A stopped or missing scout has no session left to hand off; implementation leases fresh.
+        if (scout?.kind !== "scout" || scout.stage !== "completed") continue;
         const interview = researchInterviewFor(scout);
-        if (interview === undefined) {
-          throw new Error(`Research task ${scout.id} has no durable interview state`);
-        }
+        if (interview?.status !== "open") continue;
         if (
-          interview.status === "approved" &&
-          scout.communication?.question === undefined
-        ) continue;
-        if (
-          interview.status !== "open" ||
           pendingResearchDecision(interview) !== undefined ||
           scout.communication?.question !== undefined
         ) {
-          throw new Error(`Research task ${scout.id} still has an open or unanswered decision`);
+          throw new Error(`Research task ${scout.id} still has an unanswered decision`);
         }
         const approvedInterview = finishResearchInterview(interview, "approved", context.now);
         await store.update(scout.id, scout.revision, (latest) => ({
@@ -2139,6 +2129,7 @@ class TandemController {
         return stopped;
       });
       if (stopped.cleanup?.status === "quarantined") return stopped;
+      await this.closeSettledPresentationPanes(task.id);
       const outcome = await this.cleanupTerminalTask(stopped);
       if (outcome.status === "deferred") {
         await this.#deps.store.exclusive(async (store) => {
@@ -2153,7 +2144,6 @@ class TandemController {
             cleanup: { ...cleanup, reason: outcome.reason, observedAt },
           }));
         });
-        throw new Error(`research resources were retained: ${outcome.reason}`);
       }
       return (await this.#deps.store.read(task.id)) ?? stopped;
     }
@@ -2218,22 +2208,34 @@ class TandemController {
         if (!isMissingEndpoint(error) && !discard) throw error;
       }
     }
+    for (const endpoint of runtime.endpoints) {
+      try {
+        await closeEndpoint(this.#deps.run, { endpoint, cwd, force: discard });
+      } catch (error) {
+        if (!isMissingEndpoint(error)) throw error;
+      }
+    }
+    await this.closeSettledPresentationPanes(task.id);
+  }
+
+  private async closeSettledPresentationPanes(taskId: string): Promise<void> {
     // ponytail: only the retired presentation worker had its own pane. A finished one holds
     // nothing its artifact file doesn't, so it closes even with its process still running.
-    const presentationPanes = (await this.readState()).presentations.flatMap((presentation) =>
-      presentation.taskId === task.id &&
-      presentation.endpoint !== undefined &&
-      presentation.job !== undefined &&
-      !activeRuntimeJob(presentation.job)
-        ? [{ endpoint: presentation.endpoint, cwd: presentation.job.cwd, force: true }]
-        : [],
-    );
-    for (const pane of [
-      ...runtime.endpoints.map((endpoint) => ({ endpoint, cwd, force: discard })),
-      ...presentationPanes,
-    ]) {
+    for (const presentation of (await this.readState()).presentations) {
+      if (
+        presentation.taskId !== taskId ||
+        presentation.endpoint === undefined ||
+        presentation.job === undefined ||
+        activeRuntimeJob(presentation.job)
+      ) {
+        continue;
+      }
       try {
-        await closeEndpoint(this.#deps.run, pane);
+        await closeEndpoint(this.#deps.run, {
+          endpoint: presentation.endpoint,
+          cwd: presentation.job.cwd,
+          force: true,
+        });
       } catch (error) {
         if (!isMissingEndpoint(error)) throw error;
       }

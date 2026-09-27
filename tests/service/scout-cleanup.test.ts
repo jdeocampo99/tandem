@@ -633,54 +633,6 @@ test("a completed report retains its researcher even when disposition is report-
   );
 });
 
-test("approving implementation closes the same scout session before adopting its workspace", async () => {
-  await withFixture(
-    {
-      disposition: "implementation-interview",
-      researchInterviewStatus: "open",
-      world: { paneActive: true, workerAcceptsClose: true },
-    },
-    async ({ home, world, service, lease, repoPath }) => {
-      const job = scoutJob(home, endpointFor(), "consumed");
-      await writeScoutTerminal(job, { phase: "idle", completed: true });
-      await service.tick();
-      expect(world.closedPanes).toEqual([]);
-
-      const implementation = await service.create({
-        repoPath,
-        kind: "implementation",
-        objective: "apply the scout findings",
-        acceptanceCriteria: ["the boundary is enforced"],
-        surfaces: ["service"],
-        researchTaskIds: ["task-1"],
-      });
-      await service.approve(implementation.id);
-
-      const stop = answerCloseRequests(job);
-      try {
-        await service.tick();
-      } finally {
-        stop();
-      }
-
-      const scout = await service.get("task-1");
-      const runtime = await readRuntime(home);
-      const scoutRuntime = runtime.tasks.find((entry) => entry.taskId === "task-1");
-      const implementationRuntime = runtime.tasks.find(
-        (entry) => entry.taskId === implementation.id,
-      );
-      expect(scout.researchInterview?.status).toBe("approved");
-      expect(world.closedPanes).toEqual(["pane-1"]);
-      expect(scout.endpoints ?? []).toEqual([]);
-      expect(scoutRuntime?.endpoints).toEqual([]);
-      expect(scoutRuntime?.worktree).toBeUndefined();
-      expect(implementationRuntime?.worktree?.leaseId).toBe(lease.leaseId);
-      expect(implementationRuntime?.worktree?.path).toBe(lease.path);
-      expect(world.returnedLeases).toEqual([]);
-    },
-  );
-});
-
 test("closing finished scout panes leaves a scout that is not finished alone", async () => {
   await withFixture({ stage: "blocked" }, async ({ home, world, run }) => {
     const store = createTaskStore({

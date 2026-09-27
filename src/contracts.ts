@@ -332,13 +332,14 @@ export type FindingStatus = "addressed" | "unresolved" | "regressed" | "disputed
 /**
  * Fix rounds added on top of the pinned `maxFixRounds`, recorded beside the policy rather than in
  * it: `user` when the person answered "Keep fixing?" with yes, `no-commit` when a fix round ended
- * without a new commit and so did not spend the budget. `generation` is the task generation the
- * grant was recorded at.
+ * without a new commit and so did not spend the budget, `failed-checks` when a round started to fix
+ * failed validation, which never spends it. `generation` is the task generation the grant was
+ * recorded at.
  */
 export type FixRoundGrant = {
   readonly generation: number;
   readonly rounds: number;
-  readonly reason: "user" | "no-commit";
+  readonly reason: "user" | "no-commit" | "failed-checks";
 };
 
 /** One finding identity carried across review rounds, with the change supporting its status. */

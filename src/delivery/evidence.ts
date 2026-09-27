@@ -388,7 +388,7 @@ function draftBlockers(task: TaskRecord): readonly string[] {
   }
   if (task.stage === "awaiting-fixes" && task.reviewRound >= fixRoundBudget(task)) {
     blockers.push(
-      `The bounded fix-round loop is exhausted at ${task.reviewRound} of ${fixRoundBudget(task)}; no further fix round runs until the user says to keep fixing.`,
+      `The bounded fix-round loop is exhausted at ${task.reviewRound} of ${fixRoundBudget(task)}; no further fix round runs without the user's decision.`,
     );
   }
   const question = task.communication?.question;
