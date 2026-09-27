@@ -67,7 +67,6 @@ import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import { type FixRoundGate, fixRoundGate } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
-import type { ReviewAssistanceRuntime } from "../tasks/review-assistance.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import type { TranscriptRef } from "../tasks/timeline.ts";
 import { readValidationResult, type ValidationResult } from "../validation-worker.ts";
@@ -185,7 +184,6 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
   readonly maintainPoolForAllocation: (task: TaskRecord) => Promise<boolean>;
-  readonly reviewAssistance: ReviewAssistanceRuntime;
   /** Appends accounting facts. It records only; it never decides whether work may continue. */
   readonly recordRequestUsage: (events: readonly RequestUsageEvent[]) => Promise<void>;
   /** The accounting ledger's own rows for one request, read for economical routing's usage check. */

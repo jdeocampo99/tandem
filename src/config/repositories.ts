@@ -706,13 +706,6 @@ ${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"
 # validation = []
 # review = []
 
-# How carefully reviewers check changes. jevAssistance is "off" or "shadow" (never blocks; only
-# records what the classifier would have done). sourceTransmission sends reviewers source excerpts.
-# [reviewLevels]
-# deepScrutiny = false
-# jevAssistance = "off"
-# sourceTransmission = false
-
 # How PR watch merges published pull requests and how patient it is with CI. mergeWith is
 # "auto-merge" (GitHub's own), "queue-label" (add queueLabel; blockedLabel is the label the queue
 # adds when it kicks a pull request out), or "off". Until mergeWith is set, PR watch retries CI

@@ -4,12 +4,14 @@ import type {
   FindingObservation,
   FindingStatus,
   FixRoundGrant,
+  ReviewLevel,
   ReviewResult,
   StoredReviewLens,
   TaskQuestion,
   TaskRecord,
 } from "../contracts.ts";
 import { formatDecisionQuestion, shortNote, taskName } from "./question.ts";
+import { recordedReviewLevel } from "./review-levels.ts";
 
 const FINDING_SUMMARY_MAX_CHARS = 160;
 
@@ -32,11 +34,12 @@ export const FINDING_STATUSES: readonly FindingStatus[] = [
 const MAX_NAMED_OPEN_BLOCKERS = 5;
 
 /**
- * A review fails only on a P0 or P1, confirmed or plausible. A P2 or P3 is a known issue: it is
- * reported to the user with the ready task and never costs a fix round on its own.
+ * A review fails only on a P0, or on a P1 at the standard level, confirmed or plausible. Anything
+ * else is a known issue: it is reported to the user with the ready task and never costs a fix
+ * round on its own.
  */
-export function isBlockingFinding(finding: Pick<Finding, "severity">): boolean {
-  return finding.severity === "P0" || finding.severity === "P1";
+export function isBlockingFinding(finding: Pick<Finding, "severity">, level: ReviewLevel): boolean {
+  return finding.severity === "P0" || (finding.severity === "P1" && level === "standard");
 }
 
 /** A reviewer that copied an earlier `<lens>/<id>` rendering still names the same finding. */
@@ -132,15 +135,17 @@ export function recordReviewFindings(
 /** Ledger entries that still stand and that a review may not pass over. */
 export function ledgerBlockers(
   ledger: readonly FindingLedgerEntry[],
+  level: ReviewLevel,
 ): readonly FindingLedgerEntry[] {
-  return ledger.filter((entry) => entry.status !== "addressed" && isBlockingFinding(entry));
+  return ledger.filter((entry) => entry.status !== "addressed" && isBlockingFinding(entry, level));
 }
 
 /** Ledger entries that still stand but do not block acceptance on their own. */
 export function ledgerSuggestions(
   ledger: readonly FindingLedgerEntry[],
+  level: ReviewLevel,
 ): readonly FindingLedgerEntry[] {
-  return ledger.filter((entry) => entry.status !== "addressed" && !isBlockingFinding(entry));
+  return ledger.filter((entry) => entry.status !== "addressed" && !isBlockingFinding(entry, level));
 }
 
 /** Ledger entries a later review stopped reporting; they reopen only on new reported evidence. */
@@ -200,8 +205,11 @@ export function repeatedFindings(task: TaskRecord): readonly Finding[] {
   const earlier = task.reviews.filter((review) => review.generation < task.generation);
   const priorGeneration = Math.max(-1, ...earlier.map((review) => review.generation));
   const prior = earlier.filter((review) => review.generation === priorGeneration);
+  const { level } = recordedReviewLevel(task);
   if (prior.some((review) => review.head === task.reviewHead)) {
-    return current.flatMap((review) => review.findings.filter(isBlockingFinding));
+    return current.flatMap((review) =>
+      review.findings.filter((finding) => isBlockingFinding(finding, level)),
+    );
   }
   const before = new Map<string, Finding>();
   for (const review of prior) {
@@ -211,7 +219,7 @@ export function repeatedFindings(task: TaskRecord): readonly Finding[] {
     review.findings.filter((finding) => {
       const previous = before.get(identityOf(review.lens, finding.id));
       return (
-        isBlockingFinding(finding) &&
+        isBlockingFinding(finding, level) &&
         previous !== undefined &&
         previous.file === finding.file &&
         sameText(previous.description, finding.description)
@@ -290,7 +298,7 @@ export function keepFixingGrant(task: TaskRecord): FixRoundGrant {
 
 /** The open blockers a "Keep fixing?" question carries in its details. */
 export function describeOpenFindings(task: TaskRecord): string {
-  const blockers = ledgerBlockers(task.findingLedger ?? []);
+  const blockers = ledgerBlockers(task.findingLedger ?? [], recordedReviewLevel(task).level);
   const named = blockers.slice(0, MAX_NAMED_OPEN_BLOCKERS).map(describeFindingEntry).join("; ");
   const remainder = blockers.length - Math.min(blockers.length, MAX_NAMED_OPEN_BLOCKERS);
   const open =

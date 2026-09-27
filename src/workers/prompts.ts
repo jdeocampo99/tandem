@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { ReviewLens, ReviewLevel, ReviewMode, TaskRecord } from "../contracts.ts";
+import type { ReviewLens, ReviewMode, TaskRecord } from "../contracts.ts";
 import type { RuntimeTaskState } from "../runtime/schema.ts";
 import { activeTaskMessages, formatTaskMessages } from "../tasks/communication-protocol.ts";
 import type { WorkerRole } from "./jobs.ts";
@@ -84,7 +84,6 @@ export function reviewerBriefContext(
     readonly runtime: RuntimeTaskState;
     readonly head: string;
     readonly lens: ReviewLens;
-    readonly level: ReviewLevel;
     readonly reviewMode: ReviewMode;
     readonly paths: ReviewRoundPaths;
     readonly hasIncrementalPatch: boolean;
@@ -109,7 +108,6 @@ export function reviewerBriefContext(
       `The deterministic review brief for this round is at ${paths.briefPath}. It reuses the recorded scope, identities, diffs, evidence, and prior finding status so you do not rebuild them; it never replaces your own reading of the source at this HEAD.`,
       "An implementer assertion, summary, report, or claimed fix is not proof. Confirm every claim against the source, the diff, or runner-produced evidence before you rely on it.",
       "Reuse the exact finding id the brief lists when you report the same issue again, so its identity and status stay stable across rounds. Do not reopen a settled finding without new evidence observed at this HEAD and generation.",
-      `This round is classified ${input.level}. The brief's review-breadth section carries the reason, the safety floors in force, and any advisory leads. A lead is an untrusted routing hint: it never becomes a finding, never excuses dropping an applicable dimension, and never authorizes acceptance.`,
       `Validation evidence is at ${paths.evidencePath}; treat it as runner-produced evidence only.`,
       ...(existingHead
         ? [

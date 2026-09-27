@@ -4,7 +4,7 @@ What validation and review must prove before a task is `ready`, how findings per
 rounds, and how review depth is classified.
 
 Code: src/tasks/acceptance.ts, src/tasks/findings.ts, src/tasks/review-brief.ts,
-src/tasks/review-levels.ts, src/tasks/review-assistance.ts, src/tasks/lifecycle.ts,
+src/tasks/review-levels.ts, src/tasks/lifecycle.ts,
 src/validation-worker.ts, src/workers/validation.ts, src/workers/protocol.ts, src/workers/review-round.ts,
 src/workers/prompts.ts, src/workers/validation-stage.ts, src/workers/review-stage.ts,
 src/instructions.ts
@@ -103,8 +103,6 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   `unknown-impact`. Anything but `contained` requires reading the cumulative diff and callers in full.
 - `REVIEW_BRIEF_LIMITS` bounds the brief. Blocker identities and status are never elided; any elision
   is stated with a pointer to the durable record.
-- Advisory leads render with provenance under an untrusted heading and can never become blockers,
-  drop mandatory context, or authorize acceptance.
 - "User decisions" pairs earlier worker questions with the user's answers. `appendAnswer` clears
   `task.communication.question`, so the question survives as an acknowledged, non-surfacing
   notification under the id the answer's `replyTo` names. A listed decision is settled, and a
@@ -117,9 +115,10 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   A later-generation review that stops reporting an identity settles it `addressed` (any lens,
   including legacy); only a new report reopens it as `regressed`; contradicting verdicts are
   `disputed`.
-- `record-review` stores `pass` as "no P0 or P1 stands", ignoring the reviewer's flag. P0/P1
-  (confirmed or plausible) blocks; P2/P3 never costs a fix round, is not required in one, and is listed
-  in the ready message and the PR's `# Known issues`. A violated mandatory requirement from the brief or a
+- `record-review` stores `pass` as "no blocking finding stands", ignoring the reviewer's flag. A P0
+  blocks; a P1 blocks only at `standard` (see [Review levels](#review-levels)); both count confirmed
+  or plausible. Any other finding never costs a fix round, is not required in one, and is listed in
+  the ready message and the PR's `# Known issues`. A violated mandatory requirement from the brief or a
   behavior change outside its scope is P1; a Principles rule violation or a contrived edge case is
   P2. A fix round may decline a finding in its report; the next reviewer accepts it as P2 or names
   a realistic failure inside the task's scope. A P0/P1 names a realistic failing input.
@@ -137,40 +136,18 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
 
 ## Review levels
 
-src/tasks/review-levels.ts classifies each round `light`, `standard`, or `deep` from changed paths,
-their observed content, files referencing them, and the round's impact. Level, reason, and fired floors
-are recorded on the task and shown by `tandem show`.
+Before each review round, src/tasks/review-levels.ts classifies the task's cumulative diff at the
+reviewed HEAD as `light` or `standard`. The level and a one-line reason are recorded on the task,
+rendered as one line in the reviewer brief, and shown by `tandem show` and the draft PR.
 
-- Line count, title, or extension is never enough alone. Paths categorize only enumerated sensitive
-  locations (`package.json`, `migrations/`, `.github/`); everything else comes from diff content.
-- Safety floors: `permissions-security`, `data-integrity`, and `shared-contracts-concurrency` force
-  `deep`; `dependency-build-infra` forces `standard`.
-- Unknown impact is `deep`. Unobserved content, truncated patch, binary file, no observed file, or a
-  change outside the authorized surface is `standard`. `light` needs contained impact, every file
-  observed and categorized as implementation, tests, or docs, no floor, and counts within
-  `LIGHT_CLASSIFICATION_LIMITS`.
-- Reclassification only raises. Classification never touches pinned policy or model choices.
-- Pre-level records read as `standard` with every `reviewLevels` opt-in off. An unknown level or floor,
-  or a missing reason, fails closed.
-- With default policy the level changes nothing: every round runs the single `review` lens. The
-  `reviewLevels` policy (all off by default) adds `deepScrutiny` (fired floors become mandatory
-  scrutiny in a `deep` brief; adds work only), `jevAssistance` (`off` or `shadow`), and
-  `sourceTransmission` (explicit opt-in to send source out, separate from having `TYPESAFE_API_KEY`).
-  A retired `reducedRouting` key loads and is ignored.
-
-## Shadow helper assistance
-
-- src/tasks/review-assistance.ts asks the Jev transport (src/adapters/typesafe.ts) for a depth and
-  focus flags in one call. It runs only with `jevAssistance: "shadow"`, `sourceTransmission: true`,
-  and a credential; otherwise no source leaves the process.
-- Flags become advisory leads with full provenance and never become findings or authorize acceptance.
-- `raiseReviewLevel` can only raise; in shadow mode the deterministic level is used unchanged. Any
-  failure, timeout, malformed answer, low confidence, or stale context yields nothing and never blocks.
-- Screening refuses secret-bearing paths (`.env`, `*.pem`, `.ssh/`, and others) and obvious secret
-  content; the rest is capped by the `maxTransmitted*` limits in `REVIEW_ASSISTANCE_LIMITS`, whose
-  thresholds are provisional but whose transmission bounds are hard. Diagnostics go to
-  `<home>/logs/tandem.jsonl` without source content. The cache matches all six identities exactly.
-- Before moving `jevAssistance` past shadow, publish from `evals/review-levels/`: the issue #20
-  end-to-end benchmark, zero false-safe routing on high-risk, Tagalog, and adversarial fixtures
-  (reported separately from agreement), a threshold sweep, and a comparison against the deterministic
-  baseline, keeping the baseline unless clearly worse.
+- `light`: at most 5 changed files and 200 changed lines (added plus removed) and no sensitive path.
+  Anything else is `standard`, as is a truncated diff.
+- Sensitive paths are path-only: dependency manifests and lockfiles, build config, CI and
+  infrastructure, and migrations. Diff content never raises the level.
+- The level is recomputed fresh every round, so it can drop after a fix round shrinks the change.
+- The reviewer assigns honest severities; `isBlockingFinding` applies the threshold. At `light` only a
+  P0 blocks and a P1 is a known issue like a P2 or P3; at `standard` a P0 or P1 blocks. Every level
+  runs the single `review` lens.
+- A record with no level reads as `standard`. A record from before levels were cut to two may say
+  `deep`, which reads as `standard`; its floors and helper recommendation are dropped. An unknown
+  level or a missing reason fails closed.

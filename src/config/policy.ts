@@ -2,12 +2,10 @@ import type {
   AgentRole,
   ModelSpec,
   RepoPolicy,
-  ReviewLevelPolicy,
   SetupCommand,
   ValidationCommand,
 } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
-import { DEFAULT_REVIEW_LEVEL_POLICY } from "../tasks/review-levels.ts";
 import {
   assertKnownKeys,
   cloneChannels,
@@ -26,9 +24,9 @@ import {
   readThinkingLevel,
 } from "./values.ts";
 
-// ponytail: a repository config may still set "requestBudget" or "maxWorkers" from before standing
-// request budgets and the worker limit were removed; accept them here so the config still loads,
-// but their values are never read.
+// ponytail: a repository config may still set "requestBudget", "maxWorkers", or "reviewLevels" from
+// before standing request budgets, the worker limit, and review-level settings were removed; accept
+// them here so the config still loads, but their values are never read.
 const POLICY_KEYS: Readonly<Record<string, true>> = {
   version: true,
   models: true,
@@ -54,15 +52,6 @@ const SETUP_COMMAND_KEYS: Readonly<Record<string, true>> = {
   name: true,
   argv: true,
   timeoutMs: true,
-};
-
-// ponytail: a repository config may still set "reducedRouting" from before it was removed; accept
-// it here so the config still loads, but its value is never read (see readReviewLevels).
-const REVIEW_LEVEL_KEYS: Readonly<Record<string, true>> = {
-  reducedRouting: true,
-  deepScrutiny: true,
-  jevAssistance: true,
-  sourceTransmission: true,
 };
 
 const DEFAULT_MODELS: Readonly<Record<AgentRole, ModelSpec>> = {
@@ -233,39 +222,6 @@ function readSetupCommands(value: unknown, base: readonly SetupCommand[]): reado
   return parsed;
 }
 
-function readBoolean(value: unknown, field: string): boolean {
-  if (typeof value !== "boolean") throw new TypeError(`${field} must be a boolean`);
-  return value;
-}
-
-/**
- * Reads the review-level opt-ins. Each one is off unless the repository names it, and each one
- * is documented in `docs/reference/review-and-validation.md` as requiring the end-to-end
- * evaluation from issue #20 before it is turned on, because turning one on changes what review
- * actually runs.
- */
-function readReviewLevels(value: unknown, base: ReviewLevelPolicy): ReviewLevelPolicy {
-  if (!isRecord(value)) {
-    throw new TypeError("reviewLevels must be an object");
-  }
-  assertKnownKeys(value, REVIEW_LEVEL_KEYS, "reviewLevels");
-  const jevAssistance = hasKey(value, "jevAssistance")
-    ? readNonEmptyString(value.jevAssistance, "reviewLevels.jevAssistance")
-    : base.jevAssistance;
-  if (jevAssistance !== "off" && jevAssistance !== "shadow") {
-    throw new TypeError("reviewLevels.jevAssistance must be off or shadow");
-  }
-  return {
-    deepScrutiny: hasKey(value, "deepScrutiny")
-      ? readBoolean(value.deepScrutiny, "reviewLevels.deepScrutiny")
-      : base.deepScrutiny,
-    jevAssistance,
-    sourceTransmission: hasKey(value, "sourceTransmission")
-      ? readBoolean(value.sourceTransmission, "reviewLevels.sourceTransmission")
-      : base.sourceTransmission,
-  };
-}
-
 export function copyPolicy(policy: PolicyBase): RepoPolicy {
   const models = {} as Record<AgentRole, ModelSpec>;
   for (const role of MODEL_ROLE_ORDER) {
@@ -288,7 +244,6 @@ export function copyPolicy(policy: PolicyBase): RepoPolicy {
       timeoutMs: command.timeoutMs,
     })),
     maxFixRounds: policy.maxFixRounds,
-    reviewLevels: { ...policy.reviewLevels },
     ...(policy.standards === undefined ? {} : { standards: policy.standards }),
   };
 }
@@ -342,9 +297,6 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
   const maxFixRounds = hasKey(input, "maxFixRounds")
     ? readPositiveInteger(input.maxFixRounds, "maxFixRounds")
     : base.maxFixRounds;
-  const reviewLevels = hasKey(input, "reviewLevels")
-    ? readReviewLevels(input.reviewLevels, base.reviewLevels)
-    : { ...base.reviewLevels };
   const standards = hasKey(input, "standards") ? readStandards(input.standards) : base.standards;
 
   return {
@@ -355,7 +307,6 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     validationCommands,
     setupCommands,
     maxFixRounds,
-    reviewLevels,
     ...(standards === undefined ? {} : { standards }),
   };
 }
@@ -389,7 +340,6 @@ function buildDefaultPolicy(): RepoPolicy {
     validationCommands: [],
     setupCommands: [],
     maxFixRounds: 2,
-    reviewLevels: { ...DEFAULT_REVIEW_LEVEL_POLICY },
   };
 }
 

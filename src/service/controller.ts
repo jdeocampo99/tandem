@@ -182,11 +182,6 @@ import {
   type ResearchContinuationClassifier,
   researchContinuationClassifier,
 } from "../tasks/research-continuation-classifier.ts";
-import {
-  type ReviewAssistanceRuntime,
-  reviewAssistanceConfig,
-  reviewAssistanceRuntime,
-} from "../tasks/review-assistance.ts";
 import { createTaskStore, type TaskStore, transitionStoredTask } from "../tasks/store.ts";
 import { readTimeline } from "../tasks/timeline-store.ts";
 import {
@@ -312,8 +307,6 @@ export type TandemServiceOptions = Readonly<{
   readonly classifyResearchContinuation?: ResearchContinuationClassifier;
   /** Picks a new implementation task's playbook; defaults to the general playbook. */
   readonly classifyPlaybook?: PlaybookClassifier;
-  /** The Jev transport, cache, and diagnostics sink review-level assistance is allowed to use. */
-  readonly reviewAssistance?: ReviewAssistanceRuntime;
   /** Folders crawled for another repository's checkout; unset reads `projectRoots` on each use. */
   readonly projectRoots?: readonly string[];
   /** The home folder whose skill folders hold the user's personal skills; defaults to the OS home. */
@@ -556,7 +549,6 @@ type ServiceDependencies = Readonly<{
   runtimePath: string;
   workerPath: string;
   validationWorkerPath: string;
-  reviewAssistance: ReviewAssistanceRuntime;
   projectRoots: () => Promise<readonly string[]>;
   personalSkillsHome: string;
   checkIssueDraft: IssueDraftChecker;
@@ -805,7 +797,6 @@ class TandemController {
       removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
-      reviewAssistance: deps.reviewAssistance,
       recordRequestUsage: (events) => this.#accounting.record(events),
       readRequestUsage: (requestId) => deps.usageLedger.read(requestId),
       readModelCatalogue: (cwd) => this.readModelCatalogue(cwd),
@@ -2803,18 +2794,6 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     runtimePath: runtimeFile(home),
     workerPath: fileURLToPath(new URL("../worker.ts", import.meta.url)),
     validationWorkerPath: fileURLToPath(new URL("../validation-worker.ts", import.meta.url)),
-    reviewAssistance:
-      options.reviewAssistance ??
-      reviewAssistanceRuntime({
-        ...reviewAssistanceConfig(process.env),
-        recordDiagnostic: async (event, details) => {
-          try {
-            await appendDiagnosticEvent(home, { event, details });
-          } catch {
-            // Assistance diagnostics are best effort and never change review behavior.
-          }
-        },
-      }),
     projectRoots:
       options.projectRoots === undefined
         ? () => projectRoots(home, process.env)

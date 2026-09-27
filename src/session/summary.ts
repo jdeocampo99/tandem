@@ -226,13 +226,8 @@ function summarizeTask(task: TaskRecord): string {
     );
   }
   if (task.reviewLevel !== undefined) {
-    const level = task.reviewLevel;
-    const assistance =
-      level.assistance === undefined
-        ? ""
-        : `; suggested ${level.assistance.recommendation} (not applied)`;
     lines.push(
-      `Review level: ${level.level}; minimum ${level.floors.length === 0 ? "none" : level.floors.join(", ")}; because ${compactText(level.reason, ACTION_SUMMARY_MAX_TEXT)}${assistance}`,
+      `Review level: ${task.reviewLevel.level}; because ${compactText(task.reviewLevel.reason, ACTION_SUMMARY_MAX_TEXT)}`,
     );
   }
   if (currentReviews.length > 0) {

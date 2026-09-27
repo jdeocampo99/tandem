@@ -4,7 +4,7 @@ import type { Finding, ReviewResult, WorkerReceipt } from "../contracts.ts";
 import { openSteps, type TodoItem } from "../playbooks/progress.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
-import { findingHeadline, isBlockingFinding } from "../tasks/findings.ts";
+import { findingHeadline } from "../tasks/findings.ts";
 import {
   parseWorkerResult,
   type WorkerJob,
@@ -122,7 +122,7 @@ export function reviewSummary(review: ReviewResult, round: number | undefined): 
   const title = round === undefined ? "Review" : `Review round ${round}`;
   const count = review.findings.length;
   if (count === 0) return `${title}: approved, no findings.`;
-  const verdict = review.findings.some(isBlockingFinding) ? "changes needed" : "approved";
+  const verdict = review.pass ? "approved" : "changes needed";
   const lines = [...review.findings]
     .sort((left, right) => SEVERITY_ORDER[left.severity] - SEVERITY_ORDER[right.severity])
     .map((finding) => {

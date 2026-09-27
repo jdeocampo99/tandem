@@ -14,6 +14,7 @@ import type { CoordinatorUsageEntry } from "../runtime/usage-receipt.ts";
 import type { SourceRefreshResult, TandemService } from "../service/controller.ts";
 import { isMissing, isTerminalTask } from "../service/records.ts";
 import { fixRoundBudget, ledgerBlockers } from "../tasks/findings.ts";
+import { recordedReviewLevel } from "../tasks/review-levels.ts";
 import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
 import { WELCOME_TEXT } from "../terminal/welcome.ts";
 import type { ReplyUsage } from "../workers/terminal.ts";
@@ -62,7 +63,7 @@ export function reviewStatus(task: TaskRecord): string | undefined {
     (review) => review.head === task.reviewHead && review.generation === task.generation,
   );
   const failed = current.filter((review) => !review.pass).map((review) => review.lens);
-  const blockers = ledgerBlockers(task.findingLedger ?? []).length;
+  const blockers = ledgerBlockers(task.findingLedger ?? [], recordedReviewLevel(task).level).length;
   const parts = [
     task.reviewRound === 0
       ? task.stage

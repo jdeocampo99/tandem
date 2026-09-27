@@ -39,7 +39,7 @@ src/service/draft-refresh.ts, src/presentations/, src/adapters/lavish.ts
 
 - Marked unfinished twice: GitHub draft state and a banner saying it is visibility only, not ready,
   mergeable, deployable, or accepted.
-- Reports the recorded review level with the classifier's reason and safety floors, then what the
+- Reports the recorded review level with the classifier's reason, then what the
   pinned policy still requires at final acceptance regardless of level. No recorded level reads as
   `standard`. Showing a level never changes the gates.
 - Reports current activity, blockers (durable block reason, bounded-loop exhaustion, unanswered
@@ -120,7 +120,7 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
 - A brief approved with `skipReview` gives its tasks required stages without review
   ([task-lifecycle.md](task-lifecycle.md#required-stages)); the review stage then applies the same
   event from `reviewing` once validation passes, without the stop step.
-- `# Validation` says review was skipped, names any safety floors the diff tripped, and lists the
+- `# Validation` says review was skipped and lists the
   validation that passed before the skip. If publication fails after the skip, the task stays
   `ready` and a normal `publish` can retry. Merge stays separate.
 

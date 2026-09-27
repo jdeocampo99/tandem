@@ -394,9 +394,9 @@ function boundedLine(value: string | undefined, field: string): string | undefin
 }
 
 /**
- * The reviewer submits only its findings and summary. The lens, HEAD, and generation come from the
- * job, and the review passes exactly when no P0 or P1 finding stands, so none of them can be
- * mistyped or disagree with the findings.
+ * The reviewer submits only its findings and summary. The lens, HEAD, generation, and level come
+ * from the job, and the review passes exactly when no finding blocks at that level, so none of them
+ * can be mistyped or disagree with the findings.
  */
 function submittedReview(job: WorkerJob, value: unknown): ReviewResult {
   if (job.review === undefined) {
@@ -418,7 +418,8 @@ function submittedReview(job: WorkerJob, value: unknown): ReviewResult {
   } catch (error) {
     throw new ReportRejection(error instanceof Error ? error.message : "review is invalid");
   }
-  return { ...review, pass: !review.findings.some(isBlockingFinding) };
+  const level = job.review.level ?? "standard";
+  return { ...review, pass: !review.findings.some((finding) => isBlockingFinding(finding, level)) };
 }
 
 /** Human-readable report file text; structured fields stay authoritative on the result. */

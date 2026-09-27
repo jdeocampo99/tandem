@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import type { BlockCause } from "../../src/contracts.ts";
 import { taskRuntime } from "../../src/runtime/activity.ts";
 import { readRuntimeState, runtimeFile } from "../../src/runtime/persistence.ts";
-import { reviewAssistanceRuntime } from "../../src/tasks/review-assistance.ts";
 import { transitionStoredTask } from "../../src/tasks/store.ts";
 import { WorkerWorkflow } from "../../src/workers/workflow.ts";
 import {
@@ -67,7 +66,6 @@ function workflowFor(world: ScenarioWorld, blocks: RecordedBlock[]): WorkerWorkf
     removeEndpoint: unused("removeEndpoint"),
     setRuntimeError: unused("setRuntimeError"),
     maintainPoolForAllocation: async () => true,
-    reviewAssistance: reviewAssistanceRuntime({ timeoutMs: 1 }),
     recordRequestUsage: async () => {},
     readRequestUsage: unused("readRequestUsage"),
     readModelCatalogue: unused("readModelCatalogue"),

@@ -56,11 +56,6 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
     validationCommands: [],
     setupCommands: [],
     maxFixRounds: 1,
-    reviewLevels: {
-      deepScrutiny: false,
-      jevAssistance: "off",
-      sourceTransmission: false,
-    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
