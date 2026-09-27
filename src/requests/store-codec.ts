@@ -4,9 +4,9 @@ import {
   LEGACY_ENDPOINT_ROLES,
   type RequestBriefApproval,
   type RequestBriefChangeKind,
-  type RequestBriefStoredContent,
   type RequestBriefRecord,
   type RequestBriefRevision,
+  type RequestBriefStoredContent,
   type RequestReviewPane,
   type RequestReviewPaneStatus,
 } from "../contracts.ts";

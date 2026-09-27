@@ -268,7 +268,7 @@ const invalidRequests: readonly [string, unknown][] = [
         repoPath: "/r",
         content: {
           ...brief,
-          userStories: [...brief.userStories, ...brief.userStories, ...brief.userStories],
+          userStories: Array.from({ length: 4 }, () => brief.userStories[0]),
         },
         reviewPane: false,
       },

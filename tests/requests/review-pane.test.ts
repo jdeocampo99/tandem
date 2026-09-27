@@ -260,7 +260,7 @@ test("a failed render is reported without losing the durable brief", async () =>
 
     expect(projected.status).toBe("quarantined");
     expect(projected.reason).toContain("could not render revision 1");
-    expect(await readFile(projected.renderedPath, "utf8")).toContain("Revision 1,");
+    expect(await readFile(projected.renderedPath, "utf8")).toContain("Revision 1. Plan status");
   });
 });
 

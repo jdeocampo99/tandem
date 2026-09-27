@@ -134,11 +134,11 @@ test("approving a brief without a requestId resolves the one request awaiting ap
       contentDigest: drafted.record.draft.contentDigest,
     });
     expect(drafted.markdown).toContain("Plan status: not approved yet.");
-    expect(drafted.markdown).toContain("Implementation still requires separate approval");
+    expect(drafted.markdown).toContain("Implementation scope, publication, direct merges");
     expect(approved.approvalState).toBe("current");
     expect(approved.record.id).toBe(drafted.record.id);
     expect(approved.markdown).toContain("Plan status: approved at revision 1 on");
-    expect(approved.markdown).toContain("Implementation still requires separate approval");
+    expect(approved.markdown).toContain("Implementation scope, publication, direct merges");
   } finally {
     await close();
   }
@@ -281,7 +281,7 @@ test("abandoning a stale draft lets a no-id approval land on the one brief still
       workflow.draft({
         repoPath: "/repo",
         requestId: stale.record.id,
-        content: stale.record.draft.content,
+        content: content({ goal: "A request the user walked away from" }),
         reviewPane: false,
       }),
     ).rejects.toMatchObject({ code: "request-abandoned" });
