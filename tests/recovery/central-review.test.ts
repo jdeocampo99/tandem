@@ -13,7 +13,8 @@ import type {
 } from "../../src/contracts.ts";
 import { CentralRecoveryWorkflow, RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
 import {
-  isQuarantinedReviewFailure,
+  isDeadReviewFailure,
+  STOPPED_BEFORE_RESULT_REASON,
   unresolvedReviewFailure,
 } from "../../src/recovery/central-review.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
@@ -335,9 +336,9 @@ test("unresolvedReviewFailure ignores a lens a newer job already completed, but 
   }
 });
 
-test("isQuarantinedReviewFailure only matches the exact durable-quarantine reasons", () => {
+test("isDeadReviewFailure only matches the exact dead-worker reasons", () => {
   expect(
-    isQuarantinedReviewFailure(
+    isDeadReviewFailure(
       deadReviewJob({
         lens: "verification",
         error: "owned endpoint disappeared before a durable result was written",
@@ -345,7 +346,7 @@ test("isQuarantinedReviewFailure only matches the exact durable-quarantine reaso
     ),
   ).toBe(true);
   expect(
-    isQuarantinedReviewFailure(
+    isDeadReviewFailure(
       deadReviewJob({
         lens: "verification",
         error: "worker stopped without a durable result: timeout",
@@ -353,7 +354,12 @@ test("isQuarantinedReviewFailure only matches the exact durable-quarantine reaso
     ),
   ).toBe(true);
   expect(
-    isQuarantinedReviewFailure(
+    isDeadReviewFailure(
+      deadReviewJob({ lens: "verification", error: STOPPED_BEFORE_RESULT_REASON }),
+    ),
+  ).toBe(true);
+  expect(
+    isDeadReviewFailure(
       deadReviewJob({
         lens: "verification",
         error: "review worker completed without complete review identity",
@@ -361,7 +367,7 @@ test("isQuarantinedReviewFailure only matches the exact durable-quarantine reaso
     ),
   ).toBe(false);
   expect(
-    isQuarantinedReviewFailure(
+    isDeadReviewFailure(
       deadReviewJob({
         lens: "verification",
         error:

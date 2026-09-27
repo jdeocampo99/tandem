@@ -9,6 +9,7 @@ import type {
   IdFactory,
   TaskRecord,
 } from "../contracts.ts";
+import { STOPPED_BEFORE_RESULT_REASON } from "../recovery/central-review.ts";
 import { activeRuntimeJob, taskRuntime } from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
 import { readRuntimeState, writeRuntimeState } from "../runtime/persistence.ts";
@@ -179,8 +180,7 @@ function releaseStoppedRuntime(
               ? {
                   ...job,
                   phase: "failed",
-                  error:
-                    "worker stopped before writing a terminal result; continuation will be dispatched",
+                  error: STOPPED_BEFORE_RESULT_REASON,
                 }
               : job,
         );

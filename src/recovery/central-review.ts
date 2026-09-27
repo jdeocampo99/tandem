@@ -49,29 +49,33 @@ export function unresolvedReviewFailure(
   return undefined;
 }
 
+/** The reason a restart or resume records on a job whose worker it proved stopped (src/tasks/control.ts). */
+export const STOPPED_BEFORE_RESULT_REASON =
+  "worker stopped before writing a terminal result; continuation will be dispatched";
+
 /**
- * The exact reason prefixes `failJob`'s quarantine=true call sites write in workflow.ts
- * (`reconcileJob`/`reconcileMissingEndpoint`): an unowned/dead worker proven only by its pane or
- * result disappearing, never a completed run that reported its own failure, a stale canonical
- * instruction, or a malformed result. Keep these in sync with those literal reason strings.
+ * The reason prefixes of a dead worker proven only by its pane or result disappearing, or by a
+ * restart stopping it, never a completed run that reported its own failure, a stale canonical
+ * instruction, or a malformed result. The first three are `failJob`'s literal reasons in
+ * workflow.ts (`reconcileJob`/`settleWorkerJob`/`reconcileMissingEndpoint`); keep them in sync.
  */
-export const QUARANTINED_JOB_REASON_PREFIXES = [
+export const DEAD_JOB_REASON_PREFIXES = [
   "worker job has no durable endpoint identity",
   "worker stopped without a durable result",
   "owned endpoint disappeared",
+  STOPPED_BEFORE_RESULT_REASON,
 ] as const;
 
 /**
- * True only for the durable-quarantine shape central recovery may relaunch automatically. Read from
+ * True only for the dead-worker shape central recovery may relaunch automatically. Read from
  * the dead job's own recorded reason rather than the runtime's live `operation.phase`: central
  * recovery settles that phase to `"failed"` as part of re-entry (so the replacement attempt's own
  * routing decision reads a known-safe prior outcome, not a still-quarantined one), and this check
  * must keep agreeing with itself across that exact settling.
  */
-export function isQuarantinedReviewFailure(job: DurableJob): boolean {
+export function isDeadReviewFailure(job: DurableJob): boolean {
   const reason = job.error;
   return (
-    reason !== undefined &&
-    QUARANTINED_JOB_REASON_PREFIXES.some((prefix) => reason.startsWith(prefix))
+    reason !== undefined && DEAD_JOB_REASON_PREFIXES.some((prefix) => reason.startsWith(prefix))
   );
 }
