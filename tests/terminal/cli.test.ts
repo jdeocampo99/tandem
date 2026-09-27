@@ -837,6 +837,7 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
     };
     let runner = coordinatorRunner(runnerInput);
     let startPersistentCalls = 0;
+    const serverDirectories: string[] = [];
     let serverRunning = false;
     let restoredLabel = "Tandem coordinator · repo";
     // The previous coordinator's pane/process state before its owned pane closes, distinct
@@ -934,8 +935,9 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
       async () => {
         const dependencies = {
           run,
-          startPersistent: async () => {
+          startPersistent: async (spec: Readonly<{ cwd: string }>) => {
             startPersistentCalls += 1;
+            serverDirectories.push(spec.cwd);
             serverRunning = true;
             return undefined;
           },
@@ -960,6 +962,8 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
       },
     );
     expect(startPersistentCalls).toBe(2);
+    // Returning a coordinator worktree ends processes inside it, so the server runs elsewhere.
+    expect(serverDirectories).toEqual([home, home]);
     expect(result.reused).toBeUndefined();
     // The default behavior closes the previous coordinator's owned pane instead of retaining it.
     expect(oldPaneClosed).toBe(true);
