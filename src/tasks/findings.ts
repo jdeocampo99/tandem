@@ -157,12 +157,29 @@ export function describeFindingEntry(entry: FindingLedgerEntry): string {
   return `${entry.lens}/${entry.id} (${entry.verdict} ${entry.severity}, ${entry.status}${where}) since round ${entry.raisedAt.reviewRound}, status set at round ${entry.statusAt.reviewRound} HEAD ${entry.statusAt.head}`;
 }
 
-/** The fix rounds a task may spend: the pinned `maxFixRounds` plus every recorded grant. */
+/**
+ * The fix rounds a task may spend: the pinned `maxFixRounds` plus every recorded grant, plus the
+ * round a failed validation is waiting on, since a round that fixes failed checks is free.
+ */
 export function fixRoundBudget(task: TaskRecord): number {
   return (task.fixRoundGrants ?? []).reduce(
     (total, grant) => total + grant.rounds,
-    task.policy.config.maxFixRounds,
+    task.policy.config.maxFixRounds + (failedChecks(task).length > 0 ? 1 : 0),
   );
+}
+
+/** The checks that failed at the HEAD under review. */
+export function failedChecks(task: TaskRecord): readonly string[] {
+  const failed = task.validationEvidence
+    .filter((entry) => entry.head === task.reviewHead && entry.exitCode !== 0)
+    .map((entry) => entry.name);
+  return [...new Set(failed)];
+}
+
+/** Failed checks the fix round just finished was started to fix. */
+function repeatedChecks(task: TaskRecord): readonly string[] {
+  const targeted = task.iterationScope?.reproduces ?? [];
+  return failedChecks(task).filter((name) => targeted.includes(name));
 }
 
 function sameText(left: string, right: string): boolean {
@@ -207,9 +224,10 @@ export const KEEP_FIXING_QUESTION_ID_PREFIX = "keep-fixing-";
 
 /**
  * What a task in `awaiting-fixes` must do before another fix round. It asks "Keep fixing?" once the
- * fix-round budget is spent, or earlier when the review repeats a finding unchanged; a "yes" already
- * recorded at this generation settles the repeat. A task may extend its budget only once, so when
- * the rounds a "yes" added are spent too, it stops for the user instead of asking again.
+ * fix-round budget is spent, or earlier when the review repeats a finding unchanged or a check fails
+ * again after the round that targeted it; a "yes" already recorded at this generation settles the
+ * repeat. A task may extend its budget only once, so when the rounds a "yes" added are spent too, it
+ * stops for the user instead of asking again.
  * `undefined` means the next round may run.
  */
 export type FixRoundGate =
@@ -229,12 +247,15 @@ export function fixRoundGate(task: TaskRecord): FixRoundGate | undefined {
   const approved = (task.fixRoundGrants ?? []).some(
     (grant) => grant.reason === "user" && grant.generation === task.generation,
   );
+  const repeatedCheck = approved ? undefined : repeatedChecks(task)[0];
   const repeated = approved ? undefined : repeatedFindings(task)[0];
-  if (!spent && repeated === undefined) return undefined;
+  if (!spent && repeated === undefined && repeatedCheck === undefined) return undefined;
   const note =
-    repeated === undefined
-      ? `It used all ${budget} fix rounds`
-      : `The same finding came back: ${repeated.description}`;
+    repeatedCheck !== undefined
+      ? `The ${repeatedCheck} check failed again`
+      : repeated === undefined
+        ? `It used all ${budget} fix rounds`
+        : `The same finding came back: ${repeated.description}`;
   return {
     type: "ask",
     question: {

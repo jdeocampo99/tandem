@@ -76,17 +76,19 @@ decides them; the lifecycle and the review stage read the record and never re-de
   generation, retires the old review round, returns to `implementing`, and keeps only passing checks
   at the reported commit's exact HEAD.
 - Budget is pinned `maxFixRounds` (default 2) plus `fixRoundGrants`, stored beside the pinned policy,
-  which never changes.
-- `Keep fixing "<task>"?` is asked before a round when the budget is spent, or the latest review
+  which never changes. Only review findings spend it: a round started by failed validation records a
+  one-round `failed-checks` grant, so failed checks never exhaust the budget.
+- `Keep fixing "<task>"?` is asked before a round when the budget is spent, the latest review
   repeats a blocker unchanged (same lens and id, file, and description ignoring case and spacing;
-  if HEAD did not move, every remaining blocker counts). The task blocks with `fix-rounds-exhausted`
+  if HEAD did not move, every remaining blocker counts), or a check fails again after the round
+  whose `iterationScope` targeted it. The task blocks with `fix-rounds-exhausted`
   and a durable question listing open blockers. Only exact `yes` or `no` is accepted:
   - `yes` records a `user` grant and resumes in the same worktree: a full `maxFixRounds` if the
     budget was spent, or no extra round if asked early (it only settles that generation's repeat).
   - `no` clears the question; the task stays blocked. Never create a new task to bypass the limit.
-- A task extends its budget at most once, so it runs at most twice `maxFixRounds` (plus `no-commit`
-  rounds). Once a `yes` has added rounds and those are spent, Tandem asks nothing more, repeat or
-  not: the task blocks with `fix-rounds-exhausted`, a summary that it used all its fix rounds, and
+- A task extends its budget at most once, so it runs at most twice `maxFixRounds` review rounds
+  (plus `no-commit` and `failed-checks` rounds). Once a `yes` has added rounds and those are spent,
+  Tandem asks nothing more, repeat or not: the task blocks with `fix-rounds-exhausted`, a summary that it used all its fix rounds, and
   the open blockers in the detail, so the user can take it over, publish it as-is
   ([publish now](delivery.md#publish-now-user-skips-review)), or cancel it.
 - A round ending on an already-reviewed HEAD records a one-round `no-commit` grant instead of

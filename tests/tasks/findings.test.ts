@@ -332,6 +332,49 @@ test("a repeated finding after the budget was extended stops once those rounds a
   expect(fixRoundGate({ ...task, reviewRound: 3 })?.type).toBe("ask");
 });
 
+function failedCheck(name: string): TaskRecord["validationEvidence"][number] {
+  return {
+    name,
+    argv: [name],
+    exitCode: 1,
+    stdout: "",
+    stderr: "",
+    head: "head-2",
+    contract: "legacy",
+  };
+}
+
+test("failed checks after a spent budget run a free round instead of asking", () => {
+  const task: TaskRecord = { ...taskWith([]), validationEvidence: [failedCheck("build")] };
+
+  expect(fixRoundBudget(task)).toBe(3);
+  expect(fixRoundGate(task)).toBeUndefined();
+});
+
+test("a check that fails again after the round that targeted it asks Keep fixing?", () => {
+  const scope = {
+    head: "head-1",
+    generation: 1,
+    policyDigest: "digest",
+    reproduces: ["build"],
+    surfaces: [],
+    findingIds: [],
+  };
+  const task: TaskRecord = {
+    ...taskWith([], 1),
+    validationEvidence: [failedCheck("build")],
+    iterationScope: scope,
+  };
+
+  expect(askedQuestion(task)?.text).toBe(
+    'Keep fixing "Bound the retry loop"? The build check failed again.',
+  );
+  expect(
+    fixRoundGate({ ...task, iterationScope: { ...scope, reproduces: ["test"] } }),
+  ).toBeUndefined();
+  expect(fixRoundGate({ ...task, fixRoundGrants: [keepFixingGrant(task)] })).toBeUndefined();
+});
+
 test("a reworded finding is not a repeat, but any blocker at an unchanged HEAD is", () => {
   const task: TaskRecord = {
     ...taskWith([], 1),

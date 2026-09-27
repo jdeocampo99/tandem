@@ -13,7 +13,7 @@ import {
   type WorktreeLease,
 } from "../../src/contracts.ts";
 import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
-import { ledgerBlockers } from "../../src/tasks/findings.ts";
+import { fixRoundBudget, ledgerBlockers } from "../../src/tasks/findings.ts";
 import {
   ALL_REVIEW_LENSES,
   createTask,
@@ -584,6 +584,63 @@ test("records failed validation, bounds fix rounds, and invalidates old review a
   );
   expect(task.stage).toBe("validating");
   expect(task.validationEvidence).toHaveLength(0);
+});
+
+test("a round that fixes failed checks is free; only review rounds spend the budget", () => {
+  const fail = (task: TaskRecord, head: string, generation: number): TaskRecord =>
+    transitionTask(
+      transitionTask(task, { type: "implementation-complete", head, generation }, context()),
+      {
+        type: "validation-failed",
+        head,
+        generation,
+        contract: "final",
+        policyDigest,
+        evidence: [evidence(head, "final", 1)],
+      },
+      context(),
+    );
+  const failReview = (task: TaskRecord, head: string, generation: number): TaskRecord => {
+    let next = transitionTask(
+      task,
+      { type: "implementation-complete", head, generation },
+      context(),
+    );
+    next = transitionTask(
+      next,
+      {
+        type: "validation-succeeded",
+        head,
+        generation,
+        contract: "final",
+        policyDigest,
+        evidence: [evidence(head, "final")],
+      },
+      context(),
+    );
+    next = transitionTask(
+      next,
+      { type: "record-review", review: review("review", false, head, generation) },
+      context(),
+    );
+    return transitionTask(next, { type: "finish-review", head, generation }, context());
+  };
+
+  // maxFixRounds is 1: two rounds for failed checks, then one review round, all run.
+  let task = fail(startImplementation(), "head-1", 0);
+  task = transitionTask(task, { type: "begin-fixes", head: "head-1", generation: 0 }, context());
+  task = fail(task, "head-2", 1);
+  task = transitionTask(task, { type: "begin-fixes", head: "head-2", generation: 1 }, context());
+  task = failReview(task, "head-3", 2);
+  task = transitionTask(task, { type: "begin-fixes", head: "head-3", generation: 2 }, context());
+  expect(task.reviewRound).toBe(3);
+  expect(fixRoundBudget(task)).toBe(3);
+
+  // A second review round is past the budget.
+  task = failReview(task, "head-4", 3);
+  expect(() =>
+    transitionTask(task, { type: "begin-fixes", head: "head-4", generation: 3 }, context()),
+  ).toThrow(TaskTransitionError);
 });
 
 test("a review-only fix round goes straight to review and runs the checks once it passes", () => {
