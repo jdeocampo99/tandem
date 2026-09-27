@@ -22,12 +22,14 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
 - Tool text is a bounded summary; structured details stay in the tool result and durable reports.
 - `trace` reads one in-scope task's timeline without changing task or notification state. Coordinator
   trace requests accept safe task IDs up to 256 characters so the complete rollup fits within the
-  12,000-character structured-result cap, alongside up to 16 newest events that fit. Task creation
-  and storage retain their prior ID contract; longer safe IDs remain readable, but coordinator
-  trace rejects them. Text is capped at 4,000 characters; very long accepted IDs are abbreviated
-  while structured details retain the full ID and rollup. Trace skips post-action reconciliation and
-  scheduler ticks; a trace-only model turn also skips final agent-end reconciliation. Any other
-  action/tool in that turn keeps normal final reconciliation. CLI `tandem trace` is unchanged.
+  12,000-character structured-result cap, alongside the newest chronological suffix of up to 16
+  events that fits. If the newest event is too large, it and all older events are omitted rather
+  than backfilled. Task creation and storage retain their prior ID contract; longer safe IDs remain
+  readable, but coordinator trace rejects them. Text is capped at 4,000 characters; very long
+  accepted IDs are abbreviated while structured details retain the full ID and rollup. Trace skips
+  post-action reconciliation and scheduler ticks; a trace-only model turn also skips final agent-end
+  reconciliation. Any other action/tool in that turn keeps normal final reconciliation.
+  CLI `tandem trace` is unchanged.
 - A refusal the coordinator recovers from by asking the user carries its own next step, so the
   per-turn prompt does not: `create` and `review-pr` asking where a repository is, and `create`
   finding no saved validation commands for another repository.

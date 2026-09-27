@@ -1460,6 +1460,60 @@ test("trace omits oversized event payloads from structured details", async () =>
   );
 });
 
+test("trace never backfills older events past an oversized newest event", async () => {
+  const olderEvent: StoredTimelineEvent = {
+    type: "question-asked",
+    taskId: "task-1",
+    at: "2030-01-01T00:00:00.000Z",
+    questionId: "older-question",
+    seq: 1,
+  };
+  const newestEvent: StoredTimelineEvent = {
+    type: "fix-round",
+    taskId: "task-1",
+    at: "2030-01-01T00:01:00.000Z",
+    round: 2,
+    generation: 1,
+    findingIds: Array.from({ length: 5_000 }, (_, index) => `finding-${index}`),
+    seq: 2,
+  };
+  const trace: TaskTrace = {
+    events: [olderEvent, newestEvent],
+    unreadableEvents: 3,
+    rollup: {
+      taskId: "task-1",
+      firstPassReview: false,
+      fixRounds: 2,
+      blockedMs: 12_345,
+      cost: {
+        currency: "USD",
+        amountMicros: 987_654,
+        actualSamples: 2,
+        estimatedSamples: 1,
+        unavailableSamples: 3,
+      },
+    },
+  };
+  const service = { trace: async () => trace } as unknown as TandemService;
+  const outcome = await runTandemTool(
+    { action: "trace", taskId: "task-1" },
+    callDependencies(service, []),
+    undefined,
+  );
+  const boundedTrace = (outcome.details as Readonly<{ value: BoundedTaskTrace }>).value;
+
+  expect(outcome.isError).toBe(false);
+  expect(boundedTrace.events).toEqual([]);
+  expect(boundedTrace.omittedEvents).toBe(2);
+  expect(boundedTrace.unreadableEvents).toBe(3);
+  expect(boundedTrace.rollup).toEqual(trace.rollup);
+  expect(outcome.text).toContain("2 readable; showing 0 newest; 2 omitted; 3 unreadable");
+  expect(outcome.text).not.toContain("older-question");
+  expect((JSON.stringify(outcome.details) ?? "").length).toBeLessThanOrEqual(
+    ACTION_FULL_RESULT_MAX_CHARS,
+  );
+});
+
 test("trace text stays bounded when a legacy task ID dominates the header", () => {
   const taskId = "t".repeat(MAX_TRACE_TASK_ID_CHARS + 1);
   const event: StoredTimelineEvent = {

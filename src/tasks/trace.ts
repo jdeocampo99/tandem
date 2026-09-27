@@ -110,8 +110,8 @@ export function renderTaskTrace(trace: TaskTrace): string {
 }
 
 /**
- * Keeps the newest events that fit in the structured result, without trimming their timeline data.
- * The complete rollup always takes priority over event payloads.
+ * Keeps a contiguous newest suffix that fits in the structured result, without trimming timeline
+ * data. The complete rollup always takes priority over event payloads.
  */
 export function boundTaskTrace(
   trace: TaskTrace,
@@ -129,7 +129,7 @@ export function boundTaskTrace(
   const newestFirst: StoredTimelineEvent[] = [];
   for (let index = candidates.length - 1; index >= 0; index -= 1) {
     const event = candidates[index];
-    if (event === undefined) continue;
+    if (event === undefined) break;
     const events = [...newestFirst, event].reverse();
     const candidate: BoundedTaskTrace = {
       ...trace,
@@ -139,6 +139,8 @@ export function boundTaskTrace(
     const details = { action: "trace", value: candidate };
     if (serializedJsonLength(details, limits.maxSerializedChars) <= limits.maxSerializedChars) {
       newestFirst.push(event);
+    } else {
+      break;
     }
   }
   const events = newestFirst.reverse();

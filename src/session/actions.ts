@@ -16,7 +16,12 @@ import {
   isTraceTaskId,
   MAX_TRACE_TASK_ID_CHARS,
 } from "../tasks/trace.ts";
-import type { CoordinatorTurnAction, SessionEffect } from "./events.ts";
+import type {
+  CoordinatorTurnAction,
+  SessionEffect,
+  SessionHost,
+  ToolOutcome,
+} from "./events.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -897,8 +902,12 @@ export async function executeTandemAction(
   return runTandemAction(action.action, action, service, signal);
 }
 
+function classifyCoordinatorTurnAction(action: TandemAction): CoordinatorTurnAction {
+  return action.action === "trace" ? "trace" : "other";
+}
+
 function shouldRunPostAction(action: TandemAction): boolean {
-  return action.action !== "trace";
+  return classifyCoordinatorTurnAction(action) === "other";
 }
 
 /**
@@ -938,7 +947,7 @@ export async function runTandemTool(
   signal: AbortSignal | undefined,
 ): Promise<ToolOutcome> {
   try {
-    dependencies.recordTurnAction(action.action === "trace" ? "trace" : "other");
+    dependencies.recordTurnAction(classifyCoordinatorTurnAction(action));
     const result = await executeTandemAction(action, dependencies.service(), {
       confirm: dependencies.confirm,
       signal,
@@ -1003,7 +1012,7 @@ export async function runTandemCommand(
 ): Promise<void> {
   try {
     const action = resolveCommandAction(parseTandemCommand(args), cwd);
-    dependencies.recordTurnAction(action.action === "trace" ? "trace" : "other");
+    dependencies.recordTurnAction(classifyCoordinatorTurnAction(action));
     const result = await executeTandemAction(action, dependencies.service(), {
       confirm: dependencies.confirm,
     });
