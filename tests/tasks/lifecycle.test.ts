@@ -26,7 +26,6 @@ import {
   transitionTask,
 } from "../../src/tasks/lifecycle.ts";
 import { decideRequiredStages, pullRequestPublished } from "../../src/tasks/required-stages.ts";
-import { MAX_TRACE_TASK_ID_CHARS } from "../../src/tasks/trace.ts";
 
 const models: RepoPolicy["models"] = {
   coordinator: { model: "coordinator-model", thinking: "high" },
@@ -118,11 +117,6 @@ function startImplementation(): TaskRecord {
 }
 
 const policyDigest = policyIdentity(policy);
-
-test("task lifecycle accepts IDs longer than the coordinator trace limit", () => {
-  const id = "t".repeat(MAX_TRACE_TASK_ID_CHARS + 1);
-  expect(createTask({ ...implementationInput, id }, "2026-09-15T00:00:00.000Z").id).toBe(id);
-});
 
 function evidence(
   head: string,

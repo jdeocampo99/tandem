@@ -507,6 +507,14 @@ test("a trace-only turn skips final reconciliation, but other actions keep it", 
   session.recordTurnAction("trace");
   await session.agentEnd(false);
   expect(listCalls).toBe(3);
+
+  // Answering an ask mid-run must not forget the ask itself.
+  session.userPrompt();
+  session.recordTurnAction("other");
+  session.toolEnd({ id: "ask-1", name: "ask", kind: "ask" });
+  session.recordTurnAction("trace");
+  await session.agentEnd(false);
+  expect(listCalls).toBe(4);
 });
 
 test("a local trace command leaves later automatic reconciliation enabled", async () => {

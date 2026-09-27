@@ -13,17 +13,8 @@ import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
-import {
-  boundTaskTrace,
-  isTraceTaskId,
-  MAX_TRACE_TASK_ID_CHARS,
-} from "../tasks/trace.ts";
-import type {
-  CoordinatorTurnAction,
-  SessionEffect,
-  SessionHost,
-  ToolOutcome,
-} from "./events.ts";
+import { boundTaskTrace } from "../tasks/trace.ts";
+import type { CoordinatorTurnAction, SessionEffect, SessionHost, ToolOutcome } from "./events.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -593,7 +584,6 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   presentations: async (action, service) =>
     actionResult(await service.presentations(), action.action),
   trace: async (action, service) => {
-    assertTraceTaskId(action.taskId);
     const trace = await service.trace(action.taskId);
     return actionResult(
       boundTaskTrace(trace, {
@@ -908,15 +898,10 @@ function classifyCoordinatorTurnAction(action: TandemAction): CoordinatorTurnAct
   return action.action === "trace" ? "trace" : "other";
 }
 
-function shouldRunPostAction(action: TandemAction): boolean {
-  return classifyCoordinatorTurnAction(action) === "other";
-}
-
 /**
  * Actions that finish what the user and the coordinator were working on, so the thread closes
  * without relying on the model to call `thread-done`.
  */
-
 const THREAD_ENDING_ACTIONS: ReadonlySet<TandemAction["action"]> = new Set([
   "thread-done",
   "brief-approve",
@@ -961,7 +946,7 @@ export async function runTandemTool(
       dependencies.closeThread();
     if (action.action === "tick") {
       await dependencies.reconcile();
-    } else if (shouldRunPostAction(action)) {
+    } else if (action.action !== "trace") {
       // Reconciliation can acknowledge delivered notifications, so trace must not reach it.
       await dependencies.postAction();
     }
@@ -1041,7 +1026,7 @@ export async function runTandemCommand(
       confirm: dependencies.confirm,
     });
     await host.perform({ type: "notify", text: renderActionResult(result), level: "info" });
-    if (shouldRunPostAction(action)) await dependencies.postAction();
+    if (action.action !== "trace") await dependencies.postAction();
   } catch (error) {
     await host.perform({
       type: "notify",
@@ -1165,14 +1150,6 @@ function ensureCommandArity(command: string, words: readonly string[], arity: Co
     const maximum = Number.isFinite(arity.max) ? ` at most ${arity.max}` : "";
     throw new TypeError(
       `tandem ${command} expects${maximum} argument(s); received ${words.length - 1}`,
-    );
-  }
-}
-
-function assertTraceTaskId(taskId: string): void {
-  if (!isTraceTaskId(taskId)) {
-    throw new TypeError(
-      `trace task ID must be safe and no longer than ${MAX_TRACE_TASK_ID_CHARS} characters`,
     );
   }
 }
@@ -1324,11 +1301,7 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
   },
   trace: {
     arity: { min: 2, max: 2 },
-    parse: (_words, value) => {
-      const taskId = value(1, "trace");
-      assertTraceTaskId(taskId);
-      return { action: "trace", taskId };
-    },
+    parse: (_words, value) => ({ action: "trace", taskId: value(1, "trace") }),
   },
   steer: {
     parse: (words, value) => ({

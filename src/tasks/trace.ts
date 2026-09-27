@@ -4,7 +4,6 @@ import {
   type RequestUsageReadout,
   usageCharges,
 } from "../runtime/usage-receipt.ts";
-import { isSafeTaskId } from "./lifecycle.ts";
 import type { AdmissionWaitReason, StoredTimelineEvent, TimelineEvent } from "./timeline.ts";
 import type { TimelineReadout } from "./timeline-store.ts";
 
@@ -23,14 +22,6 @@ export type TaskTrace = TimelineReadout & Readonly<{ readonly rollup: TaskRollup
 
 /** A task trace excerpt; `omittedEvents` counts readable events excluded by either output bound. */
 export type BoundedTaskTrace = TaskTrace & Readonly<{ readonly omittedEvents: number }>;
-
-/** Maximum task ID length accepted by coordinator trace requests. */
-export const MAX_TRACE_TASK_ID_CHARS = 256;
-
-/** Only path-safe task identifiers within the trace output budget fit this boundary. */
-export function isTraceTaskId(value: unknown): value is string {
-  return isSafeTaskId(value) && value.length <= MAX_TRACE_TASK_ID_CHARS;
-}
 
 /** The same figures across many tasks. */
 export type TraceSummary = Readonly<{
@@ -110,62 +101,35 @@ export function renderTaskTrace(trace: TaskTrace): string {
 }
 
 /**
- * Keeps a contiguous newest suffix that fits in the structured result, without trimming timeline
- * data. The complete rollup always takes priority over event payloads.
+ * Keeps the newest events, up to `maxEvents`, whose structured result fits in `maxSerializedChars`.
+ * The rollup is always kept; older events are dropped first.
  */
 export function boundTaskTrace(
   trace: TaskTrace,
   limits: Readonly<{ readonly maxEvents: number; readonly maxSerializedChars: number }>,
 ): BoundedTaskTrace {
-  if (
-    !Number.isSafeInteger(limits.maxEvents) ||
-    limits.maxEvents < 0 ||
-    !Number.isSafeInteger(limits.maxSerializedChars) ||
-    limits.maxSerializedChars < 1
-  ) {
-    throw new RangeError("Invalid task trace output limits");
-  }
-  const candidates = trace.events.slice(Math.max(0, trace.events.length - limits.maxEvents));
-  const newestFirst: StoredTimelineEvent[] = [];
-  for (let index = candidates.length - 1; index >= 0; index -= 1) {
-    const event = candidates[index];
-    if (event === undefined) break;
-    const events = [...newestFirst, event].reverse();
-    const candidate: BoundedTaskTrace = {
-      ...trace,
-      events,
-      omittedEvents: trace.events.length - events.length,
-    };
-    const details = { action: "trace", value: candidate };
-    if (serializedJsonLength(details, limits.maxSerializedChars) <= limits.maxSerializedChars) {
-      newestFirst.push(event);
-    } else {
-      break;
-    }
-  }
-  const events = newestFirst.reverse();
-  const bounded: BoundedTaskTrace = {
+  let events = trace.events.slice(-limits.maxEvents);
+  const bounded = (): BoundedTaskTrace => ({
     ...trace,
     events,
     omittedEvents: trace.events.length - events.length,
-  };
-  const details = { action: "trace", value: bounded };
-  if (serializedJsonLength(details, limits.maxSerializedChars) > limits.maxSerializedChars) {
-    throw new RangeError("Task trace rollup exceeds the structured output limit");
+  });
+  while (
+    events.length > 0 &&
+    JSON.stringify({ action: "trace", value: bounded() }).length > limits.maxSerializedChars
+  ) {
+    events = events.slice(1);
   }
-  return bounded;
+  return bounded();
 }
 
-const MAX_TRACE_TEXT_TASK_ID_CHARS = 160;
-
+/** The rollup, then as many of the newest events as fit in `maxChars`. */
 export function renderBoundedTaskTrace(trace: BoundedTaskTrace, maxChars: number): string {
-  if (!Number.isSafeInteger(maxChars) || maxChars < 1) {
-    throw new RangeError("Trace text limit must be a positive safe integer");
-  }
   const { rollup } = trace;
   const cost = rollup.cost;
   const totalEvents = trace.events.length + trace.omittedEvents;
-  const rollupLines = [
+  const header = [
+    `Task ${rollup.taskId}`,
     `First review: ${firstReviewText(rollup.firstPassReview)}`,
     `Fix rounds: ${rollup.fixRounds}`,
     `Time blocked: ${durationText(rollup.blockedMs)} (${rollup.blockedMs} ms)`,
@@ -175,43 +139,15 @@ export function renderBoundedTaskTrace(trace: BoundedTaskTrace, maxChars: number
         : `${dollars(cost.amountMicros)} (${cost.actualSamples} actual, ${cost.estimatedSamples} estimated, ${cost.unavailableSamples} unpriced)`
     }`,
   ];
-  const eventCountLine = (shown: number): string =>
-    `Events: ${totalEvents} readable; showing ${shown} newest; ${totalEvents - shown} omitted; ${trace.unreadableEvents} unreadable.`;
-  let maxEventCountLineChars = 0;
-  for (let shown = 0; shown <= trace.events.length; shown += 1) {
-    maxEventCountLineChars = Math.max(maxEventCountLineChars, eventCountLine(shown).length);
-  }
-  const taskIdChars = Math.min(
-    MAX_TRACE_TEXT_TASK_ID_CHARS,
-    maxChars -
-      "Task ".length -
-      1 -
-      rollupLines.join("\n").length -
-      1 -
-      maxEventCountLineChars,
-  );
-  if (taskIdChars < 0) {
-    throw new RangeError("Task trace summary exceeds the readable output limit");
-  }
-  const taskId =
-    rollup.taskId.length <= taskIdChars
-      ? rollup.taskId
-      : taskIdChars === 0
-        ? ""
-        : `${rollup.taskId.slice(0, taskIdChars - 1)}…`;
-  const header = [`Task ${taskId}`, ...rollupLines];
   const render = (events: readonly string[]): string =>
-    [...header, eventCountLine(events.length), ...events].join("\n");
-  const newestFirst: string[] = [];
-  for (let index = trace.events.length - 1; index >= 0; index -= 1) {
-    const event = trace.events[index];
-    if (event === undefined) break;
-    const line = eventLine(event);
-    const boundedLine = line.length <= 360 ? line : `${line.slice(0, 359)}…`;
-    if (render([boundedLine, ...newestFirst].reverse()).length > maxChars) break;
-    newestFirst.push(boundedLine);
-  }
-  return render(newestFirst.reverse());
+    [
+      ...header,
+      `Events: ${totalEvents} readable; showing ${events.length} newest; ${totalEvents - events.length} omitted; ${trace.unreadableEvents} unreadable.`,
+      ...events,
+    ].join("\n");
+  let lines = trace.events.map(eventLine);
+  while (lines.length > 0 && render(lines).length > maxChars) lines = lines.slice(1);
+  return render(lines);
 }
 
 export function renderTraceSummary(summary: TraceSummary): string {
@@ -340,77 +276,4 @@ function durationText(milliseconds: number): string {
 
 function sum(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0);
-}
-
-function serializedJsonLength(value: unknown, maxChars: number): number {
-  if (value === null) return 4;
-  if (typeof value === "string") return serializedStringLength(value, maxChars);
-  if (typeof value === "boolean") return value ? 4 : 5;
-  if (typeof value === "number") {
-    return Math.min(JSON.stringify(value)?.length ?? 4, maxChars + 1);
-  }
-  if (Array.isArray(value)) {
-    let length = 2;
-    for (let index = 0; index < value.length; index += 1) {
-      if (index > 0) length += 1;
-      if (length > maxChars) return maxChars + 1;
-      const entry = value[index];
-      length +=
-        entry === undefined || typeof entry === "function" || typeof entry === "symbol"
-          ? 4
-          : serializedJsonLength(entry, maxChars - length);
-      if (length > maxChars) return maxChars + 1;
-    }
-    return length;
-  }
-  if (typeof value === "object") {
-    let length = 2;
-    let hasEntry = false;
-    for (const [key, entry] of Object.entries(value)) {
-      if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") continue;
-      if (hasEntry) length += 1;
-      if (length > maxChars) return maxChars + 1;
-      length += serializedStringLength(key, maxChars - length) + 1;
-      if (length > maxChars) return maxChars + 1;
-      length += serializedJsonLength(entry, maxChars - length);
-      if (length > maxChars) return maxChars + 1;
-      hasEntry = true;
-    }
-    return length;
-  }
-  return 0;
-}
-
-function serializedStringLength(value: string, maxChars: number): number {
-  let length = 2;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (
-      code === 0x22 ||
-      code === 0x5c ||
-      code === 0x08 ||
-      code === 0x09 ||
-      code === 0x0a ||
-      code === 0x0c ||
-      code === 0x0d
-    ) {
-      length += 2;
-    } else if (code <= 0x1f) {
-      length += 6;
-    } else if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        length += 2;
-        index += 1;
-      } else {
-        length += 6;
-      }
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      length += 6;
-    } else {
-      length += 1;
-    }
-    if (length > maxChars) return maxChars + 1;
-  }
-  return length;
 }

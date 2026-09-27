@@ -274,7 +274,7 @@ export class CoordinatorSession {
   /** When the user last took part in the open thread; unset when no thread is open. */
   private threadActiveAt: number | undefined;
 
-  /** The current model cycle's actions; any non-trace action keeps final reconcile enabled. */
+  /** The current agent run's actions; any non-trace action keeps final reconcile enabled. */
   private turnAction: CoordinatorTurnAction | undefined;
   private createdService: TandemService | undefined;
   private isTandemCheckout: Promise<boolean> | undefined;
@@ -429,14 +429,13 @@ export class CoordinatorSession {
     if (call.kind === "ask") this.userPrompt();
   }
 
-  /** Records whether this model cycle can safely omit final reconciliation. */
+  /** Records whether this agent run can safely omit final reconciliation. */
   recordTurnAction(action: CoordinatorTurnAction): void {
     if (action === "other" || this.turnAction === undefined) this.turnAction = action;
   }
 
   /** The user's message reached the model: a thread opens, or the open one continues. */
   userPrompt(): void {
-    this.turnAction = undefined;
     this.threadActiveAt = this.deps.clock.now();
   }
 

@@ -129,9 +129,7 @@ test("the registered OMP tool_call hook blocks with the guard's reason", async (
     block: true,
     reason: COORDINATOR_TOOL_REFUSAL,
   });
-  expect(
-    await call("tandem", { request: { action: "trace", taskId: "task-1" } }),
-  ).toBeUndefined();
+  expect(await call("tandem", { request: { action: "trace", taskId: "task-1" } })).toBeUndefined();
   expect(turnActions).toEqual(["other", "other", "other"]);
 });
 

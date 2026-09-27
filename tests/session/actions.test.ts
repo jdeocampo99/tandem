@@ -25,11 +25,7 @@ import {
   summarizeTandemActionValue,
 } from "../../src/session/summary.ts";
 import type { StoredTimelineEvent } from "../../src/tasks/timeline.ts";
-import {
-  MAX_TRACE_TASK_ID_CHARS,
-  type BoundedTaskTrace,
-  type TaskTrace,
-} from "../../src/tasks/trace.ts";
+import type { BoundedTaskTrace, TaskTrace } from "../../src/tasks/trace.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
 import { models, policyConfig, task } from "./fixtures.ts";
@@ -58,9 +54,6 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
     detail: "full",
   });
   expect(parseTandemCommand("trace task-1")).toEqual({ action: "trace", taskId: "task-1" });
-  expect(() =>
-    parseTandemCommand(`trace ${"t".repeat(MAX_TRACE_TASK_ID_CHARS + 1)}`),
-  ).toThrow();
   expect(() => parseTandemCommand("trace")).toThrow();
   expect(() => parseTandemCommand("trace task-1 extra")).toThrow();
   expect(parseTandemCommand("presentations")).toEqual({ action: "presentations" });
@@ -1259,16 +1252,8 @@ test("the tandem tool reconciles after ticks and runs post-action for ordinary a
   } as unknown as TandemService;
   const dependencies = callDependencies(service, followUps, turnActions);
 
-  const ticked = await runTandemTool(
-    { action: "tick" },
-    dependencies,
-    undefined,
-  );
-  const listed = await runTandemTool(
-    { action: "list" },
-    dependencies,
-    undefined,
-  );
+  const ticked = await runTandemTool({ action: "tick" }, dependencies, undefined);
+  const listed = await runTandemTool({ action: "list" }, dependencies, undefined);
 
   expect(followUps).toEqual(["reconcile", "postAction"]);
   expect(turnActions).toEqual(["other", "other"]);
@@ -1408,59 +1393,6 @@ test("trace keeps the newest readable events and full rollup for long histories"
   );
 });
 
-test("trace omits oversized event payloads from structured details", async () => {
-  const oversizedEvent: StoredTimelineEvent = {
-    type: "fix-round",
-    taskId: "task-1",
-    at: new Date(Date.UTC(2030, 0, 1)).toISOString(),
-    round: 1,
-    generation: 1,
-    findingIds: Array.from({ length: 5_000 }, (_, index) => `finding-${index}`),
-    seq: 1,
-  };
-  const newestEvent: StoredTimelineEvent = {
-    type: "question-asked",
-    taskId: "task-1",
-    at: new Date(Date.UTC(2030, 0, 1, 0, 1)).toISOString(),
-    questionId: "question-2",
-    seq: 2,
-  };
-  const trace: TaskTrace = {
-    events: [oversizedEvent, newestEvent],
-    unreadableEvents: 3,
-    rollup: {
-      taskId: "task-1",
-      firstPassReview: false,
-      fixRounds: 1,
-      blockedMs: 12_345,
-      cost: {
-        currency: "USD",
-        amountMicros: 987_654,
-        actualSamples: 2,
-        estimatedSamples: 1,
-        unavailableSamples: 3,
-      },
-    },
-  };
-  const service = { trace: async () => trace } as unknown as TandemService;
-  const outcome = await runTandemTool(
-    { action: "trace", taskId: "task-1" },
-    callDependencies(service, []),
-    undefined,
-  );
-  const boundedTrace = (outcome.details as Readonly<{ value: BoundedTaskTrace }>).value;
-
-  expect(outcome.isError).toBe(false);
-  expect(boundedTrace.events).toEqual([newestEvent]);
-  expect(boundedTrace.omittedEvents).toBe(1);
-  expect(boundedTrace.unreadableEvents).toBe(3);
-  expect(boundedTrace.rollup).toEqual(trace.rollup);
-  expect(outcome.text).toContain("1 omitted; 3 unreadable");
-  expect((JSON.stringify(outcome.details) ?? "").length).toBeLessThanOrEqual(
-    ACTION_FULL_RESULT_MAX_CHARS,
-  );
-});
-
 test("trace never backfills older events past an oversized newest event", async () => {
   const olderEvent: StoredTimelineEvent = {
     type: "question-asked",
@@ -1513,104 +1445,6 @@ test("trace never backfills older events past an oversized newest event", async 
   expect((JSON.stringify(outcome.details) ?? "").length).toBeLessThanOrEqual(
     ACTION_FULL_RESULT_MAX_CHARS,
   );
-});
-
-test("trace text stays bounded when a legacy task ID dominates the header", () => {
-  const taskId = "t".repeat(MAX_TRACE_TASK_ID_CHARS + 1);
-  const event: StoredTimelineEvent = {
-    type: "created",
-    taskId,
-    at: "2030-01-01T00:00:00.000Z",
-    stage: "queued",
-    seq: 1,
-  };
-  const trace: TaskTrace = {
-    events: [event],
-    unreadableEvents: 0,
-    rollup: {
-      taskId,
-      firstPassReview: true,
-      fixRounds: 2,
-      blockedMs: 123_456,
-    },
-  };
-  const boundedTrace: BoundedTaskTrace = { ...trace, omittedEvents: 0 };
-  const text = summarizeTandemActionValue("trace", boundedTrace);
-
-  expect(text.length).toBeLessThanOrEqual(ACTION_RESULT_MAX_CHARS);
-  expect(text).toStartWith("Task ");
-  expect(text).toContain("…");
-  expect(text).not.toContain(taskId);
-  expect(text).toContain("First review: passed");
-  expect(text).toContain("Fix rounds: 2");
-  expect(text).toContain("Time blocked: 2m (123456 ms)");
-});
-
-test("trace preserves the full rollup at the maximum task ID length", async () => {
-  const taskId = "t".repeat(MAX_TRACE_TASK_ID_CHARS);
-  const events: StoredTimelineEvent[] = [];
-  for (let seq = 1; seq <= ACTION_TRACE_MAX_EVENTS; seq += 1) {
-    events.push({
-      type: "created",
-      taskId,
-      at: "2030-01-01T00:00:00.000Z",
-      stage: "queued",
-      seq,
-    });
-  }
-  const trace: TaskTrace = {
-    events,
-    unreadableEvents: 0,
-    rollup: {
-      taskId,
-      firstPassReview: true,
-      fixRounds: 2,
-      blockedMs: 123_456,
-      cost: {
-        currency: "USD",
-        amountMicros: 987_654,
-        actualSamples: 2,
-        estimatedSamples: 1,
-        unavailableSamples: 3,
-      },
-    },
-  };
-  const service = { trace: async () => trace } as unknown as TandemService;
-  const outcome = await runTandemTool(
-    { action: "trace", taskId },
-    callDependencies(service, []),
-    undefined,
-  );
-  const boundedTrace = (outcome.details as Readonly<{ value: BoundedTaskTrace }>).value;
-
-  expect(outcome.isError).toBe(false);
-  expect(boundedTrace.events).toEqual(events);
-  expect(boundedTrace.rollup).toEqual(trace.rollup);
-  expect((JSON.stringify(outcome.details) ?? "").length).toBeLessThanOrEqual(
-    ACTION_FULL_RESULT_MAX_CHARS,
-  );
-});
-
-test("trace rejects an overlong ID before reading its task", async () => {
-  const taskId = "t".repeat(MAX_TRACE_TASK_ID_CHARS + 1);
-  const followUps: string[] = [];
-  let traceReads = 0;
-  const service = {
-    trace: async () => {
-      traceReads += 1;
-      throw new Error("trace should not be called");
-    },
-  } as unknown as TandemService;
-  const outcome = await runTandemTool(
-    { action: "trace", taskId },
-    callDependencies(service, followUps),
-    undefined,
-  );
-
-  expect(outcome.isError).toBe(true);
-  expect(outcome.text).toContain("no longer than");
-  expect(traceReads).toBe(0);
-  expect(followUps).toEqual([]);
 });
 
 test("a failed trace returns not-found details without reconciliation", async () => {

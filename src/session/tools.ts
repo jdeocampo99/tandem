@@ -5,7 +5,6 @@ import {
   FINDING_CATEGORIES,
   MODEL_ROLE_ORDER,
 } from "../contracts.ts";
-import { isTraceTaskId, MAX_TRACE_TASK_ID_CHARS } from "../tasks/trace.ts";
 import { PINNABLE_PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 import { outcomesFor } from "../workers/protocol.ts";
@@ -127,7 +126,7 @@ export const tandemRequestSchema = z.strictObject({
     }),
     z.strictObject({
       action: z.literal("trace"),
-      taskId: z.string().max(MAX_TRACE_TASK_ID_CHARS).refine(isTraceTaskId),
+      taskId: z.string(),
     }),
     z.strictObject({
       action: z.literal("steer"),

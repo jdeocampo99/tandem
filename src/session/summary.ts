@@ -1015,48 +1015,11 @@ function summarizePrReview(result: unknown): string {
 
 function isBoundedTaskTrace(value: unknown): value is BoundedTaskTrace {
   const record = summaryRecord(value);
-  const rollup = record === undefined ? undefined : summaryRecord(record.rollup);
-  if (
-    record === undefined ||
-    rollup === undefined ||
-    !Array.isArray(record.events) ||
-    record.events.length > ACTION_TRACE_MAX_EVENTS
-  ) {
-    return false;
-  }
-  const events: readonly unknown[] = record.events;
-  const unreadableEvents = recordNumber(record, "unreadableEvents");
-  const omittedEvents = recordNumber(record, "omittedEvents");
-  const cost = rollup.cost === undefined ? undefined : summaryRecord(rollup.cost);
-  const validCost =
-    rollup.cost === undefined ||
-    (cost !== undefined &&
-      cost.currency === "USD" &&
-      recordNumber(cost, "amountMicros") !== undefined &&
-      recordNumber(cost, "actualSamples") !== undefined &&
-      recordNumber(cost, "estimatedSamples") !== undefined &&
-      recordNumber(cost, "unavailableSamples") !== undefined);
   return (
-    typeof rollup.taskId === "string" &&
-    recordNumber(rollup, "fixRounds") !== undefined &&
-    recordNumber(rollup, "blockedMs") !== undefined &&
-    (rollup.firstPassReview === undefined || typeof rollup.firstPassReview === "boolean") &&
-    validCost &&
-    unreadableEvents !== undefined &&
-    Number.isSafeInteger(unreadableEvents) &&
-    unreadableEvents >= 0 &&
-    omittedEvents !== undefined &&
-    Number.isSafeInteger(omittedEvents) &&
-    omittedEvents >= 0 &&
-    events.every((event: unknown) => {
-      const storedEvent = summaryRecord(event);
-      return (
-        storedEvent !== undefined &&
-        recordNumber(storedEvent, "seq") !== undefined &&
-        recordText(storedEvent, "at") !== undefined &&
-        recordText(storedEvent, "type") !== undefined
-      );
-    })
+    record !== undefined &&
+    Array.isArray(record.events) &&
+    summaryRecord(record.rollup) !== undefined &&
+    recordNumber(record, "omittedEvents") !== undefined
   );
 }
 
@@ -1071,7 +1034,6 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
       ? renderBoundedTaskTrace(value, ACTION_RESULT_MAX_CHARS)
       : boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
-
   if (action === "onboard" || action === "setup") return summarizeOnboard(value, action);
   if (action === "find-repo") return summarizeFoundRepos(value);
   if (action === "check-tools") return summarizeToolChecks(value);

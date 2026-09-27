@@ -20,11 +20,7 @@ import {
   policyIdentity,
 } from "../../src/tasks/acceptance.ts";
 import { ledgerBlockers } from "../../src/tasks/findings.ts";
-import {
-  type TaskTransitionContext,
-  transitionTask,
-} from "../../src/tasks/lifecycle.ts";
-import { MAX_TRACE_TASK_ID_CHARS } from "../../src/tasks/trace.ts";
+import { type TaskTransitionContext, transitionTask } from "../../src/tasks/lifecycle.ts";
 import {
   DEFAULT_REVIEW_LEVEL_POLICY,
   recordedReviewLevel,
@@ -598,26 +594,6 @@ test("rejects missing SQLite tables and traversal IDs instead of skipping state"
     database.exec("DROP TABLE tasks");
     database.close();
     await expect(store.list()).rejects.toThrow("authoritative state database");
-  });
-});
-
-test("explicit and generated task IDs may exceed the coordinator trace limit", async () => {
-  await withTemporaryDirectory(async (directory) => {
-    const longExplicitId = "l".repeat(MAX_TRACE_TASK_ID_CHARS + 1);
-    const store = makeStore(directory);
-    const explicit = await store.create({ ...input, id: longExplicitId });
-    expect(explicit.id).toBe(longExplicitId);
-    expect(await store.read(longExplicitId)).toMatchObject({ id: longExplicitId });
-
-    const longGeneratedId = "g".repeat(MAX_TRACE_TASK_ID_CHARS + 1);
-    const generatedIdStore = createTaskStore({
-      directory: join(directory, "generated"),
-      clock,
-      idFactory: () => longGeneratedId,
-    });
-    const generated = await generatedIdStore.create(input);
-    expect(generated.id).toBe(longGeneratedId);
-    expect(await generatedIdStore.read(longGeneratedId)).toMatchObject({ id: longGeneratedId });
   });
 });
 
