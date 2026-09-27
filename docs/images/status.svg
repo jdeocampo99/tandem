@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 918 552" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 918 592" role="img" aria-labelledby="t d">
   <title id="t">tandem status in a terminal</title>
-  <desc id="d">The tandem status view. A yellow Needs you section lists a brief waiting for approval, an open question, a blocked task, and a failing pull request. A Running section has columns for project, task, stage, and time. A PRs section shows each pull request's checks as a progress bar with its review status. A This week line counts finished tasks and cost, and a dim footer lists open coordinators.</desc>
-  <rect width="918" height="552" rx="10" fill="#161b22"/>
+  <desc id="d">The tandem status view. A yellow Needs you section lists a brief waiting for approval, an open question, a blocked task, and a failing pull request. Running groups tasks under muted project headings; each row shows its stage and elapsed time before the task objective. A PRs section shows each pull request's checks as a progress bar with its review status. A This week line counts finished tasks and cost, and a dim footer lists open coordinators.</desc>
+  <rect width="918" height="592" rx="10" fill="#161b22"/>
   <circle cx="20" cy="17" r="5.5" fill="#f47067"/><circle cx="38" cy="17" r="5.5" fill="#e0b85c"/><circle cx="56" cy="17" r="5.5" fill="#8ddb8c"/>
   <text x="459" y="21" text-anchor="middle" fill="#768390" font-size="12">tandem status</text>
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13" xml:space="preserve">
@@ -57,32 +57,21 @@
     <text x="22.0" y="208" fill="#56c8d8" font-weight="700" textLength="54.6" lengthAdjust="spacingAndGlyphs">RUNNING</text>
     <text x="84.4" y="208" fill="#768390" textLength="7.8" lengthAdjust="spacingAndGlyphs">3</text>
     <text x="100.0" y="208" fill="#768390" textLength="600.6" lengthAdjust="spacingAndGlyphs">─────────────────────────────────────────────────────────────────────────────</text>
-    <text x="45.4" y="228" fill="#768390" textLength="54.6" lengthAdjust="spacingAndGlyphs">PROJECT</text>
-    <text x="131.2" y="228" fill="#768390" textLength="31.2" lengthAdjust="spacingAndGlyphs">TASK</text>
-    <text x="310.6" y="228" fill="#768390" textLength="39.0" lengthAdjust="spacingAndGlyphs">STAGE</text>
-    <text x="419.8" y="228" fill="#768390" textLength="31.2" lengthAdjust="spacingAndGlyphs">TIME</text>
-    <text x="22.0" y="248" font-size="12">🔨</text>
-    <text x="45.4" y="248" fill="#768390" textLength="46.8" lengthAdjust="spacingAndGlyphs">tandem</text>
-    <text x="131.2" y="248" fill="#d1d7e0" textLength="23.4" lengthAdjust="spacingAndGlyphs">Fix</text>
-    <text x="162.4" y="248" fill="#d1d7e0" textLength="23.4" lengthAdjust="spacingAndGlyphs">the</text>
-    <text x="193.6" y="248" fill="#d1d7e0" textLength="39.0" lengthAdjust="spacingAndGlyphs">flaky</text>
-    <text x="240.4" y="248" fill="#d1d7e0" textLength="39.0" lengthAdjust="spacingAndGlyphs">login</text>
-    <text x="310.6" y="248" fill="#56c8d8" textLength="93.6" lengthAdjust="spacingAndGlyphs">implementing</text>
-    <text x="427.6" y="248" fill="#768390" textLength="23.4" lengthAdjust="spacingAndGlyphs">12m</text>
-    <text x="22.0" y="268" font-size="12">🔍</text>
-    <text x="45.4" y="268" fill="#768390" textLength="46.8" lengthAdjust="spacingAndGlyphs">tandem</text>
-    <text x="131.2" y="268" fill="#d1d7e0" textLength="62.4" lengthAdjust="spacingAndGlyphs">Research</text>
-    <text x="201.4" y="268" fill="#d1d7e0" textLength="39.0" lengthAdjust="spacingAndGlyphs">retry</text>
-    <text x="248.2" y="268" fill="#d1d7e0" textLength="46.8" lengthAdjust="spacingAndGlyphs">policy</text>
-    <text x="310.6" y="268" fill="#6cb6ff" textLength="85.8" lengthAdjust="spacingAndGlyphs">researching</text>
-    <text x="435.4" y="268" fill="#768390" textLength="15.6" lengthAdjust="spacingAndGlyphs">3m</text>
-    <text x="22.0" y="288" font-size="12">⏸️</text>
-    <text x="45.4" y="288" fill="#768390" textLength="70.2" lengthAdjust="spacingAndGlyphs">tagalingo</text>
-    <text x="131.2" y="288" fill="#768390" textLength="31.2" lengthAdjust="spacingAndGlyphs">Dark</text>
-    <text x="170.2" y="288" fill="#768390" textLength="31.2" lengthAdjust="spacingAndGlyphs">mode</text>
-    <text x="209.2" y="288" fill="#768390" textLength="46.8" lengthAdjust="spacingAndGlyphs">tokens</text>
-    <text x="310.6" y="288" fill="#768390" textLength="46.8" lengthAdjust="spacingAndGlyphs">paused</text>
-    <text x="435.4" y="288" fill="#768390" textLength="15.6" lengthAdjust="spacingAndGlyphs">2h</text>
+    <text x="45.4" y="228" fill="#768390" textLength="70.2" lengthAdjust="spacingAndGlyphs">tagalingo</text>
+    <text x="22.0" y="248" font-size="12">⏸️</text>
+    <text x="45.4" y="248" fill="#768390" textLength="46.8" lengthAdjust="spacingAndGlyphs">paused</text>
+    <text x="100.0" y="248" fill="#768390" textLength="31.2" lengthAdjust="spacingAndGlyphs">· 2h</text>
+    <text x="138.4" y="248" fill="#768390" textLength="124.8" lengthAdjust="spacingAndGlyphs">Dark mode tokens</text>
+    <text x="45.4" y="288" fill="#768390" textLength="46.8" lengthAdjust="spacingAndGlyphs">tandem</text>
+    <text x="22.0" y="308" font-size="12">🔍</text>
+    <text x="45.4" y="308" fill="#6cb6ff" textLength="85.8" lengthAdjust="spacingAndGlyphs">researching</text>
+    <text x="138.4" y="308" fill="#768390" textLength="31.2" lengthAdjust="spacingAndGlyphs">· 3m</text>
+    <text x="177.4" y="308" fill="#d1d7e0" textLength="163.8" lengthAdjust="spacingAndGlyphs">Research retry policy</text>
+    <text x="22.0" y="328" font-size="12">🔨</text>
+    <text x="45.4" y="328" fill="#56c8d8" textLength="93.6" lengthAdjust="spacingAndGlyphs">implementing</text>
+    <text x="146.8" y="328" fill="#768390" textLength="39.0" lengthAdjust="spacingAndGlyphs">· 12m</text>
+    <text x="193.6" y="328" fill="#d1d7e0" textLength="187.2" lengthAdjust="spacingAndGlyphs">Fix the flaky login test</text>
+    <g transform="translate(0 40)">
     <text x="22.0" y="328" fill="#6cb6ff" font-weight="700" textLength="23.4" lengthAdjust="spacingAndGlyphs">PRS</text>
     <text x="53.2" y="328" fill="#768390" textLength="7.8" lengthAdjust="spacingAndGlyphs">2</text>
     <text x="68.8" y="328" fill="#768390" textLength="631.8" lengthAdjust="spacingAndGlyphs">─────────────────────────────────────────────────────────────────────────────────</text>
@@ -162,5 +151,6 @@
     <text x="794.2" y="528" fill="#768390" textLength="23.4" lengthAdjust="spacingAndGlyphs">the</text>
     <text x="825.4" y="528" fill="#768390" textLength="31.2" lengthAdjust="spacingAndGlyphs">live</text>
     <text x="864.4" y="528" fill="#768390" textLength="31.2" lengthAdjust="spacingAndGlyphs">view</text>
+    </g>
   </g>
 </svg>

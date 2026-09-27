@@ -11,8 +11,8 @@ import { raisedRoutingPause, routingPauseExplanation } from "../workers/executio
 
 /** Task stages that wait on the user. */
 const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
-/** Task stages where Tandem is working on its own, or the user paused it. */
-const RUNNING_STAGES: readonly TaskStage[] = [
+/** Terminal order for work Tandem is currently doing. */
+export const RUNNING_STAGE_ORDER = [
   "paused",
   "queued",
   "scouting",
@@ -20,7 +20,9 @@ const RUNNING_STAGES: readonly TaskStage[] = [
   "validating",
   "reviewing",
   "awaiting-fixes",
-];
+] as const satisfies readonly TaskStage[];
+export type RunningStage = (typeof RUNNING_STAGE_ORDER)[number];
+type RunningTaskRecord = TaskRecord & Readonly<{ stage: RunningStage }>;
 
 /** Everything the board shows, read from what Tandem already saved. Nothing here calls GitHub. */
 export type BoardState = Readonly<{
@@ -43,7 +45,7 @@ export type BoardView = Readonly<{
   /** When PR watch last read GitHub. */
   readonly checkedAt?: IsoTimestamp;
   readonly needsYou: readonly BoardRow[];
-  readonly running: readonly BoardRow[];
+  readonly running: readonly RunningBoardRow[];
   /** Watched pull requests that do not need the user. */
   readonly pullRequests: readonly PrWatchViewRow[];
   /** Completed, merged, and cancelled tasks, which the board leaves out. */
@@ -109,7 +111,7 @@ export function isBoardView(value: unknown): value is BoardView {
     Array.isArray(view.needsYou) &&
     view.needsYou.every(isBoardRow) &&
     Array.isArray(view.running) &&
-    view.running.every(isBoardRow) &&
+    view.running.every(isRunningBoardRow) &&
     Array.isArray(view.pullRequests) &&
     view.pullRequests.every(isPrWatchViewRow) &&
     isFiniteNumber(view.finished) &&
@@ -130,6 +132,17 @@ function isBoardRow(value: unknown): value is BoardRow {
     typeof row.name === "string" &&
     typeof row.text === "string" &&
     (row.since === undefined || typeof row.since === "string")
+  );
+}
+
+function isRunningBoardRow(value: unknown): value is RunningBoardRow {
+  const row = recordOf(value);
+  return (
+    isBoardRow(value) &&
+    row !== undefined &&
+    isRunningStage(row.cause) &&
+    typeof row.repoPath === "string" &&
+    typeof row.since === "string"
   );
 }
 
@@ -183,11 +196,18 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+export type RunningBoardRow = Omit<BoardRow, "cause" | "repoPath" | "since"> &
+  Readonly<{
+    cause: RunningStage;
+    repoPath: string;
+    since: string;
+  }>;
+
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const NAME_CHARS = 30;
 const TEXT_CHARS = 80;
 
-const RUNNING_LABELS: Readonly<Record<string, Readonly<{ mark: string; label: string }>>> = {
+const RUNNING_LABELS: Readonly<Record<RunningStage, Readonly<{ mark: string; label: string }>>> = {
   paused: { mark: "⏸️", label: "paused" },
   queued: { mark: "⏳", label: "waiting to start" },
   scouting: { mark: "🔍", label: "researching" },
@@ -201,6 +221,10 @@ const NEEDS_YOU_LABELS: Readonly<Record<string, string>> = {
   "awaiting-approval": "waiting for approval",
   ready: "done, waiting for you",
 };
+
+export function isRunningStage(stage: unknown): stage is RunningStage {
+  return RUNNING_STAGE_ORDER.some((candidate) => candidate === stage);
+}
 
 /**
  * Sorts saved state into the board's sections. "Needs you" holds briefs awaiting approval, task
@@ -224,7 +248,7 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
       ...red.map((row) => pullRequestRow(row, state)),
     ],
     running: live
-      .filter((task) => !needsYou(task) && RUNNING_STAGES.includes(task.stage))
+      .filter((task): task is RunningTaskRecord => !needsYou(task) && isRunningStage(task.stage))
       .map((task) => runningRow(task, now)),
     pullRequests: pullRequests.rows.filter((row) => row.color !== "red"),
     finished: state.tasks.length - live.length,
@@ -313,7 +337,7 @@ export function renderBoard(view: BoardView): string {
 function chatBoardLines(rows: readonly BoardRow[]): string[] {
   return rows.map(
     (row) =>
-      `- ${row.mark} **${markdownText(row.project)}** · **${markdownText(row.name)}** — ${markdownText(rowText(row))}`,
+      `- ${row.mark} **${markdownText(row.project)}** · **${markdownText(compactBoardName(row))}** — ${markdownText(rowText(row))}`,
   );
 }
 
@@ -361,6 +385,10 @@ function weekSummary(rollups: readonly TaskRollup[]): WeekSummary {
   const { tasks, reviewedTasks, firstPassReviews, costMicros, unpricedSamples } =
     summarizeRollups(rollups);
   return { tasks, reviewedTasks, firstPassReviews, costMicros, unpricedSamples };
+}
+
+function compactBoardName(row: BoardRow): string {
+  return isRunningStage(row.cause) ? shorten(row.name, NAME_CHARS) : row.name;
 }
 
 function rowText(row: BoardRow): string {
@@ -428,28 +456,29 @@ function taskNeedsYouRow(
   return {
     ...reason,
     ...taskIdentity(task),
+    name: shorten(task.objective, NAME_CHARS),
     mark: "🙋",
     text: shorten(reason.text, TEXT_CHARS),
   };
 }
 
-function runningRow(task: TaskRecord, now: IsoTimestamp): BoardRow {
-  const { mark, label } = RUNNING_LABELS[task.stage] ?? { mark: "🔨", label: task.stage };
+function runningRow(task: RunningTaskRecord, now: IsoTimestamp): RunningBoardRow {
+  const { mark, label } = RUNNING_LABELS[task.stage];
   return {
     key: `task:${task.id}:${task.stage}`,
     cause: task.stage,
     ...taskIdentity(task),
+    name: task.objective,
     mark,
     text: label,
     since: elapsed(task.createdAt, now),
   };
 }
 
-function taskIdentity(task: TaskRecord): Pick<BoardRow, "repoPath" | "project" | "name"> {
+function taskIdentity(task: TaskRecord): Readonly<{ repoPath: string; project: string }> {
   return {
     repoPath: task.repoPath,
     project: basename(task.repoPath),
-    name: shorten(task.objective, NAME_CHARS),
   };
 }
 
