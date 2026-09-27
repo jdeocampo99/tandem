@@ -1152,10 +1152,18 @@ function briefRecordFor(goal: string) {
       repoPath: "/repo",
       content: {
         goal,
+        userStories: [
+          {
+            actor: "a request owner",
+            action: "read the brief",
+            outcome: "they know what was proposed",
+          },
+        ],
         scope: ["src/requests"],
         constraints: [],
         nonGoals: [],
         acceptanceCriteria: ["it works"],
+        verificationCommands: [],
         manualVerification: [],
         recommendedApproach: "do it",
         keyDecisions: [],

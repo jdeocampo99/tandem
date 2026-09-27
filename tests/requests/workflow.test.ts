@@ -13,10 +13,18 @@ const NOW = "2030-01-01T00:00:00.000Z";
 function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefContent {
   return {
     goal: "Give every reader a plain-English approval prompt",
+    userStories: [
+      {
+        actor: "a request owner",
+        action: "read the plan",
+        outcome: "they know what they are approving",
+      },
+    ],
     scope: ["src/requests"],
     constraints: ["no request id in user-facing text"],
     nonGoals: [],
     acceptanceCriteria: ["a person never has to look up an id"],
+    verificationCommands: [],
     manualVerification: [],
     recommendedApproach: "name the request by its goal",
     keyDecisions: [],
@@ -71,6 +79,48 @@ async function fixture(): Promise<Fixture> {
   };
 }
 
+test("repeating a story-bearing draft does not create another revision", async () => {
+  const { workflow, close } = await fixture();
+  try {
+    const first = await workflow.draft({
+      repoPath: "/repo",
+      content: content(),
+      reviewPane: false,
+    });
+    const repeated = await workflow.draft({
+      repoPath: "/repo",
+      requestId: first.record.id,
+      content: content(),
+      reviewPane: false,
+    });
+
+    expect(repeated.record.id).toBe(first.record.id);
+    expect(repeated.record.draft.revision).toBe(1);
+    expect(repeated.record.history).toEqual([]);
+    expect(repeated.record.draft.contentDigest).toBe(first.record.draft.contentDigest);
+  } finally {
+    await close();
+  }
+});
+
+test("a draft without stories fails before it creates a request", async () => {
+  const { workflow, close } = await fixture();
+  try {
+    await expect(
+      workflow.draft({
+        repoPath: "/repo",
+        content: content({ userStories: [] }),
+        reviewPane: false,
+      }),
+    ).rejects.toMatchObject({ code: "invalid-content" });
+    await expect(workflow.pendingApprovalId()).rejects.toMatchObject({
+      code: "no-pending-approval",
+    });
+  } finally {
+    await close();
+  }
+});
+
 test("approving a brief without a requestId resolves the one request awaiting approval", async () => {
   const { workflow, close } = await fixture();
   try {
@@ -83,8 +133,12 @@ test("approving a brief without a requestId resolves the one request awaiting ap
       briefRevision: drafted.record.draft.revision,
       contentDigest: drafted.record.draft.contentDigest,
     });
+    expect(drafted.markdown).toContain("Plan status: not approved yet.");
+    expect(drafted.markdown).toContain("Implementation still requires separate approval");
     expect(approved.approvalState).toBe("current");
     expect(approved.record.id).toBe(drafted.record.id);
+    expect(approved.markdown).toContain("Plan status: approved at revision 1 on");
+    expect(approved.markdown).toContain("Implementation still requires separate approval");
   } finally {
     await close();
   }

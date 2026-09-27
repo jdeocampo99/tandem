@@ -51,10 +51,12 @@ const models = {
 const summary = { tldr: ["Short."], what: ["Change."], why: ["Reason."] };
 const brief = {
   goal: "Ship it",
+  userStories: [{ actor: "a user", action: "use it", outcome: "their task is done" }],
   scope: ["src"],
   constraints: [],
   nonGoals: [],
-  acceptanceCriteria: ["Works"],
+  acceptanceCriteria: ["the request reaches its intended outcome"],
+  verificationCommands: [],
   manualVerification: [],
   recommendedApproach: "Small steps",
   keyDecisions: [],
@@ -243,6 +245,31 @@ const invalidRequests: readonly [string, unknown][] = [
         action: "brief-draft",
         repoPath: "/r",
         content: { goal: "g" },
+        reviewPane: false,
+      },
+    },
+  ],
+  [
+    "brief without user stories",
+    {
+      request: {
+        action: "brief-draft",
+        repoPath: "/r",
+        content: { ...brief, userStories: [] },
+        reviewPane: false,
+      },
+    },
+  ],
+  [
+    "brief with more than three user stories",
+    {
+      request: {
+        action: "brief-draft",
+        repoPath: "/r",
+        content: {
+          ...brief,
+          userStories: [...brief.userStories, ...brief.userStories, ...brief.userStories],
+        },
         reviewPane: false,
       },
     },

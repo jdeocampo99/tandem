@@ -12,10 +12,18 @@ import {
 
 const BRIEF: RequestBriefContent = {
   goal: "Route execution economically without economizing to fit",
+  userStories: [
+    {
+      actor: "a request owner",
+      action: "approve an economical route",
+      outcome: "premium use still needs a decision",
+    },
+  ],
   scope: ["src/workers"],
   constraints: ["a premium tier always needs a decision"],
   nonGoals: ["no per-turn model optimization"],
   acceptanceCriteria: ["rerouting never resolves a spending decision"],
+  verificationCommands: [],
   manualVerification: [],
   recommendedApproach: "Resolve routing only after the spending checkpoint admits the operation",
   keyDecisions: ["unmeasured usage is unknown, not small"],

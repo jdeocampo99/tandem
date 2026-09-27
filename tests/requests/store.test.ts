@@ -3,9 +3,16 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Clock, IdFactory, RequestBriefContent } from "../../src/contracts.ts";
-import { approveRequestBriefRecord, reviseRequestBriefRecord } from "../../src/requests/brief.ts";
+import {
+  approveRequestBriefRecord,
+  checkedRequestBriefContent,
+  requestApprovalState,
+  requestBriefDigests,
+  reviseRequestBriefRecord,
+} from "../../src/requests/brief.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../../src/requests/store.ts";
 import { parseRequestBriefRecord } from "../../src/requests/store-codec.ts";
+import { renderRequestBriefMarkdown } from "../../src/requests/markdown.ts";
 import { StateCorruptionError, TaskStoreError } from "../../src/tasks/store-errors.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
@@ -13,10 +20,18 @@ const NOW = "2030-01-01T00:00:00.000Z";
 function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefContent {
   return {
     goal: "Durable request identity",
+    userStories: [
+      {
+        actor: "a repository owner",
+        action: "record a request",
+        outcome: "its agreement survives restart",
+      },
+    ],
     scope: ["src/requests"],
     constraints: ["fail closed on unreadable state"],
     nonGoals: ["no second ledger"],
     acceptanceCriteria: ["survives restart"],
+    verificationCommands: [],
     manualVerification: [],
     recommendedApproach: "One SQLite row per request",
     keyDecisions: ["compare-and-swap on the record revision"],
@@ -103,6 +118,43 @@ test("an approval written to durable state is readable after a restart", async (
     const reread = await newStore().read(created.id);
     expect(reread?.approval?.briefRevision).toBe(1);
     expect(reread?.approval?.contentDigest).toBe(created.draft.contentDigest);
+  });
+});
+
+test("a legacy approved brief decodes without stories and keeps its approval", async () => {
+  await withHome(async (_home, newStore) => {
+    const created = await newStore().create({ repoPath: "/repo", content: content() });
+    const {
+      userStories: _userStories,
+      verificationCommands: _verificationCommands,
+      ...legacyContent
+    } = created.draft.content;
+    const checkedLegacy = checkedRequestBriefContent(legacyContent, { allowLegacyFields: true });
+    const digests = requestBriefDigests(checkedLegacy);
+    const storedLegacy = {
+      ...created,
+      draft: { ...created.draft, content: legacyContent, ...digests },
+      approval: {
+        requestId: created.id,
+        briefRevision: created.draft.revision,
+        ...digests,
+        approvedAt: NOW,
+      },
+    };
+
+    const loaded = parseRequestBriefRecord(storedLegacy);
+    const markdown = renderRequestBriefMarkdown(loaded);
+
+    expect(loaded.draft.content.userStories).toEqual([]);
+    expect(loaded.draft.contentDigest).toBe(digests.contentDigest);
+    expect(requestApprovalState(loaded)).toBe("current");
+    expect(markdown).not.toContain("## User stories");
+    expect(markdown).toContain("## Goal\nDurable request identity");
+    expect(markdown).toContain("## Proposed approach\nOne SQLite row per request");
+    expect(markdown.indexOf("## Proposed approach")).toBeLessThan(
+      markdown.indexOf("## What is included"),
+    );
+    expect(markdown).toContain("Plan status: approved at revision 1 on");
   });
 });
 

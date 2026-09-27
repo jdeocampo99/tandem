@@ -174,7 +174,7 @@ function optionalSection(record: UnknownRecord, key: string): unknown {
 
 function parseBriefContent(value: unknown, source: string): RequestBriefContent {
   try {
-    return checkedRequestBriefContent(value);
+    return checkedRequestBriefContent(value, { allowLegacyFields: true });
   } catch (error) {
     failState(source, error instanceof Error ? error.message : String(error));
   }

@@ -23,10 +23,18 @@ const NOW = "2030-01-01T00:00:00.000Z";
 function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefContent {
   return {
     goal: "Show the agreed request in a read-only pane",
+    userStories: [
+      {
+        actor: "a request owner",
+        action: "review the plan",
+        outcome: "they can approve the intended work",
+      },
+    ],
     scope: ["src/requests"],
     constraints: ["never close a pane Tandem does not own"],
     nonGoals: ["no editing path in the pane"],
     acceptanceCriteria: ["the pane shows the current draft revision"],
+    verificationCommands: [],
     manualVerification: [],
     recommendedApproach: "Render Markdown from the durable record",
     keyDecisions: ["the coordinator owns the pane"],
@@ -103,10 +111,23 @@ test("the projection opens one owned pane and refreshes it in place for later re
     expect(workspaceCreateCount(world)).toBe(1);
 
     expect(opened.renderedPath).toBe(join(world.home, "request-briefs", "req-1.md"));
-    expect(firstRender).toContain("Revision 1,");
+    expect(firstRender).toContain("Revision 1. Plan status: not approved yet.");
     expect(firstRender).toContain("editing here changes nothing");
+    expect(firstRender).toContain(
+      "## User stories\n- a request owner can review the plan, so they can approve the intended work.",
+    );
+    expect(firstRender.indexOf("## Goal")).toBeLessThan(firstRender.indexOf("## User stories"));
+    expect(firstRender.indexOf("## User stories")).toBeLessThan(
+      firstRender.indexOf("## Proposed approach"),
+    );
+    expect(firstRender.indexOf("## Proposed approach")).toBeLessThan(
+      firstRender.indexOf("## Approval scope"),
+    );
+    expect(firstRender.indexOf("## Approval scope")).toBeLessThan(
+      firstRender.indexOf("## How it is checked"),
+    );
     expect(firstRender).toContain("not approved");
-    expect(await readFile(opened.renderedPath, "utf8")).toContain("Revision 2,");
+    expect(await readFile(opened.renderedPath, "utf8")).toContain("Revision 2. Plan status:");
   });
 });
 

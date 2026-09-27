@@ -10,6 +10,7 @@ import {
   type RequestBriefContent,
   type RequestBriefRecord,
   type RequestBriefRevision,
+  type RequestBriefUserStory,
   type RequestReviewPane,
   type TaskRecord,
 } from "../contracts.ts";
@@ -84,11 +85,14 @@ const ANNOTATION_FIELDS = ["openQuestions", "researchLinks"] as const;
 
 const TEXT_FIELDS = ["goal", "recommendedApproach"] as const;
 
+const USER_STORY_FIELDS = ["actor", "action", "outcome"] as const;
+
 const LIST_FIELDS = [
   "scope",
   "constraints",
   "nonGoals",
   "acceptanceCriteria",
+  "verificationCommands",
   "manualVerification",
   "keyDecisions",
   "openQuestions",
@@ -126,15 +130,21 @@ export function requestIdFrom(rawId: string): string {
 
 /**
  * Validates untrusted brief content at the boundary and returns it in canonical field order, so
- * two equal briefs always digest identically.
+ * two equal briefs always digest identically. Legacy records may omit fields added after approval.
  */
-export function checkedRequestBriefContent(value: unknown): RequestBriefContent {
+export function checkedRequestBriefContent(
+  value: unknown,
+  options: Readonly<{ readonly allowLegacyFields?: boolean }> = {},
+): RequestBriefContent {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new RequestBriefError("invalid-content", "A request brief must be an object");
   }
   const record = value as Record<string, unknown>;
+  const allowLegacyFields = options.allowLegacyFields === true;
   const allowed: readonly string[] = [
     ...AGREEMENT_FIELDS,
+    "userStories",
+    "verificationCommands",
     MANUAL_VERIFICATION_FIELD,
     SKIP_REVIEW_FIELD,
     ...ANNOTATION_FIELDS,
@@ -146,11 +156,16 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
   }
   const content: RequestBriefContent = {
     goal: briefText(record, "goal"),
+    userStories: briefUserStories(record.userStories, allowLegacyFields),
     scope: briefList(record, "scope"),
     constraints: briefList(record, "constraints"),
     nonGoals: briefList(record, "nonGoals"),
     acceptanceCriteria: briefList(record, "acceptanceCriteria"),
-    // A brief saved before manual verification existed has only automated checks.
+    verificationCommands:
+      record.verificationCommands === undefined && allowLegacyFields
+        ? []
+        : briefList(record, "verificationCommands"),
+    // A brief saved before manual verification existed has no hands-on checks.
     manualVerification:
       record.manualVerification === undefined ? [] : briefList(record, "manualVerification"),
     recommendedApproach: briefText(record, "recommendedApproach"),
@@ -159,17 +174,29 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
     researchLinks: briefList(record, "researchLinks"),
     ...(briefFlag(record, SKIP_REVIEW_FIELD) ? { skipReview: true } : {}),
   };
-  const bytes = Buffer.byteLength(JSON.stringify(content), "utf8");
+  const { userStories, verificationCommands, ...legacyContent } = content;
+  const sizedContent = allowLegacyFields
+    ? {
+        ...legacyContent,
+        ...(userStories.length === 0 ? {} : { userStories }),
+        ...(verificationCommands.length === 0 ? {} : { verificationCommands }),
+      }
+    : content;
+  const bytes = Buffer.byteLength(JSON.stringify(sizedContent), "utf8");
   if (bytes > MAX_REQUEST_BRIEF_BYTES) {
     throw new RequestBriefError(
       "invalid-content",
       `A request brief may not exceed ${MAX_REQUEST_BRIEF_BYTES} UTF-8 bytes; received ${bytes}`,
     );
   }
-  if (content.scope.length === 0 || content.acceptanceCriteria.length === 0) {
+  if (
+    content.scope.length === 0 ||
+    content.acceptanceCriteria.length === 0 ||
+    (!allowLegacyFields && content.userStories.length === 0)
+  ) {
     throw new RequestBriefError(
       "invalid-content",
-      "A request brief must name at least one scope item and one acceptance criterion",
+      "A request brief must name at least one scope item, acceptance criterion, and user story",
     );
   }
   return content;
@@ -449,6 +476,8 @@ function canonicalContent(content: RequestBriefContent): string {
 function canonicalAgreement(content: RequestBriefContent): string {
   const agreement: unknown[] = AGREEMENT_FIELDS.map((field) => content[field]);
   if (content.manualVerification.length > 0) agreement.push(content.manualVerification);
+  if (content.userStories.length > 0) agreement.push(content.userStories);
+  if (content.verificationCommands.length > 0) agreement.push(content.verificationCommands);
   if (content.skipReview === true) agreement.push({ skipReview: true });
   return JSON.stringify(agreement);
 }
@@ -478,6 +507,50 @@ function briefText(record: Record<string, unknown>, field: (typeof TEXT_FIELDS)[
     );
   }
   return value;
+}
+
+function briefUserStories(
+  value: unknown,
+  allowLegacyFields: boolean,
+): readonly RequestBriefUserStory[] {
+  if (value === undefined && allowLegacyFields) return [];
+  if (!Array.isArray(value)) {
+    throw new RequestBriefError(
+      "invalid-content",
+      "A request brief userStories field must contain one to three actor/action/outcome stories",
+    );
+  }
+  if (allowLegacyFields && value.length === 0) return [];
+  if (value.length < 1 || value.length > 3) {
+    throw new RequestBriefError(
+      "invalid-content",
+      "A request brief must contain one to three user stories",
+    );
+  }
+  return value.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new RequestBriefError(
+        "invalid-content",
+        `A request brief userStories[${index}] must name actor, action, and outcome`,
+      );
+    }
+    const record = entry as Record<string, unknown>;
+    if (
+      Object.keys(record).some(
+        (field) => !USER_STORY_FIELDS.some((allowed) => allowed === field),
+      )
+    ) {
+      throw new RequestBriefError(
+        "invalid-content",
+        `A request brief userStories[${index}] has an unknown field`,
+      );
+    }
+    return {
+      actor: checkedLine(record.actor, `userStories[${index}].actor`),
+      action: checkedLine(record.action, `userStories[${index}].action`),
+      outcome: checkedLine(record.outcome, `userStories[${index}].outcome`),
+    };
+  });
 }
 
 function briefList(

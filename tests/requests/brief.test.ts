@@ -23,10 +23,18 @@ const LATER = "2030-01-01T01:00:00.000Z";
 function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefContent {
   return {
     goal: "Give the coordinator a durable request brief",
+    userStories: [
+      {
+        actor: "a project owner",
+        action: "approve a plan",
+        outcome: "the team shares the same intended result",
+      },
+    ],
     scope: ["src/requests"],
     constraints: ["SQLite stays authoritative"],
     nonGoals: ["no desktop GUI"],
     acceptanceCriteria: ["one stable request id"],
+    verificationCommands: [],
     manualVerification: [],
     recommendedApproach: "One record with monotonic draft revisions",
     keyDecisions: ["Markdown is a projection only"],
@@ -186,6 +194,25 @@ test("brief content is validated at the boundary rather than stored as given", (
   );
   expect(() => checkedRequestBriefContent(content({ goal: "  " }))).toThrow(/goal/u);
   expect(() => checkedRequestBriefContent(content({ scope: [] }))).toThrow(/at least one scope/u);
+  expect(() => checkedRequestBriefContent(content({ userStories: [] }))).toThrow(
+    /one to three user stories/u,
+  );
+  expect(() =>
+    checkedRequestBriefContent({
+      ...content(),
+      userStories: Array.from({ length: 4 }, () => ({
+        actor: "a user",
+        action: "does something",
+        outcome: "sees a result",
+      })),
+    }),
+  ).toThrow(/one to three user stories/u);
+  expect(() =>
+    checkedRequestBriefContent({
+      ...content(),
+      userStories: [{ actor: "a user", action: "does something", outcome: " " }],
+    }),
+  ).toThrow(/userStories\[0\]\.outcome/u);
   expect(() => checkedRequestBriefContent(content({ acceptanceCriteria: ["ok", ""] }))).toThrow(
     /acceptanceCriteria\[1\]/u,
   );
@@ -194,12 +221,18 @@ test("brief content is validated at the boundary rather than stored as given", (
   );
 });
 
-test("a brief saved before manual verification existed loads with none and keeps its digests", () => {
-  const { manualVerification: _omitted, ...legacy } = content();
-  const loaded = checkedRequestBriefContent(legacy);
+test("a brief saved before added fields loads without changing its digests", () => {
+  const {
+    manualVerification: _manualVerification,
+    userStories: _userStories,
+    verificationCommands: _verificationCommands,
+    ...legacy
+  } = content();
+  const loaded = checkedRequestBriefContent(legacy, { allowLegacyFields: true });
 
+  expect(loaded.userStories).toEqual([]);
+  expect(loaded.verificationCommands).toEqual([]);
   expect(loaded.manualVerification).toEqual([]);
-  // Digests recorded by the release before manual verification, for this exact content.
   expect(requestBriefDigests(loaded)).toEqual({
     contentDigest: "777275e9c0fa047b1b96b0c7346d31163c8d3b3bba5daec125eb24c838465531",
     agreementDigest: "74a95430904cba395789ce0926801dc88fbf7e9f3332a81faa7f1552a6c9219c",
@@ -220,6 +253,47 @@ test("moving an item into manual verification changes what was agreed and needs 
 
   expect(moved.draft.changeKind).toBe("agreement");
   expect(requestApprovalState(moved)).toBe("superseded");
+});
+
+test("changing an approved user story requires reapproval", () => {
+  const approved = approveRequestBriefRecord(
+    seeded(),
+    { requestId: "req-1", briefRevision: 1, contentDigest: seeded().draft.contentDigest },
+    NOW,
+  );
+  const revised = reviseRequestBriefRecord(
+    approved,
+    content({
+      userStories: [
+        {
+          actor: "a maintainer",
+          action: "revise the plan",
+          outcome: "the agreed result changes",
+        },
+      ],
+    }),
+    LATER,
+  );
+
+  expect(revised.draft.changeKind).toBe("agreement");
+  expect(revised.draft.agreementDigest).not.toBe(approved.draft.agreementDigest);
+  expect(requestApprovalState(revised)).toBe("superseded");
+});
+
+test("changing routine verification commands requires reapproval", () => {
+  const approved = approveRequestBriefRecord(
+    seeded(),
+    { requestId: "req-1", briefRevision: 1, contentDigest: seeded().draft.contentDigest },
+    NOW,
+  );
+  const revised = reviseRequestBriefRecord(
+    approved,
+    content({ verificationCommands: ["bun test"] }),
+    LATER,
+  );
+
+  expect(revised.draft.changeKind).toBe("agreement");
+  expect(requestApprovalState(revised)).toBe("superseded");
 });
 
 test("skipping review is part of what was agreed, and only an approved brief skips it", () => {
@@ -243,34 +317,49 @@ test("skipping review is part of what was agreed, and only an approved brief ski
   expect(briefSkipsReview(approved)).toBe(false);
   expect(briefSkipsReview(skipping)).toBe(false);
   expect(briefSkipsReview(approve(skipping))).toBe(true);
-  expect(renderRequestBriefMarkdown(skipping)).toContain("## Code review\nSkipped at your request");
+  expect(renderRequestBriefMarkdown(skipping)).toContain(
+    "Code review is skipped at your request after validation",
+  );
   expect(() => checkedRequestBriefContent({ ...content(), skipReview: "yes" })).toThrow(
     RequestBriefError,
   );
 });
 
-test("the brief shows automated checks and manual verification as two lists", () => {
+test("the brief separates behavioral checks, routine commands, and manual verification", () => {
   const record = createRequestBriefRecord(
     {
       id: "req-1",
       repoPath: "/repo",
-      content: content({ manualVerification: ["the streak bar glows at 5 in a row"] }),
+      content: content({
+        acceptanceCriteria: ["the request remains read-only"],
+        verificationCommands: ["bun run check"],
+        manualVerification: ["the reviewer can find the approval boundary"],
+      }),
     },
     NOW,
   );
 
   const markdown = renderRequestBriefMarkdown(record);
 
-  expect(markdown).toContain("## Automated checks\n- one stable request id\n");
-  expect(markdown).toContain("## Manual verification\n- the streak bar glows at 5 in a row\n");
-  expect(markdown).not.toContain("Acceptance criteria");
+  expect(markdown).toContain("### Behavioral checks\n- the request remains read-only\n");
+  expect(markdown).toContain("### Routine project commands\n- bun run check\n");
+  expect(markdown).toContain(
+    "### Hands-on verification\n- the reviewer can find the approval boundary\n",
+  );
 });
 
-test("the brief puts what approval needs first and the details after", () => {
+test("the brief puts agreement first and detailed checks below it", () => {
   const settled = renderRequestBriefMarkdown(seeded());
   const open = renderRequestBriefMarkdown(
     createRequestBriefRecord(
-      { id: "req-1", repoPath: "/repo", content: content({ openQuestions: ["Ship to web too?"] }) },
+      {
+        id: "req-1",
+        repoPath: "/repo",
+        content: content({
+          openQuestions: ["Ship to web too?"],
+          verificationCommands: ["bun test"],
+        }),
+      },
       NOW,
     ),
   );
@@ -279,20 +368,29 @@ test("the brief puts what approval needs first and the details after", () => {
   expect(headings(open)).toEqual([
     "# Request brief",
     "## Goal",
+    "## User stories",
+    "## Proposed approach",
+    "## Approval scope",
     "## Decisions required",
-    "## In scope",
-    "## Out of scope",
-    "## Automated checks",
-    "## Manual verification",
+    "## What is included",
+    "## How it is checked",
+    "### Behavioral checks",
+    "### Routine project commands",
+    "### Hands-on verification",
+    "## Limits",
+    "### Out of scope",
+    "### Constraints",
     "## Key decisions",
-    "# Details",
-    "## Approach",
-    "## Constraints",
     "## References",
     "## Record",
   ]);
   expect(settled).not.toContain("Decisions required");
-  expect(settled).toContain("Revision 1, not approved yet.");
+  expect(settled).toContain("Plan status: not approved yet.");
+  expect(
+    open.indexOf("## Approval scope") < open.indexOf("## How it is checked"),
+  ).toBe(true);
+  expect(open).toContain("Implementation still requires separate approval of its final scope.");
+  expect(open).toContain("Critical safety limits:\n- SQLite stays authoritative");
 });
 
 test("new implementation work joins the one open approved request in its repository", () => {

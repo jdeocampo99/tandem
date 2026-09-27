@@ -11,12 +11,19 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   Stored in `request_briefs` in `<home>/state.sqlite` under task-style compare-and-swap. Every edit
   pushes the prior draft into preserved history. Tasks reference it via `requestId`.
 - Agreement fields (in the agreement digest): goal, scope, constraints, non-goals,
-  `acceptanceCriteria`, `manualVerification`, approach, key decisions. Annotations: unresolved
-  questions, research links.
-- `acceptanceCriteria` is what validation or review can prove; `manualVerification` is what only a
-  person can check. Tasks copy `manualVerification`; reviewers never judge it, implementers may
-  report on it without blocking, and delivery renders it as an unticked PR checklist. It joins the
-  agreement digest only when non-empty, so older briefs keep their digests and approval.
+  `acceptanceCriteria`, user stories, routine verification commands, `manualVerification`,
+  approach, and key decisions. Annotations: unresolved questions and research links.
+- New briefs require one to three concrete actor/action/outcome user stories. A story change
+  changes the agreement digest and requires reapproval. Stories are never inferred for older
+  approved records.
+- `acceptanceCriteria` contains observable behavioral outcomes that validation or review can prove.
+  `verificationCommands` contains routine project commands, separate from behavior. `manualVerification`
+  contains hands-on checks only a person can make. Tasks copy `manualVerification`; reviewers never
+  judge it, implementers may report on it without blocking, and delivery renders it as an unticked
+  PR checklist.
+- Older records may omit `userStories` and `verificationCommands`. They decode as empty and those
+  fields are excluded from both digests while empty, so stored content digests and approvals stay
+  unchanged. Reading or projecting an old brief does not rewrite its record.
 - `skipReview: true` records the user's planning-time decision that the work needs no code review.
   It is agreement (it joins the digest only when set) and only the coordinator sets it, when the
   user says so. While the approval is current, tasks under the brief record
@@ -46,9 +53,15 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   owned temporary pane, an unfocused split right of the coordinator's pane. Without an active Herdr
   context (`HERDR_ENV`, `HERDR_PANE_ID`) in the Tandem session, it opens a separate
   `Tandem request brief · <repo>` workspace. Tiny fixes use an in-chat brief and no pane.
-- The Markdown leads with what approval needs: goal, decisions required (omitted when there are
-  none), in scope, out of scope, automated checks, manual verification, key decisions. Approach,
-  constraints, references, and the record's id, revision, and digest follow under Details.
+- A fresh Markdown projection leads with canonical plan approval status, Goal, User stories when
+  present, Proposed approach, and Approval scope with critical safety limits. Older briefs without
+  stories show no empty story heading and gain no inferred requirements.
+- Below the approval summary, plain headings show what is included, how it is checked, and limits.
+  Behavioral checks, routine project commands, hands-on verification, constraints, non-goals,
+  decisions, references, and record metadata remain visible. Routine commands are not behavioral
+  acceptance criteria.
+- A fresh projection renders status from the current SQLite record; saved Markdown snapshots are
+  not approval authority.
 - The coordinator's pane is only the split anchor; a record naming it is quarantined, never written
   or closed. Users edit by replying, never in the pane.
 - Every pane operation proves ownership with the coordinator-pane checks (session snapshot, endpoint

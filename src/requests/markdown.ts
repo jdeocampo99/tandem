@@ -1,56 +1,78 @@
-import type { RequestBriefContent, RequestBriefRecord } from "../contracts.ts";
+import type { RequestBriefRecord } from "../contracts.ts";
 import { requestApprovalState } from "./brief.ts";
 
-/** What a reviewer needs to approve, in reading order. */
-const SUMMARY_SECTIONS = [
-  ["openQuestions", "Decisions required"],
-  ["scope", "In scope"],
-  ["nonGoals", "Out of scope"],
-  ["acceptanceCriteria", "Automated checks"],
-  ["manualVerification", "Manual verification"],
-  ["keyDecisions", "Key decisions"],
-] as const satisfies readonly (readonly [keyof RequestBriefContent, string])[];
-
 /**
- * Renders the current draft as the read-only view of the durable record. It is a projection only:
- * the pane showing it offers no editing path, and SQLite remains the authority for every field
- * repeated here. The summary comes first so a reviewer can approve from it; how the work gets done
- * and the record's bookkeeping follow under Details.
+ * Renders the current draft as the read-only view of the durable record. SQLite remains the
+ * authority for every field repeated here.
  */
 export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
   const content = record.draft.content;
   const lines: string[] = [
     "# Request brief",
     "",
-    `Revision ${record.draft.revision}, ${approvalLine(record)}. Reply in the main conversation to change it; editing here changes nothing.`,
+    `Revision ${record.draft.revision}. Plan status: ${approvalLine(record)}.`,
+    "Reply in the main conversation to change it; editing here changes nothing.",
     "",
     "## Goal",
     content.goal,
   ];
-  for (const [section, title] of SUMMARY_SECTIONS) {
-    const entries = content[section];
-    // An empty question list means nothing waits on the reader, so it earns no heading.
-    if (section === "openQuestions" && entries.length === 0) continue;
-    lines.push("", `## ${title}`, ...bullets(entries));
-  }
-  if (content.skipReview === true) {
+  if (content.userStories.length > 0) {
     lines.push(
       "",
-      "## Code review",
-      "Skipped at your request: once validation passes, the work is ready to publish unreviewed.",
+      "## User stories",
+      ...content.userStories.map(
+        (story) => `- ${story.actor} can ${story.action}, so ${story.outcome}.`,
+      ),
     );
   }
   lines.push(
     "",
-    "---",
-    "",
-    "# Details",
-    "",
-    "## Approach",
+    "## Proposed approach",
     content.recommendedApproach,
     "",
-    "## Constraints",
+    "## Approval scope",
+    "Brief approval confirms agreement with this plan only. Implementation still requires separate approval of its final scope. Publishing, merging, deploying, and destructive actions need separate approval.",
+    "",
+    "Critical safety limits:",
     ...bullets(content.constraints),
+  );
+  if (content.skipReview === true) {
+    lines.push(
+      "",
+      "Code review is skipped at your request after validation; publishing still requires approval.",
+    );
+  }
+  if (content.openQuestions.length > 0) {
+    lines.push("", "## Decisions required", ...bullets(content.openQuestions));
+  }
+  lines.push(
+    "",
+    "## What is included",
+    ...bullets(content.scope),
+    "",
+    "## How it is checked",
+    "",
+    "### Behavioral checks",
+    ...bullets(content.acceptanceCriteria),
+  );
+  if (content.verificationCommands.length > 0) {
+    lines.push("", "### Routine project commands", ...bullets(content.verificationCommands));
+  }
+  lines.push(
+    "",
+    "### Hands-on verification",
+    ...bullets(content.manualVerification),
+    "",
+    "## Limits",
+    "",
+    "### Out of scope",
+    ...bullets(content.nonGoals),
+    "",
+    "### Constraints",
+    ...bullets(content.constraints),
+    "",
+    "## Key decisions",
+    ...bullets(content.keyDecisions),
     "",
     "## References",
     ...bullets(content.researchLinks),

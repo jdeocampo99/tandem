@@ -371,10 +371,18 @@ test("an unavailable OMP catalogue refuses a model change and leaves policy unto
 
 const BRIEF: RequestBriefContent = {
   goal: "Keep one durable agreement for this request",
+  userStories: [
+    {
+      actor: "a request owner",
+      action: "approve a plan",
+      outcome: "the team builds the agreed work",
+    },
+  ],
   scope: ["src/requests"],
   constraints: ["SQLite stays authoritative"],
   nonGoals: ["no second ledger"],
   acceptanceCriteria: ["dispatch is blocked while the brief is superseded"],
+  verificationCommands: [],
   manualVerification: [],
   recommendedApproach: "One record with monotonic draft revisions",
   keyDecisions: ["the pane is a projection the coordinator owns"],
@@ -418,6 +426,10 @@ test("a request brief gates dispatch, retires only its own pane, and pauses supe
     });
     expect(approved.approvalState).toBe("current");
     expect(approved.record.reviewPane?.status).toBe("closed");
+    const freshReview = await service.reviewRequestBrief(requestId);
+    expect(freshReview.approvalState).toBe("current");
+    expect(freshReview.markdown).toContain("Plan status: approved at revision 1 on");
+    expect(freshReview.record.reviewPane?.status).toBe("open");
     expect(world.paneIsPresent(reviewPaneId)).toBe(false);
     expect(world.paneIsPresent(bystander.paneId)).toBe(true);
 

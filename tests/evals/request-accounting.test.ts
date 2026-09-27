@@ -17,10 +17,18 @@ const START_MS = Date.UTC(2030, 0, 1, 0, 0);
 
 const BRIEF: RequestBriefContent = {
   goal: "Account for everything one request cost and how long it took",
+  userStories: [
+    {
+      actor: "a request owner",
+      action: "review a completed request",
+      outcome: "they can see the time and cost",
+    },
+  ],
   scope: ["src/runtime"],
   constraints: ["accounting never authorizes or blocks work"],
   nonGoals: ["no second ledger"],
   acceptanceCriteria: ["a completed request produces one wall-clock receipt"],
+  verificationCommands: [],
   manualVerification: [],
   recommendedApproach: "Append durable facts keyed by a stable event identity",
   keyDecisions: ["unavailable is never summed as zero"],

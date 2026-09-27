@@ -29,10 +29,24 @@ const modelAssignmentsSchema = z.strictObject(
 
 const briefContentSchema = z.strictObject({
   goal: z.string(),
+  userStories: z
+    .array(
+      z.strictObject({
+        actor: z.string().min(1),
+        action: z.string().min(1),
+        outcome: z.string().min(1),
+      }),
+    )
+    .min(1)
+    .max(3)
+    .describe("One to three concrete actor/action/outcome stories."),
   scope: z.array(z.string()),
   constraints: z.array(z.string()),
   nonGoals: z.array(z.string()),
   acceptanceCriteria: z.array(z.string()),
+  verificationCommands: z
+    .array(z.string())
+    .describe("Routine project commands, separate from behavioral checks."),
   manualVerification: z.array(z.string()),
   recommendedApproach: z.string(),
   keyDecisions: z.array(z.string()),

@@ -550,18 +550,27 @@ export function isSafeRequestId(value: unknown): value is string {
 export const MAX_REQUEST_BRIEF_ENTRIES = 24;
 export const MAX_REQUEST_BRIEF_BYTES = 32 * 1024;
 
+/** One concrete actor, action, and outcome bound to a brief revision. */
+export type RequestBriefUserStory = Readonly<{
+  readonly actor: string;
+  readonly action: string;
+  readonly outcome: string;
+}>;
+
 /**
- * What one brief revision says. The first eight fields carry the agreement itself; `openQuestions`
- * and `researchLinks` are annotations the coordinator keeps current without reopening approval.
- * `acceptanceCriteria` are the automated checks a validation command or code review can prove;
- * `manualVerification` are hands-on checks a person makes before merging.
+ * What one brief revision says. `userStories` are the approval-bound user outcomes.
+ * `verificationCommands` are routine project commands, separate from behavioral
+ * `acceptanceCriteria`. `manualVerification` is for hands-on checks by a person.
+ * `openQuestions` and `researchLinks` are annotations the coordinator keeps current.
  */
 export type RequestBriefContent = Readonly<{
   readonly goal: string;
+  readonly userStories: readonly RequestBriefUserStory[];
   readonly scope: readonly string[];
   readonly constraints: readonly string[];
   readonly nonGoals: readonly string[];
   readonly acceptanceCriteria: readonly string[];
+  readonly verificationCommands: readonly string[];
   readonly manualVerification: readonly string[];
   readonly recommendedApproach: string;
   readonly keyDecisions: readonly string[];
