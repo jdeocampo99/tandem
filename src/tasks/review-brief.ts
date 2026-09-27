@@ -314,8 +314,7 @@ export function assessReviewImpact(
   }
   return {
     assessment: "expanded",
-    reason:
-      "the fix reached files outside the surface the round was authorized to touch, so review the cumulative diff and the affected callers in full",
+    reason: "the fix reached files outside the surface the round was authorized to touch",
     outsideScopeFiles: boundedList(outside, REVIEW_BRIEF_LIMITS.maxChangedFiles).kept,
     escalation: "broad-impact",
   };
@@ -519,6 +518,11 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     ...describeRequirementNames(acceptance.failed).map((name) => `${name}: failed`),
     ...describeRequirementNames(acceptance.stale).map((name) => `${name}: stale`),
   ];
+  // A fix round with a complete since-last-review diff is reviewed as that diff, whatever files
+  // the fix touched; without one it falls back to the impact assessment's breadth.
+  const focused =
+    brief.identities.reviewRound > 0 &&
+    brief.diffs.some((diff) => diff.range === "since-last-review" && !diff.truncated);
   const lines: string[] = [
     `# Review brief: ${brief.lens} lens, round ${brief.identities.reviewRound}`,
     "",
@@ -567,14 +571,15 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     ...(compact
       ? [`- ${brief.sourceLinks.length} source link(s); read the patch at the paths above.`]
       : ["- source links:", ...brief.sourceLinks.map((entry) => `  - ${entry}`)]),
-    ...(brief.identities.reviewRound === 0 || brief.impact.assessment !== "contained"
-      ? []
-      : [
+    ...(focused
+      ? [
           "",
           "## Fix-round focus",
-          `- This is fix round ${brief.identities.reviewRound}; review the since-last-review diff above, not the whole change from scratch.`,
+          `- This is fix round ${brief.identities.reviewRound}; review the since-last-review diff above, not the whole change from scratch. The cumulative diff stays available as reference.`,
           "- Confirm each evidence-backed blocker below is resolved at this HEAD before passing; do not reopen a settled finding without new evidence.",
-        ]),
+          "- Raise a new P0 or P1 only on lines changed since the last review. Anything you find in older code is at most P2, unless it is a P0.",
+        ]
+      : []),
     "",
     "## Review breadth",
     `- review level: ${brief.reviewLevel.level}`,
@@ -598,7 +603,7 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
       : [
           `- files outside the authorized fix surface: ${brief.impact.outsideScopeFiles.join(", ")}`,
         ]),
-    ...(brief.impact.assessment === "contained"
+    ...(focused || brief.impact.assessment === "contained"
       ? []
       : ["- Review the cumulative diff and the affected callers in full for this round."]),
     "",

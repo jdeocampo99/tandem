@@ -86,7 +86,10 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
 - Each round writes `review-brief.md` beside the immutable diff in the reviewer's job directory,
   built by src/tasks/review-brief.ts as a pure function of durable task state plus injected git
   observations. Every field comes from existing records; it is not a memory or handoff system.
-- Fix rounds point the reviewer at the diff since the last reviewed HEAD and the open findings.
+- A fix round with a complete (untruncated) since-last-review diff gets a "Fix-round focus": review
+  that diff, confirm each prior blocker is resolved, and raise a new P0/P1 only on lines changed
+  since the last review (older code is at most P2 unless it is a P0). The cumulative diff stays as
+  reference. Without that diff, the impact assessment below decides the breadth.
 - The eight code standards are mandatory blocking requirements, and implementer claims are never
   proof: every claim is confirmed against source, diff, or runner evidence.
 - Principles (`src/instructions.ts`): nine one-line rules adapted from pstack (delete dead code
@@ -100,7 +103,7 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   copied `<lens>/` prefix, so `review/<id>` still names the same finding.
 - Impact is `contained`, `expanded`, or `unknown`, with an `EscalationReason`: outside the authorized
   surface is `broad-impact`; an unboundable surface, truncated patch, or missing prior reviewed HEAD is
-  `unknown-impact`. Anything but `contained` requires reading the cumulative diff and callers in full.
+  `unknown-impact`. Outside a focused fix round, anything but `contained` requires reading the cumulative diff and callers in full.
 - `REVIEW_BRIEF_LIMITS` bounds the brief. Blocker identities and status are never elided; any elision
   is stated with a pointer to the durable record.
 - Advisory leads render with provenance under an untrusted heading and can never become blockers,
