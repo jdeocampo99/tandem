@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { renderBoard } from "../../src/board/view.ts";
 import type { RepoPolicy } from "../../src/contracts.ts";
 import {
   type MemoryShowResult,
@@ -167,6 +168,50 @@ test("inspection and delivery slash commands preserve their arguments", () => {
       refusals: ["the worktree has uncommitted or unmerged changes"],
     }),
   ).toBe("task-1: not ready to publish: the worktree has uncommitted or unmerged changes");
+});
+
+test("board summaries validate required Running row data", () => {
+  const row = {
+    key: "task-1:implementing",
+    cause: "implementing",
+    project: "app",
+    mark: "🔨",
+    name: "Fix the flaky login test",
+    text: "implementing",
+  };
+  const board = {
+    now: "2030-01-01T12:00:00.000Z",
+    projects: ["app"],
+    needsYou: [],
+    pullRequests: [],
+    finished: 0,
+  };
+  const complete = {
+    ...board,
+    running: [{ ...row, repoPath: "/work/app", since: "12m" }],
+  };
+  expect(summarizeTandemActionValue("board", complete)).toContain(
+    "- 🔨 **app** · **Fix the flaky login test** — implementing · 12m",
+  );
+
+  const incomplete = [
+    { ...board, running: [{ ...row, since: "12m" }] },
+    { ...board, running: [{ ...row, repoPath: "/work/app" }] },
+    {
+      ...board,
+      running: [
+        {
+          ...row,
+          cause: "ready",
+          repoPath: "/work/app",
+          since: "12m",
+        },
+      ],
+    },
+  ];
+  for (const value of incomplete) {
+    expect(summarizeTandemActionValue("board", value)).toBe(JSON.stringify(value));
+  }
 });
 
 test("communication slash commands join quoted deltas and reject extra message arguments", () => {
@@ -1537,6 +1582,55 @@ test("memory actions run without an approval dialog and keep the notes' line bre
   expect(none.value).toBe("No workstreams yet.");
 });
 
+test("the coordinator board tool shows one terminal-formatted status card", async () => {
+  const view = {
+    now: "2030-01-01T00:00:05.000Z",
+    projects: ["app"],
+    needsYou: [
+      {
+        key: "brief:req-1",
+        cause: "brief",
+        repoPath: "/work/app",
+        project: "app",
+        mark: "🙋",
+        name: "Dark mode",
+        text: "brief waiting for approval",
+      },
+    ],
+    running: [],
+    pullRequests: [],
+    finished: 0,
+  } as const;
+  const service = { board: async () => view } as unknown as TandemService;
+  const shown: unknown[] = [];
+  const followUps: string[] = [];
+
+  const outcome = await runTandemTool(
+    { action: "board" },
+    {
+      ...callDependencies(service, followUps),
+      showStatus: async (effect) => {
+        shown.push(effect);
+      },
+    },
+    undefined,
+  );
+
+  expect(shown).toEqual([
+    {
+      type: "showStatus",
+      view,
+      text: renderBoard(view),
+      timing: "aside",
+      triggerTurn: false,
+    },
+  ]);
+  expect(outcome.text).toBe(
+    "The status board is displayed above. Do not repeat its rows; briefly answer the user's status question.",
+  );
+  expect(outcome.details).toMatchObject({ action: "board", value: view });
+  expect(followUps).toEqual(["postAction"]);
+});
 test("a catch-up goes on screen as its own card, and the tool result only carries the notes", async () => {
   const view = {
     name: "tia",

@@ -29,6 +29,7 @@ import {
   type WorkerTerminalState,
   type WorkerTokenTally,
 } from "../workers/terminal.ts";
+import { validationCommandRefusal } from "../workers/validation-commands.ts";
 import type {
   Cancel,
   SessionDeps,
@@ -92,6 +93,18 @@ export function idleAfterResult(
   const idleSince = input.idleSince ?? input.now;
   const settle = input.now - idleSince >= IDLE_AFTER_RESULT_GRACE_MS;
   return { idleSince: settle ? undefined : idleSince, settle };
+}
+
+/**
+ * What a turn that ended without `submit_report` means. One the person at the pane started is
+ * conversation. One Tandem started (the brief, a steer, a reminder) gets one reminder; a second
+ * fails the job so central recovery restarts it or asks the user, instead of sitting idle unseen.
+ */
+export function reportlessTurnEnd(
+  input: Readonly<{ humanTurn: boolean; reminded: boolean }>,
+): "conversation" | "remind" | "fail" {
+  if (input.humanTurn) return "conversation";
+  return input.reminded ? "fail" : "remind";
 }
 
 const SEVERITY_ORDER: Readonly<Record<Finding["severity"], number>> = {
@@ -179,7 +192,10 @@ export function mockupWriteDecision(
   return { block: false };
 }
 
-/** Once the delegated work is settled, timed out, or paused, only read-only tools may run. */
+/**
+ * Once the delegated work is settled, timed out, or paused, only read-only tools and the to-do
+ * list (the worker's own scratch notes) may run.
+ */
 export function workerToolRefusal(
   state: Readonly<{
     delegatedSettled: boolean;
@@ -196,7 +212,7 @@ export function workerToolRefusal(
     !state.pauseRequested &&
     state.phase !== "paused" &&
     !state.completed;
-  if (open || READ_ONLY_KINDS.has(kind)) return undefined;
+  if (open || READ_ONLY_KINDS.has(kind) || kind === "todo") return undefined;
   return "worker terminal is paused or completed; mutating tools are disabled";
 }
 
@@ -206,6 +222,17 @@ export function reviewShellRefusal(prReview: boolean, call: ToolCall): string | 
   return call.command === undefined
     ? `${call.name} needs a command`
     : readOnlyCommandRefusal(call.command);
+}
+
+/** Why an implementer's shell call is refused: it runs a pinned validation command itself. */
+export function implementerShellRefusal(
+  validationCommands: readonly string[] | undefined,
+  call: ToolCall,
+): string | undefined {
+  if (validationCommands === undefined || call.kind !== "shell" || call.command === undefined) {
+    return undefined;
+  }
+  return validationCommandRefusal(validationCommands, call.command);
 }
 
 /** What a worker session needs from the pane it runs in. */
@@ -240,6 +267,7 @@ type ToolEnd = Extract<SessionEvent, { type: "toolEnd" }>;
 const TERMINAL_HEARTBEAT_MS = 1_000;
 const TERMINAL_POLL_MS = 250;
 const BUSY_AFTER_RESULT_TRACE_MS = 60_000;
+const REPORT_REMINDER = `Your turn ended without calling ${SUBMIT_REPORT_TOOL}, so Tandem has no report from this job. Reports earlier in this conversation belong to earlier jobs and do not count. Call ${SUBMIT_REPORT_TOOL} now; if you are stuck or need a decision, report that outcome.`;
 const STALL_REMINDER = `Tandem stopped your turn: you went ${STALLED_TURN_MINUTES} minutes without calling a tool. Do not wait on a background command; its result can be lost. Check its output directly, run commands in the foreground, or finish and call ${SUBMIT_REPORT_TOOL}.`;
 
 function isWithin(root: string, candidate: string): boolean {
@@ -279,6 +307,9 @@ export class WorkerSession {
   private lastActivityAt: number;
   private stallReminded = false;
   private stallAbortPending = false;
+  private reportReminded = false;
+  // Whether the person at the pane typed the message that started the current run.
+  private humanTurn = false;
   private idleSince: number | undefined;
   private tokenTally: WorkerTokenTally | undefined;
   private tallyWrites = Promise.resolve();
@@ -319,7 +350,9 @@ export class WorkerSession {
           completed: this.currentState.completed,
         },
         call.kind,
-      ) ?? reviewShellRefusal(this.job.prReview !== undefined, call);
+      ) ??
+      reviewShellRefusal(this.job.prReview !== undefined, call) ??
+      implementerShellRefusal(this.job.validationCommands, call);
     return refusal === undefined ? { block: false } : { block: true, reason: refusal };
   }
 
@@ -366,6 +399,11 @@ export class WorkerSession {
         void this.timeout().catch(() => this.abort());
       });
     }
+  }
+
+  /** The person at the pane submitted a message. */
+  onHumanInput(): void {
+    this.humanTurn = true;
   }
 
   onAgentStart(): void {
@@ -433,6 +471,8 @@ export class WorkerSession {
       resultPublished: this.resultPublished,
     });
     this.agentActive = event.willContinue;
+    const humanTurn = this.humanTurn;
+    if (!event.willContinue) this.humanTurn = false;
     const resumingAfterStall = this.stallAbortPending;
     if (resumingAfterStall) {
       await this.remindAfterStall();
@@ -449,7 +489,7 @@ export class WorkerSession {
       this.deps.trace("agent_end_persisted", { phase: this.currentState.phase });
       await this.reportStatus();
     } else {
-      await this.settleTurn(event);
+      await this.settleTurn(event, humanTurn);
     }
     this.deps.trace("agent_end_done", { phase: this.currentState.phase });
   }
@@ -735,7 +775,7 @@ export class WorkerSession {
   }
 
   // The delegated result comes only from submit_report, so conversation turns never become it.
-  private async settleTurn(event: Omit<AgentEnd, "type">): Promise<void> {
+  private async settleTurn(event: Omit<AgentEnd, "type">, humanTurn: boolean): Promise<void> {
     if (this.pauseCommand !== undefined) {
       await this.persistState("paused", this.currentState.completed, this.pauseCommand.id);
       await this.reportStatus();
@@ -757,8 +797,28 @@ export class WorkerSession {
       await this.settle(this.failure(event.failure));
       return;
     }
+    const next = reportlessTurnEnd({ humanTurn, reminded: this.reportReminded });
+    this.deps.trace("reportless_turn_end", { next });
+    if (next === "fail") {
+      await this.settle(
+        this.failure(
+          `worker ended its turn without calling ${SUBMIT_REPORT_TOOL}, again after a reminder`,
+        ),
+      );
+      return;
+    }
     await this.persistState("idle", false);
     await this.reportStatus();
+    if (next === "remind") {
+      this.reportReminded = true;
+      await this.deps.host.perform({
+        type: "deliver",
+        source: "report-reminder",
+        text: REPORT_REMINDER,
+        timing: "nextTurn",
+        triggerTurn: true,
+      });
+    }
   }
 
   /**

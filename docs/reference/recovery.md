@@ -67,6 +67,9 @@ These rules decide when a worker is dead, which feeds central recovery
 
 - A submitted worker idle with nothing queued for 30 s is settled even if OMP ended the turn with
   `willContinue`, which OMP does while a backgrounded command (a dev server) still runs.
+- A worker whose Tandem-started run ends without `submit_report` is reminded once; a second
+  report-less end fails the job (see [task-lifecycle.md](task-lifecycle.md#interactive-child-terminals)).
+  Runs the person at the pane started are conversation and never count.
 - A turn with no tool start or finish for 5 minutes is stalled. The first stall stops the turn and
   reminds the worker; the second in the same job fails it as `worker stalled`, which central
   recovery restarts.
