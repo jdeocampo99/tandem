@@ -211,6 +211,7 @@ test("only pausable work bound to a blocked request is named for pausing", () =>
     task({ id: "task-3", stage: "paused" }),
     task({ id: "task-4", requestId: "req-9" }),
     { id: "task-5", stage: "implementing" } satisfies BoundTask,
+    task({ id: "task-6", stage: "ready" }),
   ];
 
   expect(tasksBlockedByRequest(approved, tasks)).toEqual([]);
@@ -223,9 +224,9 @@ test("only pausable work bound to a blocked request is named for pausing", () =>
       questions: [],
     },
   };
-  expect(tasksBlockedByRequest(activeInterview, tasks)).toEqual(["task-1"]);
+  expect(tasksBlockedByRequest(activeInterview, tasks)).toEqual(["task-1", "task-6"]);
   const superseded = reviseRequestBriefRecord(approved, content({ goal: "something else" }), LATER);
-  expect(tasksBlockedByRequest(superseded, tasks)).toEqual(["task-1"]);
+  expect(tasksBlockedByRequest(superseded, tasks)).toEqual(["task-1", "task-6"]);
 });
 
 test("brief content is validated at the boundary rather than stored as given", () => {

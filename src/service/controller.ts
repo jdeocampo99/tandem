@@ -1545,7 +1545,18 @@ class TandemController {
   }
 
   async deliveryPreflight(id: string, base: string): Promise<DeliveryPreflightResult> {
-    return deliveryPreflight(this.#deps, await this.get(assertTaskId(id)), base);
+    const task = await this.get(assertTaskId(id));
+    const dispatch = await this.#requests.dispatchDecisionForTask(task);
+    if (dispatch?.allowed === false) {
+      return {
+        taskId: task.id,
+        ready: false,
+        ...(task.reviewHead === undefined ? {} : { reviewedHead: task.reviewHead }),
+        base,
+        refusals: [dispatch.reason],
+      };
+    }
+    return deliveryPreflight(this.#deps, task, base);
   }
 
   async resume(id: string): Promise<TaskRecord> {

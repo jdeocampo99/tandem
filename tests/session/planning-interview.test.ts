@@ -87,6 +87,30 @@ test("a pending decision accepts only its exact single saved ask call", () => {
       record,
     ]),
   ).toMatchObject({ kind: "refused" });
+  const savedQuestion = input.questions[0];
+  if (savedQuestion === undefined) throw new Error("planning ask payload is empty");
+  expect(
+    planningAskCall({ questions: [{ ...savedQuestion, header: "Scope" }] }, [record]),
+  ).toMatchObject({ kind: "refused" });
+  expect(
+    planningAskCall(
+      {
+        questions: [
+          {
+            ...savedQuestion,
+            options: savedQuestion.options.map((option) => ({
+              ...option,
+              preview: "Diff summary",
+            })),
+          },
+        ],
+      },
+      [record],
+    ),
+  ).toMatchObject({ kind: "refused" });
+  expect(
+    planningAskCall({ questions: [{ ...savedQuestion, multi: false }] }, [record]),
+  ).toMatchObject({ kind: "refused" });
   expect(planningAskCall({ questions: [] }, [record])).toMatchObject({ kind: "refused" });
   expect(planningAskCall({ questions: [] }, [])).toEqual({ kind: "unmanaged" });
 });

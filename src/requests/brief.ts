@@ -120,6 +120,7 @@ const PAUSABLE_STAGES: readonly TaskRecord["stage"][] = [
   "validating",
   "reviewing",
   "awaiting-fixes",
+  "ready",
 ];
 
 /** Stages whose work is over, so it no longer holds its request open. */

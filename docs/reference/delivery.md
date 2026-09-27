@@ -88,6 +88,8 @@ src/service/draft-refresh.ts, src/presentations/, src/adapters/lavish.ts
 only what makes publishing wrong or impossible: a dirty or unmerged worktree, a HEAD other than the
 reviewed HEAD, a branch other than the task's, an `origin` that is not a GitHub repository (the
 repository is always read from `origin`), a failed GitHub lookup, or an open PR for the branch.
+At the service boundary, preflight also refuses publication when the task's bound request currently
+blocks dispatch, including during an active planning interview.
 
 - It reruns no quality commands; validation already ran them at the reviewed HEAD. Being behind the
   base branch is not a refusal.

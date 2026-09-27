@@ -67,7 +67,9 @@ export function planningAskCall(
             ? "A saved planning question is pending; ask it exactly before asking anything else."
             : "A planning interview is active without a pending question; save its next question or complete it before using OMP ask.",
         };
-  const questions = asRecord(input)?.questions;
+  const ask = asRecord(input);
+  if (ask === undefined || !hasExactKeys(ask, ["questions"])) return refuseUnmanaged();
+  const questions = ask.questions;
   if (!Array.isArray(questions)) return refuseUnmanaged();
   const ids = questions.map((value) => asRecord(value)?.id).filter(isText);
   const matches = requests.flatMap((record) =>
@@ -152,14 +154,21 @@ export function explicitPlanningAnswer(
   };
 }
 
+function hasExactKeys(record: Record<string, unknown>, expectedKeys: readonly string[]): boolean {
+  return (
+    Object.keys(record).length === expectedKeys.length &&
+    expectedKeys.every((key) => Object.hasOwn(record, key))
+  );
+}
+
 function matchesAskQuestion(value: unknown, question: RequestPlanningQuestion): boolean {
   const record = asRecord(value);
   const expected = planningAskInput(question).questions[0];
   return (
     record !== undefined &&
+    hasExactKeys(record, Object.keys(expected)) &&
     record.id === expected.id &&
     record.question === expected.question &&
-    (record.multi === undefined || record.multi === false) &&
     record.recommended === expected.recommended &&
     sameOptions(record.options, expected.options)
   );
@@ -177,6 +186,7 @@ function sameOptions(value: unknown, expected: readonly PlanningAskOption[]): bo
     return (
       actual !== undefined &&
       wanted !== undefined &&
+      hasExactKeys(actual, Object.keys(wanted)) &&
       actual.label === wanted.label &&
       actual.description === wanted.description
     );

@@ -48,11 +48,12 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   question is pending, save the next decision before asking it.
 - Dispatch is refused for work under an active interview. Starting one also pauses unfinished work
   already bound to that request, even if its current approval remains valid; the scheduler repeats
-  the gate before advancing resumed work. This is request-local and does not stop other approved
-  requests. If the brief changes, existing work governed by its prior agreement pauses for
-  reapproval. Completion requires every question answered and an empty `openQuestions` list. It
-  copies the ordered question-and-answer pairs into `planningAnswers`, an agreement field, so any
-  prior approval becomes non-current.
+  the gate before advancing resumed work. Delivery preflight also refuses publication while the
+  bound request blocks dispatch, including after a ready task is resumed. This request-local gate
+  does not stop other approved requests. If the brief changes, existing work governed by its prior
+  agreement pauses for reapproval. Completion requires every question answered and an empty
+  `openQuestions` list. It copies the ordered question-and-answer pairs into `planningAnswers`, an
+  agreement field, so any prior approval becomes non-current.
 - Completing the interview is not approval. The final brief still needs the existing explicit
   `brief-approve` confirmation, and task scope approval remains separate. An interview answer,
   recommendation, or timeout can never authorize implementation.
