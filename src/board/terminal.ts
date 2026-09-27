@@ -7,12 +7,7 @@ import {
   type PrWatchViewRow,
 } from "../pr-watch/view.ts";
 import { dollars } from "../tasks/trace.ts";
-import {
-  RUNNING_STAGE_ORDER,
-  type BoardRow,
-  type BoardView,
-  type WeekSummary,
-} from "./view.ts";
+import { type BoardRow, type BoardView, RUNNING_STAGE_ORDER, type WeekSummary } from "./view.ts";
 
 /** What only `tandem status` adds below the board. */
 export type StatusFooter = Readonly<{
@@ -235,10 +230,7 @@ function runningLines(rows: readonly BoardRow[], columns?: number): Line[] {
   return lines;
 }
 
-function projectHeading(
-  row: BoardRow,
-  identities: ReadonlySet<string> | undefined,
-): string {
+function projectHeading(row: BoardRow, identities: ReadonlySet<string> | undefined): string {
   if (identities === undefined || identities.size < 2 || row.repoPath === undefined) {
     return row.project;
   }
@@ -266,7 +258,7 @@ function compareRunningRows(left: BoardRow, right: BoardRow): number {
 }
 
 function runningStageOrder(cause: BoardRow["cause"]): number {
-  const order = RUNNING_STAGE_ORDER.findIndex((stage) => stage === cause);
+  const order = RUNNING_STAGE_ORDER.indexOf(cause as (typeof RUNNING_STAGE_ORDER)[number]);
   return order < 0 ? RUNNING_STAGE_ORDER.length : order;
 }
 
@@ -291,10 +283,9 @@ function runningTaskLines(row: BoardRow, columns?: number): Line[] {
   const description = wrapDescription(row.name, descriptionWidth);
   return [
     [...prefix, span(description[0] ?? "", ...nameTones)],
-    ...description.slice(1).map((text): Line => [
-      span(" ".repeat(prefixWidth)),
-      span(text, ...nameTones),
-    ]),
+    ...description
+      .slice(1)
+      .map((text): Line => [span(" ".repeat(prefixWidth)), span(text, ...nameTones)]),
   ];
 }
 
