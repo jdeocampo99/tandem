@@ -44,7 +44,7 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 
 | Section | Rows |
 | --- | --- |
-| Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked red. Always shown; "Nothing needs you." when empty. |
+| Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks stopped on a model (routing) question for their current generation, shown as `model question: keep <model>? <why>` instead of their running stage; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked red. Always shown; "Nothing needs you." when empty. |
 | Running | Tasks paused by the user, queued, researching, implementing, checking, in review, or fixing findings, with the time since the task was created. Left out when empty. |
 | PRs | Every other watched pull request, as PR watch's rows with `owner/repo#N`. Left out when empty. |
 | This week | One line for the 7 days before now, across every project: tasks whose timeline last moved them to completed or merged in that window, how many of those that went through review passed it the first time, and what those tasks cost. Left out when none finished. |
@@ -154,7 +154,7 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 - On each scheduler reconcile, a coordinator reads the board and keeps the keys of the "Needs you"
   rows that belong to its own project (a pull request belongs to its task's project, or to the
   checkout it was watched from) and that `notifiesUser` accepts: briefs awaiting approval, task
-  questions, red pull requests, and tasks awaiting approval or ready.
+  questions, model questions, red pull requests, and tasks awaiting approval or ready.
 - When keys appear that were not there on the last reconcile, it sends one
   `herdr notification show` for all of them, with Herdr's needs-input sound. One new row reads
   `Tandem: <name>` over `<reason> · prefix+t for status`; several read
@@ -169,11 +169,12 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 ## "How's it going?"
 
 - With Jev prompt routing on, a message Jev confidently classifies as asking how things are going
-  overall runs the read-only `board` action and shows the header and sections, without the footer,
-  in a compact uncolored form for the chat (`renderBoard`: plain section titles, no column
-  headers, checks as text, times after the stage like `implementing · 12m`),
-  with no coordinator turn (`board` in the lookup list, question schema version 5). The board ends
-  with a pointer to the live view: `prefix+t` in Herdr, or `tandem status --watch`. If Jev fails or
-  is unsure, the message goes to the coordinator as before (see
+  overall runs the read-only `board` action without a coordinator turn. In OMP chat, it shows the
+  same colored, column-fitted status sections as `tandem status`, using the terminal board formatter
+  at the chat width; the CLI adds its own footer, which chat omits. A live-view pointer follows the
+  board. If the host cannot render custom status messages, the Markdown board remains the fallback.
+  If Jev fails or is unsure, the message goes to the coordinator as before (see
   [policy.md](policy.md#jev-prompt-routing)).
-- The coordinator's `board` action returns the same view.
+- The coordinator's `board` action uses that same colored status message and tells the model not to
+  repeat the rows. `renderBoard` remains the shared Markdown fallback for hosts without the custom
+  renderer.

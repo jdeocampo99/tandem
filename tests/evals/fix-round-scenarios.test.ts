@@ -103,6 +103,39 @@ test("a spent fix-round budget asks Keep fixing?, and yes runs the next round in
   });
 }, 20_000);
 
+test("after one yes, spending those rounds too stops the task with no Keep fixing? question", async () => {
+  await withScenario({}, async (world) => {
+    const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+    const rounds = SCENARIO_POLICY.config.maxFixRounds;
+    await seedScenarioTask(world, {
+      kind: "implementation",
+      stage: "awaiting-fixes",
+      reviewHead: SCENARIO_HEAD,
+      reviewRound: rounds * 2,
+      generation: rounds * 2,
+      fixRoundGrants: [{ generation: rounds, rounds, reason: "user" }],
+      worktree: lease,
+      endpoints: [],
+    });
+    await seedScenarioRuntime(world, scenarioRuntimeTask({ worktree: lease }));
+    const service = serviceFor(world);
+
+    await service.tick();
+
+    const task = await service.get(SCENARIO_TASK_ID);
+    expect(task.stage).toBe("blocked");
+    expect(task.blockCause?.kind).toBe("fix-rounds-exhausted");
+    expect(task.blockCause?.summary).toBe(
+      `"exercise one durable scenario path" used all ${rounds * 2} fix rounds. Take it over, publish it as-is, or cancel it.`,
+    );
+    expect(task.communication?.question).toBeUndefined();
+    const snapshot = await world.snapshot();
+    expect(snapshot.runtime.tasks[0]?.jobs.some(activeRuntimeJob)).toBe(false);
+    expect(snapshot.resources.retained).toContain(`worktree:${lease.leaseId}`);
+    await service.shutdown();
+  });
+}, 20_000);
+
 test("no leaves the task blocked with its worktree kept", async () => {
   await withScenario({}, async (world) => {
     const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });

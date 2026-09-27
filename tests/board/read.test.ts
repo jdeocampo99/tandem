@@ -70,7 +70,17 @@ test("the board reads pull requests from what PR watch last saved", async () => 
     });
     const view = await readBoard(home, () => "2030-01-01T12:00:00.000Z");
     expect(renderBoard(view)).toBe(
-      "Projects: none yet · PRs checked 40s ago\n\nNeeds you\n🔴 app  acme/app#409  e2e failed twice\n\nLive view: prefix+t in Herdr, or `tandem status --watch`\n",
+      [
+        "## Tandem status",
+        "",
+        "**Projects:** none yet · **PRs checked:** 40s ago",
+        "",
+        "### 🙋 Needs you · 1",
+        "- 🔴 **app** · **acme/app#409** — e2e failed twice",
+        "",
+        "_Live view: `prefix+t` in Herdr, or `tandem status --watch`._",
+        "",
+      ].join("\n"),
     );
   } finally {
     await rm(home, { recursive: true, force: true });
@@ -88,7 +98,7 @@ test("a task the timeline shows finishing this week adds the weekly line", async
     }));
     const view = await readBoard(world.home, world.clock);
     expect(renderBoard(view)).toContain(
-      "\nThis week: 1 done · 1 of 1 passed review first time · $0.00\n\nLive view:",
+      "\n### 📈 This week\n1 done · 1 of 1 passed review first time · $0.00\n\n_Live view:",
     );
   });
 });

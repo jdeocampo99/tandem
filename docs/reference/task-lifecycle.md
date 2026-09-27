@@ -84,12 +84,17 @@ decides them; the lifecycle and the review stage read the record and never re-de
   - `yes` records a `user` grant and resumes in the same worktree: a full `maxFixRounds` if the
     budget was spent, or no extra round if asked early (it only settles that generation's repeat).
   - `no` clears the question; the task stays blocked. Never create a new task to bypass the limit.
+- A task extends its budget at most once, so it runs at most twice `maxFixRounds` (plus `no-commit`
+  rounds). Once a `yes` has added rounds and those are spent, Tandem asks nothing more, repeat or
+  not: the task blocks with `fix-rounds-exhausted`, a summary that it used all its fix rounds, and
+  the open blockers in the detail, so the user can take it over, publish it as-is
+  ([publish now](delivery.md#publish-now-user-skips-review)), or cancel it.
 - A round ending on an already-reviewed HEAD records a one-round `no-commit` grant instead of
   spending budget; the next review of that HEAD asks `Keep fixing?`, so it cannot loop.
 - Ready and exhaustion are distinct coordinator notifications; neither claims delivery. Ready fires
   only once the final manifest is satisfied and names lenses, review level, accepted HEAD, any
   P2/P3 known issues, and that ready is not publish/merge/deploy approval. Exhaustion names rounds
-  used and asks `Keep fixing?`.
+  used and asks `Keep fixing?`, or, after the one extension, says the rounds are all used.
 
 ## Timeline and trace
 
@@ -178,7 +183,7 @@ Code: src/playbooks/ (`catalog.ts` steps, `selection.ts` choice, `classify.ts` t
   it as `Type:`.
 - The implementer brief lists the steps and asks the worker to load them verbatim into OMP's `todo`
   tool. Every fix round uses the `fix-round` playbook, whose first step carries the fix-round rule
-  to fix every finding, P2 and P3 included. Older tasks without a playbook get one only in fix rounds.
+  to fix every P0 and P1 finding and leave P2 and P3 as known issues. Older tasks without a playbook get one only in fix rounds.
 - The worker extension remembers the list from the latest `todo` result. An `implemented` report is
   rejected while any step is not completed or abandoned (missing counts as open); the rejection
   names the steps. A dropped step's reason goes in the report.
@@ -190,6 +195,10 @@ Code: src/playbooks/ (`catalog.ts` steps, `selection.ts` choice, `classify.ts` t
 - The only result path is the `submit_report` tool, which writes the private result file. A settled
   `agent_end` without it is conversation, so human messages never become or overwrite the result;
   it still fails the job on provider error, abort, model substitution, or requested timeout.
+- A settled report-less `agent_end` of a run the person at the pane did not start (OMP `input`
+  from `interactive`) is a missing report, not conversation: the first gets one `report-reminder`
+  asking for `submit_report`; a second in the same job fails it as `worker ended its turn without
+  calling submit_report, again after a reminder`, which central recovery restarts or asks about.
 - The scheduler may consume a result while OMP stays open after checking job identity, generation,
   native PID, physical checkout, and a fresh terminal heartbeat. Terminal output is display only.
 - After completion or pause, follow-up turns are read-only (mutating tools blocked), except a

@@ -121,7 +121,7 @@ Call it with {request: {action: ...}}. Its text is a short summary; details and 
 - create: start a task. Research starts automatically; implementation waits for approve. Pass requestId when a brief governs it, researchTaskIds when it builds on research, skills with the exact names of skills the user asks this work to use, and manualVerification with the brief's manual verification items that apply to this task. For research or changes in another repository, keep your project repoPath and add targetRepo as owner/repo; work spanning several repositories is one task per repository. Tandem looks each skill up and gives the workers all of it, so never copy or summarize a skill yourself; a skill about the conversation itself, such as one that interviews the user, you follow here instead. If create cannot find a skill or finds two with that name, ask the user which one they meant. When you tell the user a task started or is ready, name the skills it used.
 - approve: record the user's approval of an implementation scope.
 - steer: pass a user direction to a running task within approved scope. Send short changes, and use supersedes to replace an outdated one. It is delivered at the next safe point.
-- answer: reply to a worker's question by its questionId. When Tandem asks "Keep fixing?", put it to the user and answer with their "yes" or "no"; yes gives the same task more fix rounds. Never create a new task to get past the fix-round limit.
+- answer: reply to a worker's question by its questionId. When Tandem asks "Keep fixing?", put it to the user and answer with their "yes" or "no"; yes gives the same task more fix rounds, once per task. When a task has used all its fix rounds and Tandem no longer asks, tell the user the open findings and that they can take it over, publish it as-is (publish-now), or cancel it. Never create a new task to get past the fix-round limit.
 - list, show, inspect, messages: read tasks. Read messages only when the user asks or before a decision that depends on them; do not poll.
 - pause, resume, cancel, restart, tick: control tasks. When the user asks to kill or throw away a task, cancel it with discard true: one approval stops it and deletes its worktree. Plain cancel keeps the worktree. When a task is stuck, use restart: Tandem stops what is left, keeps the work, and relaunches it in the same task. Never start a new task to get around a stuck one.
 - delivery-preflight, cleanup: housekeeping; cleanup needs the user's approval. Pass every task to clean up in one cleanup call's taskIds so the user approves once. With discard it closes the task's windows even when a worker will not exit. When delivery-preflight or publish refuses, tell the user the one-line reason and stop. Never create a new task or worktree to work around a delivery refusal.
@@ -205,7 +205,7 @@ ${PRINCIPLE_RULES}`;
 
 export const REVIEWER_PRINCIPLES = `# Principles
 
-The implementer follows these rules in the files it edits and in the callers of anything it replaces, even beyond what the brief describes. Report each violation there as a P1 finding that names the rule and the fix; leave other files alone.
+The implementer follows these rules in the files it edits and in the callers of anything it replaces, even beyond what the brief describes. Report each violation there as a P2 finding that names the rule and the fix; leave other files alone.
 ${PRINCIPLE_RULES}`;
 
 /**
@@ -248,6 +248,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Deliver the approved objective in the assigned worktree and preserve affected callers.",
     "Commit your work before submitting outcome implemented, and name the commit in the report.",
     "Stop every background process you started, such as a dev server or watcher, before calling submit_report.",
+    "Do not run the project's full test suite, type check, build, or linter, even when repository guidance lists them: Tandem runs the pinned validation commands after you submit and sends any failure back to you. A focused command, such as one test file, is fine.",
     "Do not merge, deploy, perform destructive actions, or claim validation that the runner did not perform.",
   ],
   reviewer: [
@@ -263,7 +264,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
 /** Tandem fills in the lens, HEAD, generation, and pass itself, so the reviewer reports findings only. */
 const REVIEW_RESULT_SCHEMA = `Set the submit_report review field to:
 {"findings":[{"id":"<stable id>","severity":"<P0|P1|P2|P3>","verdict":"<confirmed|plausible>","file":"<optional path>","line":1,"description":"<evidence-backed finding>","category":"<correctness|error-handling|security|tests|design|requirements|docs>","catchStage":"<planning|implementation|validation|review>"}],"summary":"<evidence-backed summary>"}
-Tandem records the commit and whether the review passes. Severity: P0 = data loss, security hole, or broken build; P1 = wrong behavior a user or caller would hit, a violated mandatory requirement from the brief, or a Principles rule violation; P2 = minor edge case or inconsistency; P3 = style or nit. Only P0 and P1 need a fix round; P2 and P3 never cost a fix round on their own; they go to the user as known issues unless a P0 or P1 already triggers a fix round, where the implementer fixes them too. catchStage is the earliest stage that should have caught the finding: planning if the brief missed it, implementation if the implementer should have noticed, validation if a test or check should have failed, review if only a reviewer could see it. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
+Tandem records the commit and whether the review passes. Severity: P0 = data loss, security hole, or broken build; P1 = wrong behavior a user or caller would hit with realistic inputs, or a violated mandatory requirement from the brief; P2 = a Principles rule violation, a minor or contrived edge case, or an inconsistency; P3 = style or nit. A P0 or P1 description names the concrete, realistic input or sequence that fails; if you cannot name one, it is P2. Only P0 and P1 need a fix round; P2 and P3 never cost one and go to the user as known issues. catchStage is the earliest stage that should have caught the finding: planning if the brief missed it, implementation if the implementer should have noticed, validation if a test or check should have failed, review if only a reviewer could see it. The findings array may be empty. File and line are optional; omit line unless it is known, and use a positive one-based line number when supplied.`;
 
 function readNonEmptyText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {

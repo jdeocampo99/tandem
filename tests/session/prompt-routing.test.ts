@@ -12,6 +12,7 @@ import {
   type JevEvaluationResponse,
   type JevFetch,
 } from "../../src/adapters/typesafe.ts";
+import { renderBoard } from "../../src/board/view.ts";
 import { registerTandemOmp } from "../../src/extension/registration.ts";
 import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
 import { appendDiagnosticEvent, readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
@@ -567,33 +568,41 @@ test("asking how it's going shows the board without a coordinator turn, and a Je
     { choice: "within" },
     { choice: "single" },
   );
-  const service = {
-    board: async () => ({
-      now: "2030-01-01T00:00:05.000Z",
-      projects: ["app"],
-      needsYou: [
-        {
-          key: "brief:req-1",
-          repoPath: "/work/app",
-          project: "app",
-          mark: "🙋",
-          name: "Dark mode",
-          text: "brief waiting for approval",
-        },
-      ],
-      running: [],
-      pullRequests: [],
-      finished: 0,
-    }),
-  } as unknown as TandemService;
+  const view = {
+    now: "2030-01-01T00:00:05.000Z",
+    projects: ["app"],
+    needsYou: [
+      {
+        key: "brief:req-1",
+        cause: "brief",
+        repoPath: "/work/app",
+        project: "app",
+        mark: "🙋",
+        name: "Dark mode",
+        text: "brief waiting for approval",
+      },
+    ],
+    running: [],
+    pullRequests: [],
+    finished: 0,
+  } as const;
+  const service = { board: async () => view } as unknown as TandemService;
   try {
-    const answered = routing(home, service, { evaluate: async () => boardFacts });
+    const answerHost = recordingSessionHost();
+    const answered = routing(home, service, { evaluate: async () => boardFacts }, answerHost);
     expect(await routeUserPrompt(typed("how's it going?"), answered.deps)).toEqual({
       handled: true,
     });
-    expect(answered.sent()).toEqual([
-      "Projects: app · PRs not checked yet\n\nNeeds you\n🙋 app  Dark mode  brief waiting for approval\n\nLive view: prefix+t in Herdr, or `tandem status --watch`\n",
-    ]);
+    expect(answered.sent()).toEqual([]);
+    expect(answerHost.effects).toHaveLength(1);
+    expect(answerHost.effects[0]).toMatchObject({
+      type: "showStatus",
+      view,
+      text: renderBoard(view),
+      timing: "nextTurn",
+      triggerTurn: false,
+      details: { action: "board" },
+    });
 
     const failed = routing(home, service, {
       evaluate: async () => {

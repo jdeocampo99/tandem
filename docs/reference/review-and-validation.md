@@ -73,6 +73,12 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   cannot report a status, the submission goes through and the settle-time checkpoint check decides.
 - An implementer's `implemented` is also refused while any of its
   [playbook](task-lifecycle.md#playbooks) steps is not completed or abandoned in its `todo` list.
+- An implementer does not run the task's pinned validation commands; the validation worker runs
+  them after the report. Its job spec lists each command line (a shell string as typed, otherwise
+  its argv joined by spaces), and the worker extension's tool guard refuses a `bash` call that runs
+  one of them unchanged, alone or chained, ignoring leading `VAR=value`/`env` prefixes and
+  redirects (src/workers/validation-commands.ts). A command with other arguments, such as one test
+  file, still runs.
 - An invalid submission is a tool error naming the fix and never settles the job.
 
 ## Review briefs
@@ -110,10 +116,12 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   including legacy); only a new report reopens it as `regressed`; contradicting verdicts are
   `disputed`.
 - `record-review` stores `pass` as "no P0 or P1 stands", ignoring the reviewer's flag. P0/P1
-  (confirmed or plausible) blocks; P2/P3 never costs a fix round on its own (a round that a P0/P1 triggers also fixes them) and is listed
-  in the ready message and the PR's `# Known issues`. A violated mandatory design rule is P1.
-- A spent fix-round budget asks `Keep fixing?` ([Task lifecycle](task-lifecycle.md#fix-rounds)).
-  Nothing retries without `yes`, auto-passes, or downgrades a blocker.
+  (confirmed or plausible) blocks; P2/P3 never costs a fix round, is not required in one, and is listed
+  in the ready message and the PR's `# Known issues`. A violated mandatory requirement from the brief is
+  P1; a Principles rule violation or a contrived edge case is P2. A P0/P1 names a realistic failing input.
+- A spent fix-round budget asks `Keep fixing?` once per task; after that extension is spent the task
+  stops for the user ([Task lifecycle](task-lifecycle.md#fix-rounds)). Nothing retries without
+  `yes`, auto-passes, or downgrades a blocker.
 - Each finding carries the reviewer's `category` (`correctness`, `error-handling`, `security`,
   `tests`, `design`, `requirements`, `docs`) and `catchStage`, the earliest stage that should have
   caught it (`planning`, `implementation`, `validation`, `review`). They are fields of the review

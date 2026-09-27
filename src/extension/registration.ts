@@ -23,6 +23,8 @@ import {
   ompSessionHost,
   ompToolCall,
   renderCardMessage,
+  renderStatusMessage,
+  STATUS_MESSAGE_TYPE,
 } from "./omp-host.ts";
 
 export type TandemOmpRegistrationDependencies = Readonly<{
@@ -50,6 +52,7 @@ export function registerTandemOmp(
   registerTandemTool(pi, dependencies);
   registerTandemCommand(pi, dependencies);
   pi.registerMessageRenderer(CARD_MESSAGE_TYPE, renderCardMessage);
+  pi.registerMessageRenderer(STATUS_MESSAGE_TYPE, renderStatusMessage);
 }
 
 function callDependencies(
@@ -133,6 +136,7 @@ function registerTandemTool(
         {
           ...callDependencies(ctx, dependencies),
           showCard: (effect) => ompSessionHost(pi, () => ctx).perform(effect),
+          showStatus: (effect) => ompSessionHost(pi, () => ctx).perform(effect),
         },
         signal,
       );

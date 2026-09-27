@@ -3,7 +3,7 @@ import type { Clock, TaskRecord } from "../contracts.ts";
 import { withPrWatches } from "../pr-watch/store.ts";
 import { createRequestBriefStore } from "../requests/store.ts";
 import { withStateTransaction } from "../runtime/database.ts";
-import { defaultIdFactory } from "../runtime/persistence.ts";
+import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
 import { createRequestUsageLedger, readTaskUsage } from "../runtime/usage-ledger.ts";
 import { createTaskStore } from "../tasks/store.ts";
 import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
@@ -28,6 +28,9 @@ export async function readBoard(home: string, clock: Clock): Promise<BoardView> 
       projects,
       tasks: saved,
       briefs: await briefs.list(),
+      routingPauses: (await readRuntimeState(runtimeFile(home))).tasks.flatMap((entry) =>
+        entry.routingPause === undefined ? [] : [entry.routingPause],
+      ),
       ...(await withPrWatches(home, ({ watches, poll }) => ({ watches, poll }))),
       finishedThisWeek: await weekRollups(home, clock, saved, now),
     };

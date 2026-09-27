@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { type BoardView, renderBoard } from "../board/view.ts";
+import { isBoardView, renderBoard } from "../board/view.ts";
 import {
   type AgentRole,
   LEGACY_EVIDENCE_CONTRACT,
@@ -926,17 +926,6 @@ function isMemoryShowResult(value: unknown): value is MemoryShowResult {
 function isPrWatchView(value: unknown): value is PrWatchView {
   const record = summaryRecord(value);
   return record !== undefined && typeof record.now === "string" && Array.isArray(record.rows);
-}
-
-function isBoardView(value: unknown): value is BoardView {
-  const record = summaryRecord(value);
-  return (
-    record !== undefined &&
-    typeof record.now === "string" &&
-    Array.isArray(record.needsYou) &&
-    Array.isArray(record.running) &&
-    Array.isArray(record.pullRequests)
-  );
 }
 
 function isTaskArray(value: unknown): value is readonly TaskRecord[] {
