@@ -22,7 +22,8 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
 - Tool text is a bounded summary; structured details stay in the tool result and durable reports.
 - `trace` reads one in-scope task's timeline without changing task or notification state. It returns
   the complete rollup, up to 16 newest events that fit within the 12,000-character structured result,
-  in chronological order, and explicit omitted/unreadable counts. Text is capped at 4,000 characters.
+  in chronological order, and explicit omitted/unreadable counts. Text is capped at 4,000 characters;
+  very long task IDs are abbreviated in text, while structured details retain the full ID and rollup.
   Trace skips post-action reconciliation and scheduler ticks. CLI `tandem trace` is unchanged.
 - A refusal the coordinator recovers from by asking the user carries its own next step, so the
   per-turn prompt does not: `create` and `review-pr` asking where a repository is, and `create`

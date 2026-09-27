@@ -145,11 +145,16 @@ export function boundTaskTrace(
   return bounded;
 }
 
+const MAX_TRACE_TEXT_TASK_ID_CHARS = 160;
+
 export function renderBoundedTaskTrace(trace: BoundedTaskTrace, maxChars: number): string {
+  if (!Number.isSafeInteger(maxChars) || maxChars < 1) {
+    throw new RangeError("Trace text limit must be a positive safe integer");
+  }
   const { rollup } = trace;
   const cost = rollup.cost;
-  const header = [
-    `Task ${rollup.taskId}`,
+  const totalEvents = trace.events.length + trace.omittedEvents;
+  const rollupLines = [
     `First review: ${firstReviewText(rollup.firstPassReview)}`,
     `Fix rounds: ${rollup.fixRounds}`,
     `Time blocked: ${durationText(rollup.blockedMs)} (${rollup.blockedMs} ms)`,
@@ -159,13 +164,33 @@ export function renderBoundedTaskTrace(trace: BoundedTaskTrace, maxChars: number
         : `${dollars(cost.amountMicros)} (${cost.actualSamples} actual, ${cost.estimatedSamples} estimated, ${cost.unavailableSamples} unpriced)`
     }`,
   ];
-  const totalEvents = trace.events.length + trace.omittedEvents;
+  const eventCountLine = (shown: number): string =>
+    `Events: ${totalEvents} readable; showing ${shown} newest; ${totalEvents - shown} omitted; ${trace.unreadableEvents} unreadable.`;
+  let maxEventCountLineChars = 0;
+  for (let shown = 0; shown <= trace.events.length; shown += 1) {
+    maxEventCountLineChars = Math.max(maxEventCountLineChars, eventCountLine(shown).length);
+  }
+  const taskIdChars = Math.min(
+    MAX_TRACE_TEXT_TASK_ID_CHARS,
+    maxChars -
+      "Task ".length -
+      1 -
+      rollupLines.join("\n").length -
+      1 -
+      maxEventCountLineChars,
+  );
+  if (taskIdChars < 0) {
+    throw new RangeError("Task trace summary exceeds the readable output limit");
+  }
+  const taskId =
+    rollup.taskId.length <= taskIdChars
+      ? rollup.taskId
+      : taskIdChars === 0
+        ? ""
+        : `${rollup.taskId.slice(0, taskIdChars - 1)}…`;
+  const header = [`Task ${taskId}`, ...rollupLines];
   const render = (events: readonly string[]): string =>
-    [
-      ...header,
-      `Events: ${totalEvents} readable; showing ${events.length} newest events that fit; ${totalEvents - events.length} omitted; ${trace.unreadableEvents} unreadable.`,
-      ...events,
-    ].join("\n");
+    [...header, eventCountLine(events.length), ...events].join("\n");
   const newestFirst: string[] = [];
   for (let index = trace.events.length - 1; index >= 0; index -= 1) {
     const event = trace.events[index];
