@@ -21,6 +21,8 @@ export type FakeLease = {
   leaseId: string;
   leaseHolder: string;
   path: string;
+  /** Processes Treehouse reports running inside the worktree. */
+  processes?: readonly Readonly<{ pid: number; name: string }>[];
 };
 
 export type FakePane = {
@@ -158,7 +160,7 @@ export function fakePool(input: PoolInput): Pool {
             lease_id: lease.leaseId,
             lease_holder: lease.leaseHolder,
             leased_at: "2030-01-02T03:04:05.000Z",
-            processes: [],
+            processes: lease.processes ?? [],
           })),
         ),
       );

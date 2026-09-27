@@ -836,9 +836,10 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     context === undefined &&
     !(await probeHerdrSession(dependencies.run, request.sessionId, coordinatorCwd))
   ) {
+    // Outside the pool: returning the coordinator's worktree must never end the server.
     await dependencies.startPersistent({
       argv: herdrLauncher,
-      cwd: coordinatorCwd,
+      cwd: paths.home,
       env: serverEnvironment,
     });
     await waitForHerdr(dependencies.run, dependencies.sleep, request.sessionId, coordinatorCwd);

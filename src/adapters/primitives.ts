@@ -90,6 +90,14 @@ export class LeaseSafetyError extends AdapterError {
   }
 }
 
+/** A release refused because a live process still has its working directory in the worktree. */
+export class WorktreeInUseError extends LeaseSafetyError {
+  constructor(processes: readonly string[], lease: WorktreeLease) {
+    super(`a running process is using this worktree (${processes.join(", ")})`, lease);
+    this.name = "WorktreeInUseError";
+  }
+}
+
 export class ApprovalRequiredError extends AdapterError {
   constructor(operation: string) {
     super(`${operation} requires explicit caller approval`, operation);
