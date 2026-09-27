@@ -18,12 +18,12 @@ import { coordinatorToolRefusal } from "../session/tool-guard.ts";
 import { tandemRequestSchema as tandemToolSchema } from "../session/tools.ts";
 import {
   CARD_MESSAGE_TYPE,
-  STATUS_MESSAGE_TYPE,
   ompApprovalDialog,
   ompSessionHost,
   ompToolCall,
   renderCardMessage,
   renderStatusMessage,
+  STATUS_MESSAGE_TYPE,
 } from "./omp-host.ts";
 
 export type TandemOmpRegistrationDependencies = Readonly<{

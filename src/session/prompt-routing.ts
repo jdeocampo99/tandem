@@ -14,8 +14,8 @@ import {
   jevGateway,
   jevUsageRecord,
 } from "../adapters/typesafe.ts";
-import type { TaskRecord } from "../contracts.ts";
 import { isBoardView } from "../board/view.ts";
+import type { TaskRecord } from "../contracts.ts";
 import { findPullRequestRef } from "../pr-review/pull-request.ts";
 import { classifyPrReviewPrompt, PR_REVIEW_ROUTE_QUESTION_VERSION } from "../pr-review/route.ts";
 import type { DiagnosticEvent, DiagnosticValue } from "../runtime/diagnostics.ts";
