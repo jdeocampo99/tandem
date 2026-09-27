@@ -10,9 +10,13 @@ import type { CommentEdit } from "../pr-review/service.ts";
 import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
-import { isTaskIdWithinLimit, MAX_TASK_ID_CHARS } from "../tasks/lifecycle.ts";
 import { taskName } from "../tasks/question.ts";
-import { boundTaskTrace } from "../tasks/trace.ts";
+import {
+  boundTaskTrace,
+  isTraceTaskId,
+  MAX_TRACE_TASK_ID_CHARS,
+} from "../tasks/trace.ts";
+import type { CoordinatorTurnAction, SessionEffect } from "./events.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -915,6 +919,7 @@ const THREAD_ENDING_ACTIONS: ReadonlySet<TandemAction["action"]> = new Set([
 export type TandemCallDependencies = Readonly<{
   /** Read lazily, so a service that cannot start fails the call instead of the hook. */
   readonly service: () => TandemService;
+  readonly recordTurnAction: (action: CoordinatorTurnAction) => void;
   readonly confirm: ApprovalDialog | undefined;
   /** Reconciles without running another tick; follows a `tick` action. */
   readonly reconcile: () => Promise<void>;
@@ -933,6 +938,7 @@ export async function runTandemTool(
   signal: AbortSignal | undefined,
 ): Promise<ToolOutcome> {
   try {
+    dependencies.recordTurnAction(action.action === "trace" ? "trace" : "other");
     const result = await executeTandemAction(action, dependencies.service(), {
       confirm: dependencies.confirm,
       signal,
@@ -997,6 +1003,7 @@ export async function runTandemCommand(
 ): Promise<void> {
   try {
     const action = resolveCommandAction(parseTandemCommand(args), cwd);
+    dependencies.recordTurnAction(action.action === "trace" ? "trace" : "other");
     const result = await executeTandemAction(action, dependencies.service(), {
       confirm: dependencies.confirm,
     });
@@ -1130,9 +1137,9 @@ function ensureCommandArity(command: string, words: readonly string[], arity: Co
 }
 
 function assertTraceTaskId(taskId: string): void {
-  if (!isTaskIdWithinLimit(taskId)) {
+  if (!isTraceTaskId(taskId)) {
     throw new TypeError(
-      `trace task ID must be safe and no longer than ${MAX_TASK_ID_CHARS} characters`,
+      `trace task ID must be safe and no longer than ${MAX_TRACE_TASK_ID_CHARS} characters`,
     );
   }
 }

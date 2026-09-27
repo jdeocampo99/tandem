@@ -4,6 +4,7 @@ import {
   type RequestUsageReadout,
   usageCharges,
 } from "../runtime/usage-receipt.ts";
+import { isSafeTaskId } from "./lifecycle.ts";
 import type { AdmissionWaitReason, StoredTimelineEvent, TimelineEvent } from "./timeline.ts";
 import type { TimelineReadout } from "./timeline-store.ts";
 
@@ -22,6 +23,14 @@ export type TaskTrace = TimelineReadout & Readonly<{ readonly rollup: TaskRollup
 
 /** A task trace excerpt; `omittedEvents` counts readable events excluded by either output bound. */
 export type BoundedTaskTrace = TaskTrace & Readonly<{ readonly omittedEvents: number }>;
+
+/** Maximum task ID length accepted by coordinator trace requests. */
+export const MAX_TRACE_TASK_ID_CHARS = 256;
+
+/** Only path-safe task identifiers within the trace output budget fit this boundary. */
+export function isTraceTaskId(value: unknown): value is string {
+  return isSafeTaskId(value) && value.length <= MAX_TRACE_TASK_ID_CHARS;
+}
 
 /** The same figures across many tasks. */
 export type TraceSummary = Readonly<{

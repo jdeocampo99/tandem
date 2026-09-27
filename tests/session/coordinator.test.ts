@@ -453,6 +453,61 @@ test("while the user is in a thread, what needs the coordinator waits for the th
   expect(wakes()[2]?.hidden?.text).not.toContain("came in while");
 });
 
+test("a trace-only turn skips final reconciliation, but other actions keep it", async () => {
+  const routine = task({
+    id: "task-routine",
+    notifications: [
+      {
+        id: "routine-1",
+        message: "A routine receipt is ready.",
+        acknowledged: false,
+        kind: "routine",
+      },
+    ],
+  });
+  const acknowledged: string[] = [];
+  let listCalls = 0;
+  const { host, effects } = recordingSessionHost();
+  const session = new CoordinatorSession(
+    coordinatorDeps(
+      {
+        list: async () => {
+          listCalls += 1;
+          return [routine];
+        },
+        acknowledge: async (taskId, notificationId) => {
+          acknowledged.push(`${taskId}:${notificationId}`);
+          return routine;
+        },
+      },
+      { host },
+    ),
+  );
+
+  session.userPrompt();
+  session.recordTurnAction("trace");
+  await session.agentEnd(false);
+  expect(listCalls).toBe(0);
+  expect(acknowledged).toEqual([]);
+  expect(effects).toEqual([]);
+
+  await session.agentEnd(false);
+  expect(listCalls).toBe(1);
+  expect(acknowledged).toEqual(["task-routine:routine-1"]);
+
+  session.userPrompt();
+  session.recordTurnAction("trace");
+  session.recordTurnAction("other");
+  await session.agentEnd(false);
+  expect(listCalls).toBe(2);
+
+  session.userPrompt();
+  session.recordTurnAction("other");
+  session.recordTurnAction("trace");
+  await session.agentEnd(false);
+  expect(listCalls).toBe(3);
+});
+
 test("the standing context lists the project's workstreams once there are any", async () => {
   const asked: string[] = [];
   const withNotes = new CoordinatorSession(

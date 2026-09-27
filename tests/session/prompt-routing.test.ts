@@ -409,6 +409,7 @@ function registeredInputHook(
     promptRouting,
     reconcile: async () => undefined,
     postAction: async () => undefined,
+    recordTurnAction: () => undefined,
     userPrompt: () => undefined,
     closeThread: () => undefined,
     researchRunning: async () => false,

@@ -15,7 +15,7 @@ import {
   runTandemTool,
   type TandemCallDependencies,
 } from "../../src/session/actions.ts";
-import type { SessionEffect } from "../../src/session/events.ts";
+import type { CoordinatorTurnAction, SessionEffect } from "../../src/session/events.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -23,9 +23,12 @@ import {
   buildDurableDigest,
   summarizeTandemActionValue,
 } from "../../src/session/summary.ts";
-import { MAX_TASK_ID_CHARS } from "../../src/tasks/lifecycle.ts";
 import type { StoredTimelineEvent } from "../../src/tasks/timeline.ts";
-import type { BoundedTaskTrace, TaskTrace } from "../../src/tasks/trace.ts";
+import {
+  MAX_TRACE_TASK_ID_CHARS,
+  type BoundedTaskTrace,
+  type TaskTrace,
+} from "../../src/tasks/trace.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
 import { models, policyConfig, task } from "./fixtures.ts";
@@ -55,7 +58,7 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
   });
   expect(parseTandemCommand("trace task-1")).toEqual({ action: "trace", taskId: "task-1" });
   expect(() =>
-    parseTandemCommand(`trace ${"t".repeat(MAX_TASK_ID_CHARS + 1)}`),
+    parseTandemCommand(`trace ${"t".repeat(MAX_TRACE_TASK_ID_CHARS + 1)}`),
   ).toThrow();
   expect(() => parseTandemCommand("trace")).toThrow();
   expect(() => parseTandemCommand("trace task-1 extra")).toThrow();
@@ -1223,9 +1226,16 @@ test("the brief-approve prompt names the request by its goal, never its id or re
   ]);
 });
 
-function callDependencies(service: TandemService, followUps: string[]): TandemCallDependencies {
+function callDependencies(
+  service: TandemService,
+  followUps: string[],
+  turnActions: CoordinatorTurnAction[] = [],
+): TandemCallDependencies {
   return {
     service: () => service,
+    recordTurnAction: (action) => {
+      turnActions.push(action);
+    },
     confirm: undefined,
     reconcile: async () => {
       followUps.push("reconcile");
@@ -1241,23 +1251,26 @@ function callDependencies(service: TandemService, followUps: string[]): TandemCa
 
 test("the tandem tool reconciles after ticks and runs post-action for ordinary actions", async () => {
   const followUps: string[] = [];
+  const turnActions: CoordinatorTurnAction[] = [];
   const service = {
     tick: async () => [],
     list: async () => [task()],
   } as unknown as TandemService;
+  const dependencies = callDependencies(service, followUps, turnActions);
 
   const ticked = await runTandemTool(
     { action: "tick" },
-    callDependencies(service, followUps),
+    dependencies,
     undefined,
   );
   const listed = await runTandemTool(
     { action: "list" },
-    callDependencies(service, followUps),
+    dependencies,
     undefined,
   );
 
   expect(followUps).toEqual(["reconcile", "postAction"]);
+  expect(turnActions).toEqual(["other", "other"]);
   expect(ticked).toEqual({
     text: summarizeTandemActionValue("tick", []),
     isError: false,
@@ -1303,13 +1316,14 @@ test("trace reads are chronological and safe to repeat", async () => {
   };
   const traceCalls: string[] = [];
   const followUps: string[] = [];
+  const turnActions: CoordinatorTurnAction[] = [];
   const service = {
     trace: async (taskId: string) => {
       traceCalls.push(taskId);
       return trace;
     },
   } as unknown as TandemService;
-  const dependencies = callDependencies(service, followUps);
+  const dependencies = callDependencies(service, followUps, turnActions);
   const action = { action: "trace" as const, taskId: "task-1" };
 
   const first = await runTandemTool(action, dependencies, undefined);
@@ -1318,6 +1332,7 @@ test("trace reads are chronological and safe to repeat", async () => {
   expect(first).toEqual(second);
   expect(traceCalls).toEqual(["task-1", "task-1"]);
   expect(followUps).toEqual([]);
+  expect(turnActions).toEqual(["trace", "trace"]);
   expect(first.text).toContain("First review: needed fixes");
   expect(first.text).toContain("Fix rounds: 2");
   expect(first.text).toContain("Time blocked: 2m (120000 ms)");
@@ -1446,7 +1461,7 @@ test("trace omits oversized event payloads from structured details", async () =>
 });
 
 test("trace text stays bounded when a legacy task ID dominates the header", () => {
-  const taskId = "t".repeat(MAX_TASK_ID_CHARS + 1);
+  const taskId = "t".repeat(MAX_TRACE_TASK_ID_CHARS + 1);
   const event: StoredTimelineEvent = {
     type: "created",
     taskId,
@@ -1477,7 +1492,7 @@ test("trace text stays bounded when a legacy task ID dominates the header", () =
 });
 
 test("trace preserves the full rollup at the maximum task ID length", async () => {
-  const taskId = "t".repeat(MAX_TASK_ID_CHARS);
+  const taskId = "t".repeat(MAX_TRACE_TASK_ID_CHARS);
   const events: StoredTimelineEvent[] = [];
   for (let seq = 1; seq <= ACTION_TRACE_MAX_EVENTS; seq += 1) {
     events.push({
@@ -1522,7 +1537,7 @@ test("trace preserves the full rollup at the maximum task ID length", async () =
 });
 
 test("trace rejects an overlong ID before reading its task", async () => {
-  const taskId = "t".repeat(MAX_TASK_ID_CHARS + 1);
+  const taskId = "t".repeat(MAX_TRACE_TASK_ID_CHARS + 1);
   const followUps: string[] = [];
   let traceReads = 0;
   const service = {
@@ -1631,6 +1646,7 @@ test("a failed tool call becomes an error outcome naming the action", async () =
 
 test("a /tandem command shows results before post-action work, except for read-only trace", async () => {
   const order: string[] = [];
+  const turnActions: CoordinatorTurnAction[] = [];
   const modelsFor: string[] = [];
   const trace: TaskTrace = {
     events: [],
@@ -1651,7 +1667,7 @@ test("a /tandem command shows results before post-action work, except for read-o
       await recording.host.perform(effect);
     },
   };
-  const dependencies = callDependencies(service, order);
+  const dependencies = callDependencies(service, order, turnActions);
 
   await runTandemCommand("models .", "/repo", dependencies, host);
   await runTandemCommand("unknown-command", "/repo", dependencies, host);
@@ -1660,6 +1676,7 @@ test("a /tandem command shows results before post-action work, except for read-o
   // `.` is the coordinator's own checkout.
   expect(modelsFor).toEqual(["/repo"]);
   expect(order).toEqual(["notify", "postAction", "notify", "notify"]);
+  expect(turnActions).toEqual(["other", "trace"]);
   expect(recording.effects[0]).toMatchObject({ type: "notify", level: "info" });
   expect(recording.effects[1]).toMatchObject({ type: "notify", level: "error" });
   expect(recording.effects[1]?.type === "notify" ? recording.effects[1].text : "").toStartWith(

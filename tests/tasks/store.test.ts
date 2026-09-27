@@ -21,10 +21,10 @@ import {
 } from "../../src/tasks/acceptance.ts";
 import { ledgerBlockers } from "../../src/tasks/findings.ts";
 import {
-  MAX_TASK_ID_CHARS,
   type TaskTransitionContext,
   transitionTask,
 } from "../../src/tasks/lifecycle.ts";
+import { MAX_TRACE_TASK_ID_CHARS } from "../../src/tasks/trace.ts";
 import {
   DEFAULT_REVIEW_LEVEL_POLICY,
   recordedReviewLevel,
@@ -147,19 +147,6 @@ function rewritePayload(
   const payload = JSON.parse(row.payload) as Record<string, unknown>;
   edit(payload);
   database.query("UPDATE tasks SET payload = ? WHERE id = ?").run(JSON.stringify(payload), taskId);
-  database.close();
-}
-
-function rewriteStoredTaskId(directory: string, previousId: string, nextId: string): void {
-  const database = new Database(join(directory, "state.sqlite"));
-  const row = database.query("SELECT payload FROM tasks WHERE id = ?").get(previousId) as {
-    payload: string;
-  };
-  const payload = JSON.parse(row.payload) as Record<string, unknown>;
-  payload.id = nextId;
-  database
-    .query("UPDATE tasks SET id = ?, payload = ? WHERE id = ?")
-    .run(nextId, JSON.stringify(payload), previousId);
   database.close();
 }
 
@@ -614,24 +601,23 @@ test("rejects missing SQLite tables and traversal IDs instead of skipping state"
   });
 });
 
-test("limits new task IDs without rejecting longer legacy records", async () => {
+test("explicit and generated task IDs may exceed the coordinator trace limit", async () => {
   await withTemporaryDirectory(async (directory) => {
+    const longExplicitId = "l".repeat(MAX_TRACE_TASK_ID_CHARS + 1);
     const store = makeStore(directory);
-    const created = await store.create({ ...input, id: "legacy-source" });
+    const explicit = await store.create({ ...input, id: longExplicitId });
+    expect(explicit.id).toBe(longExplicitId);
+    expect(await store.read(longExplicitId)).toMatchObject({ id: longExplicitId });
 
+    const longGeneratedId = "g".repeat(MAX_TRACE_TASK_ID_CHARS + 1);
     const generatedIdStore = createTaskStore({
       directory: join(directory, "generated"),
       clock,
-      idFactory: () => "g".repeat(MAX_TASK_ID_CHARS + 1),
+      idFactory: () => longGeneratedId,
     });
-    await expect(generatedIdStore.create(input)).rejects.toBeInstanceOf(UnsafeTaskIdError);
-    const legacyId = "l".repeat(MAX_TASK_ID_CHARS + 1);
-    rewriteStoredTaskId(directory, created.id, legacyId);
-
-    await expect(store.create({ ...input, id: legacyId })).rejects.toBeInstanceOf(
-      UnsafeTaskIdError,
-    );
-    expect(await store.read(legacyId)).toMatchObject({ id: legacyId });
+    const generated = await generatedIdStore.create(input);
+    expect(generated.id).toBe(longGeneratedId);
+    expect(await generatedIdStore.read(longGeneratedId)).toMatchObject({ id: longGeneratedId });
   });
 });
 

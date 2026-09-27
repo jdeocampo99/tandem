@@ -3,7 +3,7 @@ import { validateToolArguments } from "@oh-my-pi/pi-ai";
 import type { z } from "zod/v4";
 import { ompToolParameters } from "../../src/adapters/omp-tool-schema.ts";
 import type { TandemAction } from "../../src/session/actions.ts";
-import { MAX_TASK_ID_CHARS } from "../../src/tasks/lifecycle.ts";
+import { MAX_TRACE_TASK_ID_CHARS } from "../../src/tasks/trace.ts";
 import {
   copyAssetSchema,
   submitReportSchema,
@@ -200,7 +200,7 @@ const invalidRequests: readonly [string, unknown][] = [
   ["trace with an extra field", { request: { action: "trace", taskId: "t", detail: "full" } }],
   [
     "trace task ID above limit",
-    { request: { action: "trace", taskId: "t".repeat(MAX_TASK_ID_CHARS + 1) } },
+    { request: { action: "trace", taskId: "t".repeat(MAX_TRACE_TASK_ID_CHARS + 1) } },
   ],
   ["bad enum", { request: { action: "show", taskId: "t", detail: "brief" } }],
   [

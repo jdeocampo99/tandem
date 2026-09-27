@@ -105,12 +105,16 @@ test("the registered OMP tool_call hook blocks with the guard's reason", async (
     registerCommand: () => undefined,
     registerMessageRenderer: () => undefined,
   } as unknown as ExtensionAPI;
+  const turnActions: string[] = [];
   registerTandemOmp(pi, {
     getService: () => ({}) as TandemService,
     getHome: () => "/tandem-home",
     promptRouting: { timeoutMs: 1_500 },
     reconcile: async () => undefined,
     postAction: async () => undefined,
+    recordTurnAction: (_ctx, action) => {
+      turnActions.push(action);
+    },
     userPrompt: () => undefined,
     closeThread: () => undefined,
     researchRunning: async () => false,
@@ -125,6 +129,10 @@ test("the registered OMP tool_call hook blocks with the guard's reason", async (
     block: true,
     reason: COORDINATOR_TOOL_REFUSAL,
   });
+  expect(
+    await call("tandem", { request: { action: "trace", taskId: "task-1" } }),
+  ).toBeUndefined();
+  expect(turnActions).toEqual(["other", "other", "other"]);
 });
 
 test("a home reached through a symlink or ~ still counts as Tandem's records", async () => {
