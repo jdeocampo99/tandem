@@ -169,11 +169,12 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 ## "How's it going?"
 
 - With Jev prompt routing on, a message Jev confidently classifies as asking how things are going
-  overall runs the read-only `board` action and shows the header and sections, without the footer,
-  in a compact uncolored form for the chat (`renderBoard`: plain section titles, no column
-  headers, checks as text, times after the stage like `implementing · 12m`),
-  with no coordinator turn (`board` in the lookup list, question schema version 5). The board ends
-  with a pointer to the live view: `prefix+t` in Herdr, or `tandem status --watch`. If Jev fails or
-  is unsure, the message goes to the coordinator as before (see
+  overall runs the read-only `board` action without a coordinator turn. In OMP chat, it shows the
+  same colored, column-fitted status sections as `tandem status`, using the terminal board formatter
+  at the chat width; the CLI adds its own footer, which chat omits. A live-view pointer follows the
+  board. If the host cannot render custom status messages, the Markdown board remains the fallback.
+  If Jev fails or is unsure, the message goes to the coordinator as before (see
   [policy.md](policy.md#jev-prompt-routing)).
-- The coordinator's `board` action returns the same view.
+- The coordinator's `board` action uses that same colored status message and tells the model not to
+  repeat the rows. `renderBoard` remains the shared Markdown fallback for hosts without the custom
+  renderer.

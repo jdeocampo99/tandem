@@ -205,7 +205,7 @@ test("a running tool or a finished turn is never stalled", () => {
   expect(turnStalled({ ...late, turnActive: false, toolsRunning: 0 })).toBe(false);
 });
 
-test("only read-only tools run once the worker is settled, timed out, paused, or completed", () => {
+test("only read-only tools and the to-do list run once the worker is settled, timed out, paused, or completed", () => {
   const open = {
     delegatedSettled: false,
     timeoutRequested: false,
@@ -221,7 +221,7 @@ test("only read-only tools run once the worker is settled, timed out, paused, or
     { ...open, phase: "paused" as const },
     { ...open, completed: true },
   ]) {
-    for (const kind of ["read", "search", "web-search"] as const) {
+    for (const kind of ["read", "search", "web-search", "todo"] as const) {
       expect(workerToolRefusal(closed, kind)).toBeUndefined();
     }
     for (const kind of ["edit", "write", "shell", "mcp", "subagent", "other"] as const) {

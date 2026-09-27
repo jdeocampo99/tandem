@@ -82,12 +82,26 @@ export function linked(part: Span, link: string): Span {
   return { ...part, link };
 }
 
+/** The shared status sections without the terminal-only footer. */
+export function renderStatusBoard(view: BoardView, style: StatusStyle): string {
+  return drawStatusLines(statusBoardLayout(view, style).lines, style);
+}
+
 /**
  * `tandem status`: the board in titled sections with column headers, then what was finished,
  * which coordinators are open, and how to go on. Colors mark what needs the user (yellow), what
  * failed (red), work in progress (cyan), and what is done (green).
  */
 export function renderStatus(view: BoardView, footer: StatusFooter, style: StatusStyle): string {
+  const { lines, ruleWidth } = statusBoardLayout(view, style);
+  lines.push([span("─".repeat(ruleWidth), "dim")], ...footerLines(view, footer));
+  return drawStatusLines(lines, style);
+}
+
+function statusBoardLayout(
+  view: BoardView,
+  style: StatusStyle,
+): Readonly<{ lines: Line[]; ruleWidth: number }> {
   const sections: Section[] = [
     {
       title: "NEEDS YOU",
@@ -126,7 +140,10 @@ export function renderStatus(view: BoardView, footer: StatusFooter, style: Statu
   }
   if (view.week !== undefined)
     lines.push([span("THIS WEEK  ", "bold"), ...weekSpans(view.week)], []);
-  lines.push([span("─".repeat(ruleWidth), "dim")], ...footerLines(view, footer));
+  return { lines, ruleWidth };
+}
+
+function drawStatusLines(lines: readonly Line[], style: StatusStyle): string {
   return `${lines.map((line) => draw(line, style)).join("\n")}\n`;
 }
 

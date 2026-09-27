@@ -180,7 +180,10 @@ export function mockupWriteDecision(
   return { block: false };
 }
 
-/** Once the delegated work is settled, timed out, or paused, only read-only tools may run. */
+/**
+ * Once the delegated work is settled, timed out, or paused, only read-only tools and the to-do
+ * list (the worker's own scratch notes) may run.
+ */
 export function workerToolRefusal(
   state: Readonly<{
     delegatedSettled: boolean;
@@ -197,7 +200,7 @@ export function workerToolRefusal(
     !state.pauseRequested &&
     state.phase !== "paused" &&
     !state.completed;
-  if (open || READ_ONLY_KINDS.has(kind)) return undefined;
+  if (open || READ_ONLY_KINDS.has(kind) || kind === "todo") return undefined;
   return "worker terminal is paused or completed; mutating tools are disabled";
 }
 
