@@ -124,6 +124,7 @@ export const tandemRequestSchema = z.strictObject({
       taskId: z.string(),
       detail: z.enum(["summary", "full"]).optional(),
     }),
+    z.strictObject({ action: z.literal("trace"), taskId: z.string().min(1) }),
     z.strictObject({
       action: z.literal("steer"),
       taskId: z.string(),

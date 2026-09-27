@@ -15,6 +15,7 @@ import type { SessionEffect, SessionHost, ToolOutcome } from "./events.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
+  ACTION_TRACE_MAX_EVENTS,
   boundedJson,
   compactText,
   projectName,
@@ -72,6 +73,7 @@ export type TandemAction =
       readonly taskId: string;
       readonly detail?: "summary" | "full" | undefined;
     }>
+  | Readonly<{ readonly action: "trace"; readonly taskId: string }>
   | Readonly<{
       readonly action: "steer";
       readonly taskId: string;
@@ -578,6 +580,14 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   list: async (action, service) => actionResult(await service.list(), action.action),
   presentations: async (action, service) =>
     actionResult(await service.presentations(), action.action),
+  trace: async (action, service) => {
+    const trace = await service.trace(action.taskId);
+    const events = trace.events.slice(-ACTION_TRACE_MAX_EVENTS);
+    return actionResult(
+      { ...trace, events, omittedEvents: trace.events.length - events.length },
+      action.action,
+    );
+  },
   show: async (action, service) =>
     actionResult(await service.get(action.taskId), action.action, { detail: action.detail }),
   steer: async (action, service) =>
@@ -899,7 +909,7 @@ export type TandemCallDependencies = Readonly<{
   readonly confirm: ApprovalDialog | undefined;
   /** Reconciles without running another tick; follows a `tick` action. */
   readonly reconcile: () => Promise<void>;
-  /** Follows every other action. */
+  /** Follows each non-tick action except read-only trace. */
   readonly postAction: () => Promise<void>;
   /** Ends the thread the user and the coordinator were working on; follows a thread-ending action. */
   readonly closeThread: () => void;
@@ -923,7 +933,8 @@ export async function runTandemTool(
       dependencies.closeThread();
     if (action.action === "tick") {
       await dependencies.reconcile();
-    } else {
+    } else if (action.action !== "trace") {
+      // Reconciliation can acknowledge delivered notifications, so trace must not reach it.
       await dependencies.postAction();
     }
     const cardShown = await showCatchUpCard(result, dependencies.showCard);
@@ -966,8 +977,8 @@ async function showCatchUpCard(
 }
 
 /**
- * Runs one `/tandem` command line from the coordinator's `cwd`. The result is shown before the
- * post-action reconcile, so notifications it delivers follow the result.
+ * Runs one `/tandem` command line from the coordinator's `cwd`. Most results are shown before
+ * post-action reconciliation; read-only trace skips that step.
  */
 export async function runTandemCommand(
   args: string,
@@ -981,7 +992,7 @@ export async function runTandemCommand(
       confirm: dependencies.confirm,
     });
     await host.perform({ type: "notify", text: renderActionResult(result), level: "info" });
-    await dependencies.postAction();
+    if (action.action !== "trace") await dependencies.postAction();
   } catch (error) {
     await host.perform({
       type: "notify",
@@ -1253,6 +1264,10 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
         ...(words[2] === "--full" ? { detail: "full" as const } : {}),
       };
     },
+  },
+  trace: {
+    arity: { min: 2, max: 2 },
+    parse: (_words, value) => ({ action: "trace", taskId: value(1, "trace") }),
   },
   steer: {
     parse: (words, value) => ({

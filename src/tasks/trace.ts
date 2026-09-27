@@ -20,6 +20,9 @@ export type TaskRollup = Readonly<{
 
 export type TaskTrace = TimelineReadout & Readonly<{ readonly rollup: TaskRollup }>;
 
+/** A task trace excerpt; `omittedEvents` counts readable events left out of `events`. */
+export type BoundedTaskTrace = TaskTrace & Readonly<{ readonly omittedEvents: number }>;
+
 /** The same figures across many tasks. */
 export type TraceSummary = Readonly<{
   readonly tasks: number;
@@ -95,6 +98,39 @@ export function renderTaskTrace(trace: TaskTrace): string {
     `Cost: ${costText(trace.rollup.cost)}`,
   ];
   return `${lines.join("\n")}\n`;
+}
+
+export function renderBoundedTaskTrace(trace: BoundedTaskTrace, maxChars: number): string {
+  const { rollup } = trace;
+  const cost = rollup.cost;
+  const header = [
+    `Task ${rollup.taskId}`,
+    `First review: ${firstReviewText(rollup.firstPassReview)}`,
+    `Fix rounds: ${rollup.fixRounds}`,
+    `Time blocked: ${durationText(rollup.blockedMs)} (${rollup.blockedMs} ms)`,
+    `Cost: ${
+      cost === undefined
+        ? "not recorded"
+        : `${dollars(cost.amountMicros)} (${cost.actualSamples} actual, ${cost.estimatedSamples} estimated, ${cost.unavailableSamples} unpriced)`
+    }`,
+  ];
+  const totalEvents = trace.events.length + trace.omittedEvents;
+  const render = (events: readonly string[]): string =>
+    [
+      ...header,
+      `Events: ${totalEvents} readable; showing ${events.length} newest; ${totalEvents - events.length} omitted; ${trace.unreadableEvents} unreadable.`,
+      ...events,
+    ].join("\n");
+  const newestFirst: string[] = [];
+  for (let index = trace.events.length - 1; index >= 0; index -= 1) {
+    const event = trace.events[index];
+    if (event === undefined) break;
+    const line = eventLine(event);
+    const boundedLine = line.length <= 360 ? line : `${line.slice(0, 359)}…`;
+    if (render([boundedLine, ...newestFirst].reverse()).length > maxChars) break;
+    newestFirst.push(boundedLine);
+  }
+  return render(newestFirst.reverse());
 }
 
 export function renderTraceSummary(summary: TraceSummary): string {
