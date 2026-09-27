@@ -742,6 +742,25 @@ test("an orphaned clean coordinator lease is returned by its exact identity", as
   });
 });
 
+test("an orphaned coordinator lease a live process still runs in is kept, not returned", async () => {
+  await withFixture(async (test) => {
+    await seedOrphanedLease(test);
+    const lease = test.pool.leases.get(ORPHAN_LEASE_ID);
+    if (lease === undefined) throw new Error("seeded lease missing");
+    test.pool.leases.set(ORPHAN_LEASE_ID, { ...lease, processes: [{ pid: 42, name: "herdr" }] });
+
+    const applied = await test.reconcile(true);
+    const retained = entries(applied.retained, "worktree-lease").find(
+      (entry) => entry.id === ORPHAN_LEASE_ID,
+    );
+    expect(retained?.reason).toContain("a running process is using this worktree (pid 42 herdr)");
+    expect(test.pool.leases.has(ORPHAN_LEASE_ID)).toBe(true);
+    expect(
+      test.pool.calls.some((call) => call.argv[0] === "treehouse" && call.argv.includes("return")),
+    ).toBe(false);
+  });
+});
+
 test("a dirty orphaned coordinator lease is retained and reported", async () => {
   await withFixture(async (test) => {
     await seedOrphanedLease(test, { dirty: true });

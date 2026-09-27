@@ -50,6 +50,8 @@ checkout itself. Its `--extension` and `--config` must be Tandem's checked-in fi
 - All projects share one Herdr session, but each gets its own coordinator workspace, clean source
   worktree, and child-worker group. Coordinators scope durable task operations to their original
   project identity, so one cannot claim another project's work.
+- Tandem starts the shared Herdr server in the Tandem home, never in a pool worktree, because
+  returning a worktree ends every process still running inside it.
 - The terminal attaches once after every coordinator is ready, and releases its setup readline
   first so Herdr is the only terminal input owner.
 

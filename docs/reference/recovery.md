@@ -50,6 +50,12 @@ home is a separate namespace and never changes the remembered setup.
 - Reconciliation continues only on positive evidence: an endpoint matching exact workspace label,
   root pane, and cwd, or a result matching task, generation, job, and input HEAD. Restart with the
   same home, repository, pool root, and session.
+- A dead worker is a known outcome, not an ambiguous one. A worker job whose pane is gone, or whose
+  pane shows no worker process left, with no durable result settles failed and blocks with a
+  `lost-resource` cause, so central recovery restarts it within the restart budget (as after a
+  terminal-host crash). A worker process still present without a result stays quarantined.
+- `failJob` does nothing to a job that is no longer active, so a reconcile working from an older
+  snapshot never re-fails a job a restart already settled.
 - Anything missing, conflicting, or ambiguous quarantines the operation, keeping its reservation,
   capacity, and resources. Quarantine is not failure cleanup. Never clear records, invent jobs or
   receipts, replace a task, or change policy or checkpoints to get past it.
@@ -102,8 +108,8 @@ These rules decide when a worker is dead, which feeds central recovery
   through the normal reservation gate, and the prompt tells the worker to check `git status`/`git
   diff` for partial edits.
 - A relaunched fixer keeps the same `fixContextPath`; crash restarts never spend a review round.
-- `reviewing` re-entry covers only a lens whose job was quarantined (pane or result proven gone) and
-  is unrecorded for the reviewed HEAD; real findings, stale instructions, and malformed results still
+- `reviewing` re-entry covers only a lens whose job died (pane or result proven gone, or stopped by a
+  restart; `DEAD_JOB_REASON_PREFIXES`) and is unrecorded for the reviewed HEAD; real findings, stale instructions, and malformed results still
   block. The stale operation settles `failed` once the pane is proven gone. A moved, dirty, or
   unmerged worktree asks.
 - `implementing` re-entry first adopts a finished commit: worktree clean, not unmerged, on the task

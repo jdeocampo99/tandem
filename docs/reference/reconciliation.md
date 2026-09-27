@@ -49,6 +49,8 @@ It does not recover stuck tasks; [central recovery](recovery.md#central-recovery
   reason, unless it is freeable.
 - Record Tandem cannot place (e.g. under a session directory it does not name): quarantined with a
   durable note, written once per lease; nothing closed or released.
+- Worktree Treehouse reports a live process running inside: kept with "a running process is using
+  this worktree", since returning it would end that process. Every release path refuses the same way.
 - Unreadable record file: listed with path and reason, never deleted.
 - Quarantine note: removed only when no record names its lease and Treehouse, re-read under the
   repository lock, no longer holds it. Kept when its lease cannot be read.

@@ -196,6 +196,9 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly readModelCatalogue: ModelCatalogueReader;
 }>;
 
+/** How a job's pane showed its worker stopped; see `WorkerWorkflow.jobStopped`. */
+type JobStop = "exited" | "finished";
+
 /**
  * Drives a task's workers through their stages: starting queued work, fix rounds, relaunch, and
  * consuming each job's durable result. Validation and review run in their own stage modules.
@@ -303,24 +306,26 @@ export class WorkerWorkflow {
       }
       return;
     }
-    if (!(await this.jobStopped(task, job, endpoint, claim))) return;
+    const stop = await this.jobStopped(task, job, endpoint, claim);
+    if (stop === undefined) return;
     if (job.kind === "worker") {
-      await this.settleWorkerJob(task, runtime, job, claim);
+      await this.settleWorkerJob(task, runtime, job, claim, stop);
       return;
     }
     await this.settleValidationJob(task, runtime, job, claim);
   }
 
   /**
-   * Whether the job's pane shows its worker finished or paused, so its result can be read. A
-   * running worker's progress is observed instead, and a vanished pane is settled here.
+   * How the job's pane shows its worker stopped, so its result can be read: `exited` when no worker
+   * process remains, `finished` when the process is still there but reports it completed or paused.
+   * A running worker's progress is observed instead, and a vanished pane is settled here.
    */
   private async jobStopped(
     task: TaskRecord,
     job: DurableJob,
     endpoint: Endpoint,
     claim: OperationClaim,
-  ): Promise<boolean> {
+  ): Promise<JobStop | undefined> {
     let inspection: HerdrPaneInspection;
     try {
       inspection = await inspectEndpoint(this.#deps.run, {
@@ -330,21 +335,23 @@ export class WorkerWorkflow {
     } catch (error) {
       if (error instanceof EndpointOwnershipError && error.reason === "missing") {
         await this.reconcileMissingEndpoint(task, job, claim);
-        return false;
+        return undefined;
       }
       throw error;
     }
-    if (!inspection.activeWorker) return true;
+    if (!inspection.activeWorker) return "exited";
     await this.observeWorkerProgress(task, job, claim);
     const terminal = await liveWorkerTerminal(inspection, job);
-    if (terminal !== undefined && (terminal.completed || terminal.phase === "paused")) return true;
+    if (terminal !== undefined && (terminal.completed || terminal.phase === "paused")) {
+      return "finished";
+    }
     if (job.phase !== "running") {
       await this.#records.updateJob(job.taskId, job.id, claim, (current) => ({
         ...current,
         phase: "running",
       }));
     }
-    return false;
+    return undefined;
   }
 
   /** Reads a stopped worker's durable result and consumes it, failing the job when it can't. */
@@ -353,6 +360,7 @@ export class WorkerWorkflow {
     runtime: RuntimeTaskState,
     job: DurableJob,
     claim: OperationClaim,
+    stop: JobStop,
   ): Promise<void> {
     let result: WorkerResult;
     try {
@@ -366,6 +374,18 @@ export class WorkerWorkflow {
       if (isMissing(error)) {
         if (!isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) return;
         const reason = `worker stopped without a durable result: ${describeError(error)}`;
+        if (stop === "exited") {
+          // No worker process is left in the pane: the worker died, a known outcome. Block with a
+          // recoverable cause so central recovery restarts it within its restart budget.
+          await this.#records.failJob(task, job, reason, claim, true, false, {
+            group: "lost-resource",
+            kind: "resource-lost",
+            summary: "The worker stopped without reporting back.",
+            detail: reason,
+            jobId: job.id,
+          });
+          return;
+        }
         await this.#records.failJob(task, job, reason, claim, true, true, {
           group: "safety-stop",
           kind: "quarantined-unknown-outcome",
@@ -458,11 +478,12 @@ export class WorkerWorkflow {
       await this.#records.failJob(task, job, reason, claim, false, false);
       return;
     }
-    await this.#records.failJob(task, job, reason, claim, true, true, {
-      group: "safety-stop",
-      kind: "quarantined-unknown-outcome",
-      summary:
-        "The worker's terminal disappeared before it finished, so Tandem paused the task for you to look at.",
+    // Nothing runs in a pane that no longer exists, so the worker is known dead. Block with a
+    // recoverable cause so central recovery restarts it within its restart budget.
+    await this.#records.failJob(task, job, reason, claim, true, false, {
+      group: "lost-resource",
+      kind: "resource-lost",
+      summary: "The worker's terminal disappeared before it finished.",
       detail: reason,
       jobId: job.id,
     });

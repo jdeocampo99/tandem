@@ -48,7 +48,7 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 | Section | Rows |
 | --- | --- |
 | Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks stopped on a model (routing) question for their current generation, shown as `model question: keep <model>? <why>` instead of their running stage; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked red. Always shown; "Nothing needs you." when empty. |
-| Running | Tasks paused by the user, queued, researching, implementing, checking, in review, or fixing findings, grouped by repository path. Groups sort by project name and path; tasks sort by workflow stage, objective, and task ID. Each task shows the time since it was created. Left out when empty. |
+| Running | Tasks paused by the user, queued, researching, implementing, checking, in review, or fixing findings, grouped by repository path. Groups sort by project name and path; tasks sort by workflow stage, objective, and task ID. Each task shows the time since it was created, or `idle 42m` once its worker's receipt shows no progress for over 5 minutes (heartbeats do not count). Left out when empty. |
 | PRs | Every other watched pull request, as PR watch's rows with `owner/repo#N`. Left out when empty. |
 | This week | One line for the 7 days before now, across every project: tasks whose timeline last moved them to completed or merged in that window, how many of those that went through review passed it the first time, and what those tasks cost. Left out when none finished. |
 

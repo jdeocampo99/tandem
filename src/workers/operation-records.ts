@@ -74,9 +74,11 @@ export class OperationRecords {
         const current = taskRuntime(state, task.id);
         const operation = current?.operation;
         const currentJob = current?.jobs.find((entry) => entry.id === job.id);
+        // A job already settled, e.g. by a restart, is never failed again from an older snapshot.
         if (
           current === undefined ||
           currentJob === undefined ||
+          !activeRuntimeJob(currentJob) ||
           !holdsClaim(operation, claim) ||
           operation.taskId !== task.id ||
           operation.jobId !== job.id ||
