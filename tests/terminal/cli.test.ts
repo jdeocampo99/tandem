@@ -352,6 +352,9 @@ test("parseCliArgs keeps PR commands explicit and records consent separately", (
   expect(draft.options.yes).toBe(true);
   expect(parseCliArgs(["pr", "draft", "task-1", "Draft title", "main"]).options.yes).toBe(false);
 });
+test("worker-wide skill configuration is no longer a CLI command", () => {
+  expect(() => parseCliArgs(["configure-worker-skills"])).toThrow("unknown Tandem command");
+});
 test("inspection and delivery CLI commands keep their inputs", () => {
   const inspection = parseCliArgs(["inspect", "task-1", "--json"]);
   expect(inspection.command).toBe("inspect");
@@ -1361,6 +1364,7 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
   };
   const service: TandemService = {
     onboard: unused,
+    setupOnboard: unused,
     models: unused,
     openProject: unused,
     mcpServers: unused,
@@ -1371,7 +1375,6 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     onboardingFacts: unused,
     openSetupPage: unused,
     awaitSetupAnswer: unused,
-    setupRecap: unused,
     applySetup: unused,
     configureModels: unused,
     create: unused,
@@ -1433,8 +1436,6 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     memoryDone: unused,
     mergingCheck: unused,
     saveMerging: unused,
-    workerSkillOffer: unused,
-    saveWorkerSkills: unused,
     selfImprovementMode: unused,
     investigationQuestions: unused,
     investigate: unused,
@@ -1594,7 +1595,7 @@ process.exitCode = result.exitCode;
   }
 });
 
-test("onboard --json adds the merging check and worker skill offer; saving merging needs --yes", async () => {
+test("onboard --json adds the merging check; saving merging needs --yes", async () => {
   const saved: unknown[] = [];
   const root = await mkdtemp(join(tmpdir(), "tandem-cli-merging-"));
   const input = join(root, "merging.json");
@@ -1605,7 +1606,6 @@ test("onboard --json adds the merging check and worker skill offer; saving mergi
   const service = {
     onboard: async () => ({ repoPath: "/repo", existingConfig: true }),
     mergingCheck: async () => ({ repo: "acme/app", readable: true, method: "aviator" }),
-    workerSkillOffer: async () => ["buildkite"],
     saveMerging: async (value: unknown) => {
       saved.push(value);
       return { mergeWith: "queue-label" };
@@ -1625,7 +1625,6 @@ test("onboard --json adds the merging check and worker skill offer; saving mergi
       repoPath: "/repo",
       existingConfig: true,
       merging: { repo: "acme/app", readable: true, method: "aviator" },
-      workerSkillOffer: ["buildkite"],
     });
     expect((await runCli(["configure-merging", "--input", input], dependencies)).exitCode).toBe(2);
     expect(saved).toEqual([]);

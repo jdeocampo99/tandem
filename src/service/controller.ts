@@ -14,11 +14,9 @@ import { type BoardRow, type BoardView, needsYouNotice } from "../board/view.ts"
 import {
   type HomeSettings,
   readHomeSettings,
-  replaceWorkerSkills,
   type SelfImprovementMode,
   saveProjectRoots,
   saveSelfImprovement,
-  saveWorkerSkills,
 } from "../config/home-settings.ts";
 import {
   type JevSetting,
@@ -42,7 +40,7 @@ import {
   resolveRepoPolicy,
   saveMergingChoice,
 } from "../config/repositories.ts";
-import { findSkills, listPluginSkills, listSkillCatalog } from "../config/skills.ts";
+import { findSkills } from "../config/skills.ts";
 import type {
   AnswerTaskInput,
   BlockCause,
@@ -73,6 +71,7 @@ import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
 import type { MemoryShowResult } from "../memory/view.ts";
 import type { OnboardingFacts } from "../onboarding/checklist.ts";
 import {
+  type SetupApplyResult,
   type SetupPageEvent,
   type SetupPageOpened,
   SetupPageWorkflow,
@@ -332,10 +331,14 @@ export type TandemService = Readonly<{
   readonly onboard: (
     repoPath: string,
     write?: boolean,
-    coordinatorMcpServers?: readonly string[],
     commands?: SetupCommandEdits,
   ) => Promise<OnboardRepoResult>;
-  /** The MCP servers OMP would load in a project, which its coordinator may be allowed to use. */
+  /** Setup-only onboarding that may inspect/save a selected foreign checkout directly. */
+  readonly setupOnboard: (
+    repoPath: string,
+    write?: boolean,
+    commands?: SetupCommandEdits,
+  ) => Promise<OnboardRepoResult>;
   readonly mcpServers: (repoPath: string) => Promise<readonly string[]>;
   /** Checkouts the user could mean by a name or path, and whether each is already set up. */
   readonly findRepo: (name: string) => Promise<readonly FoundRepo[]>;
@@ -358,10 +361,8 @@ export type TandemService = Readonly<{
     signal: AbortSignal,
     reply?: string,
   ) => Promise<SetupPageEvent>;
-  /** A stored setup answer as the approval dialog shows it, checked again first. */
-  readonly setupRecap: (repoPath: string, answerId: string) => Promise<readonly string[]>;
-  /** Saves an approved setup answer and opens each new project's chat; returns what happened. */
-  readonly applySetup: (repoPath: string, answerId: string) => Promise<string>;
+  /** Saves a validated setup answer and reports its complete or partial result. */
+  readonly applySetup: (repoPath: string, answerId: string) => Promise<SetupApplyResult>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
   /** Opens a saved project's coordinator in this Herdr session; refuses one not yet set up. */
   readonly openProject: (
@@ -505,10 +506,6 @@ export type TandemService = Readonly<{
   readonly saveMerging: (
     input: Readonly<{ readonly repoPath: string; readonly choice: MergingChoice }>,
   ) => Promise<MergingSettingsFile>;
-  /** Claude Code plugin skills to offer as worker skills; none once the user chose. */
-  readonly workerSkillOffer: () => Promise<readonly string[]>;
-  /** Saves the user's answer to that offer, an empty list for no. */
-  readonly saveWorkerSkills: (skills: readonly string[]) => Promise<HomeSettings>;
   /** Whether this machine looks into Tandem's own problems, and what it does with the answer. */
   readonly selfImprovementMode: () => Promise<SelfImprovementMode>;
   /** Questions about open tasks that newly broke a trigger rule; each task is asked about once. */
@@ -666,10 +663,7 @@ class TandemController {
       homeSettings: () => readHomeSettings(deps.home),
       registeredProjects: () => readRegisteredProjects(deps.home),
       inspectRepo: async (path) => {
-        const [onboarded, mcpServers] = await Promise.all([
-          this.onboard(path, false),
-          listOmpMcpServers(path).catch(() => []),
-        ]);
+        const onboarded = await this.setupOnboard(path, false);
         return {
           validationCommands: onboarded.validationCommands.map((command) => command.name),
           scripts: onboarded.discovery.scripts,
@@ -677,17 +671,13 @@ class TandemController {
           ...(onboarded.discovery.lockfile === undefined
             ? {}
             : { lockfile: onboarded.discovery.lockfile }),
-          mcpServers,
         };
       },
-      mcpServers: (path) => listOmpMcpServers(path),
-      skills: () => listSkillCatalog(deps.personalSkillsHome),
       saveModels: (input) => this.configureModels(input),
-      saveWorkerSkills: (skills) => replaceWorkerSkills(deps.home, skills),
       saveSelfImprovement: (mode) => saveSelfImprovement(deps.home, mode),
       saveCodeFolders: (folders) => saveProjectRoots(deps.home, folders),
       setupRepo: (path, repo) =>
-        this.onboard(path, true, repo.coordinatorMcpServers, {
+        this.setupOnboard(path, true, {
           validationCommands: repo.validationCommands,
           setupCommands: repo.setupCommands,
         }),
@@ -888,8 +878,8 @@ class TandemController {
 
   api(): TandemService {
     return {
-      onboard: (repoPath, write, coordinatorMcpServers, commands) =>
-        this.onboard(repoPath, write, coordinatorMcpServers, commands),
+      onboard: (repoPath, write, commands) => this.onboard(repoPath, write, commands),
+      setupOnboard: (repoPath, write, commands) => this.setupOnboard(repoPath, write, commands),
       mcpServers: (repoPath) => listOmpMcpServers(repoPath),
       findRepo: (name) => this.findRepo(name),
       saveProjectRoots: (roots) =>
@@ -904,7 +894,6 @@ class TandemController {
       openSetupPage: (repoPath) => this.#setupPage.open(repoPath),
       awaitSetupAnswer: (repoPath, signal, reply) =>
         this.#setupPage.listen(repoPath, signal, reply),
-      setupRecap: (repoPath, answerId) => this.#setupPage.recap(repoPath, answerId),
       applySetup: (repoPath, answerId) => this.#setupPage.apply(repoPath, answerId),
       inspect: (id) => this.inspect(id),
       trace: (id) => this.trace(id),
@@ -984,9 +973,6 @@ class TandemController {
           home: this.#deps.home,
           choice: input.choice,
         }),
-      workerSkillOffer: () => this.workerSkillOffer(),
-      saveWorkerSkills: (skills) =>
-        saveWorkerSkills(this.#deps.home, readTextList(skills, "workerSkills")),
       selfImprovementMode: () => this.#selfImprovement.mode(),
       investigationQuestions: async () => this.#selfImprovement.takeQuestions(await this.list()),
       investigate: (input) => this.#selfImprovement.investigate(input),
@@ -996,16 +982,43 @@ class TandemController {
     };
   }
 
-  private async workerSkillOffer(): Promise<readonly string[]> {
-    const settings = await readHomeSettings(this.#deps.home);
-    if (settings.workerSkillsChosen) return [];
-    return listPluginSkills(this.#deps.personalSkillsHome);
+  async setupOnboard(
+    repoPath: string,
+    write = false,
+    commands: SetupCommandEdits = {},
+  ): Promise<OnboardRepoResult> {
+    let targetRepoPath = repoPath;
+    let checkoutPath: string | undefined;
+    const sourceWorkspace = this.#deps.sourceWorkspace;
+    if (sourceWorkspace !== undefined) {
+      const [requestedRoot, originalRoot, cleanRoot] = await Promise.all([
+        realpath(repoPath),
+        realpath(sourceWorkspace.repoPath),
+        realpath(sourceWorkspace.path),
+      ]);
+      if (requestedRoot === originalRoot || requestedRoot === cleanRoot) {
+        const source = await mapTaskSource(this.#deps.run, repoPath, sourceWorkspace);
+        targetRepoPath = source.repoPath;
+        checkoutPath = source.sourceRepoPath;
+      }
+    }
+    return onboardRepo({
+      repoPath: targetRepoPath,
+      home: this.#deps.home,
+      write,
+      ...(commands.validationCommands === undefined
+        ? {}
+        : { validationCommands: readTextList(commands.validationCommands, "validationCommands") }),
+      ...(commands.setupCommands === undefined
+        ? {}
+        : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
+      ...(checkoutPath === undefined ? {} : { checkoutPath }),
+    });
   }
 
   async onboard(
     repoPath: string,
     write = false,
-    coordinatorMcpServers?: readonly string[],
     commands: SetupCommandEdits = {},
   ): Promise<OnboardRepoResult> {
     const source = await mapTaskSource(this.#deps.run, repoPath, this.#deps.sourceWorkspace);
@@ -1013,7 +1026,6 @@ class TandemController {
       repoPath: source.repoPath,
       home: this.#deps.home,
       write,
-      ...(coordinatorMcpServers === undefined ? {} : { coordinatorMcpServers }),
       ...(commands.validationCommands === undefined
         ? {}
         : { validationCommands: readTextList(commands.validationCommands, "validationCommands") }),
@@ -1030,11 +1042,10 @@ class TandemController {
   }
 
   private async onboardingFacts(repoPath: string): Promise<OnboardingFacts> {
-    const [models, settings, registered, offer, tandem, setupPage] = await Promise.all([
+    const [models, settings, registered, tandem, setupPage] = await Promise.all([
       readModelSettings({ repoPath, home: this.#deps.home }),
       readHomeSettings(this.#deps.home),
       readRegisteredProjects(this.#deps.home),
-      this.workerSkillOffer(),
       realpath(repoPath),
       this.#setupPage.status(),
     ]);
@@ -1042,7 +1053,6 @@ class TandemController {
       modelsChosen: models.configured,
       codeFolders: settings.projectRoots,
       projects: registered.filter((project) => project !== tandem),
-      workerSkillOffer: offer,
       selfImprovementChosen: settings.selfImprovementChosen,
       setupPage,
     };
@@ -1051,7 +1061,7 @@ class TandemController {
   async openProject(
     repoPath: string,
   ): Promise<Readonly<{ readonly repoPath: string; readonly focused: boolean }>> {
-    const onboarded = await this.onboard(repoPath, false);
+    const onboarded = await this.setupOnboard(repoPath, false);
     if (!onboarded.existingConfig) {
       throw new Error(`${onboarded.repoPath} has no saved Tandem settings yet; save them first`);
     }
@@ -1238,11 +1248,8 @@ class TandemController {
                 : { checkoutPath: source.sourceRepoPath }),
             })
           : pinned.policy;
-      // Skills named for this task, then the ones every task carries.
-      const skillNames = [
-        ...(input.skills === undefined ? [] : readTextList(input.skills, "skills")),
-        ...(await readHomeSettings(this.#deps.home)).workerSkills,
-      ];
+      // Only skills explicitly named for this task are pinned into its record.
+      const skillNames = input.skills === undefined ? [] : readTextList(input.skills, "skills");
       const skills =
         skillNames.length === 0
           ? []

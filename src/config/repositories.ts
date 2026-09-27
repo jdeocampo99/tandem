@@ -68,8 +68,6 @@ export type OnboardRepoOptions = Readonly<{
   readText?: PolicyTextReader;
   writeText?: PolicyTextWriter;
   write?: boolean;
-  /** MCP servers the user let the coordinator use; written only with write=true. */
-  coordinatorMcpServers?: readonly string[];
   /** The user's own check commands, replacing the discovered ones in the proposal and the write. */
   validationCommands?: readonly string[];
   /** The user's own install commands, replacing the discovered one likewise. */
@@ -190,21 +188,6 @@ const CENTRAL_ENVELOPE_KEYS: Readonly<Record<string, true>> = {
   policy: true,
 };
 
-/** Names of the MCP servers the coordinator may use itself; tasks can use every server. */
-function readCoordinatorMcpServerList(value: unknown, source: string): readonly string[] {
-  if (value === undefined) return [];
-  const field = `${source} coordinatorMcpServers`;
-  if (!Array.isArray(value)) throw new TypeError(`${field} must be an array of server names`);
-  return deduplicateStrings(
-    value.map((entry: unknown, index) => {
-      if (typeof entry !== "string" || entry.trim().length === 0) {
-        throw new TypeError(`${field}[${index}] must be a non-empty server name`);
-      }
-      return entry.trim();
-    }),
-  );
-}
-
 /** Shell commands that stop what agents started in a worktree, such as a Docker stack. */
 function readCleanupCommandList(value: unknown, source: string): readonly string[] {
   if (value === undefined) return [];
@@ -288,9 +271,8 @@ function readMergingTable(value: unknown, source: string): MergingSettingsFile |
 }
 
 /**
- * settings.toml is the policy itself plus the `repoPath` it belongs to, the coordinator's MCP
- * servers, the cleanup commands, and `[merging]`. Those are machine settings read live, not task
- * policy, so they stay out of the policy.
+ * settings.toml is the policy itself plus the `repoPath` it belongs to, cleanup commands, and
+ * `[merging]`. Those are machine settings read live, not task policy, so they stay out of the policy.
  */
 function readSettingsToml(text: string, source: string, root: string): Record<string, unknown> {
   let parsed: unknown;
@@ -305,7 +287,6 @@ function readSettingsToml(text: string, source: string, root: string): Record<st
   if (parsed.repoPath !== root) {
     throw new TypeError(`${source} repoPath must be ${JSON.stringify(root)}`);
   }
-  readCoordinatorMcpServerList(parsed.coordinatorMcpServers, source);
   readCleanupCommandList(parsed.cleanupCommands, source);
   readMergingTable(parsed.merging, source);
   return parsed;
@@ -314,7 +295,7 @@ function readSettingsToml(text: string, source: string, root: string): Record<st
 function parseSettingsToml(text: string, source: string, root: string): unknown {
   const {
     repoPath: _repoPath,
-    coordinatorMcpServers: _servers,
+    coordinatorMcpServers: _legacyCoordinatorMcpServers,
     cleanupCommands: _cleanup,
     merging: _merging,
     ...policy
@@ -458,18 +439,6 @@ async function resolveGuidance(
   }
 
   return guidance;
-}
-
-/** The MCP servers this repository lets its coordinator use; none when unset or not yet onboarded. */
-export async function readCoordinatorMcpServers(
-  options: Readonly<{ repoPath: string; home: string; readText?: PolicyTextReader }>,
-): Promise<readonly string[]> {
-  const root = await repositoryRoot(options.repoPath);
-  const file = await existingCentralFile(centralPaths(root, await configuredHome(options.home)));
-  if (file === undefined || !file.endsWith(".toml")) return [];
-  const text = (await options.readText?.(file)) ?? (await readFile(file, "utf8"));
-  const settings = readSettingsToml(text, file, root);
-  return readCoordinatorMcpServerList(settings.coordinatorMcpServers, file);
 }
 
 /** The commands that clean up a finished task's worktree; none when unset or not yet onboarded. */
@@ -696,7 +665,6 @@ function serializeCentralConfig(
   root: string,
   validationCommands: readonly string[],
   setupCommands: readonly string[],
-  coordinatorMcpServers: readonly string[],
 ): string {
   const defaults = defaultPolicy();
   const setting = (values: readonly string[], key: string, example: string): string =>
@@ -718,11 +686,6 @@ ${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"
 # Commands that stop what agents started in a working copy, like a Docker or database stack.
 # They run in the task's working copy once the task is finished and its agents are closed.
 # cleanupCommands = ["docker compose down"]
-
-# MCP servers the coordinator may use itself, by name. The coordinator plans and hands work to
-# tasks, and tasks can use every MCP server this project has. List only servers the coordinator
-# needs for looking things up, like reading tickets.
-${setting(coordinatorMcpServers, "coordinatorMcpServers", '["linear"]')}
 
 # How many times reviewers may send a change back for fixes before Tandem asks you.
 # maxFixRounds = ${defaults.maxFixRounds}
@@ -825,12 +788,7 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
   if (options.write === true) {
     await writeCentralConfig(
       paths,
-      serializeCentralConfig(
-        root,
-        proposal.commands,
-        setupCommands,
-        options.coordinatorMcpServers ?? [],
-      ),
+      serializeCentralConfig(root, proposal.commands, setupCommands),
       options.writeText,
     );
     written = true;

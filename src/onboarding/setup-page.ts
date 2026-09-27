@@ -1,30 +1,41 @@
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { endPresentation, listenPresentation, openPresentation } from "../adapters/lavish.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import type { HomeSettings, SelfImprovementMode } from "../config/home-settings.ts";
 import type { ModelSettings } from "../config/models.ts";
-import type { SkillCatalogEntry } from "../config/skills.ts";
-import type { Clock, CommandRunner, IdFactory, RepoPolicy } from "../contracts.ts";
+import type { Clock, CommandResult, CommandRunner, IdFactory, RepoPolicy } from "../contracts.ts";
 import { describeLavishFailure, type LavishOpenFailure } from "../report/publish.ts";
 import { expandHome, findCheckoutsByName, listCheckouts } from "../repos/locate.ts";
 import { writeJsonAtomically } from "../runtime/persistence.ts";
 import {
   checkSetupAnswer,
   parseSetupAnswer,
+  parseSetupChooseFolderRequest,
+  parseSetupSearchRequest,
   readSetupAnswerText,
+  readSetupChooseFolderText,
+  readSetupCommentText,
+  readSetupSearchText,
   type SetupAnswer,
   type SetupAnswerRepo,
+  type SetupPageDraft,
   type SetupRepoCheck,
-  setupRecap,
+  setupProviders,
 } from "./setup-answer.ts";
 import { renderSetupHtml } from "./setup-render.ts";
-import { buildSetupView, type SetupRepoDetails, type SetupRepoFacts } from "./setup-view.ts";
+import {
+  buildSetupView,
+  type SetupRepoDetails,
+  type SetupRepoFacts,
+  type SetupSearchStatus,
+} from "./setup-view.ts";
 
 /**
  * The setup page's effects: gathering what the page shows, writing it under the Tandem home and
- * opening it in Lavish, listening for its one answer, and saving that answer once approved. The
- * decisions (the view, the answer's checks, the recap) are pure and live beside this file.
+ * opening it in Lavish, listening for its one answer, and applying that answer after the page's
+ * tagged Save event. The decisions (the view and the answer's checks) are pure and live beside
+ * this file.
  */
 export type SetupPageDependencies = Readonly<{
   home: string;
@@ -43,8 +54,6 @@ export type SetupPageDependencies = Readonly<{
   registeredProjects: () => Promise<readonly string[]>;
   /** Read-only discovery for one checkout not yet set up. */
   inspectRepo: (path: string) => Promise<SetupRepoDetails>;
-  mcpServers: (path: string) => Promise<readonly string[]>;
-  skills: () => Promise<readonly SkillCatalogEntry[]>;
   saveModels: (
     input: Readonly<{
       repoPath: string;
@@ -52,7 +61,6 @@ export type SetupPageDependencies = Readonly<{
       enabledProviders: readonly string[];
     }>,
   ) => Promise<unknown>;
-  saveWorkerSkills: (skills: readonly string[]) => Promise<unknown>;
   saveSelfImprovement: (mode: SelfImprovementMode) => Promise<unknown>;
   saveCodeFolders: (folders: readonly string[]) => Promise<unknown>;
   setupRepo: (
@@ -60,7 +68,6 @@ export type SetupPageDependencies = Readonly<{
     repo: Readonly<{
       validationCommands?: readonly string[] | undefined;
       setupCommands?: readonly string[] | undefined;
-      coordinatorMcpServers: readonly string[];
     }>,
   ) => Promise<unknown>;
   openProject: (path: string) => Promise<unknown>;
@@ -77,15 +84,22 @@ export type SetupPageOpened = Readonly<{ path: string; url?: string }>;
 
 /** What one wait on the open page ended with. */
 export type SetupPageEvent =
-  | Readonly<{ kind: "answer"; answerId: string; recap: readonly string[]; ended: boolean }>
+  | Readonly<{ kind: "answer"; answerId: string; ended: boolean }>
   | Readonly<{ kind: "invalid"; problems: readonly string[]; ended: boolean }>
-  /** Nothing to act on: a comment that is not an answer (`comment`), or a wait that returned early. */
-  | Readonly<{ kind: "other"; comment: boolean; ended: boolean }>
+  | Readonly<{ kind: "search"; reply: string; ended: boolean }>
+  | Readonly<{ kind: "comment"; text: string; ended: boolean }>
+  | Readonly<{ kind: "other"; ended: boolean }>
   | Readonly<{ kind: "closed" }>
   | Readonly<{ kind: "failed"; message: string }>
   | Readonly<{ kind: "stopped" }>;
+export type SetupApplyResult = Readonly<{ message: string; complete: boolean }>;
 
-type StoredAnswer = Readonly<{ answerId: string; receivedAt: string; text: string }>;
+type StoredAnswer = Readonly<{
+  answerId: string;
+  receivedAt: string;
+  text: string;
+  explicitRoots: readonly string[];
+}>;
 
 /** Everything the page and the answer checks read, in one pass. */
 type SetupFacts = Readonly<{
@@ -95,13 +109,16 @@ type SetupFacts = Readonly<{
   roots: readonly string[];
   checkouts: readonly Readonly<{ path: string; repo?: string }>[];
   registered: ReadonlySet<string>;
-  skills: readonly SkillCatalogEntry[];
 }>;
 
 export class SetupPageWorkflow {
   readonly #deps: SetupPageDependencies;
   #status: "ready" | "open" | "done" = "ready";
   #lavish: Promise<boolean> | undefined;
+  #explicitRoots: string[] = [];
+  #draft: SetupPageDraft | undefined;
+  readonly #repoDetails = new Map<string, SetupRepoDetails>();
+  #lastFacts: SetupFacts | undefined;
 
   constructor(deps: SetupPageDependencies) {
     this.#deps = deps;
@@ -128,60 +145,83 @@ export class SetupPageWorkflow {
       .catch(() => false);
     return this.#lavish;
   }
-
-  private async facts(repoPath: string): Promise<SetupFacts> {
-    const [models, settings, roots, registered, skills] = await Promise.all([
+  private async facts(
+    repoPath: string,
+    extraRoots: readonly string[] = this.#explicitRoots,
+  ): Promise<SetupFacts> {
+    const [models, settings, roots, registered] = await Promise.all([
       this.#deps.models(repoPath),
       this.#deps.homeSettings(),
       this.#deps.roots(),
       this.#deps.registeredProjects(),
-      this.#deps.skills(),
     ]);
+    const searchedRoots = [...new Set([...roots, ...extraRoots])];
     return {
       catalogue: models.availableModels,
       modelSettings: models.modelSettings,
       settings,
-      roots,
-      checkouts: await listCheckouts(roots, this.#deps.run),
+      roots: searchedRoots,
+      checkouts: await listCheckouts(searchedRoots, this.#deps.run),
       registered: new Set(registered),
-      skills,
     };
   }
 
-  /** Builds the page from saved state and discovery, writes it, and opens it in Lavish. */
-  async open(repoPath: string): Promise<SetupPageOpened> {
-    const facts = await this.facts(repoPath);
+  private async renderPage(
+    repoPath: string,
+    options: Readonly<{ draft?: SetupPageDraft; searchStatus?: SetupSearchStatus }> = {},
+    facts?: SetupFacts,
+  ): Promise<void> {
+    const data = facts ?? (await this.facts(repoPath));
     const repos: SetupRepoFacts[] = await Promise.all(
-      facts.checkouts.map(async (checkout) => {
-        const setUp = facts.registered.has(checkout.path);
-        const details = setUp
-          ? undefined
-          : await this.#deps.inspectRepo(checkout.path).catch(() => undefined);
+      data.checkouts.map(async (checkout) => {
+        const setUp = data.registered.has(checkout.path);
+        let details = this.#repoDetails.get(checkout.path);
+        let inspectionError: string | undefined;
+        if (!setUp && details === undefined) {
+          try {
+            details = await this.#deps.inspectRepo(checkout.path);
+            this.#repoDetails.set(checkout.path, details);
+          } catch (error) {
+            inspectionError = error instanceof Error ? error.message : String(error);
+          }
+        }
         return {
           ...checkout,
           setUp,
           ...(details === undefined ? {} : { details }),
+          ...(inspectionError === undefined ? {} : { inspectionError }),
         };
       }),
     );
-    const saved = facts.modelSettings;
+    const saved = data.modelSettings;
     const view = buildSetupView({
       generatedAt: this.#deps.clock(),
       homeFolder: this.#deps.homeFolder,
-      catalogue: facts.catalogue,
-      enabledProviders: saved.enabledProviders,
+      catalogue: data.catalogue,
       ...(saved.configured && saved.models !== undefined ? { savedModels: saved.models } : {}),
-      searchedFolders: facts.roots,
+      searchedFolders: data.roots,
+      pendingFolders: this.#explicitRoots,
       repos,
-      skills: facts.skills,
-      ...(facts.settings.workerSkillsChosen ? { savedSkills: facts.settings.workerSkills } : {}),
-      ...(facts.settings.selfImprovementChosen
-        ? { selfImprovement: facts.settings.selfImprovement }
+      ...(data.settings.selfImprovementChosen
+        ? { selfImprovement: data.settings.selfImprovement }
         : {}),
+      ...(options.draft === undefined ? {} : { draft: options.draft }),
+      ...(options.searchStatus === undefined ? {} : { searchStatus: options.searchStatus }),
     });
     const path = this.pagePath;
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     await writeFile(path, renderSetupHtml(view), { mode: 0o600 });
+    this.#lastFacts = data;
+  }
+
+  /** Builds the page from saved state and discovery, writes it, and opens it in Lavish. */
+  async open(repoPath: string): Promise<SetupPageOpened> {
+    this.#explicitRoots = [];
+    this.#lastFacts = undefined;
+    this.#repoDetails.clear();
+    this.#draft = undefined;
+    await this.renderPage(repoPath);
+    const path = this.pagePath;
     let failure: LavishOpenFailure;
     try {
       // The user asked for the page, so a session they ended earlier opens again.
@@ -236,30 +276,197 @@ export class SetupPageWorkflow {
         observation.status !== "browser_disconnected" &&
         observation.status !== "error"
       ) {
-        return { kind: "other", comment: false, ended: false };
+        return { kind: "other", ended: false };
       }
       this.#status = "done";
       return { kind: "closed" };
     }
-    if (ended) this.#status = "done";
     const text = readSetupAnswerText(observation.rawFeedback);
-    if (text === undefined) return { kind: "other", comment: true, ended };
-    const checked = await this.check(repoPath, text);
-    if (!checked.ok) return { kind: "invalid", problems: checked.problems, ended };
-    const answerId = this.#deps.idFactory();
-    const stored: StoredAnswer = { answerId, receivedAt: this.#deps.clock(), text };
-    await writeJsonAtomically(this.answerPath, stored);
-    return { kind: "answer", answerId, recap: checked.recap, ended };
+    if (text !== undefined) {
+      const checked = await this.check(repoPath, text);
+      if (!checked.ok) return { kind: "invalid", problems: checked.problems, ended };
+      const answerId = this.#deps.idFactory();
+      const stored: StoredAnswer = {
+        answerId,
+        receivedAt: this.#deps.clock(),
+        text,
+        explicitRoots: [...this.#explicitRoots],
+      };
+      await writeJsonAtomically(this.answerPath, stored);
+      return { kind: "answer", answerId, ended };
+    }
+    const comment = readSetupCommentText(observation.rawFeedback);
+    const chooseText = readSetupChooseFolderText(observation.rawFeedback);
+    const searchText = readSetupSearchText(observation.rawFeedback);
+    let actionResult: Extract<SetupPageEvent, { kind: "search" }> | undefined;
+    if (chooseText !== undefined) {
+      const result = await this.handleChooseFolder(repoPath, chooseText, ended, signal);
+      if (result.kind === "stopped") return result;
+      actionResult = result;
+    }
+    if (searchText !== undefined) {
+      actionResult = await this.handleSearch(repoPath, searchText, ended);
+    }
+    if (actionResult !== undefined) {
+      return comment !== undefined ? { kind: "comment", text: comment, ended } : actionResult;
+    }
+    return comment === undefined
+      ? { kind: "other", ended }
+      : { kind: "comment", text: comment, ended };
+  }
+  private async handleSearch(
+    repoPath: string,
+    text: string,
+    ended: boolean,
+  ): Promise<Extract<SetupPageEvent, { kind: "search" }>> {
+    const parsed = parseSetupSearchRequest(text);
+    if (!parsed.ok) {
+      if (parsed.draft !== undefined) this.#draft = parsed.draft;
+      return this.searchError(repoPath, parsed.problems.join(" "), ended);
+    }
+    this.#draft = parsed.request.draft;
+    const root = await this.searchRoot(parsed.request.folder);
+    if (!root.ok) return this.searchError(repoPath, root.problem, ended);
+    return this.searchFolder(repoPath, root.path, ended);
+  }
+
+  private async handleChooseFolder(
+    repoPath: string,
+    text: string,
+    ended: boolean,
+    signal: AbortSignal,
+  ): Promise<Extract<SetupPageEvent, { kind: "search" | "stopped" }>> {
+    const parsed = parseSetupChooseFolderRequest(text);
+    if (!parsed.ok) {
+      if (parsed.draft !== undefined) this.#draft = parsed.draft;
+      return this.searchError(repoPath, parsed.problems.join(" "), ended);
+    }
+    this.#draft = parsed.draft;
+    let chosen: CommandResult;
+    try {
+      chosen = await this.#deps.run({
+        argv: [
+          "osascript",
+          "-e",
+          'POSIX path of (choose folder with prompt "Choose a code folder for Tandem")',
+        ],
+        cwd: this.#deps.homeFolder,
+        signal,
+      });
+    } catch (error) {
+      if (signal.aborted) return { kind: "stopped" };
+      return this.searchError(
+        repoPath,
+        `macOS could not open the folder chooser: ${error instanceof Error ? error.message : String(error)}. Enter its path instead.`,
+        ended,
+      );
+    }
+    if (chosen.code !== 0) {
+      if (/\(-128\)/u.test(chosen.stderr)) {
+        const reply = "No folder selected.";
+        await this.renderPage(
+          repoPath,
+          { draft: this.#draft, searchStatus: { kind: "ok", message: reply } },
+          this.#lastFacts,
+        );
+        return { kind: "search", reply, ended };
+      }
+      return this.searchError(
+        repoPath,
+        "macOS could not open the folder chooser. Enter its path instead.",
+        ended,
+      );
+    }
+    const path = chosen.stdout.replace(/\r?\n$/u, "");
+    const root = await this.searchRoot(path);
+    if (!root.ok) return this.searchError(repoPath, root.problem, ended);
+    return this.searchFolder(repoPath, root.path, ended);
+  }
+
+  private async searchError(
+    repoPath: string,
+    problem: string,
+    ended: boolean,
+  ): Promise<Extract<SetupPageEvent, { kind: "search" }>> {
+    const reply = `Couldn't search that folder: ${problem}`;
+    await this.renderPage(
+      repoPath,
+      {
+        ...(this.#draft === undefined ? {} : { draft: this.#draft }),
+        searchStatus: { kind: "error", message: reply },
+      },
+      this.#lastFacts,
+    );
+    return { kind: "search", reply, ended };
+  }
+
+  private async searchFolder(
+    repoPath: string,
+    path: string,
+    ended: boolean,
+  ): Promise<Extract<SetupPageEvent, { kind: "search" }>> {
+    const roots = this.#explicitRoots.includes(path)
+      ? this.#explicitRoots
+      : [...this.#explicitRoots, path];
+    let facts: SetupFacts;
+    try {
+      facts = await this.facts(repoPath, roots);
+    } catch (error) {
+      return this.searchError(
+        repoPath,
+        `scan failed: ${error instanceof Error ? error.message : String(error)}`,
+        ended,
+      );
+    }
+    this.#explicitRoots = [...roots];
+    const count = facts.checkouts.filter(
+      (checkout) => checkout.path === path || checkout.path.startsWith(`${path}/`),
+    ).length;
+    const reply = `Searched ${path}: found ${count === 1 ? "1 repo" : `${count} repos`}.`;
+    await this.renderPage(
+      repoPath,
+      {
+        ...(this.#draft === undefined ? {} : { draft: this.#draft }),
+        searchStatus: { kind: "ok", message: reply },
+      },
+      facts,
+    );
+    return { kind: "search", reply, ended };
+  }
+
+  private async searchRoot(
+    folder: string,
+  ): Promise<Readonly<{ ok: true; path: string }> | Readonly<{ ok: false; problem: string }>> {
+    const expanded = folder.replace(/^~(?=\/|$)/u, this.#deps.homeFolder);
+    if (!isAbsolute(expanded)) return { ok: false, problem: "use an absolute path or ~/..." };
+    let path: string;
+    try {
+      path = await realpath(resolve(expanded));
+    } catch {
+      return { ok: false, problem: `${folder} does not exist.` };
+    }
+    const home = await realpath(this.#deps.homeFolder).catch(() => resolve(this.#deps.homeFolder));
+    if (path === "/" || path === home || path === dirname(home)) {
+      return { ok: false, problem: "that folder is too broad; choose a code subfolder." };
+    }
+    try {
+      if (!(await stat(path)).isDirectory()) {
+        return { ok: false, problem: `${folder} is not a directory.` };
+      }
+    } catch {
+      return { ok: false, problem: `${folder} is not readable.` };
+    }
+    return { ok: true, path };
   }
 
   private async check(
     repoPath: string,
     text: string,
+    explicitRoots: readonly string[] = this.#explicitRoots,
   ): Promise<
     | Readonly<{
         ok: true;
         answer: SetupAnswer;
-        recap: readonly string[];
         facts: SetupFacts;
         codeFolders: readonly string[];
       }>
@@ -267,22 +474,25 @@ export class SetupPageWorkflow {
   > {
     const parsed = parseSetupAnswer(text);
     if (!parsed.ok) return parsed;
-    const facts = await this.facts(repoPath);
+    const facts = await this.facts(repoPath, explicitRoots);
     const repositories = new Map<string, SetupRepoCheck>();
     for (const repo of parsed.answer.repositories) {
       repositories.set(repo.path, await this.checkRepo(repo.path, facts.registered));
     }
     const problems = checkSetupAnswer(parsed.answer, {
       catalogue: facts.catalogue,
-      skills: facts.skills.map((skill) => skill.name),
       repositories,
     });
     if (problems.length > 0) return { ok: false, problems };
-    const codeFolders = await this.codeFoldersToSave(facts);
+    const codeFolders = await this.codeFoldersToSave(
+      facts,
+      parsed.answer.repositories,
+      repositories,
+      explicitRoots,
+    );
     return {
       ok: true,
       answer: parsed.answer,
-      recap: setupRecap(parsed.answer, facts.catalogue, codeFolders),
       facts,
       codeFolders,
     };
@@ -293,27 +503,44 @@ export class SetupPageWorkflow {
     if (found === undefined) return { kind: "not-a-repo" };
     const named = await realpath(resolve(expandHome(path))).catch(() => undefined);
     if (named !== found.path) return { kind: "inside", root: found.path };
-    const mcpServers = await this.#deps.mcpServers(found.path).catch(() => undefined);
     return {
       kind: "root",
       root: found.path,
       setUp: registered.has(found.path),
-      ...(mcpServers === undefined ? {} : { mcpServers }),
     };
   }
 
   /**
-   * With no code folders saved yet, the searched folders that hold a repository become the saved
-   * ones, so finding a repository by name later looks where this page found them.
+   * Save explicitly searched folders plus any selected checkout's parent. Default discovered
+   * folders are recorded on first setup; an approved search appends to existing saved roots.
    */
-  private async codeFoldersToSave(facts: SetupFacts): Promise<readonly string[]> {
-    if (facts.settings.projectRoots.length > 0) return [];
-    const folders: string[] = [];
-    for (const root of facts.roots) {
-      const real = await realpath(resolve(expandHome(root))).catch(() => undefined);
-      if (real === undefined) continue;
-      const holds = facts.checkouts.some((checkout) => checkout.path.startsWith(`${real}/`));
-      if (holds && !folders.includes(real)) folders.push(real);
+  private async codeFoldersToSave(
+    facts: SetupFacts,
+    selected: readonly SetupAnswerRepo[],
+    checked: ReadonlyMap<string, SetupRepoCheck>,
+    explicitRoots: readonly string[],
+  ): Promise<readonly string[]> {
+    if (facts.settings.projectRoots.length > 0 && explicitRoots.length === 0) return [];
+    const folders: string[] = [...facts.settings.projectRoots];
+    if (facts.settings.projectRoots.length === 0) {
+      for (const root of facts.roots) {
+        const real = await realpath(resolve(expandHome(root))).catch(() => undefined);
+        if (real === undefined) continue;
+        const holds = facts.checkouts.some((checkout) => checkout.path.startsWith(`${real}/`));
+        if (holds && !folders.includes(real)) folders.push(real);
+      }
+    }
+    for (const root of explicitRoots) {
+      if (!folders.includes(root)) folders.push(root);
+    }
+    if (facts.settings.projectRoots.length === 0) {
+      for (const repo of selected) {
+        const match = checked.get(repo.path);
+        if (match?.kind !== "root") continue;
+        if (folders.some((folder) => match.root.startsWith(`${folder}/`))) continue;
+        const parent = dirname(match.root);
+        if (!folders.includes(parent)) folders.push(parent);
+      }
     }
     return folders;
   }
@@ -339,35 +566,43 @@ export class SetupPageWorkflow {
         `Setup page answer ${answerId} was replaced by a newer one; use the latest answer.`,
       );
     }
-    return { answerId: record.answerId, receivedAt: record.receivedAt, text: record.text };
-  }
-
-  /** The stored answer as the one approval dialog shows it, checked again against this machine. */
-  async recap(repoPath: string, answerId: string): Promise<readonly string[]> {
-    const checked = await this.check(repoPath, (await this.stored(answerId)).text);
-    if (!checked.ok)
-      throw new Error(`The setup answer can't be saved: ${checked.problems.join(" ")}`);
-    return checked.recap;
+    const explicitRoots = record.explicitRoots ?? [];
+    if (
+      !Array.isArray(explicitRoots) ||
+      !explicitRoots.every((root: unknown) => typeof root === "string" && isAbsolute(root))
+    ) {
+      throw new Error(
+        "The saved setup page answer has unreadable search folders. Open the setup page again.",
+      );
+    }
+    return {
+      answerId: record.answerId,
+      receivedAt: record.receivedAt,
+      text: record.text,
+      explicitRoots,
+    };
   }
 
   /**
-   * Saves an approved answer in order: models and providers, worker skills, the self-improvement
-   * mode, code folders, then each repository's settings followed by its chat. A failed step is
+   * Revalidates and applies the one stored answer, consuming it on completion. A failed step is
    * reported and never undoes the ones before it; a repository whose settings failed is not opened.
    */
-  async apply(repoPath: string, answerId: string): Promise<string> {
-    const checked = await this.check(repoPath, (await this.stored(answerId)).text);
+  async apply(repoPath: string, answerId: string): Promise<SetupApplyResult> {
+    const stored = await this.stored(answerId);
+    const checked = await this.check(repoPath, stored.text, stored.explicitRoots);
     if (!checked.ok) {
       throw new Error(`The setup answer can't be saved: ${checked.problems.join(" ")}`);
     }
     const { answer, codeFolders, facts } = checked;
     const lines: string[] = [];
+    let complete = true;
     const step = async (done: string, failed: string, save: () => Promise<unknown>) => {
       try {
         await save();
         lines.push(done);
         return true;
       } catch (error) {
+        complete = false;
         lines.push(`${failed}: ${error instanceof Error ? error.message : String(error)}`);
         return false;
       }
@@ -376,11 +611,8 @@ export class SetupPageWorkflow {
       this.#deps.saveModels({
         repoPath,
         models: answer.models,
-        enabledProviders: answer.enabledProviders,
+        enabledProviders: setupProviders(answer, facts.catalogue),
       }),
-    );
-    await step("Saved the skills every task gets.", "Skills were not saved", () =>
-      this.#deps.saveWorkerSkills(answer.workerSkills),
     );
     await step(
       `Saved what Tandem does when it runs into an issue: ${answer.selfImprovement}.`,
@@ -402,7 +634,7 @@ export class SetupPageWorkflow {
     await endPresentation(this.#deps.run, this.pagePath, dirname(this.pagePath)).catch(
       () => undefined,
     );
-    return lines.join("\n");
+    return { message: lines.join("\n"), complete };
   }
 
   private async applyRepo(
@@ -413,13 +645,10 @@ export class SetupPageWorkflow {
     const check = await this.checkRepo(repo.path, facts.registered);
     const root = check.kind === "root" ? check.root : repo.path;
     const name = `${basename(root)} (${root})`;
-    const servers =
-      repo.coordinatorMcpServers ?? (check.kind === "root" ? (check.mcpServers ?? []) : []);
     const saved = await step(`${name}: settings saved.`, `${name}: not set up`, () =>
       this.#deps.setupRepo(root, {
         validationCommands: repo.validationCommands,
         setupCommands: repo.setupCommands,
-        coordinatorMcpServers: servers,
       }),
     );
     if (!saved) return;

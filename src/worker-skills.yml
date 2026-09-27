@@ -1,7 +1,0 @@
-# Workers load the skills the repository ships. Personal skills stay out; a task that names one
-# carries it in the worker's brief instead. The coordinator does not load this file.
-skills:
-  enableCodexUser: false
-  enableClaudeUser: false
-  enablePiUser: false
-  enableAgentsUser: false

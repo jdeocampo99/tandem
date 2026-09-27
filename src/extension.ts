@@ -9,7 +9,6 @@ import {
   type TandemBoundaryEnvironment,
   type TandemEnvironmentSource,
 } from "./config/environment.ts";
-import { readCoordinatorMcpServers } from "./config/repositories.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
 import { isTandemCheckout } from "./coordinator/tandem-checkout.ts";
@@ -26,6 +25,7 @@ import {
 import { coordinatorCompactTokens } from "./session/compaction.ts";
 import { CoordinatorSession } from "./session/coordinator.ts";
 import { readResearchReport } from "./session/notifications.ts";
+import type { CoordinatorMessage } from "./session/onboarding-guide.ts";
 import { promptRoutingConfig } from "./session/prompt-routing.ts";
 import {
   type ResearchContinuationClassifier,
@@ -95,6 +95,39 @@ function errorMessage(error: unknown): string {
 /** The status line only needs the tool's kind, so its arguments are not classified. */
 function statusToolCall(event: Readonly<{ toolCallId: string; toolName: string }>) {
   return ompToolCall({ toolCallId: event.toolCallId, toolName: event.toolName, input: {} });
+}
+function recordValue(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+function coordinatorMessage(message: unknown): CoordinatorMessage {
+  const record = recordValue(message);
+  const role = typeof record?.role === "string" ? record.role : "unknown";
+  const content = record?.content;
+  const plainContent =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.flatMap((block) => {
+            const value = recordValue(block);
+            if (value === undefined || typeof value.type !== "string") return [];
+            return [
+              {
+                type: value.type,
+                ...(typeof value.text === "string" ? { text: value.text } : {}),
+              },
+            ];
+          })
+        : [];
+  const retryRecovery = recordValue(record?.retryRecovery);
+  return {
+    role,
+    content: plainContent,
+    ...(record?.synthetic === true ? { synthetic: true } : {}),
+    ...(retryRecovery?.status === "superseded" ? { superseded: true } : {}),
+  };
 }
 
 type BoundCoordinator = Readonly<{
@@ -188,11 +221,6 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       userPrompt: (ctx) => session(ctx).userPrompt(),
       closeThread: (ctx) => session(ctx).closeThread(),
       researchRunning: (ctx) => session(ctx).researchRunning(),
-      // An unreadable settings file allows no servers, so the guard fails closed.
-      coordinatorMcpServers: (ctx) => {
-        const { repo, home } = coordinator(ctx).environment;
-        return readCoordinatorMcpServers({ repoPath: repo, home }).catch(() => []);
-      },
     });
     pi.on("before_agent_start", async (event, ctx) => {
       const { systemContext } = await session(ctx).agentStart();
@@ -203,7 +231,12 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     pi.on("tool_execution_start", (event, ctx) => session(ctx).toolStart(statusToolCall(event)));
     pi.on("tool_execution_end", (event, ctx) => session(ctx).toolEnd(statusToolCall(event)));
     pi.on("turn_end", (event, ctx) => session(ctx).turnEnd(replyUsage(event.message)));
-    pi.on("agent_end", (event, ctx) => session(ctx).agentEnd(event.willContinue === true));
+    pi.on("agent_end", (event, ctx) =>
+      session(ctx).agentEnd(
+        event.willContinue === true,
+        () => event.messages?.map((message) => coordinatorMessage(message)) ?? [],
+      ),
+    );
     pi.on("session.compacting", async (_event, ctx) => {
       const { context, preserve } = await session(ctx).compacting();
       return { context: [...context], preserveData: { ...preserve } };

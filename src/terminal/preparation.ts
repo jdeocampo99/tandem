@@ -10,7 +10,6 @@ import type { TerminalRunResult } from "./arguments.ts";
 import type { RunInteractive } from "./cli-process.ts";
 import type { TerminalEnvironment } from "./environment.ts";
 import {
-  askCoordinatorMcpServers,
   askProjectSettingsApproval,
   runModelOnboarding,
   type TerminalPrompter,
@@ -180,7 +179,6 @@ export async function prepareProjects(
   service: TandemService,
   prompter: TerminalPrompter | undefined,
   interactive: boolean,
-  listMcpServers: (repoPath: string) => Promise<readonly string[]>,
   tandemProject: string | undefined,
 ): Promise<readonly ProjectState[] | undefined> {
   const settings = firstModelSettings(states);
@@ -225,9 +223,7 @@ export async function prepareProjects(
     if (!interactive || prompter === undefined) throw noTtyError("project settings approval");
     const approved = await askProjectSettingsApproval(prompter, state.repoPath, state.configPath);
     if (!approved) return undefined;
-    const servers = await askCoordinatorMcpServers(prompter, await listMcpServers(state.repoPath));
-    if (servers === undefined) return undefined;
-    await service.onboard(state.repoPath, true, servers);
+    await service.onboard(state.repoPath, true);
   }
   return states;
 }

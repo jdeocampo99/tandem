@@ -57,7 +57,6 @@ const IMPLEMENTER_TOOLS = [
 ] as const;
 const PRESENTATION_TOOLS = ["read", "grep", "glob", "write", "edit", SUBMIT_REPORT_TOOL] as const;
 const WORKER_CONFIG_PATH = fileURLToPath(new URL("./worker-config.yml", import.meta.url));
-const WORKER_SKILLS_CONFIG_PATH = fileURLToPath(new URL("./worker-skills.yml", import.meta.url));
 const WORKER_CONTROL_PATH = fileURLToPath(new URL("./worker-control.ts", import.meta.url));
 
 async function promptWithInitialCommunication(job: WorkerJob): Promise<string> {
@@ -126,8 +125,6 @@ function buildWorkerCommand(job: WorkerJob, prompt: string, jobPath: string): Co
         : ["--session-dir", job.sessionDirectory, "--continue"]),
       "--config",
       WORKER_CONFIG_PATH,
-      "--config",
-      WORKER_SKILLS_CONFIG_PATH,
       "--cwd",
       job.cwd,
       "--tools",

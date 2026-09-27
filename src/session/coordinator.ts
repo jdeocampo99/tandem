@@ -32,7 +32,7 @@ import {
   deliverPrWatchNotices,
   type ResearchReportReader,
 } from "./notifications.ts";
-import { OnboardingGuide } from "./onboarding-guide.ts";
+import { type CoordinatorMessage, OnboardingGuide } from "./onboarding-guide.ts";
 import { buildDurableDigest } from "./summary.ts";
 
 export type CoordinatorDeps = SessionDeps &
@@ -457,9 +457,13 @@ export class CoordinatorSession {
       .catch(() => undefined);
   }
 
-  async agentEnd(willContinue: boolean): Promise<void> {
+  async agentEnd(
+    willContinue: boolean,
+    messages: () => readonly CoordinatorMessage[] = () => [],
+  ): Promise<void> {
     this.status.agentActive = willContinue;
     this.status.report();
+    this.onboardingGuide?.agentEnd({ willContinue, messages });
     if (!willContinue) await this.reconcile(false);
   }
 

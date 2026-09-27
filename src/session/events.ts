@@ -105,7 +105,7 @@ export type SessionEffect =
       /** Delivered before `text`, never shown to the user. OMP sends it as a separate display:false message. */
       hidden?: Readonly<{ text: string; details?: unknown }>;
       details?: Readonly<Record<string, unknown>>;
-      timing: "followUp" | "nextTurn";
+      timing: "followUp" | "nextTurn" | "aside";
       triggerTurn: boolean;
     }>
   | Readonly<{
@@ -117,7 +117,7 @@ export type SessionEffect =
       view: CatchUpView;
       text: string;
     }>
-  | Readonly<{ type: "promptAsUser"; text: string }>
+  | Readonly<{ type: "promptAsUser"; text: string; deliverAs?: "aside" }>
   | Readonly<{ type: "notify"; text: string; level: "info" | "error" }>
   | Readonly<{
       type: "recordEntry";

@@ -5,26 +5,39 @@ import { SETUP_ROLE_COPY } from "./setup-view.ts";
 
 /**
  * The setup page's one answer, and the checks it must pass before anything is saved. Pure: the
- * caller reads the catalogue, the skills, and each repository's Git root, then passes them in.
+ * caller reads the catalogue and each repository's Git root, then passes them in.
  */
 export type SetupAnswer = Readonly<{
-  enabledProviders: readonly string[];
   models: Readonly<Record<AgentRole, ModelSpec>>;
   repositories: readonly SetupAnswerRepo[];
-  workerSkills: readonly string[];
   selfImprovement: SelfImprovementMode;
 }>;
 
-/**
- * One repository to set up. An absent command list means "what Tandem discovers when it saves",
- * and absent MCP servers mean all of the repository's servers; the page leaves them out only for
- * a pasted path it could not look at in advance.
- */
+export type SetupPageDraft = Readonly<{
+  picks: Partial<Record<AgentRole, ModelSpec>>;
+  repositories: readonly Readonly<{
+    path: string;
+    checks: readonly string[];
+    install: string;
+    pasted: boolean;
+  }>[];
+  selfImprovement: SelfImprovementMode;
+}>;
+
+export type SetupSearchRequest = Readonly<{
+  folder: string;
+  draft: SetupPageDraft;
+}>;
+
+export type ParsedSetupSearchRequest =
+  | Readonly<{ ok: true; request: SetupSearchRequest }>
+  | Readonly<{ ok: false; problems: readonly string[]; draft?: SetupPageDraft }>;
+
+/** One repository to set up. Omitted command lists are discovered when Tandem saves. */
 export type SetupAnswerRepo = Readonly<{
   path: string;
   validationCommands?: readonly string[];
   setupCommands?: readonly string[];
-  coordinatorMcpServers?: readonly string[];
 }>;
 
 /** What one answer path turned out to be on disk, read by the caller. */
@@ -34,16 +47,12 @@ export type SetupRepoCheck =
       /** The canonical Git root, which is what gets saved. */
       root: string;
       setUp: boolean;
-      /** The repository's MCP servers; absent when they could not be read. */
-      mcpServers?: readonly string[];
     }>
   | Readonly<{ kind: "inside"; root: string }>
   | Readonly<{ kind: "not-a-repo" }>;
 
 export type SetupAnswerFacts = Readonly<{
   catalogue: readonly OmpModelRecord[];
-  /** Names of the skills the page listed. */
-  skills: readonly string[];
   /** Keyed by the answer's own path spelling. */
   repositories: ReadonlyMap<string, SetupRepoCheck>;
 }>;
@@ -53,21 +62,211 @@ export type ParsedSetupAnswer =
   | Readonly<{ ok: false; problems: readonly string[] }>;
 
 const SELF_IMPROVEMENT_MODES: readonly SelfImprovementMode[] = ["off", "fix", "report"];
-const ANSWER_KEYS = [
-  "tandemSetup",
-  "enabledProviders",
-  "models",
-  "repositories",
-  "workerSkills",
-  "selfImprovement",
-] as const;
-const REPO_KEYS = ["path", "validationCommands", "setupCommands", "coordinatorMcpServers"];
+const ANSWER_KEYS = ["tandemSetup", "models", "repositories", "selfImprovement"] as const;
+const REPO_KEYS = ["path", "validationCommands", "setupCommands"];
+const SEARCH_KEYS = ["tandemSearch", "folder", "draft"] as const;
+const CHOOSE_FOLDER_KEYS = ["tandemChooseFolder", "draft"] as const;
+const DRAFT_KEYS = ["picks", "repositories", "selfImprovement"] as const;
+const DRAFT_REPO_KEYS = ["path", "checks", "install", "pasted"] as const;
+const MAX_SEARCH_TEXT = 256_000;
+const MAX_SEARCH_PATH = 4_096;
+const MAX_DRAFT_ITEMS = 256;
+const MAX_DRAFT_REPOSITORIES = 256;
+const MAX_DRAFT_TEXT = 16_384;
 
 /**
- * The setup answer inside `lavish-axi poll` feedback: its prompts come back as rows whose fields
- * are JSON string literals, and the answer is the last one holding a `tandemSetup` object.
+ * The setup page queues this request before it asks Lavish to send it. Keep it separate from the
+ * final answer so a search can refresh the page without creating an approval or a user question.
+ */
+export function parseSetupSearchRequest(text: string): ParsedSetupSearchRequest {
+  if (text.length > MAX_SEARCH_TEXT) {
+    return { ok: false, problems: ["The repo search request is too large."] };
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { ok: false, problems: ["The repo search request is not valid JSON."] };
+  }
+  if (!isRecord(value) || value.tandemSearch !== 1) {
+    return {
+      ok: false,
+      problems: ["The request is not a Tandem repo search request (tandemSearch: 1)."],
+    };
+  }
+  const problems: string[] = [];
+  unknownKeys(value, SEARCH_KEYS, "The search request", problems);
+  if (typeof value.folder !== "string") problems.push("folder must be text.");
+  const folder = typeof value.folder === "string" ? value.folder.trim() : "";
+  if (folder.length === 0) problems.push("folder must not be empty.");
+  if (folder.length > MAX_SEARCH_PATH) problems.push("folder is too long.");
+  const draft = parseSetupDraft(value.draft, problems);
+  if (problems.length > 0 || draft === undefined) {
+    return {
+      ok: false,
+      problems,
+      ...(draft === undefined ? {} : { draft }),
+    };
+  }
+  return { ok: true, request: { folder, draft } };
+}
+
+/** A native folder request carries only the current draft; the path comes from macOS. */
+export function parseSetupChooseFolderRequest(
+  text: string,
+):
+  | Readonly<{ ok: true; draft: SetupPageDraft }>
+  | Readonly<{ ok: false; problems: readonly string[]; draft?: SetupPageDraft }> {
+  if (text.length > MAX_SEARCH_TEXT) {
+    return { ok: false, problems: ["The folder request is too large."] };
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { ok: false, problems: ["The folder request is not valid JSON."] };
+  }
+  if (!isRecord(value) || value.tandemChooseFolder !== 1) {
+    return { ok: false, problems: ["The request is not a Tandem folder request."] };
+  }
+  const problems: string[] = [];
+  unknownKeys(value, CHOOSE_FOLDER_KEYS, "The folder request", problems);
+  const draft = parseSetupDraft(value.draft, problems);
+  if (problems.length > 0 || draft === undefined) {
+    return { ok: false, problems, ...(draft === undefined ? {} : { draft }) };
+  }
+  return { ok: true, draft };
+}
+
+function parseSetupDraft(value: unknown, problems: string[]): SetupPageDraft | undefined {
+  if (!isRecord(value)) {
+    problems.push("draft must be an object.");
+    return undefined;
+  }
+  unknownKeys(value, DRAFT_KEYS, "draft", problems);
+  const picks: Partial<Record<AgentRole, ModelSpec>> = {};
+  if (!isRecord(value.picks)) {
+    problems.push("draft.picks must be an object.");
+  } else {
+    unknownKeys(value.picks, MODEL_ROLE_ORDER, "draft.picks", problems);
+    for (const role of MODEL_ROLE_ORDER) {
+      const candidate = value.picks[role];
+      if (candidate === undefined) continue;
+      if (!isRecord(candidate)) {
+        problems.push(`draft.picks.${role} must be an object.`);
+        continue;
+      }
+      unknownKeys(candidate, ["model", "thinking"], `draft.picks.${role}`, problems);
+      const model = typeof candidate.model === "string" ? candidate.model.trim() : "";
+      const thinking = THINKING_LEVELS.find((level) => level === candidate.thinking);
+      if (model.length === 0 || model.length > MAX_DRAFT_TEXT) {
+        problems.push(`draft.picks.${role}.model must be non-empty text.`);
+      } else if (thinking === undefined) {
+        problems.push(`draft.picks.${role}.thinking must be a valid thinking level.`);
+      } else {
+        picks[role] = { model, thinking };
+      }
+    }
+  }
+  const repositories: SetupPageDraft["repositories"][number][] = [];
+  if (!Array.isArray(value.repositories)) {
+    problems.push("draft.repositories must be a list.");
+  } else if (value.repositories.length > MAX_DRAFT_REPOSITORIES) {
+    problems.push(`draft.repositories has more than ${MAX_DRAFT_REPOSITORIES} entries.`);
+  } else {
+    value.repositories.forEach((entry, index) => {
+      const where = `draft.repositories[${index}]`;
+      if (!isRecord(entry)) {
+        problems.push(`${where} must be an object.`);
+        return;
+      }
+      unknownKeys(entry, DRAFT_REPO_KEYS, where, problems);
+      const path = typeof entry.path === "string" ? entry.path.trim() : "";
+      const install = typeof entry.install === "string" ? entry.install : "";
+      const checks = boundedStringList(entry.checks, `${where}.checks`, problems, true);
+      if (path.length === 0 || path.length > MAX_SEARCH_PATH)
+        problems.push(`${where}.path is invalid.`);
+      if (install.length > MAX_DRAFT_TEXT) problems.push(`${where}.install is too long.`);
+      if (typeof entry.pasted !== "boolean") problems.push(`${where}.pasted must be boolean.`);
+      repositories.push({
+        path,
+        checks,
+        install,
+        pasted: entry.pasted === true,
+      });
+    });
+  }
+  const selfImprovement = SELF_IMPROVEMENT_MODES.find((mode) => mode === value.selfImprovement);
+  if (selfImprovement === undefined) {
+    problems.push('draft.selfImprovement must be "off", "fix", or "report".');
+  }
+  if (problems.length > 0 || selfImprovement === undefined) return undefined;
+  return { picks, repositories, selfImprovement };
+}
+
+function boundedStringList(
+  value: unknown,
+  field: string,
+  problems: string[],
+  preserveInput = false,
+): readonly string[] {
+  if (!Array.isArray(value)) {
+    problems.push(`${field} must be a list of text.`);
+    return [];
+  }
+  if (value.length > MAX_DRAFT_ITEMS) {
+    problems.push(`${field} has more than ${MAX_DRAFT_ITEMS} entries.`);
+  }
+  const entries = value.map((entry) =>
+    typeof entry === "string" ? (preserveInput ? entry : entry.trim()) : "",
+  );
+  if (value.some((entry) => typeof entry !== "string"))
+    problems.push(`${field} must be a list of text.`);
+  if (entries.some((entry) => entry.length > MAX_DRAFT_TEXT))
+    problems.push(`${field} has an entry that is too long.`);
+  if (!preserveInput && entries.some((entry) => entry.length === 0))
+    problems.push(`${field} has an empty entry.`);
+  if (!preserveInput && new Set(entries).size !== entries.length)
+    problems.push(`${field} lists something twice.`);
+  return entries.slice(0, MAX_DRAFT_ITEMS);
+}
+
+/**
+ * The setup answer is accepted only from Lavish's tagged Save control. Scanning every quoted
+ * string would let an ordinary page comment smuggle a write-capable tandemSetup object into the
+ * coordinator, so keep the prompt-row boundaries and exact selector/tag in the trust check.
  */
 export function readSetupAnswerText(rawFeedback: string): string | undefined {
+  let inPrompts = false;
+  let found: string | undefined;
+  for (const line of rawFeedback.split(/\r?\n/u)) {
+    if (/^prompts\[\d+\]\{/u.test(line)) {
+      inPrompts = true;
+      continue;
+    }
+    if (/^(?:feedback|session|errors|warnings)\b/u.test(line)) {
+      inPrompts = false;
+      continue;
+    }
+    if (!inPrompts) continue;
+    const match = /^\s+"(?:[^"\\]|\\.)*",("(?:[^"\\]|\\.)*"),button#next,tandem-setup(?:,|$)/u.exec(
+      line,
+    );
+    if (match === null || match[1] === undefined) continue;
+    try {
+      const text: unknown = JSON.parse(match[1]);
+      if (typeof text === "string" && /^\s*\{/u.test(text) && text.includes('"tandemSetup"')) {
+        found = text;
+      }
+    } catch {
+      // A malformed prompt row is not consent.
+    }
+  }
+  return found;
+}
+
+/** The latest structured browser action for one discriminator in Lavish prompt feedback. */
+function readSetupActionText(rawFeedback: string, discriminator: string): string | undefined {
   let found: string | undefined;
   for (const literal of rawFeedback.match(/"(?:[^"\\]|\\.)*"/gu) ?? []) {
     let text: unknown;
@@ -76,11 +275,76 @@ export function readSetupAnswerText(rawFeedback: string): string | undefined {
     } catch {
       continue;
     }
-    if (typeof text === "string" && /^\s*\{/u.test(text) && text.includes('"tandemSetup"')) {
+    if (typeof text === "string" && /^\s*\{/u.test(text) && text.includes(discriminator)) {
       found = text;
     }
   }
   return found;
+}
+
+export function readSetupSearchText(rawFeedback: string): string | undefined {
+  return readSetupActionText(rawFeedback, '"tandemSearch"');
+}
+
+export function readSetupChooseFolderText(rawFeedback: string): string | undefined {
+  return readSetupActionText(rawFeedback, '"tandemChooseFolder"');
+}
+/** Plain Lavish messages in one poll are kept together, excluding structured setup actions. */
+export function readSetupCommentText(rawFeedback: string): string | undefined {
+  const messages: string[] = [];
+  let promptSuffix = -1;
+  let feedback = false;
+  for (const line of rawFeedback.split(/\r?\n/u)) {
+    const prompts = /^prompts\[\d+\]\{([^}]+)\}:$/u.exec(line);
+    if (prompts !== null) {
+      const fields = prompts[1]?.split(",") ?? [];
+      promptSuffix = fields.indexOf("prompt") === 1 ? fields.length - 2 : -1;
+      feedback = false;
+      continue;
+    }
+    if (/^feedback\[\d+\]\{/u.test(line)) {
+      promptSuffix = -1;
+      feedback = true;
+      continue;
+    }
+    if (feedback) {
+      const message = /^\s+message:\s*(.*)$/u.exec(line)?.[1]?.trim();
+      if (message) messages.push(message);
+    } else if (promptSuffix >= 0) {
+      const row = /^\s+"(?:[^"\\]|\\.)*",(.*)$/u.exec(line)?.[1];
+      if (row === undefined) continue;
+      const quoted = /^"(?:[^"\\]|\\.)*"/u.exec(row)?.[0];
+      let value: string;
+      if (quoted === undefined) {
+        const parts = row.split(",");
+        value = parts
+          .slice(0, parts.length > promptSuffix ? parts.length - promptSuffix : parts.length)
+          .join(",")
+          .trim();
+      } else {
+        try {
+          const parsed: unknown = JSON.parse(quoted);
+          value = typeof parsed === "string" ? parsed.trim() : "";
+        } catch {
+          value = row.trim();
+        }
+      }
+      if (!value) continue;
+      try {
+        const action: unknown = JSON.parse(value);
+        if (
+          isRecord(action) &&
+          (action.tandemSetup === 1 || action.tandemSearch === 1 || action.tandemChooseFolder === 1)
+        ) {
+          continue;
+        }
+      } catch {
+        // Ordinary freeform text need not be JSON.
+      }
+      messages.push(value);
+    }
+  }
+  return messages.length > 0 ? messages.join("\n\n") : undefined;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -122,10 +386,8 @@ export function parseSetupAnswer(text: string): ParsedSetupAnswer {
   }
   const problems: string[] = [];
   unknownKeys(value, ANSWER_KEYS, "The answer", problems);
-  const enabledProviders = stringList(value.enabledProviders, "enabledProviders", problems);
   const models = parseModels(value.models, problems);
   const repositories = parseRepositories(value.repositories, problems);
-  const workerSkills = stringList(value.workerSkills, "workerSkills", problems);
   const selfImprovement = SELF_IMPROVEMENT_MODES.find((mode) => mode === value.selfImprovement);
   if (selfImprovement === undefined) {
     problems.push('selfImprovement must be "off", "fix", or "report".');
@@ -135,7 +397,7 @@ export function parseSetupAnswer(text: string): ParsedSetupAnswer {
   }
   return {
     ok: true,
-    answer: { enabledProviders, models, repositories, workerSkills, selfImprovement },
+    answer: { models, repositories, selfImprovement },
   };
 }
 
@@ -181,7 +443,7 @@ function parseRepositories(value: unknown, problems: string[]): readonly SetupAn
       return [];
     }
     unknownKeys(entry, REPO_KEYS, where, problems);
-    const optional = (key: "validationCommands" | "setupCommands" | "coordinatorMcpServers") =>
+    const optional = (key: "validationCommands" | "setupCommands") =>
       entry[key] === undefined
         ? {}
         : { [key]: stringList(entry[key], `${where}.${key}`, problems) };
@@ -190,7 +452,6 @@ function parseRepositories(value: unknown, problems: string[]): readonly SetupAn
         path: entry.path.trim(),
         ...optional("validationCommands"),
         ...optional("setupCommands"),
-        ...optional("coordinatorMcpServers"),
       },
     ];
   });
@@ -202,12 +463,6 @@ function parseRepositories(value: unknown, problems: string[]): readonly SetupAn
  */
 export function checkSetupAnswer(answer: SetupAnswer, facts: SetupAnswerFacts): readonly string[] {
   const problems: string[] = [];
-  const providers = new Set(facts.catalogue.map((model) => model.provider));
-  if (answer.enabledProviders.length === 0) problems.push("Tick at least one provider.");
-  for (const provider of answer.enabledProviders) {
-    if (!providers.has(provider))
-      problems.push(`${provider} is not a provider in your OMP models.`);
-  }
   for (const role of MODEL_ROLE_ORDER) {
     const spec = answer.models[role];
     const name = SETUP_ROLE_COPY[role].name;
@@ -215,15 +470,9 @@ export function checkSetupAnswer(answer: SetupAnswer, facts: SetupAnswerFacts): 
     const [model] = matches;
     if (model === undefined || matches.length !== 1) {
       problems.push(`${name}: ${spec.model} is not one of your OMP models.`);
-    } else if (!answer.enabledProviders.includes(model.provider)) {
-      problems.push(`${name}: ${spec.model} is from ${model.provider}, which isn't ticked.`);
     } else if (!model.thinking.includes(spec.thinking)) {
       problems.push(`${name}: ${spec.model} doesn't support thinking ${spec.thinking}.`);
     }
-  }
-  const skills = new Set(facts.skills);
-  for (const skill of answer.workerSkills) {
-    if (!skills.has(skill)) problems.push(`No skill named ${skill} in your skills or plugins.`);
   }
   const roots = new Set<string>();
   for (const repo of answer.repositories) {
@@ -239,68 +488,27 @@ export function checkSetupAnswer(answer: SetupAnswer, facts: SetupAnswerFacts): 
     if (check.setUp) problems.push(`${repo.path} is already set up.`);
     if (roots.has(check.root)) problems.push(`${repo.path} is listed twice.`);
     roots.add(check.root);
-    const unknown = (repo.coordinatorMcpServers ?? []).filter(
-      (server) => check.mcpServers !== undefined && !check.mcpServers.includes(server),
-    );
-    if (unknown.length > 0) {
-      problems.push(`${repo.path} has no MCP server named ${unknown.join(", ")}.`);
-    }
   }
   return problems;
 }
-
-const MODE_LABELS: Readonly<Record<SelfImprovementMode, string>> = {
-  off: "Off",
-  fix: "Fix: look into it and offer a fix",
-  report: "Report: draft a GitHub issue",
-};
-
-function listed(values: readonly string[] | undefined, absent: string): string {
-  if (values === undefined) return absent;
-  return values.length === 0 ? "none" : values.join("; ");
-}
-
-/**
- * The answer as short lines, for the chat and for the one approval dialog. `codeFolders` are the
- * folders saved for finding repositories by name, when this save adds them.
- */
-export function setupRecap(
+/** Returns the unique providers selected by the answer's model choices. */
+export function setupProviders(
   answer: SetupAnswer,
   catalogue: readonly OmpModelRecord[],
-  codeFolders: readonly string[] = [],
 ): readonly string[] {
-  const modelName = (selector: string) =>
-    catalogue.find((model) => model.selector === selector)?.name ?? selector;
-  const lines = [
-    `Providers: ${answer.enabledProviders.join(", ")}`,
-    ...MODEL_ROLE_ORDER.map((role) => {
-      const spec = answer.models[role];
-      return `${SETUP_ROLE_COPY[role].name}: ${modelName(spec.model)} (${spec.model}), ${spec.thinking}`;
-    }),
-    `Skills every task gets: ${answer.workerSkills.length === 0 ? "none" : answer.workerSkills.join(", ")}`,
-    `When Tandem runs into an issue: ${MODE_LABELS[answer.selfImprovement]}`,
-  ];
-  if (codeFolders.length > 0) lines.push(`Look for repos in: ${codeFolders.join(", ")}`);
-  if (answer.repositories.length === 0) {
-    lines.push("Repos: none yet");
-    return lines;
+  const providers = new Set<string>();
+  for (const role of MODEL_ROLE_ORDER) {
+    const model = catalogue.find((candidate) => candidate.selector === answer.models[role].model);
+    if (model !== undefined) providers.add(model.provider);
   }
-  lines.push("Repos, each opened in its own chat:");
-  for (const repo of answer.repositories) {
-    lines.push(
-      `- ${repo.path}: checks ${listed(repo.validationCommands, "found when saving")} · install ${listed(repo.setupCommands, "found when saving")} · MCPs ${listed(repo.coordinatorMcpServers, "all")}`,
-    );
-  }
-  return lines;
+  return [...providers].sort();
 }
 
-export const SETUP_ANSWER_RECEIVED = "Got your answers from the setup page:";
-export const SETUP_ANSWER_NEXT =
-  "Approve them once and Tandem saves everything, then opens a chat for each repo.";
+export const SETUP_ANSWER_SAVED = "Setup saved:";
+export const SETUP_ANSWER_PARTIAL = "Setup partly saved; review results:";
+export const SETUP_ANSWER_FAILED =
+  "Lavish setup was not applied. Fix this on the page and save again:";
 export const SETUP_ANSWER_PROBLEM =
   "The setup page's answer can't be saved yet. Fix this on the page and save again:";
 export const SETUP_PAGE_CLOSED =
   "The setup page closed without an answer. Say if you want it back, or keep setting up here.";
-export const SETUP_PAGE_REPLY_RECEIVED = "Got it. Approve it in Tandem's chat to save.";
-export const SETUP_PAGE_REPLY_OTHER =
-  "Use Save and continue at the bottom of the page to send your answers to Tandem.";

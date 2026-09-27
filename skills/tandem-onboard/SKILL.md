@@ -9,8 +9,8 @@ user-invocable: true
 # tandem-onboard
 
 Onboarding looks at a project and proposes settings without changing anything. Saving model
-choices, saving project settings, turning on merging, giving tasks plugin skills, and launching
-are separate steps, each needing its own yes.
+choices, saving project settings, turning on merging, and launching are separate steps, each needing
+its own yes.
 
 ## Talk like a teammate
 
@@ -42,9 +42,8 @@ covers another.
 ```sh
 set -o pipefail
 bun "<tandem-root>/src/cli.ts" onboard --repo "<repo>" --home "<home>" --json |
-  jq '{repoPath, existingConfig, modelSettings, configPath, validationCommands, setupCommands, unresolved, merging, workerSkillOffer}'
+  jq '{repoPath, existingConfig, modelSettings, configPath, validationCommands, setupCommands, unresolved, merging}'
 ```
-
 This writes nothing. Tell the user, in a sentence or two, what Tandem found: the checks it would run
 (`validationCommands`), the install step for fresh copies (`setupCommands`), and anything
 `unresolved` that needs their input. Show errors as they are; don't retry.
@@ -113,14 +112,8 @@ are not asked again. Then run
 `bun "<tandem-root>/src/cli.ts" configure-merging --repo "<repo>" --home "<home>" --input <file> --yes`.
 If it says this project already says how it merges, move on.
 
-## 6. Plugin skills (optional, once)
 
-When `workerSkillOffer` lists skills, ask once, for example "Give tasks the buildkite skill? Every
-task Tandem starts would follow it." The user may pick some, all, or none. Save their pick (an
-empty list for no, so it isn't offered again) as `{"workerSkills": [...]}` in a temporary file with
-`bun "<tandem-root>/src/cli.ts" configure-worker-skills --home "<home>" --input <file> --yes`.
-
-## 7. Launch (only when asked)
+## 6. Launch (only when asked)
 
 Onboarding is done. Tell the user they can start Tandem with `tandem <repo>`, and run it only when
 they ask. A launch opens a Herdr window with that project's coordinator, where they describe what

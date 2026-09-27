@@ -503,7 +503,6 @@ function welcomeSession(
           modelsChosen: false,
           codeFolders: [],
           projects: options.projects.filter((project) => project !== "/repo"),
-          workerSkillOffer: [],
           selfImprovementChosen: false,
           setupPage: "unavailable",
         }),

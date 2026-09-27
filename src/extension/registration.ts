@@ -19,7 +19,6 @@ import { tandemRequestSchema as tandemToolSchema } from "../session/tools.ts";
 import {
   CARD_MESSAGE_TYPE,
   ompApprovalDialog,
-  ompMcpToolPrefix,
   ompSessionHost,
   ompToolCall,
   renderCardMessage,
@@ -36,8 +35,6 @@ export type TandemOmpRegistrationDependencies = Readonly<{
   /** The user's message is going to the model, so a thread opens or continues. */
   readonly userPrompt: (ctx: ExtensionContext) => void;
   readonly closeThread: (ctx: ExtensionContext) => void;
-  /** The MCP servers this project lets the coordinator use itself. */
-  readonly coordinatorMcpServers: (ctx: ExtensionContext) => Promise<readonly string[]>;
   /** Whether a research task for this project is queued or running. */
   readonly researchRunning: (ctx: ExtensionContext) => Promise<boolean>;
 }>;
@@ -102,9 +99,7 @@ function registerCoordinatorToolGuard(
 ): void {
   pi.on("tool_call", async (event, ctx) => {
     const reason = await coordinatorToolRefusal(ompToolCall(event), {
-      allowedServers: () => dependencies.coordinatorMcpServers(ctx),
       researchRunning: () => dependencies.researchRunning(ctx),
-      mcpToolPrefix: ompMcpToolPrefix,
       home: dependencies.getHome(ctx),
       cwd: ctx.cwd,
       userHome: homedir(),
@@ -151,7 +146,7 @@ function registerTandemCommand(
 ): void {
   pi.registerCommand("tandem", {
     description:
-      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, open-project, find-repo, save-code-folders, worker-skills, self-improvement, check-tools, setup-page, apply-setup, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
+      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, open-project, find-repo, save-code-folders, self-improvement, check-tools, setup-page, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
     handler: (args, ctx) =>
       runTandemCommand(
         args,

@@ -3,7 +3,6 @@ import { basename } from "node:path";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
-import { listOmpMcpServers } from "./adapters/omp.ts";
 import { readBoard, runLiveBoard } from "./board/read.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
@@ -122,8 +121,6 @@ export type TerminalMainDependencies = Readonly<{
   readonly stdout?: (text: string) => void;
   readonly stderr?: (text: string) => void;
   readonly resetCoordinators?: typeof resetCoordinators;
-  /** Lists a project's MCP servers for onboarding; tests inject one so they never read real config. */
-  readonly listMcpServers?: (repoPath: string) => Promise<readonly string[]>;
   /** The Tandem checkout, whose coordinator always opens; tests inject a temporary one. */
   readonly tandemCheckout?: string;
   /** Sends Herdr's `workspace.move`; tests inject one so they never reach a live socket. */
@@ -699,7 +696,6 @@ async function runProjectFlow({
     service,
     prompter,
     interactive,
-    dependencies.listMcpServers ?? listOmpMcpServers,
     await tandemProjectAmong(roots, tandemCheckout),
   );
   if (prepared === undefined) {

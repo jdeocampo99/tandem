@@ -411,7 +411,6 @@ function registeredInputHook(
     postAction: async () => undefined,
     userPrompt: () => undefined,
     closeThread: () => undefined,
-    coordinatorMcpServers: async () => [],
     researchRunning: async () => false,
   });
   const input = handlers.get("input");

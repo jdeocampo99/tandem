@@ -39,6 +39,11 @@ h2{font-size:15px;font-weight:600;margin:0}
 .opt input{margin-top:3px}
 .opt span{font-weight:500;display:flex;gap:8px;align-items:center}
 .opt small{grid-column:2;color:var(--muted);font-size:12.5px}
+.subhead{display:flex;align-items:baseline;gap:6px;margin:8px 16px 0;padding-top:14px;border-top:1px solid var(--line);font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.subhead small{font:11px var(--mono);letter-spacing:0;color:var(--faint);font-weight:400}
+.muted{color:var(--faint);font-size:11px;font-weight:400}
+.selected-repo{border-left:2px solid var(--tandem);padding-left:14px;background:color-mix(in srgb,var(--tandem) 5%,transparent)}
+.selected-empty{margin:0;padding:18px 16px;color:var(--muted);font-size:13px;border-top:1px solid var(--line)}
 /* Repo cards */
 .tools .bulk{margin-left:4px}
 .repo{border-top:1px solid var(--line);padding:14px 16px;display:grid;gap:12px;animation:rowIn .35s var(--ease) both}
@@ -51,6 +56,23 @@ h2{font-size:15px;font-weight:600;margin:0}
 .found{font:11.5px var(--mono);color:var(--faint)}
 .tools{display:flex;flex-wrap:wrap;gap:6px;padding-top:3px}
 .tools .chip{padding:4px 10px;font-size:12.5px}
+.folder-search{display:grid;gap:8px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.folder-search label{font-size:13px;font-weight:600}
+.folder-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.folder-search .search{padding:0}
+.folder-search .search button{flex:none}
+.folder-help,.folder-roots{margin:0;color:var(--muted);font-size:12px}
+.folder-status{margin:0;font-size:12.5px;color:var(--done)}
+.folder-status[data-kind="error"]{color:var(--tandem)}
+.folder-roots b{color:var(--faint);font-weight:500}
+.folder-roots ul{display:inline-flex;flex-wrap:wrap;gap:4px 10px;margin:0;padding:0;list-style:none}
+.repo-path-search{display:grid;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+.repo-path-search label{font-size:13px;font-weight:600}
+.repo-path-search .search{padding:0}
+.repo-path-status{margin:0;color:var(--muted);font-size:12px}
+.repo-path-status[data-kind="error"]{color:var(--tandem)}
+.res{width:100%;border:0;background:transparent;color:inherit;text-align:left;font:inherit}
+.res[aria-pressed="true"] .add{color:var(--done)}
 @media (max-width:620px){.fields{grid-template-columns:1fr}.flabel{padding-top:0}}
 /* Stages */
 .stage{animation:stageIn .35s var(--ease) both}
@@ -66,7 +88,7 @@ h2{font-size:15px;font-weight:600;margin:0}
 .nav{display:flex;gap:8px;align-items:center}
 .sent{padding:14px 16px;display:grid;gap:8px}
 .sent p{margin:0;font-size:13px;color:var(--muted)}
-.sent p b{color:var(--done);font-weight:500}
+.sent p b{color:var(--muted);font-weight:500}
 .sent pre{margin:0;overflow-x:auto;font:12px/1.5 var(--mono);color:var(--muted)}
 @media (prefers-reduced-motion:reduce){.stage,.role,.repo{animation:none}}
 </style>
@@ -75,20 +97,14 @@ h2{font-size:15px;font-weight:600;margin:0}
 <div class="wrap">
   <div class="mast">
     <h1>Tandem setup</h1>
-    <span><b>First run</b> · a few quick steps. Tandem asks you to approve everything in the chat at the end, and you can change any of it later.</span>
+    <span><b>First run</b> · a few quick steps. On Review, Save and continue is your one consent to apply the shown models and providers, code folders, issue setting, and selected repository settings, then open chats for selected repos. Tandem validates them before saving; chat setup keeps its own approval step.</span>
   </div>
 
   <ol class="stepper" id="stepper" aria-label="Setup steps"></ol>
 
-  <section class="stage" data-stage="providers" aria-labelledby="h-providers">
-    <h2 id="h-providers">Which providers may Tandem spend on?</h2>
-    <p class="sec-note">Found in your OMP models. Tandem only picks models from providers you tick.</p>
-    <div class="chips" id="providers"></div>
-  </section>
-
-  <section class="stage" data-stage="models" aria-labelledby="h-models" hidden>
+  <section class="stage" data-stage="models" aria-labelledby="h-models">
     <h2 id="h-models">Which model does each job?</h2>
-    <p class="sec-note">Pick from the models you have. Each job shows an example setup to give you an idea; use whatever you have access to and like.</p>
+    <p class="sec-note">Pick from the full OMP catalogue. Each job shows an example setup to give you an idea; use whatever you have access to and like.</p>
     <div class="panel">
       <div class="cols"><span>Job</span><span>Model</span><span>Thinking</span></div>
       <div id="roles"></div>
@@ -97,30 +113,41 @@ h2{font-size:15px;font-weight:600;margin:0}
 
   <section class="stage" data-stage="repos" aria-labelledby="h-repos" hidden>
     <h2 id="h-repos">Which repos should Tandem work on?</h2>
-    <p class="sec-note">Search the repos Tandem found on this machine, or paste a path. Each one gets its own chat when you save. You can add more later.</p>
+    <p class="sec-note">Choose from the repos Tandem found, or choose another code folder to scan. Each selected repo gets its own chat when setup is applied. You can add more later.</p>
     <div class="panel">
+      <form class="folder-search" id="folder-search">
+        <label for="folder-q">Find another folder</label>
+        <div class="folder-actions">
+          <button class="primary" id="choose-folder" type="button">Choose another folder…</button>
+          <span class="folder-help">Use the native chooser, or search a path below if it is unavailable.</span>
+        </div>
+        <div class="search">
+          <input type="text" id="folder-q" placeholder="e.g. ~/code or /work/projects" aria-describedby="folder-help" autocomplete="off">
+          <button class="primary" type="submit">Search folder</button>
+        </div>
+        <p class="folder-help" id="folder-help">Scanning is read-only. Nothing is saved until you choose Save and continue on Review.</p>
+        <p class="folder-status" id="folder-status" role="status" aria-live="polite" hidden></p>
+        <div class="folder-roots" id="folder-roots" hidden></div>
+      </form>
+      <h3 class="subhead">Find repositories</h3>
       <div class="search">
-        <input type="text" id="repo-q" placeholder="Search repos, e.g. api, or paste ~/code/api" aria-label="Search repos" autocomplete="off">
+        <input type="text" id="repo-q" placeholder="Filter discovered repos by name" aria-label="Filter discovered repos by name" autocomplete="off">
         <span id="repo-count"></span>
       </div>
-      <ul class="results" id="repo-results" hidden></ul>
+      <ul class="results" id="repo-results"></ul>
+      <form class="repo-path-search" id="repo-path">
+        <label for="repo-path-q">Add a repository by exact path <span class="muted">(fallback)</span></label>
+        <div class="search">
+          <input type="text" id="repo-path-q" placeholder="e.g. ~/code/api or /work/api" aria-describedby="repo-path-help" autocomplete="off">
+          <button class="link" type="submit">Add repository</button>
+        </div>
+        <p class="repo-path-status" id="repo-path-help" role="status" aria-live="polite">Use this only for a checkout that was not found while scanning.</p>
+      </form>
+      <h3 class="subhead"><span>Selected for setup</span> <small id="selected-count">(0)</small></h3>
       <div id="repos"></div>
     </div>
   </section>
 
-  <section class="stage" data-stage="skills" aria-labelledby="h-skills" hidden>
-    <h2 id="h-skills">Skills every task gets</h2>
-    <p class="sec-note">Your personal skills and Claude Code plugin skills. Each repo's own skills load automatically, so they aren't listed. Tasks Tandem starts on its own, like fixing a failing PR, only get what you pick here. Most people pick a few.</p>
-    <div class="panel">
-      <div class="chosen" id="skill-chosen"></div>
-      <div class="search">
-        <input type="text" id="skill-q" placeholder="Search skills, e.g. ci" aria-label="Search skills" autocomplete="off">
-        <span id="skill-count"></span>
-        <span class="bulk"><button class="link" type="button" id="skill-all">Select all</button><button class="link" type="button" id="skill-none">Clear all</button></span>
-      </div>
-      <ul class="results static" id="skill-results"></ul>
-    </div>
-  </section>
 
   <section class="stage" data-stage="issues" aria-labelledby="h-self" hidden>
     <h2 id="h-self">When Tandem runs into an issue</h2>
@@ -134,10 +161,10 @@ h2{font-size:15px;font-weight:600;margin:0}
 
   <section class="stage" data-stage="review" aria-labelledby="h-review" hidden>
     <h2 id="h-review">Look it over</h2>
-    <p class="sec-note">Click any step above to change it. Save sends this to Tandem, which asks you to approve it in the chat.</p>
+    <p class="sec-note">Save and continue is your one consent to apply the models and selected providers, code folders, self-improvement setting, and selected repository settings, then open chats for those repos. Tandem validates the answer before saving; chat actions keep their own approval.</p>
     <div class="panel review" id="review"></div>
     <div class="panel sent" id="sent" hidden>
-      <p><b>Sent to Tandem.</b> This is the answer the chat receives.</p>
+      <p><b>Request submitted.</b> Tandem is saving this setup; check Tandem's chat for status.</p>
       <pre id="sent-json"></pre>
     </div>
   </section>
@@ -165,24 +192,53 @@ const ROLES = VIEW.roles;
 const NOTES = VIEW.thinkingNotes;
 const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
 const STAGES = [
-  { id: "providers", label: "Providers" },
   { id: "models", label: "Models" },
   { id: "repos", label: "Repos" },
-  { id: "skills", label: "Skills" },
-  { id: "issues", label: "Issues" },
+  { id: "issues", label: "Self-improvement" },
   { id: "review", label: "Review" },
 ];
+const draft = VIEW.draft && typeof VIEW.draft === "object" ? VIEW.draft : undefined;
+const initialPicks = draft?.picks && typeof draft.picks === "object"
+  ? draft.picks
+  : Object.fromEntries(ROLES.filter((r) => r.pick).map((r) => [r.id, { ...r.pick }]));
 const state = {
-  providers: new Set(VIEW.providers.filter((p) => p.enabled).map((p) => p.id)),
-  picks: Object.fromEntries(ROLES.filter((r) => r.pick).map((r) => [r.id, { ...r.pick }])),
-  stage: 0,
-  reached: 0,
+  picks: Object.fromEntries(ROLES.map((r) => [r.id, initialPicks[r.id]]).filter(([, pick]) => pick)),
+  stage: draft ? 1 : 0,
+  reached: draft ? 1 : 0,
 };
 const repos = [];
-const chosenSkills = new Set(VIEW.pickedSkills);
-document.querySelector(`input[name="self"][value="${VIEW.selfImprovement}"]`).checked = true;
-
-const allowed = () => MODELS.filter((m) => state.providers.has(m.provider));
+const pendingFolders = new Set(Array.isArray(VIEW.pendingFolders) ? VIEW.pendingFolders : []);
+const initialSelfImprovement = draft?.selfImprovement ?? VIEW.selfImprovement;
+document.querySelector(`input[name="self"][value="${initialSelfImprovement}"]`).checked = true;
+const viewRepos = Array.isArray(VIEW.repos) ? VIEW.repos : [];
+for (const saved of Array.isArray(draft?.repositories) ? draft.repositories : []) {
+  const found = viewRepos.find((repo) => repo.path === saved.path);
+  const pasted = Boolean(saved.pasted);
+  repos.push({
+    ...(found ?? {}),
+    name: found?.name ?? saved.path.split("/").filter(Boolean).pop() ?? saved.path,
+    path: saved.path,
+    shownPath: found?.shownPath ?? saved.path,
+    setUp: Boolean(found?.setUp),
+    validationCommands: [...(found?.validationCommands ?? [])],
+    validationSource: found?.validationSource ?? "",
+    installSource: found?.installSource ?? "",
+    checks: Array.isArray(saved.checks) ? [...saved.checks] : [...(found?.validationCommands ?? [])],
+    install: typeof saved.install === "string" ? saved.install : (found?.install ?? ""),
+    pasted,
+  });
+}
+function searchedFolders() {
+  return [...new Set([...(VIEW.searchedFolders ?? []), ...pendingFolders])];
+}
+function renderFolderRoots() {
+  const box = $("#folder-roots");
+  const roots = searchedFolders();
+  box.hidden = roots.length === 0;
+  box.innerHTML = roots.length
+    ? `<b>Current searched roots:</b> <ul>${roots.map((folder) => `<li>${esc(folder)}</li>`).join("")}</ul>`
+    : "";
+}
 /** The supported level closest to the one wanted, so a new pick keeps the job's usual effort. */
 const nearest = (levels, want) =>
   levels.includes(want)
@@ -190,30 +246,7 @@ const nearest = (levels, want) =>
     : levels.slice().sort((a, b) => Math.abs(LEVELS.indexOf(a) - LEVELS.indexOf(want)) - Math.abs(LEVELS.indexOf(b) - LEVELS.indexOf(want)))[0];
 const money = (n) => `$${n.toFixed(2)}`;
 const fmtCtx = (n) => `${n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n)} context`;
-// Unticking a provider clears the jobs that used it.
-function dropUnticked() {
-  for (const role of ROLES) {
-    const pick = state.picks[role.id];
-    if (pick && !allowed().some((m) => m.selector === pick.model)) delete state.picks[role.id];
-  }
-}
 
-function renderProviders() {
-  const box = $("#providers");
-  box.innerHTML = VIEW.providers.length ? "" : '<p class="sec-note">No providers in your OMP models yet. Sign in to one in OMP, then open this page again.</p>';
-  for (const p of VIEW.providers) {
-    const l = document.createElement("label");
-    l.className = "chip";
-    l.innerHTML = `<input type="checkbox" ${state.providers.has(p.id) ? "checked" : ""}> ${esc(p.id)} <small>${p.models} model${p.models === 1 ? "" : "s"}</small>`;
-    l.querySelector("input").addEventListener("change", (e) => {
-      e.target.checked ? state.providers.add(p.id) : state.providers.delete(p.id);
-      dropUnticked();
-      renderRoles();
-      renderSummary();
-    });
-    box.appendChild(l);
-  }
-}
 
 function renderRoles() {
   const box = $("#roles");
@@ -228,7 +261,7 @@ function rerow(role) {
   return row;
 }
 function roleRow(role) {
-  const pool = allowed();
+  const pool = MODELS;
   const pick = state.picks[role.id];
   const row = document.createElement("div");
   row.className = "role";
@@ -237,7 +270,7 @@ function roleRow(role) {
   row.style.setProperty("--i", String(ROLES.indexOf(role)));
   const title = `<div class="r-title"><i class="sw"></i><div><strong>${esc(role.name)}</strong> <span class="r-what">(${esc(role.what)})</span><p class="hint"><b>${esc(role.hintLead)}</b> ${esc(role.hintRest)}</p></div></div>`;
   if (pool.length === 0) {
-    row.innerHTML = `${title}<p class="meta"><span class="off">Tick a provider in step 1 to choose a model.</span></p>`;
+    row.innerHTML = `${title}<p class="meta"><span class="off">No models in the OMP catalogue yet. Configure a provider in OMP, then reopen this page.</span></p>`;
     return row;
   }
   const model = pick && pool.find((m) => m.selector === pick.model);
@@ -253,7 +286,7 @@ function roleRow(role) {
       ${model ? `${price}${context}<span>${esc(pick.thinking)}: ${esc(NOTES[pick.thinking])}</span>` : ""}
       <span class="example">For example: ${esc(role.example)}</span>
     </p>`;
-  const item = (m) => ({ model: m, label: m.name, search: `${m.name} ${m.selector}`, cells: [m.provider, m.cost ? money(m.cost.input) : "–"] });
+  const item = (m) => ({ model: m, label: `${m.name} · ${m.provider}`, search: `${m.name} ${m.provider} ${m.selector}`, cells: [m.cost ? money(m.cost.input) : "–"] });
   row.querySelector(".combo-slot").replaceWith(
     combobox({
       id: `m-${role.id}`,
@@ -277,57 +310,153 @@ function roleRow(role) {
   return row;
 }
 
-// Repos: search the found ones, or paste a path.
+// Repos: filter the found ones by name; separate path entry adds undiscovered checkouts.
 let repoActive = 0;
 let repoHits = [];
+function pastedRepo(path) {
+  return {
+    name: path.split("/").filter(Boolean).pop() || path,
+    path,
+    shownPath: path,
+    setUp: false,
+    validationCommands: [],
+    install: "",
+    pasted: true,
+  };
+}
 function repoMatches(q) {
   const ws = words(q);
-  const hits = VIEW.repos.filter((r) => ws.every((w) => `${r.name} ${r.path} ${r.shownPath} ${r.repo ?? ""}`.toLowerCase().includes(w)));
-  if (/^[~/.]/.test(q) && !hits.some((r) => r.path === q || r.shownPath === q)) {
-    hits.push({ name: q.split("/").filter(Boolean).pop() || q, path: q, shownPath: q, setUp: false, validationCommands: [], install: "", mcpServers: [], pasted: true });
-  }
-  return hits;
+  return viewRepos.filter((r) => ws.every((w) => r.name.toLowerCase().includes(w)));
 }
+function setFolderStatus(kind, message) {
+  const status = $("#folder-status");
+  status.hidden = !message;
+  status.dataset.kind = kind;
+  status.textContent = message;
+}
+function setupDraft() {
+  return {
+    picks: Object.fromEntries(Object.entries(state.picks).map(([role, pick]) => [role, { model: pick.model, thinking: pick.thinking }])),
+    repositories: repos.map((r) => ({
+      path: r.path,
+      checks: [...r.checks],
+      install: r.install,
+      pasted: Boolean(r.pasted),
+    })),
+    selfImprovement: document.querySelector('input[name="self"]:checked')?.value ?? "fix",
+  };
+}
+const chooseFolder = $("#choose-folder");
+const folderInput = $("#folder-q");
+function showFolderProgress(message) {
+  setFolderStatus("ok", message);
+}
+chooseFolder.addEventListener("click", () => {
+  const lavish = window.lavish;
+  if (typeof lavish?.queuePrompt !== "function" || typeof lavish?.sendQueuedPrompts !== "function") {
+    setFolderStatus("error", "Native folder chooser is unavailable. Search a folder path below instead.");
+    return;
+  }
+  try {
+    lavish.queuePrompt(JSON.stringify({ tandemChooseFolder: 1, draft: setupDraft() }), {
+      tag: "tandem-choose-folder",
+      queueKey: "tandem-choose-folder",
+      text: "Choose folder",
+    });
+    lavish.sendQueuedPrompts();
+    showFolderProgress("Folder chooser requested. Choose a folder to search…");
+  } catch {
+    setFolderStatus("error", "Native folder chooser could not be started. Search a folder path below instead.");
+  }
+});
+$("#folder-search").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const input = folderInput;
+  const folder = input.value.trim();
+  if (!folder) {
+    setFolderStatus("error", "Enter a folder path to search.");
+    input.focus();
+    return;
+  }
+  const lavish = window.lavish;
+  if (typeof lavish?.queuePrompt !== "function" || typeof lavish?.sendQueuedPrompts !== "function") {
+    setFolderStatus("error", "Folder search is unavailable right now. Try again from the Tandem chat.");
+    return;
+  }
+  try {
+    lavish.queuePrompt(JSON.stringify({ tandemSearch: 1, folder, draft: setupDraft() }), {
+      tag: "tandem-search",
+      queueKey: "tandem-search",
+      text: "Search another folder",
+    });
+    lavish.sendQueuedPrompts();
+    showFolderProgress(`Search requested for ${folder}. Results appear when the search finishes; you can continue.`);
+  } catch {
+    setFolderStatus("error", "Folder search could not be started. Try again.");
+  }
+});
+if (VIEW.searchStatus?.message) setFolderStatus(VIEW.searchStatus.kind, VIEW.searchStatus.message);
 function addRepo(r) {
-  if (r.setUp || repos.some((x) => x.path === r.path)) return;
-  repos.push({ ...r, checks: [...r.validationCommands], chosenTools: new Set(r.mcpServers) });
-  $("#repo-q").value = "";
+  if (r.setUp || repos.some((x) => x.path === r.path)) return false;
+  repos.push({ ...r, checks: [...r.validationCommands], pasted: Boolean(r.pasted) });
   renderRepoResults();
   renderRepos();
   renderSummary();
+  return true;
 }
+$("#repo-path").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const input = $("#repo-path-q");
+  const status = $("#repo-path-help");
+  const path = input.value.trim();
+  if (!path) {
+    status.dataset.kind = "error";
+    status.textContent = "Enter a repository path.";
+    input.focus();
+    return;
+  }
+  const found = viewRepos.find((r) => r.path === path || r.shownPath === path);
+  if (found?.setUp) {
+    status.dataset.kind = "error";
+    status.textContent = "That repository is already set up.";
+    return;
+  }
+  if (!addRepo(found ?? pastedRepo(path))) {
+    status.dataset.kind = "error";
+    status.textContent = "That repository is already added.";
+    return;
+  }
+  status.dataset.kind = "";
+  status.textContent = `Added ${path}. Configure it below.`;
+  input.value = "";
+});
 function renderRepoResults() {
   const q = $("#repo-q").value.trim();
   const list = $("#repo-results");
-  const folders = VIEW.searchedFolders.join(", ");
-  $("#repo-count").textContent = `${VIEW.repos.length} repo${VIEW.repos.length === 1 ? "" : "s"} found in ${folders || "no folders"}`;
-  if (!q) {
-    list.hidden = true;
-    repoHits = [];
-    return;
-  }
+  const folders = searchedFolders().join(", ");
   repoHits = repoMatches(q);
   repoActive = Math.min(repoActive, Math.max(repoHits.length - 1, 0));
+  $("#repo-count").textContent = q
+    ? `${repoHits.length} of ${viewRepos.length} repo${viewRepos.length === 1 ? "" : "s"} found`
+    : `${viewRepos.length} repo${viewRepos.length === 1 ? "" : "s"} found in ${folders || "no folders"}`;
   list.hidden = false;
   list.innerHTML = "";
   if (repoHits.length === 0) {
-    list.innerHTML = '<li class="empty-row">No repo by that name. Paste its folder path instead.</li>';
+    list.innerHTML = `<li class="empty-row">${q ? "No discovered repo matches that name." : "No repos found in the searched folders. Choose or search another folder above."}</li>`;
     return;
   }
   repoHits.forEach((r, n) => {
     const added = repos.some((x) => x.path === r.path);
     const li = document.createElement("li");
-    li.className = `res${n === repoActive ? " active" : ""}`;
-    li.tabIndex = 0;
-    li.setAttribute("aria-selected", String(added || r.setUp));
-    li.innerHTML = `<span><b>${esc(r.name)}</b><span class="src">${esc(r.shownPath)}</span></span><small>${r.pasted ? "Add this path" : esc(r.repo ?? "No GitHub remote")}</small><span class="add">${r.setUp ? "already set up" : added ? "✓ added" : "+ add"}</span>`;
-    li.addEventListener("click", () => addRepo(r));
-    li.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        addRepo(r);
-      }
-    });
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `res${n === repoActive ? " active" : ""}`;
+    button.disabled = Boolean(r.setUp);
+    button.setAttribute("aria-pressed", String(added || r.setUp));
+    button.setAttribute("aria-label", `${r.setUp ? "Already set up" : added ? "Added" : "Add"} ${r.name} at ${r.shownPath}`);
+    button.innerHTML = `<span><b>${esc(r.name)}</b><span class="src">${esc(r.shownPath)}</span></span><small>${esc(r.repo ?? "No GitHub remote")}</small><span class="add">${r.setUp ? "already set up" : added ? "✓ added" : "+ add"}</span>`;
+    button.addEventListener("click", () => addRepo(r));
+    li.appendChild(button);
     list.appendChild(li);
   });
   list.querySelector(".res.active")?.scrollIntoView({ block: "nearest" });
@@ -351,18 +480,18 @@ $("#repo-q").addEventListener("keydown", (e) => {
 
 function renderRepos() {
   const box = $("#repos");
+  $("#selected-count").textContent = `(${repos.length})`;
+  if (repos.length === 0) {
+    box.innerHTML = `<p class="selected-empty">No repositories selected yet. Add one from Find repositories above.</p>`;
+    return;
+  }
   box.innerHTML = "";
   repos.forEach((r, n) => {
     const card = document.createElement("div");
-    card.className = "repo";
+    card.className = "repo selected-repo";
     const checks = r.checks.length ? r.checks : [""];
     const checkSource = r.pasted ? "Tandem reads package.json when you save." : r.validationSource;
     const installSource = r.pasted ? "Tandem picks this from the lockfile when you save." : r.installSource;
-    const tools = r.pasted
-      ? '<span class="found">Tandem allows all of its MCP servers when you save.</span>'
-      : r.mcpServers.length
-        ? `${r.mcpServers.map((t) => `<label class="chip"><input type="checkbox" data-tool="${esc(t)}" ${r.chosenTools.has(t) ? "checked" : ""}> ${esc(t)}</label>`).join("")}<span class="bulk"><button class="link" type="button" data-bulk="all">All</button><button class="link" type="button" data-bulk="none">None</button></span>`
-        : '<span class="found">No MCP servers configured for this repo.</span>';
     card.innerHTML = `
       <div class="repo-head"><b>${esc(r.name)}</b><span class="src">${esc(r.shownPath)}${r.repo ? ` · ${esc(r.repo)}` : ""}</span><button class="link" type="button" data-remove>Remove</button></div>
       <div class="fields">
@@ -373,8 +502,6 @@ function renderRepos() {
         <div class="flabel"><b>Install command</b><small>Runs in each fresh copy of the repo before an agent starts, so dependencies are there.</small></div>
         <div class="cmds"><input type="text" id="r${n}-install" value="${esc(r.install)}" placeholder="None needed" aria-label="Install command">
           <span class="found">${esc(installSource)}</span></div>
-        <div class="flabel"><b>MCPs</b><small>Which of this repo's MCP servers its chat may use. Its tasks can always use all of them.</small></div>
-        <div class="tools">${tools}</div>
       </div>`;
     card.querySelector("[data-remove]").addEventListener("click", () => {
       repos.splice(n, 1);
@@ -395,84 +522,14 @@ function renderRepos() {
     card.querySelector(`#r${n}-install`).addEventListener("input", (e) => {
       r.install = e.target.value;
     });
-    card.querySelectorAll("[data-tool]").forEach((c) => {
-      c.addEventListener("change", () => {
-        c.checked ? r.chosenTools.add(c.dataset.tool) : r.chosenTools.delete(c.dataset.tool);
-      });
-    });
-    card.querySelectorAll("[data-bulk]").forEach((b) => {
-      b.addEventListener("click", () => {
-        r.chosenTools = b.dataset.bulk === "all" ? new Set(r.mcpServers) : new Set();
-        card.querySelectorAll("[data-tool]").forEach((c) => {
-          c.checked = r.chosenTools.has(c.dataset.tool);
-        });
-      });
-    });
     box.appendChild(card);
   });
 }
 
-// Skills: Select all and Clear all act on what the search shows.
-const shownSkills = () => {
-  const ws = words($("#skill-q").value);
-  return VIEW.skills.filter((sk) => ws.every((w) => `${sk.name} ${sk.source} ${sk.description}`.toLowerCase().includes(w)));
-};
-function renderSkills() {
-  const filtering = $("#skill-q").value.trim().length > 0;
-  const hits = shownSkills();
-  const total = VIEW.skills.length;
-  $("#skill-count").textContent = `${chosenSkills.size} picked · ${filtering ? `${hits.length} of ${total} shown` : `${total} in your folders and plugins`}`;
-  $("#skill-all").textContent = filtering ? `Select ${hits.length} shown` : "Select all";
-  $("#skill-none").textContent = filtering ? "Clear shown" : "Clear all";
-  const list = $("#skill-results");
-  list.innerHTML = hits.length ? "" : `<li class="empty-row">${total ? "No skill matches that." : "No personal or plugin skills on this machine."}</li>`;
-  for (const sk of hits) {
-    const li = document.createElement("li");
-    const on = chosenSkills.has(sk.name);
-    li.className = "res";
-    li.tabIndex = 0;
-    li.setAttribute("aria-selected", String(on));
-    li.innerHTML = `<span><b>${esc(sk.name)}</b><span class="src">${esc(sk.source)}</span></span><small>${esc(sk.description)}</small><span class="add">${on ? "✓ added" : "+ add"}</span>`;
-    const toggle = () => {
-      on ? chosenSkills.delete(sk.name) : chosenSkills.add(sk.name);
-      renderSkills();
-    };
-    li.addEventListener("click", toggle);
-    li.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        toggle();
-      }
-    });
-    list.appendChild(li);
-  }
-  const chosen = $("#skill-chosen");
-  chosen.innerHTML = "";
-  for (const name of chosenSkills) {
-    const pill = document.createElement("span");
-    pill.className = "pill";
-    pill.innerHTML = `${esc(name)}<button type="button" aria-label="Remove ${esc(name)}">×</button>`;
-    pill.querySelector("button").addEventListener("click", () => {
-      chosenSkills.delete(name);
-      renderSkills();
-    });
-    chosen.appendChild(pill);
-  }
-}
-$("#skill-q").addEventListener("input", renderSkills);
-$("#skill-all").addEventListener("click", () => {
-  for (const sk of shownSkills()) chosenSkills.add(sk.name);
-  renderSkills();
-});
-$("#skill-none").addEventListener("click", () => {
-  for (const sk of shownSkills()) chosenSkills.delete(sk.name);
-  renderSkills();
-});
 
 // The bottom bar says what this step still needs, or what comes next.
 function stepBlocker() {
   const stage = STAGES[state.stage].id;
-  if (stage === "providers" && state.providers.size === 0) return "Tick at least one provider.";
   if (stage === "models") {
     const left = ROLES.filter((r) => !state.picks[r.id]).length;
     if (left > 0) return `Pick a model for ${left === ROLES.length ? "each job" : `${left} more job${left === 1 ? "" : "s"}`}.`;
@@ -485,7 +542,7 @@ function renderSummary() {
   const stage = STAGES[state.stage];
   const next = STAGES[state.stage + 1];
   const repoNote = stage.id === "repos" && repos.length === 0 ? "No repos yet. You can add them later in the chat." : undefined;
-  const last = sent ? "<b>Sent.</b> Approve it in Tandem's chat to save." : "Save sends this to Tandem for your approval.";
+  const last = sent ? "<b>Request submitted.</b> Tandem is saving your setup. Check the Tandem chat for status." : "Save and continue applies this setup after validation.";
   $("#summary").innerHTML = blocker
     ? `<b>${esc(blocker)}</b>`
     : repoNote ?? (next ? `Step ${state.stage + 1} of ${STAGES.length} · next: ${next.label}` : last);
@@ -522,17 +579,16 @@ function go(n) {
 function answer() {
   return {
     tandemSetup: 1,
-    enabledProviders: [...state.providers],
     models: Object.fromEntries(ROLES.map((r) => [r.id, state.picks[r.id]])),
     repositories: repos.map((r) => {
       const checks = r.checks.map((c) => c.trim()).filter(Boolean);
       const install = r.install.trim();
-      if (r.pasted) {
-        return { path: r.path, ...(checks.length ? { validationCommands: checks } : {}), ...(install ? { setupCommands: [install] } : {}) };
-      }
-      return { path: r.path, validationCommands: checks, setupCommands: install ? [install] : [], coordinatorMcpServers: [...r.chosenTools] };
+      return {
+        path: r.path,
+        ...(checks.length ? { validationCommands: checks } : {}),
+        ...(install ? { setupCommands: [install] } : {}),
+      };
     }),
-    workerSkills: [...chosenSkills],
     selfImprovement: document.querySelector('input[name="self"]:checked').value,
   };
 }
@@ -541,18 +597,20 @@ function renderReview() {
   const modelName = (sel) => MODELS.find((m) => m.selector === sel)?.name ?? sel;
   const edit = (n) => `<button class="link" type="button" data-go="${n}">Change</button>`;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const pending = [...pendingFolders];
+  const repoItems = a.repositories.map((r) => `<li class="m">${esc(r.path)} <span class="dim">· ${r.validationCommands ? plural(r.validationCommands.length, "check") : "checks found on save"}</span></li>`);
+  if (pending.length) repoItems.push(`<li class="m">Folders to save with this setup: ${pending.map((folder) => esc(folder)).join(", ")}</li>`);
+  const reposReview = repoItems.length
+    ? `<ul>${repoItems.join("")}</ul>`
+    : '<span class="dim">None yet. Add them later in the chat.</span>';
+  const selectedProviders = [...new Set(
+    ROLES.map((r) => MODELS.find((m) => m.selector === a.models[r.id]?.model)?.provider).filter(Boolean),
+  )].sort();
+  const modelReview = `<ul>${ROLES.map((r) => `<li>${esc(r.name)} <span class="m dim">${esc(modelName(a.models[r.id].model))}, ${esc(a.models[r.id].thinking)}</span></li>`).join("")}</ul><p class="m dim">Tandem may spend on: ${selectedProviders.length ? selectedProviders.map(esc).join(", ") : "none"}</p>`;
   const rows = [
-    ["Providers", `<ul>${a.enabledProviders.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>`, 0],
-    ["Models", `<ul>${ROLES.map((r) => `<li>${esc(r.name)} <span class="m dim">${esc(modelName(a.models[r.id].model))}, ${esc(a.models[r.id].thinking)}</span></li>`).join("")}</ul>`, 1],
-    [
-      "Repos",
-      a.repositories.length
-        ? `<ul>${a.repositories.map((r) => `<li class="m">${esc(r.path)} <span class="dim">· ${r.validationCommands ? plural(r.validationCommands.length, "check") : "checks found on save"} · ${r.coordinatorMcpServers ? plural(r.coordinatorMcpServers.length, "MCP") : "all MCPs"}</span></li>`).join("")}</ul>`
-        : '<span class="dim">None yet. Add them later in the chat.</span>',
-      2,
-    ],
-    ["Skills", a.workerSkills.length ? `<span class="m">${esc(a.workerSkills.join(", "))}</span>` : '<span class="dim">None</span>', 3],
-    ["When Tandem runs into an issue", { off: "Off", fix: "Fix: look into it and offer a fix", report: "Report: draft a GitHub issue" }[a.selfImprovement], 4],
+    ["Models", modelReview, 0],
+    ["Repos", reposReview, 1],
+    ["Self-improvement", { off: "Off", fix: "Fix: look into it and offer a fix", report: "Report: draft a GitHub issue" }[a.selfImprovement], 2],
   ];
   const box = $("#review");
   box.innerHTML = rows.map(([k, v, n]) => `<div class="rv"><span>${esc(k)}</span><div>${v}</div>${edit(n)}</div>`).join("");
@@ -566,10 +624,20 @@ $("#next").addEventListener("click", () => {
   }
   const a = answer();
   const text = JSON.stringify(a);
-  // One answer per save; saving again replaces the unsent one, and sending hands it to Tandem.
-  if (window.lavish && typeof window.lavish.queuePrompt === "function") {
+  // One answer per save; retrying replaces the unsent request.
+  try {
+    if (!window.lavish || typeof window.lavish.queuePrompt !== "function") {
+      throw new Error("Tandem chat is unavailable. Keep this page open and try Save again.");
+    }
     window.lavish.queuePrompt(text, { tag: "tandem-setup", queueKey: "tandem-setup", text: "Tandem setup answer" });
-    if (typeof window.lavish.sendQueuedPrompts === "function") window.lavish.sendQueuedPrompts();
+    if (typeof window.lavish.sendQueuedPrompts !== "function") {
+      throw new Error("Tandem chat cannot send this answer yet. Try Save again.");
+    }
+    window.lavish.sendQueuedPrompts();
+  } catch (error) {
+    sent = false;
+    $("#summary").innerHTML = `<b>${esc(error instanceof Error ? error.message : "Could not send the answer. Try again.")}</b>`;
+    return;
   }
   sent = true;
   $("#sent-json").textContent = JSON.stringify(a, null, 2);
@@ -578,12 +646,11 @@ $("#next").addEventListener("click", () => {
   panel.scrollIntoView({ behavior: "smooth", block: "start" });
   renderSummary();
 });
-renderProviders();
 renderRoles();
-renderSkills();
+renderFolderRoots();
 renderRepoResults();
 renderRepos();
-go(0);
+go(state.stage);
 </script>
 </body>
 </html>

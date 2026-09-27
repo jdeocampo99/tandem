@@ -1,7 +1,6 @@
 import { basename } from "node:path";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
-import type { SkillCatalogEntry } from "../config/skills.ts";
 import {
   type AgentRole,
   type IsoTimestamp,
@@ -11,29 +10,30 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "../contracts.ts";
+import type { SetupPageDraft } from "./setup-answer.ts";
 
 /**
  * The setup page's view model: everything the page shows and every choice it offers, assembled
  * from saved state and read-only discovery. Pure; src/onboarding/setup-page.ts gathers the facts.
  */
+export type SetupSearchStatus = Readonly<{ kind: "ok" | "error"; message: string }>;
+
 export type SetupView = Readonly<{
   schemaVersion: 1;
   generatedAt: IsoTimestamp;
-  providers: readonly SetupProvider[];
   models: readonly SetupModel[];
   roles: readonly SetupRole[];
   /** What each thinking level means, in a word or two. */
   thinkingNotes: Readonly<Record<ThinkingLevel, string>>;
   /** The folders crawled for repositories, with the home folder shown as `~`. */
   searchedFolders: readonly string[];
+  /** Explicit folders selected in this open page, not saved until final approval. */
+  pendingFolders: readonly string[];
   repos: readonly SetupRepo[];
-  skills: readonly SkillCatalogEntry[];
-  /** Skills picked when the page opens: the saved `workerSkills` still on this machine. */
-  pickedSkills: readonly string[];
   selfImprovement: SelfImprovementMode;
+  draft?: SetupPageDraft;
+  searchStatus?: SetupSearchStatus;
 }>;
-
-export type SetupProvider = Readonly<{ id: string; models: number; enabled: boolean }>;
 
 export type SetupModel = Readonly<{
   selector: string;
@@ -58,7 +58,7 @@ export type SetupRole = Readonly<{
   thinking: ThinkingLevel;
   /** An example setup, plain text only; never a choice or a recommendation. */
   example: string;
-  /** The saved choice, when it is still in the catalogue under an enabled provider. */
+  /** The saved choice, when it is still in the catalogue. */
   pick?: ModelSpec;
 }>;
 
@@ -73,11 +73,8 @@ export type SetupRepo = Readonly<{
   validationSource: string;
   install: string;
   installSource: string;
-  /** The repository's MCP servers; all are allowed to its chat unless the user unticks them. */
-  mcpServers: readonly string[];
+  inspectionError?: string;
 }>;
-
-/** What discovery found in one checkout; absent for a checkout already set up. */
 export type SetupRepoDetails = Readonly<{
   validationCommands: readonly string[];
   /** The package.json scripts behind `validationCommands`. */
@@ -85,14 +82,13 @@ export type SetupRepoDetails = Readonly<{
   setupCommands: readonly string[];
   /** The lockfile behind `setupCommands`. */
   lockfile?: string;
-  mcpServers: readonly string[];
 }>;
-
 export type SetupRepoFacts = Readonly<{
   path: string;
   repo?: string;
   setUp: boolean;
   details?: SetupRepoDetails;
+  inspectionError?: string;
 }>;
 
 export type SetupViewInput = Readonly<{
@@ -100,15 +96,14 @@ export type SetupViewInput = Readonly<{
   /** The user's home folder, shown as `~`. */
   homeFolder: string;
   catalogue: readonly OmpModelRecord[];
-  enabledProviders: readonly string[];
   savedModels?: RepoPolicy["models"];
   searchedFolders: readonly string[];
+  pendingFolders?: readonly string[];
   repos: readonly SetupRepoFacts[];
-  skills: readonly SkillCatalogEntry[];
-  /** Saved `workerSkills`; absent when the user never chose. */
-  savedSkills?: readonly string[];
   /** Saved mode; absent when the user never chose, so the page starts at fix. */
   selfImprovement?: SelfImprovementMode;
+  draft?: SetupPageDraft;
+  searchStatus?: SetupSearchStatus;
 }>;
 
 type RoleCopy = Omit<SetupRole, "id" | "pick">;
@@ -173,31 +168,26 @@ export const THINKING_NOTES: Readonly<Record<ThinkingLevel, string>> = {
 };
 
 export function buildSetupView(input: SetupViewInput): SetupView {
-  const providers = [...new Set(input.catalogue.map((model) => model.provider))].sort();
-  const enabled = new Set(input.enabledProviders.filter((id) => providers.includes(id)));
   const models = input.catalogue.map(setupModel);
-  const skillNames = new Set(input.skills.map((skill) => skill.name));
   return {
     schemaVersion: 1,
     generatedAt: input.generatedAt,
-    providers: providers.map((id) => ({
-      id,
-      models: models.filter((model) => model.provider === id).length,
-      enabled: enabled.has(id),
-    })),
     models,
     roles: MODEL_ROLE_ORDER.map((id) => {
-      const pick = savedPick(input.savedModels?.[id], models, enabled);
+      const pick = savedPick(input.savedModels?.[id], models);
       return { id, ...SETUP_ROLE_COPY[id], ...(pick === undefined ? {} : { pick }) };
     }),
     thinkingNotes: THINKING_NOTES,
     searchedFolders: input.searchedFolders.map((folder) => shownPath(folder, input.homeFolder)),
+    pendingFolders: (input.pendingFolders ?? []).map((folder) =>
+      shownPath(folder, input.homeFolder),
+    ),
     repos: [...input.repos]
       .sort((left, right) => left.path.localeCompare(right.path))
       .map((repo) => setupRepo(repo, input.homeFolder)),
-    skills: input.skills,
-    pickedSkills: (input.savedSkills ?? []).filter((name) => skillNames.has(name)),
     selfImprovement: input.selfImprovement ?? "fix",
+    ...(input.draft === undefined ? {} : { draft: input.draft }),
+    ...(input.searchStatus === undefined ? {} : { searchStatus: input.searchStatus }),
   };
 }
 
@@ -215,11 +205,10 @@ function setupModel(record: OmpModelRecord): SetupModel {
 function savedPick(
   saved: ModelSpec | undefined,
   models: readonly SetupModel[],
-  enabled: ReadonlySet<string>,
 ): ModelSpec | undefined {
   if (saved === undefined) return undefined;
   const model = models.find((candidate) => candidate.selector === saved.model);
-  if (model === undefined || !enabled.has(model.provider)) return undefined;
+  if (model === undefined) return undefined;
   return model.thinking.includes(saved.thinking) ? saved : undefined;
 }
 
@@ -231,15 +220,16 @@ function setupRepo(repo: SetupRepoFacts, homeFolder: string): SetupRepo {
     shownPath: shownPath(repo.path, homeFolder),
     ...(repo.repo === undefined ? {} : { repo: repo.repo }),
     setUp: repo.setUp,
+    ...(repo.inspectionError === undefined ? {} : { inspectionError: repo.inspectionError }),
   };
   if (details === undefined) {
+    const reason = repo.inspectionError ?? "No inspection data was returned.";
     return {
       ...base,
       validationCommands: [],
-      validationSource: "",
+      validationSource: `Could not inspect this repository: ${reason}`,
       install: "",
-      installSource: "",
-      mcpServers: [],
+      installSource: `Could not inspect this repository: ${reason}`,
     };
   }
   const install = details.setupCommands[0] ?? "";
@@ -255,7 +245,6 @@ function setupRepo(repo: SetupRepoFacts, homeFolder: string): SetupRepo {
       install.length > 0 && details.lockfile !== undefined
         ? `Picked from ${details.lockfile}.`
         : "No lockfile found, so nothing is installed. Add one if the repo needs it.",
-    mcpServers: details.mcpServers,
   };
 }
 

@@ -150,7 +150,10 @@ export class OmpWorkerPane {
         this.current().abort();
         return;
       case "promptAsUser":
-        this.pi.sendUserMessage(effect.text);
+        this.pi.sendUserMessage(
+          effect.text,
+          effect.deliverAs === "aside" ? { deliverAs: "aside" } : undefined,
+        );
         return;
       case "deliver":
         if (effect.hidden !== undefined) throw new Error("a worker pane has no hidden messages");

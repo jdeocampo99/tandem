@@ -247,9 +247,8 @@ PR watch · 4 open · checked 5s ago
     warning when none: a pull request could merge before CI finishes;
   - whether a push dismisses approvals (`yes`, `no`, `unknown`), with a warning when it does:
     every CI retry would cost the pull request its approvals.
-- `onboard --json` includes it as `merging`, plus `workerSkillOffer`: Claude Code plugin skills
-  not yet in `workerSkills`, empty once the user answered that offer. The onboarding skill asks
-  one optional question for each and never about retries or other knobs.
+- `onboard --json` includes the merging check. Onboarding does not offer MCP-server or
+  worker-skill choices; those come from OMP's own checkout and user configuration.
 - **First watch.** `tandem watch` / `pr-watch-start` on a pull request whose repository has a
   Tandem project and no saved choice runs the check and raises the question at once; a published
   Tandem task's pull request raises it on the next tick (the `offer-merging` action, once per pull
@@ -257,12 +256,9 @@ PR watch · 4 open · checked 5s ago
   answer, like the conflict question.
 - **Saving.** The answer is saved by `pr-watch-merging` (the coordinator; needs the user's approval
   in the TUI) or `configure-merging --input FILE --yes` (onboarding). "Not now" saves
-  `mergeWith = "off"`, so it isn't asked again. Onboarding saves the plugin-skill answer with
-  `configure-worker-skills --input FILE --yes` into `<home>/settings.toml`, an empty list for no.
+  `mergeWith = "off"`, so it isn't asked again.
 - **How it writes.** `saveMergingChoice` (src/config/repositories.ts) is the only edit Tandem makes
   to a saved project's settings.toml: it adds `mergeWith` (and the labels) to `[merging]`, adding
   the section at the end when there is none, never replaces a `mergeWith` already there, validates
   the result, re-reads the file just before writing and writes nothing if it changed, and writes
   atomically. The settings path goes through the same symlink checks as every policy read.
-  `saveWorkerSkills` does the same for `workerSkills` in the home settings, creating the file
-  exclusively when it is missing.

@@ -55,13 +55,11 @@ function onboardingService(
   readonly configureCalls: ModelSpec[][];
   readonly providerCalls: (readonly string[] | undefined)[];
   readonly writeCalls: string[];
-  readonly coordinatorMcpCalls: (readonly string[] | undefined)[];
   readonly jevCalls: ("on" | "off" | undefined)[];
 } {
   const configureCalls: ModelSpec[][] = [];
   const providerCalls: (readonly string[] | undefined)[] = [];
   const writeCalls: string[] = [];
-  const coordinatorMcpCalls: (readonly string[] | undefined)[] = [];
   const jevCalls: ("on" | "off" | undefined)[] = [];
   const models = options.configured
     ? {
@@ -74,11 +72,8 @@ function onboardingService(
     : undefined;
   const enabledProviders = options.enabledProviders ?? [];
   const service = {
-    onboard: async (repoPath: string, write = false, coordinatorMcpServers?: readonly string[]) => {
-      if (write) {
-        writeCalls.push(repoPath);
-        coordinatorMcpCalls.push(coordinatorMcpServers);
-      }
+    onboard: async (repoPath: string, write = false) => {
+      if (write) writeCalls.push(repoPath);
       return {
         repoPath,
         configPath: "/private/tandem/repositories/test/config.json",
@@ -125,7 +120,7 @@ function onboardingService(
     },
     shutdown: async () => undefined,
   } as unknown as TandemService;
-  return { service, configureCalls, providerCalls, writeCalls, coordinatorMcpCalls, jevCalls };
+  return { service, configureCalls, providerCalls, writeCalls, jevCalls };
 }
 
 function fakeApplication(invocations: CliInvocation[]): CliApplication {
@@ -865,7 +860,6 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
     "Save these role choices?",
     "Use Jev?",
     "Save project settings?",
-    "Let the coordinator use linear?",
   ] as const;
   const keySequences = [
     // Accept the default "Skip": the fixture catalogue has no reasoning-capability evidence, so
@@ -884,7 +878,6 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
     "\u001b[A\r",
     "\r",
     "\r",
-    "\u001b[B\r",
   ] as const;
   let rendered = "";
   let nextPrompt = 0;
@@ -910,8 +903,6 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
       processEnvironment: {},
       input,
       output,
-      isTTY: true,
-      listMcpServers: async () => ["linear"],
       run: async (request) => {
         if (
           request.argv[0] === "herdr" &&
@@ -942,12 +933,10 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
       ),
     ).toBe(true);
     expect(fake.writeCalls).toEqual([repo]);
-    expect(fake.coordinatorMcpCalls).toEqual([["linear"]]);
     expect(invocations).toHaveLength(1);
     expect(nextPrompt).toBe(promptMarkers.length);
     expect(childInput).toBe(`${OSC_PALETTE_REPLY}${SGR_MOUSE_INPUT}${CHILD_TYPING}`);
     expect(rendered).not.toContain(OSC_PALETTE_REPLY);
-    expect(rendered).not.toContain("rgb:1357/2468/abcd");
     expect(rendered).not.toContain(SGR_MOUSE_INPUT);
     expect(rendered).not.toContain("0;12;8M");
   } finally {

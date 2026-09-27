@@ -185,7 +185,10 @@ async function performOmpEffect(
       );
       return;
     case "promptAsUser":
-      pi.sendUserMessage(effect.text);
+      pi.sendUserMessage(
+        effect.text,
+        effect.deliverAs === "aside" ? { deliverAs: "aside" } : undefined,
+      );
       return;
     case "notify":
       ctx.ui.notify(effect.text, effect.level);
