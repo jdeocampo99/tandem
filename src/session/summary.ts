@@ -969,6 +969,15 @@ function summarizeRequestBrief(value: unknown): string {
       `Paused until reapproved (${paused.length}): ${compactList(paused, ACTION_SUMMARY_MAX_ITEMS, 100)}`,
     );
   }
+  const unplain = Array.isArray(view.plainLanguage)
+    ? view.plainLanguage.filter(isNonEmptyEntry)
+    : [];
+  if (unplain.length > 0) {
+    lines.push(
+      "Not plain enough yet; rewrite these and draft again before showing the user:",
+      ...unplain.map((finding) => `- ${finding}`),
+    );
+  }
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 

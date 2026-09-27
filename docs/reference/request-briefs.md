@@ -3,27 +3,27 @@
 The durable request brief, how approval binds to one revision, and the read-only review pane.
 
 Code: src/requests/brief.ts, src/requests/store.ts, src/requests/store-codec.ts,
-src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
+src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts,
+src/requests/plain-language.ts
 
 ## Brief record
 
 - One brief per substantial request: stable `req-` id, monotonic draft revision, bound approval.
   Stored in `request_briefs` in `<home>/state.sqlite` under task-style compare-and-swap. Every edit
   pushes the prior draft into preserved history. Tasks reference it via `requestId`.
-- Agreement fields (in the agreement digest): goal, scope, constraints, non-goals,
-  `acceptanceCriteria`, user stories, routine verification commands, `manualVerification`,
-  approach, and key decisions. Annotations: unresolved questions and research links.
-- New briefs require one to three concrete actor/action/outcome user stories. A story change
-  changes the agreement digest and requires reapproval. Stories are never inferred for older
-  approved records.
-- `acceptanceCriteria` contains observable behavioral outcomes that validation or review can prove.
-  `verificationCommands` contains routine project commands, separate from behavior. `manualVerification`
-  contains hands-on checks only a person can make. Tasks copy `manualVerification`; reviewers never
-  judge it, implementers may report on it without blocking, and delivery renders it as an unticked
-  PR checklist.
-- Older records may omit both `userStories` and `verificationCommands`. Decoding preserves
-  that omission; absent fields stay out of both digests, so stored content digests and approvals
-  stay unchanged. Review-pane updates do not add those fields.
+- Agreement fields (in the agreement digest): goal, `summary`, scope, constraints, non-goals,
+  `acceptanceCriteria`, `manualVerification`, approach, key decisions. Annotations: unresolved
+  questions, research links.
+- `goal` is the one-or-two-sentence TL;DR. `summary` holds the title, one to five before-and-after
+  moments of the user's experience, and a size (`small`, `medium`, `large`) and risk (`low`,
+  `medium`, `high`) label, each with one reason; the tool schema defines each label. The tool
+  requires `summary` and a numbered `recommendedApproach`, but a brief saved before them has no
+  summary and a one-paragraph approach, and `summary` joins the agreement digest only when present,
+  so older briefs keep their digests and approval.
+- `acceptanceCriteria` is what validation or review can prove; `manualVerification` is what only a
+  person can check. Tasks copy `manualVerification`; reviewers never judge it, implementers may
+  report on it without blocking, and delivery renders it as an unticked PR checklist. It joins the
+  agreement digest only when non-empty, so older briefs keep their digests and approval.
 - `skipReview: true` records the user's planning-time decision that the work needs no code review.
   It is agreement (it joins the digest only when set) and only the coordinator sets it, when the
   user says so. While the approval is current, tasks under the brief record
@@ -44,10 +44,8 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   ended by cancelling its work. An abandoned brief is final: it no longer counts as awaiting
   approval (so a no-id `brief-approve` and the status board's "Needs you" skip it), dispatch, revision,
   and approval are refused, and its owned review pane is retired. The record and history stay.
-- Brief approval covers this plan only. Implementation scope, publication, direct merges,
-  deployment, and destructive actions need separate approval. For a published, watched PR,
-  [PR watch](pr-watch.md#merging) may arm auto-merge or add the queue label, then merge it
-  after checks pass without another merge approval.
+- Brief approval is agreement only; scope approval, publish, merge, deploy, and destructive actions
+  stay separate.
 
 ## Review pane
 
@@ -55,15 +53,20 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   owned temporary pane, an unfocused split right of the coordinator's pane. Without an active Herdr
   context (`HERDR_ENV`, `HERDR_PANE_ID`) in the Tandem session, it opens a separate
   `Tandem request brief · <repo>` workspace. Tiny fixes use an in-chat brief and no pane.
-- A fresh Markdown projection leads with canonical plan approval status, Goal, User stories when
-  present, Proposed approach, and Approval scope with critical safety limits. Older briefs without
-  stories show no empty story heading and gain no inferred requirements.
-- Below the approval summary, plain headings show what is included, how it is checked, and limits.
-  Behavioral checks, routine project commands, hands-on verification, constraints, non-goals,
-  decisions, references, and record metadata remain visible. Routine commands are not behavioral
-  acceptance criteria.
-- A fresh projection renders status from the current SQLite record; saved Markdown snapshots are
-  not approval authority.
+- The Markdown puts what approval needs above a divider: the title, TL;DR, before and after,
+  decisions needed (omitted when there are none), size and risk, how you'll verify, and the
+  numbered approach. Below it, Details holds in scope, out of scope, automated checks,
+  constraints, decisions already made, references, and the record's id, revision, and digest. A
+  brief without a summary omits its sections.
+
+## Plain language
+
+- `brief-draft` checks the sections above the divider and returns what may not read plainly; it
+  never blocks a draft. Exact tells come first: em dashes, code formatting, file paths, code names,
+  and the filler words the coordinator's prose rules ban. Then one Jev call judges each section for
+  someone who uses the product but never read its code, and flags it only when at least 0.7 sure
+  it is jargon. Without a TypeSafe key, or when Jev fails, only the exact tells are reported.
+- The coordinator rewrites flagged sections and drafts once more before showing the user.
 - The coordinator's pane is only the split anchor; a record naming it is quarantined, never written
   or closed. Users edit by replying, never in the pane.
 - Every pane operation proves ownership with the coordinator-pane checks (session snapshot, endpoint

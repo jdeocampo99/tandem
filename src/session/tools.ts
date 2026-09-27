@@ -3,7 +3,10 @@ import {
   type AgentRole,
   FINDING_CATCH_STAGES,
   FINDING_CATEGORIES,
+  MAX_REQUEST_BRIEF_MOMENTS,
   MODEL_ROLE_ORDER,
+  REQUEST_BRIEF_RISKS,
+  REQUEST_BRIEF_SIZES,
 } from "../contracts.ts";
 import { PINNABLE_PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
@@ -28,27 +31,47 @@ const modelAssignmentsSchema = z.strictObject(
 );
 
 const briefContentSchema = z.strictObject({
-  goal: z.string(),
-  userStories: z
-    .array(
-      z.strictObject({
-        actor: z.string().min(1),
-        action: z.string().min(1),
-        outcome: z.string().min(1),
-      }),
-    )
-    .min(1)
-    .max(3)
-    .describe("One to three concrete actor/action/outcome stories."),
+  goal: z
+    .string()
+    .describe("TL;DR: one or two plain sentences on what changes for the user and why."),
+  summary: z.strictObject({
+    title: z.string().describe("A short plain title for what the user gets."),
+    beforeAfter: z
+      .array(
+        z.strictObject({
+          moment: z.string().describe("A moment in the user's experience, e.g. Cancelling."),
+          before: z.string().describe("What happens at that moment today."),
+          after: z.string().describe("What happens at that moment after the change."),
+        }),
+      )
+      .min(1)
+      .max(MAX_REQUEST_BRIEF_MOMENTS),
+    size: z.strictObject({
+      level: z
+        .enum(REQUEST_BRIEF_SIZES)
+        .describe(
+          "small: one area, a handful of files. medium: several areas or one new behavior. large: crosses subsystems or changes stored data.",
+        ),
+      reason: z.string().describe("One plain sentence on why."),
+    }),
+    risk: z.strictObject({
+      level: z
+        .enum(REQUEST_BRIEF_RISKS)
+        .describe(
+          "low: easy to undo, no user data, money, or security. medium: users would notice a mistake but a revert fixes it. high: money, user data, security, or hard to undo.",
+        ),
+      reason: z.string().describe("One plain sentence on why."),
+    }),
+  }),
   scope: z.array(z.string()),
   constraints: z.array(z.string()),
   nonGoals: z.array(z.string()),
   acceptanceCriteria: z.array(z.string()),
-  verificationCommands: z
-    .array(z.string())
-    .describe("Routine project commands, separate from behavioral checks."),
   manualVerification: z.array(z.string()),
-  recommendedApproach: z.string(),
+  recommendedApproach: z
+    .array(z.string())
+    .min(1)
+    .describe("Numbered steps in plain words, at most six."),
   keyDecisions: z.array(z.string()),
   openQuestions: z.array(z.string()),
   researchLinks: z.array(z.string()),

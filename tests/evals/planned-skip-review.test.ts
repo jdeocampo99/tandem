@@ -15,18 +15,10 @@ import {
 
 const BRIEF: RequestBriefContent = {
   goal: "Fix a typo in the retry message",
-  userStories: [
-    {
-      actor: "a user",
-      action: "read the retry message",
-      outcome: "they see the corrected wording",
-    },
-  ],
   scope: ["src/retry.ts"],
   constraints: [],
   nonGoals: [],
-  acceptanceCriteria: ["the retry message uses the corrected wording"],
-  verificationCommands: ["bun test"],
+  acceptanceCriteria: ["bun test passes"],
   manualVerification: [],
   recommendedApproach: "Edit the string",
   keyDecisions: [],

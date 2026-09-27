@@ -23,18 +23,10 @@ const LATER = "2030-01-01T01:00:00.000Z";
 function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefContent {
   return {
     goal: "Give the coordinator a durable request brief",
-    userStories: [
-      {
-        actor: "a project owner",
-        action: "approve a plan",
-        outcome: "the team shares the same intended result",
-      },
-    ],
     scope: ["src/requests"],
     constraints: ["SQLite stays authoritative"],
     nonGoals: ["no desktop GUI"],
     acceptanceCriteria: ["one stable request id"],
-    verificationCommands: [],
     manualVerification: [],
     recommendedApproach: "One record with monotonic draft revisions",
     keyDecisions: ["Markdown is a projection only"],
@@ -194,25 +186,6 @@ test("brief content is validated at the boundary rather than stored as given", (
   );
   expect(() => checkedRequestBriefContent(content({ goal: "  " }))).toThrow(/goal/u);
   expect(() => checkedRequestBriefContent(content({ scope: [] }))).toThrow(/at least one scope/u);
-  expect(() => checkedRequestBriefContent(content({ userStories: [] }))).toThrow(
-    /one to three user stories/u,
-  );
-  expect(() =>
-    checkedRequestBriefContent({
-      ...content(),
-      userStories: Array.from({ length: 4 }, () => ({
-        actor: "a user",
-        action: "does something",
-        outcome: "sees a result",
-      })),
-    }),
-  ).toThrow(/one to three user stories/u);
-  expect(() =>
-    checkedRequestBriefContent({
-      ...content(),
-      userStories: [{ actor: "a user", action: "does something", outcome: " " }],
-    }),
-  ).toThrow(/userStories\[0\]\.outcome/u);
   expect(() => checkedRequestBriefContent(content({ acceptanceCriteria: ["ok", ""] }))).toThrow(
     /acceptanceCriteria\[1\]/u,
   );
@@ -221,52 +194,16 @@ test("brief content is validated at the boundary rather than stored as given", (
   );
 });
 
-test("stored briefs reject partial and empty current-format fields", () => {
-  const {
-    userStories: _userStories,
-    verificationCommands: _verificationCommands,
-    ...legacy
-  } = content();
+test("a brief saved before manual verification existed loads with none and keeps its digests", () => {
+  const { manualVerification: _omitted, ...legacy } = content();
+  const loaded = checkedRequestBriefContent(legacy);
 
-  expect(() =>
-    checkedRequestBriefContent(
-      { ...legacy, verificationCommands: ["bun test"] },
-      { allowLegacyFields: true },
-    ),
-  ).toThrow(/both userStories and verificationCommands/u);
-  expect(() =>
-    checkedRequestBriefContent(
-      { ...legacy, userStories: [], verificationCommands: ["bun test"] },
-      { allowLegacyFields: true },
-    ),
-  ).toThrow(/one to three user stories/u);
-});
-
-test("a brief saved before added fields loads without changing its digests", () => {
-  const {
-    manualVerification: _manualVerification,
-    userStories: _userStories,
-    verificationCommands: _verificationCommands,
-    ...legacy
-  } = content();
-  const loaded = checkedRequestBriefContent(legacy, { allowLegacyFields: true });
-
-  expect(loaded.userStories).toBeUndefined();
-  expect(loaded.verificationCommands).toBeUndefined();
   expect(loaded.manualVerification).toEqual([]);
+  // Digests recorded by the release before manual verification, for this exact content.
   expect(requestBriefDigests(loaded)).toEqual({
     contentDigest: "777275e9c0fa047b1b96b0c7346d31163c8d3b3bba5daec125eb24c838465531",
     agreementDigest: "74a95430904cba395789ce0926801dc88fbf7e9f3332a81faa7f1552a6c9219c",
   });
-});
-
-test("routine commands and hands-on checks have distinct agreement digests", () => {
-  const handsOn = checkedRequestBriefContent(content({ manualVerification: ["bun test"] }));
-  const routine = checkedRequestBriefContent(content({ verificationCommands: ["bun test"] }));
-
-  expect(requestBriefDigests(handsOn).agreementDigest).not.toBe(
-    requestBriefDigests(routine).agreementDigest,
-  );
 });
 
 test("moving an item into manual verification changes what was agreed and needs reapproval", () => {
@@ -283,47 +220,6 @@ test("moving an item into manual verification changes what was agreed and needs 
 
   expect(moved.draft.changeKind).toBe("agreement");
   expect(requestApprovalState(moved)).toBe("superseded");
-});
-
-test("changing an approved user story requires reapproval", () => {
-  const approved = approveRequestBriefRecord(
-    seeded(),
-    { requestId: "req-1", briefRevision: 1, contentDigest: seeded().draft.contentDigest },
-    NOW,
-  );
-  const revised = reviseRequestBriefRecord(
-    approved,
-    content({
-      userStories: [
-        {
-          actor: "a maintainer",
-          action: "revise the plan",
-          outcome: "the agreed result changes",
-        },
-      ],
-    }),
-    LATER,
-  );
-
-  expect(revised.draft.changeKind).toBe("agreement");
-  expect(revised.draft.agreementDigest).not.toBe(approved.draft.agreementDigest);
-  expect(requestApprovalState(revised)).toBe("superseded");
-});
-
-test("changing routine verification commands requires reapproval", () => {
-  const approved = approveRequestBriefRecord(
-    seeded(),
-    { requestId: "req-1", briefRevision: 1, contentDigest: seeded().draft.contentDigest },
-    NOW,
-  );
-  const revised = reviseRequestBriefRecord(
-    approved,
-    content({ verificationCommands: ["bun test"] }),
-    LATER,
-  );
-
-  expect(revised.draft.changeKind).toBe("agreement");
-  expect(requestApprovalState(revised)).toBe("superseded");
 });
 
 test("skipping review is part of what was agreed, and only an approved brief skips it", () => {
@@ -347,84 +243,107 @@ test("skipping review is part of what was agreed, and only an approved brief ski
   expect(briefSkipsReview(approved)).toBe(false);
   expect(briefSkipsReview(skipping)).toBe(false);
   expect(briefSkipsReview(approve(skipping))).toBe(true);
-  expect(renderRequestBriefMarkdown(skipping)).toContain(
-    "Code review is skipped at your request after validation",
-  );
+  expect(renderRequestBriefMarkdown(skipping)).toContain("## Code review\nSkipped at your request");
   expect(() => checkedRequestBriefContent({ ...content(), skipReview: "yes" })).toThrow(
     RequestBriefError,
   );
 });
 
-test("the brief separates behavioral checks, routine commands, and manual verification", () => {
-  const record = createRequestBriefRecord(
+const SUMMARY = {
+  title: "Keep Premium through the paid period",
+  beforeAfter: [
     {
-      id: "req-1",
-      repoPath: "/repo",
-      content: content({
-        acceptanceCriteria: ["the request remains read-only"],
-        verificationCommands: ["bun run check"],
-        manualVerification: ["the reviewer can find the approval boundary"],
-      }),
+      moment: "Cancelling",
+      before: "Premium ends at once.",
+      after: "Premium lasts until the period ends.",
     },
-    NOW,
-  );
+    { moment: "When the period ends", before: "Nothing changes.", after: "Premium turns off." },
+  ],
+  size: { level: "large", reason: "Changes every Premium check." },
+  risk: { level: "high", reason: "Touches money and customer access." },
+} as const;
 
-  const markdown = renderRequestBriefMarkdown(record);
-
-  expect(markdown).toContain("### Behavioral checks\n- the request remains read-only\n");
-  expect(markdown).toContain("### Routine project commands\n- bun run check\n");
-  expect(markdown).toContain(
-    "### Hands-on verification\n- the reviewer can find the approval boundary\n",
-  );
-});
-
-test("the brief puts agreement first and detailed checks below it", () => {
-  const settled = renderRequestBriefMarkdown(seeded());
-  const open = renderRequestBriefMarkdown(
+test("the brief puts what approval needs above the divider and the details below it", () => {
+  const markdown = renderRequestBriefMarkdown(
     createRequestBriefRecord(
       {
         id: "req-1",
         repoPath: "/repo",
         content: content({
+          summary: SUMMARY,
           openQuestions: ["Ship to web too?"],
-          verificationCommands: ["bun test"],
+          manualVerification: ["Cancel in the sandbox and keep paid content"],
+          recommendedApproach: ["Tell apart why a plan ended", "Use one access rule everywhere"],
         }),
       },
       NOW,
     ),
   );
 
-  const headings = (markdown: string) => markdown.match(/^#+ .+$/gmu);
-  expect(headings(open)).toEqual([
-    "# Request brief",
-    "## Goal",
-    "## User stories",
-    "## Proposed approach",
-    "## Approval scope",
-    "## Decisions required",
-    "## What is included",
-    "## How it is checked",
-    "### Behavioral checks",
-    "### Routine project commands",
-    "### Hands-on verification",
-    "## Limits",
+  expect(markdown.match(/^#+ .+$/gmu)).toEqual([
+    "# Keep Premium through the paid period",
+    "## TL;DR",
+    "## Before and after",
+    "## Decisions needed",
+    "## Size and risk",
+    "## How you'll verify",
+    "## Approach",
+    "## Details",
+    "### In scope",
     "### Out of scope",
+    "### Automated checks",
     "### Constraints",
-    "## Key decisions",
-    "## References",
-    "## Record",
+    "### Decisions already made",
+    "### References",
+    "### Record",
   ]);
-  expect(settled).not.toContain("Decisions required");
-  expect(settled).toContain("Plan status: not approved yet.");
-  expect(open.indexOf("## Approval scope") < open.indexOf("## How it is checked")).toBe(true);
-  expect(open).toContain(
-    "Implementation scope, publication, direct merges, deployment, and destructive actions need separate approval.",
+  expect(markdown).toContain(
+    "1. **Cancelling**\n   - Before: Premium ends at once.\n   - After: Premium lasts until the period ends.\n2. **When the period ends**",
   );
-  expect(open).toContain(
-    "For a published, watched PR, PR watch may arm auto-merge or add the queue label, then merge it after checks pass without another merge approval.",
+  expect(markdown).toContain(
+    "- **Size: Large.** Changes every Premium check.\n- **Risk: High.** Touches money and customer access.",
   );
-  expect(open).not.toContain("merging, deploying, and destructive actions need separate approval");
-  expect(open).toContain("Critical safety limits:\n- SQLite stays authoritative");
+  expect(markdown).toContain(
+    "## Approach\n1. Tell apart why a plan ended\n2. Use one access rule everywhere\n\n---\n",
+  );
+  expect(markdown).toContain("Revision 1, not approved yet.");
+});
+
+test("a brief saved before the summary still renders and keeps its digests", () => {
+  const legacy = content();
+  const markdown = renderRequestBriefMarkdown(seeded());
+
+  expect(markdown.split("\n")[0]).toBe("# Request brief");
+  expect(markdown).not.toContain("## Before and after");
+  expect(markdown).not.toContain("## Size and risk");
+  expect(markdown).not.toContain("## Decisions needed");
+  expect(markdown).toContain("## Approach\nOne record with monotonic draft revisions\n");
+  expect(
+    requestBriefDigests(checkedRequestBriefContent(JSON.parse(JSON.stringify(legacy)))),
+  ).toEqual(requestBriefDigests(legacy));
+  expect(requestBriefDigests(content({ summary: SUMMARY })).agreementDigest).not.toBe(
+    requestBriefDigests(legacy).agreementDigest,
+  );
+});
+
+test("a summary must use the fixed labels and one to five moments", () => {
+  const withSummary = (summary: unknown) => ({ ...content(), summary });
+
+  expect(checkedRequestBriefContent(withSummary(SUMMARY)).summary).toEqual(SUMMARY);
+  expect(() =>
+    checkedRequestBriefContent(withSummary({ ...SUMMARY, size: { level: "huge", reason: "x" } })),
+  ).toThrow(RequestBriefError);
+  expect(() => checkedRequestBriefContent(withSummary({ ...SUMMARY, beforeAfter: [] }))).toThrow(
+    RequestBriefError,
+  );
+  expect(() =>
+    checkedRequestBriefContent(
+      withSummary({ ...SUMMARY, beforeAfter: Array(6).fill(SUMMARY.beforeAfter[0]) }),
+    ),
+  ).toThrow(RequestBriefError);
+  expect(() => checkedRequestBriefContent({ ...content(), recommendedApproach: [] })).toThrow(
+    RequestBriefError,
+  );
 });
 
 test("new implementation work joins the one open approved request in its repository", () => {

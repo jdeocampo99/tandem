@@ -2,82 +2,80 @@ import type { RequestBriefRecord } from "../contracts.ts";
 import { requestApprovalState } from "./brief.ts";
 
 /**
- * Renders the current draft as the read-only view of the durable record. SQLite remains the
- * authority for every field repeated here.
+ * Renders the current draft as the read-only view of the durable record. It is a projection only:
+ * the pane showing it offers no editing path, and SQLite remains the authority for every field
+ * repeated here. Everything above the divider is what the reader needs to approve; the details
+ * below it are for checking specifics.
  */
 export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
   const content = record.draft.content;
-  const userStories = content.userStories ?? [];
+  const summary = content.summary;
   const lines: string[] = [
-    "# Request brief",
+    `# ${summary?.title ?? "Request brief"}`,
     "",
-    `Revision ${record.draft.revision}. Plan status: ${approvalLine(record)}.`,
-    "Reply in the main conversation to change it; editing here changes nothing.",
+    `Revision ${record.draft.revision}, ${approvalLine(record)}. Reply in the main conversation to change it; editing here changes nothing.`,
     "",
-    "## Goal",
+    "## TL;DR",
     content.goal,
   ];
-  if (userStories.length > 0) {
+  if (summary !== undefined) {
+    lines.push("", "## Before and after");
+    summary.beforeAfter.forEach((moment, index) => {
+      lines.push(
+        `${index + 1}. **${moment.moment}**`,
+        `   - Before: ${moment.before}`,
+        `   - After: ${moment.after}`,
+      );
+    });
+  }
+  // An empty question list means nothing waits on the reader, so it earns no heading.
+  if (content.openQuestions.length > 0) {
+    lines.push("", "## Decisions needed", ...bullets(content.openQuestions));
+  }
+  if (summary !== undefined) {
     lines.push(
       "",
-      "## User stories",
-      ...userStories.map((story) => `- ${story.actor} can ${story.action}, so ${story.outcome}.`),
+      "## Size and risk",
+      `- **Size: ${capitalized(summary.size.level)}.** ${summary.size.reason}`,
+      `- **Risk: ${capitalized(summary.risk.level)}.** ${summary.risk.reason}`,
     );
   }
-  lines.push(
-    "",
-    "## Proposed approach",
-    content.recommendedApproach,
-    "",
-    "## Approval scope",
-    "Brief approval covers this plan only. Implementation scope, publication, direct merges, deployment, and destructive actions need separate approval. For a published, watched PR, PR watch may arm auto-merge or add the queue label, then merge it after checks pass without another merge approval.",
-    "",
-    "Critical safety limits:",
-    ...bullets(content.constraints),
-  );
+  lines.push("", "## How you'll verify", ...bullets(content.manualVerification));
   if (content.skipReview === true) {
     lines.push(
       "",
-      "Code review is skipped at your request after validation; publishing still requires approval.",
+      "## Code review",
+      "Skipped at your request: once validation passes, the work is ready to publish unreviewed.",
     );
   }
-  if (content.openQuestions.length > 0) {
-    lines.push("", "## Decisions required", ...bullets(content.openQuestions));
-  }
   lines.push(
     "",
-    "## What is included",
+    "## Approach",
+    ...approach(content.recommendedApproach),
+    "",
+    "---",
+    "",
+    "## Details",
+    "",
+    "### In scope",
     ...bullets(content.scope),
-    "",
-    "## How it is checked",
-    "",
-    "### Behavioral checks",
-    ...bullets(content.acceptanceCriteria),
-  );
-  const verificationCommands = content.verificationCommands ?? [];
-  if (verificationCommands.length > 0) {
-    lines.push("", "### Routine project commands", ...bullets(verificationCommands));
-  }
-  lines.push(
-    "",
-    "### Hands-on verification",
-    ...bullets(content.manualVerification),
-    "",
-    "## Limits",
     "",
     "### Out of scope",
     ...bullets(content.nonGoals),
     "",
+    "### Automated checks",
+    ...bullets(content.acceptanceCriteria),
+    "",
     "### Constraints",
     ...bullets(content.constraints),
     "",
-    "## Key decisions",
+    "### Decisions already made",
     ...bullets(content.keyDecisions),
     "",
-    "## References",
+    "### References",
     ...bullets(content.researchLinks),
     "",
-    "## Record",
+    "### Record",
     `- Request: ${record.id}`,
     `- Repository: ${record.repoPath}`,
     `- Revision ${record.draft.revision}: ${record.draft.changeKind} change, recorded ${record.draft.recordedAt}`,
@@ -98,4 +96,14 @@ function approvalLine(record: RequestBriefRecord): string {
 
 function bullets(entries: readonly string[]): readonly string[] {
   return entries.length === 0 ? ["- None recorded."] : entries.map((entry) => `- ${entry}`);
+}
+
+/** Numbered steps, or the single paragraph a brief saved before steps holds. */
+function approach(steps: string | readonly string[]): readonly string[] {
+  if (typeof steps === "string") return [steps];
+  return steps.map((step, index) => `${index + 1}. ${step}`);
+}
+
+function capitalized(word: string): string {
+  return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
 }

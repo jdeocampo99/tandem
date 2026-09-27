@@ -4,9 +4,9 @@ import {
   LEGACY_ENDPOINT_ROLES,
   type RequestBriefApproval,
   type RequestBriefChangeKind,
+  type RequestBriefContent,
   type RequestBriefRecord,
   type RequestBriefRevision,
-  type RequestBriefStoredContent,
   type RequestReviewPane,
   type RequestReviewPaneStatus,
 } from "../contracts.ts";
@@ -172,9 +172,9 @@ function optionalSection(record: UnknownRecord, key: string): unknown {
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-function parseBriefContent(value: unknown, source: string): RequestBriefStoredContent {
+function parseBriefContent(value: unknown, source: string): RequestBriefContent {
   try {
-    return checkedRequestBriefContent(value, { allowLegacyFields: true });
+    return checkedRequestBriefContent(value);
   } catch (error) {
     failState(source, error instanceof Error ? error.message : String(error));
   }

@@ -20,18 +20,10 @@ const NOW = "2030-01-01T12:00:00.000Z";
 function content(goal: string): RequestBriefContent {
   return {
     goal,
-    userStories: [
-      {
-        actor: "a project owner",
-        action: "set a preference",
-        outcome: "the page follows that choice",
-      },
-    ],
     scope: ["the settings page"],
     constraints: [],
     nonGoals: [],
     acceptanceCriteria: ["dark mode follows the system setting"],
-    verificationCommands: [],
     manualVerification: [],
     recommendedApproach: "CSS variables",
     keyDecisions: [],

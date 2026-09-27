@@ -51,14 +51,18 @@ const models = {
 const summary = { tldr: ["Short."], what: ["Change."], why: ["Reason."] };
 const brief = {
   goal: "Ship it",
-  userStories: [{ actor: "a user", action: "use it", outcome: "their task is done" }],
+  summary: {
+    title: "Ship it",
+    beforeAfter: [{ moment: "Opening", before: "Slow.", after: "Fast." }],
+    size: { level: "small", reason: "One screen." },
+    risk: { level: "low", reason: "Easy to undo." },
+  },
   scope: ["src"],
   constraints: [],
   nonGoals: [],
-  acceptanceCriteria: ["the request reaches its intended outcome"],
-  verificationCommands: [],
+  acceptanceCriteria: ["Works"],
   manualVerification: [],
-  recommendedApproach: "Small steps",
+  recommendedApproach: ["Small steps"],
   keyDecisions: [],
   openQuestions: [],
   researchLinks: [],
@@ -248,31 +252,6 @@ const invalidRequests: readonly [string, unknown][] = [
         action: "brief-draft",
         repoPath: "/r",
         content: { goal: "g" },
-        reviewPane: false,
-      },
-    },
-  ],
-  [
-    "brief without user stories",
-    {
-      request: {
-        action: "brief-draft",
-        repoPath: "/r",
-        content: { ...brief, userStories: [] },
-        reviewPane: false,
-      },
-    },
-  ],
-  [
-    "brief with more than three user stories",
-    {
-      request: {
-        action: "brief-draft",
-        repoPath: "/r",
-        content: {
-          ...brief,
-          userStories: Array.from({ length: 4 }, () => brief.userStories[0]),
-        },
         reviewPane: false,
       },
     },

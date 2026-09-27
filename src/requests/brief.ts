@@ -4,14 +4,17 @@ import {
   isSafeRequestId,
   MAX_REQUEST_BRIEF_BYTES,
   MAX_REQUEST_BRIEF_ENTRIES,
+  MAX_REQUEST_BRIEF_MOMENTS,
+  REQUEST_BRIEF_RISKS,
+  REQUEST_BRIEF_SIZES,
   REQUEST_ID_PREFIX,
   type RequestBriefApproval,
   type RequestBriefChangeKind,
   type RequestBriefContent,
+  type RequestBriefRating,
   type RequestBriefRecord,
   type RequestBriefRevision,
-  type RequestBriefStoredContent,
-  type RequestBriefUserStory,
+  type RequestBriefSummary,
   type RequestReviewPane,
   type TaskRecord,
 } from "../contracts.ts";
@@ -82,18 +85,18 @@ const MANUAL_VERIFICATION_FIELD = "manualVerification";
 /** Also agreement and added later: it joins the agreement digest only when set. */
 const SKIP_REVIEW_FIELD = "skipReview";
 
+/** Also agreement and added later: it joins the agreement digest only when present. */
+const SUMMARY_FIELD = "summary";
+
 const ANNOTATION_FIELDS = ["openQuestions", "researchLinks"] as const;
 
-const TEXT_FIELDS = ["goal", "recommendedApproach"] as const;
-
-const USER_STORY_FIELDS = ["actor", "action", "outcome"] as const;
+const TEXT_FIELDS = ["goal"] as const;
 
 const LIST_FIELDS = [
   "scope",
   "constraints",
   "nonGoals",
   "acceptanceCriteria",
-  "verificationCommands",
   "manualVerification",
   "keyDecisions",
   "openQuestions",
@@ -131,30 +134,17 @@ export function requestIdFrom(rawId: string): string {
 
 /**
  * Validates untrusted brief content at the boundary and returns it in canonical field order, so
- * two equal briefs always digest identically. Legacy records may omit both newly added fields.
+ * two equal briefs always digest identically.
  */
-export function checkedRequestBriefContent(
-  value: unknown,
-  options?: Readonly<{ readonly allowLegacyFields?: false }>,
-): RequestBriefContent;
-export function checkedRequestBriefContent(
-  value: unknown,
-  options: Readonly<{ readonly allowLegacyFields: boolean }>,
-): RequestBriefStoredContent;
-export function checkedRequestBriefContent(
-  value: unknown,
-  options: Readonly<{ readonly allowLegacyFields?: boolean }> = {},
-): RequestBriefStoredContent {
+export function checkedRequestBriefContent(value: unknown): RequestBriefContent {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new RequestBriefError("invalid-content", "A request brief must be an object");
   }
   const record = value as Record<string, unknown>;
-  const allowLegacyFields = options.allowLegacyFields === true;
   const allowed: readonly string[] = [
     ...AGREEMENT_FIELDS,
-    "userStories",
-    "verificationCommands",
     MANUAL_VERIFICATION_FIELD,
+    SUMMARY_FIELD,
     SKIP_REVIEW_FIELD,
     ...ANNOTATION_FIELDS,
   ];
@@ -163,47 +153,23 @@ export function checkedRequestBriefContent(
       throw new RequestBriefError("invalid-content", `A request brief has no field ${key}`);
     }
   }
-  const hasUserStories = Object.hasOwn(record, "userStories");
-  const hasVerificationCommands = Object.hasOwn(record, "verificationCommands");
-  if (allowLegacyFields && hasUserStories !== hasVerificationCommands) {
-    throw new RequestBriefError(
-      "invalid-content",
-      "A stored request brief must include both userStories and verificationCommands or omit both",
-    );
-  }
-  const legacyFieldsOmitted = allowLegacyFields && !hasUserStories && !hasVerificationCommands;
-  const commonContent = {
+  const content: RequestBriefContent = {
     goal: briefText(record, "goal"),
     scope: briefList(record, "scope"),
     constraints: briefList(record, "constraints"),
     nonGoals: briefList(record, "nonGoals"),
     acceptanceCriteria: briefList(record, "acceptanceCriteria"),
-    // A brief saved before manual verification existed has no hands-on checks.
+    // A brief saved before manual verification existed has only automated checks.
     manualVerification:
       record.manualVerification === undefined ? [] : briefList(record, "manualVerification"),
-    recommendedApproach: briefText(record, "recommendedApproach"),
+    recommendedApproach: briefApproach(record.recommendedApproach),
     keyDecisions: briefList(record, "keyDecisions"),
     openQuestions: briefList(record, "openQuestions"),
     researchLinks: briefList(record, "researchLinks"),
+    // A brief saved before the summary existed has none.
+    ...(record.summary === undefined ? {} : { summary: briefSummary(record.summary) }),
     ...(briefFlag(record, SKIP_REVIEW_FIELD) ? { skipReview: true } : {}),
   };
-  const content: RequestBriefStoredContent = legacyFieldsOmitted
-    ? commonContent
-    : {
-        goal: commonContent.goal,
-        userStories: briefUserStories(record.userStories),
-        scope: commonContent.scope,
-        constraints: commonContent.constraints,
-        nonGoals: commonContent.nonGoals,
-        acceptanceCriteria: commonContent.acceptanceCriteria,
-        verificationCommands: briefList(record, "verificationCommands"),
-        manualVerification: commonContent.manualVerification,
-        recommendedApproach: commonContent.recommendedApproach,
-        keyDecisions: commonContent.keyDecisions,
-        openQuestions: commonContent.openQuestions,
-        researchLinks: commonContent.researchLinks,
-        ...(commonContent.skipReview === true ? { skipReview: true } : {}),
-      };
   const bytes = Buffer.byteLength(JSON.stringify(content), "utf8");
   if (bytes > MAX_REQUEST_BRIEF_BYTES) {
     throw new RequestBriefError(
@@ -214,13 +180,13 @@ export function checkedRequestBriefContent(
   if (content.scope.length === 0 || content.acceptanceCriteria.length === 0) {
     throw new RequestBriefError(
       "invalid-content",
-      "A request brief must name at least one scope item and acceptance criterion",
+      "A request brief must name at least one scope item and one acceptance criterion",
     );
   }
   return content;
 }
 
-export function requestBriefDigests(content: RequestBriefStoredContent): RequestBriefDigests {
+export function requestBriefDigests(content: RequestBriefContent): RequestBriefDigests {
   return {
     contentDigest: digestOf(canonicalContent(content)),
     agreementDigest: digestOf(canonicalAgreement(content)),
@@ -484,20 +450,17 @@ function digestOf(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function canonicalContent(content: RequestBriefStoredContent): string {
+function canonicalContent(content: RequestBriefContent): string {
   return JSON.stringify([
     canonicalAgreement(content),
     ...ANNOTATION_FIELDS.map((field) => content[field]),
   ]);
 }
 
-function canonicalAgreement(content: RequestBriefStoredContent): string {
+function canonicalAgreement(content: RequestBriefContent): string {
   const agreement: unknown[] = AGREEMENT_FIELDS.map((field) => content[field]);
   if (content.manualVerification.length > 0) agreement.push(content.manualVerification);
-  if (content.userStories !== undefined) agreement.push(content.userStories);
-  if (content.verificationCommands !== undefined && content.verificationCommands.length > 0) {
-    agreement.push(content.verificationCommands);
-  }
+  if (content.summary !== undefined) agreement.push(content.summary);
   if (content.skipReview === true) agreement.push({ skipReview: true });
   return JSON.stringify(agreement);
 }
@@ -529,48 +492,92 @@ function briefText(record: Record<string, unknown>, field: (typeof TEXT_FIELDS)[
   return value;
 }
 
-function briefUserStories(value: unknown): readonly RequestBriefUserStory[] {
-  if (!Array.isArray(value)) {
+function briefApproach(value: unknown): string | readonly string[] {
+  // A brief saved before numbered steps holds one paragraph.
+  if (typeof value === "string" && value.trim().length > 0) return value;
+  const steps = checkedStrings(value, "recommendedApproach");
+  if (steps.length === 0) {
     throw new RequestBriefError(
       "invalid-content",
-      "A request brief userStories field must contain one to three actor/action/outcome stories",
+      "A request brief recommendedApproach needs a step",
     );
   }
-  if (value.length < 1 || value.length > 3) {
+  return steps;
+}
+
+function briefSummary(value: unknown): RequestBriefSummary {
+  const summary = checkedObject(value, "summary", ["title", "beforeAfter", "size", "risk"]);
+  if (!Array.isArray(summary.beforeAfter)) {
     throw new RequestBriefError(
       "invalid-content",
-      "A request brief must contain one to three user stories",
+      "A request brief summary.beforeAfter must be an array",
     );
   }
-  return value.map((entry, index) => {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      throw new RequestBriefError(
-        "invalid-content",
-        `A request brief userStories[${index}] must name actor, action, and outcome`,
-      );
-    }
-    const record = entry as Record<string, unknown>;
-    if (
-      Object.keys(record).some((field) => !USER_STORY_FIELDS.some((allowed) => allowed === field))
-    ) {
-      throw new RequestBriefError(
-        "invalid-content",
-        `A request brief userStories[${index}] has an unknown field`,
-      );
-    }
-    return {
-      actor: checkedLine(record.actor, `userStories[${index}].actor`),
-      action: checkedLine(record.action, `userStories[${index}].action`),
-      outcome: checkedLine(record.outcome, `userStories[${index}].outcome`),
-    };
-  });
+  if (summary.beforeAfter.length === 0 || summary.beforeAfter.length > MAX_REQUEST_BRIEF_MOMENTS) {
+    throw new RequestBriefError(
+      "invalid-content",
+      `A request brief summary.beforeAfter must hold one to ${MAX_REQUEST_BRIEF_MOMENTS} moments`,
+    );
+  }
+  return {
+    title: checkedLine(summary.title, "summary.title"),
+    beforeAfter: summary.beforeAfter.map((entry: unknown, index) => {
+      const field = `summary.beforeAfter[${index}]`;
+      const moment = checkedObject(entry, field, ["moment", "before", "after"]);
+      return {
+        moment: checkedLine(moment.moment, `${field}.moment`),
+        before: checkedLine(moment.before, `${field}.before`),
+        after: checkedLine(moment.after, `${field}.after`),
+      };
+    }),
+    size: briefRating(summary.size, "summary.size", REQUEST_BRIEF_SIZES),
+    risk: briefRating(summary.risk, "summary.risk", REQUEST_BRIEF_RISKS),
+  };
+}
+
+function briefRating<Level extends string>(
+  value: unknown,
+  field: string,
+  levels: readonly Level[],
+): RequestBriefRating<Level> {
+  const rating = checkedObject(value, field, ["level", "reason"]);
+  const level = levels.find((candidate) => candidate === rating.level);
+  if (level === undefined) {
+    throw new RequestBriefError(
+      "invalid-content",
+      `A request brief ${field}.level must be one of ${levels.join(", ")}`,
+    );
+  }
+  return { level, reason: checkedLine(rating.reason, `${field}.reason`) };
+}
+
+function checkedObject(
+  value: unknown,
+  field: string,
+  keys: readonly string[],
+): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new RequestBriefError("invalid-content", `A request brief ${field} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const unknown = Object.keys(record).find((key) => !keys.includes(key));
+  if (unknown !== undefined) {
+    throw new RequestBriefError(
+      "invalid-content",
+      `A request brief ${field} has no field ${unknown}`,
+    );
+  }
+  return record;
 }
 
 function briefList(
   record: Record<string, unknown>,
   field: (typeof LIST_FIELDS)[number],
 ): readonly string[] {
-  const value = record[field];
+  return checkedStrings(record[field], field);
+}
+
+function checkedStrings(value: unknown, field: string): readonly string[] {
   if (!Array.isArray(value)) {
     throw new RequestBriefError(
       "invalid-content",
