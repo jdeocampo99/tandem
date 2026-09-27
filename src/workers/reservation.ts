@@ -33,6 +33,7 @@ import {
   taskAdmissionRefusal,
 } from "./admission.ts";
 import {
+  catalogueGapPersists,
   describeExecutionRoutingDecision,
   type ExecutionUsageObservation,
   executionRoutingPauseStands,
@@ -240,7 +241,13 @@ export class TaskReservations {
     // An uncertain-outcome question stops speaking once that attempt settles as a known failure.
     const settledUncertainty =
       runtime.routingPause?.reason === "prior-outcome-uncertain" && prior?.outcome !== "uncertain";
-    if (!settledUncertainty && executionRoutingPauseStands(runtime.routingPause, identity)) {
+    const catalogue = await this.readCatalogue(attempt.cwd);
+    // A catalogue gap stops speaking once the catalogue lists the pinned model cleanly again.
+    if (
+      !settledUncertainty &&
+      executionRoutingPauseStands(runtime.routingPause, identity) &&
+      catalogueGapPersists(runtime.routingPause, catalogue)
+    ) {
       return runtime.routingPause;
     }
     const decision = resolveExecutionRouting({
@@ -257,7 +264,7 @@ export class TaskReservations {
         inputHead: attempt.inputHead,
       },
       pinned: task.policy.config.models[modelRole],
-      catalogue: await this.readCatalogue(attempt.cwd),
+      catalogue,
       usage: await this.observeRequestUsage(task),
       now: this.#deps.clock(),
     });

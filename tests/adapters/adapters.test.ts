@@ -30,6 +30,7 @@ import {
   ApprovalRequiredError,
   EndpointOwnershipError,
   LeaseSafetyError,
+  WorktreeInUseError,
 } from "../../src/adapters/primitives.ts";
 import {
   acquireWorktree,
@@ -755,6 +756,36 @@ test("preserves Treehouse return diagnostics in a failed destructive release", a
       destructiveApproval: true,
     }),
   ).rejects.toThrow(/Treehouse refused to return the checkout/u);
+});
+
+test("refuses to return a worktree a live process still runs in", async () => {
+  const status = JSON.stringify([
+    {
+      name: lease.name,
+      path: lease.path,
+      status: "leased",
+      flavor: "git",
+      lease_id: lease.leaseId,
+      lease_holder: lease.leaseHolder,
+      leased_at: lease.leasedAt,
+      processes: [{ pid: 42, name: "herdr" }],
+    },
+  ]);
+  const runner = scriptedRunner([result(status)]);
+
+  const released = releaseWorktree(runner.run, {
+    repo: "/tmp/repo",
+    lease,
+    childWorkerStopped: true,
+    discard: true,
+    destructiveApproval: true,
+  });
+
+  await expect(released).rejects.toBeInstanceOf(WorktreeInUseError);
+  await expect(released).rejects.toThrow(
+    /a running process is using this worktree \(pid 42 herdr\)/u,
+  );
+  expect(runner.calls).toHaveLength(1);
 });
 
 test("refuses a pull request merge when the reviewed head is stale", async () => {

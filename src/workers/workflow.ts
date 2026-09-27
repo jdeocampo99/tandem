@@ -65,7 +65,7 @@ import { taskSourcePath } from "../service/source.ts";
 import { policyIdentity } from "../tasks/acceptance.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
-import { keepFixingQuestion } from "../tasks/findings.ts";
+import { type FixRoundGate, fixRoundGate } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
 import type { ReviewAssistanceRuntime } from "../tasks/review-assistance.ts";
 import type { TaskStore } from "../tasks/store.ts";
@@ -194,6 +194,9 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly readModelCatalogue: ModelCatalogueReader;
 }>;
 
+/** How a job's pane showed its worker stopped; see `WorkerWorkflow.jobStopped`. */
+type JobStop = "exited" | "finished";
+
 /**
  * Drives a task's workers through their stages: starting queued work, fix rounds, relaunch, and
  * consuming each job's durable result. Validation and review run in their own stage modules.
@@ -301,24 +304,26 @@ export class WorkerWorkflow {
       }
       return;
     }
-    if (!(await this.jobStopped(task, job, endpoint, claim))) return;
+    const stop = await this.jobStopped(task, job, endpoint, claim);
+    if (stop === undefined) return;
     if (job.kind === "worker") {
-      await this.settleWorkerJob(task, runtime, job, claim);
+      await this.settleWorkerJob(task, runtime, job, claim, stop);
       return;
     }
     await this.settleValidationJob(task, runtime, job, claim);
   }
 
   /**
-   * Whether the job's pane shows its worker finished or paused, so its result can be read. A
-   * running worker's progress is observed instead, and a vanished pane is settled here.
+   * How the job's pane shows its worker stopped, so its result can be read: `exited` when no worker
+   * process remains, `finished` when the process is still there but reports it completed or paused.
+   * A running worker's progress is observed instead, and a vanished pane is settled here.
    */
   private async jobStopped(
     task: TaskRecord,
     job: DurableJob,
     endpoint: Endpoint,
     claim: OperationClaim,
-  ): Promise<boolean> {
+  ): Promise<JobStop | undefined> {
     let inspection: HerdrPaneInspection;
     try {
       inspection = await inspectEndpoint(this.#deps.run, {
@@ -328,21 +333,23 @@ export class WorkerWorkflow {
     } catch (error) {
       if (error instanceof EndpointOwnershipError && error.reason === "missing") {
         await this.reconcileMissingEndpoint(task, job, claim);
-        return false;
+        return undefined;
       }
       throw error;
     }
-    if (!inspection.activeWorker) return true;
+    if (!inspection.activeWorker) return "exited";
     await this.observeWorkerProgress(task, job, claim);
     const terminal = await liveWorkerTerminal(inspection, job);
-    if (terminal !== undefined && (terminal.completed || terminal.phase === "paused")) return true;
+    if (terminal !== undefined && (terminal.completed || terminal.phase === "paused")) {
+      return "finished";
+    }
     if (job.phase !== "running") {
       await this.#records.updateJob(job.taskId, job.id, claim, (current) => ({
         ...current,
         phase: "running",
       }));
     }
-    return false;
+    return undefined;
   }
 
   /** Reads a stopped worker's durable result and consumes it, failing the job when it can't. */
@@ -351,6 +358,7 @@ export class WorkerWorkflow {
     runtime: RuntimeTaskState,
     job: DurableJob,
     claim: OperationClaim,
+    stop: JobStop,
   ): Promise<void> {
     let result: WorkerResult;
     try {
@@ -364,6 +372,18 @@ export class WorkerWorkflow {
       if (isMissing(error)) {
         if (!isOlderThan(job.createdAt, this.#deps.clock, DEFAULT_STARTUP_GRACE_MS)) return;
         const reason = `worker stopped without a durable result: ${describeError(error)}`;
+        if (stop === "exited") {
+          // No worker process is left in the pane: the worker died, a known outcome. Block with a
+          // recoverable cause so central recovery restarts it within its restart budget.
+          await this.#records.failJob(task, job, reason, claim, true, false, {
+            group: "lost-resource",
+            kind: "resource-lost",
+            summary: "The worker stopped without reporting back.",
+            detail: reason,
+            jobId: job.id,
+          });
+          return;
+        }
         await this.#records.failJob(task, job, reason, claim, true, true, {
           group: "safety-stop",
           kind: "quarantined-unknown-outcome",
@@ -456,11 +476,12 @@ export class WorkerWorkflow {
       await this.#records.failJob(task, job, reason, claim, false, false);
       return;
     }
-    await this.#records.failJob(task, job, reason, claim, true, true, {
-      group: "safety-stop",
-      kind: "quarantined-unknown-outcome",
-      summary:
-        "The worker's terminal disappeared before it finished, so Tandem paused the task for you to look at.",
+    // Nothing runs in a pane that no longer exists, so the worker is known dead. Block with a
+    // recoverable cause so central recovery restarts it within its restart budget.
+    await this.#records.failJob(task, job, reason, claim, true, false, {
+      group: "lost-resource",
+      kind: "resource-lost",
+      summary: "The worker's terminal disappeared before it finished.",
       detail: reason,
       jobId: job.id,
     });
@@ -1260,9 +1281,9 @@ export class WorkerWorkflow {
       });
       return;
     }
-    const keepFixing = recoveryFix ? undefined : keepFixingQuestion(task);
-    if (keepFixing !== undefined) {
-      await this.askKeepFixing(task.id, keepFixing);
+    const gate = recoveryFix ? undefined : fixRoundGate(task);
+    if (gate !== undefined) {
+      await this.stopBeforeFixRound(task.id, gate);
       return;
     }
     const reservation = reserved ?? (await this.#reservations.reserveTask(task.id, "implementer"));
@@ -1350,32 +1371,30 @@ export class WorkerWorkflow {
   }
 
   /**
-   * Blocks a task in `awaiting-fixes` on the "Keep fixing?" question, so the person decides whether
-   * this same task and worktree get more fix rounds. Nothing is launched and no round is spent.
+   * Blocks a task in `awaiting-fixes` before another fix round: on the "Keep fixing?" question, so
+   * the person decides whether this same task and worktree get more fix rounds, or, once its one
+   * extension is spent, with the open findings and no question. Nothing is launched and no round is
+   * spent.
    */
-  private async askKeepFixing(taskId: string, question: TaskQuestion): Promise<void> {
+  private async stopBeforeFixRound(taskId: string, gate: FixRoundGate): Promise<void> {
+    const summary = gate.type === "ask" ? gate.question.text : gate.summary;
+    const detail =
+      gate.type === "ask" ? (gate.question.recommendation ?? gate.question.text) : gate.detail;
     await this.#deps.store.exclusive(async (store) => {
       const current = await store.read(taskId);
       if (current?.stage !== "awaiting-fixes") return;
-      await store.update(current.id, current.revision, (entry) =>
-        taskWithQuestion(
-          transitionTask(
-            entry,
-            {
-              type: "block",
-              reason: question.text,
-              cause: {
-                group: "user-decision",
-                kind: "fix-rounds-exhausted",
-                summary: question.text,
-                detail: question.recommendation ?? question.text,
-              },
-            },
-            this.#deps.context(),
-          ),
-          question,
-        ),
-      );
+      await store.update(current.id, current.revision, (entry) => {
+        const blocked = transitionTask(
+          entry,
+          {
+            type: "block",
+            reason: summary,
+            cause: { group: "user-decision", kind: "fix-rounds-exhausted", summary, detail },
+          },
+          this.#deps.context(),
+        );
+        return gate.type === "ask" ? taskWithQuestion(blocked, gate.question) : blocked;
+      });
     });
   }
 

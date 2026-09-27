@@ -12,7 +12,8 @@ tests/terminal/main.test.ts.
 
 ## What it shows
 
-One view across every onboarded project. Each row names its project; no row shows a task ID.
+One view across every onboarded project. The Running section groups tasks beneath their project;
+other rows name the project inline. No row shows a task ID.
 
 ```
  tandem   tandem, tagalingo · PRs checked 40s ago
@@ -24,10 +25,12 @@ NEEDS YOU 4 ──────────────────────�
 🔴 tagalingo  acme/app#409 refactor-cache  🙋 test_cache_evict failed twice → https://ci/…
 
 RUNNING 3 ────────────────────────────────────────────────────────────────────────────────
-   PROJECT    TASK                   STAGE         TIME
-🔨 tandem     Fix the flaky login    implementing   12m
-🔍 tandem     Research retry policy  researching     3m
-⏸️ tagalingo  Dark mode tokens       paused          2h
+  tagalingo
+  ⏸️ paused · 2h  Dark mode tokens
+
+  tandem
+  🔍 researching · 3m  Research retry policy
+  🔨 implementing · 12m  Fix the flaky login
 
 PRS 2 ────────────────────────────────────────────────────────────────────────────────────
    PULL REQUEST            CHECKS          STATUS       NEXT
@@ -44,22 +47,28 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 
 | Section | Rows |
 | --- | --- |
-| Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked red. Always shown; "Nothing needs you." when empty. |
-| Running | Tasks paused by the user, queued, researching, implementing, checking, in review, or fixing findings, with the time since the task was created. Left out when empty. |
+| Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks stopped on a model (routing) question for their current generation, shown as `model question: keep <model>? <why>` instead of their running stage; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked red. Always shown; "Nothing needs you." when empty. |
+| Running | Tasks paused by the user, queued, researching, implementing, checking, in review, or fixing findings, grouped by repository path. Groups sort by project name and path; tasks sort by workflow stage, objective, and task ID. Each task shows the time since it was created, or `idle 42m` once its worker's receipt shows no progress for over 5 minutes (heartbeats do not count). Left out when empty. |
 | PRs | Every other watched pull request, as PR watch's rows with `owner/repo#N`. Left out when empty. |
 | This week | One line for the 7 days before now, across every project: tasks whose timeline last moved them to completed or merged in that window, how many of those that went through review passed it the first time, and what those tasks cost. Left out when none finished. |
 
 - The header names the projects and how long ago PR watch last read GitHub ("PRs not checked
   yet" before the first read).
-- Each section title carries its row count and a rule as wide as its widest row. Running and PRs
-  have column headers; a pull request's checks show as an 8-cell bar of passed out of all checks
-  when PR watch has the counts, otherwise its checks text (`no CI`, `⚠`).
+- Each section title carries its row count and a rule as wide as its widest row. PRs have column
+  headers; a pull request's checks show as an 8-cell bar of passed out of all checks when PR watch
+  has the counts, otherwise its checks text (`no CI`, `⚠`).
+- Running groups tasks by repository path, orders projects by name and path, and sorts each
+  project's tasks by workflow stage, objective, then task key. Duplicate basenames include a
+  distinguishing repository path suffix in the heading. Each project has one dim heading and one
+  blank line separates project groups.
+- Running task rows show stage and elapsed time before the objective. On a terminal, objectives
+  wrap to at most two lines at the available width; overflow ends with `…`.
 - Columns are measured in terminal cells (`Bun.stringWidth`), so emoji take two.
 - On a terminal, text is colored by meaning: yellow waits on the user (section title, brief and
   approval rows, `question:`), red failed (`blocked:`, red pull requests, failing checks), cyan and
   blue are work in progress, magenta is checking or review, green is done or passing, and the
-  header's extras, project names, times, and footer are dim. Paused and queued rows are dim.
-  Lines are cut with `…` to the terminal's width so a row never wraps.
+  header's extras, project headings, times, and footer are dim. Paused and queued stages and
+  descriptions are dim. Other rows are cut with `…` so they never wrap.
 - Colors and cutting apply only when stdout is a terminal. Piped or captured output, and any
   output when `NO_COLOR` is set, is plain text with the same layout; plain output says
   `Projects:` where the colored header shows a ` tandem ` badge.
@@ -89,9 +98,9 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 ## `tandem status --watch`
 
 - Re-reads the state and open coordinators every 2 seconds and redraws (clearing the screen) only
-  when the rendered text changed. It reads the terminal's width each round, so a resized pane is
-  redrawn to fit. The code version is read once at start. A round that finds the
-  state lock held by another Tandem is skipped.
+  when the rendered text changed. It reads the terminal's width each round, so the Running grouping
+  and wrapped descriptions refit after a resize. The code version is read once. A round that finds
+  the state lock held by another Tandem is skipped.
 - Runs until Esc, q, or Ctrl-C when its input is a terminal (read in raw mode, so arrow keys do
   nothing), and until Ctrl-C otherwise. Closing cuts the wait between redraws short, so it exits at
   once. Esc and q are what close it in Herdr's popup, which receives every key, including Herdr's
@@ -154,7 +163,7 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 - On each scheduler reconcile, a coordinator reads the board and keeps the keys of the "Needs you"
   rows that belong to its own project (a pull request belongs to its task's project, or to the
   checkout it was watched from) and that `notifiesUser` accepts: briefs awaiting approval, task
-  questions, red pull requests, and tasks awaiting approval or ready.
+  questions, model questions, red pull requests, and tasks awaiting approval or ready.
 - When keys appear that were not there on the last reconcile, it sends one
   `herdr notification show` for all of them, with Herdr's needs-input sound. One new row reads
   `Tandem: <name>` over `<reason> · prefix+t for status`; several read
@@ -169,11 +178,12 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 ## "How's it going?"
 
 - With Jev prompt routing on, a message Jev confidently classifies as asking how things are going
-  overall runs the read-only `board` action and shows the header and sections, without the footer,
-  in a compact uncolored form for the chat (`renderBoard`: plain section titles, no column
-  headers, checks as text, times after the stage like `implementing · 12m`),
-  with no coordinator turn (`board` in the lookup list, question schema version 5). The board ends
-  with a pointer to the live view: `prefix+t` in Herdr, or `tandem status --watch`. If Jev fails or
-  is unsure, the message goes to the coordinator as before (see
+  overall runs the read-only `board` action without a coordinator turn. In OMP chat, it shows the
+  same colored, column-fitted status sections as `tandem status`, using the terminal board formatter
+  at the chat width; the CLI adds its own footer, which chat omits. A live-view pointer follows the
+  board. If the host cannot render custom status messages, the Markdown board remains the fallback.
+  If Jev fails or is unsure, the message goes to the coordinator as before (see
   [policy.md](policy.md#jev-prompt-routing)).
-- The coordinator's `board` action returns the same view.
+- The coordinator's `board` action uses that same colored status message and tells the model not to
+  repeat the rows. `renderBoard` remains the shared Markdown fallback for hosts without the custom
+  renderer.

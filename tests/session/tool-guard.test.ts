@@ -112,12 +112,16 @@ test("the registered OMP tool_call hook blocks with the guard's reason", async (
     registerCommand: () => undefined,
     registerMessageRenderer: () => undefined,
   } as unknown as ExtensionAPI;
+  const turnActions: string[] = [];
   registerTandemOmp(pi, {
     getService: () => ({}) as TandemService,
     getHome: () => "/tandem-home",
     promptRouting: { timeoutMs: 1_500 },
     reconcile: async () => undefined,
     postAction: async () => undefined,
+    recordTurnAction: (_ctx, action) => {
+      turnActions.push(action);
+    },
     userPrompt: () => undefined,
     closeThread: () => undefined,
     researchRunning: async () => false,
@@ -132,9 +136,11 @@ test("the registered OMP tool_call hook blocks with the guard's reason", async (
     block: true,
     reason: COORDINATOR_TOOL_REFUSAL,
   });
+  expect(await call("tandem", { request: { action: "trace", taskId: "task-1" } })).toBeUndefined();
+  expect(turnActions).toEqual(["other", "other", "other"]);
 });
 
-test("OMP saves only an explicit answer for the exact pending planning question", async () => {
+test("OMP advances through exact planning asks and saves only explicit answers", async () => {
   type Handler = (event: unknown, ctx: unknown) => Promise<unknown>;
   const handlers = new Map<string, Handler>();
   const pi = {
@@ -159,7 +165,10 @@ test("OMP saves only an explicit answer for the exact pending planning question"
           manualVerification: [],
           recommendedApproach: "Use research evidence",
           keyDecisions: [],
-          openQuestions: ["Which contract should remain?"],
+          openQuestions: [
+            "Which contract should remain?",
+            "What compatibility constraint applies?",
+          ],
           researchLinks: [],
         },
         planningInterview: {
@@ -182,13 +191,30 @@ test("OMP saves only an explicit answer for the exact pending planning question"
   );
   const question = record.planningInterview?.questions[0];
   if (question === undefined) throw new Error("planning question was not saved");
+  let failNextAnswerSave = false;
   const service = {
     requestBriefs: async () => [record],
+    addRequestPlanningQuestion: async (
+      _requestId: string,
+      input: Parameters<typeof addRequestPlanningQuestion>[1],
+    ) => {
+      record = addRequestPlanningQuestion(
+        record,
+        input,
+        "plan-2",
+        "2030-01-01T00:00:00.000Z",
+      );
+      return record;
+    },
     recordRequestPlanningAnswer: async (
       _requestId: string,
       questionId: string,
       answer: RequestPlanningAnswer,
     ) => {
+      if (failNextAnswerSave) {
+        failNextAnswerSave = false;
+        throw new Error("request store unavailable");
+      }
       const saved = recordRequestPlanningAnswer(
         record,
         questionId,
@@ -205,6 +231,7 @@ test("OMP saves only an explicit answer for the exact pending planning question"
     promptRouting: { timeoutMs: 1_500 },
     reconcile: async () => undefined,
     postAction: async () => undefined,
+    recordTurnAction: () => undefined,
     userPrompt: () => undefined,
     closeThread: () => undefined,
     researchRunning: async () => false,
@@ -252,26 +279,87 @@ test("OMP saves only an explicit answer for the exact pending planning question"
   });
   expect(record.planningInterview?.questions[0]?.answer).toBeUndefined();
 
-  const explicit = await resultHook(
+  const explicitInput = {
+    toolName: "ask",
+    input: askInput,
+    details: {
+      question: `${question.context}\n\n${question.question}`,
+      options: question.options.map((option) => option.label),
+      multi: false,
+      selectedOptions: ["New"],
+      timedOut: false,
+    },
+    isError: false,
+  };
+  failNextAnswerSave = true;
+  const failedSave = await resultHook(explicitInput, context);
+  expect(failedSave).toMatchObject({
+    content: [{ text: expect.stringContaining("Tandem did not save this planning answer") }],
+    details: { tandemPlanningAnswerSaved: false },
+    isError: true,
+  });
+  expect(record.planningInterview?.questions[0]?.answer).toBeUndefined();
+
+  const explicit = await resultHook(explicitInput, context);
+  expect(explicit).toMatchObject({
+    content: [{ text: expect.stringContaining("Continue from the saved request state.") }],
+    details: { tandemPlanningAnswerSaved: true },
+  });
+  expect(record.planningInterview?.questions[0]?.answer).toEqual({
+    kind: "option",
+    value: "New",
+  });
+  const stale = await resultHook(
+    {
+      ...explicitInput,
+      details: { ...explicitInput.details, selectedOptions: ["Existing"] },
+    },
+    context,
+  );
+  expect(stale).toMatchObject({
+    details: { tandemPlanningAnswerSaved: false },
+    isError: true,
+  });
+  expect(record.planningInterview?.questions[0]?.answer).toEqual({
+    kind: "option",
+    value: "New",
+  });
+
+  const second = await service.addRequestPlanningQuestion("req-interview", {
+    context: "The two paths affect older clients.",
+    question: "What compatibility constraint applies?",
+    options: [{ label: "Keep existing clients" }, { label: "Require migration" }],
+    recommendedOption: 0,
+  });
+  const secondQuestion = second.planningInterview?.questions.at(-1);
+  if (secondQuestion === undefined) throw new Error("second planning question was not saved");
+  const secondAskInput = planningAskInput(secondQuestion);
+  expect(await callHook({ toolName: "ask", input: secondAskInput }, context)).toBeUndefined();
+
+  const custom = await resultHook(
     {
       toolName: "ask",
-      input: askInput,
+      input: secondAskInput,
       details: {
-        question: `${question.context}\n\n${question.question}`,
-        options: question.options.map((option) => option.label),
+        question: `${secondQuestion.context}\n\n${secondQuestion.question}`,
+        options: secondQuestion.options.map((option) => option.label),
         multi: false,
-        selectedOptions: ["New"],
+        selectedOptions: [],
+        customInput: "Keep the adapter for older clients",
         timedOut: false,
       },
       isError: false,
     },
     context,
   );
-  expect(explicit).toMatchObject({ details: { tandemPlanningAnswerSaved: true } });
-  expect(record.planningInterview?.questions[0]?.answer).toEqual({
-    kind: "option",
-    value: "New",
+  expect(custom).toMatchObject({
+    content: [{ text: expect.stringContaining("Continue from the saved request state.") }],
+    details: { tandemPlanningAnswerSaved: true },
   });
+  expect(record.planningInterview?.questions.map((saved) => saved.answer)).toEqual([
+    { kind: "option", value: "New" },
+    { kind: "custom", value: "Keep the adapter for older clients" },
+  ]);
 });
 
 test("a home reached through a symlink or ~ still counts as Tandem's records", async () => {

@@ -153,7 +153,7 @@ requests. In Herdr you don't have to ask: the tab bar always shows a one-line su
 pane (Esc or q closes it). When something new needs you, Herdr shows a notification.
 `tandem status --watch` works in any terminal.
 
-![tandem status in a terminal: a yellow Needs you section with briefs, questions, blocked tasks, and failing pull requests; Running and PRs sections with column headers and check progress bars; and a weekly summary](docs/images/status.svg)
+![tandem status in a terminal: Needs you comes first; Running tasks are grouped under muted project headings, with stage and elapsed time before each objective; PRs show check progress bars; and a weekly summary follows](docs/images/status.svg)
 
 Sections are colored by what they mean: yellow waits on you, red failed, cyan is in progress,
 green is done. Piped output and `NO_COLOR` give the same layout as plain text.

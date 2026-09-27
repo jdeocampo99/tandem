@@ -4,6 +4,7 @@ import type { ModelSpec, ThinkingLevel } from "../../src/contracts.ts";
 import type { DurableExecutionRouting } from "../../src/runtime/schema.ts";
 import {
   authorizeExecutionModel,
+  catalogueGapPersists,
   describeExecutionRoutingDecision,
   type ExecutionRoutingBoundary,
   type ExecutionRoutingDecision,
@@ -351,6 +352,25 @@ test("a catalogue contradicting the pinned model pauses rather than falling back
 
   expect(pause.reason).toBe("pinned-model-absent-from-catalogue");
   expect(pause.evidenceGaps).toEqual(["incumbent-absent-from-catalogue"]);
+});
+
+test("a missing-model pause persists until the catalogue lists the pinned model again", () => {
+  const pause = pauseOf(
+    resolveExecutionRouting(
+      routingRequest({ catalogue: snapshot([catalogueEntry("alpha/other")], ["alpha"]) }),
+    ),
+  );
+
+  expect(
+    catalogueGapPersists(pause, { status: "unavailable", reason: "catalogue-unreadable" }),
+  ).toBe(true);
+  expect(catalogueGapPersists(pause, snapshot([], ["alpha"]))).toBe(true);
+  expect(catalogueGapPersists(pause, snapshot([catalogueEntry("alpha/other")], ["alpha"]))).toBe(
+    true,
+  );
+  expect(catalogueGapPersists(pause, snapshot([catalogueEntry(PINNED.model)], ["alpha"]))).toBe(
+    false,
+  );
 });
 
 test("an unread catalogue keeps the pinned model and claims no comparison", () => {

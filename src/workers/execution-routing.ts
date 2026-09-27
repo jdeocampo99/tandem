@@ -276,6 +276,22 @@ export function executionRoutingPauseStands(
 }
 
 /**
+ * Whether the catalogue still shows the gap a saved pause stopped on. An unreadable or empty
+ * catalogue proves nothing either way, so the pause keeps standing; a catalogue that now resolves
+ * the pinned model cleanly retires it. An uncertain prior outcome is no catalogue gap and persists.
+ */
+export function catalogueGapPersists(
+  pause: RaisedExecutionRoutingPause,
+  snapshot: ModelCatalogueSnapshot,
+): boolean {
+  if (pause.reason === "prior-outcome-uncertain") return true;
+  const catalogue = publishedCatalogue(snapshot);
+  if (catalogue === undefined) return true;
+  const pinned = { model: pause.pinnedSelector, thinking: pause.pinnedThinking };
+  return lookupModelTierEvidence(catalogue.models, pinned).status !== "known";
+}
+
+/**
  * The routing question as one short question: keep the pinned model, and why Tandem stopped.
  * It never proposes a saving or names a task, decision, generation, or attempt id; a caller that
  * needs those reads them off `pause` directly. `taskObjective`, when given, names the task.
@@ -294,6 +310,13 @@ export function describeExecutionRoutingDecision(
 /** Why routing stopped, as one plain sentence with no ids. */
 export function routingPauseExplanation(pause: RaisedExecutionRoutingPause): string {
   return ROUTING_PAUSE_EXPLANATIONS[pause.reason];
+}
+
+/** Whether a saved pause is one routing still raises, not a retired reason that never stands. */
+export function raisedRoutingPause(
+  pause: DurableExecutionRoutingPause,
+): pause is RaisedExecutionRoutingPause {
+  return isRaisedReason(pause.reason);
 }
 
 function isRaisedReason(reason: string): reason is ExecutionRoutingPauseReason {

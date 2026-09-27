@@ -4,6 +4,7 @@ import type { BoardRow } from "../../src/board/view.ts";
 import type { TaskRecord } from "../../src/contracts.ts";
 import { TANDEM_COORDINATOR_INSTRUCTIONS } from "../../src/instructions.ts";
 import type { TandemService } from "../../src/service/controller.ts";
+import { runTandemCommand } from "../../src/session/actions.ts";
 import {
   type CoordinatorDeps,
   CoordinatorSession,
@@ -452,6 +453,129 @@ test("while the user is in a thread, what needs the coordinator waits for the th
   await session.agentEnd(false);
   expect(wakes()).toHaveLength(3);
   expect(wakes()[2]?.hidden?.text).not.toContain("came in while");
+});
+
+test("a trace-only turn skips final reconciliation, but other actions keep it", async () => {
+  const routine = task({
+    id: "task-routine",
+    notifications: [
+      {
+        id: "routine-1",
+        message: "A routine receipt is ready.",
+        acknowledged: false,
+        kind: "routine",
+      },
+    ],
+  });
+  const acknowledged: string[] = [];
+  let listCalls = 0;
+  const { host, effects } = recordingSessionHost();
+  const session = new CoordinatorSession(
+    coordinatorDeps(
+      {
+        list: async () => {
+          listCalls += 1;
+          return [routine];
+        },
+        acknowledge: async (taskId, notificationId) => {
+          acknowledged.push(`${taskId}:${notificationId}`);
+          return routine;
+        },
+      },
+      { host },
+    ),
+  );
+
+  session.userPrompt();
+  session.recordTurnAction("trace");
+  await session.agentEnd(false);
+  expect(listCalls).toBe(0);
+  expect(acknowledged).toEqual([]);
+  expect(effects).toEqual([]);
+
+  await session.agentEnd(false);
+  expect(listCalls).toBe(1);
+  expect(acknowledged).toEqual(["task-routine:routine-1"]);
+
+  session.userPrompt();
+  session.recordTurnAction("trace");
+  session.recordTurnAction("other");
+  await session.agentEnd(false);
+  expect(listCalls).toBe(2);
+
+  session.userPrompt();
+  session.recordTurnAction("other");
+  session.recordTurnAction("trace");
+  await session.agentEnd(false);
+  expect(listCalls).toBe(3);
+
+  // Answering an ask mid-run must not forget the ask itself.
+  session.userPrompt();
+  session.recordTurnAction("other");
+  session.toolEnd({ id: "ask-1", name: "ask", kind: "ask" });
+  session.recordTurnAction("trace");
+  await session.agentEnd(false);
+  expect(listCalls).toBe(4);
+});
+
+test("a local trace command leaves later automatic reconciliation enabled", async () => {
+  const routine = task({
+    id: "task-routine",
+    notifications: [
+      {
+        id: "routine-1",
+        message: "A routine receipt is ready.",
+        acknowledged: false,
+        kind: "routine",
+      },
+    ],
+  });
+  const acknowledged: string[] = [];
+  let listCalls = 0;
+  const service = {
+    trace: async () => ({
+      events: [],
+      unreadableEvents: 0,
+      rollup: { taskId: "task-routine", fixRounds: 0, blockedMs: 0 },
+    }),
+    list: async () => {
+      listCalls += 1;
+      return [routine];
+    },
+    acknowledge: async (taskId: string, notificationId: string) => {
+      acknowledged.push(`${taskId}:${notificationId}`);
+      return routine;
+    },
+  } as unknown as TandemService;
+  const { host, effects } = recordingSessionHost();
+  const session = new CoordinatorSession(coordinatorDeps(service, { host }));
+  const postActionCalls: string[] = [];
+
+  await runTandemCommand(
+    "trace task-routine",
+    "/repo",
+    {
+      service: () => service,
+      confirm: undefined,
+      postAction: async () => {
+        postActionCalls.push("postAction");
+        await session.reconcile(false);
+      },
+    },
+    host,
+  );
+
+  expect(listCalls).toBe(0);
+  expect(acknowledged).toEqual([]);
+  expect(postActionCalls).toEqual([]);
+  expect(effects[0]?.type === "notify" ? effects[0].text : "").toContain("Task task-routine");
+
+  // Notification-triggered turns start without passing through the input handler.
+  session.turnStart();
+  await session.agentEnd(false);
+
+  expect(listCalls).toBe(1);
+  expect(acknowledged).toEqual(["task-routine:routine-1"]);
 });
 
 test("the standing context lists the project's workstreams once there are any", async () => {

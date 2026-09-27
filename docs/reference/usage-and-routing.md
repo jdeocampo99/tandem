@@ -128,7 +128,8 @@ src/workers/execution-routing.ts, src/service/request-accounting.ts
 
 Other questions stop the task on a durable `routingPause`. The coordinator is notified once and
 nothing for the task starts while it stands. It stops standing when the pinned policy, generation, or
-input HEAD moves.
+input HEAD moves. A catalogue pause (`pinned-model-*`) also re-reads the catalogue at each admission
+and stops standing once it lists the pinned model cleanly; an unreadable or empty catalogue keeps it.
 
 | Reason | Meaning |
 | --- | --- |

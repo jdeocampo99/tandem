@@ -362,6 +362,9 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     );
     await session.onSessionStart();
   });
+  pi.on("input", (event) => {
+    if (event.source === "interactive") session.onHumanInput();
+  });
   pi.on("agent_start", (_event, ctx) => {
     pane.enter(ctx);
     session.onAgentStart();

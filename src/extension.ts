@@ -15,6 +15,7 @@ import { isTandemCheckout } from "./coordinator/tandem-checkout.ts";
 import { ompSessionHost, ompToolCall } from "./extension/omp-host.ts";
 import { registerTandemOmp } from "./extension/registration.ts";
 import { type PlaybookClassifier, playbookClassifier } from "./playbooks/classify.ts";
+import { type BriefLanguageChecker, briefLanguageChecker } from "./requests/plain-language.ts";
 import { appendCoordinatorUsage } from "./runtime/usage-ledger.ts";
 import { type IssueDraftChecker, issueDraftChecker } from "./self-improvement/issue-draft.ts";
 import {
@@ -52,6 +53,7 @@ function createCoordinatorService(
   classifyResearchContinuation: ResearchContinuationClassifier,
   classifyPlaybook: PlaybookClassifier,
   checkIssueDraft: IssueDraftChecker,
+  checkBriefLanguage: BriefLanguageChecker,
 ): TandemService {
   if (options.service !== undefined) return options.service;
   const sourceRepo = environment.sourceRepo;
@@ -69,6 +71,7 @@ function createCoordinatorService(
     classifyResearchContinuation,
     classifyPlaybook,
     checkIssueDraft,
+    checkBriefLanguage,
     ...(sourceRepo === undefined
       ? {}
       : {
@@ -143,6 +146,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
     const classifyResearchContinuation = researchContinuationClassifier(jevConfig);
     const classifyPlaybook = playbookClassifier(jevConfig);
     const checkIssueDraft = issueDraftChecker(jevConfig);
+    const checkBriefLanguage = briefLanguageChecker(jevConfig);
     let latestContext: ExtensionContext;
     let bound: BoundCoordinator | undefined;
 
@@ -184,6 +188,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             classifyResearchContinuation,
             classifyPlaybook,
             checkIssueDraft,
+            checkBriefLanguage,
           ),
         realpath: (path) => realpath(path),
         isTandemCheckout: () => isTandemCheckout(environment.repo),
@@ -218,6 +223,7 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
       promptRouting: promptRoutingConfig(environmentSnapshot),
       reconcile: (ctx, runTick) => session(ctx).reconcile(runTick),
       postAction: (ctx) => session(ctx).reconcile(false),
+      recordTurnAction: (ctx, action) => session(ctx).recordTurnAction(action),
       userPrompt: (ctx) => session(ctx).userPrompt(),
       closeThread: (ctx) => session(ctx).closeThread(),
       researchRunning: (ctx) => session(ctx).researchRunning(),

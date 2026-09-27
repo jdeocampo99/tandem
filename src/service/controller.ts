@@ -132,6 +132,7 @@ import {
 } from "../repos/locate.ts";
 import type { RequestPlanningQuestionInput } from "../requests/brief.ts";
 import { briefSkipsReview } from "../requests/brief.ts";
+import { type BriefLanguageChecker, briefLanguageChecker } from "../requests/plain-language.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../requests/store.ts";
 import {
   type ApproveRequestBriefInput,
@@ -319,6 +320,8 @@ export type TandemServiceOptions = Readonly<{
   readonly personalSkillsHome?: string;
   /** The Jev check of a report-mode issue draft; without one, every draft is flagged. */
   readonly checkIssueDraft?: IssueDraftChecker;
+  /** The plain-language check of a new brief; without one, only exact tells are found. */
+  readonly checkBriefLanguage?: BriefLanguageChecker;
 }>;
 /** A checkout onboarding found by name, and whether it already has saved Tandem settings. */
 export type FoundRepo = NamedCheckout & Readonly<{ readonly setUp: boolean }>;
@@ -565,6 +568,7 @@ type ServiceDependencies = Readonly<{
   projectRoots: () => Promise<readonly string[]>;
   personalSkillsHome: string;
   checkIssueDraft: IssueDraftChecker;
+  checkBriefLanguage: BriefLanguageChecker;
 }>;
 
 /** Why a task resumed after its question was answered, as its timeline records it. */
@@ -848,6 +852,7 @@ class TandemController {
         await this.pause(taskId, reason);
       },
       idFactory: deps.idFactory,
+      checkLanguage: deps.checkBriefLanguage,
     });
     this.#recoveryCentral = new CentralRecoveryWorkflow({
       home: deps.home,
@@ -2829,6 +2834,9 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     checkIssueDraft:
       options.checkIssueDraft ??
       issueDraftChecker({ timeoutMs: DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS }),
+    checkBriefLanguage:
+      options.checkBriefLanguage ??
+      briefLanguageChecker({ timeoutMs: DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS }),
   };
 }
 

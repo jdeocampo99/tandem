@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import type { ToolCall, ToolKind } from "../../src/session/events.ts";
 import {
   idleAfterResult,
+  implementerShellRefusal,
   mockupWriteDecision,
+  reportlessTurnEnd,
   reviewShellRefusal,
   reviewSummary,
   submittedReportText,
@@ -18,6 +20,7 @@ import type {
   WorkerTerminalState,
   WorkerTokenTally,
 } from "../../src/workers/terminal.ts";
+import { VALIDATION_COMMAND_REFUSAL } from "../../src/workers/validation-commands.ts";
 import { fakeSessionTime, recordingSessionHost } from "../evals/scenario.ts";
 
 function job(overrides: Partial<WorkerJob> = {}): WorkerJob {
@@ -203,7 +206,7 @@ test("a running tool or a finished turn is never stalled", () => {
   expect(turnStalled({ ...late, turnActive: false, toolsRunning: 0 })).toBe(false);
 });
 
-test("only read-only tools run once the worker is settled, timed out, paused, or completed", () => {
+test("only read-only tools and the to-do list run once the worker is settled, timed out, paused, or completed", () => {
   const open = {
     delegatedSettled: false,
     timeoutRequested: false,
@@ -219,7 +222,7 @@ test("only read-only tools run once the worker is settled, timed out, paused, or
     { ...open, phase: "paused" as const },
     { ...open, completed: true },
   ]) {
-    for (const kind of ["read", "search", "web-search"] as const) {
+    for (const kind of ["read", "search", "web-search", "todo"] as const) {
       expect(workerToolRefusal(closed, kind)).toBeUndefined();
     }
     for (const kind of ["edit", "write", "shell", "mcp", "subagent", "other"] as const) {
@@ -238,6 +241,46 @@ test("a PR reviewer's shell is limited to read-only commands; other workers are 
   expect(reviewShellRefusal(true, bash())).toBe("bash needs a command");
   expect(reviewShellRefusal(false, bash("rm -rf src"))).toBeUndefined();
   expect(reviewShellRefusal(true, call("read"))).toBeUndefined();
+});
+
+test("an implementer may not run a pinned validation command; other shell calls still run", () => {
+  const bash = (command: string) => call("shell", { name: "bash", command });
+  const pinned = ["bun run check", "bun test", "bun run lint"];
+  for (const command of [
+    "bun test",
+    "bun run check && bun test && bun run lint",
+    "env -u NO_COLOR -u TANDEM_WORKER_JOB_PATH bun test",
+    "cd /tmp/worktree && CI=1  bun run lint 2>&1 | tail -20",
+  ]) {
+    expect(implementerShellRefusal(pinned, bash(command))).toBe(VALIDATION_COMMAND_REFUSAL);
+  }
+  for (const command of [
+    "bun test tests/session/worker.test.ts",
+    "bun run lint --write src/a.ts",
+    "git status --short",
+    "grep -rn test src",
+  ]) {
+    expect(implementerShellRefusal(pinned, bash(command))).toBeUndefined();
+  }
+  expect(implementerShellRefusal(undefined, bash("bun test"))).toBeUndefined();
+  expect(implementerShellRefusal(pinned, call("read"))).toBeUndefined();
+});
+
+test("a multi-step validation command is refused only when run whole", () => {
+  const bash = (command: string) => call("shell", { name: "bash", command });
+  const pinned = ["cd app && npm test"];
+  expect(implementerShellRefusal(pinned, bash("cd app && npm test"))).toBeString();
+  expect(implementerShellRefusal(pinned, bash("cd app && ls"))).toBeUndefined();
+});
+
+test("an implementer session refuses its pinned validation commands through the tool guard", () => {
+  const worker = workerSession({ validationCommands: ["bun test"] });
+  expect(
+    worker.session.guardToolCall(call("shell", { name: "bash", command: "bun test" })),
+  ).toEqual({ block: true, reason: VALIDATION_COMMAND_REFUSAL });
+  expect(
+    worker.session.guardToolCall(call("shell", { name: "bash", command: "git diff" })),
+  ).toEqual({ block: false });
 });
 
 test("the worker pane shows pause, then a pending answer, then work, then the settled outcome", () => {
@@ -425,6 +468,45 @@ test("a stalled turn is stopped with a reminder, and a second stall fails the jo
   );
 });
 
+test("a turn Tandem started that ends without a report is reminded once, then fails", () => {
+  expect(reportlessTurnEnd({ humanTurn: false, reminded: false })).toBe("remind");
+  expect(reportlessTurnEnd({ humanTurn: false, reminded: true })).toBe("fail");
+  expect(reportlessTurnEnd({ humanTurn: true, reminded: false })).toBe("conversation");
+  expect(reportlessTurnEnd({ humanTurn: true, reminded: true })).toBe("conversation");
+});
+
+test("a scout that ends its turn without a report is reminded, then failed, never left idle", async () => {
+  // The farewell-email scout: it read its prior report, said it was already submitted, and
+  // stopped, leaving the task "researching" for hours with no result.
+  const worker = workerSession({ role: "scout" });
+  await worker.session.onSessionStart();
+  await worker.session.onAgentEnd({ willContinue: false, interrupted: false });
+  expect(worker.results).toHaveLength(0);
+  expect(worker.recording.effects.at(-1)).toMatchObject({
+    type: "deliver",
+    source: "report-reminder",
+    timing: "nextTurn",
+    triggerTurn: true,
+  });
+  await worker.session.onAgentEnd({ willContinue: false, interrupted: false });
+  expect(worker.results[0]).toMatchObject({
+    status: "failed",
+    error: "worker ended its turn without calling submit_report, again after a reminder",
+  });
+});
+
+test("a reply to the person at the pane is conversation, not a missing report", async () => {
+  const worker = workerSession({ role: "scout" });
+  await worker.session.onSessionStart();
+  for (let turn = 0; turn < 3; turn += 1) {
+    worker.session.onHumanInput();
+    await worker.session.onAgentEnd({ willContinue: false, interrupted: false });
+  }
+  expect(worker.results).toHaveLength(0);
+  expect(worker.recording.effects.filter((effect) => effect.type === "deliver")).toEqual([]);
+  expect(worker.states.at(-1)).toMatchObject({ phase: "idle", completed: false });
+});
+
 test("a background result waking a submitted worker is stopped, and the stop is no failure", async () => {
   const worker = workerSession();
   await worker.session.onSessionStart();
@@ -577,4 +659,34 @@ test("an implementer cannot report done while a playbook step is open in its to-
   });
   const accepted = await worker.session.submitReport({ outcome: "implemented", report: "Done." });
   expect(accepted.isError).toBe(false);
+});
+
+test("a completed idle worker acknowledges close; a busy pane records which flag held it back", async () => {
+  const details: Record<string, unknown>[] = [];
+  const worker = workerSession(
+    {},
+    { trace: (event, detail) => event === "close_blocked" && details.push({ ...detail }) },
+  );
+  await worker.session.onSessionStart();
+  await worker.session.submitReport({ outcome: "implemented", report: "Done." });
+  await worker.session.onAgentEnd({ willContinue: false, interrupted: false });
+  worker.recording.answers.paneState = { idle: true, pendingMessages: false, draft: true };
+  worker.control.command = {
+    schemaVersion: 1,
+    id: "close-1",
+    jobId: "job-1",
+    taskId: "task-1",
+    generation: 0,
+    action: "close",
+    expiresAt: "2030-01-01T00:10:00.000Z",
+  };
+  worker.time.advance(250);
+  await settle();
+  expect(worker.states.at(-1)?.phase).toBe("idle");
+  expect(details).toEqual([{ idle: true, pendingMessages: false, draft: true }]);
+
+  worker.recording.answers.paneState = { idle: true, pendingMessages: false, draft: false };
+  worker.time.advance(250);
+  await settle();
+  expect(worker.states.at(-1)).toMatchObject({ phase: "closing", commandId: "close-1" });
 });

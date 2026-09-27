@@ -33,6 +33,7 @@ import {
   withRequestReviewPane,
 } from "./brief.ts";
 import { renderRequestBriefMarkdown } from "./markdown.ts";
+import type { BriefLanguageChecker } from "./plain-language.ts";
 import {
   closeRequestBriefPane,
   projectRequestBriefPane,
@@ -53,6 +54,8 @@ export type RequestBriefWorkflowDependencies = Readonly<{
   /** The existing ownership-safe pause control; the workflow never stops work by itself. */
   readonly pauseTask: (taskId: string, reason: string) => Promise<void>;
   readonly idFactory: IdFactory;
+  /** Advises on the top of a new draft; it never blocks one. */
+  readonly checkLanguage: BriefLanguageChecker;
 }>;
 
 /**
@@ -88,6 +91,8 @@ export type RequestBriefView = Readonly<{
   readonly markdown: string;
   /** Tasks this call stopped because the agreement changed under them. */
   readonly pausedTaskIds: readonly string[];
+  /** Sections of a new draft that may not read plainly; empty on every other call. */
+  readonly plainLanguage: readonly string[];
 }>;
 
 export class RequestBriefWorkflow {
@@ -110,7 +115,10 @@ export class RequestBriefWorkflow {
     const created = await this.#draftRecord(input, content);
     const pausedTaskIds = await this.#pauseWorkForRequest(created);
     const projected = input.reviewPane ? await this.#project(created) : created;
-    return this.#view(projected, pausedTaskIds);
+    return {
+      ...this.#view(projected, pausedTaskIds),
+      plainLanguage: await this.#deps.checkLanguage(content),
+    };
   }
 
   async addPlanningQuestion(
@@ -388,6 +396,7 @@ export class RequestBriefWorkflow {
       approvalState: requestApprovalState(record),
       markdown: renderRequestBriefMarkdown(record),
       pausedTaskIds,
+      plainLanguage: [],
     };
   }
 }

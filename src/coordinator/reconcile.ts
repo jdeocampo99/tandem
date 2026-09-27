@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { WorktreeInUseError } from "../adapters/primitives.ts";
 import { readTreehousePoolStatus, type TreehousePoolStatusRecord } from "../adapters/treehouse.ts";
 import type { Clock, CommandRunner, TaskRecord, WorktreeLease } from "../contracts.ts";
 import { taskRuntime } from "../runtime/activity.ts";
@@ -867,7 +868,13 @@ async function applyLeaseItem(
   if (item.action === "quarantine" || lease === undefined) {
     return { item, outcome: "quarantined", reason: item.reason };
   }
-  const released = await releaseCoordinatorLease(input.run, { repoPath: item.repoPath, lease });
+  let released: Awaited<ReturnType<typeof releaseCoordinatorLease>>;
+  try {
+    released = await releaseCoordinatorLease(input.run, { repoPath: item.repoPath, lease });
+  } catch (error) {
+    if (!(error instanceof WorktreeInUseError)) throw error;
+    return { item, outcome: "retained", reason: error.message };
+  }
   return {
     item,
     outcome: "cleaned",

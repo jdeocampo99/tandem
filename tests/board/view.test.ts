@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { renderStatus, renderStatusLine } from "../../src/board/terminal.ts";
+import { renderStatus, renderStatusBoard, renderStatusLine } from "../../src/board/terminal.ts";
 import {
   type BoardState,
   boardView,
@@ -12,6 +12,7 @@ import {
 import type { RequestBriefContent } from "../../src/contracts.ts";
 import type { PrWatch } from "../../src/pr-watch/store.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
+import type { DurableExecutionRoutingPause } from "../../src/runtime/schema.ts";
 import { task } from "../session/fixtures.ts";
 
 const NOW = "2030-01-01T12:00:00.000Z";
@@ -57,9 +58,11 @@ function state(overrides: Partial<BoardState> = {}): BoardState {
     projects: ["/work/tandem", "/work/app"],
     tasks: [],
     briefs: [],
+    routingPauses: [],
     watches: [],
     poll: {},
     finishedThisWeek: [],
+    progressAt: new Map(),
     ...overrides,
   };
 }
@@ -125,9 +128,11 @@ test("status puts what needs you first, then running work and pull requests, the
       "🔴 app     acme/app#409 branch-409  🙋 test_cache_evict failed twice",
       "",
       `RUNNING 2 ${"─".repeat(64)}`,
-      "   PROJECT  TASK                      STAGE         TIME",
-      "🔨 tandem   Fix the flaky login test  implementing   12m",
-      "⏸️ app      Dark mode tokens          paused          2h",
+      "  app",
+      "  ⏸️ paused · 2h  Dark mode tokens",
+      "",
+      "  tandem",
+      "  🔨 implementing · 12m  Fix the flaky login test",
       "",
       `PRS 1 ${"─".repeat(68)}`,
       "   PULL REQUEST             CHECKS          STATUS       NEXT",
@@ -140,7 +145,29 @@ test("status puts what needs you first, then running work and pull requests, the
       "",
     ].join("\n"),
   );
-  expect(renderBoard(view)).toContain("🔨 tandem  Fix the flaky login test  implementing · 12m");
+  expect(renderBoard(view)).toBe(
+    [
+      "## Tandem status",
+      "",
+      "**Projects:** tandem, app · **PRs checked:** 40s ago",
+      "",
+      "### 🙋 Needs you · 3",
+      "- 🙋 **tandem** · **Dark mode** — brief waiting for approval",
+      "- 🙋 **app** · **Refactor the cache** — question: Keep the old eviction order?",
+      "- 🔴 **app** · **acme/app#409 branch-409** — 🙋 test\\_cache\\_evict failed twice",
+      "",
+      "### 🔨 Running · 2",
+      "- 🔨 **tandem** · **Fix the flaky login test** — implementing · 12m",
+      "- ⏸️ **app** · **Dark mode tokens** — paused · 2h",
+      "",
+      "### 🔀 Pull requests · 1",
+      "- 🟢 **acme/app#420** — branch-420",
+      "  ⏳ 12/16 · ✅ approved",
+      "",
+      "_Live view: `prefix+t` in Herdr, or `tandem status --watch`._",
+      "",
+    ].join("\n"),
+  );
   expect(view.needsYou.map((row) => [row.key, row.repoPath])).toEqual([
     ["brief:req-1", "/work/tandem"],
     ["question:q-1", "/work/app"],
@@ -148,10 +175,167 @@ test("status puts what needs you first, then running work and pull requests, the
   ]);
 });
 
+test("Running groups repository identities and sorts tasks by stage, description, and stable ties", () => {
+  const alpha = "/repos/alpha/shared";
+  const zeta = "/repos/zeta/shared";
+  const view = boardView(
+    state({
+      tasks: [
+        task({
+          id: "zeta",
+          repoPath: zeta,
+          stage: "implementing",
+          objective: "Zeta repository task",
+          createdAt: "2030-01-01T11:40:00.000Z",
+        }),
+        task({
+          id: "tie-z",
+          repoPath: alpha,
+          stage: "implementing",
+          objective: "Alpha implementation",
+          createdAt: "2030-01-01T11:48:00.000Z",
+        }),
+        task({
+          id: "zulu",
+          repoPath: alpha,
+          stage: "implementing",
+          objective: "Zulu implementation",
+          createdAt: "2030-01-01T11:45:00.000Z",
+        }),
+        task({
+          id: "research",
+          repoPath: alpha,
+          stage: "scouting",
+          objective: "Research implementation",
+          createdAt: "2030-01-01T11:50:00.000Z",
+        }),
+        task({
+          id: "tie-a",
+          repoPath: alpha,
+          stage: "implementing",
+          objective: "Alpha implementation",
+          createdAt: "2030-01-01T11:55:00.000Z",
+        }),
+        task({
+          id: "paused",
+          repoPath: alpha,
+          stage: "paused",
+          objective: "Paused task",
+          createdAt: "2030-01-01T11:00:00.000Z",
+        }),
+        task({
+          id: "queued",
+          repoPath: alpha,
+          stage: "queued",
+          objective: "Queued task",
+          createdAt: "2030-01-01T11:30:00.000Z",
+        }),
+      ],
+    }),
+    NOW,
+  );
+  const runningBefore = [...view.running];
+  const output = renderStatus(
+    view,
+    { code: "abc", coordinators: [] },
+    { color: false, columns: 120 },
+  );
+  const rerendered = renderStatus(
+    view,
+    { code: "abc", coordinators: [] },
+    { color: false, columns: 120 },
+  );
+  expect(rerendered).toBe(output);
+  expect(view.running).toEqual(runningBefore);
+  const alphaHeading = "  shared · …/alpha/shared";
+  const zetaHeading = "  shared · …/zeta/shared";
+  const alphaStart = output.indexOf(alphaHeading);
+  const zetaStart = output.indexOf(zetaHeading);
+  const alphaGroup = output.slice(alphaStart, zetaStart);
+
+  expect(alphaStart).toBeGreaterThan(-1);
+  expect(zetaStart).toBeGreaterThan(alphaStart);
+  expect(output.split(alphaHeading)).toHaveLength(2);
+  expect(output.split(zetaHeading)).toHaveLength(2);
+  expect(output.slice(0, zetaStart).endsWith("\n\n")).toBe(true);
+  expect(alphaGroup.indexOf("paused ·")).toBeLessThan(alphaGroup.indexOf("waiting to start ·"));
+  expect(alphaGroup.indexOf("waiting to start ·")).toBeLessThan(
+    alphaGroup.indexOf("researching ·"),
+  );
+  expect(alphaGroup.indexOf("researching ·")).toBeLessThan(alphaGroup.indexOf("implementing ·"));
+  expect(alphaGroup.indexOf("implementing · 5m  Alpha implementation")).toBeLessThan(
+    alphaGroup.indexOf("implementing · 12m  Alpha implementation"),
+  );
+  expect(alphaGroup.indexOf("Alpha implementation")).toBeLessThan(
+    alphaGroup.indexOf("Zulu implementation"),
+  );
+});
+
+test("Running descriptions wrap to two terminal-cell-aware lines without hiding stage or time", () => {
+  const view = boardView(
+    state({
+      tasks: [
+        task({
+          id: "long",
+          repoPath: "/work/app",
+          stage: "implementing",
+          objective:
+            "Investigate the user's report that the Running section mixes projects and cuts task objectives before the useful context appears",
+          createdAt: "2030-01-01T11:48:00.000Z",
+        }),
+      ],
+    }),
+    NOW,
+  );
+  const footer = { code: "abc", coordinators: [] };
+  for (const columns of [60, 80, 120]) {
+    const output = renderStatus(view, footer, { color: false, columns });
+    const lines = output.trimEnd().split("\n");
+    const taskLine = lines.findIndex((line) => line.includes("implementing · 12m"));
+    const firstDescription = lines[taskLine]?.split("  ").at(-1) ?? "";
+    const nextDescription = lines[taskLine + 1]?.trim() ?? "";
+    const projectHeading = lines.indexOf("  app");
+    const nextEmptyLine = lines.indexOf("", projectHeading + 1);
+
+    expect(lines.every((line) => Bun.stringWidth(line) <= columns)).toBe(true);
+    expect(taskLine).toBeGreaterThan(-1);
+    expect(Bun.stringWidth(firstDescription)).toBeGreaterThan(30);
+    expect(`${firstDescription} ${nextDescription}`).toContain("Running section mixes projects");
+    expect(nextEmptyLine - projectHeading - 1).toBe(2);
+  }
+});
+
+test("chat status escapes Markdown in task content", () => {
+  const view = boardView(
+    state({
+      tasks: [
+        task({
+          id: "task-markdown",
+          repoPath: "/work/tandem",
+          stage: "implementing",
+          objective: "Ship **now**",
+        }),
+      ],
+    }),
+    NOW,
+  );
+  expect(renderBoard(view)).toContain("**Ship \\*\\*now\\*\\***");
+});
+
 test("an empty status says nothing needs you, that PR watch has not checked yet, and how to open a coordinator", () => {
   const view = boardView(state({ projects: [] }), NOW);
   expect(renderBoard(view)).toBe(
-    "Projects: none yet · PRs not checked yet\n\nNeeds you\nNothing needs you.\n\nLive view: prefix+t in Herdr, or `tandem status --watch`\n",
+    [
+      "## Tandem status",
+      "",
+      "**Projects:** none yet · **PRs checked:** not checked yet",
+      "",
+      "### 🙋 Needs you · 0",
+      "Nothing needs you.",
+      "",
+      "_Live view: `prefix+t` in Herdr, or `tandem status --watch`._",
+      "",
+    ].join("\n"),
   );
   const status = renderStatus(view, { code: "abc", coordinators: [] }, { color: false });
   expect(status).toStartWith(
@@ -194,6 +378,23 @@ test("on a terminal, status colors sections by meaning and cuts lines to the ter
   expect(narrow).toContain("🙋 tandem  Implement the requ…");
 });
 
+test("the chat board shares terminal sections without the terminal-only footer", () => {
+  const view = boardView(
+    state({ tasks: [task({ stage: "implementing", objective: "Implement status rendering" })] }),
+    NOW,
+  );
+  const colored = renderStatusBoard(view, { color: true, columns: 80 });
+  expect(colored).toContain("\x1b[1m\x1b[33mNEEDS YOU");
+  expect(colored).toContain("\x1b[36mimplementing\x1b[39m");
+  expect(colored).not.toContain("Tandem code:");
+  expect(colored).not.toContain("no coordinators open");
+
+  const narrow = renderStatusBoard(view, { color: false, columns: 30 });
+  for (const line of narrow.trimEnd().split("\n")) {
+    expect(Bun.stringWidth(line)).toBeLessThanOrEqual(30);
+  }
+});
+
 test("an abandoned brief leaves the board", () => {
   const brief = createRequestBriefRecord(
     { id: "req-1", repoPath: "/work/tandem", content: content("Dark mode") },
@@ -227,6 +428,32 @@ test("an approved brief leaves the board, and a blocked task says why", () => {
     NOW,
   );
   expect(view.needsYou.map((row) => row.text)).toEqual(["blocked: validation failed twice"]);
+});
+
+test("a running task whose worker made no progress for over 5 minutes shows how long it has idled", () => {
+  const view = boardView(
+    state({
+      tasks: [
+        task({ id: "task-idle", stage: "scouting", createdAt: "2030-01-01T06:00:00.000Z" }),
+        task({ id: "task-busy", stage: "scouting", createdAt: "2030-01-01T06:00:00.000Z" }),
+        task({ id: "task-new", stage: "scouting", createdAt: "2030-01-01T06:00:00.000Z" }),
+      ],
+      progressAt: new Map([
+        ["task-idle", "2030-01-01T11:18:00.000Z"],
+        ["task-busy", "2030-01-01T11:57:00.000Z"],
+      ]),
+    }),
+    NOW,
+  );
+  expect(view.running.map((row) => [row.key, row.since])).toEqual([
+    ["task:task-idle:scouting", "idle 42m"],
+    ["task:task-busy:scouting", "6h"],
+    ["task:task-new:scouting", "6h"],
+  ]);
+  expect(renderBoard(view)).toContain("researching · idle 42m");
+  expect(renderStatusBoard(view, { color: false, columns: 120 })).toContain(
+    "researching · idle 42m",
+  );
 });
 
 test("a paused task shows under Running, and every Needs you row but a block notifies", () => {
@@ -301,8 +528,8 @@ test("the weekly line follows the PRs, counting finished tasks, first-pass revie
     }),
     NOW,
   );
-  expect(renderBoard(view).trimEnd().split("\n").at(-3)).toBe(
-    "This week: 3 done · 1 of 2 passed review first time · $14.20",
+  expect(renderBoard(view)).toContain(
+    "### 📈 This week\n3 done · 1 of 2 passed review first time · $14.20",
   );
   expect(renderBoard(boardView(state(), NOW))).not.toContain("This week");
 });
@@ -355,4 +582,60 @@ test("the one-line status leads with what needs you, then running work and pull 
 
   const paused = boardView(state({ tasks: [task({ id: "t1", stage: "paused" })] }), NOW);
   expect(renderStatusLine(paused)).toBe("✓ all quiet");
+});
+
+function routingPause(
+  overrides: Partial<DurableExecutionRoutingPause> = {},
+): DurableExecutionRoutingPause {
+  return {
+    schemaVersion: 1,
+    decisionId: "routing-1",
+    reason: "pinned-model-absent-from-catalogue",
+    taskId: "task-scout",
+    jobId: "job-2",
+    operationId: "op-2",
+    role: "scout",
+    generation: 3,
+    attempt: 9,
+    policyDigest: "digest",
+    inputHead: "head",
+    pinnedSelector: "openai-codex/gpt-6-luna",
+    pinnedThinking: "xhigh",
+    evidenceGaps: ["incumbent-absent-from-catalogue"],
+    enabledProviders: ["openai-codex"],
+    usageSource: "no-governing-request",
+    observedAt: NOW,
+    ...overrides,
+  };
+}
+
+test("a task stopped on a model question needs you instead of reading as researching", () => {
+  const scout = task({
+    id: "task-scout",
+    stage: "scouting",
+    generation: 3,
+    objective: "Research the farewell email",
+  });
+  const view = boardView(state({ tasks: [scout], routingPauses: [routingPause()] }), NOW);
+  expect(view.running).toEqual([]);
+  expect(view.needsYou).toMatchObject([
+    {
+      key: "model-question:routing-1",
+      cause: "model-question",
+      text: "model question: keep openai-codex/gpt-6-luna? That model isn't listed right now.",
+    },
+  ]);
+  expect(view.needsYou.every(notifiesUser)).toBe(true);
+});
+
+test("a model question from an older generation or a retired reason does not stop the task", () => {
+  const scout = task({ id: "task-scout", stage: "scouting", generation: 4 });
+  for (const pause of [
+    routingPause(),
+    routingPause({ generation: 4, reason: "premium-tier-requires-approval" }),
+  ]) {
+    const view = boardView(state({ tasks: [scout], routingPauses: [pause] }), NOW);
+    expect(view.needsYou).toEqual([]);
+    expect(view.running.map((row) => row.cause)).toEqual(["scouting"]);
+  }
 });

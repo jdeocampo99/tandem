@@ -836,6 +836,8 @@ test("bound coordinators scope tasks by physical original identity and reject fo
     await symlink(other, originalAlias);
     expect(await service.list()).toEqual([]);
     await expect(service.get("task-a")).rejects.toThrow("Task task-a was not found");
+    await expect(service.trace("task-a")).rejects.toThrow("Task task-a was not found");
+    await expect(service.trace("task-b")).rejects.toThrow("Task task-b was not found");
     await expect(service.cancel("task-a")).rejects.toThrow("task task-a is missing");
     await expect(service.get("task-b")).rejects.toThrow("Task task-b was not found");
     await expect(service.cancel("task-b")).rejects.toThrow("task task-b is missing");
@@ -2193,6 +2195,21 @@ test("a dispatched job carries the exact model its recorded execution transition
       expect(routing.evidence.source).toBe("catalogue-read");
       const spec = JSON.parse(await readFile(jobPath, "utf8")) as WorkerJob;
       expect(spec.model).toEqual({ model: routing.selector, thinking: routing.thinking });
+    },
+  );
+});
+
+test("an implementer job names the pinned validation commands it may not run", async () => {
+  await withFixture(
+    { kind: "implementation", runner: { ompModels: OMP_MODELS } },
+    async ({ home, lease, service }) => {
+      await approveWithWorktree(home, lease, service);
+      await service.tick();
+
+      const jobPath = (await readRuntime(home)).tasks[0]?.jobs[0]?.jobPath;
+      if (jobPath === undefined) throw new Error("implementer job was not persisted");
+      const spec = JSON.parse(await readFile(jobPath, "utf8")) as WorkerJob;
+      expect(spec.validationCommands).toEqual(["bun run check"]);
     },
   );
 });
@@ -4981,7 +4998,7 @@ test("pause records a lost-resource cause when the worker pane cannot be proven 
   );
 });
 
-test("unknown launch acknowledgement quarantines the operation and retains capacity", async () => {
+test("a launch whose pane is gone fails the job for recovery instead of quarantining", async () => {
   await withFixture(
     {
       kind: "scout",
@@ -5000,9 +5017,13 @@ test("unknown launch acknowledgement quarantines the operation and retains capac
       const runtime = state.tasks[0];
       expect(runnerState.launches).toBe(0);
       expect(runtime?.operation?.id).toBe(intent.id);
-      expect(runtime?.operation?.phase).toBe("quarantined");
-      expect(runtime?.reservation?.phase).toBe("reserved");
-      expect(runtime?.jobs[0]?.phase).toBe("launching");
+      expect(runtime?.operation?.phase).toBe("failed");
+      expect(runtime?.reservation?.phase).toBe("released");
+      expect(runtime?.jobs[0]?.phase).toBe("failed");
+      expect((await service.get("task-1")).blockCause).toMatchObject({
+        group: "lost-resource",
+        jobId: job.id,
+      });
     },
   );
 });
@@ -5434,7 +5455,7 @@ test("stale successful source-check cannot transition a queued task after takeov
   );
 });
 
-test("launched operation with missing endpoint and result is quarantined, not failed-and-released", async () => {
+test("a launched worker whose pane and result are gone fails its job for recovery to restart", async () => {
   await withFixture(
     {
       kind: "implementation",
@@ -5480,17 +5501,17 @@ test("launched operation with missing endpoint and result is quarantined, not fa
       });
 
       await service.tick();
-      await service.tick();
-      await service.resume("task-1").catch(() => undefined);
-      await service.tick();
 
       const after = await readRuntime(home);
-      const recovered = after.tasks[0];
+      const settled = after.tasks[0];
       expect(runnerState.launches).toBe(0);
-      expect(recovered?.operation?.phase).toBe("quarantined");
-      expect(recovered?.reservation?.phase).toBe("reserved");
-      expect(recovered?.jobs[0]?.phase).toBe("running");
-      expect(recovered?.endpoints).toHaveLength(0);
+      expect(settled?.operation?.phase).toBe("failed");
+      expect(settled?.reservation?.phase).toBe("released");
+      expect(settled?.jobs[0]?.phase).toBe("failed");
+      expect((await service.get("task-1")).blockCause).toMatchObject({
+        group: "lost-resource",
+        jobId: job.id,
+      });
     },
   );
 });

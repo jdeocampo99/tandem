@@ -20,6 +20,7 @@ import type { ReplyUsage } from "../workers/terminal.ts";
 import { atCompactionBoundary, finishedTaskIds } from "./compaction.ts";
 import type {
   Cancel,
+  CoordinatorTurnAction,
   ReplyFor,
   SessionDeps,
   SessionEvent,
@@ -272,6 +273,9 @@ export class CoordinatorSession {
   private needsYouSeen: ReadonlySet<string> | undefined;
   /** When the user last took part in the open thread; unset when no thread is open. */
   private threadActiveAt: number | undefined;
+
+  /** The current agent run's actions; any non-trace action keeps final reconcile enabled. */
+  private turnAction: CoordinatorTurnAction | undefined;
   private createdService: TandemService | undefined;
   private isTandemCheckout: Promise<boolean> | undefined;
   private onboardingGuide: OnboardingGuide | undefined;
@@ -426,6 +430,11 @@ export class CoordinatorSession {
     if (call.kind === "ask") this.userPrompt();
   }
 
+  /** Records whether this agent run can safely omit final reconciliation. */
+  recordTurnAction(action: CoordinatorTurnAction): void {
+    if (action === "other" || this.turnAction === undefined) this.turnAction = action;
+  }
+
   /** The user's message reached the model: a thread opens, or the open one continues. */
   userPrompt(): void {
     this.threadActiveAt = this.deps.clock.now();
@@ -465,7 +474,11 @@ export class CoordinatorSession {
     this.status.agentActive = willContinue;
     this.status.report();
     this.onboardingGuide?.agentEnd({ willContinue, messages });
-    if (!willContinue) await this.reconcile(false);
+    if (!willContinue) {
+      const traceOnly = this.turnAction === "trace";
+      this.turnAction = undefined;
+      if (!traceOnly) await this.reconcile(false);
+    }
   }
 
   async compacting(): Promise<Reply<"compacting">> {

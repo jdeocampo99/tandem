@@ -298,50 +298,101 @@ test("skipping review is part of what was agreed, and only an approved brief ski
   );
 });
 
-test("the brief shows automated checks and manual verification as two lists", () => {
-  const record = createRequestBriefRecord(
+const SUMMARY = {
+  title: "Keep Premium through the paid period",
+  beforeAfter: [
     {
-      id: "req-1",
-      repoPath: "/repo",
-      content: content({ manualVerification: ["the streak bar glows at 5 in a row"] }),
+      moment: "Cancelling",
+      before: "Premium ends at once.",
+      after: "Premium lasts until the period ends.",
     },
-    NOW,
-  );
+    { moment: "When the period ends", before: "Nothing changes.", after: "Premium turns off." },
+  ],
+  size: { level: "large", reason: "Changes every Premium check." },
+  risk: { level: "high", reason: "Touches money and customer access." },
+} as const;
 
-  const markdown = renderRequestBriefMarkdown(record);
-
-  expect(markdown).toContain("## Automated checks\n- one stable request id\n");
-  expect(markdown).toContain("## Manual verification\n- the streak bar glows at 5 in a row\n");
-  expect(markdown).not.toContain("Acceptance criteria");
-});
-
-test("the brief puts what approval needs first and the details after", () => {
-  const settled = renderRequestBriefMarkdown(seeded());
-  const open = renderRequestBriefMarkdown(
+test("the brief puts what approval needs above the divider and the details below it", () => {
+  const markdown = renderRequestBriefMarkdown(
     createRequestBriefRecord(
-      { id: "req-1", repoPath: "/repo", content: content({ openQuestions: ["Ship to web too?"] }) },
+      {
+        id: "req-1",
+        repoPath: "/repo",
+        content: content({
+          summary: SUMMARY,
+          openQuestions: ["Ship to web too?"],
+          manualVerification: ["Cancel in the sandbox and keep paid content"],
+          recommendedApproach: ["Tell apart why a plan ended", "Use one access rule everywhere"],
+        }),
+      },
       NOW,
     ),
   );
 
-  const headings = (markdown: string) => markdown.match(/^#+ .+$/gmu);
-  expect(headings(open)).toEqual([
-    "# Request brief",
-    "## Goal",
-    "## Decisions required",
-    "## In scope",
-    "## Out of scope",
-    "## Automated checks",
-    "## Manual verification",
-    "## Key decisions",
-    "# Details",
+  expect(markdown.match(/^#+ .+$/gmu)).toEqual([
+    "# Keep Premium through the paid period",
+    "## TL;DR",
+    "## Before and after",
+    "## Decisions needed",
+    "## Size and risk",
+    "## How you'll verify",
     "## Approach",
-    "## Constraints",
-    "## References",
-    "## Record",
+    "## Details",
+    "### In scope",
+    "### Out of scope",
+    "### Automated checks",
+    "### Constraints",
+    "### Decisions already made",
+    "### References",
+    "### Record",
   ]);
-  expect(settled).not.toContain("Decisions required");
-  expect(settled).toContain("Revision 1, not approved yet.");
+  expect(markdown).toContain(
+    "1. **Cancelling**\n   - Before: Premium ends at once.\n   - After: Premium lasts until the period ends.\n2. **When the period ends**",
+  );
+  expect(markdown).toContain(
+    "- **Size: Large.** Changes every Premium check.\n- **Risk: High.** Touches money and customer access.",
+  );
+  expect(markdown).toContain(
+    "## Approach\n1. Tell apart why a plan ended\n2. Use one access rule everywhere\n\n---\n",
+  );
+  expect(markdown).toContain("Revision 1, not approved yet.");
+});
+
+test("a brief saved before the summary still renders and keeps its digests", () => {
+  const legacy = content();
+  const markdown = renderRequestBriefMarkdown(seeded());
+
+  expect(markdown.split("\n")[0]).toBe("# Request brief");
+  expect(markdown).not.toContain("## Before and after");
+  expect(markdown).not.toContain("## Size and risk");
+  expect(markdown).not.toContain("## Decisions needed");
+  expect(markdown).toContain("## Approach\nOne record with monotonic draft revisions\n");
+  expect(
+    requestBriefDigests(checkedRequestBriefContent(JSON.parse(JSON.stringify(legacy)))),
+  ).toEqual(requestBriefDigests(legacy));
+  expect(requestBriefDigests(content({ summary: SUMMARY })).agreementDigest).not.toBe(
+    requestBriefDigests(legacy).agreementDigest,
+  );
+});
+
+test("a summary must use the fixed labels and one to five moments", () => {
+  const withSummary = (summary: unknown) => ({ ...content(), summary });
+
+  expect(checkedRequestBriefContent(withSummary(SUMMARY)).summary).toEqual(SUMMARY);
+  expect(() =>
+    checkedRequestBriefContent(withSummary({ ...SUMMARY, size: { level: "huge", reason: "x" } })),
+  ).toThrow(RequestBriefError);
+  expect(() => checkedRequestBriefContent(withSummary({ ...SUMMARY, beforeAfter: [] }))).toThrow(
+    RequestBriefError,
+  );
+  expect(() =>
+    checkedRequestBriefContent(
+      withSummary({ ...SUMMARY, beforeAfter: Array(6).fill(SUMMARY.beforeAfter[0]) }),
+    ),
+  ).toThrow(RequestBriefError);
+  expect(() => checkedRequestBriefContent({ ...content(), recommendedApproach: [] })).toThrow(
+    RequestBriefError,
+  );
 });
 
 test("new implementation work joins the one open approved request in its repository", () => {

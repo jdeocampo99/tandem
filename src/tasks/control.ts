@@ -9,6 +9,7 @@ import type {
   IdFactory,
   TaskRecord,
 } from "../contracts.ts";
+import { STOPPED_BEFORE_RESULT_REASON } from "../recovery/central-review.ts";
 import { activeRuntimeJob, taskRuntime } from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
 import { readRuntimeState, writeRuntimeState } from "../runtime/persistence.ts";
@@ -38,6 +39,7 @@ import {
   pauseWorkerTerminal,
   prepareWorkerTerminal,
   workerJobForEndpoint,
+  workerJobOccupyingEndpoint,
 } from "../workers/terminal-control.ts";
 import { appendTaskMessage } from "./communication-protocol.ts";
 import { recoverEndpointFromLaunch, sameEndpointLaunch } from "./endpoint-launch.ts";
@@ -179,8 +181,7 @@ function releaseStoppedRuntime(
               ? {
                   ...job,
                   phase: "failed",
-                  error:
-                    "worker stopped before writing a terminal result; continuation will be dispatched",
+                  error: STOPPED_BEFORE_RESULT_REASON,
                 }
               : job,
         );
@@ -481,7 +482,7 @@ export class TaskControlWorkflow {
     const cwd = workerCwd(task, runtime);
     let stopFailure: string | undefined;
     for (const endpoint of runtime.endpoints) {
-      const job = workerJobForEndpoint(runtime.jobs, endpoint);
+      const job = await workerJobOccupyingEndpoint(runtime.jobs, endpoint);
       try {
         await pauseWorkerTerminal(this.#deps.run, {
           endpoint,
@@ -767,7 +768,7 @@ export class TaskControlWorkflow {
       const result = await this.probeOwnedEndpoint(
         endpoint,
         cwd,
-        workerJobForEndpoint(runtime.jobs, endpoint),
+        await workerJobOccupyingEndpoint(runtime.jobs, endpoint),
       );
       probes.set(endpoint.paneId, result);
       return result;
@@ -848,7 +849,7 @@ export class TaskControlWorkflow {
     cwd: string,
     jobs: readonly DurableJob[],
   ): Promise<boolean> {
-    const job = workerJobForEndpoint(jobs, endpoint);
+    const job = await workerJobOccupyingEndpoint(jobs, endpoint);
     const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
     if (await workerDelegationStopped(inspection, job)) return true;
     await pauseWorkerTerminal(this.#deps.run, {

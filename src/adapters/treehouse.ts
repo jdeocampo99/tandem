@@ -16,6 +16,7 @@ import {
   requireSuccess,
   runChecked,
   type WorktreeAdapterOptions,
+  WorktreeInUseError,
 } from "./primitives.ts";
 
 type LeaseMetadata = Readonly<{
@@ -616,7 +617,8 @@ function leaseRecordMatches(record: JsonRecord, lease: WorktreeLease): boolean {
   return recordPath === lease.path || recordId === lease.leaseId;
 }
 
-function verifyLeaseMetadata(value: unknown, lease: WorktreeLease, response: string): void {
+/** Returns the lease's one status record after proving its identity is unchanged. */
+function verifyLeaseMetadata(value: unknown, lease: WorktreeLease, response: string): JsonRecord {
   const records = parseLeaseStatus(value, "treehouse lease status", response);
   const matching = records.filter((record) => leaseRecordMatches(record, lease));
   const record = matching[0];
@@ -640,6 +642,24 @@ function verifyLeaseMetadata(value: unknown, lease: WorktreeLease, response: str
       response,
     );
   }
+  return record;
+}
+
+/**
+ * Names each process Treehouse reports running inside a worktree, such as "pid 42 herdr".
+ * `treehouse return` terminates them, so any one of them means the worktree is still in use.
+ */
+function worktreeProcessNames(processes: unknown): readonly string[] {
+  if (!Array.isArray(processes)) return [];
+  return processes.map((process: unknown) => {
+    if (typeof process !== "object" || process === null) return "an unnamed process";
+    const { pid, name } = process as { pid?: unknown; name?: unknown };
+    return (
+      [typeof pid === "number" ? `pid ${pid}` : "", typeof name === "string" ? name : ""]
+        .filter((part) => part !== "")
+        .join(" ") || "an unnamed process"
+    );
+  });
 }
 async function verifyReleaseGitSafety(
   run: CommandRunner,
@@ -723,11 +743,14 @@ export async function releaseWorktree(
       cwd: repo,
     };
     const statusResult = await runChecked(run, statusRequest, "treehouse lease status");
-    verifyLeaseMetadata(
+    const record = verifyLeaseMetadata(
       parseJson(statusResult.stdout, "treehouse lease status"),
       lease,
       statusResult.stdout,
     );
+    // Returning ends every process inside; one may be the Herdr server all panes depend on.
+    const processes = worktreeProcessNames(record.processes);
+    if (processes.length > 0) throw new WorktreeInUseError(processes, lease);
     if (!discard) await verifyReleaseGitSafety(run, { ...input, repo });
 
     const returnArgv = [

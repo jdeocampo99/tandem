@@ -64,6 +64,7 @@ async function fixture(): Promise<Fixture> {
       sequence += 1;
       return `planning-${sequence}`;
     },
+    checkLanguage: async () => [],
   });
   return {
     workflow,
