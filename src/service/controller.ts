@@ -200,6 +200,7 @@ import { readRegisteredProjects } from "../terminal/projects.ts";
 import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { claimOf, ownsOperation } from "../workers/operation-claim.ts";
+import { readWorkerTerminal, requestWorkerMockup } from "../workers/terminal.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { WorkerWorkflow } from "../workers/workflow.ts";
 import { DraftRefreshWorkflow } from "./draft-refresh.ts";
@@ -231,6 +232,7 @@ import {
   workerRoleForTask,
 } from "./records.ts";
 import { RequestAccountingWorkflow } from "./request-accounting.ts";
+import { askResearchAgent } from "./research-follow-up.ts";
 import { resolveResearchHandoffs } from "./research-handoffs.ts";
 import {
   releaseTerminalTaskResources,
@@ -460,6 +462,8 @@ export type TandemService = Readonly<{
     id: string,
     input: { readonly objective: string; readonly artifacts: readonly string[] },
   ) => Promise<PresentationRecord>;
+  /** Asks a completed scout's kept research agent one read-only question; returns its answer. */
+  readonly researchFollowUp: (id: string, question: string) => Promise<string>;
   readonly presentations: () => Promise<readonly PresentationRecord[]>;
   readonly feedback: (presentationId: string, signal?: AbortSignal) => Promise<PresentationRecord>;
   /** Shows a presentation again because the user asked, even one they ended in the browser. */
@@ -938,6 +942,7 @@ class TandemController {
       merge: (id, input) => this.merge(id, input),
       cleanup: (id, input) => this.cleanup(id, input),
       present: (id, input) => this.present(id, input),
+      researchFollowUp: (id, question) => this.researchFollowUp(id, question),
       presentations: () => this.presentations(),
       feedback: (id, signal) => this.feedback(id, signal),
       openPresentation: (id) => this.#presentationFeedback.open(id),
@@ -1961,6 +1966,32 @@ class TandemController {
     });
     await this.#presentationRuntime.reconcilePresentation(runtime);
     return this.readPresentation(record.id);
+  }
+
+  async researchFollowUp(id: string, question: string): Promise<string> {
+    const task = await this.get(id);
+    const state = await this.readState();
+    // A visual's request settles on the same channel, so a question must not overtake it.
+    for (const entry of state.presentations) {
+      if (entry.taskId !== task.id) continue;
+      if ((await readPresentationRecord(entry.recordPath)).request !== undefined) {
+        throw new Error(`Task ${task.id}'s research agent is drawing a visual; try again shortly.`);
+      }
+    }
+    return askResearchAgent(
+      task,
+      presentationAgentFor(state, task.id),
+      {
+        id: singleLine(this.#deps.idFactory(), "follow-up id"),
+        question: text(question, "question"),
+      },
+      {
+        readTerminal: readWorkerTerminal,
+        send: requestWorkerMockup,
+        now: () => Date.parse(this.#deps.clock()),
+        sleep: (ms) => Bun.sleep(ms),
+      },
+    );
   }
 
   async presentations(): Promise<readonly PresentationRecord[]> {

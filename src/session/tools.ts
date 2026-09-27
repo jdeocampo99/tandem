@@ -223,6 +223,11 @@ export const tandemRequestSchema = z.strictObject({
       artifacts: z.array(z.string()),
     }),
     z.strictObject({
+      action: z.literal("research-follow-up"),
+      taskId: z.string(),
+      question: z.string().min(1),
+    }),
+    z.strictObject({
       action: z.literal("describe"),
       taskId: z.string(),
       summary: pullRequestSummarySchema,

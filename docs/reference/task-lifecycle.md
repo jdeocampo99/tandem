@@ -156,6 +156,11 @@ never permission. It does not set `scopeApproved` or create tasks. It is refused
 - After the user answers, an implementation task citing the scout in `researchTaskIds` is created
   `awaiting-approval`, passes repository and report-provenance handoff validation, and launches only
   after explicit approval. Research on an older commit still hands off, recording the scout's HEAD.
+- While a completed `ask-intent` or `implementation-interview` scout keeps its agent, the
+  coordinator's `research-follow-up` action puts one question to that agent over the mockup turn
+  channel (src/service/research-follow-up.ts). The agent may write only the answer file in its
+  job's `follow-up-<id>/` folder. The action waits up to two minutes, then returns the answer path.
+  A report-only, closed, or busy agent is refused with a one-line reason; start new research then.
 
 ## Classifying the disposition
 
