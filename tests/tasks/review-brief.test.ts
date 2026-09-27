@@ -225,7 +225,7 @@ test("blockers, suggestions, and settled findings are separated with their suppo
 
   const rendered = renderReviewBrief(brief);
   expect(rendered).toContain("Evidence-backed blockers");
-  expect(rendered).toContain("behavior/f-1 (confirmed P1, unresolved");
+  expect(rendered).toContain("- f-1 (confirmed P1, unresolved");
   expect(rendered).toContain("status set at round 0 HEAD head-1");
   expect(rendered).toContain("Settled findings (do not reopen without new evidence");
 });
@@ -287,7 +287,7 @@ test("a fix that stays inside the authorized surface reports contained impact", 
   expect(rendered).toContain("## Fix-round focus");
   expect(rendered).toContain("This is fix round 1; review the since-last-review diff above");
   expect(rendered).toContain("Confirm each evidence-backed blocker below is resolved");
-  expect(rendered).toContain("behavior/f-1");
+  expect(rendered).toContain("- f-1 (");
 });
 
 test("a fix reaching outside the authorized surface broadens the review", () => {
@@ -377,27 +377,6 @@ test("a truncated incremental patch cannot bound the impact", () => {
   expect(renderReviewBrief(brief)).toContain("truncated");
 });
 
-test("an escalated validation contract broadens the review with its recorded reason", () => {
-  const brief = buildReviewBrief({
-    task: task({
-      iterationScope: {
-        head: "head-1",
-        generation: 0,
-        policyDigest: "a-different-policy-digest",
-        reproduces: ["check"],
-        surfaces: ["service"],
-        findingIds: ["f-1"],
-      },
-    }),
-    head: HEAD,
-    lens: "review",
-    observations: observations(),
-  });
-
-  expect(brief.impact.assessment).toBe("expanded");
-  expect(brief.impact.escalation).toBe("stale-identity");
-});
-
 test("advisory leads are rendered with provenance as untrusted leads", () => {
   const lead: AdvisoryReviewLead = {
     id: "lead-1",
@@ -464,7 +443,7 @@ test("the brief bounds its lists and stays within the rendered byte limit", () =
   expect(Buffer.byteLength(rendered, "utf8")).toBeLessThanOrEqual(
     REVIEW_BRIEF_LIMITS.maxBriefBytes,
   );
-  expect(rendered).toContain("behavior/f-0");
+  expect(rendered).toContain("- f-0 (");
   expect(rendered).toContain("item(s) were elided");
 });
 
@@ -499,7 +478,7 @@ test("an oversized brief compacts suggestions and long text but keeps every bloc
   expect(Buffer.byteLength(rendered, "utf8")).toBeLessThanOrEqual(
     REVIEW_BRIEF_LIMITS.maxBriefBytes,
   );
-  for (const entry of brief.blockers) expect(rendered).toContain(`behavior/${entry.id}`);
+  for (const entry of brief.blockers) expect(rendered).toContain(`- ${entry.id} (`);
   expect(rendered).toContain("suggestion(s) recorded; read them with tandem status TASK_ID");
   expect(rendered).not.toContain("y".repeat(REVIEW_BRIEF_LIMITS.maxCompactDescriptionBytes + 1));
 });

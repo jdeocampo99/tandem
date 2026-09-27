@@ -643,7 +643,7 @@ test("a round that fixes failed checks is free; only review rounds spend the bud
   ).toThrow(TaskTransitionError);
 });
 
-test("a review-only fix round goes straight to review and runs the checks once it passes", () => {
+test("a review-only fix round runs every check before it goes back to review", () => {
   let task = implementationToReviewing();
   task = transitionTask(
     task,
@@ -673,15 +673,6 @@ test("a review-only fix round goes straight to review and runs the checks once i
     { type: "implementation-complete", head: "head-2", generation: 1 },
     context(),
   );
-  expect(task.stage).toBe("reviewing");
-  expect(task.validationEvidence).toHaveLength(0);
-
-  task = transitionTask(
-    task,
-    { type: "record-review", review: review("review", true, "head-2", 1) },
-    context(),
-  );
-  task = transitionTask(task, { type: "finish-review", head: "head-2", generation: 1 }, context());
   expect(task.stage).toBe("validating");
 
   task = transitionTask(
@@ -694,6 +685,12 @@ test("a review-only fix round goes straight to review and runs the checks once i
       policyDigest,
       evidence: [evidence("head-2", "final")],
     },
+    context(),
+  );
+  expect(task.stage).toBe("reviewing");
+  task = transitionTask(
+    task,
+    { type: "record-review", review: review("review", true, "head-2", 1) },
     context(),
   );
   task = transitionTask(task, { type: "finish-review", head: "head-2", generation: 1 }, context());

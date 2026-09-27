@@ -34,8 +34,8 @@ src/session/worker.ts, src/session/worker-steering.ts, src/workers/terminal-exte
 | `awaiting-approval` | Implementation scope not yet approved. |
 | `queued` | Approved, waiting for capacity. Not proof of a running worker or finished research. |
 | `scouting` / `implementing` | A worker is active in its owned workspace. |
-| `validating` | One named validation contract runs at that exact HEAD: iteration checks between fix rounds, or the full final manifest once otherwise ready. |
-| `reviewing` | Checks passed or were skipped ([Review and validation](review-and-validation.md)); fresh reviewers record lenses. |
+| `validating` | Every configured check runs at that exact HEAD, after the first round and after every fix round. |
+| `reviewing` | Every check passed at this HEAD, or none is required ([Review and validation](review-and-validation.md)); fresh reviewers record lenses. |
 | `awaiting-fixes` | Validation or review failed; a bounded fix round may start. |
 | `ready` | The task's [required stages](#required-stages) passed at the current HEAD (the final manifest and all required lenses, when both are required), or the user chose [publish now](delivery.md) at that HEAD. |
 | `paused` | Stopped with a resumable previous stage. |
@@ -58,7 +58,7 @@ decides them; the lifecycle and the review stage read the record and never re-de
   direction (from the brief and the PR's state at that moment), and again on the governed tasks
   when a brief is approved.
 - `implementation-complete` goes to `validating` when validation is required (or straight to
-  `reviewing` when passing pinned checks at that HEAD still hold). With nothing required it goes
+  `reviewing` when every check already passed at that HEAD). With nothing required it goes
   straight to `ready`, recording `reviewSkippedHead` at that HEAD.
 - With review not required, the review stage records the review level (so the PR names any safety
   floors the diff tripped) and applies `skip-review` instead of launching a reviewer.

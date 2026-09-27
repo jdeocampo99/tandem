@@ -29,6 +29,7 @@ import {
   type RuntimeState,
   type RuntimeTaskState,
 } from "../runtime/schema.ts";
+import { isBlockingFinding } from "../tasks/findings.ts";
 import type { TaskEvent } from "../tasks/lifecycle.ts";
 import type { StoreTaskInput } from "../tasks/store.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
@@ -323,12 +324,13 @@ export function currentWriter(runtime: RuntimeTaskState): Endpoint | undefined {
   return writer;
 }
 
+/** The P0/P1 findings a fix round must resolve; P2/P3 stay known issues for the user. */
 export function reviewFindings(task: TaskRecord): readonly Finding[] {
   const findings: Finding[] = [];
   for (const review of task.reviews) {
     if (review.head !== task.reviewHead || review.generation !== task.generation || review.pass)
       continue;
-    findings.push(...review.findings);
+    findings.push(...review.findings.filter(isBlockingFinding));
   }
   return findings;
 }

@@ -18,7 +18,7 @@ src/instructions.ts
   `LEGACY_ENDPOINT_ROLES` in src/contracts.ts) but never count.
 - Manual verification items are a person's to check. The reviewer reviews their code but never demands
   proof they work, so a hands-on check cannot loop a task through fix rounds.
-- Failed review goes to `awaiting-fixes`; passing review goes to the final validation run.
+- Failed review goes to `awaiting-fixes`; passing review goes to `ready`, since every check already passed at that HEAD.
 
 ## Validation commands
 
@@ -29,27 +29,25 @@ src/instructions.ts
 - Runner evidence is `origin: "local"` and satisfies only local requirements. Remote required checks
   are the GitHub `RemoteCheck` rollup asserted at merge; a local pass is never relabeled remote.
 
-## Iteration and final contracts
+## Fix rounds and the final contract
 
 src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execute and record them.
 
-- **Iteration**: an admitted fix round records a durable `iterationScope` (failing checks, their
-  surfaces, findings to resolve, code and policy identity). The next run executes only those checks
-  under `contract: "iteration"`. A targeted pass is progress and never satisfies acceptance.
+- Every validation run executes the complete manifest (every command matching the task surfaces)
+  under `contract: "final"`, so a fix round never reaches review with an unrun check. Evidence saved
+  under the retired `contract: "iteration"` stays readable and never satisfies acceptance.
+- An admitted fix round records a durable `iterationScope` (failing checks, their surfaces, the P0/P1
+  findings to resolve, code and policy identity). P2/P3 findings are never in a fix round's scope
+  or its fix context; they stay known issues reported with the ready task.
   A round for failed checks does not spend the fix-round budget; a check that fails again after
   the round that targeted it asks `Keep fixing?` ([fix rounds](task-lifecycle.md#fix-rounds)).
-- Targeted runs escalate to the full manifest, with the reason durable on the validation job:
-  `stale-identity`, `disputed-result` (reviewer rejected a candidate whose checks all passed),
-  `unknown-impact` (unconfigured check), `broad-impact` (scope already covers every check).
 - **Final**: the complete manifest (every required check, the review lens, the acceptance criteria)
-  is pinned to the delivered code, policy digest, and HEAD. It runs only after review passes at that
-  HEAD and generation; `ready` needs every item passing under one code and policy identity. Delivery
-  re-checks and refuses an incomplete, failed, or stale manifest. A failed final run returns to fix
-  rounds and later restarts the full manifest from the beginning. No review level changes this.
-- `canSkipValidation` sends a finished round straight to `reviewing` when the full manifest already
-  passed at the reported HEAD and policy (a fix round with no commit), or when the round only answered
-  findings after every check passed. Review completion refuses a HEAD with failed evidence but does
-  not require evidence.
+  is pinned to the delivered code, policy digest, and HEAD. `ready` needs every item passing under
+  one code and policy identity. Delivery re-checks and refuses an incomplete, failed, or stale
+  manifest. A failed run returns to fix rounds. No review level changes this.
+- `canSkipValidation` sends a finished round straight to `reviewing` only when every manifest
+  command already passed at the reported HEAD and policy (a fix round with no commit). Review
+  completion refuses a HEAD with failed evidence.
 
 ## Evidence validity
 
@@ -98,7 +96,9 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   the callers of anything it replaces, and never changes existing behavior the brief didn't ask
   for. The reviewer gets the same rules and reports a violation there as P2. In evaluations, one-line rules changed
   the code, while pstack's full principle texts only got cited after the fact.
-- Impact is `contained`, `expanded`, or `unknown`, reusing `EscalationReason`: outside the authorized
+- Prior findings render by their bare `id`, which the reviewer reuses; the ledger also strips a
+  copied `<lens>/` prefix, so `review/<id>` still names the same finding.
+- Impact is `contained`, `expanded`, or `unknown`, with an `EscalationReason`: outside the authorized
   surface is `broad-impact`; an unboundable surface, truncated patch, or missing prior reviewed HEAD is
   `unknown-impact`. Anything but `contained` requires reading the cumulative diff and callers in full.
 - `REVIEW_BRIEF_LIMITS` bounds the brief. Blocker identities and status are never elided; any elision

@@ -11,7 +11,7 @@ import type {
   ValidationEvidence,
 } from "../contracts.ts";
 import { LEGACY_EVIDENCE_CONTRACT } from "../contracts.ts";
-import { failedChecks } from "./findings.ts";
+import { failedChecks, isBlockingFinding } from "./findings.ts";
 
 /** The one reviewer session the final acceptance manifest requires per round. */
 export const FINAL_REVIEW_LENSES: readonly ReviewLens[] = ["review"];
@@ -33,28 +33,8 @@ export type FinalAcceptanceContract = Readonly<{
   readonly criteria: readonly string[];
 }>;
 
-/** The targeted reproduction and affected checks authorized between fix rounds. */
-export type IterationContract = Readonly<{
-  readonly contract: "iteration";
-  readonly identity: ContractIdentity;
-  readonly surfaces: readonly string[];
-  readonly commands: readonly ValidationCommand[];
-  readonly scope: IterationScope;
-}>;
-
-export type ValidationPlan = IterationContract | FinalAcceptanceContract;
-
-/** Why targeted checks were refused in favour of the complete manifest. */
-export type EscalationReason =
-  | "unknown-impact"
-  | "broad-impact"
-  | "stale-identity"
-  | "disputed-result";
-
-export type PlannedValidation = Readonly<{
-  readonly plan: ValidationPlan;
-  readonly escalation?: EscalationReason;
-}>;
+/** Why a review round's impact widened beyond the surface its fix round was authorized to touch. */
+export type EscalationReason = "unknown-impact" | "broad-impact";
 
 /** What the final manifest still needs before the candidate can be accepted. */
 export type FinalAcceptanceStatus = Readonly<{
@@ -137,13 +117,14 @@ export function finalAcceptanceContract(task: TaskRecord, head: string): FinalAc
   };
 }
 
+/** The P0/P1 findings the failed review reported; P2/P3 stay known issues for the user. */
 function failingFindingIds(task: TaskRecord): readonly string[] {
   const ids: string[] = [];
   for (const review of task.reviews) {
     if (review.head !== task.reviewHead || review.generation !== task.generation || review.pass) {
       continue;
     }
-    for (const finding of review.findings) ids.push(finding.id);
+    for (const finding of review.findings) if (isBlockingFinding(finding)) ids.push(finding.id);
   }
   return deduplicate(ids);
 }
@@ -224,19 +205,10 @@ export function finalAcceptanceStatus(task: TaskRecord, head: string): FinalAcce
 }
 
 /**
- * Whether a finished round at `head` can go straight to review. It can when the complete manifest
- * already passed at this HEAD and policy, or when the round only answered review findings after
- * every check passed; that round's checks then run once, as the final manifest, after review passes.
+ * Whether a finished round at `head` can go straight to review: only when every command in the
+ * complete manifest already passed at this HEAD and policy, as after a fix round with no commit.
  */
 export function canSkipValidation(task: TaskRecord, head: string): boolean {
-  const scope = task.iterationScope;
-  if (
-    scope !== undefined &&
-    scope.reproduces.length === 0 &&
-    scope.policyDigest === policyIdentity(task.policy)
-  ) {
-    return true;
-  }
   try {
     const status = finalAcceptanceStatus(task, head);
     return status.missing.length === 0 && status.failed.length === 0 && status.stale.length === 0;
@@ -245,41 +217,4 @@ export function canSkipValidation(task: TaskRecord, head: string): boolean {
     if (error instanceof ValidationConfigurationError) return false;
     throw error;
   }
-}
-
-/**
- * Chooses the contract for the next validation run: targeted iteration checks when the recorded
- * scope is contained and current, and the complete final manifest otherwise. A targeted plan is
- * never returned once every required lens passes, so a final run always precedes acceptance.
- */
-export function planValidation(task: TaskRecord, head: string): PlannedValidation {
-  const manifest = finalAcceptanceContract(task, head);
-  const identity = manifest.identity;
-  const scope = task.iterationScope;
-  if (scope === undefined) return { plan: manifest };
-  if (scope.policyDigest !== identity.policyDigest) {
-    return { plan: manifest, escalation: "stale-identity" };
-  }
-  if (scope.reproduces.length === 0) {
-    return { plan: manifest, escalation: "disputed-result" };
-  }
-  const commands = manifest.commands.filter((command) => scope.reproduces.includes(command.name));
-  if (commands.length !== scope.reproduces.length) {
-    return { plan: manifest, escalation: "unknown-impact" };
-  }
-  if (commands.length === manifest.commands.length) {
-    return { plan: manifest, escalation: "broad-impact" };
-  }
-  if (finalAcceptanceStatus(task, head).pendingLenses.length === 0) {
-    return { plan: manifest };
-  }
-  return {
-    plan: {
-      contract: "iteration",
-      identity,
-      surfaces: [...scope.surfaces],
-      commands,
-      scope,
-    },
-  };
 }

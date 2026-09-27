@@ -368,7 +368,10 @@ export type ReviewResult = {
   readonly mode?: ReviewMode;
 };
 
-/** Names the two validation contracts: targeted fix-time checks and the complete final gate. */
+/**
+ * Names the validation contracts. Every run is `final`; `iteration` survives only on evidence saved
+ * when fix rounds ran targeted checks, and never satisfies acceptance.
+ */
 export type ValidationContractName = "iteration" | "final";
 
 /** Keeps runner-owned local checks distinguishable from GitHub or other remote checks. */

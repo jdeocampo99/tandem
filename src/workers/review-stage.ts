@@ -211,7 +211,7 @@ export class ReviewStage {
       repo: worktree.path,
       baseHead: worktree.baseHead,
     });
-    const classified = await classifyReviewRound(this.#deps, { task, head, facts });
+    const classified = await classifyReviewRound(this.#deps, { task, facts });
     const leveledTask = await this.recordReviewLevel(task, classified.record);
     // Recorded above so the pull request still names the risk checks the change tripped.
     if (!requiredStagesOf(leveledTask).review) {

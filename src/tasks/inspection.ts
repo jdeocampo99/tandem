@@ -31,7 +31,6 @@ export type TaskJobState = Readonly<{
   readonly generation: number;
   readonly head?: string;
   readonly contract?: DurableJob["contract"];
-  readonly escalation?: DurableJob["escalation"];
   readonly endpointPaneId?: string;
   readonly jobPath: string;
   readonly resultPath: string;
@@ -214,7 +213,6 @@ function jobState(job: DurableJob, resultExists: boolean): TaskJobState {
     generation: job.generation,
     ...(job.head === undefined ? {} : { head: job.head }),
     ...(job.contract === undefined ? {} : { contract: job.contract }),
-    ...(job.escalation === undefined ? {} : { escalation: job.escalation }),
     ...(job.endpoint?.paneId === undefined ? {} : { endpointPaneId: job.endpoint.paneId }),
     jobPath: job.jobPath,
     resultPath: job.resultPath,
