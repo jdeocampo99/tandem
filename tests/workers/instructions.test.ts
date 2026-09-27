@@ -227,7 +227,7 @@ test("holds worker prose to the coordinator's writing bans as a blocking standar
   expect(CODE_STANDARD_NAMES.some((name) => name.startsWith("Plain Prose:"))).toBe(true);
 });
 
-test("implementers follow the principle rules and reviewers grade the same rules as blocking", () => {
+test("implementers follow the principle rules and reviewers report the same rules as known issues", () => {
   const input = {
     objective: "Change the parser",
     acceptanceCriteria: ["Keep behavior identical."],
@@ -246,7 +246,7 @@ test("implementers follow the principle rules and reviewers grade the same rules
   });
   expect(reviewer).toContain(REVIEWER_PRINCIPLES);
   expect(reviewer).toContain(rule);
-  expect(reviewer).toContain("P1 finding that names the rule");
+  expect(reviewer).toContain("P2 finding that names the rule");
   expect(buildAgentBrief({ ...input, role: "scout" })).not.toContain(rule);
 });
 
