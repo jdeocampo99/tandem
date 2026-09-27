@@ -1,38 +1,46 @@
-import type { RequestBriefContent, RequestBriefRecord } from "../contracts.ts";
+import type { RequestBriefRecord } from "../contracts.ts";
 import { requestApprovalState } from "./brief.ts";
-
-/** What a reviewer needs to approve, in reading order. */
-const SUMMARY_SECTIONS = [
-  ["openQuestions", "Decisions required"],
-  ["scope", "In scope"],
-  ["nonGoals", "Out of scope"],
-  ["acceptanceCriteria", "Automated checks"],
-  ["manualVerification", "Manual verification"],
-  ["keyDecisions", "Key decisions"],
-] as const satisfies readonly (readonly [keyof RequestBriefContent, string])[];
 
 /**
  * Renders the current draft as the read-only view of the durable record. It is a projection only:
  * the pane showing it offers no editing path, and SQLite remains the authority for every field
- * repeated here. The summary comes first so a reviewer can approve from it; how the work gets done
- * and the record's bookkeeping follow under Details.
+ * repeated here. Everything above the divider is what the reader needs to approve; the details
+ * below it are for checking specifics.
  */
 export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
   const content = record.draft.content;
+  const summary = content.summary;
   const lines: string[] = [
-    "# Request brief",
+    `# ${summary?.title ?? "Request brief"}`,
     "",
     `Revision ${record.draft.revision}, ${approvalLine(record)}. Reply in the main conversation to change it; editing here changes nothing.`,
     "",
-    "## Goal",
+    "## TL;DR",
     content.goal,
   ];
-  for (const [section, title] of SUMMARY_SECTIONS) {
-    const entries = content[section];
-    // An empty question list means nothing waits on the reader, so it earns no heading.
-    if (section === "openQuestions" && entries.length === 0) continue;
-    lines.push("", `## ${title}`, ...bullets(entries));
+  if (summary !== undefined) {
+    lines.push("", "## Before and after");
+    summary.beforeAfter.forEach((moment, index) => {
+      lines.push(
+        `${index + 1}. **${moment.moment}**`,
+        `   - Before: ${moment.before}`,
+        `   - After: ${moment.after}`,
+      );
+    });
   }
+  // An empty question list means nothing waits on the reader, so it earns no heading.
+  if (content.openQuestions.length > 0) {
+    lines.push("", "## Decisions needed", ...bullets(content.openQuestions));
+  }
+  if (summary !== undefined) {
+    lines.push(
+      "",
+      "## Size and risk",
+      `- **Size: ${capitalized(summary.size.level)}.** ${summary.size.reason}`,
+      `- **Risk: ${capitalized(summary.risk.level)}.** ${summary.risk.reason}`,
+    );
+  }
+  lines.push("", "## How you'll verify", ...bullets(content.manualVerification));
   if (content.skipReview === true) {
     lines.push(
       "",
@@ -42,20 +50,32 @@ export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
   }
   lines.push(
     "",
+    "## Approach",
+    ...approach(content.recommendedApproach),
+    "",
     "---",
     "",
-    "# Details",
+    "## Details",
     "",
-    "## Approach",
-    content.recommendedApproach,
+    "### In scope",
+    ...bullets(content.scope),
     "",
-    "## Constraints",
+    "### Out of scope",
+    ...bullets(content.nonGoals),
+    "",
+    "### Automated checks",
+    ...bullets(content.acceptanceCriteria),
+    "",
+    "### Constraints",
     ...bullets(content.constraints),
     "",
-    "## References",
+    "### Decisions already made",
+    ...bullets(content.keyDecisions),
+    "",
+    "### References",
     ...bullets(content.researchLinks),
     "",
-    "## Record",
+    "### Record",
     `- Request: ${record.id}`,
     `- Repository: ${record.repoPath}`,
     `- Revision ${record.draft.revision}: ${record.draft.changeKind} change, recorded ${record.draft.recordedAt}`,
@@ -76,4 +96,14 @@ function approvalLine(record: RequestBriefRecord): string {
 
 function bullets(entries: readonly string[]): readonly string[] {
   return entries.length === 0 ? ["- None recorded."] : entries.map((entry) => `- ${entry}`);
+}
+
+/** Numbered steps, or the single paragraph a brief saved before steps holds. */
+function approach(steps: string | readonly string[]): readonly string[] {
+  if (typeof steps === "string") return [steps];
+  return steps.map((step, index) => `${index + 1}. ${step}`);
+}
+
+function capitalized(word: string): string {
+  return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
 }

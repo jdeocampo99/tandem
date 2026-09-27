@@ -551,11 +551,40 @@ export function isSafeRequestId(value: unknown): value is string {
 export const MAX_REQUEST_BRIEF_ENTRIES = 24;
 export const MAX_REQUEST_BRIEF_BYTES = 32 * 1024;
 
+export const REQUEST_BRIEF_SIZES = ["small", "medium", "large"] as const;
+export const REQUEST_BRIEF_RISKS = ["low", "medium", "high"] as const;
+export const MAX_REQUEST_BRIEF_MOMENTS = 5;
+
+/** One moment in the user's experience, as it works today and after the change. */
+export type RequestBriefMoment = Readonly<{
+  readonly moment: string;
+  readonly before: string;
+  readonly after: string;
+}>;
+
+/** A fixed label and the one reason this brief earned it. */
+export type RequestBriefRating<Level extends string> = Readonly<{
+  readonly level: Level;
+  readonly reason: string;
+}>;
+
 /**
- * What one brief revision says. The first eight fields carry the agreement itself; `openQuestions`
- * and `researchLinks` are annotations the coordinator keeps current without reopening approval.
- * `acceptanceCriteria` are the automated checks a validation command or code review can prove;
- * `manualVerification` are hands-on checks a person makes before merging.
+ * The top of the brief: what the reader needs to decide whether to approve. Briefs saved before
+ * it existed have none.
+ */
+export type RequestBriefSummary = Readonly<{
+  readonly title: string;
+  readonly beforeAfter: readonly RequestBriefMoment[];
+  readonly size: RequestBriefRating<(typeof REQUEST_BRIEF_SIZES)[number]>;
+  readonly risk: RequestBriefRating<(typeof REQUEST_BRIEF_RISKS)[number]>;
+}>;
+
+/**
+ * What one brief revision says. Everything but `openQuestions` and `researchLinks` is agreement;
+ * those two are annotations the coordinator keeps current without reopening approval. `goal` is
+ * the one-or-two-sentence TL;DR. `acceptanceCriteria` are the automated checks a validation
+ * command or code review can prove; `manualVerification` are hands-on checks a person makes
+ * before merging. `recommendedApproach` is numbered steps; older briefs hold one paragraph.
  */
 export type RequestBriefContent = Readonly<{
   readonly goal: string;
@@ -564,10 +593,11 @@ export type RequestBriefContent = Readonly<{
   readonly nonGoals: readonly string[];
   readonly acceptanceCriteria: readonly string[];
   readonly manualVerification: readonly string[];
-  readonly recommendedApproach: string;
+  readonly recommendedApproach: string | readonly string[];
   readonly keyDecisions: readonly string[];
   readonly openQuestions: readonly string[];
   readonly researchLinks: readonly string[];
+  readonly summary?: RequestBriefSummary | undefined;
   /** The user decided while planning that this work needs no code review. Absent when not. */
   readonly skipReview?: boolean | undefined;
 }>;

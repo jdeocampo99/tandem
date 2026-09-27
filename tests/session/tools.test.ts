@@ -51,12 +51,18 @@ const models = {
 const summary = { tldr: ["Short."], what: ["Change."], why: ["Reason."] };
 const brief = {
   goal: "Ship it",
+  summary: {
+    title: "Ship it",
+    beforeAfter: [{ moment: "Opening", before: "Slow.", after: "Fast." }],
+    size: { level: "small", reason: "One screen." },
+    risk: { level: "low", reason: "Easy to undo." },
+  },
   scope: ["src"],
   constraints: [],
   nonGoals: [],
   acceptanceCriteria: ["Works"],
   manualVerification: [],
-  recommendedApproach: "Small steps",
+  recommendedApproach: ["Small steps"],
   keyDecisions: [],
   openQuestions: [],
   researchLinks: [],

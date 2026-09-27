@@ -60,6 +60,7 @@ async function fixture(): Promise<Fixture> {
     pauseTask: async (taskId, reason) => {
       pauseCalls.push({ taskId, reason });
     },
+    checkLanguage: async () => [],
   });
   return {
     workflow,
