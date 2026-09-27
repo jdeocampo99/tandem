@@ -39,14 +39,8 @@ const SHELL_PROCESS_NAMES: Readonly<Record<string, true>> = {
   fish: true,
 };
 const SOCKET_RESPONSE_LIMIT = 4 * 1024 * 1024;
-const MAX_TASK_WORKSPACE_LABEL_LENGTH = 96;
-const TASK_WORKSPACE_IDENTITY_LENGTH = 12;
+const MAX_TASK_WORKSPACE_TITLE_LENGTH = 32;
 const workspaceGraphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
-const TASK_ROLE_CUES: Readonly<Partial<Record<AgentRole, string>>> = {
-  scout: "research",
-  implementer: "implement",
-};
-const FALLBACK_TASK_ROLE_CUE = "task";
 
 function normalizeWorkspaceText(value: string): string {
   return value
@@ -66,18 +60,6 @@ function truncateWorkspaceText(value: string, maxLength: number): string {
     output += segment.segment;
   }
   return `${output}${suffix}`;
-}
-function compactTaskIdentity(taskName: string): string {
-  const withoutPrefix = taskName.startsWith("tandem-")
-    ? taskName.slice("tandem-".length)
-    : taskName;
-  const start = Math.max(0, withoutPrefix.length - TASK_WORKSPACE_IDENTITY_LENGTH);
-  const segment = workspaceGraphemes.segment(withoutPrefix).containing(start);
-  return withoutPrefix.slice(
-    segment === undefined || segment.index === start
-      ? start
-      : segment.index + segment.segment.length,
-  );
 }
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 5_000;
 const DEFAULT_INTERRUPT_POLL_MS = 100;
@@ -872,22 +854,12 @@ export async function moveWorkspaceAfterParent(
   return warnings;
 }
 
-export function taskWorkspaceLabel(taskName: string, objective: string, role: AgentRole): string {
-  const normalizedTaskName = normalizeWorkspaceText(checkedText(taskName, "taskName"));
-  if (typeof objective !== "string" || objective.length === 0) {
-    throw new TypeError("objective must be non-empty text");
-  }
-  const normalizedObjective = normalizeWorkspaceText(objective);
-  const objectiveTitle =
-    normalizedObjective.length === 0 ? normalizedTaskName : normalizedObjective;
-  const identity = compactTaskIdentity(normalizedTaskName);
-  const roleCue = TASK_ROLE_CUES[role] ?? FALLBACK_TASK_ROLE_CUE;
-  const lowerTitle = objectiveTitle.toLowerCase();
-  const hasRolePrefix = lowerTitle === roleCue || lowerTitle.startsWith(`${roleCue} `);
-  const title = hasRolePrefix ? objectiveTitle : `${roleCue} ${objectiveTitle}`;
-  const cue = ` · ${identity}`;
-  const titleLimit = Math.max(1, MAX_TASK_WORKSPACE_LABEL_LENGTH - 2 - cue.length);
-  return `└ ${truncateWorkspaceText(title, titleLimit)}${cue}`;
+/** Names a task's sidebar workspace by its short title, or by its objective on older tasks. */
+export function taskWorkspaceLabel(task: Readonly<{ title?: string; objective: string }>): string {
+  const title = normalizeWorkspaceText(task.title ?? "");
+  const name = title.length === 0 ? normalizeWorkspaceText(task.objective) : title;
+  if (name.length === 0) throw new TypeError("task title or objective must be non-empty text");
+  return `└ ${truncateWorkspaceText(name, MAX_TASK_WORKSPACE_TITLE_LENGTH)}`;
 }
 
 export async function createTaskEndpoint(

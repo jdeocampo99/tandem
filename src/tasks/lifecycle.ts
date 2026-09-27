@@ -51,6 +51,8 @@ export type TaskInput = Readonly<{
   readonly repoPath: string;
   readonly kind: TaskKind;
   readonly objective: string;
+  /** Short sidebar name for the task's workspaces. */
+  readonly title?: string;
   readonly acceptanceCriteria: readonly string[];
   /** Hands-on checks a person makes before merging; never judged by review. */
   readonly manualVerification?: readonly string[];
@@ -329,6 +331,9 @@ function assertTaskInput(input: TaskInput): void {
   }
   if (!isNonEmptyText(input.objective)) {
     throw new TypeError("Task objective must be a non-empty string");
+  }
+  if (input.title !== undefined && !isNonEmptyText(input.title)) {
+    throw new TypeError("Task title must be a non-empty string");
   }
   assertTextList(input.acceptanceCriteria, "acceptanceCriteria");
   if (input.manualVerification !== undefined) {
@@ -829,6 +834,7 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
     kind: input.kind,
     objective: input.objective,
+    ...(input.title === undefined ? {} : { title: input.title }),
     acceptanceCriteria: [...input.acceptanceCriteria],
     ...(input.manualVerification === undefined || input.manualVerification.length === 0
       ? {}

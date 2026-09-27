@@ -39,6 +39,7 @@ export const DEFAULT_STARTUP_GRACE_MS = 15 * 1000;
 export type TaskCreationRequest = Readonly<{
   readonly kind: TaskKind;
   readonly objective: string;
+  readonly title?: string;
   readonly acceptanceCriteria: readonly string[];
   readonly manualVerification?: readonly string[];
   readonly surfaces: readonly string[];
@@ -555,6 +556,7 @@ export function taskInputFor(
     repoPath,
     kind: request.kind,
     objective: text(request.objective, "objective"),
+    ...(request.title === undefined ? {} : { title: text(request.title, "title") }),
     acceptanceCriteria: readTextList(request.acceptanceCriteria, "acceptanceCriteria"),
     ...(request.manualVerification === undefined
       ? {}

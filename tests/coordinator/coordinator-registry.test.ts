@@ -771,7 +771,7 @@ for (const force of [false, true]) {
   });
 }
 
-for (const label of ["Tandem coordinator · repo-a", "My scratch terminal"]) {
+for (const label of ["◆ repo-a", "Tandem coordinator · repo-a", "My scratch terminal"]) {
   test(`reset preserves extra panes and only retires its own generated workspace label: ${label}`, async () => {
     const values = await fixture();
     try {
@@ -795,7 +795,7 @@ for (const label of ["Tandem coordinator · repo-a", "My scratch terminal"]) {
       expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(false);
       expect(runner.panes.get(extra.endpoint.paneId)?.present).toBe(true);
       expect(runner.workspaces.get(values.recordA.endpoint.workspaceId)).toBe(
-        label === "My scratch terminal" ? label : "Retained terminals · repo-a",
+        label === "My scratch terminal" ? label : "◇ repo-a (old)",
       );
     } finally {
       await cleanup(values.root);

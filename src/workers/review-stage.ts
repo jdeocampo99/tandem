@@ -415,7 +415,7 @@ export class ReviewStage {
         sessionId: this.#deps.sessionId,
         cwd: reviewCwd,
         taskName,
-        workspaceLabel: taskWorkspaceLabel(taskName, task.objective, role),
+        workspaceLabel: taskWorkspaceLabel(task),
         role,
         generation: task.generation,
         ...(this.#deps.parentWorkspaceId === undefined

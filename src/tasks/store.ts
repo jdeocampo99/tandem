@@ -180,6 +180,7 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
       repoPath: input.repoPath,
       kind: input.kind,
       objective: input.objective,
+      ...(input.title === undefined ? {} : { title: input.title }),
       acceptanceCriteria: input.acceptanceCriteria,
       ...(input.manualVerification === undefined
         ? {}

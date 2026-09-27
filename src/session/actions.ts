@@ -56,6 +56,8 @@ export type TandemAction =
       readonly requestId?: string | undefined;
       readonly kind: CreatableTaskKind;
       readonly objective: string;
+      /** Sidebar name; the tool schema requires it, the typed command leaves it out. */
+      readonly title?: string | undefined;
       readonly acceptanceCriteria: readonly string[];
       readonly manualVerification?: readonly string[] | undefined;
       readonly surfaces: readonly string[];
@@ -499,6 +501,7 @@ function serviceCreateInput(
     repoPath: action.repoPath,
     kind: action.kind,
     objective: action.objective,
+    ...(action.title === undefined ? {} : { title: action.title }),
     ...(action.requestId === undefined ? {} : { requestId: action.requestId }),
     acceptanceCriteria: action.acceptanceCriteria,
     ...(action.manualVerification === undefined

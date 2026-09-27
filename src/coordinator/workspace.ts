@@ -23,12 +23,24 @@ export type CoordinatorWorkspaceRetirement = Readonly<{
 
 type RetiredRecord = Pick<CoordinatorRecord, "repoPath" | "endpoint" | "worktree">;
 
+/** Short enough to read in Herdr's narrow sidebar; task workspaces nest under it with "└ ". */
 export function coordinatorWorkspaceLabel(repoPath: string): string {
-  return `Tandem coordinator · ${basename(repoPath)}`;
+  return `◆ ${basename(repoPath)}`;
+}
+
+/**
+ * Whether a label is one Tandem generated for this repository's coordinator. Workspaces opened
+ * before the short label still carry the long one and must retire the same way.
+ */
+function isCoordinatorWorkspaceLabel(label: string, repoPath: string): boolean {
+  return (
+    label === coordinatorWorkspaceLabel(repoPath) ||
+    label === `Tandem coordinator · ${basename(repoPath)}`
+  );
 }
 
 function retainedWorkspaceLabel(repoPath: string): string {
-  return `Retained terminals · ${basename(repoPath)}`;
+  return `◇ ${basename(repoPath)} (old)`;
 }
 
 async function currentWorkspaceLabel(
@@ -156,8 +168,8 @@ async function proveCoordinatorStopped(
  * stop has already proven it is safe to replace.
  *
  * Closes the coordinator's own pane by default, which removes the workspace once it was the
- * last pane. A workspace is retained instead (its generated label renamed to "Retained
- * terminals · <repo>") only when another pane still shares the workspace and keeps it alive.
+ * last pane. A workspace is retained instead (its generated label renamed to "◇ <repo>
+ * (old)") only when another pane still shares the workspace and keeps it alive.
  * A custom label, or ownership that cannot be proven exactly and as stopped, is left entirely
  * untouched and reported rather than closed or renamed.
  *
@@ -178,7 +190,7 @@ export async function retireCoordinatorWorkspace(
   ): CoordinatorWorkspaceRetirement =>
     extraPaneIds.length === 0 ? retirement : { ...retirement, extraPaneIds };
 
-  if (label !== coordinatorWorkspaceLabel(record.repoPath)) {
+  if (!isCoordinatorWorkspaceLabel(label, record.repoPath)) {
     return withExtras({ outcome: "retained", reason: "workspace has a custom label" });
   }
 

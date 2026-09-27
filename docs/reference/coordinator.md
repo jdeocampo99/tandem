@@ -195,9 +195,14 @@ Applies when launch replaces a stopped coordinator and during reset.
 
 - Herdr removes a workspace when its last pane closes. Retirement closes the coordinator's own
   pane only once exact ownership and a stopped process are proven.
-- If other panes share the workspace, it is renamed `Retained terminals · <repo>` instead. Those
+- If other panes share the workspace, it is renamed `◇ <repo> (old)` instead. Those
   extra panes are never closed just for sharing the workspace; they are reported with the outcome.
 - A workspace with a user-set custom label is left entirely untouched, pane included.
+- A coordinator workspace is labelled `◆ <repo>`; one still labelled `Tandem coordinator · <repo>`
+  from before retires the same way.
+- A shell Herdr just restored is still starting (prompt, fastfetch), so launch retries retirement
+  for about five seconds before treating the pane as busy. Without that wait, every Herdr restart
+  left the old coordinator workspace open next to its replacement.
 - Ownership that cannot be proven exactly and as stopped (cwd or process no longer matches the
   record) is quarantined: not closed, not renamed, reported, and listed again by `tandem fix`.
 - There is no explicit-retention option.
