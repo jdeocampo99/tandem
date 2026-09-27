@@ -391,14 +391,17 @@ export function completeRequestPlanningInterview(
       record.id,
     );
   }
-  const planningAnswers = interview.questions.map((question) => {
-    const answer = question.answer;
-    if (answer === undefined) throw planningError("complete interview is missing an answer");
-    return `${question.question}\nAnswer: ${answer.value}${answer.note === undefined ? "" : `\nNote: ${answer.note}`}`;
-  });
+  const planningAnswers = [
+    ...(record.draft.content.planningAnswers ?? []),
+    ...interview.questions.map((question) => {
+      const answer = question.answer;
+      if (answer === undefined) throw planningError("complete interview is missing an answer");
+      return `${question.question}\nAnswer: ${answer.value}${answer.note === undefined ? "" : `\nNote: ${answer.note}`}`;
+    }),
+  ];
   const content = checkedRequestBriefContent({
     ...record.draft.content,
-    ...(planningAnswers.length === 0 ? {} : { planningAnswers }),
+    planningAnswers,
   });
   const base =
     requestBriefDigests(content).contentDigest === record.draft.contentDigest

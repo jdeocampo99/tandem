@@ -1775,8 +1775,15 @@ class TandemController {
     if (!input.approved) throw new ApprovalRequiredError("publish now");
     const published = await this.publishedTask(id);
     if (published !== undefined) return published;
-    if ((await this.get(id)).stage === "cancelled") {
+    const task = await this.get(id);
+    if (task.stage === "cancelled") {
       throw new Error(`Task ${id} was cancelled, so it can't be published`);
+    }
+    const dispatch = await this.#requests.dispatchDecisionForTask(task);
+    if (dispatch !== undefined && !dispatch.allowed) {
+      throw new Error(
+        `Task ${task.id} cannot skip review while its request blocks dispatch: ${dispatch.reason}`,
+      );
     }
     await this.#control.skipReview(assertTaskId(id));
     return this.publish(id, input);

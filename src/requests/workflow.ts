@@ -309,7 +309,7 @@ export class RequestBriefWorkflow {
     const nextInterview =
       startInterview === undefined
         ? current.planningInterview
-        : current.planningInterview === undefined
+        : current.planningInterview === undefined || current.planningInterview.status === "complete"
           ? startInterview
           : sameResearchTasks(current.planningInterview, startInterview)
             ? current.planningInterview

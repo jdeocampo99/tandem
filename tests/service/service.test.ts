@@ -2051,6 +2051,93 @@ test("active planning interviews block resumed tasks before dispatch and publica
   }
 });
 
+test("publish-now does not waive review while a request interview blocks dispatch", async () => {
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "queued",
+      attachLease: true,
+      taskEdits: { reviewHead: SOURCE_CHECKPOINT.head },
+    },
+    async ({ home, task: fixtureTask, service }) => {
+      const content = {
+        goal: "Publish only after the planning decision",
+        scope: ["src"],
+        constraints: [],
+        nonGoals: [],
+        acceptanceCriteria: ["blocked work stays blocked while its request waits"],
+        manualVerification: [],
+        recommendedApproach: "Keep the review state unchanged until publication is allowed",
+        keyDecisions: [],
+        openQuestions: [],
+        researchLinks: [],
+      };
+      const drafted = await service.draftRequestBrief({
+        repoPath: fixtureTask.repoPath,
+        content,
+        reviewPane: false,
+      });
+      const approved = await service.approveRequestBrief({
+        requestId: drafted.record.id,
+        briefRevision: drafted.record.draft.revision,
+        contentDigest: drafted.record.draft.contentDigest,
+      });
+      expect(approved.approvalState).toBe("current");
+
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const current = await store.read(fixtureTask.id);
+      if (current === undefined) throw new Error("fixture task missing");
+      await store.update(current.id, current.revision, (record) => {
+        const blockedTask = transitionTask(
+          record,
+          { type: "block", reason: "Awaiting the user's planning decision" },
+          { now: TIMESTAMP, notificationId: "block-1" },
+        );
+        if (blockedTask.worktree === undefined) {
+          throw new Error("fixture task missing worktree lease");
+        }
+        return {
+          ...blockedTask,
+          requestId: drafted.record.id,
+          worktree: { ...blockedTask.worktree, baseHead: "base-head" },
+        };
+      });
+
+      const interview = await service.draftRequestBrief({
+        repoPath: fixtureTask.repoPath,
+        requestId: drafted.record.id,
+        content: { ...content, openQuestions: ["Should older clients remain supported?"] },
+        reviewPane: false,
+        startPlanningInterview: true,
+      });
+      expect(interview.approvalState).toBe("current");
+      expect(interview.pausedTaskIds).toEqual([]);
+      const blocked = await service.get(fixtureTask.id);
+      expect(blocked.stage).toBe("blocked");
+      expect(blocked.reviewSkippedHead).toBeUndefined();
+
+      await expect(
+        service.publishNow(fixtureTask.id, {
+          repository: "acme/repo",
+          title: "Publish after planning",
+          base: "main",
+          summary: {
+            tldr: ["Wait for the planning answer"],
+            what: ["Keep final publication blocked"],
+            why: ["The request is under interview"],
+          },
+          approved: true,
+        }),
+      ).rejects.toThrow(/planning interview/u);
+      expect(await service.get(fixtureTask.id)).toEqual(blocked);
+    },
+  );
+});
+
 async function approveWithWorktree(
   home: string,
   lease: WorktreeLease,

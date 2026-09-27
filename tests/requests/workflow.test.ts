@@ -241,7 +241,7 @@ test("abandoning a stale draft lets a no-id approval land on the one brief still
 });
 
 test("planning interviews persist ordered decisions and require final brief approval", async () => {
-  const { workflow, close } = await fixture();
+  const { workflow, pauseCalls, setTasks, close } = await fixture();
   try {
     const drafted = await workflow.draft({
       repoPath: "/repo",
@@ -346,6 +346,87 @@ test("planning interviews persist ordered decisions and require final brief appr
     expect(await workflow.dispatchDecisionForTask({ requestId: drafted.record.id })).toMatchObject({
       allowed: true,
     });
+
+    setTasks([
+      { id: "task-owned", requestId: drafted.record.id, stage: "implementing" } as TaskRecord,
+      { id: "task-other", requestId: "req-other", stage: "implementing" } as TaskRecord,
+    ]);
+    const priorAnswers = approved.record.draft.content.planningAnswers;
+    if (priorAnswers === undefined) throw new Error("completed interview did not persist answers");
+    const reopened = await workflow.draft({
+      repoPath: "/repo",
+      requestId: drafted.record.id,
+      content: {
+        ...approved.record.draft.content,
+        openQuestions: ["Should older clients remain supported?"],
+      },
+      reviewPane: false,
+      startPlanningInterview: true,
+      researchTaskIds: ["scout-2"],
+    });
+    expect(reopened.approvalState).toBe("current");
+    expect(reopened.record.planningInterview).toMatchObject({
+      status: "active",
+      researchTaskIds: ["scout-2"],
+      questions: [],
+    });
+    expect(reopened.record.draft.content.planningAnswers).toEqual(priorAnswers);
+    expect(reopened.pausedTaskIds).toEqual(["task-owned"]);
+    expect(pauseCalls.map((call) => call.taskId)).toEqual(["task-owned"]);
+    await expect(
+      workflow.dispatchDecisionForTask({ requestId: drafted.record.id }),
+    ).resolves.toMatchObject({
+      allowed: false,
+      reason: expect.stringContaining("planning interview"),
+    });
+    await expect(
+      workflow.recordPlanningAnswer(drafted.record.id, firstQuestion.id, {
+        kind: "option",
+        value: "Stable behavior",
+      }),
+    ).rejects.toMatchObject({ code: "planning-question-stale" });
+
+    const followup = await workflow.addPlanningQuestion(drafted.record.id, {
+      context: "Implementation found a new compatibility issue.",
+      question: "Should older clients remain supported?",
+      options: [{ label: "Preserve support" }, { label: "Require migration" }],
+      recommendedOption: 0,
+    });
+    const followupQuestion = followup.planningInterview?.questions[0];
+    if (followupQuestion === undefined) throw new Error("follow-up question was not saved");
+    await workflow.recordPlanningAnswer(drafted.record.id, followupQuestion.id, {
+      kind: "option",
+      value: "Preserve support",
+    });
+    setTasks([
+      { id: "task-owned", requestId: drafted.record.id, stage: "paused" } as TaskRecord,
+      { id: "task-other", requestId: "req-other", stage: "implementing" } as TaskRecord,
+    ]);
+    await workflow.draft({
+      repoPath: "/repo",
+      requestId: drafted.record.id,
+      content: {
+        ...reopened.record.draft.content,
+        keyDecisions: [
+          ...reopened.record.draft.content.keyDecisions,
+          "Preserve support for older clients",
+        ],
+        openQuestions: [],
+      },
+      reviewPane: false,
+    });
+    const completedAgain = await workflow.completePlanningInterview(drafted.record.id);
+    expect(completedAgain.record.draft.content.planningAnswers).toEqual([
+      ...priorAnswers,
+      "Should older clients remain supported?\nAnswer: Preserve support",
+    ]);
+    expect(completedAgain.approvalState).toBe("superseded");
+    const reapproved = await workflow.approve({
+      requestId: drafted.record.id,
+      briefRevision: completedAgain.record.draft.revision,
+      contentDigest: completedAgain.record.draft.contentDigest,
+    });
+    expect(reapproved.approvalState).toBe("current");
   } finally {
     await close();
   }

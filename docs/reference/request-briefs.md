@@ -57,6 +57,9 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
 - Completing the interview is not approval. The final brief still needs the existing explicit
   `brief-approve` confirmation, and task scope approval remains separate. An interview answer,
   recommendation, or timeout can never authorize implementation.
+- A later unresolved decision may start a new interview on the same request after the prior interview
+  is complete. The new round starts with no saved questions; completion appends its answers to the
+  existing `planningAnswers`. Its final brief still needs explicit approval.
 
 ## Approval
 

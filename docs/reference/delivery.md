@@ -114,6 +114,8 @@ blocks dispatch, including during an active planning interview.
   chooses it, and it needs confirmation like `publish`.
 - Allowed for an implementation task in `validating`, `reviewing`, `awaiting-fixes`, or `blocked`,
   with a clean worktree and a commit beyond its base (`skipReview` in src/tasks/control.ts).
+- Before `skipReview` changes task state, publish-now refuses if the bound request blocks dispatch.
+  The final publication gate checks again after review is skipped.
 - Running validators/reviewers stop through the same pause path `restart` uses; a worker that
   cannot be proven stopped blocks the task and nothing moves. The abandoned job is settled.
 - The `skip-review` lifecycle event makes the task `ready` at its current HEAD with
