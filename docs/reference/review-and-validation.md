@@ -113,8 +113,9 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   (confirmed or plausible) blocks; P2/P3 never costs a fix round, is not required in one, and is listed
   in the ready message and the PR's `# Known issues`. A violated mandatory requirement from the brief is
   P1; a Principles rule violation or a contrived edge case is P2. A P0/P1 names a realistic failing input.
-- A spent fix-round budget asks `Keep fixing?` ([Task lifecycle](task-lifecycle.md#fix-rounds)).
-  Nothing retries without `yes`, auto-passes, or downgrades a blocker.
+- A spent fix-round budget asks `Keep fixing?` once per task; after that extension is spent the task
+  stops for the user ([Task lifecycle](task-lifecycle.md#fix-rounds)). Nothing retries without
+  `yes`, auto-passes, or downgrades a blocker.
 - Each finding carries the reviewer's `category` (`correctness`, `error-handling`, `security`,
   `tests`, `design`, `requirements`, `docs`) and `catchStage`, the earliest stage that should have
   caught it (`planning`, `implementation`, `validation`, `review`). They are fields of the review
