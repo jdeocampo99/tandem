@@ -104,7 +104,11 @@ const THINKING_LEVELS = [
 ] as const;
 const FINDING_SEVERITIES: readonly FindingSeverity[] = ["P0", "P1", "P2", "P3"];
 const FINDING_VERDICTS: readonly FindingVerdict[] = ["confirmed", "plausible"];
-const FIX_ROUND_GRANT_REASONS: readonly FixRoundGrant["reason"][] = ["user", "no-commit"];
+const FIX_ROUND_GRANT_REASONS: readonly FixRoundGrant["reason"][] = [
+  "user",
+  "no-commit",
+  "failed-checks",
+];
 // ponytail: accepts every legacy lens name too (see ALL_REVIEW_LENSES) so a stored review or
 // finding recorded before the lenses were merged still decodes.
 const REVIEW_LENSES: readonly StoredReviewLens[] = ALL_REVIEW_LENSES;
