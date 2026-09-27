@@ -81,9 +81,7 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const NAME_CHARS = 30;
 const TEXT_CHARS = 80;
 
-const RUNNING_LABELS: Readonly<
-  Record<RunningStage, Readonly<{ mark: string; label: string }>>
-> = {
+const RUNNING_LABELS: Readonly<Record<RunningStage, Readonly<{ mark: string; label: string }>>> = {
   paused: { mark: "⏸️", label: "paused" },
   queued: { mark: "⏳", label: "waiting to start" },
   scouting: { mark: "🔍", label: "researching" },

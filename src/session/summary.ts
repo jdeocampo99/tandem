@@ -1,8 +1,8 @@
 import { basename } from "node:path";
 import {
   type BoardView,
-  type RunningBoardRow,
   isRunningStage,
+  type RunningBoardRow,
   renderBoard,
 } from "../board/view.ts";
 import {
