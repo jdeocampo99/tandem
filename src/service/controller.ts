@@ -825,6 +825,8 @@ class TandemController {
       removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
       setRuntimeError: (taskId, error) => this.setRuntimeError(taskId, error),
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
+      cleanupNonAdoptedResearchHandoff: (task) =>
+        this.cleanupTerminalTask(task, { approvedResearchHandoff: true }),
       reviewAssistance: deps.reviewAssistance,
       recordRequestUsage: (events) => this.#accounting.record(events),
       readRequestUsage: (requestId) => deps.usageLedger.read(requestId),

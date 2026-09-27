@@ -1182,6 +1182,7 @@ async function classifyResources(
 }
 
 export type SeedTaskInput = Readonly<{
+  readonly id?: string;
   readonly kind: TaskRecord["kind"];
   readonly requestId?: string;
   readonly policy?: ResolvedPolicy;
@@ -1207,7 +1208,7 @@ export async function seedScenarioTask(
   input: SeedTaskInput,
 ): Promise<TaskRecord> {
   let task = await world.store.create({
-    id: SCENARIO_TASK_ID,
+    id: input.id ?? SCENARIO_TASK_ID,
     repoPath: world.repoPath,
     kind: input.kind,
     objective: "exercise one durable scenario path",
@@ -1265,6 +1266,15 @@ export async function seedScenarioRuntime(
   });
 }
 
+export async function appendScenarioRuntime(
+  world: ScenarioWorld,
+  task: RuntimeTaskState,
+): Promise<void> {
+  const path = runtimeFile(world.home);
+  const current = await readRuntimeState(path);
+  await writeRuntimeState(path, { ...current, tasks: [...current.tasks, task] });
+}
+
 export function scenarioRuntimeTask(overrides: Partial<RuntimeTaskState> = {}): RuntimeTaskState {
   return {
     schemaVersion: 1,
@@ -1289,17 +1299,21 @@ export function scenarioJob(
     readonly role: Exclude<DurableJob["role"], "validation">;
     readonly cwd: string;
     readonly endpoint: Endpoint;
+    readonly taskId?: string;
+    readonly jobId?: string;
     readonly phase?: DurableJob["phase"];
     readonly generation?: number;
   }>,
 ): DurableJob {
+  const taskId = input.taskId ?? SCENARIO_TASK_ID;
+  const jobId = input.jobId ?? "job-1";
   const generation = input.generation ?? 0;
-  const directory = join(input.home, "jobs", SCENARIO_TASK_ID, String(generation), "job-1");
+  const directory = join(input.home, "jobs", taskId, String(generation), jobId);
   const phase = input.phase ?? "running";
   return {
     schemaVersion: 1,
-    id: "job-1",
-    taskId: SCENARIO_TASK_ID,
+    id: jobId,
+    taskId,
     generation,
     role: input.role,
     kind: "worker",

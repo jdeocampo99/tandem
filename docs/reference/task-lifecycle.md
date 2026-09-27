@@ -146,9 +146,13 @@ never permission. It does not set `scopeApproved` or create tasks. It is refused
   session or workspace may be released; the durable interview below owns that lifecycle.
 - An older task-level `communication.question` still uses the regular `answer-question` action.
   New research clarifications use the focused research interview and do not open that question UI.
-- An implementation task citing a scout in `researchTaskIds` remains `awaiting-approval`. Explicit
-  approval records the research disposition and task approval together. Workspace adoption happens
-  only after the cited session is proven stopped and its exact checkout is clean.
+- An implementation task citing scouts in `researchTaskIds` remains `awaiting-approval`. Explicit
+  approval atomically approves the implementation scope and all cited research interviews. The
+  first cited scout is the designated workspace; its exact clean checkout may be adopted only after
+  its pane, runtime jobs, endpoint launch, and lease owner are re-proven.
+- Every additional cited scout session must also be proven stopped before implementation starts.
+  Tandem releases its clean workspace, but retains a dirty or unmerged one with the recorded reason.
+  If any session closure or ownership cannot be proven, implementation blocks without a fresh workspace.
 
 ## Completed research interview
 
@@ -165,13 +169,17 @@ without this field loads as `open`; absence never means approved or stopped.
   fails, the pending decision and workspace remain durable; a successful result can be recovered
   from its decision-bound sidecar after a process restart. A different question creates a separate
   bounded decision. Stopping withdraws any unanswered decision.
+- An open completed interview's OMP conversation is protected from the normal 30-day transcript
+  pruning. Explicit approval or stop closes that retention; the report and answered decisions remain.
 - Creating an implementation that cites the report does not approve it. Explicit `approve` requires
   no unanswered research decision and atomically approves the implementation scope and interview.
   The implementation may adopt only the exact cited clean worktree after the scout pane, runtime
   jobs, endpoint launch, lease owner, and checkout are all re-proven. If closure or ownership is
   uncertain, implementation blocks and never falls back to a fresh workspace.
-- `cleanup` is the explicit stop action for an open interview. A proven clean scout pane and lease
-  may then be released; dirty, moved, unmerged, foreign, or uncertain resources stay retained or
+- `cleanup` is the explicit stop action for an open interview and requires the user's confirmation.
+  The confirmation says it stops research, not that it discards the worktree. Scout cleanup rejects
+  `--discard`; run it without that flag to stop research. A proven clean scout pane and lease may
+  then be released; dirty, moved, unmerged, foreign, or uncertain resources stay retained or
   quarantined with the recorded reason. Repeating cleanup rechecks retained resources after the
   condition is resolved; quarantined ownership is never retried. The report and answered decisions
   remain available. There is no question-panel lifecycle for this interview.

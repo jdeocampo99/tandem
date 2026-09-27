@@ -288,7 +288,7 @@ function summarizeTask(task: TaskRecord): string {
     const answer = interview.decisions.findLast((decision) => decision.status === "answered");
     if (answer?.status === "answered" && answer.answer !== undefined) {
       lines.push(
-        `Latest research answer: ${compactText(answer.question, 120)} — ${compactText(answer.answer, ACTION_SUMMARY_MAX_TEXT)}`,
+        `Latest research answer: ${compactText(answer.question, 120)}; ${compactText(answer.answer, ACTION_SUMMARY_MAX_TEXT)}`,
       );
     }
   }
@@ -741,7 +741,7 @@ function summarizeCommunicationMessage(
   const status = communicationStatusLabel(message.status);
   const text = recordText(message, "text");
   return `${kind} ${compactText(id, 100)}: ${status}${
-    text === undefined ? "" : ` — ${compactText(text, textLimit)}`
+    text === undefined ? "" : `; ${compactText(text, textLimit)}`
   }`;
 }
 
@@ -1228,7 +1228,7 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
       const answer = interview?.decisions.findLast((decision) => decision.status === "answered");
       if (answer?.status === "answered" && answer.answer !== undefined) {
         lines.push(
-          `  latest research answer: ${compactText(answer.question, 120)} — ${compactText(answer.answer, MAX_TASK_MESSAGE_CHARS)}`,
+          `  latest research answer: ${compactText(answer.question, 120)}; ${compactText(answer.answer, MAX_TASK_MESSAGE_CHARS)}`,
         );
       }
     }

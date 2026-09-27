@@ -105,6 +105,26 @@ test("research-follow-up routes a read-only question without asking for approval
   expect(result.value).toBe("The report's constraint is the pinned source commit.");
   expect(result.approved).toBeUndefined();
 });
+
+test("cancel passes its parsed reason to the service", async () => {
+  const calls: unknown[] = [];
+  const found = task({ id: "task-1", stage: "running" });
+  const service = {
+    get: async () => found,
+    cancel: async (...args: unknown[]) => {
+      calls.push(args);
+      return task({ id: "task-1", stage: "cancelled" });
+    },
+  } as unknown as TandemService;
+
+  const action = parseTandemCommand(
+    'cancel task-1 "the user asked to stop"',
+  );
+  await executeTandemAction(action, service, { confirm: async () => true });
+
+  expect(calls).toEqual([["task-1", "the user asked to stop", { discard: false }]]);
+});
+
 test("create forwards the named request so work can join one of several open requests", async () => {
   const createCalls: unknown[] = [];
   const service = {
@@ -1102,22 +1122,13 @@ test("a published pull request is summarized with its link", () => {
   expect(summary).toContain("Pull request: https://github.com/acme/repo/pull/12 (open)");
 });
 
-test("extension cleanup skips confirmation for safe release and shows scope for discard", async () => {
+test("extension cleanup asks before stopping research and avoids discard wording", async () => {
   const cleanupInputs: unknown[] = [];
-  const prompts: string[] = [];
+  const prompts: Array<{ readonly title: string; readonly message: string }> = [];
   const cleanupTask = task({
-    objective: "Release the completed task resources",
-    reviewHead: "review-head",
-    worktree: {
-      root: "/tmp/treehouse",
-      path: "/tmp/treehouse/task-1",
-      name: "task-1",
-      baseHead: "base-head",
-      branch: "tandem/task-1",
-      leaseId: "lease-1",
-      leaseHolder: "tandem-1",
-      leasedAt: "2030-01-02T03:04:05.000Z",
-    },
+    kind: "scout",
+    stage: "completed",
+    objective: "Investigate the settings behavior",
   });
   const service = {
     get: async () => cleanupTask,
@@ -1126,24 +1137,69 @@ test("extension cleanup skips confirmation for safe release and shows scope for 
       return cleanupTask;
     },
   } as unknown as TandemService;
+  const answers = [false, true];
   const context = {
-    confirm: async (_title: string, message: string) => {
-      prompts.push(message);
-      return false;
+    confirm: async (title: string, message: string) => {
+      prompts.push({ title, message });
+      return answers.shift() ?? false;
     },
   };
 
-  await executeTandemAction({ action: "cleanup", taskIds: [cleanupTask.id] }, service, context);
   const refused = await executeTandemAction(
-    { action: "cleanup", taskIds: [cleanupTask.id], discard: true },
+    { action: "cleanup", taskIds: [cleanupTask.id] },
+    service,
+    context,
+  );
+  const accepted = await executeTandemAction(
+    { action: "cleanup", taskIds: [cleanupTask.id] },
     service,
     context,
   );
 
   expect(cleanupInputs).toEqual([{}]);
-  expect(prompts).toHaveLength(1);
-  expect(prompts[0]).toBe("This discards its changes.");
   expect(refused.approved).toBe(false);
+  expect(accepted.approved).toBe(true);
+  expect(prompts).toEqual([
+    {
+      title: 'Stop research for "Investigate the settings behavior"?',
+      message:
+        "The report stays. Tandem attempts to stop research; only proven-safe resources are released.",
+    },
+    {
+      title: 'Stop research for "Investigate the settings behavior"?',
+      message:
+        "The report stays. Tandem attempts to stop research; only proven-safe resources are released.",
+    },
+  ]);
+});
+
+test("discard cleanup refuses research before presenting a destructive prompt", async () => {
+  const cleanupTask = task({ kind: "scout", stage: "completed" });
+  let confirmations = 0;
+  let cleanups = 0;
+  const service = {
+    get: async () => cleanupTask,
+    cleanup: async () => {
+      cleanups += 1;
+      return cleanupTask;
+    },
+  } as unknown as TandemService;
+
+  await expect(
+    executeTandemAction(
+      { action: "cleanup", taskIds: [cleanupTask.id], discard: true },
+      service,
+      {
+        confirm: async () => {
+          confirmations += 1;
+          return true;
+        },
+      },
+    ),
+  ).rejects.toThrow("scout research cleanup never discards an unproven worktree");
+
+  expect(confirmations).toBe(0);
+  expect(cleanups).toBe(0);
 });
 
 test("extension cleanup asks once for a batch and keeps going past a failure", async () => {

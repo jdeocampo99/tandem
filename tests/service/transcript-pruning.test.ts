@@ -10,19 +10,33 @@ const now = "2026-09-25T00:00:00.000Z";
 const daysAgo = (days: number) =>
   new Date(Date.parse(now) - days * 24 * 60 * 60 * 1000).toISOString();
 
-function task(id: string, stage: TaskRecord["stage"], updatedAt: string): TaskRecord {
-  return { id, stage, updatedAt } as TaskRecord;
+function task(
+  id: string,
+  stage: TaskRecord["stage"],
+  updatedAt: string,
+  fields: Partial<TaskRecord> = {},
+): TaskRecord {
+  return { id, stage, updatedAt, ...fields } as TaskRecord;
 }
 
-test("only tasks finished more than 30 days ago lose their transcripts", () => {
+test("only old finished tasks without an open research interview lose transcripts", () => {
   const tasks = [
     task("merged-old", "merged", daysAgo(31)),
     task("cancelled-at-cutoff", "cancelled", daysAgo(30)),
     task("completed-recent", "completed", daysAgo(29)),
     task("blocked-old", "blocked", daysAgo(90)),
     task("ready-old", "ready", daysAgo(90)),
+    task("open-scout-old", "completed", daysAgo(90), { kind: "scout" }),
+    task("stopped-scout-old", "completed", daysAgo(90), {
+      kind: "scout",
+      researchInterview: { schemaVersion: 1, status: "stopped", decisions: [] },
+    }),
   ];
-  expect(transcriptsToPrune(tasks, now)).toEqual(["merged-old", "cancelled-at-cutoff"]);
+  expect(transcriptsToPrune(tasks, now)).toEqual([
+    "merged-old",
+    "cancelled-at-cutoff",
+    "stopped-scout-old",
+  ]);
 });
 
 test("pruning deletes each task's session folder and leaves every other folder", async () => {

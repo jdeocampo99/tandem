@@ -125,6 +125,7 @@ export type TandemAction =
   | Readonly<{
       readonly action: "cancel";
       readonly taskId: string;
+      readonly reason?: string | undefined;
       readonly discard?: boolean | undefined;
     }>
   | Readonly<{
@@ -297,7 +298,7 @@ async function onboardingDetails(repoPath: string, service: TandemService) {
 }
 
 function requiresHumanApproval(action: TandemAction): boolean {
-  if (action.action === "cleanup") return action.discard === true;
+  if (action.action === "cleanup") return true;
   return (
     action.action === "setup" ||
     action.action === "open-project" ||
@@ -376,16 +377,48 @@ async function approvalPrompt(
     };
   }
   if (action.action === "cleanup") {
-    const names = await Promise.all(
-      action.taskIds.map(async (taskId) => taskName((await service.get(taskId)).objective)),
+    const tasks = await Promise.all(action.taskIds.map((taskId) => service.get(taskId)));
+    const names = tasks.map((task) => taskName(task.objective));
+    const researchers = tasks.filter((task) => task.kind === "scout");
+    if (action.discard === true) {
+      if (researchers.length > 0) {
+        throw new Error("scout research cleanup never discards an unproven worktree");
+      }
+      return names.length === 1
+        ? { title: `Delete the worktree for ${names[0]}?`, message: "This discards its changes." }
+        : {
+            title: `Delete the worktrees for ${names.length} tasks?`,
+            message: `${names.map((name) => `- ${name}`).join("\n")}\nThis discards their changes.`,
+          };
+    }
+    const lines: string[] = tasks.map((task, index) =>
+      researchers.length === tasks.length
+        ? `- ${names[index]}`
+        : `- ${names[index]}: ${task.kind === "scout" ? "stop research" : "clean up resources"}`,
     );
-    const [only] = names;
-    return names.length === 1 && only !== undefined
-      ? { title: `Delete the worktree for ${only}?`, message: "This discards its changes." }
-      : {
-          title: `Delete the worktrees for ${names.length} tasks?`,
-          message: `${names.map((name) => `- ${name}`).join("\n")}\nThis discards their changes.`,
-        };
+    if (tasks.length === 1 && researchers.length === 1) {
+      return {
+        title: `Stop research for ${names[0]}?`,
+        message:
+          "The report stays. Tandem attempts to stop research; only proven-safe resources are released.",
+      };
+    }
+    if (researchers.length === tasks.length) {
+      return {
+        title: `Stop research for ${tasks.length} tasks?`,
+        message: `${lines.join("\n")}\nThe reports stay. Dirty or uncertain workspaces stay in place.`,
+      };
+    }
+    if (researchers.length > 0) {
+      return {
+        title: `Stop research and clean up ${tasks.length} tasks?`,
+        message: `${lines.join("\n")}\nReports stay. Dirty or uncertain workspaces stay in place.`,
+      };
+    }
+    return {
+      title: `Clean up resources for ${tasks.length} tasks?`,
+      message: `${lines.join("\n")}\nOnly safely owned resources are released; uncertain work stays in place.`,
+    };
   }
   if (action.action === "pr-watch-merging") {
     const how =
@@ -653,7 +686,7 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.resume(action.taskId), action.action),
   cancel: async (action, service) =>
     actionResult(
-      await service.cancel(action.taskId, undefined, { discard: action.discard === true }),
+      await service.cancel(action.taskId, action.reason, { discard: action.discard === true }),
       action.action,
       { approved: true },
     ),
@@ -732,11 +765,7 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
         lines.push(`- ${taskId}: not cleaned up: ${reason}`);
       }
     }
-    return actionResult(
-      lines.join("\n"),
-      action.action,
-      action.discard === true ? { approved: true } : {},
-    );
+    return actionResult(lines.join("\n"), action.action, { approved: true });
   },
   "review-pr": async (action, service) =>
     actionResult(

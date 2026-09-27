@@ -28,6 +28,7 @@ import {
 } from "../runtime/persistence.ts";
 import type { RuntimeState, RuntimeTaskState } from "../runtime/schema.ts";
 import { createTaskStore, type TaskStore } from "../tasks/store.ts";
+import { researchInterviewFor } from "../tasks/research-interview.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import {
   absoluteDirectory,
@@ -45,7 +46,6 @@ import {
   type SupersededProof,
 } from "./superseded.ts";
 
-import { researchInterviewFor } from "../tasks/research-interview.ts";
 /** What one cleanup attempt settled on, including the attempts that deliberately changed nothing. */
 export type TaskCleanupOutcome = Readonly<{
   readonly taskId: string;
@@ -67,6 +67,11 @@ export type TaskCleanupDependencies = Readonly<{
 export type TerminalTaskCleanupOptions = Readonly<{
   /** Discard is reserved for explicitly approved cancelled or blocked implementation tasks. */
   readonly discard?: boolean;
+  /**
+   * Close a non-adopted scout cited by an approved implementation. Exact ownership and cleanliness
+   * are still re-proved before its worktree is released.
+   */
+  readonly approvedResearchHandoff?: boolean;
   /**
    * Explicitly approved: return a cancelled or completed implementation worktree whose commits
    * the proof shows are already in other work. Re-proved under the state lock; the branch is kept.
@@ -109,6 +114,7 @@ export function decideScoutCleanupEligibility(
     TaskRecord,
     "kind" | "stage" | "reportPath" | "communication" | "researchInterview"
   >,
+  options: Readonly<{ readonly allowApprovedHandoff?: boolean }> = {},
 ): ScoutCleanupEligibility {
   if (task.kind !== "scout") {
     return { kind: "retained", reason: "task is not a scout" };
@@ -139,7 +145,9 @@ export function decideScoutCleanupEligibility(
   }
   const interview = researchInterviewFor(task);
   if (interview?.status === "approved") {
-    return { kind: "retained", reason: "research approved for implementation handoff" };
+    return options.allowApprovedHandoff === true
+      ? { kind: "eligible" }
+      : { kind: "retained", reason: "research approved for implementation handoff" };
   }
   if (interview?.status === "open") {
     return {
@@ -547,7 +555,12 @@ export async function releaseTerminalTaskResources(
     if (runtime === undefined) {
       return deferred(task.id, "the task has no durable runtime metadata");
     }
-    if (runtime.terminalCleanupRevision === task.revision) {
+    const retryApprovedHandoff =
+      options.approvedResearchHandoff === true &&
+      task.kind === "scout" &&
+      task.cleanup?.status === "retained" &&
+      researchInterviewFor(task)?.status === "approved";
+    if (runtime.terminalCleanupRevision === task.revision && !retryApprovedHandoff) {
       return {
         taskId: task.id,
         status: task.cleanup?.status ?? "released",
@@ -564,7 +577,11 @@ export async function releaseTerminalTaskResources(
       return deferred(task.id, "a presentation for this task is still running");
     }
     const eligibility =
-      task.kind === "scout" ? decideScoutCleanupEligibility(task) : ({ kind: "eligible" } as const);
+      task.kind === "scout"
+        ? decideScoutCleanupEligibility(task, {
+            allowApprovedHandoff: options.approvedResearchHandoff === true,
+          })
+        : ({ kind: "eligible" } as const);
     if (eligibility.kind === "retained") {
       return recordCleanupAttempt(deps, task, {
         closedPaneIds: [],

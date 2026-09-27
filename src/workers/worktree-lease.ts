@@ -10,6 +10,7 @@ import {
   closeFinishedScoutPanes,
   decideScoutWorktreeRelease,
   observeScoutCheckout,
+  type TaskCleanupOutcome,
 } from "../service/scout-cleanup.ts";
 import { taskSourcePath } from "../service/source.ts";
 import type { TaskStore } from "../tasks/store.ts";
@@ -33,6 +34,7 @@ export type WorktreeLeasesDependencies = Readonly<{
   readonly clock: Clock;
   readonly getTask: (taskId: string) => Promise<TaskRecord>;
   readonly runtimeFor: (taskId: string) => Promise<RuntimeTaskState | undefined>;
+  readonly cleanupNonAdoptedResearchHandoff: (task: TaskRecord) => Promise<TaskCleanupOutcome>;
   readonly maintainPoolForAllocation: (task: TaskRecord) => Promise<boolean>;
   readonly records: OperationRecords;
 }>;
@@ -311,76 +313,33 @@ export class WorktreeLeases {
   }
 
   /**
-   * Adopts the exact clean worktree named by the first research handoff. A cited handoff that
-   * cannot be closed and re-proved blocks implementation; it never silently gets a fresh lease.
+   * Adopts the first cited scout's exact clean worktree. Every other cited scout is closed and
+   * safely released or retained before implementation can start.
    */
   private async adoptableScoutWorktree(
     task: TaskRecord,
   ): Promise<NonNullable<RuntimeTaskState["worktree"]> | undefined> {
-    const scoutId =
-      task.kind === "implementation" ? task.researchHandoffs?.[0]?.scoutTaskId : undefined;
-    if (scoutId === undefined) return undefined;
-    let before = await this.#deps.getTask(scoutId);
-    if (
-      before.kind !== "scout" ||
-      before.stage !== "completed" ||
-      before.target?.repo !== task.target?.repo ||
-      before.communication?.question !== undefined
-    ) {
-      throw new Error(`research handoff ${scoutId} is not an available completed scout`);
+    const handoffs = task.kind === "implementation" ? (task.researchHandoffs ?? []) : [];
+    if (handoffs.length === 0) return undefined;
+    const scouts: TaskRecord[] = [];
+    for (const handoff of handoffs) {
+      const scout = await this.settleResearchHandoff(task, handoff.scoutTaskId);
+      if (researchInterviewFor(scout)?.status !== "approved") {
+        throw new Error(`research handoff ${scout.id} is not approved for implementation`);
+      }
+      scouts.push(scout);
     }
-    const interview = researchInterviewFor(before);
-    if (
-      interview?.status === "open" &&
-      task.scopeApproved &&
-      pendingResearchDecision(interview) === undefined
-    ) {
-      before = await this.#deps.store.exclusive(async (store) => {
-        const current = await store.read(scoutId);
-        if (
-          current?.kind !== "scout" ||
-          current.stage !== "completed" ||
-          current.target?.repo !== task.target?.repo
-        ) {
-          throw new Error(`research handoff ${scoutId} changed before approval recovery`);
-        }
-        const currentInterview = researchInterviewFor(current);
-        if (
-          currentInterview?.status === "approved" &&
-          current.communication?.question === undefined
-        ) {
-          return current;
-        }
-        if (
-          currentInterview?.status !== "open" ||
-          pendingResearchDecision(currentInterview) !== undefined ||
-          current.communication?.question !== undefined
-        ) {
-          throw new Error(`research handoff ${scoutId} has an unanswered question`);
-        }
-        const approvedAt = this.#deps.clock();
-        const approvedInterview = finishResearchInterview(currentInterview, "approved", approvedAt);
-        return store.update(current.id, current.revision, (latest) => ({
-          ...latest,
-          revision: latest.revision + 1,
-          updatedAt: approvedAt,
-          researchInterview: approvedInterview,
-          cleanup: {
-            schemaVersion: 1,
-            status: "retained",
-            reason: "research approved for implementation handoff",
-            observedAt: approvedAt,
-          },
-        }));
-      });
+    for (const [index, scout] of scouts.entries()) {
+      if (index === 0) continue;
+      await this.cleanupNonAdoptedResearchHandoff(task, scout);
     }
-    if (researchInterviewFor(before)?.status !== "approved") {
-      throw new Error(`research handoff ${scoutId} is not approved for implementation`);
-    }
-    await closeFinishedScoutPanes(this.#deps, scoutId);
+
+    const [primaryScout] = scouts;
+    if (primaryScout === undefined) return undefined;
+    await closeFinishedScoutPanes(this.#deps, primaryScout.id);
     const [scout, runtime] = await Promise.all([
-      this.#deps.getTask(scoutId),
-      this.#deps.runtimeFor(scoutId),
+      this.#deps.getTask(primaryScout.id),
+      this.#deps.runtimeFor(primaryScout.id),
     ]);
     const lease = runtime?.worktree;
     if (
@@ -391,7 +350,7 @@ export class WorktreeLeases {
       scout.target?.repo !== task.target?.repo ||
       runtime === undefined ||
       lease === undefined ||
-      lease.leaseHolder !== `${this.#deps.sessionId}:${scoutId}` ||
+      lease.leaseHolder !== `${this.#deps.sessionId}:${scout.id}` ||
       lease.baseHead !== runtime.sourceCheckpoint.head ||
       runtime.endpoints.length > 0 ||
       (scout.endpoints?.length ?? 0) > 0 ||
@@ -399,13 +358,113 @@ export class WorktreeLeases {
       runtime.jobs.some(activeRuntimeJob) ||
       unreleasedReservation(runtime.reservation)
     ) {
-      throw new Error(`research handoff ${scoutId} has not proven a stopped, owned session`);
+      throw new Error(`research handoff ${primaryScout.id} has not proven a stopped, owned session`);
     }
     const checkout = await observeScoutCheckout(this.#deps.run, lease.path);
     const decision = decideScoutWorktreeRelease({ lease, checkout });
     if (decision.kind !== "release") {
-      throw new Error(`research handoff ${scoutId} workspace is ${decision.kind}: ${decision.reason}`);
+      throw new Error(
+        `research handoff ${primaryScout.id} workspace is ${decision.kind}: ${decision.reason}`,
+      );
     }
     return lease;
+  }
+
+  private async settleResearchHandoff(task: TaskRecord, scoutId: string): Promise<TaskRecord> {
+    const before = await this.#deps.getTask(scoutId);
+    if (
+      before.kind !== "scout" ||
+      before.stage !== "completed" ||
+      before.target?.repo !== task.target?.repo ||
+      before.communication?.question !== undefined
+    ) {
+      throw new Error(`research handoff ${scoutId} is not an available completed scout`);
+    }
+    const interview = researchInterviewFor(before);
+    if (interview?.status !== "open") return before;
+    if (!task.scopeApproved || pendingResearchDecision(interview) !== undefined) {
+      throw new Error(`research handoff ${scoutId} has an unanswered question`);
+    }
+    return this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(scoutId);
+      if (
+        current?.kind !== "scout" ||
+        current.stage !== "completed" ||
+        current.target?.repo !== task.target?.repo ||
+        current.communication?.question !== undefined
+      ) {
+        throw new Error(`research handoff ${scoutId} changed before approval recovery`);
+      }
+      const currentInterview = researchInterviewFor(current);
+      if (currentInterview?.status !== "open") return current;
+      if (pendingResearchDecision(currentInterview) !== undefined) {
+        throw new Error(`research handoff ${scoutId} has an unanswered question`);
+      }
+      const approvedAt = this.#deps.clock();
+      const approvedInterview = finishResearchInterview(currentInterview, "approved", approvedAt);
+      return store.update(current.id, current.revision, (latest) => ({
+        ...latest,
+        revision: latest.revision + 1,
+        updatedAt: approvedAt,
+        researchInterview: approvedInterview,
+        cleanup: {
+          schemaVersion: 1,
+          status: "retained",
+          reason: "research approved for implementation handoff",
+          observedAt: approvedAt,
+        },
+      }));
+    });
+  }
+
+  private async cleanupNonAdoptedResearchHandoff(
+    task: TaskRecord,
+    captured: TaskRecord,
+  ): Promise<void> {
+    const outcome = await this.#deps.cleanupNonAdoptedResearchHandoff(captured);
+    if (outcome.status !== "released" && outcome.status !== "retained") {
+      throw new Error(
+        `research handoff ${captured.id} cleanup is ${outcome.status}: ${outcome.reason}`,
+      );
+    }
+    const [scout, runtime] = await Promise.all([
+      this.#deps.getTask(captured.id),
+      this.#deps.runtimeFor(captured.id),
+    ]);
+    if (
+      scout.kind !== "scout" ||
+      scout.stage !== "completed" ||
+      scout.target?.repo !== task.target?.repo ||
+      scout.communication?.question !== undefined ||
+      researchInterviewFor(scout)?.status !== "approved" ||
+      runtime === undefined ||
+      runtime.endpoints.length > 0 ||
+      (scout.endpoints?.length ?? 0) > 0 ||
+      runtime.endpointLaunch !== undefined ||
+      runtime.jobs.some(activeRuntimeJob) ||
+      unreleasedReservation(runtime.reservation) ||
+      scout.cleanup?.status !== outcome.status
+    ) {
+      throw new Error(`research handoff ${captured.id} has not proven a stopped, settled session`);
+    }
+    const lease = runtime.worktree;
+    if (outcome.status === "released") {
+      if (lease !== undefined) {
+        throw new Error(`research handoff ${captured.id} still owns a released worktree`);
+      }
+      return;
+    }
+    if (
+      lease === undefined ||
+      lease.leaseHolder !== `${this.#deps.sessionId}:${captured.id}` ||
+      lease.baseHead !== runtime.sourceCheckpoint.head
+    ) {
+      throw new Error(`research handoff ${captured.id} retained an unproven workspace`);
+    }
+    const checkout = await observeScoutCheckout(this.#deps.run, lease.path);
+    const decision = decideScoutWorktreeRelease({ lease, checkout });
+    if (decision.kind !== "retain") {
+      throw new Error(`research handoff ${captured.id} retention is not proven safe`);
+    }
   }
 }

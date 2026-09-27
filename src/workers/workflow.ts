@@ -61,6 +61,7 @@ import {
   workerCommand,
   workerRoleForTask,
 } from "../service/records.ts";
+import type { TaskCleanupOutcome } from "../service/scout-cleanup.ts";
 import { taskSourcePath } from "../service/source.ts";
 import { policyIdentity } from "../tasks/acceptance.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
@@ -185,6 +186,7 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
   readonly setRuntimeError: (taskId: string, error: string) => Promise<void>;
   readonly maintainPoolForAllocation: (task: TaskRecord) => Promise<boolean>;
+  readonly cleanupNonAdoptedResearchHandoff: (task: TaskRecord) => Promise<TaskCleanupOutcome>;
   readonly reviewAssistance: ReviewAssistanceRuntime;
   /** Appends accounting facts. It records only; it never decides whether work may continue. */
   readonly recordRequestUsage: (events: readonly RequestUsageEvent[]) => Promise<void>;

@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import type { IsoTimestamp, TaskRecord } from "../contracts.ts";
 import { taskSessionDirectory } from "../runtime/persistence.ts";
-import { isTerminalTask } from "./records.ts";
+import { researchInterviewFor } from "../tasks/research-interview.ts";
 
 /** How long a finished task keeps its worker conversation. Its timeline and reports are kept. */
 export const TRANSCRIPT_RETENTION_DAYS = 30;
@@ -18,7 +18,16 @@ export function transcriptsToPrune(
 ): readonly string[] {
   const cutoff = Date.parse(now) - RETENTION_MS;
   return tasks
-    .filter((task) => isTerminalTask(task) && Date.parse(task.updatedAt) <= cutoff)
+    .filter(
+      (task) =>
+        isTerminalTask(task) &&
+        Date.parse(task.updatedAt) <= cutoff &&
+        !(
+          task.kind === "scout" &&
+          task.stage === "completed" &&
+          researchInterviewFor(task)?.status === "open"
+        ),
+    )
     .map((task) => task.id);
 }
 

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { ResearchContinuation } from "../../src/contracts.ts";
+import type { ResearchContinuation, TaskRecord } from "../../src/contracts.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { finishPendingScoutCleanup } from "../../src/service/scout-cleanup.ts";
 import { persistWorkerResult } from "../../src/workers/jobs.ts";
@@ -10,6 +10,7 @@ import {
   SCENARIO_HEAD,
   SCENARIO_TASK_ID,
   type ScenarioWorld,
+  appendScenarioRuntime,
   scenarioJob,
   scenarioOperation,
   scenarioReservation,
@@ -41,34 +42,48 @@ const REPORT_ONLY: ResearchContinuation = {
 
 async function seedRunningScout(
   world: ScenarioWorld,
-  options: Readonly<{ continuation?: ResearchContinuation; holder?: string }> = {},
+  options: Readonly<{
+    taskId?: string;
+    paneId?: string;
+    continuation?: ResearchContinuation;
+    holder?: string;
+  }> = {},
 ): Promise<string> {
+  const taskId = options.taskId ?? SCENARIO_TASK_ID;
+  const paneId = options.paneId ?? "pane-1";
   const lease = await world.grantLease({
-    name: "scenario-task",
+    name: taskId === SCENARIO_TASK_ID ? "scenario-task" : `scenario-${taskId}`,
     holder: options.holder ?? "scenario-holder",
   });
   const endpoint = {
-    ...world.openPane({ paneId: "pane-1", cwd: lease.path }),
+    ...world.openPane({ paneId, cwd: lease.path }),
     role: "scout" as const,
   };
-  const job = scenarioJob({ home: world.home, role: "scout", cwd: lease.path, endpoint });
+  const job = scenarioJob({
+    home: world.home,
+    role: "scout",
+    cwd: lease.path,
+    endpoint,
+    taskId,
+  });
   await seedScenarioTask(world, {
+    id: taskId,
     kind: "scout",
     stage: "scouting",
     worktree: lease,
     endpoints: [endpoint],
     researchContinuation: options.continuation ?? REPORT_ONLY,
   });
-  await seedScenarioRuntime(
-    world,
-    scenarioRuntimeTask({
-      worktree: lease,
-      endpoints: [endpoint],
-      jobs: [job],
-      operation: scenarioOperation(job),
-      reservation: scenarioReservation(),
-    }),
-  );
+  const runtime = scenarioRuntimeTask({
+    taskId,
+    worktree: lease,
+    endpoints: [endpoint],
+    jobs: [job],
+    operation: scenarioOperation(job),
+    reservation: scenarioReservation({ taskId }),
+  });
+  if (taskId === SCENARIO_TASK_ID) await seedScenarioRuntime(world, runtime);
+  else await appendScenarioRuntime(world, runtime);
   await persistWorkerResult(job.resultPath, {
     id: job.id,
     taskId: job.taskId,
@@ -108,6 +123,44 @@ async function seedSettledScout(world: ScenarioWorld): Promise<string> {
     }),
   );
   return lease.path;
+}
+
+async function seedApprovedMultipleScoutHandoff(
+  world: ScenarioWorld,
+): Promise<Readonly<{
+  readonly service: ReturnType<typeof serviceFor>;
+  readonly implementation: TaskRecord;
+  readonly primaryPath: string;
+  readonly additionalPath: string;
+}>> {
+  const continuation: ResearchContinuation = {
+    schemaVersion: 1,
+    disposition: "implementation-interview",
+    selectedBy: "explicit",
+  };
+  const primaryPath = await seedRunningScout(world, {
+    continuation,
+    holder: `${world.sessionId}:${SCENARIO_TASK_ID}`,
+  });
+  const additionalPath = await seedRunningScout(world, {
+    taskId: "scout-extra",
+    paneId: "pane-2",
+    continuation,
+    holder: `${world.sessionId}:scout-extra`,
+  });
+  const service = serviceFor(world);
+  await service.tick();
+  await service.tick();
+  const implementation = await service.create({
+    repoPath: world.repoPath,
+    kind: "implementation",
+    objective: "apply the cited research",
+    acceptanceCriteria: ["the cited findings are applied"],
+    surfaces: ["scenario"],
+    researchTaskIds: [SCENARIO_TASK_ID, "scout-extra"],
+  });
+  await service.approve(implementation.id);
+  return { service, implementation, primaryPath, additionalPath };
 }
 
 test("completed research retains its session and clean workspace until explicit stop", async () => {
@@ -357,6 +410,90 @@ test("an implementation built on research adopts the scout's worktree instead of
     expect(adoptedScout.cleanup?.reason).toBe(
       "research approved for implementation handoff",
     );
+    await service.shutdown();
+  });
+});
+
+test("multiple research handoffs adopt one workspace and release clean extras", async () => {
+  await withScenario({}, async (world) => {
+    const { service, implementation, primaryPath } =
+      await seedApprovedMultipleScoutHandoff(world);
+
+    await service.tick();
+
+    const snapshot = await world.snapshot();
+    const runtime = (taskId: string) =>
+      snapshot.runtime.tasks.find((entry) => entry.taskId === taskId);
+    expect(runtime(implementation.id)?.worktree?.path).toBe(primaryPath);
+    expect(runtime(implementation.id)?.worktree?.leaseId).toBe("lease-1");
+    expect(runtime(SCENARIO_TASK_ID)?.worktree).toBeUndefined();
+    expect(runtime("scout-extra")?.worktree).toBeUndefined();
+    expect(world.paneIsPresent("pane-1")).toBe(false);
+    expect(world.paneIsPresent("pane-2")).toBe(false);
+    expect(snapshot.resources.released).toContain("lease:lease-2");
+    expect(snapshot.resources.released).not.toContain("lease:lease-1");
+    expect(
+      snapshot.trace.filter((event) => event.action === "treehouse return"),
+    ).toHaveLength(1);
+    expect((await service.get(SCENARIO_TASK_ID)).researchInterview?.status).toBe("approved");
+    const additional = await service.get("scout-extra");
+    expect(additional.researchInterview?.status).toBe("approved");
+    expect(additional.cleanup?.status).toBe("released");
+    await service.shutdown();
+  });
+});
+
+test("multiple research handoffs retain dirty extras and adopt only the first", async () => {
+  await withScenario({}, async (world) => {
+    const { service, implementation, primaryPath, additionalPath } =
+      await seedApprovedMultipleScoutHandoff(world);
+    world.patchCheckout(additionalPath, { dirty: true });
+
+    await service.tick();
+
+    const snapshot = await world.snapshot();
+    const runtime = (taskId: string) =>
+      snapshot.runtime.tasks.find((entry) => entry.taskId === taskId);
+    expect(runtime(implementation.id)?.worktree?.path).toBe(primaryPath);
+    expect(runtime(implementation.id)?.worktree?.leaseId).toBe("lease-1");
+    expect(runtime(SCENARIO_TASK_ID)?.worktree).toBeUndefined();
+    expect(runtime("scout-extra")?.worktree?.leaseId).toBe("lease-2");
+    expect(world.paneIsPresent("pane-1")).toBe(false);
+    expect(world.paneIsPresent("pane-2")).toBe(false);
+    expect(snapshot.resources.retained).toContain("lease:lease-2");
+    expect(snapshot.resources.released).not.toContain("lease:lease-2");
+    const additional = await service.get("scout-extra");
+    expect(additional.researchInterview?.status).toBe("approved");
+    expect(additional.cleanup?.status).toBe("retained");
+    expect(additional.cleanup?.reason).toContain("uncommitted changes");
+    await service.shutdown();
+  });
+});
+
+test("uncertain extra research closure blocks the cited implementation", async () => {
+  await withScenario({}, async (world) => {
+    const { service, implementation } = await seedApprovedMultipleScoutHandoff(world);
+    world.failAt({ boundary: "herdr", action: "herdr pane process-info" });
+
+    await service.tick();
+
+    const snapshot = await world.snapshot();
+    const blocked = await service.get(implementation.id);
+    const runtime = (taskId: string) =>
+      snapshot.runtime.tasks.find((entry) => entry.taskId === taskId);
+    expect(blocked.stage).toBe("blocked");
+    expect(blocked.blockReason).toContain("research handoff");
+    expect(runtime(implementation.id)?.worktree).toBeUndefined();
+    expect(runtime(SCENARIO_TASK_ID)?.worktree?.leaseId).toBe("lease-1");
+    expect(runtime("scout-extra")?.worktree?.leaseId).toBe("lease-2");
+    expect(snapshot.resources.retained).toContain("pane:pane-1");
+    expect(snapshot.resources.retained).toContain("pane:pane-2");
+    expect(snapshot.resources.retained).toContain("lease:lease-1");
+    expect(snapshot.resources.retained).toContain("lease:lease-2");
+    expect(world.paneIsPresent("pane-1")).toBe(true);
+    expect(world.paneIsPresent("pane-2")).toBe(true);
+    expect(snapshot.trace.some((event) => event.action === "treehouse get")).toBe(false);
+    expect(snapshot.trace.some((event) => event.action === "treehouse return")).toBe(false);
     await service.shutdown();
   });
 });
