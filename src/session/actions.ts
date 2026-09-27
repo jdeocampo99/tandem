@@ -10,6 +10,7 @@ import type { CommentEdit } from "../pr-review/service.ts";
 import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
+import { isTaskIdWithinLimit, MAX_TASK_ID_CHARS } from "../tasks/lifecycle.ts";
 import { taskName } from "../tasks/question.ts";
 import { boundTaskTrace } from "../tasks/trace.ts";
 import {
@@ -581,6 +582,7 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   presentations: async (action, service) =>
     actionResult(await service.presentations(), action.action),
   trace: async (action, service) => {
+    assertTraceTaskId(action.taskId);
     const trace = await service.trace(action.taskId);
     return actionResult(
       boundTaskTrace(trace, {
@@ -1127,6 +1129,14 @@ function ensureCommandArity(command: string, words: readonly string[], arity: Co
   }
 }
 
+function assertTraceTaskId(taskId: string): void {
+  if (!isTaskIdWithinLimit(taskId)) {
+    throw new TypeError(
+      `trace task ID must be safe and no longer than ${MAX_TASK_ID_CHARS} characters`,
+    );
+  }
+}
+
 function commaList(value: string): readonly string[] {
   return value
     .split(",")
@@ -1274,7 +1284,11 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
   },
   trace: {
     arity: { min: 2, max: 2 },
-    parse: (_words, value) => ({ action: "trace", taskId: value(1, "trace") }),
+    parse: (_words, value) => {
+      const taskId = value(1, "trace");
+      assertTraceTaskId(taskId);
+      return { action: "trace", taskId };
+    },
   },
   steer: {
     parse: (words, value) => ({

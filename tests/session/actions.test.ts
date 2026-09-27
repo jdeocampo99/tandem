@@ -23,6 +23,7 @@ import {
   buildDurableDigest,
   summarizeTandemActionValue,
 } from "../../src/session/summary.ts";
+import { MAX_TASK_ID_CHARS } from "../../src/tasks/lifecycle.ts";
 import type { StoredTimelineEvent } from "../../src/tasks/timeline.ts";
 import type { BoundedTaskTrace, TaskTrace } from "../../src/tasks/trace.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";
@@ -53,6 +54,9 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
     detail: "full",
   });
   expect(parseTandemCommand("trace task-1")).toEqual({ action: "trace", taskId: "task-1" });
+  expect(() =>
+    parseTandemCommand(`trace ${"t".repeat(MAX_TASK_ID_CHARS + 1)}`),
+  ).toThrow();
   expect(() => parseTandemCommand("trace")).toThrow();
   expect(() => parseTandemCommand("trace task-1 extra")).toThrow();
   expect(parseTandemCommand("presentations")).toEqual({ action: "presentations" });
@@ -1441,8 +1445,8 @@ test("trace omits oversized event payloads from structured details", async () =>
   );
 });
 
-test("trace text stays bounded when the task ID dominates the header", async () => {
-  const taskId = "t".repeat(5_000);
+test("trace text stays bounded when a legacy task ID dominates the header", () => {
+  const taskId = "t".repeat(MAX_TASK_ID_CHARS + 1);
   const event: StoredTimelineEvent = {
     type: "created",
     taskId,
@@ -1460,6 +1464,47 @@ test("trace text stays bounded when the task ID dominates the header", async () 
       blockedMs: 123_456,
     },
   };
+  const boundedTrace: BoundedTaskTrace = { ...trace, omittedEvents: 0 };
+  const text = summarizeTandemActionValue("trace", boundedTrace);
+
+  expect(text.length).toBeLessThanOrEqual(ACTION_RESULT_MAX_CHARS);
+  expect(text).toStartWith("Task ");
+  expect(text).toContain("…");
+  expect(text).not.toContain(taskId);
+  expect(text).toContain("First review: passed");
+  expect(text).toContain("Fix rounds: 2");
+  expect(text).toContain("Time blocked: 2m (123456 ms)");
+});
+
+test("trace preserves the full rollup at the maximum task ID length", async () => {
+  const taskId = "t".repeat(MAX_TASK_ID_CHARS);
+  const events: StoredTimelineEvent[] = [];
+  for (let seq = 1; seq <= ACTION_TRACE_MAX_EVENTS; seq += 1) {
+    events.push({
+      type: "created",
+      taskId,
+      at: "2030-01-01T00:00:00.000Z",
+      stage: "queued",
+      seq,
+    });
+  }
+  const trace: TaskTrace = {
+    events,
+    unreadableEvents: 0,
+    rollup: {
+      taskId,
+      firstPassReview: true,
+      fixRounds: 2,
+      blockedMs: 123_456,
+      cost: {
+        currency: "USD",
+        amountMicros: 987_654,
+        actualSamples: 2,
+        estimatedSamples: 1,
+        unavailableSamples: 3,
+      },
+    },
+  };
   const service = { trace: async () => trace } as unknown as TandemService;
   const outcome = await runTandemTool(
     { action: "trace", taskId },
@@ -1469,18 +1514,33 @@ test("trace text stays bounded when the task ID dominates the header", async () 
   const boundedTrace = (outcome.details as Readonly<{ value: BoundedTaskTrace }>).value;
 
   expect(outcome.isError).toBe(false);
-  expect(outcome.text.length).toBeLessThanOrEqual(ACTION_RESULT_MAX_CHARS);
-  expect(outcome.text).toStartWith("Task ");
-  expect(outcome.text).toContain("…");
-  expect(outcome.text).not.toContain(taskId);
-  expect(outcome.text).toContain("First review: passed");
-  expect(outcome.text).toContain("Fix rounds: 2");
-  expect(outcome.text).toContain("Time blocked: 2m (123456 ms)");
-  expect(boundedTrace.events).toEqual([event]);
+  expect(boundedTrace.events).toEqual(events);
   expect(boundedTrace.rollup).toEqual(trace.rollup);
   expect((JSON.stringify(outcome.details) ?? "").length).toBeLessThanOrEqual(
     ACTION_FULL_RESULT_MAX_CHARS,
   );
+});
+
+test("trace rejects an overlong ID before reading its task", async () => {
+  const taskId = "t".repeat(MAX_TASK_ID_CHARS + 1);
+  const followUps: string[] = [];
+  let traceReads = 0;
+  const service = {
+    trace: async () => {
+      traceReads += 1;
+      throw new Error("trace should not be called");
+    },
+  } as unknown as TandemService;
+  const outcome = await runTandemTool(
+    { action: "trace", taskId },
+    callDependencies(service, followUps),
+    undefined,
+  );
+
+  expect(outcome.isError).toBe(true);
+  expect(outcome.text).toContain("no longer than");
+  expect(traceReads).toBe(0);
+  expect(followUps).toEqual([]);
 });
 
 test("a failed trace returns not-found details without reconciliation", async () => {

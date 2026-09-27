@@ -20,7 +20,11 @@ import {
   policyIdentity,
 } from "../../src/tasks/acceptance.ts";
 import { ledgerBlockers } from "../../src/tasks/findings.ts";
-import { type TaskTransitionContext, transitionTask } from "../../src/tasks/lifecycle.ts";
+import {
+  MAX_TASK_ID_CHARS,
+  type TaskTransitionContext,
+  transitionTask,
+} from "../../src/tasks/lifecycle.ts";
 import {
   DEFAULT_REVIEW_LEVEL_POLICY,
   recordedReviewLevel,
@@ -143,6 +147,19 @@ function rewritePayload(
   const payload = JSON.parse(row.payload) as Record<string, unknown>;
   edit(payload);
   database.query("UPDATE tasks SET payload = ? WHERE id = ?").run(JSON.stringify(payload), taskId);
+  database.close();
+}
+
+function rewriteStoredTaskId(directory: string, previousId: string, nextId: string): void {
+  const database = new Database(join(directory, "state.sqlite"));
+  const row = database.query("SELECT payload FROM tasks WHERE id = ?").get(previousId) as {
+    payload: string;
+  };
+  const payload = JSON.parse(row.payload) as Record<string, unknown>;
+  payload.id = nextId;
+  database
+    .query("UPDATE tasks SET id = ?, payload = ? WHERE id = ?")
+    .run(nextId, JSON.stringify(payload), previousId);
   database.close();
 }
 
@@ -594,6 +611,27 @@ test("rejects missing SQLite tables and traversal IDs instead of skipping state"
     database.exec("DROP TABLE tasks");
     database.close();
     await expect(store.list()).rejects.toThrow("authoritative state database");
+  });
+});
+
+test("limits new task IDs without rejecting longer legacy records", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "legacy-source" });
+
+    const generatedIdStore = createTaskStore({
+      directory: join(directory, "generated"),
+      clock,
+      idFactory: () => "g".repeat(MAX_TASK_ID_CHARS + 1),
+    });
+    await expect(generatedIdStore.create(input)).rejects.toBeInstanceOf(UnsafeTaskIdError);
+    const legacyId = "l".repeat(MAX_TASK_ID_CHARS + 1);
+    rewriteStoredTaskId(directory, created.id, legacyId);
+
+    await expect(store.create({ ...input, id: legacyId })).rejects.toBeInstanceOf(
+      UnsafeTaskIdError,
+    );
+    expect(await store.read(legacyId)).toMatchObject({ id: legacyId });
   });
 });
 

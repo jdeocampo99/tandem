@@ -304,12 +304,24 @@ export function isSafeTaskId(value: unknown): value is string {
   );
 }
 
+/** Maximum ID length for new tasks and coordinator trace requests. */
+export const MAX_TASK_ID_CHARS = 256;
+
+/** Legacy records keep the broader path-safe check; new IDs also fit bounded trace rollups. */
+export function isTaskIdWithinLimit(value: unknown): value is string {
+  return isSafeTaskId(value) && value.length <= MAX_TASK_ID_CHARS;
+}
+
 function assertTaskInput(input: TaskInput): void {
   if (!input || typeof input !== "object") {
     throw new TypeError("Task input must be an object");
   }
-  if (!isSafeTaskId(input.id)) {
-    throw new TypeError(`Unsafe task id: ${String(input.id)}`);
+  if (!isTaskIdWithinLimit(input.id)) {
+    throw new TypeError(
+      typeof input.id === "string" && input.id.length > MAX_TASK_ID_CHARS
+        ? `Task id exceeds ${MAX_TASK_ID_CHARS} characters`
+        : `Unsafe task id: ${String(input.id)}`,
+    );
   }
   if (!isNonEmptyText(input.repoPath)) {
     throw new TypeError("Task repoPath must be a non-empty string");

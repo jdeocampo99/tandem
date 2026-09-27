@@ -17,6 +17,7 @@ import { ledgerBlockers } from "../../src/tasks/findings.ts";
 import {
   ALL_REVIEW_LENSES,
   createTask,
+  MAX_TASK_ID_CHARS,
   isActiveTask,
   notificationDigest,
   pendingNotifications,
@@ -117,6 +118,13 @@ function startImplementation(): TaskRecord {
 }
 
 const policyDigest = policyIdentity(policy);
+
+test("new task IDs stay within the bounded trace rollup limit", () => {
+  const id = "t".repeat(MAX_TASK_ID_CHARS + 1);
+  expect(() =>
+    createTask({ ...implementationInput, id }, "2026-09-15T00:00:00.000Z"),
+  ).toThrow(TypeError);
+});
 
 function evidence(
   head: string,

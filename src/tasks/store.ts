@@ -13,6 +13,8 @@ import {
 import {
   createTask,
   isSafeTaskId,
+  isTaskIdWithinLimit,
+  MAX_TASK_ID_CHARS,
   type TaskEvent,
   type TaskInput,
   type TaskTransitionContext,
@@ -70,6 +72,15 @@ const DEFAULT_LOCK_POLL_MS = 20;
 
 function ensureSafeId(id: unknown): asserts id is string {
   if (!isSafeTaskId(id)) throw new UnsafeTaskIdError(id);
+}
+
+function ensureNewTaskId(id: unknown): asserts id is string {
+  if (isTaskIdWithinLimit(id)) return;
+  const reportedId =
+    typeof id === "string" && id.length > MAX_TASK_ID_CHARS
+      ? `ID longer than ${MAX_TASK_ID_CHARS} characters`
+      : id;
+  throw new UnsafeTaskIdError(reportedId);
 }
 
 function ensureStoreOptions(options: TaskStoreOptions): { timeoutMs: number; pollMs: number } {
@@ -158,7 +169,7 @@ function validateCreatedTaskInput(input: StoreTaskInput): void {
   if (!input || typeof input !== "object") {
     throw new TaskStoreError("invalid-options", "Task input must be an object");
   }
-  if (input.id !== undefined) ensureSafeId(input.id);
+  if (input.id !== undefined) ensureNewTaskId(input.id);
 }
 
 export function createTaskStore(options: TaskStoreOptions): TaskStore {
@@ -172,7 +183,7 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
   ): Promise<TaskRecord> {
     validateCreatedTaskInput(input);
     const id = input.id ?? options.idFactory();
-    ensureSafeId(id);
+    ensureNewTaskId(id);
     const existing = readTaskFromDatabase(db, id);
     if (existing !== undefined) throw new TaskAlreadyExistsError(id);
     const taskInput: TaskInput = {

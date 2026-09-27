@@ -20,11 +20,13 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   model call with a stray root field is still accepted; "unknown fields are rejected" is a property
   of the schema, not of every OMP tool call.
 - Tool text is a bounded summary; structured details stay in the tool result and durable reports.
-- `trace` reads one in-scope task's timeline without changing task or notification state. It returns
-  the complete rollup, up to 16 newest events that fit within the 12,000-character structured result,
-  in chronological order, and explicit omitted/unreadable counts. Text is capped at 4,000 characters;
-  very long task IDs are abbreviated in text, while structured details retain the full ID and rollup.
-  Trace skips post-action reconciliation and scheduler ticks. CLI `tandem trace` is unchanged.
+- `trace` reads one in-scope task's timeline without changing task or notification state. New task
+  IDs and trace requests are limited to 256 characters so the complete rollup fits within the
+  12,000-character structured-result cap, alongside up to 16 newest events that fit. Older saved
+  records with longer safe IDs remain readable, but the coordinator trace action rejects them.
+  Text is capped at 4,000 characters; very long accepted IDs are abbreviated in text while
+  structured details retain the full ID and rollup. Trace skips post-action reconciliation and
+  scheduler ticks. CLI `tandem trace` is unchanged.
 - A refusal the coordinator recovers from by asking the user carries its own next step, so the
   per-turn prompt does not: `create` and `review-pr` asking where a repository is, and `create`
   finding no saved validation commands for another repository.
