@@ -17,20 +17,46 @@ export type WorkerTerminalInput = Readonly<{
   job?: WorkerTerminalJob;
 }>;
 
+function ownsEndpoint(job: DurableJob, endpoint: Endpoint): boolean {
+  const owned = job.endpoint;
+  return (
+    owned !== undefined &&
+    owned.sessionId === endpoint.sessionId &&
+    owned.workspaceId === endpoint.workspaceId &&
+    owned.tabId === endpoint.tabId &&
+    owned.paneId === endpoint.paneId
+  );
+}
+
 export function workerJobForEndpoint(
   jobs: readonly DurableJob[],
   endpoint: Endpoint,
 ): DurableJob | undefined {
-  return jobs.findLast((job) => {
-    const owned = job.endpoint;
-    return (
-      owned !== undefined &&
-      owned.sessionId === endpoint.sessionId &&
-      owned.workspaceId === endpoint.workspaceId &&
-      owned.tabId === endpoint.tabId &&
-      owned.paneId === endpoint.paneId
+  return jobs.findLast((job) => ownsEndpoint(job, endpoint));
+}
+
+/**
+ * The job whose worker occupies the pane: the newest one for it that ever wrote a terminal record.
+ * A later launch that failed before its worker started leaves no record and never took the pane.
+ * Validation jobs keep no terminal record, so the newest one is never skipped.
+ */
+export async function workerJobOccupyingEndpoint(
+  jobs: readonly DurableJob[],
+  endpoint: Endpoint,
+): Promise<DurableJob | undefined> {
+  const owned = jobs.filter((job) => ownsEndpoint(job, endpoint));
+  const newest = owned.at(-1);
+  if (newest === undefined || newest.role === "validation") return newest;
+  for (const job of owned.toReversed()) {
+    if (job.role === "validation") continue;
+    // An unreadable record still names a worker that started; keep it so the check fails closed.
+    const started = await readWorkerTerminal(job).then(
+      (terminal) => terminal !== undefined,
+      () => true,
     );
-  });
+    if (started) return job;
+  }
+  return newest;
 }
 
 export async function prepareWorkerTerminal(

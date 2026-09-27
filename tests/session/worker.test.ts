@@ -660,3 +660,33 @@ test("an implementer cannot report done while a playbook step is open in its to-
   const accepted = await worker.session.submitReport({ outcome: "implemented", report: "Done." });
   expect(accepted.isError).toBe(false);
 });
+
+test("a completed idle worker acknowledges close; a busy pane records which flag held it back", async () => {
+  const details: Record<string, unknown>[] = [];
+  const worker = workerSession(
+    {},
+    { trace: (event, detail) => event === "close_blocked" && details.push({ ...detail }) },
+  );
+  await worker.session.onSessionStart();
+  await worker.session.submitReport({ outcome: "implemented", report: "Done." });
+  await worker.session.onAgentEnd({ willContinue: false, interrupted: false });
+  worker.recording.answers.paneState = { idle: true, pendingMessages: false, draft: true };
+  worker.control.command = {
+    schemaVersion: 1,
+    id: "close-1",
+    jobId: "job-1",
+    taskId: "task-1",
+    generation: 0,
+    action: "close",
+    expiresAt: "2030-01-01T00:10:00.000Z",
+  };
+  worker.time.advance(250);
+  await settle();
+  expect(worker.states.at(-1)?.phase).toBe("idle");
+  expect(details).toEqual([{ idle: true, pendingMessages: false, draft: true }]);
+
+  worker.recording.answers.paneState = { idle: true, pendingMessages: false, draft: false };
+  worker.time.advance(250);
+  await settle();
+  expect(worker.states.at(-1)).toMatchObject({ phase: "closing", commandId: "close-1" });
+});

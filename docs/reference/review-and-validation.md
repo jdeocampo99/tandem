@@ -36,6 +36,8 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
 - **Iteration**: an admitted fix round records a durable `iterationScope` (failing checks, their
   surfaces, findings to resolve, code and policy identity). The next run executes only those checks
   under `contract: "iteration"`. A targeted pass is progress and never satisfies acceptance.
+  A round for failed checks does not spend the fix-round budget; a check that fails again after
+  the round that targeted it asks `Keep fixing?` ([fix rounds](task-lifecycle.md#fix-rounds)).
 - Targeted runs escalate to the full manifest, with the reason durable on the validation job:
   `stale-identity`, `disputed-result` (reviewer rejected a candidate whose checks all passed),
   `unknown-impact` (unconfigured check), `broad-impact` (scope already covers every check).

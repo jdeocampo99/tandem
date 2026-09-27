@@ -13,10 +13,12 @@ import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
-import type { SessionEffect, SessionHost, ToolOutcome } from "./events.ts";
+import { boundTaskTrace } from "../tasks/trace.ts";
+import type { CoordinatorTurnAction, SessionEffect, SessionHost, ToolOutcome } from "./events.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
+  ACTION_TRACE_MAX_EVENTS,
   boundedJson,
   compactText,
   projectName,
@@ -74,6 +76,7 @@ export type TandemAction =
       readonly taskId: string;
       readonly detail?: "summary" | "full" | undefined;
     }>
+  | Readonly<{ readonly action: "trace"; readonly taskId: string }>
   | Readonly<{
       readonly action: "steer";
       readonly taskId: string;
@@ -580,6 +583,16 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   list: async (action, service) => actionResult(await service.list(), action.action),
   presentations: async (action, service) =>
     actionResult(await service.presentations(), action.action),
+  trace: async (action, service) => {
+    const trace = await service.trace(action.taskId);
+    return actionResult(
+      boundTaskTrace(trace, {
+        maxEvents: ACTION_TRACE_MAX_EVENTS,
+        maxSerializedChars: ACTION_FULL_RESULT_MAX_CHARS,
+      }),
+      action.action,
+    );
+  },
   show: async (action, service) =>
     actionResult(await service.get(action.taskId), action.action, { detail: action.detail }),
   steer: async (action, service) =>
@@ -881,6 +894,10 @@ export async function executeTandemAction(
   return runTandemAction(action.action, action, service, signal);
 }
 
+function classifyCoordinatorTurnAction(action: TandemAction): CoordinatorTurnAction {
+  return action.action === "trace" ? "trace" : "other";
+}
+
 /**
  * Actions that finish what the user and the coordinator were working on, so the thread closes
  * without relying on the model to call `thread-done`.
@@ -894,14 +911,15 @@ const THREAD_ENDING_ACTIONS: ReadonlySet<TandemAction["action"]> = new Set([
   "review-post",
 ]);
 
-/** What the `tandem` tool and `/tandem` command need from the running coordinator. */
+/** Dependencies for a Tandem tool call; command handlers consume a subset. */
 export type TandemCallDependencies = Readonly<{
   /** Read lazily, so a service that cannot start fails the call instead of the hook. */
   readonly service: () => TandemService;
+  readonly recordTurnAction: (action: CoordinatorTurnAction) => void;
   readonly confirm: ApprovalDialog | undefined;
   /** Reconciles without running another tick; follows a `tick` action. */
   readonly reconcile: () => Promise<void>;
-  /** Follows every other action. */
+  /** Follows each non-tick action except read-only trace. */
   readonly postAction: () => Promise<void>;
   /** Ends the thread the user and the coordinator were working on; follows a thread-ending action. */
   readonly closeThread: () => void;
@@ -918,6 +936,7 @@ export async function runTandemTool(
   signal: AbortSignal | undefined,
 ): Promise<ToolOutcome> {
   try {
+    dependencies.recordTurnAction(classifyCoordinatorTurnAction(action));
     const result = await executeTandemAction(action, dependencies.service(), {
       confirm: dependencies.confirm,
       signal,
@@ -927,7 +946,8 @@ export async function runTandemTool(
       dependencies.closeThread();
     if (action.action === "tick") {
       await dependencies.reconcile();
-    } else {
+    } else if (action.action !== "trace") {
+      // Reconciliation can acknowledge delivered notifications, so trace must not reach it.
       await dependencies.postAction();
     }
     const statusShown = await showStatusBoard(result, dependencies.showStatus);
@@ -991,13 +1011,13 @@ async function showStatusBoard(
 }
 
 /**
- * Runs one `/tandem` command line from the coordinator's `cwd`. The result is shown before the
- * post-action reconcile, so notifications it delivers follow the result.
+ * Runs one `/tandem` command line from the coordinator's `cwd`. Most results are shown before
+ * post-action reconciliation; read-only trace skips that step.
  */
 export async function runTandemCommand(
   args: string,
   cwd: string,
-  dependencies: Omit<TandemCallDependencies, "reconcile" | "closeThread">,
+  dependencies: Pick<TandemCallDependencies, "service" | "confirm" | "postAction">,
   host: Pick<SessionHost, "perform">,
 ): Promise<void> {
   try {
@@ -1006,7 +1026,7 @@ export async function runTandemCommand(
       confirm: dependencies.confirm,
     });
     await host.perform({ type: "notify", text: renderActionResult(result), level: "info" });
-    await dependencies.postAction();
+    if (action.action !== "trace") await dependencies.postAction();
   } catch (error) {
     await host.perform({
       type: "notify",
@@ -1278,6 +1298,10 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
         ...(words[2] === "--full" ? { detail: "full" as const } : {}),
       };
     },
+  },
+  trace: {
+    arity: { min: 2, max: 2 },
+    parse: (_words, value) => ({ action: "trace", taskId: value(1, "trace") }),
   },
   steer: {
     parse: (words, value) => ({

@@ -32,6 +32,9 @@ export type ToolKind =
   | "todo"
   | "other";
 
+/** Whether this coordinator turn may skip agent-end reconciliation. */
+export type CoordinatorTurnAction = "trace" | "other";
+
 export type ToolCall = Readonly<{
   id: string;
   /** The native name, for traces and receipts only. */

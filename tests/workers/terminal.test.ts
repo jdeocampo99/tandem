@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createReviewerEndpoint, type HerdrPaneInspection } from "../../src/adapters/herdr.ts";
 import { EndpointBusyError } from "../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../src/contracts.ts";
+import type { DurableJob } from "../../src/runtime/schema.ts";
 import {
   addReplyUsage,
   readWorkerTerminalCommand,
@@ -20,7 +21,11 @@ import {
   writeWorkerTerminal,
   writeWorkerTokenTally,
 } from "../../src/workers/terminal.ts";
-import { pauseWorkerTerminal, prepareWorkerTerminal } from "../../src/workers/terminal-control.ts";
+import {
+  pauseWorkerTerminal,
+  prepareWorkerTerminal,
+  workerJobOccupyingEndpoint,
+} from "../../src/workers/terminal-control.ts";
 
 function fixture(root: string) {
   const job: WorkerTerminalJob = {
@@ -137,6 +142,39 @@ test("review can coexist with a completed interactive writer, but not a busy del
       },
     };
     await expect(createReviewerEndpoint(nativeRunner(foreign), input)).rejects.toThrow();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the pane's occupant skips a later launch whose worker never started", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-pane-occupant-"));
+  try {
+    const { job, endpoint, state, inspection } = fixture(root);
+    const durable = (id: string, phase: DurableJob["phase"]): DurableJob => ({
+      schemaVersion: 1,
+      id,
+      taskId: job.taskId,
+      generation: job.generation,
+      role: "implementer",
+      kind: "worker",
+      cwd: root,
+      jobPath: join(root, id, "job.json"),
+      resultPath: join(root, id, "result.json"),
+      attempt: 1,
+      phase,
+      launchAttempted: true,
+      createdAt: new Date().toISOString(),
+      endpoint,
+    });
+    const finished = durable("finished-job", "consumed");
+    const neverStarted = durable("never-started-job", "failed");
+    await writeWorkerTerminal(finished.jobPath, { ...state, jobId: finished.id });
+
+    const occupant = await workerJobOccupyingEndpoint([finished, neverStarted], endpoint);
+    expect(occupant?.id).toBe(finished.id);
+    expect(await workerDelegationStopped(inspection, occupant)).toBe(true);
+    expect(await workerJobOccupyingEndpoint([neverStarted], endpoint)).toBe(neverStarted);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

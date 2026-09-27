@@ -9,6 +9,7 @@ import {
   runTandemTool,
   type TandemCallDependencies,
 } from "../session/actions.ts";
+import type { CoordinatorTurnAction } from "../session/events.ts";
 import {
   type ChoiceConfirmation,
   type PromptRoutingConfig,
@@ -34,6 +35,7 @@ export type TandemOmpRegistrationDependencies = Readonly<{
   readonly promptRouting: PromptRoutingConfig;
   readonly reconcile: (ctx: ExtensionContext, runTick: boolean) => Promise<void>;
   readonly postAction: (ctx: ExtensionContext) => Promise<void>;
+  readonly recordTurnAction: (ctx: ExtensionContext, action: CoordinatorTurnAction) => void;
   /** The user's message is going to the model, so a thread opens or continues. */
   readonly userPrompt: (ctx: ExtensionContext) => void;
   readonly closeThread: (ctx: ExtensionContext) => void;
@@ -59,6 +61,7 @@ function callDependencies(
 ): TandemCallDependencies {
   return {
     service: () => dependencies.getService(ctx),
+    recordTurnAction: (action) => dependencies.recordTurnAction(ctx, action),
     confirm: ompApprovalDialog(ctx),
     reconcile: () => dependencies.reconcile(ctx, false),
     postAction: () => dependencies.postAction(ctx),
@@ -101,7 +104,9 @@ function registerCoordinatorToolGuard(
   dependencies: TandemOmpRegistrationDependencies,
 ): void {
   pi.on("tool_call", async (event, ctx) => {
-    const reason = await coordinatorToolRefusal(ompToolCall(event), {
+    const toolCall = ompToolCall(event);
+    if (toolCall.name !== "tandem") dependencies.recordTurnAction(ctx, "other");
+    const reason = await coordinatorToolRefusal(toolCall, {
       researchRunning: () => dependencies.researchRunning(ctx),
       home: dependencies.getHome(ctx),
       cwd: ctx.cwd,
@@ -150,7 +155,7 @@ function registerTandemCommand(
 ): void {
   pi.registerCommand("tandem", {
     description:
-      "Inspect or control Tandem: restart, list, presentations, show, messages, models, onboard, setup, open-project, find-repo, save-code-folders, self-improvement, check-tools, setup-page, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
+      "Inspect or control Tandem: restart, list, presentations, show, trace, messages, models, onboard, setup, open-project, find-repo, save-code-folders, self-improvement, check-tools, setup-page, create, approve, brief-show, brief-review, brief-approve, request-receipt, steer, answer, tick, pause, resume, cancel, present, presentation-open, feedback, describe, draft, publish, merge, cleanup.",
     handler: (args, ctx) =>
       runTandemCommand(
         args,

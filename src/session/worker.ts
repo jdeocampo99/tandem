@@ -865,12 +865,19 @@ export class WorkerSession {
   /** A close request is honored only for a paused or completed pane with nothing in flight. */
   private async acceptClose(command: WorkerTerminalCommand): Promise<void> {
     if (this.currentState.phase !== "paused" && !this.currentState.completed) return;
-    if (this.paneBusy()) return;
+    if (this.closeBlockedByPane()) return;
     const confirmed = await this.deps.terminal.readCommand();
     if (confirmed?.id !== command.id || confirmed.action !== "close") return;
-    if (this.paneBusy()) return;
+    if (this.closeBlockedByPane()) return;
     this.closingCommand = confirmed;
     await this.persistState("closing", true, confirmed.id);
+  }
+
+  /** Records which pane flag held a close back, so a close that never lands can be explained. */
+  private closeBlockedByPane(): boolean {
+    if (!this.paneBusy()) return false;
+    this.deps.trace("close_blocked", { ...this.deps.host.paneState() });
+    return true;
   }
 
   // A finished scout takes a mockup request only while nothing else is happening in its pane,
