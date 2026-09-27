@@ -411,8 +411,8 @@ function projectSetupLines(record: Record<string, unknown>, saved: boolean): rea
     const servers = stringList(record.mcpServers);
     lines.push(
       servers.length === 0
-        ? "MCP tools: none configured for this project."
-        : `MCP tools its chat could use (ask which, default none; pass to setup as coordinatorMcpServers): ${servers.join(", ")}`,
+        ? "MCP tools: none discovered for this project."
+        : `MCP tools OMP loaded for this project: ${servers.join(", ")}`,
     );
   }
   const merging = summaryRecord(record.merging);
@@ -1030,14 +1030,10 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   if (action === "onboard" || action === "setup") return summarizeOnboard(value, action);
   if (action === "find-repo") return summarizeFoundRepos(value);
   if (action === "check-tools") return summarizeToolChecks(value);
-  if ((action === "setup-page" || action === "apply-setup") && typeof value === "string") {
+  if (action === "setup-page" && typeof value === "string") {
     return boundedOutput(value, ACTION_RESULT_MAX_CHARS);
   }
-  if (
-    action === "save-code-folders" ||
-    action === "worker-skills" ||
-    action === "self-improvement"
-  ) {
+  if (action === "save-code-folders" || action === "self-improvement") {
     return "Saved.";
   }
   if (action === "models") return summarizeModels(value);

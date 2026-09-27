@@ -4,45 +4,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   readHomeSettings,
-  replaceWorkerSkills,
   saveProjectRoots,
   saveSelfImprovement,
-  saveWorkerSkills,
 } from "../../src/config/home-settings.ts";
 
-test("worker skills are saved once, an empty list for no, and never over what the user wrote", async () => {
+test("legacy worker skills settings are accepted but ignored", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-home-settings-"));
   try {
+    await writeFile(
+      join(home, "settings.toml"),
+      'workerSkills = ["old"]\nselfImprovement = "report"\nprojectRoots = ["/code"]\n',
+    );
     expect(await readHomeSettings(home)).toEqual({
-      workerSkills: [],
-      workerSkillsChosen: false,
-      selfImprovement: "off",
-      selfImprovementChosen: false,
-      projectRoots: [],
+      selfImprovement: "report",
+      selfImprovementChosen: true,
+      projectRoots: ["/code"],
     });
-    expect(await saveWorkerSkills(home, ["buildkite"])).toEqual({
-      workerSkills: ["buildkite"],
-      workerSkillsChosen: true,
-      selfImprovement: "off",
-      selfImprovementChosen: false,
-      projectRoots: [],
-    });
-    await expect(saveWorkerSkills(home, [])).rejects.toThrow("already lists workerSkills");
-
-    await writeFile(join(home, "settings.toml"), "# mine\n");
-    expect(await saveWorkerSkills(home, [])).toEqual({
-      workerSkills: [],
-      workerSkillsChosen: true,
-      selfImprovement: "off",
-      selfImprovementChosen: false,
-      projectRoots: [],
-    });
-    expect(await readFile(join(home, "settings.toml"), "utf8")).toBe("workerSkills = []\n# mine\n");
   } finally {
     await rm(home, { recursive: true, force: true });
   }
 });
-
 test("self-improvement is off unless the user sets fix or report", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-home-settings-"));
   try {
@@ -72,24 +53,6 @@ test("code folders and the self-improvement mode are saved, replacing a one-line
     expect(await readFile(join(home, "settings.toml"), "utf8")).toBe(
       'projectRoots = [\n  "/a",\n]\n',
     );
-  } finally {
-    await rm(home, { recursive: true, force: true });
-  }
-});
-
-test("the setup page replaces saved worker skills in place, still refusing a multi-line value", async () => {
-  const home = await mkdtemp(join(tmpdir(), "tandem-home-settings-"));
-  try {
-    await writeFile(join(home, "settings.toml"), '# mine\nworkerSkills = ["old"]\n');
-    expect((await replaceWorkerSkills(home, ["tdd", "ci:buildkite"])).workerSkills).toEqual([
-      "tdd",
-      "ci:buildkite",
-    ]);
-    expect(await readFile(join(home, "settings.toml"), "utf8")).toBe(
-      '# mine\nworkerSkills = ["tdd", "ci:buildkite"]\n',
-    );
-    await writeFile(join(home, "settings.toml"), 'workerSkills = [\n  "old",\n]\n');
-    await expect(replaceWorkerSkills(home, [])).rejects.toThrow("over several lines");
   } finally {
     await rm(home, { recursive: true, force: true });
   }

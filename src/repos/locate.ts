@@ -112,6 +112,7 @@ export function checkoutQuestion(
 /** Where people usually keep code, under their home folder; searched until they name their own. */
 const COMMON_CODE_FOLDERS: readonly string[] = [
   "Coding/Projects",
+  "Coding_Projects",
   "code",
   "Code",
   "Projects",

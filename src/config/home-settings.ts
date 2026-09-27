@@ -9,10 +9,6 @@ import { assertKnownKeys, deduplicateStrings, isRecord, readNonEmptyString } fro
  * each use and never pinned to a task; an absent file means every default.
  */
 export type HomeSettings = Readonly<{
-  /** Personal skills every task carries, looked up and pinned like skills named at create. */
-  readonly workerSkills: readonly string[];
-  /** Whether `workerSkills` is written at all, even empty: the user already chose, so don't offer. */
-  readonly workerSkillsChosen: boolean;
   /** What Tandem does when it looks into its own problems; see {@link SelfImprovementMode}. */
   readonly selfImprovement: SelfImprovementMode;
   /** Whether `selfImprovement` is written at all: the user already chose, so don't ask. */
@@ -33,6 +29,7 @@ const SELF_IMPROVEMENT_MODES: readonly SelfImprovementMode[] = ["off", "fix", "r
 
 const HOME_SETTINGS_FILE = "settings.toml";
 const HOME_SETTINGS_KEYS: Readonly<Record<string, true>> = {
+  // Kept for backwards-compatible decoding. Older homes may still contain this inert key.
   workerSkills: true,
   selfImprovement: true,
   projectRoots: true,
@@ -46,8 +43,6 @@ export async function readHomeSettings(home: string): Promise<HomeSettings> {
   } catch (error) {
     if (isNotFoundError(error)) {
       return {
-        workerSkills: [],
-        workerSkillsChosen: false,
         selfImprovement: "off",
         selfImprovementChosen: false,
         projectRoots: [],
@@ -70,8 +65,6 @@ function parseHomeSettings(text: string, source: string): HomeSettings {
   if (!isRecord(parsed)) throw new TypeError(`${source} must be a TOML table`);
   assertKnownKeys(parsed, HOME_SETTINGS_KEYS, source);
   return {
-    workerSkills: readNameList(parsed.workerSkills, `${source} workerSkills`),
-    workerSkillsChosen: parsed.workerSkills !== undefined,
     selfImprovement: readSelfImprovement(parsed.selfImprovement, `${source} selfImprovement`),
     selfImprovementChosen: parsed.selfImprovement !== undefined,
     projectRoots: readAbsolutePaths(parsed.projectRoots, `${source} projectRoots`),
@@ -136,54 +129,6 @@ async function saveHomeSetting(home: string, key: string, value: string): Promis
   }
   await writeTextAtomically(file, after);
   return saved;
-}
-
-/**
- * Saves the user's answer to "give tasks these skills?" as `workerSkills`, an empty list for no,
- * so it is never offered again. It only adds the setting: one the user already wrote is left
- * alone, and a file changed since it was read is not written.
- */
-export async function saveWorkerSkills(
-  home: string,
-  skills: readonly string[],
-): Promise<HomeSettings> {
-  const file = join(home, HOME_SETTINGS_FILE);
-  const line = `workerSkills = [${skills.map((skill) => JSON.stringify(readNonEmptyString(skill, "skill"))).join(", ")}]\n`;
-  let before: string | undefined;
-  try {
-    before = await readFile(file, "utf8");
-  } catch (error) {
-    if (!isNotFoundError(error)) throw error;
-  }
-  if (before === undefined) {
-    const created = `# Tandem settings for every project in this home.\n${line}`;
-    await writeFile(file, created, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    return parseHomeSettings(created, file);
-  }
-  if (parseHomeSettings(before, file).workerSkillsChosen) {
-    throw new Error(`${file} already lists workerSkills; edit it there.`);
-  }
-  // Keys go before any table, so the new one goes first.
-  const after = `${line}${before}`;
-  const saved = parseHomeSettings(after, file);
-  if ((await readFile(file, "utf8")) !== before) {
-    throw new Error(`${file} changed while saving; nothing was written. Try again.`);
-  }
-  await writeTextAtomically(file, after);
-  return saved;
-}
-
-/**
- * Saves `workerSkills` whether or not it was written before, for the setup page, where the user
- * sees the saved list and may change it. Same guard as the other home settings: a one-line value
- * is replaced in place, a multi-line value or a file changed since reading is refused.
- */
-export async function replaceWorkerSkills(
-  home: string,
-  skills: readonly string[],
-): Promise<HomeSettings> {
-  const names = skills.map((skill) => JSON.stringify(readNonEmptyString(skill, "skill")));
-  return saveHomeSetting(home, "workerSkills", `[${names.join(", ")}]`);
 }
 
 function readNameList(value: unknown, field: string): readonly string[] {

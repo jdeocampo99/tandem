@@ -276,32 +276,17 @@ const CLI_COMMAND_HANDLERS: Readonly<Record<CliCommand, CliCommandHandler>> = {
       approved: true,
     };
   },
-  "configure-worker-skills": async ({ invocation, service, capabilities }) => {
-    requireYes(invocation, "saving worker skills");
-    const input = await jsonObjectFromFile(
-      capabilities.statPath,
-      invocation.options.input,
-      "configure-worker-skills",
-    );
-    const skills = input.workerSkills;
-    if (!Array.isArray(skills) || !skills.every((skill) => typeof skill === "string")) {
-      throw new CliUsageError("input.workerSkills must be a list of skill names");
-    }
-    return { value: await service().saveWorkerSkills(skills), approved: true };
-  },
   doctor,
   setup: onboardWithConsent,
   onboard: async (context) => {
     if (context.invocation.options.write) return onboardWithConsent(context);
     const repoPath = repoFor(context.invocation, context.environment);
     const service = context.service();
-    // Read-only extras for the onboarding conversation: how pull requests would merge, and
-    // plugin skills worth offering to every task.
+    // Read-only extras for the onboarding conversation: how pull requests would merge.
     return {
       value: {
         ...(await service.onboard(repoPath, false)),
         merging: await service.mergingCheck(repoPath),
-        workerSkillOffer: await service.workerSkillOffer(),
       },
     };
   },

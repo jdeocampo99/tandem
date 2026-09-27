@@ -11,8 +11,11 @@ const COORDINATOR_BINDINGS = [
   "TANDEM_REPO",
   "TANDEM_SOURCE_REPO",
   "TANDEM_PARENT_WORKSPACE",
-  "HERDR_PANE_ID",
+  "HERDR_ENV",
+  "HERDR_SESSION",
+  "HERDR_SESSION_NAME",
   "HERDR_WORKSPACE_ID",
+  "HERDR_PANE_ID",
 ] as const;
 
 export type OpenProjectInput = Readonly<{
@@ -23,7 +26,7 @@ export type OpenProjectInput = Readonly<{
   readonly tandemCheckout?: string;
 }>;
 
-/** `tandem PATH --no-attach` for one saved project, in the same home and Herdr session. */
+/** `tandem PATH --no-attach` for one saved project, in the same home and target Herdr session. */
 export function openProjectCommand(input: OpenProjectInput): CommandRequest {
   const main = join(input.tandemCheckout ?? TANDEM_CHECKOUT, "src", "main.ts");
   return {

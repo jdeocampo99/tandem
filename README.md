@@ -194,19 +194,41 @@ Then, from any folder:
 tandem
 ```
 
-The first run opens Tandem's own chat with a welcome popup; press Enter and, with Lavish installed,
-Tandem opens a one-page setup in your browser: tick the providers it may spend on, pick a model for
-each job, add repos (found on your machine, or paste a path) with their checks, install step, and
-which MCP servers their chat may use, choose skills every task gets, and decide what Tandem does when
-it runs into trouble. Save sends it to the chat, which asks you to approve it once, then saves
-everything and opens a chat for each repo. Without Lavish, the chat walks you through the same
-setup: it checks your tools, helps you pick models, asks where you keep code, and then sets up the
-repos you name ("api and web"). For each one it looks without changing anything, shows the checks
-and install step it found for you to confirm or change, asks how pull requests should merge, and
-asks before saving settings and opening the project's own chat. Leave halfway and it picks up where
-you stopped. Ask it to change how Tandem works, too; it tries settings first and makes
-code changes as ordinary tasks. After that, plain `tandem` from any folder reopens Tandem's chat and
-every saved project with its previous chat. `tandem /path/to/repo` still works.
+The first run opens Tandem's own chat with a welcome popup. With Lavish installed, Tandem opens a
+one-page setup in your browser. It has four steps:
+
+1. **Models** — choose a model and thinking level for each job from the OMP catalogue.
+2. **Repos** — choose discovered checkouts, scan another code folder, or add a checkout by its exact
+   path. Review and edit the validation and install commands for each.
+3. **Self-improvement** — choose whether Tandem should investigate its own recurring problems and
+   offer a fix or draft an issue.
+4. **Review** — check the complete answer, including which selected providers Tandem may spend on.
+
+Save and continue is your one consent to apply the models and selected providers, code folders,
+self-improvement setting, and selected repository settings, then open a chat for each selected repo.
+Tandem validates the answer against the current machine before it saves anything; the coordinator
+posts a fixed success or error status in chat. The page only reports that the request was submitted
+and saving is in progress until that status arrives. Chat-based setup keeps its own approval step.
+You do not choose MCP servers or a worker-skill set in onboarding:
+coordinators and child workers use the skills and MCP servers OMP loads for their checkout and user
+configuration. OMP's own configuration still controls what is available; Tandem does not grant
+every skill or server that might exist elsewhere.
+Without Lavish, the chat walks through the same four decisions. It checks your tools, helps you pick
+models, asks where you keep code and which repos to set up, then shows the checks and install step
+it found for each repo for you to confirm or change. It asks before saving settings and opening the
+project's own chat. Leave halfway and it picks up where you stopped. Ask it to change how Tandem
+works, too; it tries settings first and makes code changes as ordinary tasks. After that, plain
+`tandem` from any folder reopens Tandem's chat and every saved project with its previous chat.
+`tandem /path/to/repo` still works.
+
+The Repos step lists checkouts Tandem found before you type; click one to add it. If yours isn't
+listed, **Choose another folder…** opens the macOS folder picker and scans the folder read-only. If
+the picker is unavailable, enter a folder path (such as `~/code`) instead. The page refreshes with
+matches and restores the draft choices; keep the page open while the search result arrives. You can
+also add a checkout by its exact path when scanning did not find it. Search requests do not save
+folders or settings: roots are saved alongside existing ones only after you choose Save and continue
+on the Review stage.
+Ask for help in Lavish's Conversation panel and Tandem answers there without making you save first.
 
 ## Commands
 

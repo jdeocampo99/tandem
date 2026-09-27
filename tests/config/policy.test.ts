@@ -18,7 +18,6 @@ import { defaultPolicy, parsePolicy } from "../../src/config/policy.ts";
 import {
   onboardRepo,
   readCleanupCommands,
-  readCoordinatorMcpServers,
   readMergingSettings,
   resolveRepoPolicy,
   saveMergingChoice,
@@ -523,7 +522,6 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
     const settings = Bun.TOML.parse(enabled) as Record<string, unknown>;
     expect(Object.keys(settings).sort()).toEqual([
       "cleanupCommands",
-      "coordinatorMcpServers",
       "instructionFiles",
       "instructions",
       "maxFixRounds",
@@ -535,7 +533,7 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
       "standards",
       "validationCommands",
     ]);
-    const { repoPath, coordinatorMcpServers, cleanupCommands, merging, ...policy } = settings;
+    const { repoPath, cleanupCommands, merging, ...policy } = settings;
     expect(repoPath).toBe(repo);
     expect(merging).toEqual({
       mergeWith: "queue-label",
@@ -548,7 +546,6 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
     expect(await readMergingSettings({ repoPath: repo, home })).toEqual(
       merging as Awaited<ReturnType<typeof readMergingSettings>>,
     );
-    expect(coordinatorMcpServers).toEqual(["linear"]);
     expect(cleanupCommands).toEqual(["docker compose down"]);
     expect(() => parsePolicy(policy)).not.toThrow();
   });
@@ -562,32 +559,20 @@ test("a project with both settings.toml and config.json is refused rather than g
   });
 });
 
-test("onboarding saves the coordinator's MCP servers outside task policy", async () => {
+test("legacy coordinator MCP settings are ignored rather than read or written", async () => {
   await withFixture("coordinator-mcp", async ({ repo, home }) => {
-    expect(await readCoordinatorMcpServers({ repoPath: repo, home })).toEqual([]);
-
-    const written = await onboardRepo({
-      repoPath: repo,
-      home,
-      write: true,
-      coordinatorMcpServers: ["linear"],
-    });
-
-    expect(await readCoordinatorMcpServers({ repoPath: repo, home })).toEqual(["linear"]);
-    const resolved = await resolveRepoPolicy({ repoPath: repo, home });
-    expect(resolved.config).not.toHaveProperty("coordinatorMcpServers");
-
+    const written = await onboardRepo({ repoPath: repo, home, write: true });
+    const saved = await readFile(written.configPath, "utf8");
+    expect(saved).not.toContain("coordinatorMcpServers");
     await writeFile(
       written.configPath,
-      `repoPath = ${JSON.stringify(repo)}\ncoordinatorMcpServers = "linear"\n`,
+      `repoPath = ${JSON.stringify(repo)}\ncoordinatorMcpServers = "legacy"\n`,
       "utf8",
     );
-    await expect(resolveRepoPolicy({ repoPath: repo, home })).rejects.toThrow(
-      "coordinatorMcpServers must be an array of server names",
-    );
+    const resolved = await resolveRepoPolicy({ repoPath: repo, home });
+    expect(resolved.config).not.toHaveProperty("coordinatorMcpServers");
   });
 });
-
 test("cleanup commands are read from settings.toml and kept out of task policy", async () => {
   await withFixture("cleanup-commands", async ({ repo, home }) => {
     expect(await readCleanupCommands({ repoPath: repo, home })).toEqual([]);

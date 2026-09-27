@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { centralConfigPath } from "../../src/config/repositories.ts";
 import {
   type CommandRequest,
   type CommandResult,
@@ -180,6 +181,8 @@ type FakeRunnerOptions = Readonly<{
   readonly holdProof?: boolean;
   readonly presentationResponses?: readonly CommandResult[];
   readonly presentationOpenResponse?: CommandResult;
+  /** Opt-in response for the coordinator launch used when opening another project. */
+  readonly projectLaunchResponse?: CommandResult;
   readonly ompModels?: readonly unknown[];
 }>;
 
@@ -195,6 +198,7 @@ type FakeRunnerState = {
   readonly releaseHead: () => void;
   readonly presentationStarted: Promise<void>;
   readonly releasePresentation: () => void;
+  readonly queuePresentationResponse: (response: CommandResult) => void;
 };
 
 function commandResult(stdout = "", code = 0, stderr = ""): CommandResult {
@@ -233,6 +237,9 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
   const presentationGate = Promise.withResolvers<void>();
   const startPresentation = (): void => presentationStarted.resolve();
   const releasePresentation = (): void => presentationGate.resolve();
+  const queuePresentationResponse = (response: CommandResult): void => {
+    presentationResponses.push(response);
+  };
 
   const draftRemote = options.draftRemote;
   const draftRemoteState: DraftRemoteState = { created: 0, editBodies: [], failEdit: false };
@@ -273,6 +280,7 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
     get releasePresentation() {
       return releasePresentation;
     },
+    queuePresentationResponse,
   };
 
   const run = async (request: CommandRequest): Promise<CommandResult> => {
@@ -311,6 +319,35 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
         if (argv[2] === "view") return commandResult(JSON.stringify(draftRemoteJson()));
       }
     }
+    if (
+      options.projectLaunchResponse !== undefined &&
+      argv.length === 27 &&
+      argv[0] === "env" &&
+      argv[1] === "-u" &&
+      argv[2] === "TANDEM_REPO" &&
+      argv[3] === "-u" &&
+      argv[4] === "TANDEM_SOURCE_REPO" &&
+      argv[5] === "-u" &&
+      argv[6] === "TANDEM_PARENT_WORKSPACE" &&
+      argv[7] === "-u" &&
+      argv[8] === "HERDR_ENV" &&
+      argv[9] === "-u" &&
+      argv[10] === "HERDR_SESSION" &&
+      argv[11] === "-u" &&
+      argv[12] === "HERDR_SESSION_NAME" &&
+      argv[13] === "-u" &&
+      argv[14] === "HERDR_WORKSPACE_ID" &&
+      argv[15] === "-u" &&
+      argv[16] === "HERDR_PANE_ID" &&
+      argv[17] === "bun" &&
+      argv[18]?.endsWith("/src/main.ts") === true &&
+      argv[20] === "--home" &&
+      argv[22] === "--session" &&
+      argv[24] === "--pool-root" &&
+      argv[26] === "--no-attach"
+    ) {
+      return options.projectLaunchResponse;
+    }
     if (argv[0] === "omp" && argv[1] === "models") {
       return commandResult(JSON.stringify({ models: options.ompModels ?? [] }));
     }
@@ -318,10 +355,18 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
       if (argv[1] === "poll") {
         startPresentation();
         await presentationGate.promise;
-        return (
+        const response =
           presentationResponses.shift() ??
-          commandResult("session:\n  status: waiting\n  session_ended: false\n")
-        );
+          commandResult("session:\n  status: waiting\n  session_ended: false\n");
+        return response.stdout.includes("__FOREIGN__")
+          ? {
+              ...response,
+              stdout: response.stdout.replaceAll(
+                "__FOREIGN__",
+                join(dirname(request.cwd), "foreign"),
+              ),
+            }
+          : response;
       }
       return options.presentationOpenResponse ?? commandResult();
     }
@@ -453,9 +498,11 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
     }
     if (argv[0] === "git") {
       const path = argv[2] ?? request.cwd;
+      if (argv.includes("remote") && argv.includes("get-url")) return commandResult("", 1);
       const checkoutHead = options.checkoutHeadFor?.(path) ?? options.checkoutHead ?? "source-head";
       if (argv.includes("rev-parse")) {
         const target = argv.at(-1);
+        if (target === "--show-toplevel") return commandResult(`${path}\n`);
         if (target === "HEAD") {
           if (options.holdInitialHead && !headBlocked) {
             headBlocked = true;
@@ -547,6 +594,8 @@ type FixtureOptions = Readonly<{
   }>;
   readonly runtimeEdits?: Partial<RuntimeTaskState>;
   readonly runner?: FakeRunnerOptions;
+  readonly sourceWorkspace?: boolean;
+  readonly projectRoots?: (home: string, repoPath: string) => readonly string[];
   /** Attach the fixture's worktree lease to the task record, as delivery paths require. */
   readonly attachLease?: boolean;
   readonly reviewAssistance?: ReviewAssistanceRuntime;
@@ -566,6 +615,12 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   const home = await mkdtemp(join(tmpdir(), "tandem-service-regression-"));
   const repoPath = join(home, "repo");
   await mkdir(repoPath, { recursive: true });
+  const sourcePath = join(home, "clean-source");
+  const commonPath = join(home, "git-common");
+  if (options.sourceWorkspace === true) {
+    await mkdir(sourcePath, { recursive: true });
+    await mkdir(commonPath, { recursive: true });
+  }
   const clock = options.clock ?? (() => TIMESTAMP);
   const store = createTaskStore({
     directory: join(home, "tasks"),
@@ -620,9 +675,14 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     });
   }
   const lease = leaseFor(home);
+  const endpoint = endpointFor();
   await mkdir(lease.path, { recursive: true });
-  const endpoint = endpointFor(kind === "implementation" ? "implementer" : "scout");
-  const runner = fakeRunner(options.runner);
+  const runner = fakeRunner({
+    ...options.runner,
+    ...(options.sourceWorkspace === true && options.runner?.commonDirectory === undefined
+      ? { commonDirectory: commonPath }
+      : {}),
+  });
   const runtime: RuntimeTaskState = {
     schemaVersion: 1,
     taskId: task.id,
@@ -651,6 +711,12 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     run: runner.run,
     clock,
     idFactory,
+    ...(options.sourceWorkspace === true
+      ? { sourceWorkspace: { repoPath, path: sourcePath } }
+      : {}),
+    ...(options.projectRoots === undefined
+      ? {}
+      : { projectRoots: options.projectRoots(home, repoPath) }),
     ...(options.reviewAssistance === undefined
       ? {}
       : { reviewAssistance: options.reviewAssistance }),
@@ -811,6 +877,151 @@ test("bound task creation normalizes clean input to the original identity and pe
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("bound setup inspects and saves a selected foreign checkout while ordinary onboarding stays source-bound", async () => {
+  const setupAnswer = {
+    tandemSetup: 1,
+    models: Object.fromEntries(
+      ["coordinator", "scout", "implementer", "reviewer", "presentation"].map((role) => [
+        role,
+        { model: `test/${role}`, thinking: "low" },
+      ]),
+    ),
+    repositories: [
+      {
+        path: "__FOREIGN__",
+        validationCommands: ["bun test"],
+        setupCommands: ["bun install --frozen-lockfile"],
+      },
+    ],
+    selfImprovement: "off",
+  };
+  await withFixture(
+    {
+      sourceWorkspace: true,
+      projectRoots: (home) => [join(home, "foreign")],
+      runner: {
+        ompModels: OMP_MODELS,
+        projectLaunchResponse: commandResult(),
+        presentationOpenResponse: commandResult(
+          "session:\n  status: opened\n  url: http://127.0.0.1:4387/session/setup\n",
+        ),
+      },
+    },
+    async ({ home, service, task, runnerState }) => {
+      const foreign = join(home, "foreign");
+      await mkdir(join(foreign, ".git"), { recursive: true });
+      await writeFile(
+        join(foreign, "package.json"),
+        JSON.stringify({ scripts: { check: "bun test" } }),
+        "utf8",
+      );
+      await writeFile(join(foreign, "bun.lock"), "", "utf8");
+
+      await expect(service.onboard(foreign, false)).rejects.toThrow();
+
+      await writeFile(
+        join(home, "clean-source", "package.json"),
+        JSON.stringify({ scripts: { check: "bun test --clean" } }),
+        "utf8",
+      );
+      await writeFile(join(home, "clean-source", "pnpm-lock.yaml"), "", "utf8");
+      const own = await service.setupOnboard(task.repoPath, false);
+      expect(own.discovery.lockfile).toBe("pnpm-lock.yaml");
+      expect(own.setupCommands.map((command) => command.name)).toContain(
+        "pnpm install --frozen-lockfile",
+      );
+      const opened = await service.openSetupPage(task.repoPath);
+      expect(opened.path).toBe(join(home, "setup", "tandem-setup.html"));
+      const page = await readFile(opened.path, "utf8");
+      const setupDataMatch = page.match(
+        /<script type="application\/json" id="setup-data">([\s\S]*?)<\/script>/,
+      );
+      expect(setupDataMatch).not.toBeNull();
+      const setupData = JSON.parse(setupDataMatch?.[1] ?? "") as {
+        repos: Array<{
+          path: string;
+          validationCommands: string[];
+          install: string;
+        }>;
+      };
+      const foreignPath = await realpath(foreign);
+      const foreignView = setupData.repos.find((repo) => repo.path === foreignPath);
+      expect(foreignView).toBeDefined();
+      expect(foreignView?.validationCommands).toEqual(["bun run check"]);
+      expect(foreignView?.install).toBe("bun install --frozen-lockfile");
+      runnerState.queuePresentationResponse(
+        commandResult(
+          [
+            "session:",
+            "  status: feedback",
+            "prompts[1]{uid,prompt,selector,tag,text}:",
+            `  "1",${JSON.stringify(
+              JSON.stringify({
+                ...setupAnswer,
+                repositories: [{ ...setupAnswer.repositories[0], path: foreign }],
+              }),
+            )},button#next,tandem-setup,Tandem setup answer`,
+          ].join("\n"),
+        ),
+      );
+
+      const pending = service.awaitSetupAnswer(task.repoPath, new AbortController().signal);
+      runnerState.releasePresentation();
+      const event = await pending;
+      expect(event.kind).toBe("answer");
+      if (event.kind !== "answer") throw new Error(`unexpected setup event: ${event.kind}`);
+      const saved = await service.applySetup(task.repoPath, event.answerId);
+      expect(saved.complete).toBe(true);
+      const config = await readFile(await centralConfigPath(foreign, home), "utf8");
+      expect(config).toContain('"bun test"');
+      expect(config).toContain('"bun install --frozen-lockfile"');
+      expect(saved.message).toContain(`foreign (${foreignPath}): settings saved.`);
+      expect(saved.message).toContain(`foreign (${foreignPath}): its chat is open.`);
+      const foreignLaunch = runnerState.calls.find(
+        ({ argv, cwd }) =>
+          cwd === foreignPath &&
+          argv[0] === "env" &&
+          argv.length === 27 &&
+          argv[19] === foreignPath &&
+          argv[26] === "--no-attach",
+      );
+      expect(foreignLaunch).toBeDefined();
+      if (foreignLaunch === undefined) throw new Error("foreign project launch was not attempted");
+      expect(foreignLaunch.argv.slice(0, 17)).toEqual([
+        "env",
+        "-u",
+        "TANDEM_REPO",
+        "-u",
+        "TANDEM_SOURCE_REPO",
+        "-u",
+        "TANDEM_PARENT_WORKSPACE",
+        "-u",
+        "HERDR_ENV",
+        "-u",
+        "HERDR_SESSION",
+        "-u",
+        "HERDR_SESSION_NAME",
+        "-u",
+        "HERDR_WORKSPACE_ID",
+        "-u",
+        "HERDR_PANE_ID",
+      ]);
+      expect(foreignLaunch.argv[17]).toBe("bun");
+      expect(foreignLaunch.argv[18]).toMatch(/\/src\/main\.ts$/u);
+      expect(foreignLaunch.argv.slice(19)).toEqual([
+        foreignPath,
+        "--home",
+        home,
+        "--session",
+        "session-1",
+        "--pool-root",
+        join(home, "pool"),
+        "--no-attach",
+      ]);
+    },
+  );
+});
 test("looks skills up at creation, repository first, and pins them across a restart", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-service-skill-"));
   const home = join(root, "home");
@@ -900,7 +1111,7 @@ test("looks skills up at creation, repository first, and pins them across a rest
   }
 });
 
-test("every task carries the home's worker skills, and a skill named twice counts once", async () => {
+test("tasks pin only explicitly requested skills, ignoring legacy home worker skills", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-service-worker-skills-"));
   const home = join(root, "home");
   const repoPath = join(root, "repo");
@@ -911,10 +1122,7 @@ test("every task carries the home's worker skills, and a skill named twice count
     mkdir(common, { recursive: true }),
     mkdir(home, { recursive: true }),
   ]);
-  const buildkite = await writeSkill(
-    join(personalHome, ".claude", "skills", "buildkite"),
-    "Read Buildkite logs.",
-  );
+  await writeSkill(join(personalHome, ".claude", "skills", "buildkite"), "Read Buildkite logs.");
   const tdd = await writeSkill(join(personalHome, ".claude", "skills", "tdd"), "Test first.");
   await writeFile(join(home, "settings.toml"), 'workerSkills = ["buildkite", "tdd"]\n');
   const service = createTandemService({
@@ -937,10 +1145,7 @@ test("every task carries the home's worker skills, and a skill named twice count
     });
     expect(
       created.skills?.map((skill) => ["directory" in skill && skill.directory, skill.name]),
-    ).toEqual([
-      [tdd, "tdd"],
-      [buildkite, "buildkite"],
-    ]);
+    ).toEqual([[tdd, "tdd"]]);
   } finally {
     await service.shutdown();
     await rm(root, { recursive: true, force: true });

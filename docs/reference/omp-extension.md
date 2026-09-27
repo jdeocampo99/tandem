@@ -24,19 +24,30 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   per-turn prompt does not: `create` and `review-pr` asking where a repository is, and `create`
   finding no saved validation commands for another repository.
 - `/tandem` parses arguments with shell-style quoting only; nothing runs in a shell.
-- The tool is registered with OMP `write` approval. `requiresHumanApproval` covers `setup`,
-  `apply-setup` (one dialog recapping the whole setup page answer), `open-project`, `save-code-folders`, `worker-skills`, `self-improvement`, `configure-models`, `approve`, `brief-approve`, `cancel` (with or without `discard`), `publish`,
-  `publish-now`, `draft`, `merge`, and `cleanup` with `discard`. Each needs a live TUI confirmation; without an
-  interactive TUI they fail closed.
+- The tool is registered with OMP `write` approval. `requiresHumanApproval` covers chat actions such
+  as `setup`, `open-project`, `save-code-folders`, `self-improvement`, `configure-models`, `approve`,
+  `brief-approve`, `cancel` (with or without `discard`), `publish`, `publish-now`, `draft`, `merge`,
+  and `cleanup` with `discard`. Each needs a live TUI confirmation; without an interactive TUI they
+  fail closed. The Lavish Review Save is separate: it is the user's one consent for the complete
+  setup answer, and its backend validation reports a fixed success or error status without a model
+  turn.
 - `configure-models` does not change existing task snapshots.
 - User prompts route through `routeUserPrompt` (src/session/prompt-routing.ts) before the model
   sees them, for confirmations and other harness-neutral prompt handling; OMP's `input` event
   forwards there via `registerPromptRouting` in src/extension/registration.ts.
 - The coordinator's own tool calls, not the `tandem` tool's, are guarded by `coordinatorToolRefusal`
   (src/session/tool-guard.ts), keyed on the call's harness-neutral `ToolCall.kind` (`"mcp"`,
-  `"read"`, ...) rather than an OMP tool name. `registerCoordinatorToolGuard` in
-  src/extension/registration.ts converts OMP's native `tool_call` event to that shape with
-  `ompToolCall` (src/extension/omp-host.ts) and blocks the call when a reason comes back.
+  `"read"`, ...) rather than an OMP tool name. OMP-loaded MCP servers are not filtered by a Tandem
+  per-project allowlist: the coordinator may use what OMP loaded for its checkout and user
+  configuration. The guard blocks direct web-URL reads and repository reads while a scout is
+  researching the same project.
+- Coordinator and child workers use OMP's normal skill and MCP loading for their own checkout and
+  user configuration. Tandem does not grant every skill or server found on disk; sources OMP
+  intentionally disables remain unavailable. Explicit per-task skills are still resolved and
+  pinned into worker briefs.
+- `registerCoordinatorToolGuard` in `src/extension/registration.ts` converts OMP's native
+  `tool_call` event to the harness-neutral shape with `ompToolCall` (src/extension/omp-host.ts) and
+  blocks the call when a reason comes back.
 - src/extension/omp-host.ts is the shared OMP coordinator host: `ompSessionHost` (the `SessionHost`
   the harness-neutral core calls into), `ompToolCall`, `ompMcpToolPrefix`, and `ompApprovalDialog`.
   src/extension.ts and src/extension/registration.ts build the coordinator extension on it.

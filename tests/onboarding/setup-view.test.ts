@@ -29,13 +29,11 @@ const input: SetupViewInput = {
   generatedAt: "2026-09-26T12:00:00.000Z",
   homeFolder: "/Users/me",
   catalogue,
-  enabledProviders: ["anthropic", "retired"],
   searchedFolders: ["/Users/me/code", "/srv/git"],
   repos: [
     {
       path: "/Users/me/code/web",
       setUp: false,
-      details: { validationCommands: [], scripts: [], setupCommands: [], mcpServers: [] },
     },
     {
       path: "/Users/me/code/api",
@@ -46,18 +44,13 @@ const input: SetupViewInput = {
         scripts: ["check", "test"],
         setupCommands: ["bun install --frozen-lockfile"],
         lockfile: "bun.lock",
-        mcpServers: ["linear"],
       },
     },
     { path: "/Users/me/code/tandem", setUp: true },
   ],
-  skills: [
-    { name: "tdd", source: "~/.agents/skills", description: "Write the failing test first" },
-    { name: "buildkite", source: "plugin: ci", description: "" },
-  ],
 };
 
-test("every job starts empty on a first run, and providers start from the saved ones", () => {
+test("every job starts empty on a first run and all catalogue models are available", () => {
   const view = buildSetupView(input);
   expect(view.roles.map((role) => role.name)).toEqual([
     "Planning",
@@ -68,29 +61,22 @@ test("every job starts empty on a first run, and providers start from the saved 
   ]);
   expect(view.roles.every((role) => role.pick === undefined)).toBe(true);
   expect(view.roles[0]?.example).toBe("Claude Fable 5.1 on high");
-  expect(view.providers).toEqual([
-    { id: "anthropic", models: 1, enabled: true },
-    { id: "openai", models: 1, enabled: false },
-  ]);
   expect(view.models[0]?.thinking).toEqual(["low", "high", "max"]);
   expect(view.models[1]?.name).toBe("gpt");
   expect(view.selfImprovement).toBe("fix");
-  expect(view.pickedSkills).toEqual([]);
 });
 
-test("saved choices come back only while their model, provider, and thinking still hold", () => {
+test("saved choices remain available across providers while invalid model or thinking choices clear", () => {
   const view = buildSetupView({
     ...input,
     savedModels: saved,
-    savedSkills: ["tdd", "uninstalled"],
     selfImprovement: "off",
   });
   const picks = Object.fromEntries(view.roles.map((role) => [role.id, role.pick]));
   expect(picks.coordinator).toEqual({ model: "anthropic/claude-opus", thinking: "high" });
-  expect(picks.scout).toBeUndefined(); // openai is not enabled
+  expect(picks.scout).toEqual({ model: "openai/gpt", thinking: "high" });
   expect(picks.implementer).toBeUndefined(); // medium is not supported
   expect(picks.reviewer).toBeUndefined(); // no longer in the catalogue
-  expect(view.pickedSkills).toEqual(["tdd"]);
   expect(view.selfImprovement).toBe("off");
 });
 
@@ -104,15 +90,14 @@ test("repositories say where their commands came from, with the home folder as ~
     repo: "acme/api",
     validationCommands: ["bun run check", "bun run test"],
     install: "bun install --frozen-lockfile",
-    mcpServers: ["linear"],
   });
   expect(api?.validationSource).toBe(
     "Found in package.json scripts: check, test. Edit if these aren't what you run before merging.",
   );
   expect(api?.installSource).toBe("Picked from bun.lock.");
   expect(tandem?.setUp).toBe(true);
-  expect(web?.validationSource).toStartWith("None found in package.json.");
-  expect(web?.installSource).toStartWith("No lockfile found");
+  expect(web?.validationSource).toStartWith("Could not inspect this repository:");
+  expect(web?.installSource).toStartWith("Could not inspect this repository:");
 });
 
 test("the page is one self-contained document with the shared components inlined", () => {
@@ -130,7 +115,10 @@ test("the page is one self-contained document with the shared components inlined
 test("names from disk cannot close the data script", () => {
   const hostile = "</script><img src=x onerror=alert(1)>";
   const html = renderSetupHtml(
-    buildSetupView({ ...input, skills: [{ name: hostile, source: hostile, description: "" }] }),
+    buildSetupView({
+      ...input,
+      repos: [...input.repos, { path: hostile, setUp: false }],
+    }),
   );
   expect(html).not.toContain("<img");
   expect(html.toLowerCase().match(/<\/script>/g)).toHaveLength(3);

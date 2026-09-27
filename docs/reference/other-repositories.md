@@ -25,9 +25,9 @@ Scenario: tests/evals/cross-repo-scenarios.test.ts.
   up to three levels deep, matching any remote and preferring `origin`.
 - Roots are read on each use (`projectRoots` in src/repos/locate.ts): `TANDEM_PROJECT_ROOTS`
   (colon-separated) when set, then `projectRoots` in `<home>/settings.toml` (saved during
-  onboarding), then the usual places under the home folder (`~/Coding/Projects`, `~/code`,
-  `~/Projects`, `~/src`, `~/dev`, `~/Developer`, `~/git`, `~/repos`, `~/workspace`, `~/GitHub`, and
-  a few spellings of these). A checkout two roots reach is counted once.
+  onboarding), then the usual places under the home folder (`~/Coding/Projects`,
+  `~/Coding_Projects`, `~/code`, `~/Projects`, `~/src`, `~/dev`, `~/Developer`, `~/git`, `~/repos`,
+  `~/workspace`, `~/GitHub`, and a few spellings of these). A checkout two roots reach is counted once.
 - No match or several matches make `create` fail with the question to ask the user. The answer
   comes back as `targetCheckout` (re-checked, then saved) or `targetClone: true` (a blobless clone
   under `<home>/clones/owner/repo`).
@@ -47,11 +47,17 @@ Scenario: tests/evals/cross-repo-scenarios.test.ts.
 
 ## Policy
 
-- The target's own saved settings and guidance apply when it is onboarded; otherwise the saved
-  global model choices and built-in defaults do.
-- Implementation needs validation commands. When the target has none saved, `create` fails with a
-  question for the user; their answer goes into the brief's automated checks and comes back as
-  `validationCommands`, appended to the pinned policy. Nothing is written to the target's settings.
+- The target's own saved settings and guidance apply to its tasks when it is onboarded; otherwise
+  the saved global model choices and built-in defaults do.
+- Setup can inspect a foreign checkout directly, from the Repos page or the chat fallback. It
+  reads that checkout's package scripts and lockfile, lets the user confirm or edit validation and
+  install commands, and writes the target's central Tandem settings once after approval. This
+  setup-only path does not require opening the checkout as the coordinator's source.
+- Ordinary task creation does not silently onboard a foreign checkout or modify its settings.
+  Implementation there needs validation commands. When the target has none saved, `create` fails
+  with a question for the user; their answer goes into the brief's automated checks and comes back
+  as `validationCommands`, appended to the pinned policy. Nothing is written to the target's
+  repository by this fallback.
 
 ## Delivery
 

@@ -3,10 +3,15 @@ import type { OmpModelRecord } from "../../src/adapters/omp.ts";
 import {
   checkSetupAnswer,
   parseSetupAnswer,
+  parseSetupChooseFolderRequest,
+  parseSetupSearchRequest,
   readSetupAnswerText,
+  readSetupChooseFolderText,
+  readSetupCommentText,
+  readSetupSearchText,
   type SetupAnswer,
   type SetupAnswerFacts,
-  setupRecap,
+  setupProviders,
 } from "../../src/onboarding/setup-answer.ts";
 
 const catalogue: readonly OmpModelRecord[] = [
@@ -22,7 +27,6 @@ const catalogue: readonly OmpModelRecord[] = [
 
 const answer = {
   tandemSetup: 1,
-  enabledProviders: ["anthropic"],
   models: {
     coordinator: { model: "anthropic/opus", thinking: "high" },
     scout: { model: "anthropic/opus", thinking: "high" },
@@ -35,19 +39,16 @@ const answer = {
       path: "/code/api",
       validationCommands: ["bun run check"],
       setupCommands: [],
-      coordinatorMcpServers: ["linear"],
     },
     { path: "~/pasted" },
   ],
-  workerSkills: ["tdd"],
   selfImprovement: "fix",
 };
 
 const facts: SetupAnswerFacts = {
   catalogue,
-  skills: ["tdd", "buildkite"],
   repositories: new Map([
-    ["/code/api", { kind: "root", root: "/code/api", setUp: false, mcpServers: ["linear"] }],
+    ["/code/api", { kind: "root", root: "/code/api", setUp: false }],
     ["~/pasted", { kind: "root", root: "/Users/me/pasted", setUp: false }],
   ]),
 };
@@ -58,6 +59,30 @@ function parsed(value: unknown): SetupAnswer {
   return result.answer;
 }
 
+test("reads only the tagged Save prompt, never answer-shaped comments or other actions", () => {
+  const prompt = JSON.stringify(JSON.stringify(answer));
+  const raw = [
+    "feedback[0]{message,kind}:",
+    `  message: ${prompt}`,
+    "  kind: comment",
+    "prompts[2]{uid,prompt,selector,tag,text}:",
+    `  "1",${prompt},form#folder-search,tandem-search,Search another folder`,
+    `  "2",${prompt},button#next,tandem-setup,Tandem setup answer`,
+  ].join("\n");
+  const text = readSetupAnswerText(raw);
+  expect(text === undefined ? undefined : JSON.parse(text)).toEqual(answer);
+  expect(
+    readSetupAnswerText(
+      `prompts[1]{uid,prompt,selector,tag,text}:
+  "1",${prompt},button#next,wrong-tag,Tandem setup answer`,
+    ),
+  ).toBeUndefined();
+  expect(
+    readSetupAnswerText(`prompts[1]{uid,prompt,selector,tag,text}:
+  "1",${prompt},form#folder-search,tandem-setup,Tandem setup answer`),
+  ).toBeUndefined();
+});
+
 test("reads the answer out of a real lavish-axi poll response", () => {
   const prompt = JSON.stringify(JSON.stringify(answer));
   const raw = [
@@ -67,15 +92,145 @@ test("reads the answer out of a real lavish-axi poll response", () => {
   ].join("\n");
   const text = readSetupAnswerText(raw);
   expect(text === undefined ? undefined : JSON.parse(text)).toEqual(answer);
-  expect(readSetupAnswerText('prompts[1]{uid,prompt}:\n  "1","please make it blue"')).toBe(
-    undefined,
-  );
+  expect(
+    readSetupAnswerText(`prompts[1]{uid,prompt}:
+  "1","please make it blue"`),
+  ).toBeUndefined();
+});
+
+test("does not accept answer-shaped text in a plain Lavish comment", () => {
+  const prompt = JSON.stringify(JSON.stringify(answer));
+  expect(
+    readSetupAnswerText(`prompts[1]{uid,prompt,selector,tag,text}:
+  "1",${JSON.stringify(`I accept this setup: ${prompt}`)},body,,`),
+  ).toBeUndefined();
+});
+
+test("reads a question from Lavish without mistaking commas or feedback metadata for the message", () => {
+  const row = [
+    "prompts[1]{uid,prompt,selector,tag,text}:",
+    `  "1",${JSON.stringify("I'm on step 3, where are my repos?")},body,,`,
+  ].join("\n");
+  expect(readSetupCommentText(row)).toBe("I'm on step 3, where are my repos?");
+  expect(
+    readSetupCommentText(
+      'prompts[1]{uid,prompt,selector,tag,text}:\n  "1",I am on step 3, and cannot find repos,body,,',
+    ),
+  ).toBe("I am on step 3, and cannot find repos");
+  expect(
+    readSetupCommentText(
+      "feedback[0]{message,kind}:\n  message: I cannot find my repos\n  kind: comment",
+    ),
+  ).toBe("I cannot find my repos");
+});
+test("two queued Lavish questions survive one poll even beside a structured folder request", () => {
+  const raw = [
+    "prompts[3]{uid,prompt,selector,tag,text}:",
+    '  "",First question?,"",message,Freeform message',
+    `  "1",${JSON.stringify(JSON.stringify({ tandemChooseFolder: 1, draft: {} }))},button#choose-folder,tandem-choose-folder,Choose folder`,
+    '  "",Second question?,"",message,Freeform message',
+  ].join("\n");
+  expect(readSetupCommentText(raw)).toBe("First question?\n\nSecond question?");
+});
+
+test("a folder search is separate from the final answer and retains in-progress command fields", () => {
+  const request = {
+    tandemSearch: 1,
+    folder: "~/Coding_Projects",
+    draft: {
+      picks: { coordinator: { model: "anthropic/opus", thinking: "high" } },
+      repositories: [
+        {
+          path: "/code/api",
+          checks: [" make check ", ""],
+          install: " npm ci ",
+          pasted: false,
+        },
+      ],
+      selfImprovement: "fix",
+    },
+  };
+  const raw = [
+    "prompts[1]{uid,prompt,selector,tag,text}:",
+    `  "1",${JSON.stringify(JSON.stringify(request))},form#folder-search,tandem-search,Search another folder`,
+  ].join("\n");
+  expect(readSetupAnswerText(raw)).toBeUndefined();
+  const text = readSetupSearchText(raw);
+  expect(text).toBeDefined();
+  if (text === undefined) return;
+  const parsed = parseSetupSearchRequest(text);
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  expect(parsed.request.folder).toBe("~/Coding_Projects");
+  expect(parsed.request.draft.repositories[0]).toEqual(request.draft.repositories[0]);
+  expect(parsed.request.draft.picks.coordinator).toEqual({
+    model: "anthropic/opus",
+    thinking: "high",
+  });
+  expect(parseSetupSearchRequest(JSON.stringify({ ...request, extra: 1 })).ok).toBe(false);
+  expect(
+    parseSetupSearchRequest(
+      JSON.stringify({
+        ...request,
+        draft: {
+          ...request.draft,
+          repositories: [{ ...request.draft.repositories[0], pasted: "yes" }],
+        },
+      }),
+    ).ok,
+  ).toBe(false);
+});
+
+test("native folder requests preserve draft and never become a setup answer or question", () => {
+  const request = {
+    tandemChooseFolder: 1,
+    draft: {
+      picks: { coordinator: { model: "anthropic/opus", thinking: "high" } },
+      repositories: [
+        {
+          path: "/code/api",
+          checks: ["make check"],
+          install: "npm ci",
+          pasted: false,
+        },
+      ],
+      selfImprovement: "fix",
+    },
+  };
+  const raw = [
+    "prompts[1]{uid,prompt,selector,tag,text}:",
+    `  "1",${JSON.stringify(JSON.stringify(request))},button#choose-folder,tandem-choose-folder,Choose folder`,
+  ].join("\n");
+  expect(readSetupAnswerText(raw)).toBeUndefined();
+  expect(readSetupSearchText(raw)).toBeUndefined();
+  const text = readSetupChooseFolderText(raw);
+  expect(text).toBeDefined();
+  if (text === undefined) return;
+  const parsed = parseSetupChooseFolderRequest(text);
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  expect(parsed.draft.repositories[0]).toEqual(request.draft.repositories[0]);
+  expect(parseSetupChooseFolderRequest(JSON.stringify({ ...request, folder: "/" })).ok).toBe(false);
+  expect(parseSetupChooseFolderRequest(JSON.stringify({ ...request, draft: {} })).ok).toBe(false);
 });
 
 test("a well-formed answer passes every check on this machine", () => {
   const value = parsed(answer);
   expect(value.repositories[1]).toEqual({ path: "~/pasted" });
   expect(checkSetupAnswer(value, facts)).toEqual([]);
+});
+
+test("selected models authorize only their providers, regardless of the rest of the catalogue", () => {
+  const value = parsed({
+    ...answer,
+    models: { ...answer.models, scout: { model: "openai/gpt", thinking: "high" } },
+  });
+  const available = [
+    ...catalogue,
+    { selector: "google/gemini", id: "gemini", provider: "google", thinking: ["high"] },
+  ] satisfies readonly OmpModelRecord[];
+  expect(checkSetupAnswer(value, { ...facts, catalogue: available })).toEqual([]);
+  expect(setupProviders(value, available)).toEqual(["anthropic", "openai"]);
 });
 
 test("the shape is strict: unknown fields, missing jobs, and bad modes are named", () => {
@@ -86,7 +241,7 @@ test("the shape is strict: unknown fields, missing jobs, and bad modes are named
       models: { ...answer.models, presentation: undefined, verifier: {} },
       extra: true,
       selfImprovement: "sometimes",
-      workerSkills: ["tdd", "tdd"],
+      workerSkills: ["tdd"],
     }),
   );
   expect(result.ok).toBe(false);
@@ -94,10 +249,10 @@ test("the shape is strict: unknown fields, missing jobs, and bad modes are named
   expect(result.problems).toEqual(
     expect.arrayContaining([
       "The answer has an unknown field extra.",
+      "The answer has an unknown field workerSkills.",
       "models has an unknown field verifier.",
       "Visual mockups has no model.",
       'selfImprovement must be "off", "fix", or "report".',
-      "workerSkills lists something twice.",
     ]),
   );
   expect(parseSetupAnswer("not json")).toEqual({
@@ -110,16 +265,14 @@ test("the shape is strict: unknown fields, missing jobs, and bad modes are named
 test("each problem on this machine is one sentence the user can act on", () => {
   const value = parsed({
     ...answer,
-    enabledProviders: ["anthropic", "mystery"],
     models: {
       ...answer.models,
       scout: { model: "openai/gpt", thinking: "high" },
       reviewer: { model: "anthropic/opus", thinking: "low" },
       presentation: { model: "nobody/model", thinking: "high" },
     },
-    workerSkills: ["gone"],
     repositories: [
-      { path: "/code/api", coordinatorMcpServers: ["sentry"] },
+      { path: "/code/api" },
       { path: "/code/api/src" },
       { path: "/tmp/plain" },
       { path: "/code/done" },
@@ -128,40 +281,19 @@ test("each problem on this machine is one sentence the user can act on", () => {
   const problems = checkSetupAnswer(value, {
     ...facts,
     repositories: new Map([
-      ["/code/api", { kind: "root", root: "/code/api", setUp: false, mcpServers: ["linear"] }],
+      ["/code/api", { kind: "root", root: "/code/api", setUp: false }],
       ["/code/api/src", { kind: "inside", root: "/code/api" }],
       ["/code/done", { kind: "root", root: "/code/done", setUp: true }],
     ]),
   });
   expect(problems).toEqual([
-    "mystery is not a provider in your OMP models.",
-    "Research: openai/gpt is from openai, which isn't ticked.",
     "Review: anthropic/opus doesn't support thinking low.",
     "Visual mockups: nobody/model is not one of your OMP models.",
-    "No skill named gone in your skills or plugins.",
-    "/code/api has no MCP server named sentry.",
     "/code/api/src is inside the repository at /code/api; add that folder.",
     "/tmp/plain is not a Git repository.",
     "/code/done is already set up.",
   ]);
-  expect(checkSetupAnswer(parsed({ ...answer, enabledProviders: [] }), facts)).toContain(
-    "Tick at least one provider.",
+  expect(parseSetupAnswer(JSON.stringify({ ...answer, enabledProviders: ["google"] })).ok).toBe(
+    false,
   );
-});
-
-test("the recap names every choice, with discovered commands left to the save", () => {
-  expect(setupRecap(parsed(answer), catalogue, ["/code"])).toEqual([
-    "Providers: anthropic",
-    "Planning: Opus (anthropic/opus), high",
-    "Research: Opus (anthropic/opus), high",
-    "Coding: Opus (anthropic/opus), high",
-    "Review: Opus (anthropic/opus), high",
-    "Visual mockups: Opus (anthropic/opus), high",
-    "Skills every task gets: tdd",
-    "When Tandem runs into an issue: Fix: look into it and offer a fix",
-    "Look for repos in: /code",
-    "Repos, each opened in its own chat:",
-    "- /code/api: checks bun run check · install none · MCPs linear",
-    "- ~/pasted: checks found when saving · install found when saving · MCPs all",
-  ]);
 });

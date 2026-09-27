@@ -300,7 +300,7 @@ test("extension setup approval preserves the write boundary and metadata", async
   let allow = false;
   const configPath = "/tandem-home/repositories/abc123/config.json";
   const service = {
-    onboard: async (repoPath: string, write = false) => {
+    setupOnboard: async (repoPath: string, write = false) => {
       if (write) writeCalls.push(repoPath);
       return {
         repoPath,
@@ -386,12 +386,12 @@ test("open-project opens a project's chat only after the user approves it", asyn
   });
 });
 
-test("setup's approval shows the checks, install step, and tools the user chose", async () => {
+test("setup's approval shows the checks and install step", async () => {
   const prompts: Array<{ readonly title: string; readonly message: string }> = [];
   const writes: unknown[][] = [];
   const service = {
-    onboard: async (repoPath: string, write = false, servers?: unknown, commands?: unknown) => {
-      if (write) writes.push([repoPath, servers, commands]);
+    setupOnboard: async (repoPath: string, write = false, commands?: unknown) => {
+      if (write) writes.push([repoPath, commands]);
       return {
         repoPath,
         existingConfig: false,
@@ -408,7 +408,6 @@ test("setup's approval shows the checks, install step, and tools the user chose"
     repoPath: "/code/api",
     validationCommands: ["make check"],
     setupCommands: ["make deps"],
-    coordinatorMcpServers: ["linear"],
   } as const;
   const result = await executeTandemAction(action, service, {
     confirm: async (title: string, message: string) => {
@@ -420,8 +419,7 @@ test("setup's approval shows the checks, install step, and tools the user chose"
   expect(prompts[0]?.title).toBe("Save Tandem settings for api?");
   expect(prompts[0]?.message).toContain("Checks: make check");
   expect(prompts[0]?.message).toContain("Install in fresh copies: make deps");
-  expect(prompts[0]?.message).toContain("Tools its chat may use: linear");
-  expect(writes).toEqual([["/code/api", ["linear"], action]]);
+  expect(writes).toEqual([["/code/api", action]]);
 });
 
 test("onboarding saves ask first, and lookups do not", async () => {
@@ -429,7 +427,6 @@ test("onboarding saves ask first, and lookups do not", async () => {
   const calls: string[] = [];
   const service = {
     saveProjectRoots: async (roots: readonly string[]) => calls.push(`roots ${roots.join(",")}`),
-    saveWorkerSkills: async (skills: readonly string[]) => calls.push(`skills ${skills.length}`),
     saveSelfImprovement: async (mode: string) => calls.push(`self ${mode}`),
     findRepo: async () => [{ path: "/code/api", repo: "acme/api", setUp: true }],
     checkTools: async () => [
@@ -447,18 +444,16 @@ test("onboarding saves ask first, and lookups do not", async () => {
     service,
     context,
   );
-  await executeTandemAction({ action: "worker-skills", skills: [] }, service, context);
   await executeTandemAction({ action: "self-improvement", mode: "fix" }, service, context);
   expect(prompts).toEqual([
     "Look for your repos in these folders?",
-    "Give tasks none of your plugin skills?",
     "Let Tandem look into its own problems and offer fixes?",
   ]);
-  expect(calls).toEqual(["roots /Users/me/code", "skills 0", "self fix"]);
+  expect(calls).toEqual(["roots /Users/me/code", "self fix"]);
 
   const found = await executeTandemAction({ action: "find-repo", name: "api" }, service, context);
+  expect(prompts).toHaveLength(2);
   const tools = await executeTandemAction({ action: "check-tools" }, service, context);
-  expect(prompts).toHaveLength(3);
   expect(summarizeTandemActionValue("find-repo", found.value)).toBe(
     "Found api:\n- /code/api (acme/api) (already set up)",
   );
@@ -473,7 +468,7 @@ test("onboarding saves ask first, and lookups do not", async () => {
 test("find-repo with one new checkout also says what Tandem found there", async () => {
   const service = {
     findRepo: async () => [{ path: "/code/api", repo: "acme/api", setUp: false }],
-    onboard: async (repoPath: string) => ({
+    setupOnboard: async (repoPath: string) => ({
       repoPath,
       existingConfig: false,
       written: false,
@@ -494,8 +489,7 @@ test("find-repo with one new checkout also says what Tandem found there", async 
   expect(summary).toContain("- /code/api (acme/api)");
   expect(summary).toContain("Checks it would run before calling work done: bun run check");
   expect(summary).toContain("Install step for fresh copies: bun install --frozen-lockfile");
-  expect(summary).toContain("could use (ask which, default none");
-  expect(summary).not.toContain("Merging");
+  expect(summary).toContain("MCP tools OMP loaded for this project: linear");
 });
 
 test("model listing is read-only and model changes require approval", async () => {
@@ -1411,56 +1405,23 @@ test("a report-mode issue is filed only after the user approves the cleaned-up d
   ]);
 });
 
-test("the setup page opens without approval, and saving its answer takes one approval", async () => {
+test("the setup page opens without approval", async () => {
   const calls: string[] = [];
-  const prompts: { title: string; message: string }[] = [];
   const service = {
     openSetupPage: async (repoPath: string) => {
       calls.push(`open ${repoPath}`);
       return { path: "/home/setup/tandem-setup.html", url: "http://127.0.0.1:4387/session/a" };
     },
-    setupRecap: async (_repoPath: string, answerId: string) => {
-      calls.push(`recap ${answerId}`);
-      return ["Providers: anthropic", "Repos: none yet"];
-    },
-    applySetup: async (_repoPath: string, answerId: string) => {
-      calls.push(`apply ${answerId}`);
-      return "Saved the model choices and providers.\nSaved the skills every task gets.";
-    },
   } as unknown as TandemService;
 
   const opened = await executeTandemAction({ action: "setup-page", repoPath: "/tandem" }, service, {
-    confirm: undefined,
+    confirm: async () => false,
   });
   expect(opened.value).toBe(
     "The setup page is open in Lavish (http://127.0.0.1:4387/session/a). Its answer comes back to this chat by itself; wait for it.",
   );
+  expect(calls).toEqual(["open /tandem"]);
   expect(parseTandemCommand("setup-page")).toEqual({ action: "setup-page", repoPath: "." });
-
-  const apply = { action: "apply-setup", repoPath: "/tandem", answerId: "a-1" } as const;
-  const refused = await executeTandemAction(apply, service, {
-    confirm: async () => false,
-  });
-  expect(refused.approved).toBe(false);
-  expect(calls).not.toContain("apply a-1");
-
-  const applied = await executeTandemAction(apply, service, {
-    confirm: async (title: string, message: string) => {
-      prompts.push({ title, message });
-      return true;
-    },
-  });
-  expect(prompts).toEqual([
-    {
-      title: "Save this setup?",
-      message: "Providers: anthropic\nRepos: none yet\nYou can change any of it later.",
-    },
-  ]);
-  expect(applied.approved).toBe(true);
-  expect(summarizeTandemActionValue("apply-setup", applied.value)).toBe(
-    "Saved the model choices and providers.\nSaved the skills every task gets.",
-  );
-  expect(calls).toEqual(["open /tandem", "recap a-1", "recap a-1", "apply a-1"]);
 });
 
 test("create forwards the workstream the work belongs to", async () => {

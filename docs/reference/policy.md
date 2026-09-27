@@ -21,11 +21,11 @@ src/adapters/typesafe.ts, src/instructions.ts
 - `repoPath` in the record equals that canonical root. Treat it as a known project-index entry,
   never as a reason to crawl a home directory, guess a basename, clone, or create a checkout.
 - Global model choices: `<home>/models.json`.
-- Home settings: `<home>/settings.toml`, optional and hand-written, read live on each use and
-  never pinned (src/config/home-settings.ts). `workerSkills` lists personal skills every task
-  carries (see [Skills](#skills)); onboarding offers the user's Claude Code plugin skills once and
-  saves the answer here, an empty list for no. `selfImprovement` is `"off"` (default), `"fix"`, or
-  `"report"`; see [self-improvement.md](self-improvement.md). Unknown keys and bad TOML are refused.
+- Home settings: `<home>/settings.toml`, optional and hand-written, read live on each use and never
+  pinned (src/config/home-settings.ts). It stores `projectRoots` (folders searched for checkouts)
+  and `selfImprovement` (`"off"` by default, or `"fix"`/`"report"`); see
+  [self-improvement.md](self-improvement.md). Older `workerSkills` entries are accepted while
+  reading old homes but ignored. Unknown other keys and bad TOML are refused.
 - Any symlink in the policy namespace below the home (`inspectPolicyPath`) fails closed. New
   directories use `0700`; new files use `0600`.
 - A child-root `.tandem.json` from old builds is ignored: neither imported nor deleted.
@@ -44,33 +44,31 @@ src/adapters/typesafe.ts, src/instructions.ts
 - In chat, the Tandem coordinator runs the same steps with the same approvals (see
   [coordinator.md](coordinator.md#the-tandem-coordinator)); `open-project` then opens the saved
   project's own coordinator. Before that first write the user may replace the discovered commands:
-  `setup` takes `validationCommands` and `setupCommands`, which replace the proposal (and leave
-  nothing unresolved), and `coordinatorMcpServers`. The write is still the one exclusive create.
-- Two more home settings come from onboarding answers, each with its own approval, through
-  `saveHomeSetting` in src/config/home-settings.ts (a one-line value is replaced, a missing key is
-  added first, a multi-line value or a file changed since reading is refused): `projectRoots`, the
-  absolute folders searched for checkouts by name, and `selfImprovement`.
-- The setup page (see [coordinator.md](coordinator.md#the-tandem-coordinator)) saves the same
-  settings after one approval of its whole answer. It shows saved choices and may change them, so
-  it writes `workerSkills` with `replaceWorkerSkills`, which goes through `saveHomeSetting` and its
-  guard; the chat's answer to the plugin-skill offer (`saveWorkerSkills`, `worker-skills`,
-  `configure-worker-skills`) still only adds the key and refuses once it is written.
+  `setup` takes `validationCommands` and `setupCommands`, which replace the proposal. The write is
+  still the one exclusive create.
+- In chat, these two home settings each retain their own approval through `saveHomeSetting` in
+  src/config/home-settings.ts (a one-line value is replaced, a missing key is added first, a
+  multi-line value or a file changed since reading is refused): `projectRoots`, the absolute
+  folders searched for checkouts by name, and `selfImprovement`. The Lavish Review Save bundles
+  them into its one user consent after the backend re-checks the answer.
+- The setup page (see [coordinator.md](coordinator.md#the-tandem-coordinator)) covers four stages:
+  Models, Repos, Self-improvement, and Review. Review's Save and continue is the user's one consent
+  to apply the complete answer: models and selected providers, code folders, the self-improvement
+  setting, and selected repository settings before opening chats for selected repositories. The
+  backend validates the answer against the current machine before writing, then posts a fixed
+  success or error status without a model turn. Chat setup actions retain their own approval. The
+  page does not ask the user to choose MCP servers or worker skills; OMP determines skills and MCP
+  availability from each coordinator or child worker's checkout and user configuration.
 - The native terminal asks **Save settings** / **Not now** before writing; **Not now** or Ctrl+C
   creates no project record and leaves saved model choices intact. The interview text and choice
   rules live in `src/terminal/onboarding.ts` and `src/instructions.ts`.
-- After **Save settings**, the terminal offers each project MCP server to the coordinator,
-  defaulting to **Skip**. The setup page defaults the other way: every one of a repository's MCP
-  servers starts ticked, and a pasted path it could not look at in advance gets all of them at save.
-  The chat's `setup` saves only the servers it is given. Answers are saved as
-  `coordinatorMcpServers` (see [Coordinator tool limits](#coordinator-tool-limits)); unset means none.
 - A later custom policy edit requires approval scoped to the project and fields, a re-read
   immediately before writing (stale-snapshot guard for an existing file, exclusive create for a
   missing one), and refusal if a path or symlink could escape the home. Do not add a CLI flag for it.
 - The one such edit Tandem makes is saving how PR watch merges (`[merging] mergeWith`), after the
   user answered in onboarding or at the first watch: `configure-merging` or `pr-watch-merging`,
   each with its own approval, through `saveMergingChoice`, which only adds fields and follows the
-  guard above (see [pr-watch.md](pr-watch.md#setting-up-merging)). `configure-worker-skills` saves
-  `workerSkills` into the home settings the same way.
+  guard above (see [pr-watch.md](pr-watch.md#setting-up-merging)).
 
 ### Proposed commands
 
@@ -90,9 +88,10 @@ The coordinator delegates research and does judgement itself.
 
 - Its `--tools` are `read`, `ask`, and `tandem`; no `grep` or `glob`, so it reads only paths a
   report, brief, or the user names.
-- OMP loads MCP servers outside `--tools`, so `tool-guard.ts` refuses every MCP call to a server
-  not in `coordinatorMcpServers`, and every `read` of an `http(s)://` URL. An unreadable settings
-  file allows no servers. The list is read live on each MCP call. Tasks keep every server.
+- OMP loads MCP servers outside `--tools`; the coordinator may use every MCP server OMP successfully
+  loads for its checkout and user configuration. Tandem has no per-project MCP allowlist, and an old
+  `coordinatorMcpServers` value is inert. The web-URL read guard still applies. Child workers use
+  OMP's own loading rules for their child checkout and user configuration.
 - While a scout for the project is queued or scouting, `read` of any file outside the Tandem home,
   or inside its `pool/`, is refused. Reports and briefs stay readable. If the task list cannot be
   read, the refusal applies.
@@ -139,9 +138,11 @@ differs from resolved policy is rejected.
 `parsePolicyOverride` in `src/config/policy.ts` is the full schema; unknown keys are rejected.
 Contracts the parser does not make obvious:
 
-- `repoPath` must equal the canonical root. `coordinatorMcpServers`, `cleanupCommands`, and
-  `[merging]` (PR watch; see [pr-watch.md](pr-watch.md#settings)) are machine settings read live
-  from `settings.toml`; they are stripped out of task policy and never pinned. Everything else is policy, pinned with the task at creation, so edits apply to new tasks.
+- `repoPath` must equal the canonical root. `cleanupCommands`, and `[merging]` (PR watch; see
+  [pr-watch.md](pr-watch.md#settings)) are machine settings read live from `settings.toml`; they
+  are stripped out of task policy and never pinned. Legacy `coordinatorMcpServers` is accepted
+  when decoding old project settings but ignored; it is not an MCP allowlist. Everything else is
+  policy, pinned with the task at creation, so edits apply to new tasks.
 - Setup writes the file once with discovered commands filled in and every other setting commented
   out with a description and example. A test uncomments them all and checks the result parses;
   keep that true when adding a setting.
@@ -196,41 +197,26 @@ Policy resolution builds a guidance snapshot per channel (`implementation`, `val
 
 ## Skills
 
-Workers discover the target repository's own skills, the way OMP does in any session. Personal
-skills stay out: `src/worker-skills.yml`, a second `--config` only workers load, turns off OMP's
-user-level skill folders. The coordinator does not load it and keeps the user's skills.
+OMP controls the skills visible to each process. A coordinator and each child worker run in the
+context of their own checkout and user configuration, so they see the skills OMP loads for that
+context. Tandem does not offer a global worker-skill selection or turn every skill found on disk
+into a worker skill. Sources that OMP intentionally disables remain unavailable.
 
-- `create` takes `skills`, the names the user asked the work to use; `/skill:` prefixes are
-  dropped. Owner: `src/config/skills.ts`.
-- Every task also gets the home's `workerSkills`, since tasks Tandem starts on its own (like PR
-  watch fixes) have no one to name skills. They are looked up and pinned exactly like `skills`,
-  after them; a name given in both, or two names reaching the same folder, counts once, and the
-  32 KB limit covers them all. Turning on every personal skill for workers was rejected: that is
-  about 70 skills, including mail and file actions and some that conflict with worker rules.
-- Each name is looked up under the repository's committed checkout (`.omp/skills`,
-  `.claude/skills`, `.agents/skills`, `.agent/skills`, `.codex/skills`), then under the user's home
-  (`.omp/agent/skills`, `.claude/skills`, `.agents/skills`, `.agent/skills`, `.codex/skills`) and
-  in Claude Code plugins: each install in `~/.claude/plugins/installed_plugins.json`, at
-  `<installPath>/skills/<name>/SKILL.md`. `plugin:name` looks only in that plugin (the install
-  key without `@marketplace`). A repository skill wins over a personal one with the same name;
-  linked copies of one folder count once. Matching is by folder name.
-- The setup page lists what `workerSkills` can name (`listSkillCatalog`): the personal folders
-  above and plugin skills, never repository skills, which every task in that repository loads
-  anyway. Each is listed by the name that finds it alone: a plugin skill is `plugin:name` when
-  another plugin or a personal skill shares its name; a personal name in two folders is listed once.
-  Its line is SKILL.md's frontmatter `description`, on one line and cut near 140 characters.
-- Create fails, with a message the coordinator puts to the user, when a name is not a plain folder
-  name, matches nothing, matches two different folders in the same place, has an empty SKILL.md,
-  or the skills together pass 32 KB (`MAX_TASK_SKILLS_BYTES`).
-- The task pins each skill's name, origin, real folder path, and SKILL.md body without frontmatter.
-  Later edits to the skill never change the task; fix rounds and restarts use the pinned copy.
-- Scout, implementer, and reviewer briefs carry every pinned skill in full with its folder.
-  Workers follow them and the brief wins where they conflict; the reviewer checks the change
-  against them and reports a departure only when it affects the result. Presentation briefs carry
-  none.
+- `create` takes `skills`, the names the user explicitly asked this work to use; `/skill:` prefixes
+  are dropped. Tandem resolves and pins those names for the task. This explicit pin does not grant
+  other skills or broaden OMP's runtime scope. Owner: `src/config/skills.ts`.
+- A task stores each explicitly requested skill's name, origin, real folder path, and SKILL.md body
+  without frontmatter. Later edits to the skill never change the task; fix rounds and restarts use
+  the pinned copy.
+- Scout, implementer, and reviewer briefs carry every explicitly pinned skill in full with its
+  folder. Workers also have whatever OMP loads for their own checkout and user configuration at
+  runtime; Tandem's explicit task pins do not expand that OMP scope. Presentation briefs carry no
+  explicit task skills.
+- Create fails, with a message the coordinator puts to the user, when an explicit name is not a
+  plain folder name, matches nothing, matches two different folders in the same place, has an empty
+  SKILL.md, or the pinned skills together pass 32 KB (`MAX_TASK_SKILLS_BYTES`).
 - Tasks created before this recorded one `skill` with the coordinator's own summary; they load as a
-  single `summary`-origin skill without a folder. A record with both `skill` and `skills` is
-  corrupt.
+  single `summary`-origin skill without a folder. A record with both `skill` and `skills` is corrupt.
 
 ## Jev prompt routing
 
