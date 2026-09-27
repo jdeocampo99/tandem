@@ -277,6 +277,20 @@ test("persists manual verification and reloads it; a task created without it has
   });
 });
 
+test("persists a task title and reloads it; an older task without one still loads", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const titled = await store.create({ ...input, id: "titled", title: "fix paid access" });
+    const untitled = await store.create({ ...input, id: "untitled" });
+
+    const reloaded = makeStore(directory, "reload");
+    expect((await reloaded.read(titled.id))?.title).toBe("fix paid access");
+    const reloadedUntitled = await reloaded.read(untitled.id);
+    if (reloadedUntitled === undefined) throw new Error("task did not reload");
+    expect("title" in reloadedUntitled).toBe(false);
+  });
+});
+
 test("reloads a recorded finding ledger unchanged", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);

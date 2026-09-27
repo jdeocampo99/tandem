@@ -148,10 +148,11 @@ async function samePhysicalDirectory(expected: string, actual: string): Promise<
   }
 }
 
-async function findLaunchWorkspace(
+/** Lists the workspaces carrying the launch's label; task titles need not be unique. */
+async function findLaunchWorkspaces(
   run: CommandRunner,
   intent: DurableEndpointLaunch,
-): Promise<LaunchLookup<HerdrWorkspaceObservation>> {
+): Promise<LaunchLookup<readonly HerdrWorkspaceObservation[]>> {
   let workspaces: readonly HerdrWorkspaceObservation[];
   try {
     workspaces = parseHerdrWorkspaces(
@@ -177,17 +178,7 @@ async function findLaunchWorkspace(
       detail: `no Herdr workspace has label ${JSON.stringify(intent.workspaceLabel)}`,
     };
   }
-  if (matches.length !== 1) {
-    return {
-      status: "ambiguous",
-      detail: `Herdr workspace label ${JSON.stringify(intent.workspaceLabel)} matched ${matches.length} workspaces`,
-    };
-  }
-  const workspace = matches[0];
-  if (workspace === undefined) {
-    return { status: "pending", detail: "Herdr workspace recovery returned no selected workspace" };
-  }
-  return { status: "found", value: workspace };
+  return { status: "found", value: matches };
 }
 
 /** A root pane sits on the workspace's active tab with its shell, and any foreground, in `cwd`. */
@@ -245,22 +236,43 @@ async function findLaunchRootPane(
   return { status: "found", value: pane };
 }
 
-/** Finds the one Herdr pane a recorded launch intent created, or explains why it cannot yet. */
+/**
+ * Finds the one Herdr pane a recorded launch intent created, or explains why it cannot yet.
+ * Workspaces sharing the label are told apart by a root pane in the launch's worktree.
+ */
 export async function recoverEndpointFromLaunch(
   run: CommandRunner,
   intent: DurableEndpointLaunch,
 ): Promise<EndpointLaunchRecovery> {
-  const workspace = await findLaunchWorkspace(run, intent);
-  if (workspace.status !== "found") return workspace;
-  const pane = await findLaunchRootPane(run, intent, workspace.value);
-  if (pane.status !== "found") return pane;
+  const workspaces = await findLaunchWorkspaces(run, intent);
+  if (workspaces.status !== "found") return workspaces;
+  const found: Readonly<{ workspace: HerdrWorkspaceObservation; pane: HerdrPaneObservation }>[] =
+    [];
+  const unresolved: UnresolvedLaunch[] = [];
+  for (const workspace of workspaces.value) {
+    const pane = await findLaunchRootPane(run, intent, workspace);
+    if (pane.status === "found") found.push({ workspace, pane: pane.value });
+    else unresolved.push(pane);
+  }
+  const ambiguous = unresolved.find((lookup) => lookup.status === "ambiguous");
+  if (ambiguous !== undefined) return ambiguous;
+  if (found.length > 1) {
+    return {
+      status: "ambiguous",
+      detail: `${found.length} Herdr workspaces labelled ${JSON.stringify(intent.workspaceLabel)} have a root pane at ${intent.cwd}`,
+    };
+  }
+  const match = found[0];
+  if (match === undefined) {
+    return unresolved[0] ?? { status: "pending", detail: "Herdr workspace recovery found no pane" };
+  }
   return {
     status: "recovered",
     endpoint: {
       sessionId: intent.sessionId,
-      workspaceId: workspace.value.workspaceId,
-      tabId: pane.value.tabId,
-      paneId: pane.value.paneId,
+      workspaceId: match.workspace.workspaceId,
+      tabId: match.pane.tabId,
+      paneId: match.pane.paneId,
       role: intent.role,
       generation: intent.generation,
     },

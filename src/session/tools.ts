@@ -114,6 +114,12 @@ export const tandemRequestSchema = z.strictObject({
         .describe("The approved request this work belongs to; required when several are open."),
       kind: z.enum(["scout", "implementation"]),
       objective: z.string(),
+      title: z
+        .string()
+        .min(1)
+        .describe(
+          "Two to four lowercase words naming this work in the sidebar, e.g. 'fix paid access'.",
+        ),
       acceptanceCriteria: z.array(z.string()),
       manualVerification: z.array(z.string()).optional(),
       surfaces: z.array(z.string()),

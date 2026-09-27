@@ -1213,11 +1213,7 @@ export class WorkerWorkflow {
       task.generation,
       allowedStages,
       async ({ task: currentTask, runtime: currentRuntime }) => {
-        const workspaceLabel = taskWorkspaceLabel(
-          currentRuntime.taskName,
-          currentTask.objective,
-          role,
-        );
+        const workspaceLabel = taskWorkspaceLabel(currentTask);
         const endpointLaunch = endpointLaunchFor(
           reservation,
           this.#deps.sessionId,

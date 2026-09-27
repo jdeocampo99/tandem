@@ -257,7 +257,7 @@ test("closes its own pane but retains the workspace when an extra pane remains",
     });
     expect(runner.panes.get("pane-a")?.present).toBe(false);
     expect(runner.panes.get("extra-pane")?.present).toBe(true);
-    expect(runner.workspaceLabel.get("workspace-a")).toBe(`Retained terminals · repo`);
+    expect(runner.workspaceLabel.get("workspace-a")).toBe(`◇ repo (old)`);
   } finally {
     await cleanup(root);
   }

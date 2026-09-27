@@ -219,52 +219,31 @@ test("sanitizes task branches and builds the exact OMP invocation", () => {
     "Implement the approved scope.",
   ]);
 });
-test("labels use readable role names while preserving normalized bounded identity", () => {
-  const objective = `Fix parser\nwith hostile\u0000 controls and ${"界".repeat(120)}`;
-  const first = taskWorkspaceLabel(
-    "tandem-task-01M2TV2GZ4FG73A3GMVVSJ24S0",
-    objective,
-    "implementer",
-  );
-  const second = taskWorkspaceLabel(
-    "tandem-task-01M2TV2GZ4FG73A3GMVVSJ24S1",
-    objective,
-    "implementer",
-  );
-
-  expect(first).toMatch(/^└ implement Fix parser with hostile controls/u);
-  expect(first).toContain("A3GMVVSJ24S0");
-  expect(first).not.toContain(" · impl");
-  expect(first).not.toMatch(/\p{Cc}/u);
-  expect(first.length).toBeLessThanOrEqual(96);
-  expect(second).not.toBe(first);
+test("labels name the task by its short title", () => {
+  expect(
+    taskWorkspaceLabel({ title: "fix paid access", objective: "Investigate why paid users…" }),
+  ).toBe("└ fix paid access");
 });
 
-test("labels use readable role names, avoid duplicates, and provide a fallback", () => {
-  const scoutLabel = taskWorkspaceLabel("tandem-task-research", "Research app standards", "scout");
-  const implementationLabel = taskWorkspaceLabel(
-    "tandem-task-implementation",
-    "implement app store review",
-    "implementer",
-  );
-  const reviewerLabel = taskWorkspaceLabel(
-    "tandem-task-review",
-    "inspect app store review",
-    "reviewer",
-  );
+test("labels fall back to a normalized, shortened objective on untitled tasks", () => {
+  const label = taskWorkspaceLabel({
+    objective: `Fix parser\nwith hostile\u0000 controls and ${"界".repeat(120)}`,
+  });
 
-  expect(scoutLabel).toMatch(/^└ Research app standards · /u);
-  expect(scoutLabel).not.toContain("research Research");
-  expect(reviewerLabel).toMatch(/^└ task inspect app store review · /u);
-  expect(implementationLabel).not.toContain("implement implement");
+  expect(label).toMatch(/^└ Fix parser with hostile contro/u);
+  expect(label).not.toMatch(/\p{Cc}/u);
+  expect(label.endsWith("…")).toBe(true);
+  expect(label.length).toBeLessThanOrEqual(2 + 32);
+  expect(taskWorkspaceLabel({ title: " \n ", objective: "Research app standards" })).toBe(
+    "└ Research app standards",
+  );
 });
 
 test("long labels retain complete graphemes and normalize combining marks", () => {
   const cluster = "\u{1F469}\u200d\u{1F4BB}";
-  const label = taskWorkspaceLabel("tandem-task-1", `e\u0301${cluster.repeat(30)}`, "implementer");
-  const title = label.slice(0, label.indexOf(" · "));
-  expect(title).toMatch(new RegExp(`^└ implement é(?:${cluster})*…$`, "u"));
-  expect(label.length).toBeLessThanOrEqual(96);
+  const label = taskWorkspaceLabel({ title: `e\u0301${cluster.repeat(30)}`, objective: "x" });
+  expect(label).toMatch(new RegExp(`^└ é(?:${cluster})*…$`, "u"));
+  expect(label.length).toBeLessThanOrEqual(2 + 32);
 });
 
 test("validates an exact OMP model selector and thinking level without fallback", async () => {

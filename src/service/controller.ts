@@ -250,6 +250,8 @@ export type CreateTaskRequest = Readonly<{
   readonly repoPath: string;
   readonly kind: CreatableTaskKind;
   readonly objective: string;
+  /** Short sidebar name for the task's workspaces. */
+  readonly title?: string;
   readonly acceptanceCriteria: readonly string[];
   /** Hands-on checks a person makes before merging; they become the PR's checklist. */
   readonly manualVerification?: readonly string[];

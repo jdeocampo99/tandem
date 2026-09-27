@@ -219,10 +219,12 @@ Code: src/playbooks/ (`catalog.ts` steps, `selection.ts` choice, `classify.ts` t
 
 ## Herdr labels and status
 
-- Workspace label: `└ <role cue> <objective> · <short identity>` (cue `research`, `implement`, or
-  `task` for other roles), normalized, at most 96 UTF-16 units, never splitting graphemes. It is
-  persisted before creation and reused by recovery, never recomputed. Existing labels are never
-  renamed. A label is never ownership proof.
+- Workspace label: `└ <title>`, the two-to-four-word title the coordinator gives at `create`
+  (older tasks without one use the objective), normalized, at most 32 UTF-16 units, never
+  splitting graphemes. Labels need not be unique: recovery picks the one same-labelled workspace
+  whose root pane sits in the launch's worktree and stays ambiguous otherwise. It is persisted
+  before creation and reused by recovery, never recomputed. Existing labels are never renamed. A
+  label is never ownership proof.
 - States: active turns `working`; question dialogs, paused workers, and failed or needs-decision
   results `blocked`; completed turns `idle`. An idle coordinator aggregates its original project's
   tasks: approval, pause, and blockers outrank queued/running work; ready and terminal tasks do not

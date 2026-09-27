@@ -790,6 +790,8 @@ export type TaskRecord = {
   readonly requestId?: string;
   readonly kind: TaskKind;
   readonly objective: string;
+  /** Two to four word sidebar name the coordinator gave at creation; absent on older tasks. */
+  readonly title?: string;
   /** Automated checks: what validation or code review can prove. */
   readonly acceptanceCriteria: readonly string[];
   /** Hands-on checks a person makes before merging; reviewers never judge these. Absent when none. */

@@ -844,6 +844,8 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
     // from the freshly created replacement pane the underlying coordinatorRunner simulates.
     let oldPaneClosed = false;
     let newWorkspaceCreated = false;
+    // A shell Herdr just restored is still running its startup for its first few checks.
+    let startupChecksLeft = 2;
     const run: CommandRunner = async (call) => {
       if (call.argv[0] === "herdr" && !serverRunning) {
         if (call.argv.includes("status")) {
@@ -903,6 +905,8 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
           };
         }
         if (call.argv[4] === "process-info") {
+          const starting = startupChecksLeft > 0;
+          startupChecksLeft -= 1;
           return {
             code: 0,
             stdout: JSON.stringify({
@@ -910,7 +914,9 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
                 process_info: {
                   pane_id: "pane-2",
                   shell_pid: 999,
-                  foreground_processes: [{ pid: 999, name: "zsh", argv: ["-zsh"], argv0: "-zsh" }],
+                  foreground_processes: starting
+                    ? [{ pid: 1234, name: "fastfetch", argv: ["fastfetch"], argv0: "fastfetch" }]
+                    : [{ pid: 999, name: "zsh", argv: ["-zsh"], argv0: "-zsh" }],
                 },
               },
             }),
@@ -965,8 +971,10 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
     // Returning a coordinator worktree ends processes inside it, so the server runs elsewhere.
     expect(serverDirectories).toEqual([home, home]);
     expect(result.reused).toBeUndefined();
-    // The default behavior closes the previous coordinator's owned pane instead of retaining it.
+    // The default behavior closes the previous coordinator's owned pane instead of retaining it,
+    // waiting out the restored shell's startup rather than leaving the workspace open.
     expect(oldPaneClosed).toBe(true);
+    expect(startupChecksLeft).toBeLessThan(0);
     expect(restoredLabel).toBe("Tandem coordinator · repo");
 
     expect(result.direct).toBe(false);

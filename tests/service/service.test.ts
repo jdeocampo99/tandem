@@ -1971,7 +1971,7 @@ test("approved task allocates a fresh endpoint and dispatches one worker", async
     const workspaceCreate = runnerState.calls.find(
       (request) => request.argv.includes("workspace") && request.argv.includes("create"),
     );
-    expect(workspaceCreate?.argv).toContain("└ implement exercise a durable service path · task-1");
+    expect(workspaceCreate?.argv).toContain("└ exercise a durable service path");
     expect(persisted.tasks[0]?.taskName).toBe("tandem-task-1");
     expect(persisted.tasks[0]?.worktree?.name).toBe("tandem-task-1");
     expect(persisted.tasks[0]?.jobs[0]?.phase).toBe("running");

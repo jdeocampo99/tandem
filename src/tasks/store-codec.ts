@@ -122,6 +122,7 @@ const TOP_LEVEL_KEYS = [
   "requestId",
   "kind",
   "objective",
+  "title",
   "acceptanceCriteria",
   "manualVerification",
   "surfaces",
@@ -1067,6 +1068,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     failState(source, `unsafe task id ${id}`);
   }
   const requestId = optionalText(value, "requestId", source);
+  const title = optionalText(value, "title", source);
   if (requestId !== undefined && !isSafeRequestId(requestId)) {
     failState(source, `unsafe request id ${requestId}`);
   }
@@ -1140,6 +1142,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     ...(requestId === undefined ? {} : { requestId }),
     kind,
     objective: requiredText(value, "objective", source),
+    ...(title === undefined ? {} : { title }),
     acceptanceCriteria: requiredTextArray(value, "acceptanceCriteria", source),
     ...(Object.hasOwn(value, "manualVerification")
       ? { manualVerification: requiredTextArray(value, "manualVerification", source) }

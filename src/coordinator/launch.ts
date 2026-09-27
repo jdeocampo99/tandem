@@ -46,6 +46,8 @@ import {
 const DEFAULT_COORDINATOR_CONFIG = "worker-config.yml";
 const HERDR_READY_ATTEMPTS = 40;
 const HERDR_READY_DELAY_MS = 250;
+/** How long a coordinator shell Herdr just restored gets to finish starting before it counts as busy. */
+const RESTORED_SHELL_ATTEMPTS = 20;
 // No grep or glob: searching the repository is a scout's job, not the coordinator's.
 const COORDINATOR_TOOLS = ["read", "ask", "tandem"] as const;
 
@@ -589,6 +591,24 @@ async function assertRunningCoordinatorSource(
   }
 }
 
+/**
+ * Retires the previous coordinator's workspace, giving a shell Herdr just restored time to finish
+ * starting. Mid-startup (prompt, fastfetch) the pane does not yet prove a stopped shell, so without
+ * waiting the old workspace is left open beside its replacement after every Herdr restart.
+ */
+async function retireSettledCoordinatorWorkspace(
+  dependencies: CoordinatorLaunchDependencies,
+  previous: CoordinatorRecord,
+): Promise<CoordinatorWorkspaceRetirement> {
+  for (let attempt = 1; ; attempt += 1) {
+    const retirement = await retireCoordinatorWorkspace(dependencies.run, previous);
+    if (retirement.outcome !== "quarantined" || attempt >= RESTORED_SHELL_ATTEMPTS) {
+      return retirement;
+    }
+    await dependencies.sleep(HERDR_READY_DELAY_MS);
+  }
+}
+
 /** Retires the previous coordinator's workspace, then settles its lease for the replacement. */
 async function replacePreviousCoordinator(
   request: CoordinatorLaunchRequest,
@@ -602,7 +622,7 @@ async function replacePreviousCoordinator(
     readonly previousResources: CoordinatorResourceOutcome;
   }>
 > {
-  const workspaceRetirement = await retireCoordinatorWorkspace(dependencies.run, previous);
+  const workspaceRetirement = await retireSettledCoordinatorWorkspace(dependencies, previous);
   const previousResources = await applyCoordinatorReplacement({
     run: dependencies.run,
     home: paths.home,
@@ -845,7 +865,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     await waitForHerdr(dependencies.run, dependencies.sleep, request.sessionId, coordinatorCwd);
     // Starting Herdr can restore the previous workspace and its saved label.
     if (previous !== undefined) {
-      workspaceRetirement = await retireCoordinatorWorkspace(dependencies.run, previous);
+      workspaceRetirement = await retireSettledCoordinatorWorkspace(dependencies, previous);
     }
   }
   const workspaceResult = await runExternal(dependencies.run, {
