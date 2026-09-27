@@ -27,8 +27,8 @@ import {
   writeRuntimeState,
 } from "../runtime/persistence.ts";
 import type { RuntimeState, RuntimeTaskState } from "../runtime/schema.ts";
-import { createTaskStore, type TaskStore } from "../tasks/store.ts";
 import { researchInterviewFor } from "../tasks/research-interview.ts";
+import { createTaskStore, type TaskStore } from "../tasks/store.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import {
   absoluteDirectory,
@@ -110,10 +110,7 @@ export type ScoutWorktreeDecision =
  * explicitly stopped; cancellation is itself an explicit stop.
  */
 export function decideScoutCleanupEligibility(
-  task: Pick<
-    TaskRecord,
-    "kind" | "stage" | "reportPath" | "communication" | "researchInterview"
-  >,
+  task: Pick<TaskRecord, "kind" | "stage" | "reportPath" | "communication" | "researchInterview">,
   options: Readonly<{ readonly allowApprovedHandoff?: boolean }> = {},
 ): ScoutCleanupEligibility {
   if (task.kind !== "scout") {
@@ -199,7 +196,6 @@ export function decideScoutWorktreeRelease(
   }
   return { kind: "release", reason: "the scout worktree is clean and still on its source commit" };
 }
-
 
 /**
  * Sorts a cleanup failure into one that reconciliation may retry and one that must not be retried.
@@ -440,7 +436,6 @@ function hasBusyPresentation(state: RuntimeState, taskId: string): boolean {
         unreleasedReservation(presentation.reservation)),
   );
 }
-
 
 /**
  * Closes a finished scout's pane once the implementation that follows it starts, so that

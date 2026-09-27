@@ -1317,7 +1317,11 @@ function completeScoutReport(
   return commitWithNotification(
     task,
     context,
-    { stage: "completed", reportPath: event.reportPath, researchInterview: createResearchInterview() },
+    {
+      stage: "completed",
+      reportPath: event.reportPath,
+      researchInterview: createResearchInterview(),
+    },
     `Scout report completed for task ${task.id}`,
     "coordinator",
   );

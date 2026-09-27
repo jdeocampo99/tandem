@@ -708,7 +708,9 @@ test("a completed scout answers a focused question in the same read-only session
   expect(worker.session.guardToolCall(call("write", { path: "src/app.ts" }))).toMatchObject({
     block: true,
   });
-  expect(await worker.session.submitResearchFollowUp("Keep the source workspace unchanged.")).toEqual({
+  expect(
+    await worker.session.submitResearchFollowUp("Keep the source workspace unchanged."),
+  ).toEqual({
     text: "Research follow-up answer submitted.",
     isError: false,
   });
@@ -731,7 +733,9 @@ test("a completed scout answers a focused question in the same read-only session
 
   worker.time.advance(250);
   await settle();
-  expect(worker.recording.effects.filter((effect) => effect.type === "promptAsUser")).toHaveLength(1);
+  expect(worker.recording.effects.filter((effect) => effect.type === "promptAsUser")).toHaveLength(
+    1,
+  );
 });
 
 test("a completed idle worker acknowledges close; a busy pane records which flag held it back", async () => {

@@ -3,8 +3,8 @@ import {
   MAX_RESEARCH_INTERVIEW_BYTES,
   MAX_RESEARCH_INTERVIEW_DECISIONS,
   PENDING_DECISION_STATUSES,
-  RESEARCH_INTERVIEW_STATUSES,
   type PendingDecision,
+  RESEARCH_INTERVIEW_STATUSES,
   type ResearchInterview,
   type ResearchInterviewStatus,
   type TaskRecord,
@@ -30,9 +30,7 @@ export function researchInterviewFor(
   return undefined;
 }
 
-export function pendingResearchDecision(
-  interview: ResearchInterview,
-): PendingDecision | undefined {
+export function pendingResearchDecision(interview: ResearchInterview): PendingDecision | undefined {
   return interview.decisions.find((decision) => decision.status === "pending");
 }
 
@@ -48,10 +46,7 @@ export function openPendingDecision(
   if (interview.status !== "open") throw new Error("the research interview is already closed");
   const existing = interview.decisions.find((decision) => decision.id === input.id);
   if (existing !== undefined) {
-    if (
-      existing.question !== input.question ||
-      existing.recommendation !== input.recommendation
-    ) {
+    if (existing.question !== input.question || existing.recommendation !== input.recommendation) {
       throw new Error(`decision ${input.id} was already used for another question`);
     }
     if (existing.status === "withdrawn") {
@@ -74,7 +69,9 @@ export function openPendingDecision(
   );
   if (previouslyAnswered !== undefined) return interview;
   if (interview.decisions.length >= MAX_RESEARCH_INTERVIEW_DECISIONS) {
-    throw new Error(`research interview is limited to ${MAX_RESEARCH_INTERVIEW_DECISIONS} decisions`);
+    throw new Error(
+      `research interview is limited to ${MAX_RESEARCH_INTERVIEW_DECISIONS} decisions`,
+    );
   }
   return {
     ...interview,
@@ -150,23 +147,42 @@ export function checkResearchInterview(value: unknown): ResearchInterviewCheck {
   if (!RESEARCH_INTERVIEW_STATUSES.includes(value.status as ResearchInterviewStatus)) {
     return { valid: false, defect: "status is unsupported" };
   }
-  if (!Array.isArray(value.decisions) || value.decisions.length > MAX_RESEARCH_INTERVIEW_DECISIONS) {
-    return { valid: false, defect: `decisions must contain at most ${MAX_RESEARCH_INTERVIEW_DECISIONS} entries` };
+  if (
+    !Array.isArray(value.decisions) ||
+    value.decisions.length > MAX_RESEARCH_INTERVIEW_DECISIONS
+  ) {
+    return {
+      valid: false,
+      defect: `decisions must contain at most ${MAX_RESEARCH_INTERVIEW_DECISIONS} entries`,
+    };
   }
   const decisions: PendingDecision[] = [];
   const ids = new Set<string>();
   let totalBytes = 0;
   for (const [index, candidate] of value.decisions.entries()) {
-    if (!isRecord(candidate)) return { valid: false, defect: `decisions[${index}] must be an object` };
+    if (!isRecord(candidate))
+      return { valid: false, defect: `decisions[${index}] must be an object` };
     if (
-      !hasExactKeys(candidate, ["id", "question", "recommendation", "status", "answer", "createdAt", "resolvedAt"])
+      !hasExactKeys(candidate, [
+        "id",
+        "question",
+        "recommendation",
+        "status",
+        "answer",
+        "createdAt",
+        "resolvedAt",
+      ])
     ) {
       return { valid: false, defect: `decisions[${index}] has unsupported fields` };
     }
     if (!isText(candidate.id) || !isText(candidate.question) || !isTimestamp(candidate.createdAt)) {
-      return { valid: false, defect: `decisions[${index}] has invalid identity, question, or timestamp` };
+      return {
+        valid: false,
+        defect: `decisions[${index}] has invalid identity, question, or timestamp`,
+      };
     }
-    if (ids.has(candidate.id)) return { valid: false, defect: `decision id ${candidate.id} is duplicated` };
+    if (ids.has(candidate.id))
+      return { valid: false, defect: `decision id ${candidate.id} is duplicated` };
     ids.add(candidate.id);
     if (!PENDING_DECISION_STATUSES.includes(candidate.status as PendingDecision["status"])) {
       return { valid: false, defect: `decisions[${index}].status is unsupported` };
@@ -182,7 +198,10 @@ export function checkResearchInterview(value: unknown): ResearchInterviewCheck {
         return { valid: false, defect: `pending decision ${candidate.id} cannot have an answer` };
       }
     } else if (!isTimestamp(resolvedAt)) {
-      return { valid: false, defect: `settled decision ${candidate.id} needs a resolvedAt timestamp` };
+      return {
+        valid: false,
+        defect: `settled decision ${candidate.id} needs a resolvedAt timestamp`,
+      };
     }
     if (candidate.status === "answered" && !isText(answer)) {
       return { valid: false, defect: `answered decision ${candidate.id} needs an answer` };
@@ -197,7 +216,10 @@ export function checkResearchInterview(value: unknown): ResearchInterviewCheck {
       if (entry !== undefined) {
         const bytes = Buffer.byteLength(entry, "utf8");
         if (entry !== candidate.id && bytes > MAX_RESEARCH_DECISION_TEXT_BYTES) {
-          return { valid: false, defect: `decisions[${index}] text exceeds ${MAX_RESEARCH_DECISION_TEXT_BYTES} bytes` };
+          return {
+            valid: false,
+            defect: `decisions[${index}] text exceeds ${MAX_RESEARCH_DECISION_TEXT_BYTES} bytes`,
+          };
         }
         totalBytes += bytes;
       }

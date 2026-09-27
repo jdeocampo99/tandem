@@ -1,8 +1,8 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import type { HerdrAgentState } from "../adapters/herdr-status.ts";
 import {
-  MAX_RESEARCH_DECISION_TEXT_BYTES,
   type Finding,
+  MAX_RESEARCH_DECISION_TEXT_BYTES,
   type ReviewResult,
   type WorkerReceipt,
 } from "../contracts.ts";
@@ -30,10 +30,10 @@ import {
   COPY_ASSET_TOOL,
   type ReplyUsage,
   SUBMIT_REPORT_TOOL,
+  WORKER_RESEARCH_FOLLOW_UP_TOOL,
   type WorkerTerminalCommand,
   type WorkerTerminalState,
   type WorkerTokenTally,
-  WORKER_RESEARCH_FOLLOW_UP_TOOL,
 } from "../workers/terminal.ts";
 import { validationCommandRefusal } from "../workers/validation-commands.ts";
 import type {
@@ -265,11 +265,13 @@ export type WorkerDeps = Pick<SessionDeps, "clock" | "timers" | "status"> &
       input: Readonly<{ cwd: string; artifactDir: string; from: string; name: string }>,
     ): Promise<string>;
     /** Writes one answer for the active, completed-scout follow-up command. */
-    submitResearchFollowUp(input: Readonly<{
-      readonly decisionId: string;
-      readonly resultPath: string;
-      readonly answer: string;
-    }>): Promise<void>;
+    submitResearchFollowUp(
+      input: Readonly<{
+        readonly decisionId: string;
+        readonly resultPath: string;
+        readonly answer: string;
+      }>,
+    ): Promise<void>;
     trace(event: string, detail?: Readonly<Record<string, unknown>>): void;
   }>;
 

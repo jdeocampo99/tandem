@@ -6,11 +6,11 @@ import { createTandemService } from "../../src/service/controller.ts";
 import { finishPendingScoutCleanup } from "../../src/service/scout-cleanup.ts";
 import { persistWorkerResult } from "../../src/workers/jobs.ts";
 import {
-  SCENARIO_NOW,
+  appendScenarioRuntime,
   SCENARIO_HEAD,
+  SCENARIO_NOW,
   SCENARIO_TASK_ID,
   type ScenarioWorld,
-  appendScenarioRuntime,
   scenarioJob,
   scenarioOperation,
   scenarioReservation,
@@ -125,14 +125,14 @@ async function seedSettledScout(world: ScenarioWorld): Promise<string> {
   return lease.path;
 }
 
-async function seedApprovedMultipleScoutHandoff(
-  world: ScenarioWorld,
-): Promise<Readonly<{
-  readonly service: ReturnType<typeof serviceFor>;
-  readonly implementation: TaskRecord;
-  readonly primaryPath: string;
-  readonly additionalPath: string;
-}>> {
+async function seedApprovedMultipleScoutHandoff(world: ScenarioWorld): Promise<
+  Readonly<{
+    readonly service: ReturnType<typeof serviceFor>;
+    readonly implementation: TaskRecord;
+    readonly primaryPath: string;
+    readonly additionalPath: string;
+  }>
+> {
   const continuation: ResearchContinuation = {
     schemaVersion: 1,
     disposition: "implementation-interview",
@@ -272,7 +272,6 @@ test("a dirty research workspace keeps one pending decision and stays retained o
     await service.shutdown();
   });
 });
- 
 
 test("unmerged scout work keeps its worktree and report instead of being cleaned up", async () => {
   await withScenario({}, async (world) => {
@@ -382,9 +381,7 @@ test("an implementation built on research adopts the scout's worktree instead of
     await service.approve(implementation.id);
     const approvedScout = await service.get(SCENARIO_TASK_ID);
     expect(approvedScout.researchInterview?.status).toBe("approved");
-    expect(approvedScout.cleanup?.reason).toBe(
-      "research approved for implementation handoff",
-    );
+    expect(approvedScout.cleanup?.reason).toBe("research approved for implementation handoff");
     // An older persisted implementation carries explicit approval but no interview field.
     await world.store.update(approvedScout.id, approvedScout.revision, (latest) => {
       const { researchInterview: _researchInterview, ...legacy } = latest;
@@ -408,17 +405,14 @@ test("an implementation built on research adopts the scout's worktree instead of
     expect(snapshot.trace.some((event) => event.action === "treehouse return")).toBe(false);
     const adoptedScout = await service.get(SCENARIO_TASK_ID);
     expect(adoptedScout.researchInterview?.status).toBe("approved");
-    expect(adoptedScout.cleanup?.reason).toBe(
-      "research approved for implementation handoff",
-    );
+    expect(adoptedScout.cleanup?.reason).toBe("research approved for implementation handoff");
     await service.shutdown();
   });
 });
 
 test("multiple research handoffs adopt one workspace and release clean extras", async () => {
   await withScenario({}, async (world) => {
-    const { service, implementation, primaryPath } =
-      await seedApprovedMultipleScoutHandoff(world);
+    const { service, implementation, primaryPath } = await seedApprovedMultipleScoutHandoff(world);
 
     await service.tick();
 
@@ -433,9 +427,7 @@ test("multiple research handoffs adopt one workspace and release clean extras", 
     expect(world.paneIsPresent("pane-2")).toBe(false);
     expect(snapshot.resources.released).toContain("lease:lease-2");
     expect(snapshot.resources.released).not.toContain("lease:lease-1");
-    expect(
-      snapshot.trace.filter((event) => event.action === "treehouse return"),
-    ).toHaveLength(1);
+    expect(snapshot.trace.filter((event) => event.action === "treehouse return")).toHaveLength(1);
     expect((await service.get(SCENARIO_TASK_ID)).researchInterview?.status).toBe("approved");
     const additional = await service.get("scout-extra");
     expect(additional.researchInterview?.status).toBe("approved");

@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
-import { inspectEndpoint, closeEndpoint, showNotification } from "../adapters/herdr.ts";
+import { closeEndpoint, inspectEndpoint, showNotification } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpMcpServers, listOmpModels } from "../adapters/omp.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
@@ -41,7 +41,6 @@ import {
   saveMergingChoice,
 } from "../config/repositories.ts";
 import { findSkills } from "../config/skills.ts";
-import { MAX_RESEARCH_DECISION_TEXT_BYTES } from "../contracts.ts";
 import type {
   AnswerTaskInput,
   BlockCause,
@@ -59,13 +58,7 @@ import type {
   TaskRecord,
   TaskTarget,
 } from "../contracts.ts";
-import {
-  answerPendingDecision,
-  finishResearchInterview,
-  openPendingDecision,
-  pendingResearchDecision,
-  researchInterviewFor,
-} from "../tasks/research-interview.ts";
+import { MAX_RESEARCH_DECISION_TEXT_BYTES } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { openProject } from "../coordinator/open-project.ts";
 import { describeTaskPr, type PrSummary } from "../delivery/evidence.ts";
@@ -183,6 +176,7 @@ import {
   type IssueReview,
   SelfImprovement,
 } from "../self-improvement/service.ts";
+import { buildResearchContinuationBrief } from "../session/research-follow-up.ts";
 import { TaskControlWorkflow } from "../tasks/control.ts";
 import { KEEP_FIXING_QUESTION_ID_PREFIX, keepFixingGrant } from "../tasks/findings.ts";
 import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
@@ -194,11 +188,13 @@ import {
   type ResearchContinuationClassifier,
   researchContinuationClassifier,
 } from "../tasks/research-continuation-classifier.ts";
-import { buildResearchContinuationBrief } from "../session/research-follow-up.ts";
 import {
-  createResearchFollowUpFiles,
-  readResearchFollowUpAnswer,
-} from "./research-session.ts";
+  answerPendingDecision,
+  finishResearchInterview,
+  openPendingDecision,
+  pendingResearchDecision,
+  researchInterviewFor,
+} from "../tasks/research-interview.ts";
 import {
   type ReviewAssistanceRuntime,
   reviewAssistanceConfig,
@@ -217,6 +213,12 @@ import { readRegisteredProjects } from "../terminal/projects.ts";
 import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { claimOf, ownsOperation } from "../workers/operation-claim.ts";
+import {
+  liveWorkerTerminal,
+  requestWorkerResearchFollowUp,
+  type WorkerTerminalJob,
+  waitForWorkerResearchFollowUp,
+} from "../workers/terminal.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { WorkerWorkflow } from "../workers/workflow.ts";
 import { DraftRefreshWorkflow } from "./draft-refresh.ts";
@@ -240,31 +242,27 @@ import {
   positiveInteger,
   readTextList,
   replaceRuntimeTask,
+  reportPathFor,
   singleLine,
   taskInputFor,
   taskNameFor,
   text,
   validateModelAssignments,
   workerRoleForTask,
-  reportPathFor,
 } from "./records.ts";
 import { RequestAccountingWorkflow } from "./request-accounting.ts";
 import { resolveResearchHandoffs } from "./research-handoffs.ts";
+import { createResearchFollowUpFiles, readResearchFollowUpAnswer } from "./research-session.ts";
 import {
+  decideScoutWorktreeRelease,
+  observeScoutCheckout,
   releaseTerminalTaskResources,
   runCleanupCommands,
   type TaskCleanupOutcome,
   type TerminalTaskCleanupOptions,
 } from "./scout-cleanup.ts";
-import { decideScoutWorktreeRelease, observeScoutCheckout } from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskCheckoutPath, taskSourcePath } from "./source.ts";
 import { pruneTranscripts, transcriptsToPrune } from "./transcript-pruning.ts";
-import {
-  liveWorkerTerminal,
-  requestWorkerResearchFollowUp,
-  waitForWorkerResearchFollowUp,
-  type WorkerTerminalJob,
-} from "../workers/terminal.ts";
 
 // ponytail: a fixed count of ready idle worktree copies per repository, removed first under disk
 // pressure. Size it from recent task starts if copies are too often missing or left unused.
@@ -434,7 +432,9 @@ export type TandemService = Readonly<{
   readonly tick: () => Promise<readonly TaskRecord[]>;
   readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly steer: (input: SteerTaskInput) => Promise<TaskCommunicationView>;
-  readonly researchFollowUp: (input: Readonly<{ readonly taskId: string; readonly question: string }>) => Promise<string>;
+  readonly researchFollowUp: (
+    input: Readonly<{ readonly taskId: string; readonly question: string }>,
+  ) => Promise<string>;
   readonly answer: (input: AnswerTaskInput) => Promise<TaskCommunicationView>;
   readonly messages: (taskId: string) => Promise<TaskCommunicationView>;
   readonly pause: (id: string, reason?: string) => Promise<TaskRecord>;
@@ -1457,22 +1457,34 @@ class TandemController {
     return task;
   }
 
-  async researchFollowUp(input: Readonly<{ readonly taskId: string; readonly question: string }>): Promise<string> {
+  async researchFollowUp(
+    input: Readonly<{ readonly taskId: string; readonly question: string }>,
+  ): Promise<string> {
     if (!isRecord(input)) throw new TypeError("research follow-up input must be an object");
     const taskId = assertTaskId(input.taskId);
     const question = text(input.question, "question");
     if (Buffer.byteLength(question, "utf8") > MAX_RESEARCH_DECISION_TEXT_BYTES) {
-      throw new Error(`research follow-up question exceeds ${MAX_RESEARCH_DECISION_TEXT_BYTES} bytes`);
+      throw new Error(
+        `research follow-up question exceeds ${MAX_RESEARCH_DECISION_TEXT_BYTES} bytes`,
+      );
     }
     const requested = await this.get(taskId);
-    if (requested.kind !== "scout" || requested.stage !== "completed" || requested.reportPath === undefined) {
+    if (
+      requested.kind !== "scout" ||
+      requested.stage !== "completed" ||
+      requested.reportPath === undefined
+    ) {
       throw new Error(`Task ${taskId} is not a completed research session`);
     }
     const createdAt = this.#deps.clock();
     const generatedId = singleLine(this.#deps.idFactory(), "decision id");
     const reserved = await this.#deps.store.exclusive(async (store) => {
       const current = await store.read(taskId);
-      if (current?.kind !== "scout" || current.stage !== "completed" || current.reportPath === undefined) {
+      if (
+        current?.kind !== "scout" ||
+        current.stage !== "completed" ||
+        current.reportPath === undefined
+      ) {
         throw new Error(`Task ${taskId} is no longer an available completed research session`);
       }
       const interview = researchInterviewFor(current);
@@ -1490,7 +1502,8 @@ class TandemController {
       const decision = nextInterview.decisions.find(
         (entry) => entry.question === question && entry.status !== "withdrawn",
       );
-      if (decision === undefined) throw new Error("research follow-up decision could not be recorded");
+      if (decision === undefined)
+        throw new Error("research follow-up decision could not be recorded");
       if (nextInterview === interview) return { task: current, decision };
       const updated = await store.update(current.id, current.revision, (latest) => ({
         ...latest,
@@ -1508,9 +1521,11 @@ class TandemController {
     }
 
     const state = await readRuntimeState(this.#deps.runtimePath);
-    if (state === undefined) throw new Error("research runtime state is unavailable; the session was retained");
+    if (state === undefined)
+      throw new Error("research runtime state is unavailable; the session was retained");
     const runtime = taskRuntime(state, taskId);
-    if (runtime === undefined) throw new Error("research runtime ownership is unavailable; the session was retained");
+    if (runtime === undefined)
+      throw new Error("research runtime ownership is unavailable; the session was retained");
     const handoffs = await resolveResearchHandoffs([taskId], {
       home: this.#deps.home,
       projectRepoPath: reserved.task.repoPath,
@@ -1518,7 +1533,8 @@ class TandemController {
       store: this.#deps.store,
     });
     const handoff = handoffs[0];
-    if (handoff === undefined) throw new Error("research report provenance could not be established");
+    if (handoff === undefined)
+      throw new Error("research report provenance could not be established");
     const durableJob = runtime.jobs.find(
       (job) =>
         job.kind === "worker" &&
@@ -1536,7 +1552,9 @@ class TandemController {
       lease.baseHead !== runtime.sourceCheckpoint.head ||
       resolve(durableJob.cwd) !== resolve(lease.path)
     ) {
-      throw new Error("research job and workspace lease ownership could not be proven; resources were retained");
+      throw new Error(
+        "research job and workspace lease ownership could not be proven; resources were retained",
+      );
     }
     const terminalJob: WorkerTerminalJob = {
       id: durableJob.id,
@@ -1568,12 +1586,16 @@ class TandemController {
       runtime.jobs.some(activeRuntimeJob) ||
       unreleasedReservation(runtime.reservation)
     ) {
-      throw new Error("research session still has an unresolved job or reservation; resources were retained");
+      throw new Error(
+        "research session still has an unresolved job or reservation; resources were retained",
+      );
     }
     const checkout = await observeScoutCheckout(this.#deps.run, lease.path);
     const ownership = decideScoutWorktreeRelease({ lease, checkout });
     if (ownership.kind !== "release") {
-      throw new Error(`research workspace is ${ownership.kind}: ${ownership.reason}; resources were retained`);
+      throw new Error(
+        `research workspace is ${ownership.kind}: ${ownership.reason}; resources were retained`,
+      );
     }
     const endpoint = runtime.endpoints.find(
       (entry) =>
@@ -1583,8 +1605,13 @@ class TandemController {
         entry.tabId === durableJob.endpoint.tabId &&
         entry.paneId === durableJob.endpoint.paneId,
     );
-    if (endpoint === undefined || workerJobForEndpoint(runtime.jobs, endpoint)?.id !== durableJob.id) {
-      throw new Error("research session pane ownership could not be proven; resources were retained");
+    if (
+      endpoint === undefined ||
+      workerJobForEndpoint(runtime.jobs, endpoint)?.id !== durableJob.id
+    ) {
+      throw new Error(
+        "research session pane ownership could not be proven; resources were retained",
+      );
     }
     const inspection = await inspectEndpoint(this.#deps.run, {
       endpoint,
@@ -1597,7 +1624,9 @@ class TandemController {
     const activeSameTurn =
       terminal?.phase === "busy" && terminal.commandId === reserved.decision.id;
     if (terminal?.completed !== true || (!idle && !activeSameTurn)) {
-      throw new Error("research session is not idle for this follow-up; its pane and workspace were retained");
+      throw new Error(
+        "research session is not idle for this follow-up; its pane and workspace were retained",
+      );
     }
     const dispatch = await this.#deps.store.exclusive(async (store) => {
       const current = await store.read(taskId);
@@ -1614,7 +1643,9 @@ class TandemController {
         interview?.status !== "open" ||
         decision?.status !== "pending"
       ) {
-        throw new Error("research follow-up decision is no longer pending; resources were retained");
+        throw new Error(
+          "research follow-up decision is no longer pending; resources were retained",
+        );
       }
       await requestWorkerResearchFollowUp(terminalJob, reserved.decision.id, {
         decisionId: reserved.decision.id,
@@ -1627,7 +1658,9 @@ class TandemController {
     await waitForWorkerResearchFollowUp(terminalJob, reserved.decision.id);
     const answer = await readResearchFollowUpAnswer(files.resultPath, reserved.decision.id);
     if (answer === undefined) {
-      throw new Error("research session settled without an answer; its pending decision and resources were retained");
+      throw new Error(
+        "research session settled without an answer; its pending decision and resources were retained",
+      );
     }
     await this.recordResearchFollowUpAnswer(taskId, reserved.decision.id, answer);
     return answer;
@@ -1642,7 +1675,8 @@ class TandemController {
       const task = await store.read(taskId);
       if (task?.kind !== "scout") throw new Error(`Research task ${taskId} is unavailable`);
       const interview = researchInterviewFor(task);
-      if (interview === undefined) throw new Error(`Research task ${taskId} has no interview state`);
+      if (interview === undefined)
+        throw new Error(`Research task ${taskId} has no interview state`);
       const resolvedAt = this.#deps.clock();
       const nextInterview = answerPendingDecision(interview, {
         id: decisionId,

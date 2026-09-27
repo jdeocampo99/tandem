@@ -317,8 +317,7 @@ function summarizeTaskList(action: TandemAction["action"], tasks: readonly TaskR
     const report =
       task.reportPath === undefined ? "" : `; report: ${compactText(task.reportPath, 120)}`;
     const interview = researchInterviewFor(task);
-    const research =
-      interview === undefined ? "" : `; research interview ${interview.status}`;
+    const research = interview === undefined ? "" : `; research interview ${interview.status}`;
     lines.push(
       `- ${task.id}: ${task.stage}; ${compactText(task.objective, ACTION_SUMMARY_MAX_TEXT)}; ${
         task.scopeApproved ? "scope approved" : "scope pending"

@@ -396,34 +396,16 @@ async function approvalPrompt(
             message: `${names.map((name) => `- ${name}`).join("\n")}\nThis discards their changes.`,
           };
     }
-    const lines: string[] = tasks.map((task, index) =>
-      researchers.length === tasks.length
-        ? `- ${names[index]}`
-        : `- ${names[index]}: ${task.kind === "scout" ? "stop research" : "clean up resources"}`,
-    );
-    if (tasks.length === 1 && researchers.length === 1) {
-      return {
-        title: `Stop research for ${names[0]}?`,
-        message:
-          "The report stays. Tandem attempts to stop research; only proven-safe resources are released.",
-      };
-    }
-    if (researchers.length === tasks.length) {
-      return {
-        title: `Stop research for ${tasks.length} tasks?`,
-        message: `${lines.join("\n")}\nThe reports stay. Dirty or uncertain workspaces stay in place.`,
-      };
-    }
-    if (researchers.length > 0) {
-      return {
-        title: `Stop research and clean up ${tasks.length} tasks?`,
-        message: `${lines.join("\n")}\nReports stay. Dirty or uncertain workspaces stay in place.`,
-      };
-    }
-    return {
-      title: `Clean up resources for ${tasks.length} tasks?`,
-      message: `${lines.join("\n")}\nOnly safely owned resources are released; uncertain work stays in place.`,
-    };
+    const [only] = names;
+    return names.length === 1 && only !== undefined
+      ? {
+          title: researchers.length === 1 ? `Stop research for ${only}?` : `Clean up ${only}?`,
+          message: "Reports stay. Only proven-safe resources are released.",
+        }
+      : {
+          title: `Clean up ${names.length} tasks?`,
+          message: `${names.map((name) => `- ${name}`).join("\n")}\nReports stay. Only proven-safe resources are released.`,
+        };
   }
   if (action.action === "pr-watch-merging") {
     const how =

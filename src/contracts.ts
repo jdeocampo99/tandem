@@ -547,7 +547,6 @@ export type ResearchInterview = Readonly<{
   readonly decisions: readonly PendingDecision[];
 }>;
 
-
 /**
  * How far automatic release of a terminal task's child pane and worktree got, and why it stopped
  * there. `released` and `retained` are settled outcomes, `pending` is retried by reconciliation,

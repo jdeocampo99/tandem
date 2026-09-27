@@ -13,12 +13,12 @@ import {
   type TaskCleanupOutcome,
 } from "../service/scout-cleanup.ts";
 import { taskSourcePath } from "../service/source.ts";
-import type { TaskStore } from "../tasks/store.ts";
 import {
   finishResearchInterview,
   pendingResearchDecision,
   researchInterviewFor,
 } from "../tasks/research-interview.ts";
+import type { TaskStore } from "../tasks/store.ts";
 import type { ReservationResult } from "./admission.ts";
 import { assertSourceUnchanged, isCleanAt } from "./checkout.ts";
 import type { OperationClaim } from "./operation-claim.ts";
@@ -56,7 +56,8 @@ export class WorktreeLeases {
   ): Promise<NonNullable<RuntimeTaskState["worktree"]> | undefined | "stopped"> {
     let adoption: NonNullable<RuntimeTaskState["worktree"]> | undefined;
     try {
-      adoption = runtime.worktree === undefined ? await this.adoptableScoutWorktree(task) : undefined;
+      adoption =
+        runtime.worktree === undefined ? await this.adoptableScoutWorktree(task) : undefined;
     } catch (error) {
       await this.#deps.records.releaseAndBlock(task.id, reservation.reservation.id, claim, {
         group: "lost-resource",
@@ -355,7 +356,9 @@ export class WorktreeLeases {
       runtime.jobs.some(activeRuntimeJob) ||
       unreleasedReservation(runtime.reservation)
     ) {
-      throw new Error(`research handoff ${primaryScout.id} has not proven a stopped, owned session`);
+      throw new Error(
+        `research handoff ${primaryScout.id} has not proven a stopped, owned session`,
+      );
     }
     const checkout = await observeScoutCheckout(this.#deps.run, lease.path);
     const decision = decideScoutWorktreeRelease({ lease, checkout });

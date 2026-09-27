@@ -153,51 +153,51 @@ never permission. It does not set `scopeApproved` or create tasks. It is refused
   session or workspace may be released; the durable interview below owns that lifecycle.
 - An older task-level `communication.question` still uses the regular `answer-question` action.
   New research clarifications use the focused research interview and do not open that question UI.
-- An implementation task citing scouts in `researchTaskIds` remains `awaiting-approval`. Explicit
-  approval atomically approves the implementation scope and all cited research interviews. The
-  first cited scout is the designated workspace; its exact clean checkout may be adopted only after
-  its pane, runtime jobs, endpoint launch, and lease owner are re-proven.
-- Every additional cited scout session must also be proven stopped before implementation starts.
-  Tandem releases its clean workspace, but retains a dirty or unmerged one with the recorded reason.
-  If any session closure or ownership cannot be proven, implementation blocks without a fresh workspace.
+- An implementation task citing scouts in `researchTaskIds` stays `awaiting-approval` until explicit
+  approval; see the interview below for how the handoff adopts a workspace.
 
 ## Completed research interview
 
 A completed report is durable evidence, not proof that its OMP session or checkout can be released.
-A completed scout has a persisted `researchInterview` state: `open`, `approved`, or `stopped`,
-plus bounded decisions that are `pending`, `answered`, or `withdrawn`. A legacy completed scout
-without this field loads as `open`; absence never means approved or stopped.
+A completed scout carries `researchInterview`: `open`, `approved`, or `stopped`, with bounded
+decisions that are `pending`, `answered`, or `withdrawn`. A completed scout without the field loads
+as `open`; a cancelled one as `stopped`.
 
-- Completion retains the scout job, terminal, and lease while the interview is open. `research-follow-up`
-  asks a focused question in that same idle OMP session. The follow-up receives the report evidence
-  and may only submit its answer; it cannot write repository files, create a report, or start a new
-  job or generation. The answer is recorded against a stable decision ID.
-- Repeating the same pending or answered question reuses its decision. If dispatch or result recovery
-  fails, the pending decision and workspace remain durable; a successful result can be recovered
-  from its decision-bound sidecar after a process restart. A different question creates a separate
-  bounded decision. Stopping withdraws any unanswered decision.
-- An open completed interview's OMP conversation is protected from the normal 30-day transcript
-  pruning. Explicit approval or stop closes that retention; the report and answered decisions remain.
-- Creating an implementation that cites the report does not approve it. Explicit `approve` requires
-  no unanswered research decision and atomically approves the implementation scope and interview.
-  The implementation may adopt only the exact cited clean worktree after the scout pane, runtime
-  jobs, endpoint launch, lease owner, and checkout are all re-proven. If closure or ownership is
-  uncertain, implementation blocks and never falls back to a fresh workspace.
-- `cleanup` is the explicit stop action for an open interview and requires the user's confirmation.
-  The confirmation says it stops research, not that it discards the worktree. Scout cleanup rejects
-  `--discard`; run it without that flag to stop research. A proven clean scout pane and lease may
-  then be released; dirty, moved, unmerged, foreign, or uncertain resources stay retained or
-  quarantined with the recorded reason. Repeating cleanup rechecks retained resources after the
-  condition is resolved; quarantined ownership is never retried. The report and answered decisions
-  remain available. There is no question-panel lifecycle for this interview.
-- Summaries and the durable digest show interview status, pending question, latest answer, and any
-  retained cleanup reason, so stopping with dirty work does not make it disappear from coordinator
-  context.
+- While the interview is open, completion keeps the scout's pane, job, and lease, and transcript
+  pruning skips it. `research-follow-up` asks one focused question in the same idle OMP session.
+  That turn is read-only and can only call `submit_research_follow_up`; it starts no job or
+  generation. The same question reuses its decision; a failed dispatch leaves the decision pending,
+  and an answer written before a restart is recovered from its decision-bound result file.
+- `approve` on an implementation refuses while a cited scout has an unanswered decision, then
+  approves the scope and every open cited interview together. Scouts already stopped or cancelled
+  are skipped, so the implementation leases a fresh workspace as before.
+- At launch, the first cited scout still in an approved interview is the designated workspace: its
+  pane is closed and its exact clean checkout adopted after the lease owner, jobs, and endpoint
+  launch are re-proven. Every other cited scout is closed; a clean workspace is released and a
+  dirty one retained with its reason. If any closure or ownership is uncertain, implementation
+  blocks rather than leasing a fresh workspace.
+- `cleanup` stops an open interview, withdraws any pending decision, and always asks the user
+  first. It refuses `discard` for scouts. Only a proven clean pane and lease are released; anything
+  dirty or uncertain is retained or quarantined with the reason, and a retained one is rechecked by
+  the next cleanup.
+- Summaries and the durable digest show interview status, the pending question, the latest answer,
+  and any retained cleanup reason, so they survive compaction.
 
-The state and sidecar boundaries are implemented in `src/tasks/research-interview.ts` and
-`src/service/research-session.ts`; same-session dispatch is in `src/session/worker.ts` and
-`src/workers/terminal-extension.ts`; approval, cleanup, and worktree adoption are in
-`src/service/controller.ts`, `src/service/scout-cleanup.ts`, and `src/workers/worktree-lease.ts`.
+### Pending-decision API
+
+`src/tasks/research-interview.ts` holds the pure state transitions over a `ResearchInterview`
+(`src/contracts.ts`); callers persist the result under the task store lock.
+
+- `researchInterviewFor(task)`: the interview, defaulting legacy completed and cancelled scouts.
+- `openPendingDecision(interview, { id, question, recommendation?, createdAt })`: adds one pending
+  decision. Idempotent for the same id or question; refuses a second pending decision or a closed
+  interview.
+- `answerPendingDecision(interview, { id, answer, resolvedAt })`: records the single answer;
+  repeating the same answer is a no-op, a different one is refused.
+- `pendingResearchDecision(interview)`: the one unanswered decision, if any.
+- `finishResearchInterview(interview, "approved" | "stopped", at)`: closes the interview. Approval
+  requires no pending decision; stopping withdraws it.
+- `checkResearchInterview(value)`: validates a stored interview against the size and shape limits.
 
 ## Classifying the disposition
 

@@ -1252,7 +1252,9 @@ export async function seedScenarioTask(
     ...(input.reportPath === undefined ? {} : { reportPath: input.reportPath }),
     ...(input.worktree === undefined ? {} : { worktree: input.worktree }),
     ...(input.endpoints === undefined ? {} : { endpoints: input.endpoints }),
-    ...(input.researchInterview === undefined ? {} : { researchInterview: input.researchInterview }),
+    ...(input.researchInterview === undefined
+      ? {}
+      : { researchInterview: input.researchInterview }),
     ...(input.pullRequest === undefined ? {} : { pullRequest: input.pullRequest }),
   }));
 }

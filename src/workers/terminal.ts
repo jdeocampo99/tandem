@@ -403,7 +403,9 @@ export async function requestWorkerResearchFollowUp(
     !withinDirectory(dirname(job.jobPath), request.briefPath) ||
     !withinDirectory(dirname(job.jobPath), request.resultPath)
   ) {
-    throw new TypeError("research follow-up files must match the decision and stay in its job directory");
+    throw new TypeError(
+      "research follow-up files must match the decision and stay in its job directory",
+    );
   }
   const current = await readWorkerTerminal(job);
   if (current?.commandId === id || current?.settledCommandId === id) return;
@@ -432,7 +434,9 @@ export async function waitForWorkerResearchFollowUp(
       throw new Error("research session stopped before submitting its follow-up answer");
     }
     if (Date.now() >= deadline) {
-      throw new Error("research session has not settled the follow-up answer; its resources were retained");
+      throw new Error(
+        "research session has not settled the follow-up answer; its resources were retained",
+      );
     }
     await Bun.sleep(CONTROL_POLL_MS);
   }

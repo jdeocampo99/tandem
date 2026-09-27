@@ -1,9 +1,9 @@
 import { z } from "zod/v4";
 import {
-  MAX_RESEARCH_DECISION_TEXT_BYTES,
   type AgentRole,
   FINDING_CATCH_STAGES,
   FINDING_CATEGORIES,
+  MAX_RESEARCH_DECISION_TEXT_BYTES,
   MODEL_ROLE_ORDER,
 } from "../contracts.ts";
 import { PINNABLE_PLAYBOOK_IDS } from "../playbooks/catalog.ts";
@@ -15,7 +15,9 @@ export const submitResearchFollowUpSchema = z.strictObject({
     .string()
     .min(1)
     .max(MAX_RESEARCH_DECISION_TEXT_BYTES)
-    .describe("The answer to the coordinator's focused research question, based on the report and read-only inspection."),
+    .describe(
+      "The answer to the coordinator's focused research question, based on the report and read-only inspection.",
+    ),
 });
 const pullRequestSummarySchema = z.strictObject({
   tldr: z.array(z.string()),

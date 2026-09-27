@@ -24,9 +24,9 @@ import {
   buildDurableDigest,
   summarizeTandemActionValue,
 } from "../../src/session/summary.ts";
+import { tandemRequestSchema } from "../../src/session/tools.ts";
 import type { StoredTimelineEvent } from "../../src/tasks/timeline.ts";
 import type { BoundedTaskTrace, TaskTrace } from "../../src/tasks/trace.ts";
-import { tandemRequestSchema } from "../../src/session/tools.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
 import { models, policyConfig, task } from "./fixtures.ts";
@@ -129,9 +129,7 @@ test("cancel passes its parsed reason to the service", async () => {
     },
   } as unknown as TandemService;
 
-  const action = parseTandemCommand(
-    'cancel task-1 "the user asked to stop"',
-  );
+  const action = parseTandemCommand('cancel task-1 "the user asked to stop"');
   await executeTandemAction(action, service, { confirm: async () => true });
 
   expect(calls).toEqual([["task-1", "the user asked to stop", { discard: false }]]);
@@ -1218,13 +1216,11 @@ test("extension cleanup asks before stopping research and avoids discard wording
   expect(prompts).toEqual([
     {
       title: 'Stop research for "Investigate the settings behavior"?',
-      message:
-        "The report stays. Tandem attempts to stop research; only proven-safe resources are released.",
+      message: "Reports stay. Only proven-safe resources are released.",
     },
     {
       title: 'Stop research for "Investigate the settings behavior"?',
-      message:
-        "The report stays. Tandem attempts to stop research; only proven-safe resources are released.",
+      message: "Reports stay. Only proven-safe resources are released.",
     },
   ]);
 });
@@ -1242,16 +1238,12 @@ test("discard cleanup refuses research before presenting a destructive prompt", 
   } as unknown as TandemService;
 
   await expect(
-    executeTandemAction(
-      { action: "cleanup", taskIds: [cleanupTask.id], discard: true },
-      service,
-      {
-        confirm: async () => {
-          confirmations += 1;
-          return true;
-        },
+    executeTandemAction({ action: "cleanup", taskIds: [cleanupTask.id], discard: true }, service, {
+      confirm: async () => {
+        confirmations += 1;
+        return true;
       },
-    ),
+    }),
   ).rejects.toThrow("scout research cleanup never discards an unproven worktree");
 
   expect(confirmations).toBe(0);

@@ -245,17 +245,6 @@ function worldRunner(world: World, lease: WorktreeLease) {
   };
 }
 
-/** Plays the worker extension's side of a close request: it answers with the closing phase. */
-function answerCloseRequests(job: DurableJob): () => void {
-  const timer = setInterval(async () => {
-    const command = await readFile(`${job.jobPath}.terminal.json.command`, "utf8").catch(() => "");
-    if (command === "") return;
-    const commandId = (JSON.parse(command) as { id: string }).id;
-    await writeScoutTerminal(job, { phase: "closing", completed: true, commandId });
-  }, 10);
-  return () => clearInterval(timer);
-}
-
 async function writeScoutTerminal(
   job: DurableJob,
   state: Pick<WorkerTerminalState, "phase" | "completed" | "commandId">,

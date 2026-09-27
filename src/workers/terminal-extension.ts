@@ -10,6 +10,7 @@ import { runCommand } from "../adapters/commands.ts";
 import { createHerdrStatusReporter } from "../adapters/herdr-status.ts";
 import { ompToolParameters } from "../adapters/omp-tool-schema.ts";
 import { todoItems } from "../playbooks/progress.ts";
+import { writeJsonAtomically } from "../runtime/persistence.ts";
 import type {
   SessionDeps,
   SessionEffect,
@@ -27,7 +28,6 @@ import { type WorkerHost, WorkerSession } from "../session/worker.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import type { TranscriptRef } from "../tasks/timeline.ts";
 import { parseWorkerJob, persistWorkerResult, type WorkerJob } from "./jobs.ts";
-import { writeJsonAtomically } from "../runtime/persistence.ts";
 import {
   assertSelectedModel,
   expectedModelParts,

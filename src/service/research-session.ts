@@ -3,6 +3,7 @@ import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { MAX_RESEARCH_DECISION_TEXT_BYTES } from "../contracts.ts";
 import { taskJobsDirectory } from "../runtime/persistence.ts";
+
 const MAX_RESEARCH_RESULT_FILE_BYTES = MAX_RESEARCH_DECISION_TEXT_BYTES * 6 + 512;
 
 export type ResearchFollowUpFiles = Readonly<{
@@ -19,7 +20,12 @@ async function writeOnce(path: string, content: string): Promise<void> {
   try {
     await writeFile(path, content, { flag: "wx", mode: 0o600 });
   } catch (error) {
-    if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "EEXIST") {
+    if (
+      typeof error !== "object" ||
+      error === null ||
+      !("code" in error) ||
+      error.code !== "EEXIST"
+    ) {
       throw error;
     }
     const metadata = await lstat(path);
@@ -34,13 +40,15 @@ async function writeOnce(path: string, content: string): Promise<void> {
   }
 }
 
-export async function createResearchFollowUpFiles(input: Readonly<{
-  readonly home: string;
-  readonly taskId: string;
-  readonly jobPath: string;
-  readonly decisionId: string;
-  readonly brief: string;
-}>): Promise<ResearchFollowUpFiles> {
+export async function createResearchFollowUpFiles(
+  input: Readonly<{
+    readonly home: string;
+    readonly taskId: string;
+    readonly jobPath: string;
+    readonly decisionId: string;
+    readonly brief: string;
+  }>,
+): Promise<ResearchFollowUpFiles> {
   if (!isAbsolute(input.jobPath) || input.jobPath.includes("\0")) {
     throw new TypeError("research job path must be absolute without NUL characters");
   }

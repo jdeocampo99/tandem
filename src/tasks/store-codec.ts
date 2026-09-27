@@ -59,8 +59,8 @@ import {
   type ValidationCommand,
   type ValidationContractName,
   type ValidationEvidence,
-  type WorktreeLease,
   WORKSTREAM_NAME_PATTERN,
+  type WorktreeLease,
 } from "../contracts.ts";
 import { PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import { type PrReviewState, parsePrReviewState } from "../pr-review/state.ts";

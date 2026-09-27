@@ -44,21 +44,27 @@ test("a focused research decision records one durable, idempotent answer", () =>
     answer: "The constraint is the source commit.",
     resolvedAt: RESOLVED_AT,
   });
-  expect(answerPendingDecision(answered, {
-    id: "decision-1",
-    answer: "The constraint is the source commit.",
-    resolvedAt: "2030-01-01T00:02:00.000Z",
-  })).toBe(answered);
-  expect(() => answerPendingDecision(answered, {
-    id: "decision-1",
-    answer: "A different answer.",
-    resolvedAt: RESOLVED_AT,
-  })).toThrow("different answer");
-  expect(openPendingDecision(answered, {
-    id: "decision-2",
-    question: "Which constraint changes the recommendation?",
-    createdAt: RESOLVED_AT,
-  })).toBe(answered);
+  expect(
+    answerPendingDecision(answered, {
+      id: "decision-1",
+      answer: "The constraint is the source commit.",
+      resolvedAt: "2030-01-01T00:02:00.000Z",
+    }),
+  ).toBe(answered);
+  expect(() =>
+    answerPendingDecision(answered, {
+      id: "decision-1",
+      answer: "A different answer.",
+      resolvedAt: RESOLVED_AT,
+    }),
+  ).toThrow("different answer");
+  expect(
+    openPendingDecision(answered, {
+      id: "decision-2",
+      question: "Which constraint changes the recommendation?",
+      createdAt: RESOLVED_AT,
+    }),
+  ).toBe(answered);
   expect(checkResearchInterview(answered).valid).toBe(true);
 });
 
@@ -73,11 +79,13 @@ test("stopping withdraws unanswered decisions and approval requires answers", ()
   expect(stopped.decisions[0]).toMatchObject({ status: "withdrawn", resolvedAt: RESOLVED_AT });
   expect(pendingResearchDecision(stopped)).toBeUndefined();
   expect(finishResearchInterview(stopped, "stopped", "2030-01-01T00:02:00.000Z")).toBe(stopped);
-  expect(() => answerPendingDecision(stopped, {
-    id: "decision-1",
-    answer: "Too late.",
-    resolvedAt: RESOLVED_AT,
-  })).toThrow("already closed");
+  expect(() =>
+    answerPendingDecision(stopped, {
+      id: "decision-1",
+      answer: "Too late.",
+      resolvedAt: RESOLVED_AT,
+    }),
+  ).toThrow("already closed");
   expect(checkResearchInterview({ ...stopped, extra: true })).toMatchObject({ valid: false });
 });
 
