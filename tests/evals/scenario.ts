@@ -1195,6 +1195,7 @@ export type SeedTaskInput = Readonly<{
   readonly worktree?: WorktreeLease;
   readonly endpoints?: readonly Endpoint[];
   readonly researchContinuation?: ResearchContinuation;
+  readonly researchInterview?: NonNullable<TaskRecord["researchInterview"]>;
   readonly manualVerification?: readonly string[];
   readonly pullRequest?: PullRequestMetadata;
   readonly workstream?: string;
@@ -1248,6 +1249,7 @@ export async function seedScenarioTask(
     ...(input.reportPath === undefined ? {} : { reportPath: input.reportPath }),
     ...(input.worktree === undefined ? {} : { worktree: input.worktree }),
     ...(input.endpoints === undefined ? {} : { endpoints: input.endpoints }),
+    ...(input.researchInterview === undefined ? {} : { researchInterview: input.researchInterview }),
     ...(input.pullRequest === undefined ? {} : { pullRequest: input.pullRequest }),
   }));
 }

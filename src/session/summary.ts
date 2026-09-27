@@ -286,7 +286,7 @@ function summarizeTask(task: TaskRecord): string {
       `Research interview: ${interview.status}${pendingDecision === undefined ? "" : `; pending ${compactText(pendingDecision.question, 140)}`}`,
     );
     const answer = interview.decisions.findLast((decision) => decision.status === "answered");
-    if (answer?.status === "answered") {
+    if (answer?.status === "answered" && answer.answer !== undefined) {
       lines.push(
         `Latest research answer: ${compactText(answer.question, 120)} — ${compactText(answer.answer, ACTION_SUMMARY_MAX_TEXT)}`,
       );
@@ -1226,7 +1226,7 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
         );
       }
       const answer = interview?.decisions.findLast((decision) => decision.status === "answered");
-      if (answer?.status === "answered") {
+      if (answer?.status === "answered" && answer.answer !== undefined) {
         lines.push(
           `  latest research answer: ${compactText(answer.question, 120)} — ${compactText(answer.answer, MAX_TASK_MESSAGE_CHARS)}`,
         );

@@ -653,7 +653,7 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.resume(action.taskId), action.action),
   cancel: async (action, service) =>
     actionResult(
-      await service.cancel(action.taskId, action.reason, { discard: action.discard === true }),
+      await service.cancel(action.taskId, undefined, { discard: action.discard === true }),
       action.action,
       { approved: true },
     ),

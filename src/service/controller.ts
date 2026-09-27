@@ -1587,7 +1587,6 @@ class TandemController {
     const inspection = await inspectEndpoint(this.#deps.run, {
       endpoint,
       cwd: durableJob.cwd,
-      job: terminalJob,
     });
     const terminal = await liveWorkerTerminal(inspection, terminalJob);
     const idle =

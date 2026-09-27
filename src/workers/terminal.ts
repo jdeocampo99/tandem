@@ -327,8 +327,11 @@ function parseCommand(value: unknown, job: WorkerIdentity): WorkerTerminalComman
     throw new TypeError("interactive worker terminal command is malformed");
   }
   assertIdentity(value, job);
-  if (value.action === "research-follow-up" && value.researchFollowUp?.decisionId !== value.id) {
-    throw new TypeError("research follow-up command identity is inconsistent");
+  if (value.action === "research-follow-up") {
+    const request = value.researchFollowUp;
+    if (!record(request) || request.decisionId !== value.id) {
+      throw new TypeError("research follow-up command identity is inconsistent");
+    }
   }
   return value as WorkerTerminalCommand;
 }

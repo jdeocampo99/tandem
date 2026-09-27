@@ -289,9 +289,9 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       readCommand: () => readWorkerTerminalCommand(jobPath, job),
       writeState: (state) => writeWorkerTerminal(jobPath, state),
       writeTokenTally: (tally) => writeWorkerTokenTally(jobPath, tally),
-      submitResearchFollowUp: ({ decisionId, resultPath, answer }) =>
-        writeJsonAtomically(resultPath, { schemaVersion: 1, decisionId, answer }),
     },
+    submitResearchFollowUp: ({ decisionId, resultPath, answer }) =>
+      writeJsonAtomically(resultPath, { schemaVersion: 1, decisionId, answer }),
     persistResult: (result) => {
       const transcript = pane.transcript();
       return persistWorkerResult(

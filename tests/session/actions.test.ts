@@ -939,7 +939,7 @@ test("scout summaries and the durable digest carry the post-research disposition
   const quietScout = {
     ...legacyScout,
     notifications: [],
-    researchInterview: { schemaVersion: 1, status: "stopped", decisions: [] },
+    researchInterview: { schemaVersion: 1 as const, status: "stopped" as const, decisions: [] },
   };
   expect(buildDurableDigest([quietScout])).not.toContain("after research");
   expect(buildDurableDigest([task({ id: "implementation-task" })])).not.toContain("continuation:");

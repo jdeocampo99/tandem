@@ -7,6 +7,7 @@ import { finishPendingScoutCleanup } from "../../src/service/scout-cleanup.ts";
 import { persistWorkerResult } from "../../src/workers/jobs.ts";
 import {
   SCENARIO_NOW,
+  SCENARIO_HEAD,
   SCENARIO_TASK_ID,
   type ScenarioWorld,
   scenarioJob,
