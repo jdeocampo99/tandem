@@ -25,6 +25,30 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   `skip-review` event (see [delivery.md](delivery.md#publish-now-user-skips-review)). The user's decision wins over every
   safety floor; the PR body names any floors the diff tripped. Publishing still needs approval.
 
+## Planning interviews
+
+- An interview lives on the request record beside its brief, not in chat history. It stores the
+  ordered questions, options, recommendation, explicit answers, and the research task ids that led
+  to the interview. Legacy briefs have no interview field.
+- `brief-draft` starts an interview with `startPlanningInterview: true`. `brief-question` appends one
+  question only when no prior question is pending; its returned `askInput` is the exact single
+  question to pass to OMP's `ask` tool. The tool hook checks that payload against the current saved
+  question.
+- Only an explicit selection or custom answer is recorded. OMP's timeout marker, cancellation,
+  failure, malformed output, or recommended default is not an answer. Replaying the same answer is
+  idempotent; an answer for a superseded question or a conflicting replay is refused.
+- The active interview and exact pending question are included in coordinator restart and
+  compaction context. After an explicit answer, continue from the saved ledger; do not re-ask a
+  settled question. If no question is pending, save the next decision before asking it.
+- Dispatch is refused for work under an active interview; the interview is request-local and does
+  not stop the scheduler for other approved requests. If the brief changes, existing work governed
+  by its prior agreement pauses for reapproval. Completion requires every question answered and an
+  empty `openQuestions` list. It copies the ordered question-and-answer pairs into `planningAnswers`,
+  an agreement field, so any prior approval becomes non-current.
+- Completing the interview is not approval. The final brief still needs the existing explicit
+  `brief-approve` confirmation, and task scope approval remains separate. An interview answer,
+  recommendation, or timeout can never authorize implementation.
+
 ## Approval
 
 - An explicit, human-confirmed main-conversation decision recording request id, revision, content

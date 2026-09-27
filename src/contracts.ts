@@ -564,6 +564,8 @@ export type RequestBriefContent = Readonly<{
   readonly acceptanceCriteria: readonly string[];
   readonly manualVerification: readonly string[];
   readonly recommendedApproach: string;
+  /** Explicit interview answers copied into the final approval-bound agreement. */
+  readonly planningAnswers?: readonly string[];
   readonly keyDecisions: readonly string[];
   readonly openQuestions: readonly string[];
   readonly researchLinks: readonly string[];
@@ -596,6 +598,35 @@ export type RequestBriefApproval = Readonly<{
   readonly approvedAt: IsoTimestamp;
 }>;
 
+export type RequestPlanningOption = Readonly<{
+  readonly label: string;
+  readonly description?: string | undefined;
+}>;
+
+export type RequestPlanningAnswer = Readonly<{
+  readonly kind: "option" | "custom";
+  readonly value: string;
+  readonly note?: string;
+}>;
+
+/** One decision presented through OMP ask and bound to its explicit response. */
+export type RequestPlanningQuestion = Readonly<{
+  readonly id: string;
+  readonly context: string;
+  readonly question: string;
+  readonly options: readonly RequestPlanningOption[];
+  readonly recommendedOption: number;
+  readonly answer?: RequestPlanningAnswer;
+}>;
+
+/** Request-scoped interview state; only the final active question may be unanswered. */
+export type RequestPlanningInterview = Readonly<{
+  readonly schemaVersion: 1;
+  readonly status: "active" | "complete";
+  readonly researchTaskIds: readonly string[];
+  readonly questions: readonly RequestPlanningQuestion[];
+}>;
+
 /**
  * Where the coordinator-owned temporary review pane stands. `retained` and `quarantined` mean
  * Tandem deliberately left a pane alone: `retained` is a transient refusal such as a busy pane,
@@ -626,6 +657,8 @@ export type RequestBriefRecord = {
   readonly updatedAt: IsoTimestamp;
   readonly draft: RequestBriefRevision;
   readonly history: readonly RequestBriefRevision[];
+  /** Durable ordered planning decisions; absent on requests created before this feature. */
+  readonly planningInterview?: RequestPlanningInterview;
   readonly approval?: RequestBriefApproval;
   readonly reviewPane?: RequestReviewPane;
   /** Set when the user dropped the request before its brief was approved; final. */

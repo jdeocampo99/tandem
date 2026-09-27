@@ -35,6 +35,7 @@ function coordinatorDeps(
     createService: () =>
       ({
         prWatchNotices: async () => [],
+        requestBriefs: async () => [],
         board: async () => ({ now: "", projects: [], needsYou: [], running: [], pullRequests: [] }),
         investigationQuestions: async () => [],
         ...service,

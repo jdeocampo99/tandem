@@ -2,20 +2,29 @@ import { realpath } from "node:fs/promises";
 import type {
   Clock,
   CommandRunner,
+  IdFactory,
   RequestBriefContent,
   RequestBriefRecord,
+  RequestPlanningAnswer,
+  RequestPlanningInterview,
   TaskRecord,
 } from "../contracts.ts";
+import { TaskStoreError } from "../tasks/store-errors.ts";
 import {
   abandonRequestBriefRecord,
+  addRequestPlanningQuestion,
   approveRequestBriefRecord,
   assertNotAbandoned,
   assertSafeRequestId,
   checkedRequestBriefContent,
+  checkedRequestPlanningInterview,
+  completeRequestPlanningInterview,
   decideRequestDispatch,
   openRequestForNewWork,
   type RequestApprovalState,
   RequestBriefError,
+  type RequestPlanningQuestionInput,
+  recordRequestPlanningAnswer,
   requestApprovalState,
   requestBriefDigests,
   reviseRequestBriefRecord,
@@ -43,6 +52,7 @@ export type RequestBriefWorkflowDependencies = Readonly<{
   readonly listTasks: () => Promise<readonly TaskRecord[]>;
   /** The existing ownership-safe pause control; the workflow never stops work by itself. */
   readonly pauseTask: (taskId: string, reason: string) => Promise<void>;
+  readonly idFactory: IdFactory;
 }>;
 
 /**
@@ -65,6 +75,10 @@ export type DraftRequestBriefInput = Readonly<{
   readonly content: RequestBriefContent;
   /** False for a tiny in-chat fix, which keeps the same approval contract without a pane. */
   readonly reviewPane: boolean;
+  /** Starts a durable implementation-planning interview on the created or revised request. */
+  readonly startPlanningInterview?: boolean;
+  /** Research whose findings led to this interview; retained for request provenance. */
+  readonly researchTaskIds?: readonly string[];
 }>;
 
 /** Everything a caller needs to show the brief and act on it, read from durable state. */
@@ -98,6 +112,59 @@ export class RequestBriefWorkflow {
     const pausedTaskIds = await this.#pauseWorkAwaitingReapproval(created);
     const projected = input.reviewPane ? await this.#project(created) : created;
     return this.#view(projected, pausedTaskIds);
+  }
+
+  async addPlanningQuestion(
+    requestId: string,
+    input: RequestPlanningQuestionInput,
+  ): Promise<RequestBriefRecord> {
+    const current = await this.#require(requestId);
+    return this.#deps.store.update(current.id, current.revision, (record) =>
+      addRequestPlanningQuestion(
+        record,
+        input,
+        `plan-${this.#deps.idFactory()}`,
+        this.#deps.clock(),
+      ),
+    );
+  }
+
+  async recordPlanningAnswer(
+    requestId: string,
+    questionId: string,
+    answer: RequestPlanningAnswer,
+  ): Promise<Readonly<{ readonly record: RequestBriefRecord; readonly duplicate: boolean }>> {
+    const current = await this.#require(requestId);
+    const first = recordRequestPlanningAnswer(current, questionId, answer, this.#deps.clock());
+    if (first.duplicate) return { record: current, duplicate: true };
+    try {
+      const updated = await this.#deps.store.update(
+        current.id,
+        current.revision,
+        (record) =>
+          recordRequestPlanningAnswer(record, questionId, answer, this.#deps.clock()).record,
+      );
+      return { record: updated, duplicate: false };
+    } catch (error) {
+      if (error instanceof TaskStoreError && error.code === "stale-revision") {
+        const latest = await this.#require(requestId);
+        const replay = recordRequestPlanningAnswer(latest, questionId, answer, this.#deps.clock());
+        if (replay.duplicate) return { record: latest, duplicate: true };
+      }
+      throw error;
+    }
+  }
+
+  async completePlanningInterview(requestId: string): Promise<RequestBriefView> {
+    const current = await this.#require(requestId);
+    const completed =
+      current.planningInterview?.status === "complete"
+        ? current
+        : await this.#deps.store.update(current.id, current.revision, (record) =>
+            completeRequestPlanningInterview(record, this.#deps.clock()),
+          );
+    const pausedTaskIds = await this.#pauseWorkAwaitingReapproval(completed);
+    return this.#view(completed, pausedTaskIds);
   }
 
   /** Reopens or refreshes the projection for the latest durable draft, proving ownership first. */
@@ -196,15 +263,59 @@ export class RequestBriefWorkflow {
     input: DraftRequestBriefInput,
     content: RequestBriefContent,
   ): Promise<RequestBriefRecord> {
+    if (input.researchTaskIds !== undefined && input.startPlanningInterview !== true) {
+      throw new RequestBriefError(
+        "planning-interview-incomplete",
+        "researchTaskIds require startPlanningInterview",
+      );
+    }
+    const startInterview =
+      input.startPlanningInterview === true
+        ? initialPlanningInterview(input.researchTaskIds ?? [])
+        : undefined;
     if (input.requestId === undefined) {
-      return this.#deps.store.create({ repoPath: input.repoPath, content });
+      return this.#deps.store.create({
+        repoPath: input.repoPath,
+        content,
+        ...(startInterview === undefined ? {} : { planningInterview: startInterview }),
+      });
     }
     const current = await this.#require(input.requestId);
     assertNotAbandoned(current);
-    if (requestBriefDigests(content).contentDigest === current.draft.contentDigest) return current;
-    return this.#deps.store.update(current.id, current.revision, (record) =>
-      reviseRequestBriefRecord(record, content, this.#deps.clock()),
-    );
+    const finalContent =
+      current.planningInterview?.status === "complete" &&
+      current.draft.content.planningAnswers !== undefined
+        ? checkedRequestBriefContent({
+            ...content,
+            planningAnswers: current.draft.content.planningAnswers,
+          })
+        : content;
+    const contentChanged =
+      requestBriefDigests(finalContent).contentDigest !== current.draft.contentDigest;
+    const nextInterview =
+      startInterview === undefined
+        ? current.planningInterview
+        : current.planningInterview === undefined
+          ? startInterview
+          : sameResearchTasks(current.planningInterview, startInterview)
+            ? current.planningInterview
+            : (() => {
+                throw new RequestBriefError(
+                  "planning-interview-incomplete",
+                  `Request ${current.id} already has a planning interview`,
+                  current.id,
+                );
+              })();
+    if (!contentChanged && nextInterview === current.planningInterview) return current;
+    return this.#deps.store.update(current.id, current.revision, (record) => {
+      const revised = contentChanged
+        ? reviseRequestBriefRecord(record, finalContent, this.#deps.clock())
+        : { ...record, revision: record.revision + 1, updatedAt: this.#deps.clock() };
+      return {
+        ...revised,
+        ...(nextInterview === undefined ? {} : { planningInterview: nextInterview }),
+      };
+    });
   }
 
   async #pauseWorkAwaitingReapproval(record: RequestBriefRecord): Promise<readonly string[]> {
@@ -259,4 +370,24 @@ export class RequestBriefWorkflow {
       pausedTaskIds,
     };
   }
+}
+
+function initialPlanningInterview(researchTaskIds: readonly string[]): RequestPlanningInterview {
+  return checkedRequestPlanningInterview({
+    schemaVersion: 1,
+    status: "active",
+    researchTaskIds,
+    questions: [],
+  });
+}
+
+function sameResearchTasks(
+  current: RequestPlanningInterview,
+  requested: RequestPlanningInterview,
+): boolean {
+  return (
+    current.status === "active" &&
+    current.researchTaskIds.length === requested.researchTaskIds.length &&
+    current.researchTaskIds.every((id, index) => id === requested.researchTaskIds[index])
+  );
 }

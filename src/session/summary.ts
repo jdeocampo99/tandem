@@ -5,6 +5,7 @@ import {
   LEGACY_EVIDENCE_CONTRACT,
   MODEL_ROLE_LABELS,
   MODEL_ROLE_ORDER,
+  type RequestBriefRecord,
   type SkillOrigin,
   type TaskRecord,
 } from "../contracts.ts";
@@ -24,6 +25,7 @@ import {
   researchContinuationFor,
 } from "../tasks/research-continuation.ts";
 import type { TandemAction } from "./actions.ts";
+import { planningAskInput } from "./planning-interview.ts";
 import { describeResearchDisposition } from "./research-follow-up.ts";
 
 export const DIGEST_MAX_TASKS = 12;
@@ -977,6 +979,48 @@ function summarizeRequestBrief(value: unknown): string {
       `Paused until reapproved (${paused.length}): ${compactList(paused, ACTION_SUMMARY_MAX_ITEMS, 100)}`,
     );
   }
+  const interview = summaryRecord(record.planningInterview);
+  if (interview !== undefined) {
+    const questions = Array.isArray(interview.questions) ? interview.questions : [];
+    const status = recordText(interview, "status") ?? "unknown";
+    lines.push(`Planning interview: ${status}; ${questions.length} saved question(s).`);
+    const pending = summaryRecord(questions.at(-1));
+    if (status === "active" && pending !== undefined && pending.answer === undefined) {
+      const id = recordText(pending, "id");
+      const context = recordText(pending, "context");
+      const questionText = recordText(pending, "question");
+      const options = Array.isArray(pending.options) ? pending.options : [];
+      const recommended = recordNumber(pending, "recommendedOption");
+      if (id !== undefined && context !== undefined && questionText !== undefined) {
+        lines.push(
+          `Resume the current question exactly, without adding another: ${JSON.stringify({
+            questions: [
+              {
+                id,
+                question: `${context}\n\n${questionText}`,
+                options,
+                recommended,
+              },
+            ],
+          })}`,
+        );
+      }
+    } else if (status === "active") {
+      lines.push("No question is pending; save the next question before asking it.");
+    } else {
+      lines.push(
+        "The final scope still needs explicit user approval; a recommendation or timeout is not approval.",
+      );
+    }
+    for (const questionValue of questions) {
+      const question = summaryRecord(questionValue);
+      const answer = question === undefined ? undefined : summaryRecord(question.answer);
+      if (question === undefined || answer === undefined) continue;
+      lines.push(
+        `Saved answer to ${compactText(recordText(question, "question") ?? "planning question", 100)}: ${compactText(recordText(answer, "value") ?? "", 160)}${recordText(answer, "note") === undefined ? "" : `; note: ${compactText(recordText(answer, "note") ?? "", 80)}`}`,
+      );
+    }
+  }
   return boundedOutput(lines.join("\n"), ACTION_RESULT_MAX_CHARS);
 }
 
@@ -1061,12 +1105,14 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   ) {
     return isTaskRecord(value) ? summarizeTask(value) : boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
+  if (action === "brief-question") return boundedJson(value, ACTION_RESULT_MAX_CHARS);
   if (
     action === "brief-draft" ||
     action === "brief-review" ||
     action === "brief-show" ||
     action === "brief-abandon" ||
-    action === "brief-approve"
+    action === "brief-approve" ||
+    action === "brief-interview-complete"
   ) {
     return summarizeRequestBrief(value);
   }
@@ -1122,18 +1168,64 @@ function isQuietFinishedTask(task: TaskRecord): boolean {
   );
 }
 
+function appendPlanningInterviews(lines: string[], requests: readonly RequestBriefRecord[]): void {
+  const attention = requests.filter((record) => {
+    const interview = record.planningInterview;
+    if (interview === undefined || record.abandonedAt !== undefined) return false;
+    return (
+      interview.status === "active" ||
+      record.approval === undefined ||
+      record.approval.agreementDigest !== record.draft.agreementDigest
+    );
+  });
+  if (attention.length === 0) return;
+  lines.push(`Planning interview(s) needing attention: ${attention.length}.`);
+  for (const record of attention) {
+    const interview = record.planningInterview;
+    if (interview === undefined) continue;
+    lines.push(
+      `- ${record.id}: ${compactText(record.draft.content.goal, 100)}; ${interview.status}.`,
+    );
+    for (const [index, question] of interview.questions.entries()) {
+      if (question.answer !== undefined) {
+        lines.push(
+          `  Saved decision ${index + 1}: ${compactText(question.question, 120)} → ${compactText(question.answer.value, 160)}${question.answer.note === undefined ? "" : `; note: ${compactText(question.answer.note, 100)}`}`,
+        );
+      }
+    }
+    if (interview.status === "complete") {
+      lines.push(
+        "  Final scope is ready for review; request explicit confirmation, then use brief-approve. Never infer approval.",
+      );
+      continue;
+    }
+    const pending = interview.questions.at(-1);
+    if (pending?.answer === undefined && pending !== undefined) {
+      lines.push(
+        `  Resume this saved question without changing it: ${JSON.stringify(planningAskInput(pending))}`,
+      );
+    } else {
+      lines.push(
+        "  No question is pending. Save the next single planning question before asking, or complete only when the brief has no open questions.",
+      );
+    }
+  }
+}
+
 /**
  * The task state injected into every coordinator turn. Commit hashes are left out (the coordinator
  * never shows them), and finished tasks with nothing new collapse to one line of ids and objectives,
  * enough to cite earlier research; show and list carry the rest.
  */
-export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
+export function buildDurableDigest(
+  tasks: readonly TaskRecord[],
+  requests: readonly RequestBriefRecord[] = [],
+): string {
   const lines = ["Tandem work right now:"];
-  if (tasks.length === 0) {
-    lines.push("- No tasks.");
-    return boundedOutput(lines.join("\n"), DIGEST_MAX_CHARS);
-  }
-  lines.push(`- ${tasks.length} task(s).`);
+  if (tasks.length === 0) lines.push("- No tasks.");
+  else lines.push(`- ${tasks.length} task(s).`);
+  appendPlanningInterviews(lines, requests);
+  if (tasks.length === 0) return boundedOutput(lines.join("\n"), DIGEST_MAX_CHARS);
   const ordered = prioritizeTasks(tasks);
   const active = ordered.filter((task) => !isQuietFinishedTask(task));
   const quiet = ordered.filter(isQuietFinishedTask);

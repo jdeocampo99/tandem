@@ -5,7 +5,13 @@ import {
   renderCatchUpCard,
   renderMemoryShow,
 } from "../../src/memory/view.ts";
-import { createRequestBriefRecord } from "../../src/requests/brief.ts";
+import {
+  addRequestPlanningQuestion,
+  completeRequestPlanningInterview,
+  createRequestBriefRecord,
+  recordRequestPlanningAnswer,
+  reviseRequestBriefRecord,
+} from "../../src/requests/brief.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import {
   executeTandemAction,
@@ -16,6 +22,7 @@ import {
   type TandemCallDependencies,
 } from "../../src/session/actions.ts";
 import type { SessionEffect } from "../../src/session/events.ts";
+import { planningAskInput } from "../../src/session/planning-interview.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/session/summary.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
@@ -901,6 +908,142 @@ test("scout summaries and the durable digest carry the post-research disposition
   const quietScout = { ...legacyScout, notifications: [] };
   expect(buildDurableDigest([quietScout])).not.toContain("after research");
   expect(buildDurableDigest([task({ id: "implementation-task" })])).not.toContain("continuation:");
+});
+
+test("durable digest resumes the saved planning question and never promotes an answer to approval", () => {
+  const started = createRequestBriefRecord(
+    {
+      id: "req-plan",
+      repoPath: "/repo",
+      content: {
+        goal: "Choose the compatibility contract",
+        scope: ["src"],
+        constraints: [],
+        nonGoals: [],
+        acceptanceCriteria: ["the approved contract is explicit"],
+        manualVerification: [],
+        recommendedApproach: "Use research evidence",
+        keyDecisions: [],
+        openQuestions: ["Which contract should remain?"],
+        researchLinks: [],
+      },
+      planningInterview: {
+        schemaVersion: 1,
+        status: "active",
+        researchTaskIds: ["scout-1"],
+        questions: [],
+      },
+    },
+    "2030-01-01T00:00:00.000Z",
+  );
+  const asked = addRequestPlanningQuestion(
+    started,
+    {
+      context: "Research found an existing and a new path.",
+      question: "Which contract should remain?",
+      options: [{ label: "Existing" }, { label: "New" }],
+      recommendedOption: 0,
+    },
+    "plan-1",
+    "2030-01-01T00:00:00.000Z",
+  );
+  const question = asked.planningInterview?.questions[0];
+  if (question === undefined) throw new Error("planning question was not saved");
+  const activeDigest = buildDurableDigest([], [asked]);
+  expect(activeDigest).toContain(JSON.stringify(planningAskInput(question)));
+
+  const answered = recordRequestPlanningAnswer(
+    asked,
+    question.id,
+    { kind: "option", value: "Existing" },
+    "2030-01-01T00:00:00.000Z",
+  ).record;
+  const resumedDigest = buildDurableDigest([], [answered]);
+  expect(resumedDigest).toContain("Saved decision 1: Which contract should remain? → Existing");
+  expect(resumedDigest).not.toContain("Resume this saved question");
+
+  const briefed = reviseRequestBriefRecord(
+    answered,
+    {
+      ...answered.draft.content,
+      keyDecisions: ["Preserve the existing contract"],
+      openQuestions: [],
+    },
+    "2030-01-01T00:00:00.000Z",
+  );
+  const completed = completeRequestPlanningInterview(briefed, "2030-01-01T00:00:00.000Z");
+  const completedDigest = buildDurableDigest([], [completed]);
+  expect(completedDigest).toContain(
+    "Final scope is ready for review; request explicit confirmation, then use brief-approve. Never infer approval.",
+  );
+  expect(completed.approval).toBeUndefined();
+});
+
+test("brief-question returns the exact ask payload for its saved request decision", async () => {
+  let record = createRequestBriefRecord(
+    {
+      id: "req-action",
+      repoPath: "/repo",
+      content: {
+        goal: "Choose a behavior",
+        scope: ["src"],
+        constraints: [],
+        nonGoals: [],
+        acceptanceCriteria: ["the decision is saved"],
+        manualVerification: [],
+        recommendedApproach: "Use research evidence",
+        keyDecisions: [],
+        openQuestions: ["Which behavior?"],
+        researchLinks: [],
+      },
+      planningInterview: {
+        schemaVersion: 1,
+        status: "active",
+        researchTaskIds: ["scout-1"],
+        questions: [],
+      },
+    },
+    "2030-01-01T00:00:00.000Z",
+  );
+  const service = {
+    addRequestPlanningQuestion: async (
+      requestId: string,
+      input: Parameters<typeof addRequestPlanningQuestion>[1],
+    ) => {
+      expect(requestId).toBe(record.id);
+      record = addRequestPlanningQuestion(record, input, "plan-action", "2030-01-01T00:00:00.000Z");
+      return record;
+    },
+  } as unknown as TandemService;
+  const result = await executeTandemAction(
+    {
+      action: "brief-question",
+      requestId: "req-action",
+      context: "Research found two paths.",
+      question: "Which behavior?",
+      options: [{ label: "Existing" }, { label: "Alternative" }],
+      recommendedOption: 1,
+    },
+    service,
+    { confirm: undefined },
+  );
+
+  expect(result.value).toEqual({
+    requestId: "req-action",
+    askInput: {
+      questions: [
+        {
+          id: "plan-action",
+          question: "Research found two paths.\n\nWhich behavior?",
+          options: [{ label: "Existing" }, { label: "Alternative" }],
+          recommended: 1,
+        },
+      ],
+    },
+  });
+  expect(summarizeTandemActionValue("brief-question", result.value)).toBe(
+    JSON.stringify(result.value),
+  );
 });
 
 test("draft publication needs interactive human approval and never runs without it", async () => {

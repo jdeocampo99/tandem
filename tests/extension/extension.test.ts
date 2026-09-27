@@ -124,6 +124,7 @@ test("extension binds services to a clean source while preserving original ident
   let shutdownCalls = 0;
   const service = {
     list: async () => [],
+    requestBriefs: async () => [],
     shutdown: async () => {
       shutdownCalls += 1;
     },
@@ -185,6 +186,7 @@ test("before_agent_start exposes a blocked source refresh instead of silently pl
   const handlers = new Map<string, LifecycleHandler>();
   const service = {
     list: async () => [],
+    requestBriefs: async () => [],
     refreshSource: async () => {
       throw new Error("origin/main fetch failed");
     },

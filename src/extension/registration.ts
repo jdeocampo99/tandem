@@ -9,6 +9,7 @@ import {
   runTandemTool,
   type TandemCallDependencies,
 } from "../session/actions.ts";
+import { explicitPlanningAnswer, planningAskCall } from "../session/planning-interview.ts";
 import {
   type ChoiceConfirmation,
   type PromptRoutingConfig,
@@ -98,6 +99,13 @@ function registerCoordinatorToolGuard(
   dependencies: TandemOmpRegistrationDependencies,
 ): void {
   pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName === "ask") {
+      const planningCall = planningAskCall(
+        event.input,
+        await dependencies.getService(ctx).requestBriefs(),
+      );
+      if (planningCall.kind === "refused") return { block: true, reason: planningCall.reason };
+    }
     const reason = await coordinatorToolRefusal(ompToolCall(event), {
       researchRunning: () => dependencies.researchRunning(ctx),
       home: dependencies.getHome(ctx),
@@ -106,6 +114,74 @@ function registerCoordinatorToolGuard(
       realpath: (path) => realpath(path),
     });
     return reason === undefined ? undefined : { block: true, reason };
+  });
+  pi.on("tool_result", async (event, ctx) => {
+    if (event.toolName !== "ask") return undefined;
+    const service = dependencies.getService(ctx);
+    const planningCall = planningAskCall(event.input, await service.requestBriefs());
+    if (planningCall.kind === "unmanaged") return undefined;
+    if (planningCall.kind === "refused") {
+      return {
+        content: [{ type: "text", text: planningCall.reason }],
+        details: { tandemPlanningAnswerSaved: false },
+        isError: true,
+      };
+    }
+    if (event.isError) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "The saved planning question was not answered. No answer was saved; repeat this exact question.",
+          },
+        ],
+        details: { tandemPlanningAnswerSaved: false },
+        isError: true,
+      };
+    }
+    const answer = explicitPlanningAnswer(event.details, planningCall.question);
+    if (answer === undefined) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "No explicit answer was saved. The planning question remains pending. A timed-out recommendation is only a default; repeat this exact question.",
+          },
+        ],
+        details: { tandemPlanningAnswerSaved: false },
+        isError: true,
+      };
+    }
+    try {
+      const saved = await service.recordRequestPlanningAnswer(
+        planningCall.requestId,
+        planningCall.question.id,
+        answer,
+      );
+      const recordedAnswer = saved.record.planningInterview?.questions.find(
+        (question) => question.id === planningCall.question.id,
+      )?.answer;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Tandem ${saved.duplicate ? "already had" : "saved"} this explicit planning answer: ${recordedAnswer?.value ?? answer.value}${recordedAnswer?.note === undefined ? "" : `; note: ${recordedAnswer.note}`}. Continue from the saved request state.`,
+          },
+        ],
+        details: { tandemPlanningAnswerSaved: true, duplicate: saved.duplicate },
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Tandem did not save this planning answer: ${error instanceof Error ? error.message : String(error)}. Read the request's current planning state before asking anything else.`,
+          },
+        ],
+        details: { tandemPlanningAnswerSaved: false },
+        isError: true,
+      };
+    }
   });
 }
 

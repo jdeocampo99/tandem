@@ -7,11 +7,16 @@ import {
   type RequestBriefContent,
   type RequestBriefRecord,
   type RequestBriefRevision,
+  type RequestPlanningInterview,
   type RequestReviewPane,
   type RequestReviewPaneStatus,
 } from "../contracts.ts";
 import { StateCorruptionError } from "../tasks/store-errors.ts";
-import { checkedRequestBriefContent, requestBriefDigests } from "./brief.ts";
+import {
+  checkedRequestBriefContent,
+  checkedRequestPlanningInterview,
+  requestBriefDigests,
+} from "./brief.ts";
 
 const RECORD_KEYS = [
   "schemaVersion",
@@ -25,6 +30,7 @@ const RECORD_KEYS = [
   "approval",
   "reviewPane",
   "abandonedAt",
+  "planningInterview",
 ] as const;
 
 const REVISION_KEYS = [
@@ -91,6 +97,11 @@ export function parseRequestBriefRecord(
   );
   const draft = parseRevision(requiredValue(record, "draft", source), `${source}.draft`);
   assertMonotonicHistory(history, draft, source);
+  const planningInterviewValue = optionalSection(record, "planningInterview");
+  const planningInterview =
+    planningInterviewValue === undefined
+      ? undefined
+      : parsePlanningInterview(planningInterviewValue, `${source}.planningInterview`);
   const approval = optionalSection(record, "approval");
   const reviewPane = optionalSection(record, "reviewPane");
   const abandonedAt = Object.hasOwn(record, "abandonedAt")
@@ -111,6 +122,7 @@ export function parseRequestBriefRecord(
     ...(reviewPane === undefined
       ? {}
       : { reviewPane: parseReviewPane(reviewPane, `${source}.reviewPane`) }),
+    ...(planningInterview === undefined ? {} : { planningInterview }),
     ...(abandonedAt === undefined ? {} : { abandonedAt }),
   };
 }
@@ -175,6 +187,13 @@ function optionalSection(record: UnknownRecord, key: string): unknown {
 function parseBriefContent(value: unknown, source: string): RequestBriefContent {
   try {
     return checkedRequestBriefContent(value);
+  } catch (error) {
+    failState(source, error instanceof Error ? error.message : String(error));
+  }
+}
+function parsePlanningInterview(value: unknown, source: string): RequestPlanningInterview {
+  try {
+    return checkedRequestPlanningInterview(value);
   } catch (error) {
     failState(source, error instanceof Error ? error.message : String(error));
   }

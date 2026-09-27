@@ -397,7 +397,8 @@ export class CoordinatorSession {
       this.sourceStatus = sourceRefreshBlockedStatus(message);
     }
     this.status.report();
-    const digest = buildDurableDigest(await service.list());
+    const [tasks, requests] = await Promise.all([service.list(), service.requestBriefs()]);
+    const digest = buildDurableDigest(tasks, requests);
     const workstreams = await workstreamLines(service, this.deps.environment.repo);
     return {
       systemContext: coordinatorContext(
@@ -468,8 +469,10 @@ export class CoordinatorSession {
   }
 
   async compacting(): Promise<Reply<"compacting">> {
-    const digest = buildDurableDigest(await this.service().list());
-    const workstreams = await workstreamLines(this.service(), this.deps.environment.repo);
+    const service = this.service();
+    const [tasks, requests] = await Promise.all([service.list(), service.requestBriefs()]);
+    const digest = buildDurableDigest(tasks, requests);
+    const workstreams = await workstreamLines(service, this.deps.environment.repo);
     return {
       context: coordinatorContext(
         this.deps.environment,
@@ -484,7 +487,9 @@ export class CoordinatorSession {
 
   async compacted(): Promise<void> {
     await this.reconcile(true);
-    const digest = buildDurableDigest(await this.service().list());
+    const service = this.service();
+    const [tasks, requests] = await Promise.all([service.list(), service.requestBriefs()]);
+    const digest = buildDurableDigest(tasks, requests);
     await this.deps.host.perform({
       type: "recordEntry",
       entryType: "tandem-digest",

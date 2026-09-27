@@ -3,7 +3,12 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Clock, IdFactory, RequestBriefContent } from "../../src/contracts.ts";
-import { approveRequestBriefRecord, reviseRequestBriefRecord } from "../../src/requests/brief.ts";
+import {
+  addRequestPlanningQuestion,
+  approveRequestBriefRecord,
+  recordRequestPlanningAnswer,
+  reviseRequestBriefRecord,
+} from "../../src/requests/brief.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../../src/requests/store.ts";
 import { parseRequestBriefRecord } from "../../src/requests/store-codec.ts";
 import { StateCorruptionError, TaskStoreError } from "../../src/tasks/store-errors.ts";
@@ -149,4 +154,44 @@ test("a record whose id is not a request identity fails the read closed", () => 
       history: [],
     }),
   ).toThrow(/unsafe request id/u);
+});
+
+test("planning interview state and an explicit answer survive reopening the store", async () => {
+  await withHome(async (_home, newStore) => {
+    const store = newStore();
+    const started = await store.create({
+      repoPath: "/repo",
+      content: content(),
+      planningInterview: {
+        schemaVersion: 1,
+        status: "active",
+        researchTaskIds: ["scout-1"],
+        questions: [],
+      },
+    });
+    const asked = await store.update(started.id, started.revision, (record) =>
+      addRequestPlanningQuestion(
+        record,
+        {
+          context: "Research found a compatibility tradeoff.",
+          question: "Which contract should remain?",
+          options: [{ label: "Existing" }, { label: "New" }],
+          recommendedOption: 0,
+        },
+        "plan-1",
+        NOW,
+      ),
+    );
+    const question = asked.planningInterview?.questions[0];
+    if (question === undefined) throw new Error("planning question was not saved");
+    const answered = await store.update(
+      asked.id,
+      asked.revision,
+      (record) =>
+        recordRequestPlanningAnswer(record, question.id, { kind: "option", value: "Existing" }, NOW)
+          .record,
+    );
+
+    expect(await newStore().read(started.id)).toEqual(answered);
+  });
 });

@@ -33,6 +33,39 @@ export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
     if (section === "openQuestions" && entries.length === 0) continue;
     lines.push("", `## ${title}`, ...bullets(entries));
   }
+  if (content.planningAnswers !== undefined && content.planningAnswers.length > 0) {
+    lines.push("", "## Planning answers", ...bullets(content.planningAnswers));
+  }
+  if (record.planningInterview !== undefined) {
+    const interview = record.planningInterview;
+    lines.push(
+      "",
+      "## Planning interview",
+      `Status: ${interview.status}. Research tasks: ${
+        interview.researchTaskIds.length === 0
+          ? "none recorded"
+          : interview.researchTaskIds.join(", ")
+      }.`,
+    );
+    for (const [index, question] of interview.questions.entries()) {
+      lines.push(
+        "",
+        `### Decision ${index + 1}: ${question.question}`,
+        question.context,
+        "Choices:",
+      );
+      lines.push(
+        ...question.options.map(
+          (option) =>
+            `- ${option.label}${option.description === undefined ? "" : ` — ${option.description}`}`,
+        ),
+        `Recommendation: ${question.options[question.recommendedOption]?.label ?? "none"} (not a user decision).`,
+        question.answer === undefined
+          ? "No explicit answer saved."
+          : `Saved explicit answer: ${question.answer.value}${question.answer.note === undefined ? "" : `; note: ${question.answer.note}`}`,
+      );
+    }
+  }
   if (content.skipReview === true) {
     lines.push(
       "",

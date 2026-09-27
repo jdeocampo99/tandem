@@ -19,8 +19,8 @@ import { parseRequestBriefRecord } from "./store-codec.ts";
 export type CreateRequestBriefInput = Readonly<{
   readonly repoPath: string;
   readonly content: RequestBriefContent;
+  readonly planningInterview?: RequestBriefRecord["planningInterview"];
 }>;
-
 export type RequestBriefTransform = (
   record: RequestBriefRecord,
 ) => RequestBriefRecord | PromiseLike<RequestBriefRecord>;
@@ -65,7 +65,14 @@ export function createRequestBriefStore(options: RequestBriefStoreOptions): Requ
           throw new RequestBriefError("invalid-request-id", `Request ${id} already exists`, id);
         }
         const record = createRequestBriefRecord(
-          { id, repoPath: input.repoPath, content: input.content },
+          {
+            id,
+            repoPath: input.repoPath,
+            content: input.content,
+            ...(input.planningInterview === undefined
+              ? {}
+              : { planningInterview: input.planningInterview }),
+          },
           options.clock(),
         );
         writeRequestBriefPayload(db, record.id, record.revision, record);

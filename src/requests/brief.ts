@@ -10,6 +10,10 @@ import {
   type RequestBriefContent,
   type RequestBriefRecord,
   type RequestBriefRevision,
+  type RequestPlanningAnswer,
+  type RequestPlanningInterview,
+  type RequestPlanningOption,
+  type RequestPlanningQuestion,
   type RequestReviewPane,
   type TaskRecord,
 } from "../contracts.ts";
@@ -25,6 +29,9 @@ export type RequestBriefErrorCode =
   | "ambiguous-pending-approval"
   | "ambiguous-open-request"
   | "request-abandoned"
+  | "planning-interview-incomplete"
+  | "planning-question-pending"
+  | "planning-question-stale"
   | "request-in-use";
 
 export class RequestBriefError extends Error {
@@ -91,9 +98,14 @@ const LIST_FIELDS = [
   "acceptanceCriteria",
   "manualVerification",
   "keyDecisions",
+  "planningAnswers",
   "openQuestions",
   "researchLinks",
 ] as const;
+
+export const MAX_REQUEST_PLANNING_QUESTIONS = 8;
+const MAX_PLANNING_INTERVIEW_BYTES = 32 * 1024;
+const PLANNING_ANSWER_TEXT_FIELD = "planningAnswers";
 
 /** Stages whose work is actually under way, and so must stop while a brief awaits reapproval. */
 const PAUSABLE_STAGES: readonly TaskRecord["stage"][] = [
@@ -136,6 +148,7 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
   const allowed: readonly string[] = [
     ...AGREEMENT_FIELDS,
     MANUAL_VERIFICATION_FIELD,
+    PLANNING_ANSWER_TEXT_FIELD,
     SKIP_REVIEW_FIELD,
     ...ANNOTATION_FIELDS,
   ];
@@ -144,6 +157,8 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
       throw new RequestBriefError("invalid-content", `A request brief has no field ${key}`);
     }
   }
+  const planningAnswers =
+    record.planningAnswers === undefined ? [] : briefList(record, "planningAnswers");
   const content: RequestBriefContent = {
     goal: briefText(record, "goal"),
     scope: briefList(record, "scope"),
@@ -157,6 +172,7 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
     keyDecisions: briefList(record, "keyDecisions"),
     openQuestions: briefList(record, "openQuestions"),
     researchLinks: briefList(record, "researchLinks"),
+    ...(planningAnswers.length === 0 ? {} : { planningAnswers }),
     ...(briefFlag(record, SKIP_REVIEW_FIELD) ? { skipReview: true } : {}),
   };
   const bytes = Buffer.byteLength(JSON.stringify(content), "utf8");
@@ -175,6 +191,315 @@ export function checkedRequestBriefContent(value: unknown): RequestBriefContent 
   return content;
 }
 
+export function checkedRequestPlanningAnswer(value: unknown): RequestPlanningAnswer {
+  const record = planningRecord(value, "answer");
+  assertPlanningKeys(record, ["kind", "value", "note"], "answer");
+  const kind = record.kind;
+  if (kind !== "option" && kind !== "custom") {
+    throw planningError("answer kind must be option or custom");
+  }
+  const note =
+    record.note === undefined ? undefined : planningText(record.note, "answer note", 1000);
+  return {
+    kind,
+    value: planningText(record.value, "answer value", 2000),
+    ...(note === undefined ? {} : { note }),
+  };
+}
+
+export function checkedRequestPlanningInterview(value: unknown): RequestPlanningInterview {
+  const record = planningRecord(value, "interview");
+  assertPlanningKeys(
+    record,
+    ["schemaVersion", "status", "researchTaskIds", "questions"],
+    "interview",
+  );
+  if (record.schemaVersion !== 1) throw planningError("unsupported interview schemaVersion");
+  if (record.status !== "active" && record.status !== "complete") {
+    throw planningError("interview status must be active or complete");
+  }
+  if (!Array.isArray(record.researchTaskIds) || record.researchTaskIds.length > 24) {
+    throw planningError("researchTaskIds must be an array with at most 24 entries");
+  }
+  const researchTaskIds = record.researchTaskIds.map((id, index) =>
+    planningText(id, `researchTaskIds[${index}]`, 160),
+  );
+  if (new Set(researchTaskIds).size !== researchTaskIds.length) {
+    throw planningError("researchTaskIds must be unique");
+  }
+  if (
+    !Array.isArray(record.questions) ||
+    record.questions.length > MAX_REQUEST_PLANNING_QUESTIONS
+  ) {
+    throw planningError(
+      `questions must be an array with at most ${MAX_REQUEST_PLANNING_QUESTIONS} entries`,
+    );
+  }
+  const questions = record.questions.map((question, index) =>
+    checkedPlanningQuestion(question, `questions[${index}]`),
+  );
+  if (new Set(questions.map((question) => question.id)).size !== questions.length) {
+    throw planningError("question ids must be unique");
+  }
+  if (
+    record.status === "complete" &&
+    (questions.length === 0 || questions.some((question) => question.answer === undefined))
+  ) {
+    throw planningError("a complete interview must contain answered planning questions");
+  }
+  const interview: RequestPlanningInterview = {
+    schemaVersion: 1,
+    status: record.status,
+    researchTaskIds,
+    questions,
+  };
+  const bytes = Buffer.byteLength(JSON.stringify(interview), "utf8");
+  if (bytes > MAX_PLANNING_INTERVIEW_BYTES) {
+    throw planningError(`interview may not exceed ${MAX_PLANNING_INTERVIEW_BYTES} UTF-8 bytes`);
+  }
+  return interview;
+}
+
+export type RequestPlanningQuestionInput = Readonly<{
+  readonly context: string;
+  readonly question: string;
+  readonly options: readonly RequestPlanningOption[];
+  readonly recommendedOption: number;
+}>;
+
+export function addRequestPlanningQuestion(
+  record: RequestBriefRecord,
+  input: RequestPlanningQuestionInput,
+  questionId: string,
+  now: IsoTimestamp,
+): RequestBriefRecord {
+  const interview = requireActivePlanningInterview(record);
+  const last = interview.questions.at(-1);
+  if (last?.answer === undefined && last !== undefined) {
+    throw new RequestBriefError(
+      "planning-question-pending",
+      `Request ${record.id} already has an unanswered planning question`,
+      record.id,
+    );
+  }
+  if (interview.questions.length >= MAX_REQUEST_PLANNING_QUESTIONS) {
+    throw new RequestBriefError(
+      "planning-interview-incomplete",
+      `Request ${record.id} reached the ${MAX_REQUEST_PLANNING_QUESTIONS}-question planning limit`,
+      record.id,
+    );
+  }
+  const question = checkedPlanningQuestion({ ...input, id: questionId }, "planning question");
+  const planningInterview = checkedRequestPlanningInterview({
+    ...interview,
+    questions: [...interview.questions, question],
+  });
+  return {
+    ...record,
+    revision: record.revision + 1,
+    updatedAt: checkedLine(now, "timestamp"),
+    planningInterview,
+  };
+}
+
+export function recordRequestPlanningAnswer(
+  record: RequestBriefRecord,
+  questionId: string,
+  answerValue: unknown,
+  now: IsoTimestamp,
+): Readonly<{ readonly record: RequestBriefRecord; readonly duplicate: boolean }> {
+  const interview = requireActivePlanningInterview(record);
+  const answer = checkedRequestPlanningAnswer(answerValue);
+  const questionIndex = interview.questions.findIndex((question) => question.id === questionId);
+  const question = interview.questions[questionIndex];
+  if (question === undefined) {
+    throw new RequestBriefError(
+      "planning-question-stale",
+      `Planning question ${JSON.stringify(questionId)} is not in request ${record.id}`,
+      record.id,
+    );
+  }
+  if (question.answer !== undefined) {
+    if (JSON.stringify(question.answer) === JSON.stringify(answer)) {
+      return { record, duplicate: true };
+    }
+    throw new RequestBriefError(
+      "planning-question-stale",
+      `Planning question ${JSON.stringify(questionId)} already has a different saved answer`,
+      record.id,
+    );
+  }
+  if (interview.status !== "active" || questionIndex !== interview.questions.length - 1) {
+    throw new RequestBriefError(
+      "planning-question-stale",
+      `Planning question ${JSON.stringify(questionId)} is no longer the current question`,
+      record.id,
+    );
+  }
+  const questions = interview.questions.map((entry, index) =>
+    index === questionIndex ? { ...entry, answer } : entry,
+  );
+  const planningInterview = checkedRequestPlanningInterview({ ...interview, questions });
+  return {
+    record: {
+      ...record,
+      revision: record.revision + 1,
+      updatedAt: checkedLine(now, "timestamp"),
+      planningInterview,
+    },
+    duplicate: false,
+  };
+}
+
+export function completeRequestPlanningInterview(
+  record: RequestBriefRecord,
+  now: IsoTimestamp,
+): RequestBriefRecord {
+  const interview = requireActivePlanningInterview(record);
+  if (interview.questions.length === 0) {
+    throw new RequestBriefError(
+      "planning-interview-incomplete",
+      `Request ${record.id} needs at least one saved planning decision before completion`,
+      record.id,
+    );
+  }
+  if (interview.questions.some((question) => question.answer === undefined)) {
+    throw new RequestBriefError(
+      "planning-interview-incomplete",
+      `Request ${record.id} still has an unanswered planning question`,
+      record.id,
+    );
+  }
+  if (record.draft.content.openQuestions.length > 0) {
+    throw new RequestBriefError(
+      "planning-interview-incomplete",
+      `Request ${record.id} still has unresolved open questions in its brief`,
+      record.id,
+    );
+  }
+  const planningAnswers = interview.questions.map((question) => {
+    const answer = question.answer;
+    if (answer === undefined) throw planningError("complete interview is missing an answer");
+    return `${question.question}\nAnswer: ${answer.value}${answer.note === undefined ? "" : `\nNote: ${answer.note}`}`;
+  });
+  const content = checkedRequestBriefContent({
+    ...record.draft.content,
+    ...(planningAnswers.length === 0 ? {} : { planningAnswers }),
+  });
+  const base =
+    requestBriefDigests(content).contentDigest === record.draft.contentDigest
+      ? record
+      : reviseRequestBriefRecord(record, content, now);
+  return {
+    ...base,
+    revision: record.revision + 1,
+    updatedAt: checkedLine(now, "timestamp"),
+    planningInterview: { ...interview, status: "complete" },
+  };
+}
+
+function requireActivePlanningInterview(record: RequestBriefRecord): RequestPlanningInterview {
+  assertNotAbandoned(record);
+  const interview = record.planningInterview;
+  if (interview === undefined) {
+    throw new RequestBriefError(
+      "planning-interview-incomplete",
+      `Request ${record.id} has no planning interview`,
+      record.id,
+    );
+  }
+  if (interview.status !== "active") {
+    throw new RequestBriefError(
+      "planning-interview-incomplete",
+      `Request ${record.id} planning interview is already complete`,
+      record.id,
+    );
+  }
+  return interview;
+}
+
+function checkedPlanningQuestion(value: unknown, field: string): RequestPlanningQuestion {
+  const record = planningRecord(value, field);
+  assertPlanningKeys(
+    record,
+    ["id", "context", "question", "options", "recommendedOption", "answer"],
+    field,
+  );
+  if (!Array.isArray(record.options) || record.options.length < 2 || record.options.length > 3) {
+    throw planningError(`${field}.options must contain two or three choices`);
+  }
+  const options = record.options.map((option, index) => {
+    const choice = planningRecord(option, `${field}.options[${index}]`);
+    assertPlanningKeys(choice, ["label", "description"], `${field}.options[${index}]`);
+    const description =
+      choice.description === undefined
+        ? undefined
+        : planningText(choice.description, `${field}.options[${index}].description`, 240);
+    return {
+      label: planningText(choice.label, `${field}.options[${index}].label`, 100),
+      ...(description === undefined ? {} : { description }),
+    };
+  });
+  if (new Set(options.map((option) => option.label)).size !== options.length) {
+    throw planningError(`${field}.options labels must be unique`);
+  }
+  const recommendedOption = record.recommendedOption;
+  if (
+    typeof recommendedOption !== "number" ||
+    !Number.isSafeInteger(recommendedOption) ||
+    recommendedOption < 0 ||
+    recommendedOption >= options.length
+  ) {
+    throw planningError(`${field}.recommendedOption must index one of its choices`);
+  }
+  const answer =
+    record.answer === undefined ? undefined : checkedRequestPlanningAnswer(record.answer);
+  if (answer?.kind === "option" && !options.some((option) => option.label === answer.value)) {
+    throw planningError(`${field}.answer must name one of its saved option labels`);
+  }
+  return {
+    id: planningText(record.id, `${field}.id`, 160),
+    context: planningText(record.context, `${field}.context`, 800),
+    question: planningText(record.question, `${field}.question`, 600),
+    options,
+    recommendedOption,
+    ...(answer === undefined ? {} : { answer }),
+  };
+}
+
+function planningRecord(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw planningError(`${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function assertPlanningKeys(
+  record: Record<string, unknown>,
+  allowed: readonly string[],
+  field: string,
+): void {
+  for (const key of Object.keys(record)) {
+    if (!allowed.includes(key)) throw planningError(`${field} has no field ${key}`);
+  }
+}
+
+function planningText(value: unknown, field: string, maximumBytes: number): string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.includes("\0") ||
+    Buffer.byteLength(value, "utf8") > maximumBytes
+  ) {
+    throw planningError(`${field} must be non-empty and at most ${maximumBytes} UTF-8 bytes`);
+  }
+  return value;
+}
+
+function planningError(message: string): RequestBriefError {
+  return new RequestBriefError("invalid-content", message);
+}
+
 export function requestBriefDigests(content: RequestBriefContent): RequestBriefDigests {
   return {
     contentDigest: digestOf(canonicalContent(content)),
@@ -187,6 +512,7 @@ export function createRequestBriefRecord(
     readonly id: string;
     readonly repoPath: string;
     readonly content: RequestBriefContent;
+    readonly planningInterview?: RequestPlanningInterview;
   }>,
   now: IsoTimestamp,
 ): RequestBriefRecord {
@@ -202,6 +528,9 @@ export function createRequestBriefRecord(
     updatedAt: timestamp,
     draft: revisionOf(checkedRequestBriefContent(input.content), 1, "agreement", timestamp),
     history: [],
+    ...(input.planningInterview === undefined
+      ? {}
+      : { planningInterview: checkedRequestPlanningInterview(input.planningInterview) }),
   };
 }
 
@@ -241,6 +570,13 @@ export function approveRequestBriefRecord(
 ): RequestBriefRecord {
   const timestamp = checkedLine(now, "timestamp");
   assertNotAbandoned(record);
+  if (record.planningInterview?.status === "active") {
+    throw new RequestBriefError(
+      "planning-interview-incomplete",
+      `Request ${record.id} planning interview must be complete before brief approval`,
+      record.id,
+    );
+  }
   if (intent.requestId !== record.id) {
     throw new RequestBriefError(
       "request-mismatch",
@@ -398,6 +734,12 @@ export function decideRequestDispatch(record: RequestBriefRecord): RequestDispat
       reason: `Request ${record.id} was abandoned on ${record.abandonedAt}`,
     };
   }
+  if (record.planningInterview?.status === "active") {
+    return {
+      allowed: false,
+      reason: `Request ${record.id} still has an active planning interview`,
+    };
+  }
   const state = requestApprovalState(record);
   if (state === "current" && record.approval !== undefined) {
     return { allowed: true, approvedRevision: record.approval.briefRevision };
@@ -449,6 +791,9 @@ function canonicalContent(content: RequestBriefContent): string {
 function canonicalAgreement(content: RequestBriefContent): string {
   const agreement: unknown[] = AGREEMENT_FIELDS.map((field) => content[field]);
   if (content.manualVerification.length > 0) agreement.push(content.manualVerification);
+  if (content.planningAnswers !== undefined && content.planningAnswers.length > 0) {
+    agreement.push({ planningAnswers: content.planningAnswers });
+  }
   if (content.skipReview === true) agreement.push({ skipReview: true });
   return JSON.stringify(agreement);
 }

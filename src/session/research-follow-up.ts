@@ -59,9 +59,12 @@ function followUpSteps(decision: ResearchFollowUpDecision): readonly string[] {
     case "implementation-interview":
       return [
         RESEARCH_SUMMARY,
-        "Propose one initial direction drawn from that evidence, then ask focused questions covering desired behavior, acceptance criteria, affected surfaces, non-goals, risks and compatibility; offer a default for each.",
-        "Stay inside the report and the user's request; do not widen scope on your own.",
-        "Only after the user answers may you create an implementation task, passing this task in researchTaskIds. Approval is a separate, later step: give a short summary without asking for approval in it, then call approve (or brief-approve when a brief governs it) so its own confirmation is the single approval ask, not a prose question first.",
+        "Before asking, create or update this request brief with brief-draft, startPlanningInterview: true, and this task in researchTaskIds; pass requestId when an existing brief governs this research.",
+        "Propose one initial direction from the report, then save each decision as exactly one brief-question with context, question, two or three user-facing options, and recommendedOption. Call OMP ask with the returned askInput unchanged; never batch questions.",
+        "Only a non-timeout explicit answer is saved. After each answer, read the brief and advance from its saved decisions. On timeout or cancellation, repeat the same saved question; the recommendation is not a decision.",
+        "After all decisions are answered, draft a concrete brief with openQuestions empty and call brief-interview-complete. Do not create implementation work until the interview and final brief are complete.",
+        "Final scope still needs its existing explicit human approval. Use the existing brief and task approval actions as applicable. For either action, its own confirmation is the single approval ask. Never ask approval in prose or infer it from an interview answer.",
+        "Keep unrelated approved requests progressing while this interview waits.",
       ];
     case "answer-question":
       return [

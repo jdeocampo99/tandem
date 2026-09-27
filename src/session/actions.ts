@@ -1,6 +1,11 @@
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import type { MergingChoice } from "../config/repositories.ts";
-import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
+import type {
+  CreatableTaskKind,
+  RepoPolicy,
+  RequestBriefContent,
+  RequestPlanningOption,
+} from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import { type MemoryShowResult, renderCatchUpCard, renderMemoryShow } from "../memory/view.ts";
 import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
@@ -98,7 +103,18 @@ export type TandemAction =
       readonly requestId?: string | undefined;
       readonly content: RequestBriefContent;
       readonly reviewPane: boolean;
+      readonly startPlanningInterview?: boolean | undefined;
+      readonly researchTaskIds?: readonly string[] | undefined;
     }>
+  | Readonly<{
+      readonly action: "brief-question";
+      readonly requestId: string;
+      readonly context: string;
+      readonly question: string;
+      readonly options: readonly RequestPlanningOption[];
+      readonly recommendedOption: number;
+    }>
+  | Readonly<{ readonly action: "brief-interview-complete"; readonly requestId: string }>
   | Readonly<{ readonly action: "brief-review"; readonly requestId: string }>
   | Readonly<{ readonly action: "brief-show"; readonly requestId: string }>
   | Readonly<{ readonly action: "brief-abandon"; readonly requestId: string }>
@@ -616,9 +632,43 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
         content: action.content,
         reviewPane: action.reviewPane,
         ...(action.requestId === undefined ? {} : { requestId: action.requestId }),
+        ...(action.startPlanningInterview === undefined
+          ? {}
+          : { startPlanningInterview: action.startPlanningInterview }),
+        ...(action.researchTaskIds === undefined
+          ? {}
+          : { researchTaskIds: action.researchTaskIds }),
       }),
       action.action,
     ),
+  "brief-question": async (action, service) => {
+    const record = await service.addRequestPlanningQuestion(action.requestId, {
+      context: action.context,
+      question: action.question,
+      options: action.options,
+      recommendedOption: action.recommendedOption,
+    });
+    const question = record.planningInterview?.questions.at(-1);
+    if (question === undefined) throw new Error("Saved planning question is missing");
+    return actionResult(
+      {
+        requestId: record.id,
+        askInput: {
+          questions: [
+            {
+              id: question.id,
+              question: `${question.context}\n\n${question.question}`,
+              options: question.options,
+              recommended: question.recommendedOption,
+            },
+          ],
+        },
+      },
+      action.action,
+    );
+  },
+  "brief-interview-complete": async (action, service) =>
+    actionResult(await service.completeRequestPlanningInterview(action.requestId), action.action),
   "brief-review": async (action, service) =>
     actionResult(await service.reviewRequestBrief(action.requestId), action.action),
   "brief-show": async (action, service) =>

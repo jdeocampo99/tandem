@@ -109,6 +109,23 @@ const validRequests: readonly Record<string, unknown>[] = [
   {
     action: "brief-draft",
     repoPath: "/r",
+    content: brief,
+    reviewPane: false,
+    startPlanningInterview: true,
+    researchTaskIds: ["scout-1"],
+  },
+  {
+    action: "brief-question",
+    requestId: "req-1",
+    context: "Research found a tradeoff.",
+    question: "Which behavior should remain?",
+    options: [{ label: "Existing" }, { label: "New" }],
+    recommendedOption: 0,
+  },
+  { action: "brief-interview-complete", requestId: "req-1" },
+  {
+    action: "brief-draft",
+    repoPath: "/r",
     requestId: "req-1",
     content: { ...brief, skipReview: true },
     reviewPane: true,
@@ -243,6 +260,17 @@ const invalidRequests: readonly [string, unknown][] = [
         action: "brief-draft",
         repoPath: "/r",
         content: { goal: "g" },
+        reviewPane: false,
+      },
+    },
+  ],
+  [
+    "coordinator cannot submit internal planning answers",
+    {
+      request: {
+        action: "brief-draft",
+        repoPath: "/r",
+        content: { ...brief, planningAnswers: ["forged answer"] },
         reviewPane: false,
       },
     },

@@ -60,6 +60,10 @@ async function fixture(): Promise<Fixture> {
     pauseTask: async (taskId, reason) => {
       pauseCalls.push({ taskId, reason });
     },
+    idFactory: () => {
+      sequence += 1;
+      return `planning-${sequence}`;
+    },
   });
   return {
     workflow,
@@ -231,6 +235,198 @@ test("abandoning a stale draft lets a no-id approval land on the one brief still
         reviewPane: false,
       }),
     ).rejects.toMatchObject({ code: "request-abandoned" });
+  } finally {
+    await close();
+  }
+});
+
+test("planning interviews persist ordered decisions and require final brief approval", async () => {
+  const { workflow, close } = await fixture();
+  try {
+    const drafted = await workflow.draft({
+      repoPath: "/repo",
+      content: content({ openQuestions: ["Which behavior?", "What compatibility constraint?"] }),
+      reviewPane: false,
+      startPlanningInterview: true,
+      researchTaskIds: ["scout-1"],
+    });
+    expect(drafted.record.planningInterview).toMatchObject({
+      status: "active",
+      researchTaskIds: ["scout-1"],
+      questions: [],
+    });
+    await expect(
+      workflow.approve({
+        requestId: drafted.record.id,
+        briefRevision: drafted.record.draft.revision,
+        contentDigest: drafted.record.draft.contentDigest,
+      }),
+    ).rejects.toMatchObject({ code: "planning-interview-incomplete" });
+
+    const first = await workflow.addPlanningQuestion(drafted.record.id, {
+      context: "The report found two plausible paths.",
+      question: "Which behavior should remain?",
+      options: [{ label: "Stable behavior" }, { label: "New behavior" }],
+      recommendedOption: 0,
+    });
+    const firstQuestion = first.planningInterview?.questions[0];
+    if (firstQuestion === undefined) throw new Error("first planning question was not saved");
+    await expect(
+      workflow.addPlanningQuestion(drafted.record.id, {
+        context: "A second decision.",
+        question: "What compatibility constraint applies?",
+        options: [{ label: "Preserve" }, { label: "Replace" }],
+        recommendedOption: 0,
+      }),
+    ).rejects.toMatchObject({ code: "planning-question-pending" });
+
+    const firstAnswers = await Promise.all([
+      workflow.recordPlanningAnswer(drafted.record.id, firstQuestion.id, {
+        kind: "option",
+        value: "Stable behavior",
+      }),
+      workflow.recordPlanningAnswer(drafted.record.id, firstQuestion.id, {
+        kind: "option",
+        value: "Stable behavior",
+      }),
+    ]);
+    expect(firstAnswers.map((answer) => answer.duplicate).sort()).toEqual([false, true]);
+    await expect(
+      workflow.recordPlanningAnswer(drafted.record.id, firstQuestion.id, {
+        kind: "option",
+        value: "New behavior",
+      }),
+    ).rejects.toMatchObject({ code: "planning-question-stale" });
+
+    const second = await workflow.addPlanningQuestion(drafted.record.id, {
+      context: "The replacement path affects older callers.",
+      question: "What compatibility constraint applies?",
+      options: [{ label: "Preserve" }, { label: "Replace" }],
+      recommendedOption: 0,
+    });
+    const secondQuestion = second.planningInterview?.questions[1];
+    if (secondQuestion === undefined) throw new Error("second planning question was not saved");
+    await expect(workflow.completePlanningInterview(drafted.record.id)).rejects.toMatchObject({
+      code: "planning-interview-incomplete",
+    });
+    await workflow.recordPlanningAnswer(drafted.record.id, secondQuestion.id, {
+      kind: "custom",
+      value: "Keep the adapter for older callers",
+    });
+    await expect(workflow.completePlanningInterview(drafted.record.id)).rejects.toMatchObject({
+      code: "planning-interview-incomplete",
+    });
+
+    await workflow.draft({
+      repoPath: "/repo",
+      requestId: drafted.record.id,
+      content: content({
+        keyDecisions: ["Keep stable behavior and the adapter for older callers"],
+        openQuestions: [],
+      }),
+      reviewPane: false,
+    });
+    const completed = await workflow.completePlanningInterview(drafted.record.id);
+    expect(completed.record.planningInterview?.status).toBe("complete");
+    expect(completed.record.draft.content.planningAnswers).toEqual([
+      "Which behavior should remain?\nAnswer: Stable behavior",
+      "What compatibility constraint applies?\nAnswer: Keep the adapter for older callers",
+    ]);
+    expect(completed.approvalState).toBe("unapproved");
+
+    const approved = await workflow.approve({
+      requestId: drafted.record.id,
+      briefRevision: completed.record.draft.revision,
+      contentDigest: completed.record.draft.contentDigest,
+    });
+    expect(approved.approvalState).toBe("current");
+    const repeatedCompletion = await workflow.completePlanningInterview(drafted.record.id);
+    expect(repeatedCompletion.record.revision).toBe(approved.record.revision);
+    expect(repeatedCompletion.approvalState).toBe("current");
+    expect(await workflow.dispatchDecisionForTask({ requestId: drafted.record.id })).toMatchObject({
+      allowed: true,
+    });
+  } finally {
+    await close();
+  }
+});
+
+test("an active interview gates only its request and pauses stale work after a scope change", async () => {
+  const { workflow, pauseCalls, setTasks, close } = await fixture();
+  try {
+    const drafted = await workflow.draft({
+      repoPath: "/repo",
+      content: content(),
+      reviewPane: false,
+    });
+    const approved = await workflow.approve({
+      requestId: drafted.record.id,
+      briefRevision: drafted.record.draft.revision,
+      contentDigest: drafted.record.draft.contentDigest,
+    });
+    setTasks([
+      { id: "task-owned", requestId: drafted.record.id, stage: "implementing" } as TaskRecord,
+      { id: "task-other", requestId: "req-other", stage: "implementing" } as TaskRecord,
+    ]);
+
+    const active = await workflow.draft({
+      repoPath: "/repo",
+      requestId: drafted.record.id,
+      content: content(),
+      reviewPane: false,
+      startPlanningInterview: true,
+      researchTaskIds: ["scout-1"],
+    });
+    expect(active.approvalState).toBe("current");
+    expect(pauseCalls).toEqual([]);
+    await expect(
+      workflow.dispatchDecisionForTask({ requestId: drafted.record.id }),
+    ).resolves.toMatchObject({
+      allowed: false,
+      reason: expect.stringContaining("planning interview"),
+    });
+    await expect(
+      workflow.approve({
+        requestId: drafted.record.id,
+        briefRevision: approved.record.draft.revision,
+        contentDigest: approved.record.draft.contentDigest,
+      }),
+    ).rejects.toMatchObject({ code: "planning-interview-incomplete" });
+
+    const question = await workflow.addPlanningQuestion(drafted.record.id, {
+      context: "Research raised a scope decision.",
+      question: "Should the adapter remain?",
+      options: [{ label: "Keep it" }, { label: "Remove it" }],
+      recommendedOption: 0,
+    });
+    const savedQuestion = question.planningInterview?.questions[0];
+    if (savedQuestion === undefined) throw new Error("planning question was not saved");
+    await workflow.recordPlanningAnswer(drafted.record.id, savedQuestion.id, {
+      kind: "option",
+      value: "Keep it",
+    });
+    const revised = await workflow.draft({
+      repoPath: "/repo",
+      requestId: drafted.record.id,
+      content: content({ keyDecisions: ["Keep the adapter"] }),
+      reviewPane: false,
+    });
+    expect(revised.approvalState).toBe("superseded");
+    expect(pauseCalls.map((call) => call.taskId)).toEqual(["task-owned"]);
+
+    setTasks([
+      { id: "task-owned", requestId: drafted.record.id, stage: "paused" } as TaskRecord,
+      { id: "task-other", requestId: "req-other", stage: "implementing" } as TaskRecord,
+    ]);
+    const completed = await workflow.completePlanningInterview(drafted.record.id);
+    expect(completed.pausedTaskIds).toEqual([]);
+    expect(pauseCalls.map((call) => call.taskId)).toEqual(["task-owned"]);
+    const finalApproval = await workflow.approve({
+      requestId: drafted.record.id,
+      briefRevision: completed.record.draft.revision,
+      contentDigest: completed.record.draft.contentDigest,
+    });
+    expect(finalApproval.approvalState).toBe("current");
   } finally {
     await close();
   }

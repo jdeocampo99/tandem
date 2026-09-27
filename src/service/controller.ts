@@ -52,6 +52,7 @@ import type {
   PullRequestMetadata,
   RepoPolicy,
   RequestBriefRecord,
+  RequestPlanningAnswer,
   ResearchContinuation,
   SteerTaskInput,
   TaskCommunicationView,
@@ -129,6 +130,7 @@ import {
   projectRoots,
   repoName,
 } from "../repos/locate.ts";
+import type { RequestPlanningQuestionInput } from "../requests/brief.ts";
 import { briefSkipsReview } from "../requests/brief.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../requests/store.ts";
 import {
@@ -395,6 +397,16 @@ export type TandemService = Readonly<{
   ) => Promise<DeliveryPreflightResult>;
   readonly approve: (id: string) => Promise<TaskRecord>;
   readonly draftRequestBrief: (input: DraftRequestBriefInput) => Promise<RequestBriefView>;
+  readonly addRequestPlanningQuestion: (
+    requestId: string,
+    input: RequestPlanningQuestionInput,
+  ) => Promise<RequestBriefRecord>;
+  readonly recordRequestPlanningAnswer: (
+    requestId: string,
+    questionId: string,
+    answer: RequestPlanningAnswer,
+  ) => Promise<Readonly<{ readonly record: RequestBriefRecord; readonly duplicate: boolean }>>;
+  readonly completeRequestPlanningInterview: (requestId: string) => Promise<RequestBriefView>;
   readonly reviewRequestBrief: (requestId: string) => Promise<RequestBriefView>;
   readonly approveRequestBrief: (intent: ApproveRequestBriefInput) => Promise<RequestBriefView>;
   /** Drops a request whose brief was never approved, so it stops awaiting approval. */
@@ -835,6 +847,7 @@ class TandemController {
       pauseTask: async (taskId, reason) => {
         await this.pause(taskId, reason);
       },
+      idFactory: deps.idFactory,
     });
     this.#recoveryCentral = new CentralRecoveryWorkflow({
       home: deps.home,
@@ -913,6 +926,12 @@ class TandemController {
       draftRequestBrief: (input) => this.draftRequestBrief(input),
       reviewRequestBrief: (requestId) => this.#requests.review(requestId),
       approveRequestBrief: (intent) => this.approveRequestBrief(intent),
+      addRequestPlanningQuestion: (requestId, input) =>
+        this.#requests.addPlanningQuestion(requestId, input),
+      recordRequestPlanningAnswer: (requestId, questionId, answer) =>
+        this.#requests.recordPlanningAnswer(requestId, questionId, answer),
+      completeRequestPlanningInterview: (requestId) =>
+        this.#requests.completePlanningInterview(requestId),
       abandonRequestBrief: (requestId) => this.#requests.abandon(requestId),
       pendingBriefApprovalId: () => this.#requests.pendingApprovalId(),
       requestBrief: (requestId) => this.#requests.read(requestId),

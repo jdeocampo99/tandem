@@ -41,6 +41,11 @@ const briefContentSchema = z.strictObject({
   skipReview: z.boolean().optional(),
 });
 
+const planningOptionSchema = z.strictObject({
+  label: z.string(),
+  description: z.string().optional(),
+});
+
 /** The strict `{ request: { action, ... } }` parameters of the `tandem` tool; see `TandemAction`. */
 export const tandemRequestSchema = z.strictObject({
   request: z.union([
@@ -150,6 +155,20 @@ export const tandemRequestSchema = z.strictObject({
       requestId: z.string().optional(),
       content: briefContentSchema,
       reviewPane: z.boolean(),
+      startPlanningInterview: z.boolean().optional(),
+      researchTaskIds: z.array(z.string()).optional(),
+    }),
+    z.strictObject({
+      action: z.literal("brief-question"),
+      requestId: z.string(),
+      context: z.string(),
+      question: z.string(),
+      options: z.array(planningOptionSchema),
+      recommendedOption: z.number().int().nonnegative(),
+    }),
+    z.strictObject({
+      action: z.literal("brief-interview-complete"),
+      requestId: z.string(),
     }),
     z.strictObject({ action: z.literal("brief-review"), requestId: z.string() }),
     z.strictObject({ action: z.literal("brief-show"), requestId: z.string() }),

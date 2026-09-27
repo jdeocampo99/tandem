@@ -1,9 +1,16 @@
 import { expect, test } from "bun:test";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { RequestPlanningAnswer } from "../../src/contracts.ts";
 import { ompToolCall } from "../../src/extension/omp-host.ts";
 import { registerTandemOmp } from "../../src/extension/registration.ts";
+import {
+  addRequestPlanningQuestion,
+  createRequestBriefRecord,
+  recordRequestPlanningAnswer,
+} from "../../src/requests/brief.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import type { ToolCall } from "../../src/session/events.ts";
+import { planningAskInput } from "../../src/session/planning-interview.ts";
 import {
   COORDINATOR_RESEARCH_RUNNING_REFUSAL,
   COORDINATOR_TOOL_REFUSAL,
@@ -124,6 +131,146 @@ test("the registered OMP tool_call hook blocks with the guard's reason", async (
   expect(await call("read", { path: "https://example.com" })).toEqual({
     block: true,
     reason: COORDINATOR_TOOL_REFUSAL,
+  });
+});
+
+test("OMP saves only an explicit answer for the exact pending planning question", async () => {
+  type Handler = (event: unknown, ctx: unknown) => Promise<unknown>;
+  const handlers = new Map<string, Handler>();
+  const pi = {
+    on: (event: string, handler: Handler) => {
+      handlers.set(event, handler);
+    },
+    registerTool: () => undefined,
+    registerCommand: () => undefined,
+    registerMessageRenderer: () => undefined,
+  } as unknown as ExtensionAPI;
+  let record = addRequestPlanningQuestion(
+    createRequestBriefRecord(
+      {
+        id: "req-interview",
+        repoPath: "/repo",
+        content: {
+          goal: "Choose a behavior",
+          scope: ["src"],
+          constraints: [],
+          nonGoals: [],
+          acceptanceCriteria: ["the decision is durable"],
+          manualVerification: [],
+          recommendedApproach: "Use research evidence",
+          keyDecisions: [],
+          openQuestions: ["Which contract should remain?"],
+          researchLinks: [],
+        },
+        planningInterview: {
+          schemaVersion: 1,
+          status: "active",
+          researchTaskIds: ["scout-1"],
+          questions: [],
+        },
+      },
+      "2030-01-01T00:00:00.000Z",
+    ),
+    {
+      context: "Research found two paths.",
+      question: "Which contract should remain?",
+      options: [{ label: "Existing" }, { label: "New" }],
+      recommendedOption: 0,
+    },
+    "plan-1",
+    "2030-01-01T00:00:00.000Z",
+  );
+  const question = record.planningInterview?.questions[0];
+  if (question === undefined) throw new Error("planning question was not saved");
+  const service = {
+    requestBriefs: async () => [record],
+    recordRequestPlanningAnswer: async (
+      _requestId: string,
+      questionId: string,
+      answer: RequestPlanningAnswer,
+    ) => {
+      const saved = recordRequestPlanningAnswer(
+        record,
+        questionId,
+        answer,
+        "2030-01-01T00:00:00.000Z",
+      );
+      record = saved.record;
+      return saved;
+    },
+  } as unknown as TandemService;
+  registerTandemOmp(pi, {
+    getService: () => service,
+    getHome: () => "/tandem-home",
+    promptRouting: { timeoutMs: 1_500 },
+    reconcile: async () => undefined,
+    postAction: async () => undefined,
+    userPrompt: () => undefined,
+    closeThread: () => undefined,
+    researchRunning: async () => false,
+  });
+  const callHook = handlers.get("tool_call");
+  const resultHook = handlers.get("tool_result");
+  if (callHook === undefined || resultHook === undefined) {
+    throw new Error("planning ask hooks were not registered");
+  }
+  const askInput = planningAskInput(question);
+  const context = { cwd: "/repo" };
+
+  expect(await callHook({ toolName: "ask", input: askInput }, context)).toBeUndefined();
+  expect(
+    await callHook(
+      {
+        toolName: "ask",
+        input: { questions: [{ ...askInput.questions[0], question: "Edited question" }] },
+      },
+      context,
+    ),
+  ).toMatchObject({ block: true });
+  expect(
+    await callHook({ toolName: "ask", input: { questions: [{ question: "unrelated" }] } }, context),
+  ).toMatchObject({ block: true });
+
+  const timeout = await resultHook(
+    {
+      toolName: "ask",
+      input: askInput,
+      details: {
+        question: `${question.context}\n\n${question.question}`,
+        options: question.options.map((option) => option.label),
+        multi: false,
+        selectedOptions: ["Existing"],
+        timedOut: true,
+      },
+      isError: false,
+    },
+    context,
+  );
+  expect(timeout).toMatchObject({
+    details: { tandemPlanningAnswerSaved: false },
+    isError: true,
+  });
+  expect(record.planningInterview?.questions[0]?.answer).toBeUndefined();
+
+  const explicit = await resultHook(
+    {
+      toolName: "ask",
+      input: askInput,
+      details: {
+        question: `${question.context}\n\n${question.question}`,
+        options: question.options.map((option) => option.label),
+        multi: false,
+        selectedOptions: ["New"],
+        timedOut: false,
+      },
+      isError: false,
+    },
+    context,
+  );
+  expect(explicit).toMatchObject({ details: { tandemPlanningAnswerSaved: true } });
+  expect(record.planningInterview?.questions[0]?.answer).toEqual({
+    kind: "option",
+    value: "New",
   });
 });
 
