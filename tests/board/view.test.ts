@@ -62,6 +62,7 @@ function state(overrides: Partial<BoardState> = {}): BoardState {
     watches: [],
     poll: {},
     finishedThisWeek: [],
+    progressAt: new Map(),
     ...overrides,
   };
 }
@@ -427,6 +428,32 @@ test("an approved brief leaves the board, and a blocked task says why", () => {
     NOW,
   );
   expect(view.needsYou.map((row) => row.text)).toEqual(["blocked: validation failed twice"]);
+});
+
+test("a running task whose worker made no progress for over 5 minutes shows how long it has idled", () => {
+  const view = boardView(
+    state({
+      tasks: [
+        task({ id: "task-idle", stage: "scouting", createdAt: "2030-01-01T06:00:00.000Z" }),
+        task({ id: "task-busy", stage: "scouting", createdAt: "2030-01-01T06:00:00.000Z" }),
+        task({ id: "task-new", stage: "scouting", createdAt: "2030-01-01T06:00:00.000Z" }),
+      ],
+      progressAt: new Map([
+        ["task-idle", "2030-01-01T11:18:00.000Z"],
+        ["task-busy", "2030-01-01T11:57:00.000Z"],
+      ]),
+    }),
+    NOW,
+  );
+  expect(view.running.map((row) => [row.key, row.since])).toEqual([
+    ["task:task-idle:scouting", "idle 42m"],
+    ["task:task-busy:scouting", "6h"],
+    ["task:task-new:scouting", "6h"],
+  ]);
+  expect(renderBoard(view)).toContain("researching · idle 42m");
+  expect(renderStatusBoard(view, { color: false, columns: 120 })).toContain(
+    "researching · idle 42m",
+  );
 });
 
 test("a paused task shows under Running, and every Needs you row but a block notifies", () => {

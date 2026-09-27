@@ -1,16 +1,24 @@
 import { join } from "node:path";
-import type { Clock, TaskRecord } from "../contracts.ts";
+import type { Clock, IsoTimestamp, TaskRecord } from "../contracts.ts";
 import { withPrWatches } from "../pr-watch/store.ts";
 import { createRequestBriefStore } from "../requests/store.ts";
+import { latestPrimaryReceipt, taskRuntime } from "../runtime/activity.ts";
 import { withStateTransaction } from "../runtime/database.ts";
 import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
+import type { RuntimeState } from "../runtime/schema.ts";
 import { createRequestUsageLedger, readTaskUsage } from "../runtime/usage-ledger.ts";
 import { createTaskStore } from "../tasks/store.ts";
 import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
 import { readTimeline } from "../tasks/timeline-store.ts";
 import { type TaskRollup, taskCost, taskRollup } from "../tasks/trace.ts";
 import { readRegisteredProjects } from "../terminal/projects.ts";
-import { type BoardView, boardView, finishedWithinWeek, withinWeek } from "./view.ts";
+import {
+  type BoardView,
+  boardView,
+  finishedWithinWeek,
+  isRunningStage,
+  withinWeek,
+} from "./view.ts";
 
 /** How often the live board re-reads saved state. */
 const BOARD_REFRESH_MS = 2_000;
@@ -24,18 +32,34 @@ export async function readBoard(home: string, clock: Clock): Promise<BoardView> 
   const now = clock();
   const state = await withStateTransaction(home, async () => {
     const saved = await tasks.list();
+    const runtime = await readRuntimeState(runtimeFile(home));
     return {
       projects,
       tasks: saved,
       briefs: await briefs.list(),
-      routingPauses: (await readRuntimeState(runtimeFile(home))).tasks.flatMap((entry) =>
+      routingPauses: runtime.tasks.flatMap((entry) =>
         entry.routingPause === undefined ? [] : [entry.routingPause],
       ),
       ...(await withPrWatches(home, ({ watches, poll }) => ({ watches, poll }))),
       finishedThisWeek: await weekRollups(home, clock, saved, now),
+      progressAt: await progressTimes(saved, runtime),
     };
   });
   return boardView(state, now);
+}
+
+/** When each running task's worker last made progress, from its newest receipt. */
+async function progressTimes(
+  tasks: readonly TaskRecord[],
+  runtime: RuntimeState,
+): Promise<ReadonlyMap<string, IsoTimestamp>> {
+  const times = new Map<string, IsoTimestamp>();
+  for (const task of tasks) {
+    if (!isRunningStage(task.stage)) continue;
+    const receipt = await latestPrimaryReceipt(task, taskRuntime(runtime, task.id));
+    if (receipt !== undefined) times.set(task.id, receipt.progressAt);
+  }
+  return times;
 }
 
 /** Rollups, with cost, of the tasks whose timeline says they finished in the last 7 days. */

@@ -6,20 +6,17 @@ import type {
   Notification,
   TaskCommunicationView,
   TaskRecord,
-  WorkerReceipt,
 } from "../contracts.ts";
-import { taskRuntime } from "../runtime/activity.ts";
+import { latestPrimaryReceipt, taskRuntime } from "../runtime/activity.ts";
 import { readRuntimeState } from "../runtime/persistence.ts";
 import type { RuntimeState, RuntimeTaskState } from "../runtime/schema.ts";
 import {
   readTaskInbox,
-  readWorkerReceipt,
   taskInboxPath,
   writeTaskInbox,
 } from "../tasks/communication-persistence.ts";
 import { appendTaskMessage, taskInbox } from "../tasks/communication-protocol.ts";
 import type { TaskStore } from "../tasks/store.ts";
-import type { WorkerRole } from "../workers/jobs.ts";
 import { isRecord, pathText, singleLine } from "./records.ts";
 
 export type SourceWorkspace = Readonly<{
@@ -258,31 +255,7 @@ export class SourceInboxWorkflow {
     const state: RuntimeState = await this.#deps.store.exclusive(() =>
       readRuntimeState(this.#deps.runtimePath),
     );
-    const runtime = taskRuntime(state, task.id);
-    const primaryRole: WorkerRole = task.kind === "scout" ? "scout" : "implementer";
-    let activity: WorkerReceipt | undefined;
-    if (runtime !== undefined) {
-      const jobs = [...runtime.jobs]
-        .filter(
-          (job) =>
-            job.kind === "worker" &&
-            job.role === primaryRole &&
-            job.generation === task.generation &&
-            job.receiptPath !== undefined,
-        )
-        .reverse();
-      for (const job of jobs) {
-        const receipt = await readWorkerReceipt(job.receiptPath as string, {
-          jobId: job.id,
-          taskId: task.id,
-          generation: job.generation,
-        }).catch(() => undefined);
-        if (receipt !== undefined) {
-          activity = receipt;
-          break;
-        }
-      }
-    }
+    const activity = await latestPrimaryReceipt(task, taskRuntime(state, task.id));
     const messages = allMessages.map((message) => ({
       ...message,
       status: superseded.has(message.id)
