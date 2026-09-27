@@ -169,6 +169,50 @@ test("inspection and delivery slash commands preserve their arguments", () => {
   ).toBe("task-1: not ready to publish: the worktree has uncommitted or unmerged changes");
 });
 
+test("board summaries validate required Running row data", () => {
+  const row = {
+    key: "task-1:implementing",
+    cause: "implementing",
+    project: "app",
+    mark: "🔨",
+    name: "Fix the flaky login test",
+    text: "implementing",
+  };
+  const board = {
+    now: "2030-01-01T12:00:00.000Z",
+    projects: ["app"],
+    needsYou: [],
+    pullRequests: [],
+    finished: 0,
+  };
+  const complete = {
+    ...board,
+    running: [{ ...row, repoPath: "/work/app", since: "12m" }],
+  };
+  expect(summarizeTandemActionValue("board", complete)).toContain(
+    "Running\n🔨 app  Fix the flaky login test",
+  );
+
+  const incomplete = [
+    { ...board, running: [{ ...row, since: "12m" }] },
+    { ...board, running: [{ ...row, repoPath: "/work/app" }] },
+    {
+      ...board,
+      running: [
+        {
+          ...row,
+          cause: "ready",
+          repoPath: "/work/app",
+          since: "12m",
+        },
+      ],
+    },
+  ];
+  for (const value of incomplete) {
+    expect(summarizeTandemActionValue("board", value)).toBe(JSON.stringify(value));
+  }
+});
+
 test("communication slash commands join quoted deltas and reject extra message arguments", () => {
   expect(parseTandemCommand('steer task-1 "preserve the API" now')).toEqual({
     action: "steer",

@@ -7,7 +7,14 @@ import {
   type PrWatchViewRow,
 } from "../pr-watch/view.ts";
 import { dollars } from "../tasks/trace.ts";
-import { type BoardRow, type BoardView, RUNNING_STAGE_ORDER, type WeekSummary } from "./view.ts";
+import {
+  type BoardRow,
+  type BoardView,
+  RUNNING_STAGE_ORDER,
+  type RunningBoardRow,
+  type RunningStage,
+  type WeekSummary,
+} from "./view.ts";
 
 /** What only `tandem status` adds below the board. */
 export type StatusFooter = Readonly<{
@@ -206,34 +213,30 @@ function needsYouText(row: BoardRow): Line {
   return [span(row.text, "yellow")];
 }
 
-function runningLines(rows: readonly BoardRow[], columns?: number): Line[] {
+function runningLines(rows: readonly RunningBoardRow[], columns?: number): Line[] {
   const ordered = [...rows].sort(compareRunningRows);
   const identitiesByProject = new Map<string, Set<string>>();
   for (const row of ordered) {
-    const identity = row.repoPath ?? row.project;
     const identities = identitiesByProject.get(row.project) ?? new Set<string>();
-    identities.add(identity);
+    identities.add(row.repoPath);
     identitiesByProject.set(row.project, identities);
   }
   const lines: Line[] = [];
   let previousIdentity: string | undefined;
   for (const row of ordered) {
-    const identity = row.repoPath ?? row.project;
-    if (identity !== previousIdentity) {
+    if (row.repoPath !== previousIdentity) {
       if (previousIdentity !== undefined) lines.push([]);
       const heading = projectHeading(row, identitiesByProject.get(row.project));
       lines.push([span(`  ${heading}`, "dim")]);
-      previousIdentity = identity;
+      previousIdentity = row.repoPath;
     }
     lines.push(...runningTaskLines(row, columns));
   }
   return lines;
 }
 
-function projectHeading(row: BoardRow, identities: ReadonlySet<string> | undefined): string {
-  if (identities === undefined || identities.size < 2 || row.repoPath === undefined) {
-    return row.project;
-  }
+function projectHeading(row: RunningBoardRow, identities: ReadonlySet<string> | undefined): string {
+  if (identities === undefined || identities.size < 2) return row.project;
   const paths = [...identities].map((path) => path.split(sep).filter(Boolean));
   const projectPath = row.repoPath.split(sep).filter(Boolean);
   const maximumDepth = Math.max(...paths.map((path) => path.length));
@@ -247,26 +250,25 @@ function projectHeading(row: BoardRow, identities: ReadonlySet<string> | undefin
   return `${row.project} · ${depth < projectPath.length ? `…${sep}${suffix}` : suffix}`;
 }
 
-function compareRunningRows(left: BoardRow, right: BoardRow): number {
+function compareRunningRows(left: RunningBoardRow, right: RunningBoardRow): number {
   return (
     compareText(left.project, right.project) ||
-    compareText(left.repoPath ?? left.project, right.repoPath ?? right.project) ||
+    compareText(left.repoPath, right.repoPath) ||
     runningStageOrder(left.cause) - runningStageOrder(right.cause) ||
     compareText(left.name, right.name) ||
     compareText(left.key, right.key)
   );
 }
 
-function runningStageOrder(cause: BoardRow["cause"]): number {
-  const order = RUNNING_STAGE_ORDER.indexOf(cause as (typeof RUNNING_STAGE_ORDER)[number]);
-  return order < 0 ? RUNNING_STAGE_ORDER.length : order;
+function runningStageOrder(cause: RunningStage): number {
+  return RUNNING_STAGE_ORDER.indexOf(cause);
 }
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function runningTaskLines(row: BoardRow, columns?: number): Line[] {
+function runningTaskLines(row: RunningBoardRow, columns?: number): Line[] {
   const tones = STAGE_TONES[row.cause] ?? ["cyan"];
   const quiet = tones.includes("dim");
   const nameTones = quiet ? (["dim"] as const) : ([] as const);
@@ -274,7 +276,7 @@ function runningTaskLines(row: BoardRow, columns?: number): Line[] {
     span("  "),
     span(`${row.mark} `),
     span(row.text, ...tones),
-    span(` · ${row.since ?? ""}`, "dim"),
+    span(` · ${row.since}`, "dim"),
     span("  "),
   ];
   const prefixWidth = lineWidth(prefix);

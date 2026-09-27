@@ -10,7 +10,7 @@ import { dollars, summarizeRollups, type TaskRollup, type TraceSummary } from ".
 /** Task stages that wait on the user. */
 const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
 /** Terminal order for work Tandem is currently doing. */
-export const RUNNING_STAGE_ORDER: readonly TaskStage[] = [
+export const RUNNING_STAGE_ORDER = [
   "paused",
   "queued",
   "scouting",
@@ -18,7 +18,9 @@ export const RUNNING_STAGE_ORDER: readonly TaskStage[] = [
   "validating",
   "reviewing",
   "awaiting-fixes",
-];
+] as const satisfies readonly TaskStage[];
+export type RunningStage = (typeof RUNNING_STAGE_ORDER)[number];
+type RunningTaskRecord = TaskRecord & Readonly<{ stage: RunningStage }>;
 
 /** Everything the board shows, read from what Tandem already saved. Nothing here calls GitHub. */
 export type BoardState = Readonly<{
@@ -39,7 +41,7 @@ export type BoardView = Readonly<{
   /** When PR watch last read GitHub. */
   readonly checkedAt?: IsoTimestamp;
   readonly needsYou: readonly BoardRow[];
-  readonly running: readonly BoardRow[];
+  readonly running: readonly RunningBoardRow[];
   /** Watched pull requests that do not need the user. */
   readonly pullRequests: readonly PrWatchViewRow[];
   /** Completed, merged, and cancelled tasks, which the board leaves out. */
@@ -68,11 +70,20 @@ export type BoardRow = Readonly<{
   readonly since?: string;
 }>;
 
+export type RunningBoardRow = Omit<BoardRow, "cause" | "repoPath" | "since"> &
+  Readonly<{
+    cause: RunningStage;
+    repoPath: string;
+    since: string;
+  }>;
+
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const NAME_CHARS = 30;
 const TEXT_CHARS = 80;
 
-const RUNNING_LABELS: Readonly<Record<string, Readonly<{ mark: string; label: string }>>> = {
+const RUNNING_LABELS: Readonly<
+  Record<RunningStage, Readonly<{ mark: string; label: string }>>
+> = {
   paused: { mark: "⏸️", label: "paused" },
   queued: { mark: "⏳", label: "waiting to start" },
   scouting: { mark: "🔍", label: "researching" },
@@ -86,6 +97,10 @@ const NEEDS_YOU_LABELS: Readonly<Record<string, string>> = {
   "awaiting-approval": "waiting for approval",
   ready: "done, waiting for you",
 };
+
+export function isRunningStage(stage: unknown): stage is RunningStage {
+  return RUNNING_STAGE_ORDER.some((candidate) => candidate === stage);
+}
 
 /**
  * Sorts saved state into the board's sections. "Needs you" holds briefs awaiting approval, task
@@ -104,9 +119,7 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
       ...live.filter(needsYou).map(taskNeedsYouRow),
       ...red.map((row) => pullRequestRow(row, state)),
     ],
-    running: live
-      .filter((task) => !needsYou(task) && RUNNING_STAGE_ORDER.includes(task.stage))
-      .map((task) => runningRow(task, now)),
+    running: live.filter(isRunningTask).map((task) => runningRow(task, now)),
     pullRequests: pullRequests.rows.filter((row) => row.color !== "red"),
     finished: state.tasks.length - live.length,
     ...(state.finishedThisWeek.length === 0 ? {} : { week: weekSummary(state.finishedThisWeek) }),
@@ -215,9 +228,7 @@ function boardLines(rows: readonly BoardRow[]): string[] {
 }
 
 function compactBoardName(row: BoardRow): string {
-  return RUNNING_STAGE_ORDER.some((stage) => stage === row.cause)
-    ? shorten(row.name, NAME_CHARS)
-    : row.name;
+  return isRunningStage(row.cause) ? shorten(row.name, NAME_CHARS) : row.name;
 }
 
 function rowText(row: BoardRow): string {
@@ -226,6 +237,10 @@ function rowText(row: BoardRow): string {
 
 function needsYou(task: TaskRecord): boolean {
   return task.communication?.question !== undefined || NEEDS_YOU_STAGES.includes(task.stage);
+}
+
+function isRunningTask(task: TaskRecord): task is RunningTaskRecord {
+  return !needsYou(task) && isRunningStage(task.stage);
 }
 
 function briefRow(brief: RequestBriefRecord): BoardRow {
@@ -261,8 +276,8 @@ function taskNeedsYouRow(task: TaskRecord): BoardRow {
   };
 }
 
-function runningRow(task: TaskRecord, now: IsoTimestamp): BoardRow {
-  const { mark, label } = RUNNING_LABELS[task.stage] ?? { mark: "🔨", label: task.stage };
+function runningRow(task: RunningTaskRecord, now: IsoTimestamp): RunningBoardRow {
+  const { mark, label } = RUNNING_LABELS[task.stage];
   return {
     key: `task:${task.id}:${task.stage}`,
     cause: task.stage,
@@ -274,7 +289,7 @@ function runningRow(task: TaskRecord, now: IsoTimestamp): BoardRow {
   };
 }
 
-function taskIdentity(task: TaskRecord): Pick<BoardRow, "repoPath" | "project"> {
+function taskIdentity(task: TaskRecord): Readonly<{ repoPath: string; project: string }> {
   return {
     repoPath: task.repoPath,
     project: basename(task.repoPath),
