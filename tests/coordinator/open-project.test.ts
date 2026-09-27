@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../src/adapters/commands.ts";
@@ -16,33 +16,53 @@ const input = {
   tandemCheckout: "/tandem",
 };
 
-test("opening a project runs the front door without this coordinator's pane or checkout", () => {
-  expect(openProjectCommand(input)).toEqual({
-    argv: [
-      "env",
-      "-u",
-      "TANDEM_REPO",
-      "-u",
-      "TANDEM_SOURCE_REPO",
-      "-u",
-      "TANDEM_PARENT_WORKSPACE",
-      "-u",
-      "HERDR_PANE_ID",
-      "-u",
-      "HERDR_WORKSPACE_ID",
-      "bun",
-      "/tandem/src/main.ts",
-      "/code/app",
-      "--home",
-      "/tandem-home",
-      "--session",
-      "tandem",
-      "--pool-root",
-      "/tandem-home/pool",
-      "--no-attach",
-    ],
-    cwd: "/code/app",
-  });
+test("opening a project strips an ambient Herdr context before the child starts", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-open-project-")));
+  const checkout = join(root, "tandem");
+  const repo = join(root, "app");
+  const herdrEnvironment = {
+    HERDR_ENV: "1",
+    HERDR_SESSION: "ambient-session",
+    HERDR_SESSION_NAME: "ambient-name",
+    HERDR_WORKSPACE_ID: "ambient-workspace",
+    HERDR_PANE_ID: "ambient-pane",
+  } as const;
+  const herdrKeys = Object.keys(herdrEnvironment) as Array<keyof typeof herdrEnvironment>;
+  try {
+    await mkdir(join(checkout, "src"), { recursive: true });
+    await mkdir(repo, { recursive: true });
+    await writeFile(
+      join(checkout, "src", "main.ts"),
+      [
+        "const keys = [",
+        '  "HERDR_ENV",',
+        '  "HERDR_SESSION",',
+        '  "HERDR_SESSION_NAME",',
+        '  "HERDR_WORKSPACE_ID",',
+        '  "HERDR_PANE_ID",',
+        "];",
+        "console.log(JSON.stringify(Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null]))));",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(join(repo, ".keep"), "", "utf8");
+
+    const request = openProjectCommand({
+      ...input,
+      repoPath: repo,
+      tandemCheckout: checkout,
+    });
+    const result = await runCommand({ ...request, env: herdrEnvironment });
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(
+      Object.fromEntries(herdrKeys.map((key) => [key, null])),
+    );
+    expect(request.argv).toContain("--session");
+    expect(request.argv).toContain(input.sessionId);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("an opened project's workspace is brought forward", async () => {

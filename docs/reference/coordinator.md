@@ -131,12 +131,13 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   or `owner/repo`, ignoring case (`findCheckoutsByName` in src/repos/locate.ts). Each match says
   whether it is already set up; several matches are a question for the user.
 - `open-project` (approval required) runs the front door for one saved project, `tandem PATH
-  --no-attach` in the same home and session (src/coordinator/open-project.ts), with the calling
-  pane's `TANDEM_REPO`, `TANDEM_SOURCE_REPO`, `TANDEM_PARENT_WORKSPACE`, `HERDR_PANE_ID`, and
-  `HERDR_WORKSPACE_ID` removed so the launch claims nothing of this coordinator. It refuses a
-  project without saved settings or saved model choices, before running anything. Afterwards it
-  focuses the project's coordinator workspace from its record; a failed focus is reported, not an
-  error.
+  --no-attach` in the same home and explicit target session (src/coordinator/open-project.ts), with
+  the calling pane's `TANDEM_REPO`, `TANDEM_SOURCE_REPO`, `TANDEM_PARENT_WORKSPACE`, `HERDR_ENV`,
+  `HERDR_SESSION`, `HERDR_SESSION_NAME`, `HERDR_WORKSPACE_ID`, and `HERDR_PANE_ID` removed so the
+  launch claims nothing of this coordinator or inherits a dangling Herdr identity. It passes
+  `--session` explicitly for the target session. It refuses a project without saved settings or
+  saved model choices, before running anything. Afterwards it focuses the project's coordinator
+  workspace from its record; a failed focus is reported, not an error.
 - At each session start, while no saved project other than the Tandem checkout exists, it opens
   the welcome popup: `herdr plugin pane open --plugin tandem.ui --entrypoint welcome` with
   `TANDEM_WELCOME_PANE` set to its own pane. The popup runs `tandem welcome`
