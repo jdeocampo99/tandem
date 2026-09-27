@@ -727,6 +727,56 @@ test("an uncertain-outcome routing pause stops blocking once that attempt settle
   }
 });
 
+test("a missing-model pause clears once the catalogue lists the pinned model, and otherwise keeps its decision", async () => {
+  const pinned = SCENARIO_POLICY.config.models.implementer;
+  for (const listed of [false, true]) {
+    const ompModels = [
+      {
+        selector: listed ? pinned.model : "scenario/other",
+        id: "m",
+        provider: "scenario",
+        thinking: [pinned.thinking],
+      },
+    ];
+    await withScenario({ ompModels }, async (world) => {
+      await seedScenarioTask(world, { kind: "implementation", stage: "queued" });
+      await seedScenarioRuntime(
+        world,
+        scenarioRuntimeTask({
+          routingPause: {
+            schemaVersion: 1,
+            decisionId: "routing-absent",
+            reason: "pinned-model-absent-from-catalogue",
+            taskId: SCENARIO_TASK_ID,
+            jobId: "job-1",
+            operationId: "operation-1",
+            role: "implementer",
+            generation: 0,
+            attempt: 1,
+            policyDigest: policyIdentity(SCENARIO_POLICY),
+            inputHead: SCENARIO_HEAD,
+            pinnedSelector: pinned.model,
+            pinnedThinking: pinned.thinking,
+            evidenceGaps: ["incumbent-absent-from-catalogue"],
+            enabledProviders: [],
+            usageSource: "no-governing-request",
+            observedAt: SCENARIO_NOW,
+          },
+        }),
+      );
+      const service = serviceFor(world);
+
+      await service.tick();
+      await service.tick();
+
+      const runtime = (await world.snapshot()).runtime.tasks[0];
+      expect(runtime?.routingPause?.decisionId).toBe(listed ? undefined : "routing-absent");
+      expect(runtime?.jobs.some(activeRuntimeJob)).toBe(listed);
+      await service.shutdown();
+    });
+  }
+});
+
 test("a saved pause with a reason routing no longer raises doesn't block; the pinned model relaunches", async () => {
   await withScenario({}, async (world) => {
     await seedScenarioTask(world, { kind: "implementation", stage: "queued" });
