@@ -321,7 +321,43 @@ test("a fix reaching outside the authorized surface broadens the review", () => 
   expect(brief.impact.assessment).toBe("expanded");
   expect(brief.impact.escalation).toBe("broad-impact");
   expect(brief.impact.outsideScopeFiles).toEqual(["src/config/policy.ts"]);
-  expect(renderReviewBrief(brief)).toContain("Review the cumulative diff and the affected callers");
+  expect(renderReviewBrief(brief)).not.toContain("in full");
+});
+
+test("a fix-round brief touching a test file no finding names still gets the fix-round focus", () => {
+  const brief = buildReviewBrief({
+    task: task({
+      reviews: [priorReview()],
+      findingLedger: [ledgerEntry()],
+      iterationScope: {
+        head: "head-1",
+        generation: 0,
+        policyDigest: policyIdentity(policy),
+        reproduces: [],
+        surfaces: [],
+        findingIds: ["f-1"],
+      },
+    }),
+    head: HEAD,
+    lens: "review",
+    observations: observations({
+      sinceLastReview: {
+        range: "since-last-review",
+        fromRef: "head-1",
+        toRef: HEAD,
+        patchPath: "/jobs/since-last-review.patch",
+        changedFiles: ["src/service/controller.ts", "tests/service/controller.test.ts"],
+        truncated: false,
+      },
+    }),
+  });
+
+  expect(brief.impact.assessment).toBe("expanded");
+  const rendered = renderReviewBrief(brief);
+  expect(rendered).toContain("## Fix-round focus");
+  expect(rendered).toContain("The cumulative diff stays available as reference.");
+  expect(rendered).toContain("Raise a new P0 or P1 only on lines changed since the last review");
+  expect(rendered).not.toContain("Review the cumulative diff and the affected callers in full");
 });
 
 test("an unbounded fix surface reports unknown impact and escalates", () => {
@@ -374,7 +410,10 @@ test("a truncated incremental patch cannot bound the impact", () => {
   });
 
   expect(brief.impact.assessment).toBe("unknown");
-  expect(renderReviewBrief(brief)).toContain("truncated");
+  const rendered = renderReviewBrief(brief);
+  expect(rendered).toContain("truncated");
+  expect(rendered).not.toContain("## Fix-round focus");
+  expect(rendered).toContain("Review the cumulative diff and the affected callers in full");
 });
 
 test("advisory leads are rendered with provenance as untrusted leads", () => {
