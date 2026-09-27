@@ -21,9 +21,9 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   contains hands-on checks only a person can make. Tasks copy `manualVerification`; reviewers never
   judge it, implementers may report on it without blocking, and delivery renders it as an unticked
   PR checklist.
-- Older records may omit `userStories` and `verificationCommands`. They decode as empty and those
-  fields are excluded from both digests while empty, so stored content digests and approvals stay
-  unchanged. Reading or projecting an old brief does not rewrite its record.
+- Older records may omit both `userStories` and `verificationCommands`. Decoding preserves
+  that omission; absent fields stay out of both digests, so stored content digests and approvals
+  stay unchanged. Review-pane updates do not add those fields.
 - `skipReview: true` records the user's planning-time decision that the work needs no code review.
   It is agreement (it joins the digest only when set) and only the coordinator sets it, when the
   user says so. While the approval is current, tasks under the brief record
@@ -44,8 +44,10 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
   ended by cancelling its work. An abandoned brief is final: it no longer counts as awaiting
   approval (so a no-id `brief-approve` and the status board's "Needs you" skip it), dispatch, revision,
   and approval are refused, and its owned review pane is retired. The record and history stay.
-- Brief approval is agreement only; scope approval, publish, merge, deploy, and destructive actions
-  stay separate.
+- Brief approval covers this plan only. Implementation scope, publication, direct merges,
+  deployment, and destructive actions need separate approval. For a published, watched PR,
+  [PR watch](pr-watch.md#merging) may arm auto-merge or add the queue label, then merge it
+  after checks pass without another merge approval.
 
 ## Review pane
 

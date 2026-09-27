@@ -30,7 +30,7 @@ export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
     content.recommendedApproach,
     "",
     "## Approval scope",
-    "Brief approval confirms agreement with this plan only. Implementation still requires separate approval of its final scope. Publishing, merging, deploying, and destructive actions need separate approval.",
+    "Brief approval covers this plan only. Implementation scope, publication, direct merges, deployment, and destructive actions need separate approval. For a published, watched PR, PR watch may arm auto-merge or add the queue label, then merge it after checks pass without another merge approval.",
     "",
     "Critical safety limits:",
     ...bullets(content.constraints),

@@ -417,7 +417,13 @@ test("the brief puts agreement first and detailed checks below it", () => {
   expect(settled).not.toContain("Decisions required");
   expect(settled).toContain("Plan status: not approved yet.");
   expect(open.indexOf("## Approval scope") < open.indexOf("## How it is checked")).toBe(true);
-  expect(open).toContain("Implementation still requires separate approval of its final scope.");
+  expect(open).toContain(
+    "Implementation scope, publication, direct merges, deployment, and destructive actions need separate approval.",
+  );
+  expect(open).toContain(
+    "For a published, watched PR, PR watch may arm auto-merge or add the queue label, then merge it after checks pass without another merge approval.",
+  );
+  expect(open).not.toContain("merging, deploying, and destructive actions need separate approval");
   expect(open).toContain("Critical safety limits:\n- SQLite stays authoritative");
 });
 
