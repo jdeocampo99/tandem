@@ -535,11 +535,7 @@ function briefUserStories(
       );
     }
     const record = entry as Record<string, unknown>;
-    if (
-      Object.keys(record).some(
-        (field) => !USER_STORY_FIELDS.some((allowed) => allowed === field),
-      )
-    ) {
+    if (Object.keys(record).some((field) => !USER_STORY_FIELDS.some((allowed) => allowed === field))) {
       throw new RequestBriefError(
         "invalid-content",
         `A request brief userStories[${index}] has an unknown field`,

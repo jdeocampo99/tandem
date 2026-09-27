@@ -10,9 +10,9 @@ import {
   requestBriefDigests,
   reviseRequestBriefRecord,
 } from "../../src/requests/brief.ts";
+import { renderRequestBriefMarkdown } from "../../src/requests/markdown.ts";
 import { createRequestBriefStore, type RequestBriefStore } from "../../src/requests/store.ts";
 import { parseRequestBriefRecord } from "../../src/requests/store-codec.ts";
-import { renderRequestBriefMarkdown } from "../../src/requests/markdown.ts";
 import { StateCorruptionError, TaskStoreError } from "../../src/tasks/store-errors.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";

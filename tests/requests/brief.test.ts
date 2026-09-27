@@ -386,9 +386,7 @@ test("the brief puts agreement first and detailed checks below it", () => {
   ]);
   expect(settled).not.toContain("Decisions required");
   expect(settled).toContain("Plan status: not approved yet.");
-  expect(
-    open.indexOf("## Approval scope") < open.indexOf("## How it is checked"),
-  ).toBe(true);
+  expect(open.indexOf("## Approval scope") < open.indexOf("## How it is checked")).toBe(true);
   expect(open).toContain("Implementation still requires separate approval of its final scope.");
   expect(open).toContain("Critical safety limits:\n- SQLite stays authoritative");
 });
