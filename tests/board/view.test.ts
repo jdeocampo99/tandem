@@ -125,9 +125,11 @@ test("status puts what needs you first, then running work and pull requests, the
       "🔴 app     acme/app#409 branch-409  🙋 test_cache_evict failed twice",
       "",
       `RUNNING 2 ${"─".repeat(64)}`,
-      "   PROJECT  TASK                      STAGE         TIME",
-      "🔨 tandem   Fix the flaky login test  implementing   12m",
-      "⏸️ app      Dark mode tokens          paused          2h",
+      "  app",
+      "  ⏸️ paused · 2h  Dark mode tokens",
+      "",
+      "  tandem",
+      "  🔨 implementing · 12m  Fix the flaky login test",
       "",
       `PRS 1 ${"─".repeat(68)}`,
       "   PULL REQUEST             CHECKS          STATUS       NEXT",
@@ -146,6 +148,136 @@ test("status puts what needs you first, then running work and pull requests, the
     ["question:q-1", "/work/app"],
     ["pr:acme/app#409", "/work/app"],
   ]);
+});
+
+test("Running groups repository identities and sorts tasks by stage, description, and stable ties", () => {
+  const alpha = "/repos/alpha/shared";
+  const zeta = "/repos/zeta/shared";
+  const view = boardView(
+    state({
+      tasks: [
+        task({
+          id: "zeta",
+          repoPath: zeta,
+          stage: "implementing",
+          objective: "Zeta repository task",
+          createdAt: "2030-01-01T11:40:00.000Z",
+        }),
+        task({
+          id: "tie-z",
+          repoPath: alpha,
+          stage: "implementing",
+          objective: "Alpha implementation",
+          createdAt: "2030-01-01T11:48:00.000Z",
+        }),
+        task({
+          id: "zulu",
+          repoPath: alpha,
+          stage: "implementing",
+          objective: "Zulu implementation",
+          createdAt: "2030-01-01T11:45:00.000Z",
+        }),
+        task({
+          id: "research",
+          repoPath: alpha,
+          stage: "scouting",
+          objective: "Research implementation",
+          createdAt: "2030-01-01T11:50:00.000Z",
+        }),
+        task({
+          id: "tie-a",
+          repoPath: alpha,
+          stage: "implementing",
+          objective: "Alpha implementation",
+          createdAt: "2030-01-01T11:55:00.000Z",
+        }),
+        task({
+          id: "paused",
+          repoPath: alpha,
+          stage: "paused",
+          objective: "Paused task",
+          createdAt: "2030-01-01T11:00:00.000Z",
+        }),
+        task({
+          id: "queued",
+          repoPath: alpha,
+          stage: "queued",
+          objective: "Queued task",
+          createdAt: "2030-01-01T11:30:00.000Z",
+        }),
+      ],
+    }),
+    NOW,
+  );
+  const runningBefore = [...view.running];
+  const output = renderStatus(
+    view,
+    { code: "abc", coordinators: [] },
+    { color: false, columns: 120 },
+  );
+  const rerendered = renderStatus(
+    view,
+    { code: "abc", coordinators: [] },
+    { color: false, columns: 120 },
+  );
+  expect(rerendered).toBe(output);
+  expect(view.running).toEqual(runningBefore);
+  const alphaHeading = "  shared · …/alpha/shared";
+  const zetaHeading = "  shared · …/zeta/shared";
+  const alphaStart = output.indexOf(alphaHeading);
+  const zetaStart = output.indexOf(zetaHeading);
+  const alphaGroup = output.slice(alphaStart, zetaStart);
+
+  expect(alphaStart).toBeGreaterThan(-1);
+  expect(zetaStart).toBeGreaterThan(alphaStart);
+  expect(output.split(alphaHeading)).toHaveLength(2);
+  expect(output.split(zetaHeading)).toHaveLength(2);
+  expect(output.slice(0, zetaStart).endsWith("\n\n")).toBe(true);
+  expect(alphaGroup.indexOf("paused ·")).toBeLessThan(alphaGroup.indexOf("waiting to start ·"));
+  expect(alphaGroup.indexOf("waiting to start ·")).toBeLessThan(
+    alphaGroup.indexOf("researching ·"),
+  );
+  expect(alphaGroup.indexOf("researching ·")).toBeLessThan(alphaGroup.indexOf("implementing ·"));
+  expect(alphaGroup.indexOf("implementing · 5m  Alpha implementation")).toBeLessThan(
+    alphaGroup.indexOf("implementing · 12m  Alpha implementation"),
+  );
+  expect(alphaGroup.indexOf("Alpha implementation")).toBeLessThan(
+    alphaGroup.indexOf("Zulu implementation"),
+  );
+});
+
+test("Running descriptions wrap to two terminal-cell-aware lines without hiding stage or time", () => {
+  const view = boardView(
+    state({
+      tasks: [
+        task({
+          id: "long",
+          repoPath: "/work/app",
+          stage: "implementing",
+          objective:
+            "Investigate the user's report that the Running section mixes projects and cuts task objectives before the useful context appears",
+          createdAt: "2030-01-01T11:48:00.000Z",
+        }),
+      ],
+    }),
+    NOW,
+  );
+  const footer = { code: "abc", coordinators: [] };
+  for (const columns of [60, 80, 120]) {
+    const output = renderStatus(view, footer, { color: false, columns });
+    const lines = output.trimEnd().split("\n");
+    const taskLine = lines.findIndex((line) => line.includes("implementing · 12m"));
+    const firstDescription = lines[taskLine]?.split("  ").at(-1) ?? "";
+    const nextDescription = lines[taskLine + 1]?.trim() ?? "";
+    const projectHeading = lines.indexOf("  app");
+    const nextEmptyLine = lines.indexOf("", projectHeading + 1);
+
+    expect(lines.every((line) => Bun.stringWidth(line) <= columns)).toBe(true);
+    expect(taskLine).toBeGreaterThan(-1);
+    expect(Bun.stringWidth(firstDescription)).toBeGreaterThan(30);
+    expect(`${firstDescription} ${nextDescription}`).toContain("Running section mixes projects");
+    expect(nextEmptyLine - projectHeading - 1).toBe(2);
+  }
 });
 
 test("an empty status says nothing needs you, that PR watch has not checked yet, and how to open a coordinator", () => {

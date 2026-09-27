@@ -9,8 +9,8 @@ import { dollars, summarizeRollups, type TaskRollup, type TraceSummary } from ".
 
 /** Task stages that wait on the user. */
 const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
-/** Task stages where Tandem is working on its own, or the user paused it. */
-const RUNNING_STAGES: readonly TaskStage[] = [
+/** Terminal order for work Tandem is currently doing. */
+export const RUNNING_STAGE_ORDER: readonly TaskStage[] = [
   "paused",
   "queued",
   "scouting",
@@ -105,7 +105,7 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
       ...red.map((row) => pullRequestRow(row, state)),
     ],
     running: live
-      .filter((task) => !needsYou(task) && RUNNING_STAGES.includes(task.stage))
+      .filter((task) => !needsYou(task) && RUNNING_STAGE_ORDER.includes(task.stage))
       .map((task) => runningRow(task, now)),
     pullRequests: pullRequests.rows.filter((row) => row.color !== "red"),
     finished: state.tasks.length - live.length,
@@ -206,11 +206,18 @@ function weekSummary(rollups: readonly TaskRollup[]): WeekSummary {
 function boardLines(rows: readonly BoardRow[]): string[] {
   const width = (values: readonly string[]) =>
     Math.max(0, ...values.map((value) => [...value].length));
+  const names = rows.map(compactBoardName);
   const projectWidth = width(rows.map((row) => row.project));
-  const nameWidth = width(rows.map((row) => row.name));
-  return rows.map((row) =>
-    `${row.mark} ${[pad(row.project, projectWidth), pad(row.name, nameWidth), rowText(row)].join("  ")}`.trimEnd(),
+  const nameWidth = width(names);
+  return rows.map((row, index) =>
+    `${row.mark} ${[pad(row.project, projectWidth), pad(names[index] ?? "", nameWidth), rowText(row)].join("  ")}`.trimEnd(),
   );
+}
+
+function compactBoardName(row: BoardRow): string {
+  return RUNNING_STAGE_ORDER.some((stage) => stage === row.cause)
+    ? shorten(row.name, NAME_CHARS)
+    : row.name;
 }
 
 function rowText(row: BoardRow): string {
@@ -248,6 +255,7 @@ function taskNeedsYouRow(task: TaskRecord): BoardRow {
     key: question === undefined ? `task:${task.id}:${task.stage}` : `question:${question.id}`,
     cause: question === undefined ? task.stage : "question",
     ...taskIdentity(task),
+    name: shorten(task.objective, NAME_CHARS),
     mark: "🙋",
     text: shorten(text, TEXT_CHARS),
   };
@@ -259,17 +267,17 @@ function runningRow(task: TaskRecord, now: IsoTimestamp): BoardRow {
     key: `task:${task.id}:${task.stage}`,
     cause: task.stage,
     ...taskIdentity(task),
+    name: task.objective,
     mark,
     text: label,
     since: elapsed(task.createdAt, now),
   };
 }
 
-function taskIdentity(task: TaskRecord): Pick<BoardRow, "repoPath" | "project" | "name"> {
+function taskIdentity(task: TaskRecord): Pick<BoardRow, "repoPath" | "project"> {
   return {
     repoPath: task.repoPath,
     project: basename(task.repoPath),
-    name: shorten(task.objective, NAME_CHARS),
   };
 }
 

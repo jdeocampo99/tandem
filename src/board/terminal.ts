@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, sep } from "node:path";
 import { styleText } from "node:util";
 import {
   elapsed,
@@ -7,7 +7,12 @@ import {
   type PrWatchViewRow,
 } from "../pr-watch/view.ts";
 import { dollars } from "../tasks/trace.ts";
-import type { BoardRow, BoardView, WeekSummary } from "./view.ts";
+import {
+  RUNNING_STAGE_ORDER,
+  type BoardRow,
+  type BoardView,
+  type WeekSummary,
+} from "./view.ts";
 
 /** What only `tandem status` adds below the board. */
 export type StatusFooter = Readonly<{
@@ -54,7 +59,6 @@ type Section = Readonly<{
 }>;
 
 export const RULE_MIN = 40;
-const TIME_WIDTH = 4;
 const CHECK_BAR = 8;
 const STAGE_TONES: Readonly<Record<string, readonly Tone[]>> = {
   paused: ["dim"],
@@ -102,7 +106,7 @@ export function renderStatus(view: BoardView, footer: StatusFooter, style: Statu
             title: "RUNNING",
             count: view.running.length,
             tone: "cyan",
-            lines: runningLines(view.running),
+            lines: runningLines(view.running, style.columns),
           } as const,
         ]),
     ...(view.pullRequests.length === 0
@@ -207,37 +211,141 @@ function needsYouText(row: BoardRow): Line {
   return [span(row.text, "yellow")];
 }
 
-function runningLines(rows: readonly BoardRow[]): Line[] {
-  const projectWidth = columnWidth(["PROJECT", ...rows.map((row) => row.project)]);
-  const nameWidth = columnWidth(["TASK", ...rows.map((row) => row.name)]);
-  const stageWidth = columnWidth(["STAGE", ...rows.map((row) => row.text)]);
-  const heading: Line = [
-    span("   "),
-    ...cell("PROJECT", projectWidth, "dim"),
+function runningLines(rows: readonly BoardRow[], columns?: number): Line[] {
+  const ordered = [...rows].sort(compareRunningRows);
+  const identitiesByProject = new Map<string, Set<string>>();
+  for (const row of ordered) {
+    const identity = row.repoPath ?? row.project;
+    const identities = identitiesByProject.get(row.project) ?? new Set<string>();
+    identities.add(identity);
+    identitiesByProject.set(row.project, identities);
+  }
+  const lines: Line[] = [];
+  let previousIdentity: string | undefined;
+  for (const row of ordered) {
+    const identity = row.repoPath ?? row.project;
+    if (identity !== previousIdentity) {
+      if (previousIdentity !== undefined) lines.push([]);
+      const heading = projectHeading(row, identitiesByProject.get(row.project));
+      lines.push([span(`  ${heading}`, "dim")]);
+      previousIdentity = identity;
+    }
+    lines.push(...runningTaskLines(row, columns));
+  }
+  return lines;
+}
+
+function projectHeading(
+  row: BoardRow,
+  identities: ReadonlySet<string> | undefined,
+): string {
+  if (identities === undefined || identities.size < 2 || row.repoPath === undefined) {
+    return row.project;
+  }
+  const paths = [...identities].map((path) => path.split(sep).filter(Boolean));
+  const projectPath = row.repoPath.split(sep).filter(Boolean);
+  const maximumDepth = Math.max(...paths.map((path) => path.length));
+  let depth = 1;
+  while (depth < maximumDepth) {
+    const suffixes = new Set(paths.map((path) => path.slice(-depth).join(sep)));
+    if (suffixes.size === paths.length) break;
+    depth += 1;
+  }
+  const suffix = projectPath.slice(-depth).join(sep);
+  return `${row.project} · ${depth < projectPath.length ? `…${sep}${suffix}` : suffix}`;
+}
+
+function compareRunningRows(left: BoardRow, right: BoardRow): number {
+  return (
+    compareText(left.project, right.project) ||
+    compareText(left.repoPath ?? left.project, right.repoPath ?? right.project) ||
+    runningStageOrder(left.cause) - runningStageOrder(right.cause) ||
+    compareText(left.name, right.name) ||
+    compareText(left.key, right.key)
+  );
+}
+
+function runningStageOrder(cause: BoardRow["cause"]): number {
+  const order = RUNNING_STAGE_ORDER.findIndex((stage) => stage === cause);
+  return order < 0 ? RUNNING_STAGE_ORDER.length : order;
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function runningTaskLines(row: BoardRow, columns?: number): Line[] {
+  const tones = STAGE_TONES[row.cause] ?? ["cyan"];
+  const quiet = tones.includes("dim");
+  const nameTones = quiet ? (["dim"] as const) : ([] as const);
+  const prefix: Line = [
     span("  "),
-    ...cell("TASK", nameWidth, "dim"),
+    span(`${row.mark} `),
+    span(row.text, ...tones),
+    span(` · ${row.since ?? ""}`, "dim"),
     span("  "),
-    ...cell("STAGE", stageWidth, "dim"),
-    span("  "),
-    ...rightCell("TIME", TIME_WIDTH, "dim"),
   ];
+  const prefixWidth = lineWidth(prefix);
+  const descriptionWidth =
+    columns === undefined ? Number.POSITIVE_INFINITY : Math.max(1, columns - prefixWidth);
+  const description = wrapDescription(row.name, descriptionWidth);
   return [
-    heading,
-    ...rows.map((row): Line => {
-      const tones = STAGE_TONES[row.cause] ?? ["cyan"];
-      const quiet = tones.includes("dim");
-      return [
-        span(`${row.mark} `),
-        ...cell(row.project, projectWidth, "dim"),
-        span("  "),
-        ...cell(row.name, nameWidth, ...(quiet ? (["dim"] as const) : [])),
-        span("  "),
-        ...cell(row.text, stageWidth, ...tones),
-        span("  "),
-        ...rightCell(row.since ?? "", TIME_WIDTH, "dim"),
-      ];
-    }),
+    [...prefix, span(description[0] ?? "", ...nameTones)],
+    ...description.slice(1).map((text): Line => [
+      span(" ".repeat(prefixWidth)),
+      span(text, ...nameTones),
+    ]),
   ];
+}
+
+function wrapDescription(text: string, width: number): string[] {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (normalized.length === 0) return [""];
+
+  const lines: string[] = [];
+  let line = "";
+  let lineWidth = 0;
+  const spaceWidth = textWidth(" ");
+  for (const word of normalized.split(" ")) {
+    const wordWidth = textWidth(word);
+    const nextWidth = line.length === 0 ? wordWidth : lineWidth + spaceWidth + wordWidth;
+    if (nextWidth <= width) {
+      line = line.length === 0 ? word : `${line} ${word}`;
+      lineWidth = nextWidth;
+      continue;
+    }
+    if (line.length > 0) lines.push(line);
+    let piece = "";
+    let pieceWidth = 0;
+    for (const { segment } of graphemes.segment(word)) {
+      const segmentWidth = textWidth(segment);
+      if (piece.length > 0 && pieceWidth + segmentWidth > width) {
+        lines.push(piece);
+        piece = "";
+        pieceWidth = 0;
+      }
+      piece += segment;
+      pieceWidth += segmentWidth;
+    }
+    line = piece;
+    lineWidth = pieceWidth;
+  }
+  if (line.length > 0 || lines.length === 0) lines.push(line);
+  if (lines.length <= 2) return lines;
+  return [lines[0] ?? "", appendEllipsis(lines[1] ?? "", width)];
+}
+
+function appendEllipsis(text: string, width: number): string {
+  const room = Math.max(0, width - textWidth("…"));
+  let result = "";
+  let used = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    const segmentWidth = textWidth(segment);
+    if (used + segmentWidth > room) break;
+    result += segment;
+    used += segmentWidth;
+  }
+  return `${result.trimEnd()}…`;
 }
 
 function prLines(rows: readonly PrWatchViewRow[]): Line[] {
@@ -343,10 +451,6 @@ function footerLines(view: BoardView, footer: StatusFooter): Line[] {
 
 export function cell(text: string, width: number, ...tones: Tone[]): Line {
   return pad([span(text, ...tones)], width);
-}
-
-function rightCell(text: string, width: number, ...tones: Tone[]): Line {
-  return [span(" ".repeat(Math.max(0, width - textWidth(text)))), span(text, ...tones)];
 }
 
 function pad(line: Line, width: number): Line {
