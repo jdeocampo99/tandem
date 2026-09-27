@@ -73,7 +73,7 @@ import {
   withRestartRecorded,
   withValidationRetryRecorded,
 } from "./central-reentry.ts";
-import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "./central-review.ts";
+import { isDeadReviewFailure, unresolvedReviewFailure } from "./central-review.ts";
 
 /** What one central recovery pass did for a task. */
 export type CentralRecoveryAction =
@@ -750,7 +750,7 @@ export class CentralRecoveryWorkflow {
     if (runtime === undefined) return skipped(task.id, "durable runtime metadata is missing");
     if (hasLiveOwner(runtime)) return skipped(task.id, LIVE_OWNER_REASON);
     const deadReview = unresolvedReviewFailure(task, runtime);
-    if (deadReview === undefined || !isQuarantinedReviewFailure(deadReview)) {
+    if (deadReview === undefined || !isDeadReviewFailure(deadReview)) {
       return skipped(
         task.id,
         "no unresolved reviewer/verifier failure eligible for automatic recovery",
@@ -961,7 +961,7 @@ export class CentralRecoveryWorkflow {
     const runtime = await this.readTaskRuntime(task.id);
     if (runtime === undefined || task.stage !== "reviewing" || hasLiveOwner(runtime)) return;
     const deadReview = unresolvedReviewFailure(task, runtime);
-    if (deadReview === undefined || !isQuarantinedReviewFailure(deadReview)) return;
+    if (deadReview === undefined || !isDeadReviewFailure(deadReview)) return;
     if (!isReviewable(task)) return;
     if ((await this.stopDeadReviewLens(task, runtime, deadReview)) !== "stopped") return;
     const reasonSummary = reviewFailureSummary(deadReview.error);

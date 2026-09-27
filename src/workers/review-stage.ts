@@ -15,7 +15,7 @@ import type {
   ReviewMode,
   TaskRecord,
 } from "../contracts.ts";
-import { isQuarantinedReviewFailure, unresolvedReviewFailure } from "../recovery/central-review.ts";
+import { isDeadReviewFailure, unresolvedReviewFailure } from "../recovery/central-review.ts";
 import { writeJsonAtomically, writeTextAtomically } from "../runtime/persistence.ts";
 import type { DurableJob, RuntimeTaskState } from "../runtime/schema.ts";
 import {
@@ -284,12 +284,12 @@ export class ReviewStage {
     }
     // A lens whose most recent job failed and is still unresolved either blocks (a genuine content
     // failure the worker itself reported, a stale canonical instruction, or a malformed result) or,
-    // when the job's own recorded reason is a durable-quarantine one (proven-unowned: the pane or its
-    // result disappeared, never proof of a real outcome), is left for central recovery's `reviewing`
+    // when the job's own recorded reason is a dead-worker one (the pane or its result disappeared, or
+    // a restart stopped it, never proof of a real outcome), is left for central recovery's `reviewing`
     // re-entry, which the caller runs before this method and which clears the dead lens so it is
     // picked up as the next lens instead.
     const failedReview = unresolvedReviewFailure(task, runtime);
-    if (failedReview !== undefined && !isQuarantinedReviewFailure(failedReview)) {
+    if (failedReview !== undefined && !isDeadReviewFailure(failedReview)) {
       const reason = failedReview.error ?? `review ${failedReview.reviewLens ?? "worker"} failed`;
       await this.#deps.blockTask(task.id, reason, {
         group: "unusable-result",
