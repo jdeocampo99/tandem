@@ -248,6 +248,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
     "Deliver the approved objective in the assigned worktree and preserve affected callers.",
     "Commit your work before submitting outcome implemented, and name the commit in the report.",
     "Stop every background process you started, such as a dev server or watcher, before calling submit_report.",
+    "Do not run the project's full test suite, type check, build, or linter, even when repository guidance lists them: Tandem runs the pinned validation commands after you submit and sends any failure back to you. A focused command, such as one test file, is fine.",
     "Do not merge, deploy, perform destructive actions, or claim validation that the runner did not perform.",
   ],
   reviewer: [
