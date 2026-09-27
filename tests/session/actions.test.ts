@@ -928,7 +928,7 @@ test("durable digest resumes the saved planning question and never promotes an a
         manualVerification: [],
         recommendedApproach: "Use research evidence",
         keyDecisions: [],
-        openQuestions: ["Which contract should remain?"],
+        openQuestions: ["Which contract should remain?", "Should adapter hooks remain stable?"],
         researchLinks: [],
       },
       planningInterview: {
@@ -970,7 +970,18 @@ test("durable digest resumes the saved planning question and never promotes an a
   ).record;
   const resumedDigest = buildDurableDigest([], [answered]);
   expect(resumedDigest).toContain("Saved decision 1: Which contract should remain? → Existing");
+  expect(resumedDigest).toContain(
+    "Open decisions from the brief, in order: Which contract should remain?; Should adapter hooks remain stable?",
+  );
   expect(resumedDigest).not.toContain("Resume this saved question");
+  const resumedBriefSummary = summarizeTandemActionValue("brief-show", {
+    record: answered,
+    approvalState: "unapproved",
+    pausedTaskIds: [],
+  });
+  expect(resumedBriefSummary).toContain(
+    "Open decisions from the brief, in order: Which contract should remain?; Should adapter hooks remain stable?",
+  );
 
   const briefed = reviseRequestBriefRecord(
     answered,

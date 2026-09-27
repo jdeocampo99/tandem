@@ -44,8 +44,9 @@ src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts
 - The durable digest includes complete pending ask payloads atomically, ahead of task details. When
   interview records exceed its 8K budget, an overflow notice reports the omitted count and a compact
   request-id list and directs the coordinator to `brief-show`; it never sends partial ask JSON.
-  After an explicit answer, continue from the saved ledger; do not re-ask a settled question. If no
-  question is pending, save the next decision before asking it.
+  After an explicit answer leaves no question pending, the digest and brief summary include a compact,
+  ordered list of the brief's `openQuestions`. Continue from saved answers and ask the first decision
+  not already answered.
 - Dispatch is refused for work under an active interview. Starting one also pauses unfinished work
   already bound to that request, even if its current approval remains valid; the scheduler repeats
   the gate before advancing resumed work. Delivery preflight also refuses publication while the

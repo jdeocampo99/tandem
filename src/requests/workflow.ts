@@ -296,14 +296,14 @@ export class RequestBriefWorkflow {
     }
     const current = await this.#require(input.requestId);
     assertNotAbandoned(current);
+    const priorPlanningAnswers = current.draft.content.planningAnswers;
     const finalContent =
-      current.planningInterview?.status === "complete" &&
-      current.draft.content.planningAnswers !== undefined
-        ? checkedRequestBriefContent({
+      priorPlanningAnswers === undefined
+        ? content
+        : checkedRequestBriefContent({
             ...content,
-            planningAnswers: current.draft.content.planningAnswers,
-          })
-        : content;
+            planningAnswers: priorPlanningAnswers,
+          });
     const contentChanged =
       requestBriefDigests(finalContent).contentDigest !== current.draft.contentDigest;
     const nextInterview =

@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 import { type BoardView, renderBoard } from "../board/view.ts";
 import {
+  MAX_REQUEST_BRIEF_ENTRIES,
   type AgentRole,
   LEGACY_EVIDENCE_CONTRACT,
   MODEL_ROLE_LABELS,
@@ -127,6 +128,11 @@ export function compactList(
   const visible = entries.slice(0, itemLimit).map((entry) => compactText(entry, entryLimit));
   const omitted = entries.length - visible.length;
   return `${visible.join("; ")}${omitted > 0 ? `; +${omitted} more` : ""}`;
+}
+
+function summarizeOpenBriefDecisions(decisions: readonly string[]): string | undefined {
+  if (decisions.length === 0) return undefined;
+  return `Open decisions from the brief, in order: ${compactList(decisions, MAX_REQUEST_BRIEF_ENTRIES, 120)}`;
 }
 
 type TaskReview = TaskRecord["reviews"][number];
@@ -956,6 +962,11 @@ function summarizeRequestBrief(value: unknown): string {
     return boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
   const pane = summaryRecord(record.reviewPane);
+  const content = summaryRecord(draft.content);
+  const openQuestions =
+    content !== undefined && Array.isArray(content.openQuestions)
+      ? content.openQuestions.filter(isNonEmptyEntry)
+      : [];
   const paused = Array.isArray(view.pausedTaskIds)
     ? view.pausedTaskIds.filter(isNonEmptyEntry)
     : [];
@@ -997,7 +1008,11 @@ function summarizeRequestBrief(value: unknown): string {
         `Resume the current question exactly, without adding another: ${JSON.stringify(planningAskInput(pending))}`,
       );
     } else if (interview.status === "active") {
-      lines.push("No question is pending; save the next question before asking it.");
+      const openDecisions = summarizeOpenBriefDecisions(openQuestions);
+      if (openDecisions !== undefined) lines.push(openDecisions);
+      lines.push(
+        "No question is pending. Use the first open decision not already answered to save one question; complete only when no open questions remain.",
+      );
     } else {
       lines.push(
         "The final scope still needs explicit user approval; a recommendation or timeout is not approval.",
@@ -1200,8 +1215,10 @@ function appendPlanningInterviews(
           `  Resume this saved question without changing it: ${JSON.stringify(planningAskInput(pending))}`,
         );
       } else {
+        const openDecisions = summarizeOpenBriefDecisions(record.draft.content.openQuestions);
+        if (openDecisions !== undefined) recordLines.push(`  ${openDecisions}`);
         recordLines.push(
-          "  No question is pending. Save the next single planning question before asking, or complete only when the brief has no open questions.",
+          "  No question is pending. Use the first open decision not already answered to save one question; complete only when no open questions remain.",
         );
       }
     }

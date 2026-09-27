@@ -402,19 +402,20 @@ test("planning interviews persist ordered decisions and require final brief appr
       { id: "task-owned", requestId: drafted.record.id, stage: "paused" } as TaskRecord,
       { id: "task-other", requestId: "req-other", stage: "implementing" } as TaskRecord,
     ]);
-    await workflow.draft({
+    const { planningAnswers: _planningAnswers, ...finalBriefContent } =
+      reopened.record.draft.content;
+    const revisedDraft = await workflow.draft({
       repoPath: "/repo",
       requestId: drafted.record.id,
       content: {
-        ...reopened.record.draft.content,
-        keyDecisions: [
-          ...reopened.record.draft.content.keyDecisions,
-          "Preserve support for older clients",
-        ],
+        ...finalBriefContent,
+        keyDecisions: [...finalBriefContent.keyDecisions, "Preserve support for older clients"],
         openQuestions: [],
       },
       reviewPane: false,
     });
+    expect(revisedDraft.record.draft.content.planningAnswers).toEqual(priorAnswers);
+
     const completedAgain = await workflow.completePlanningInterview(drafted.record.id);
     expect(completedAgain.record.draft.content.planningAnswers).toEqual([
       ...priorAnswers,
