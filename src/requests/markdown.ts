@@ -7,6 +7,7 @@ import { requestApprovalState } from "./brief.ts";
  */
 export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
   const content = record.draft.content;
+  const userStories = content.userStories ?? [];
   const lines: string[] = [
     "# Request brief",
     "",
@@ -16,13 +17,11 @@ export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
     "## Goal",
     content.goal,
   ];
-  if (content.userStories.length > 0) {
+  if (userStories.length > 0) {
     lines.push(
       "",
       "## User stories",
-      ...content.userStories.map(
-        (story) => `- ${story.actor} can ${story.action}, so ${story.outcome}.`,
-      ),
+      ...userStories.map((story) => `- ${story.actor} can ${story.action}, so ${story.outcome}.`),
     );
   }
   lines.push(
@@ -55,8 +54,9 @@ export function renderRequestBriefMarkdown(record: RequestBriefRecord): string {
     "### Behavioral checks",
     ...bullets(content.acceptanceCriteria),
   );
-  if (content.verificationCommands.length > 0) {
-    lines.push("", "### Routine project commands", ...bullets(content.verificationCommands));
+  const verificationCommands = content.verificationCommands ?? [];
+  if (verificationCommands.length > 0) {
+    lines.push("", "### Routine project commands", ...bullets(verificationCommands));
   }
   lines.push(
     "",

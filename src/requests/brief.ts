@@ -8,6 +8,7 @@ import {
   type RequestBriefApproval,
   type RequestBriefChangeKind,
   type RequestBriefContent,
+  type RequestBriefStoredContent,
   type RequestBriefRecord,
   type RequestBriefRevision,
   type RequestBriefUserStory,
@@ -130,12 +131,20 @@ export function requestIdFrom(rawId: string): string {
 
 /**
  * Validates untrusted brief content at the boundary and returns it in canonical field order, so
- * two equal briefs always digest identically. Legacy records may omit fields added after approval.
+ * two equal briefs always digest identically. Legacy records may omit both newly added fields.
  */
 export function checkedRequestBriefContent(
   value: unknown,
+  options?: Readonly<{ readonly allowLegacyFields?: false }>,
+): RequestBriefContent;
+export function checkedRequestBriefContent(
+  value: unknown,
+  options: Readonly<{ readonly allowLegacyFields: boolean }>,
+): RequestBriefStoredContent;
+export function checkedRequestBriefContent(
+  value: unknown,
   options: Readonly<{ readonly allowLegacyFields?: boolean }> = {},
-): RequestBriefContent {
+): RequestBriefStoredContent {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new RequestBriefError("invalid-content", "A request brief must be an object");
   }
@@ -154,17 +163,21 @@ export function checkedRequestBriefContent(
       throw new RequestBriefError("invalid-content", `A request brief has no field ${key}`);
     }
   }
-  const content: RequestBriefContent = {
+  const hasUserStories = Object.hasOwn(record, "userStories");
+  const hasVerificationCommands = Object.hasOwn(record, "verificationCommands");
+  if (allowLegacyFields && hasUserStories !== hasVerificationCommands) {
+    throw new RequestBriefError(
+      "invalid-content",
+      "A stored request brief must include both userStories and verificationCommands or omit both",
+    );
+  }
+  const legacyFieldsOmitted = allowLegacyFields && !hasUserStories && !hasVerificationCommands;
+  const commonContent = {
     goal: briefText(record, "goal"),
-    userStories: briefUserStories(record.userStories, allowLegacyFields),
     scope: briefList(record, "scope"),
     constraints: briefList(record, "constraints"),
     nonGoals: briefList(record, "nonGoals"),
     acceptanceCriteria: briefList(record, "acceptanceCriteria"),
-    verificationCommands:
-      record.verificationCommands === undefined && allowLegacyFields
-        ? []
-        : briefList(record, "verificationCommands"),
     // A brief saved before manual verification existed has no hands-on checks.
     manualVerification:
       record.manualVerification === undefined ? [] : briefList(record, "manualVerification"),
@@ -174,35 +187,40 @@ export function checkedRequestBriefContent(
     researchLinks: briefList(record, "researchLinks"),
     ...(briefFlag(record, SKIP_REVIEW_FIELD) ? { skipReview: true } : {}),
   };
-  const { userStories, verificationCommands, ...legacyContent } = content;
-  const sizedContent = allowLegacyFields
-    ? {
-        ...legacyContent,
-        ...(userStories.length === 0 ? {} : { userStories }),
-        ...(verificationCommands.length === 0 ? {} : { verificationCommands }),
-      }
-    : content;
-  const bytes = Buffer.byteLength(JSON.stringify(sizedContent), "utf8");
+  const content: RequestBriefStoredContent = legacyFieldsOmitted
+    ? commonContent
+    : {
+        goal: commonContent.goal,
+        userStories: briefUserStories(record.userStories),
+        scope: commonContent.scope,
+        constraints: commonContent.constraints,
+        nonGoals: commonContent.nonGoals,
+        acceptanceCriteria: commonContent.acceptanceCriteria,
+        verificationCommands: briefList(record, "verificationCommands"),
+        manualVerification: commonContent.manualVerification,
+        recommendedApproach: commonContent.recommendedApproach,
+        keyDecisions: commonContent.keyDecisions,
+        openQuestions: commonContent.openQuestions,
+        researchLinks: commonContent.researchLinks,
+        ...(commonContent.skipReview === true ? { skipReview: true } : {}),
+      };
+  const bytes = Buffer.byteLength(JSON.stringify(content), "utf8");
   if (bytes > MAX_REQUEST_BRIEF_BYTES) {
     throw new RequestBriefError(
       "invalid-content",
       `A request brief may not exceed ${MAX_REQUEST_BRIEF_BYTES} UTF-8 bytes; received ${bytes}`,
     );
   }
-  if (
-    content.scope.length === 0 ||
-    content.acceptanceCriteria.length === 0 ||
-    (!allowLegacyFields && content.userStories.length === 0)
-  ) {
+  if (content.scope.length === 0 || content.acceptanceCriteria.length === 0) {
     throw new RequestBriefError(
       "invalid-content",
-      "A request brief must name at least one scope item, acceptance criterion, and user story",
+      "A request brief must name at least one scope item and acceptance criterion",
     );
   }
   return content;
 }
 
-export function requestBriefDigests(content: RequestBriefContent): RequestBriefDigests {
+export function requestBriefDigests(content: RequestBriefStoredContent): RequestBriefDigests {
   return {
     contentDigest: digestOf(canonicalContent(content)),
     agreementDigest: digestOf(canonicalAgreement(content)),
@@ -466,18 +484,20 @@ function digestOf(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function canonicalContent(content: RequestBriefContent): string {
+function canonicalContent(content: RequestBriefStoredContent): string {
   return JSON.stringify([
     canonicalAgreement(content),
     ...ANNOTATION_FIELDS.map((field) => content[field]),
   ]);
 }
 
-function canonicalAgreement(content: RequestBriefContent): string {
+function canonicalAgreement(content: RequestBriefStoredContent): string {
   const agreement: unknown[] = AGREEMENT_FIELDS.map((field) => content[field]);
   if (content.manualVerification.length > 0) agreement.push(content.manualVerification);
-  if (content.userStories.length > 0) agreement.push(content.userStories);
-  if (content.verificationCommands.length > 0) agreement.push(content.verificationCommands);
+  if (content.userStories !== undefined) agreement.push(content.userStories);
+  if (content.verificationCommands !== undefined && content.verificationCommands.length > 0) {
+    agreement.push(content.verificationCommands);
+  }
   if (content.skipReview === true) agreement.push({ skipReview: true });
   return JSON.stringify(agreement);
 }
@@ -509,18 +529,13 @@ function briefText(record: Record<string, unknown>, field: (typeof TEXT_FIELDS)[
   return value;
 }
 
-function briefUserStories(
-  value: unknown,
-  allowLegacyFields: boolean,
-): readonly RequestBriefUserStory[] {
-  if (value === undefined && allowLegacyFields) return [];
+function briefUserStories(value: unknown): readonly RequestBriefUserStory[] {
   if (!Array.isArray(value)) {
     throw new RequestBriefError(
       "invalid-content",
       "A request brief userStories field must contain one to three actor/action/outcome stories",
     );
   }
-  if (allowLegacyFields && value.length === 0) return [];
   if (value.length < 1 || value.length > 3) {
     throw new RequestBriefError(
       "invalid-content",

@@ -4,7 +4,7 @@ import {
   LEGACY_ENDPOINT_ROLES,
   type RequestBriefApproval,
   type RequestBriefChangeKind,
-  type RequestBriefContent,
+  type RequestBriefStoredContent,
   type RequestBriefRecord,
   type RequestBriefRevision,
   type RequestReviewPane,
@@ -172,7 +172,7 @@ function optionalSection(record: UnknownRecord, key: string): unknown {
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-function parseBriefContent(value: unknown, source: string): RequestBriefContent {
+function parseBriefContent(value: unknown, source: string): RequestBriefStoredContent {
   try {
     return checkedRequestBriefContent(value, { allowLegacyFields: true });
   } catch (error) {

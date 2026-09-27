@@ -579,6 +579,16 @@ export type RequestBriefContent = Readonly<{
   /** The user decided while planning that this work needs no code review. Absent when not. */
   readonly skipReview?: boolean | undefined;
 }>;
+/** Content stored before stories and routine commands became required. */
+export type LegacyRequestBriefContent = Omit<
+  RequestBriefContent,
+  "userStories" | "verificationCommands"
+> & {
+  readonly userStories?: undefined;
+  readonly verificationCommands?: undefined;
+};
+
+export type RequestBriefStoredContent = RequestBriefContent | LegacyRequestBriefContent;
 
 /** Whether a revision changed what was agreed or only annotated it. */
 export type RequestBriefChangeKind = "agreement" | "annotation";
@@ -586,7 +596,7 @@ export type RequestBriefChangeKind = "agreement" | "annotation";
 /** One immutable draft revision, digested so later content can be detected as different. */
 export type RequestBriefRevision = Readonly<{
   readonly revision: number;
-  readonly content: RequestBriefContent;
+  readonly content: RequestBriefStoredContent;
   readonly contentDigest: string;
   readonly agreementDigest: string;
   readonly changeKind: RequestBriefChangeKind;

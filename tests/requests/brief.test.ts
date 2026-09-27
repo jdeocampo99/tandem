@@ -221,6 +221,27 @@ test("brief content is validated at the boundary rather than stored as given", (
   );
 });
 
+test("stored briefs reject partial and empty current-format fields", () => {
+  const {
+    userStories: _userStories,
+    verificationCommands: _verificationCommands,
+    ...legacy
+  } = content();
+
+  expect(() =>
+    checkedRequestBriefContent(
+      { ...legacy, verificationCommands: ["bun test"] },
+      { allowLegacyFields: true },
+    ),
+  ).toThrow(/both userStories and verificationCommands/u);
+  expect(() =>
+    checkedRequestBriefContent(
+      { ...legacy, userStories: [], verificationCommands: ["bun test"] },
+      { allowLegacyFields: true },
+    ),
+  ).toThrow(/one to three user stories/u);
+});
+
 test("a brief saved before added fields loads without changing its digests", () => {
   const {
     manualVerification: _manualVerification,
@@ -230,13 +251,22 @@ test("a brief saved before added fields loads without changing its digests", () 
   } = content();
   const loaded = checkedRequestBriefContent(legacy, { allowLegacyFields: true });
 
-  expect(loaded.userStories).toEqual([]);
-  expect(loaded.verificationCommands).toEqual([]);
+  expect(loaded.userStories).toBeUndefined();
+  expect(loaded.verificationCommands).toBeUndefined();
   expect(loaded.manualVerification).toEqual([]);
   expect(requestBriefDigests(loaded)).toEqual({
     contentDigest: "777275e9c0fa047b1b96b0c7346d31163c8d3b3bba5daec125eb24c838465531",
     agreementDigest: "74a95430904cba395789ce0926801dc88fbf7e9f3332a81faa7f1552a6c9219c",
   });
+});
+
+test("routine commands and hands-on checks have distinct agreement digests", () => {
+  const handsOn = checkedRequestBriefContent(content({ manualVerification: ["bun test"] }));
+  const routine = checkedRequestBriefContent(content({ verificationCommands: ["bun test"] }));
+
+  expect(requestBriefDigests(handsOn).agreementDigest).not.toBe(
+    requestBriefDigests(routine).agreementDigest,
+  );
 });
 
 test("moving an item into manual verification changes what was agreed and needs reapproval", () => {
