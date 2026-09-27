@@ -20,7 +20,7 @@ export type TaskRollup = Readonly<{
 
 export type TaskTrace = TimelineReadout & Readonly<{ readonly rollup: TaskRollup }>;
 
-/** A task trace excerpt; `omittedEvents` counts readable events left out of `events`. */
+/** A task trace excerpt; `omittedEvents` counts readable events excluded by either output bound. */
 export type BoundedTaskTrace = TaskTrace & Readonly<{ readonly omittedEvents: number }>;
 
 /** The same figures across many tasks. */
@@ -100,6 +100,51 @@ export function renderTaskTrace(trace: TaskTrace): string {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * Keeps the newest events that fit in the structured result, without trimming their timeline data.
+ * The complete rollup always takes priority over event payloads.
+ */
+export function boundTaskTrace(
+  trace: TaskTrace,
+  limits: Readonly<{ readonly maxEvents: number; readonly maxSerializedChars: number }>,
+): BoundedTaskTrace {
+  if (
+    !Number.isSafeInteger(limits.maxEvents) ||
+    limits.maxEvents < 0 ||
+    !Number.isSafeInteger(limits.maxSerializedChars) ||
+    limits.maxSerializedChars < 1
+  ) {
+    throw new RangeError("Invalid task trace output limits");
+  }
+  const candidates = trace.events.slice(Math.max(0, trace.events.length - limits.maxEvents));
+  const newestFirst: StoredTimelineEvent[] = [];
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const event = candidates[index];
+    if (event === undefined) continue;
+    const events = [...newestFirst, event].reverse();
+    const candidate: BoundedTaskTrace = {
+      ...trace,
+      events,
+      omittedEvents: trace.events.length - events.length,
+    };
+    const details = { action: "trace", value: candidate };
+    if (serializedJsonLength(details, limits.maxSerializedChars) <= limits.maxSerializedChars) {
+      newestFirst.push(event);
+    }
+  }
+  const events = newestFirst.reverse();
+  const bounded: BoundedTaskTrace = {
+    ...trace,
+    events,
+    omittedEvents: trace.events.length - events.length,
+  };
+  const details = { action: "trace", value: bounded };
+  if (serializedJsonLength(details, limits.maxSerializedChars) > limits.maxSerializedChars) {
+    throw new RangeError("Task trace rollup exceeds the structured output limit");
+  }
+  return bounded;
+}
+
 export function renderBoundedTaskTrace(trace: BoundedTaskTrace, maxChars: number): string {
   const { rollup } = trace;
   const cost = rollup.cost;
@@ -118,7 +163,7 @@ export function renderBoundedTaskTrace(trace: BoundedTaskTrace, maxChars: number
   const render = (events: readonly string[]): string =>
     [
       ...header,
-      `Events: ${totalEvents} readable; showing ${events.length} newest; ${totalEvents - events.length} omitted; ${trace.unreadableEvents} unreadable.`,
+      `Events: ${totalEvents} readable; showing ${events.length} newest events that fit; ${totalEvents - events.length} omitted; ${trace.unreadableEvents} unreadable.`,
       ...events,
     ].join("\n");
   const newestFirst: string[] = [];
@@ -259,4 +304,77 @@ function durationText(milliseconds: number): string {
 
 function sum(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function serializedJsonLength(value: unknown, maxChars: number): number {
+  if (value === null) return 4;
+  if (typeof value === "string") return serializedStringLength(value, maxChars);
+  if (typeof value === "boolean") return value ? 4 : 5;
+  if (typeof value === "number") {
+    return Math.min(JSON.stringify(value)?.length ?? 4, maxChars + 1);
+  }
+  if (Array.isArray(value)) {
+    let length = 2;
+    for (let index = 0; index < value.length; index += 1) {
+      if (index > 0) length += 1;
+      if (length > maxChars) return maxChars + 1;
+      const entry = value[index];
+      length +=
+        entry === undefined || typeof entry === "function" || typeof entry === "symbol"
+          ? 4
+          : serializedJsonLength(entry, maxChars - length);
+      if (length > maxChars) return maxChars + 1;
+    }
+    return length;
+  }
+  if (typeof value === "object") {
+    let length = 2;
+    let hasEntry = false;
+    for (const [key, entry] of Object.entries(value)) {
+      if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") continue;
+      if (hasEntry) length += 1;
+      if (length > maxChars) return maxChars + 1;
+      length += serializedStringLength(key, maxChars - length) + 1;
+      if (length > maxChars) return maxChars + 1;
+      length += serializedJsonLength(entry, maxChars - length);
+      if (length > maxChars) return maxChars + 1;
+      hasEntry = true;
+    }
+    return length;
+  }
+  return 0;
+}
+
+function serializedStringLength(value: string, maxChars: number): number {
+  let length = 2;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      code === 0x22 ||
+      code === 0x5c ||
+      code === 0x08 ||
+      code === 0x09 ||
+      code === 0x0a ||
+      code === 0x0c ||
+      code === 0x0d
+    ) {
+      length += 2;
+    } else if (code <= 0x1f) {
+      length += 6;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        length += 2;
+        index += 1;
+      } else {
+        length += 6;
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      length += 6;
+    } else {
+      length += 1;
+    }
+    if (length > maxChars) return maxChars + 1;
+  }
+  return length;
 }

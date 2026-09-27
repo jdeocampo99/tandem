@@ -11,7 +11,7 @@ import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
-import type { SessionEffect, SessionHost, ToolOutcome } from "./events.ts";
+import { boundTaskTrace } from "../tasks/trace.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -582,9 +582,11 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.presentations(), action.action),
   trace: async (action, service) => {
     const trace = await service.trace(action.taskId);
-    const events = trace.events.slice(-ACTION_TRACE_MAX_EVENTS);
     return actionResult(
-      { ...trace, events, omittedEvents: trace.events.length - events.length },
+      boundTaskTrace(trace, {
+        maxEvents: ACTION_TRACE_MAX_EVENTS,
+        maxSerializedChars: ACTION_FULL_RESULT_MAX_CHARS,
+      }),
       action.action,
     );
   },
@@ -889,10 +891,15 @@ export async function executeTandemAction(
   return runTandemAction(action.action, action, service, signal);
 }
 
+function shouldRunPostAction(action: TandemAction): boolean {
+  return action.action !== "trace";
+}
+
 /**
  * Actions that finish what the user and the coordinator were working on, so the thread closes
  * without relying on the model to call `thread-done`.
  */
+
 const THREAD_ENDING_ACTIONS: ReadonlySet<TandemAction["action"]> = new Set([
   "thread-done",
   "brief-approve",
@@ -933,7 +940,7 @@ export async function runTandemTool(
       dependencies.closeThread();
     if (action.action === "tick") {
       await dependencies.reconcile();
-    } else if (action.action !== "trace") {
+    } else if (shouldRunPostAction(action)) {
       // Reconciliation can acknowledge delivered notifications, so trace must not reach it.
       await dependencies.postAction();
     }
@@ -992,7 +999,7 @@ export async function runTandemCommand(
       confirm: dependencies.confirm,
     });
     await host.perform({ type: "notify", text: renderActionResult(result), level: "info" });
-    if (action.action !== "trace") await dependencies.postAction();
+    if (shouldRunPostAction(action)) await dependencies.postAction();
   } catch (error) {
     await host.perform({
       type: "notify",

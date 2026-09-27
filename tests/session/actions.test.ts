@@ -17,6 +17,7 @@ import {
 } from "../../src/session/actions.ts";
 import type { SessionEffect } from "../../src/session/events.ts";
 import {
+  ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
   ACTION_TRACE_MAX_EVENTS,
   buildDurableDigest,
@@ -1382,6 +1383,62 @@ test("trace keeps the newest readable events and full rollup for long histories"
   expect(boundedTrace.unreadableEvents).toBe(2);
   expect(boundedTrace.rollup).toEqual(trace.rollup);
   expect((JSON.stringify(boundedTrace) ?? "").length).toBeLessThanOrEqual(12_000);
+  expect((JSON.stringify(outcome.details) ?? "").length).toBeLessThanOrEqual(
+    ACTION_FULL_RESULT_MAX_CHARS,
+  );
+});
+
+test("trace omits oversized event payloads from structured details", async () => {
+  const oversizedEvent: StoredTimelineEvent = {
+    type: "fix-round",
+    taskId: "task-1",
+    at: new Date(Date.UTC(2030, 0, 1)).toISOString(),
+    round: 1,
+    generation: 1,
+    findingIds: Array.from({ length: 5_000 }, (_, index) => `finding-${index}`),
+    seq: 1,
+  };
+  const newestEvent: StoredTimelineEvent = {
+    type: "question-asked",
+    taskId: "task-1",
+    at: new Date(Date.UTC(2030, 0, 1, 0, 1)).toISOString(),
+    questionId: "question-2",
+    seq: 2,
+  };
+  const trace: TaskTrace = {
+    events: [oversizedEvent, newestEvent],
+    unreadableEvents: 3,
+    rollup: {
+      taskId: "task-1",
+      firstPassReview: false,
+      fixRounds: 1,
+      blockedMs: 12_345,
+      cost: {
+        currency: "USD",
+        amountMicros: 987_654,
+        actualSamples: 2,
+        estimatedSamples: 1,
+        unavailableSamples: 3,
+      },
+    },
+  };
+  const service = { trace: async () => trace } as unknown as TandemService;
+  const outcome = await runTandemTool(
+    { action: "trace", taskId: "task-1" },
+    callDependencies(service, []),
+    undefined,
+  );
+  const boundedTrace = (outcome.details as Readonly<{ value: BoundedTaskTrace }>).value;
+
+  expect(outcome.isError).toBe(false);
+  expect(boundedTrace.events).toEqual([newestEvent]);
+  expect(boundedTrace.omittedEvents).toBe(1);
+  expect(boundedTrace.unreadableEvents).toBe(3);
+  expect(boundedTrace.rollup).toEqual(trace.rollup);
+  expect(outcome.text).toContain("1 omitted; 3 unreadable");
+  expect((JSON.stringify(outcome.details) ?? "").length).toBeLessThanOrEqual(
+    ACTION_FULL_RESULT_MAX_CHARS,
+  );
 });
 
 test("a failed trace returns not-found details without reconciliation", async () => {
