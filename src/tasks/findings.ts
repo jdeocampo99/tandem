@@ -39,8 +39,9 @@ export function isBlockingFinding(finding: Pick<Finding, "severity">): boolean {
   return finding.severity === "P0" || finding.severity === "P1";
 }
 
+/** A reviewer that copied an earlier `<lens>/<id>` rendering still names the same finding. */
 function identityOf(lens: StoredReviewLens, id: string): string {
-  return `${lens}:${id}`;
+  return `${lens}:${id.replace(new RegExp(`^(?:${lens}/)+`), "")}`;
 }
 
 function sameObservation(left: FindingObservation, right: FindingObservation): boolean {
@@ -154,7 +155,7 @@ export function describeFindingEntry(entry: FindingLedgerEntry): string {
     entry.file === undefined
       ? ""
       : ` ${entry.file}${entry.line === undefined ? "" : `:${entry.line}`}`;
-  return `${entry.lens}/${entry.id} (${entry.verdict} ${entry.severity}, ${entry.status}${where}) since round ${entry.raisedAt.reviewRound}, status set at round ${entry.statusAt.reviewRound} HEAD ${entry.statusAt.head}`;
+  return `${entry.id} (${entry.verdict} ${entry.severity}, ${entry.status}${where}) since round ${entry.raisedAt.reviewRound}, status set at round ${entry.statusAt.reviewRound} HEAD ${entry.statusAt.head}`;
 }
 
 /**

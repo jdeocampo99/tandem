@@ -8,6 +8,7 @@ import type {
   TaskRecord,
 } from "../../src/contracts.ts";
 import {
+  describeFindingEntry,
   describeOpenFindings,
   fixRoundBudget,
   fixRoundGate,
@@ -182,6 +183,38 @@ test("a re-reported finding stays unresolved rather than being raised again", ()
   expect(second[0]?.statusAt.reviewRound).toBe(1);
 });
 
+test("a round-2 report reusing the id the brief lists updates the same ledger entry", () => {
+  const first = recordReviewFindings({
+    ledger: [],
+    review: review({ head: "head-1", generation: 0, findings: [finding({ id: "f-1" })] }),
+    reviewRound: 0,
+  });
+  const listed = describeFindingEntry(first[0] as FindingLedgerEntry).split(" ")[0] ?? "";
+  const reused = recordReviewFindings({
+    ledger: first,
+    review: review({ head: "head-2", generation: 1, findings: [finding({ id: listed })] }),
+    reviewRound: 1,
+  });
+  // A reviewer that copied the old `review/<id>` rendering, even twice, still names the same one.
+  const prefixed = recordReviewFindings({
+    ledger: reused,
+    review: review({
+      head: "head-3",
+      generation: 2,
+      findings: [finding({ id: "review/review/f-1" })],
+    }),
+    reviewRound: 2,
+  });
+
+  expect(listed).toBe("f-1");
+  expect(reused).toHaveLength(1);
+  expect(reused[0]?.status).toBe("unresolved");
+  expect(reused[0]?.raisedAt.reviewRound).toBe(0);
+  expect(prefixed).toHaveLength(1);
+  expect(prefixed[0]?.raisedAt.reviewRound).toBe(0);
+  expect(prefixed[0]?.statusAt.reviewRound).toBe(2);
+});
+
 test("contradicting verdicts for one identity are recorded as disputed", () => {
   const first = recordReviewFindings({
     ledger: [],
@@ -253,7 +286,8 @@ test("the open-findings details name the remaining blockers and forbid a new tas
 
   expect(details).toContain("Fix round 2 of 2");
   expect(details).toContain("1 open blocker(s)");
-  expect(details).toContain("review/f-1");
+  expect(details).toContain("f-1 (confirmed P1");
+  expect(details).not.toContain("review/f-1");
   expect(details).not.toContain("f-2");
   expect(details).toContain("Never start a new task");
 });

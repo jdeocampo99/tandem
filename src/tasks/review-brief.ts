@@ -9,7 +9,7 @@ import type {
 } from "../contracts.ts";
 import { CODE_STANDARD_NAMES, MANUAL_VERIFICATION_REVIEWER } from "../instructions.ts";
 import type { EscalationReason, FinalAcceptanceStatus, FinalRequirement } from "./acceptance.ts";
-import { finalAcceptanceStatus, isPinnedEvidence, planValidation } from "./acceptance.ts";
+import { finalAcceptanceStatus, isPinnedEvidence } from "./acceptance.ts";
 import {
   describeFindingEntry,
   fixRoundBudget,
@@ -262,18 +262,9 @@ export function assessReviewImpact(
     readonly task: TaskRecord;
     readonly ledger: readonly FindingLedgerEntry[];
     readonly observations: ReviewImpactObservations;
-    readonly escalation: EscalationReason | undefined;
   }>,
 ): ReviewBriefImpact {
-  const { escalation, observations, task } = input;
-  if (escalation !== undefined) {
-    return {
-      assessment: escalation === "unknown-impact" ? "unknown" : "expanded",
-      reason: `the next validation contract escalated with ${escalation}, so review the cumulative diff and the affected callers in full`,
-      outsideScopeFiles: [],
-      escalation,
-    };
-  }
+  const { observations, task } = input;
   const incremental = observations.sinceLastReview;
   if (incremental === undefined) {
     return task.reviewRound === 0
@@ -376,7 +367,6 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
   const worktree = task.worktree;
   if (worktree === undefined) throw new TypeError("a review brief requires a task worktree lease");
   const acceptance = finalAcceptanceStatus(task, head);
-  const escalation = planValidation(task, head).escalation;
   const ledger = task.findingLedger ?? [];
 
   const surfaces = truncateText(task.surfaces.join(", "), REVIEW_BRIEF_LIMITS.maxDescriptionBytes);
@@ -467,7 +457,7 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
     },
     reviewLevel: recordedReviewLevel(task),
     deepScrutiny: deepScrutinyRequirements(task.reviewLevel, task.policy.config.reviewLevels),
-    impact: assessReviewImpact({ task, ledger, observations, escalation }),
+    impact: assessReviewImpact({ task, ledger, observations }),
     blockers: blockers.kept,
     suggestions: suggestions.kept,
     settled: settled.kept,

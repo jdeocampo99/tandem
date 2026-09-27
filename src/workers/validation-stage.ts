@@ -18,8 +18,8 @@ import {
   workerCommand,
 } from "../service/records.ts";
 import {
-  type PlannedValidation,
-  planValidation,
+  type FinalAcceptanceContract,
+  finalAcceptanceContract,
   ValidationConfigurationError,
 } from "../tasks/acceptance.ts";
 import type { ValidationJob } from "../validation-worker.ts";
@@ -69,7 +69,7 @@ export class ValidationStage {
   ): Promise<ReservationRefusal | undefined> {
     const target = await this.planOrBlock(task);
     if (target === undefined) return;
-    const { head, planned } = target;
+    const { head, plan } = target;
     const reservation =
       reserved ?? (await this.#deps.reservations.reserveTask(task.id, "validation"));
     if ("refusal" in reservation) return reservation;
@@ -113,7 +113,7 @@ export class ValidationStage {
     }
     let job: DurableJob | undefined;
     try {
-      job = await this.persistValidationJob({ task, runtime, claim, planned, endpoint, cwd, head });
+      job = await this.persistValidationJob({ task, runtime, claim, plan, endpoint, cwd, head });
       if (job === undefined) {
         await records.releaseUnlaunchedTaskReservation(task.id, reservationId, claim);
         return;
@@ -137,10 +137,12 @@ export class ValidationStage {
     );
   }
 
-  /** The validation plan for the task's reviewed HEAD, or undefined once the task is blocked. */
+  /** The full manifest for the task's reviewed HEAD, or undefined once the task is blocked. */
   private async planOrBlock(
     task: TaskRecord,
-  ): Promise<Readonly<{ readonly head: string; readonly planned: PlannedValidation }> | undefined> {
+  ): Promise<
+    Readonly<{ readonly head: string; readonly plan: FinalAcceptanceContract }> | undefined
+  > {
     const head = task.reviewHead;
     if (head === undefined || task.worktree === undefined) {
       const reason = "validation requires a task worktree and reviewed HEAD";
@@ -153,7 +155,7 @@ export class ValidationStage {
       return undefined;
     }
     try {
-      return { head, planned: planValidation(task, head) };
+      return { head, plan: finalAcceptanceContract(task, head) };
     } catch (error) {
       const reason =
         error instanceof ValidationConfigurationError
@@ -233,18 +235,18 @@ export class ValidationStage {
       readonly task: TaskRecord;
       readonly runtime: RuntimeTaskState;
       readonly claim: OperationClaim;
-      readonly planned: PlannedValidation;
+      readonly plan: FinalAcceptanceContract;
       readonly endpoint: Endpoint;
       readonly cwd: string;
       readonly head: string;
     }>,
   ): Promise<DurableJob | undefined> {
-    const { task, claim, planned, cwd, head } = input;
+    const { task, claim, plan, cwd, head } = input;
     const operation = input.runtime.operation;
     const jobId = operation?.jobId ?? singleLine(this.#deps.idFactory(), "validation job id");
     const paths = jobPaths(jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId));
-    const contract = planned.plan.contract;
-    const policyDigest = planned.plan.identity.policyDigest;
+    const contract = plan.contract;
+    const policyDigest = plan.identity.policyDigest;
     const spec: ValidationJob = {
       schemaVersion: 1,
       id: jobId,
@@ -254,8 +256,8 @@ export class ValidationStage {
       head,
       contract,
       policyDigest,
-      surfaces: planned.plan.surfaces,
-      commands: planned.plan.commands,
+      surfaces: plan.surfaces,
+      commands: plan.commands,
       resultPath: paths.resultPath,
       ...(operation === undefined
         ? {}
@@ -291,7 +293,6 @@ export class ValidationStage {
       head,
       contract,
       policyDigest,
-      ...(planned.escalation === undefined ? {} : { escalation: planned.escalation }),
       ...(task.communication === undefined
         ? {}
         : { instructionRevision: task.communication.revision }),

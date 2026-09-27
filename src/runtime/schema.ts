@@ -17,7 +17,6 @@ import type {
   WorktreeLease,
 } from "../contracts.ts";
 import { ALL_REVIEW_LENSES, LEGACY_ENDPOINT_ROLES, THINKING_LEVELS } from "../contracts.ts";
-import type { EscalationReason } from "../tasks/acceptance.ts";
 import type { LegacyWorkerRole } from "../workers/jobs.ts";
 
 const RUNTIME_SCHEMA_VERSION = 1;
@@ -240,8 +239,6 @@ export type DurableJob = Readonly<{
   /** Validation jobs carry the contract and policy identity their evidence is pinned to. */
   readonly contract?: ValidationContractName;
   readonly policyDigest?: string;
-  /** Present when targeted iteration checks were refused for the complete manifest. */
-  readonly escalation?: EscalationReason;
   readonly reviewLens?: StoredReviewLens;
   readonly receiptPath?: string;
   readonly instructionRevision?: number;
@@ -832,14 +829,6 @@ function parseJob(value: unknown, field: string): DurableJob {
     value.policyDigest === undefined
       ? undefined
       : singleLine(value.policyDigest, `${field}.policyDigest`);
-  const escalation =
-    value.escalation === undefined
-      ? undefined
-      : enumValue(
-          value.escalation,
-          ["unknown-impact", "broad-impact", "stale-identity", "disputed-result"] as const,
-          `${field}.escalation`,
-        );
   if ((contract === undefined) !== (policyDigest === undefined)) {
     throw new TypeError(`${field} must name its contract and policy digest together`);
   }
@@ -898,7 +887,6 @@ function parseJob(value: unknown, field: string): DurableJob {
     ...(head === undefined ? {} : { head }),
     ...(contract === undefined ? {} : { contract }),
     ...(policyDigest === undefined ? {} : { policyDigest }),
-    ...(escalation === undefined ? {} : { escalation }),
     ...(reviewLens === undefined ? {} : { reviewLens }),
     ...(receiptPath === undefined ? {} : { receiptPath }),
     ...(instructionRevision === undefined ? {} : { instructionRevision }),

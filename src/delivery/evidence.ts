@@ -353,9 +353,7 @@ function draftActivity(task: TaskRecord): readonly string[] {
     case "implementing":
       return [`An implementer is working in the task worktree at generation ${task.generation}.`];
     case "validating":
-      return [
-        `The runner is executing the planned validation contract against ${head}; a targeted iteration run never substitutes for the final acceptance manifest.`,
-      ];
+      return [`The runner is executing every configured check against ${head}.`];
     case "reviewing": {
       const recorded = currentReviews(task);
       const detail =

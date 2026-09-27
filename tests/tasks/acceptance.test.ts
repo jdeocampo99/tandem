@@ -7,10 +7,10 @@ import type {
   ValidationCommand,
 } from "../../src/contracts.ts";
 import {
+  canSkipValidation,
   finalAcceptanceContract,
   finalAcceptanceStatus,
   iterationScopeFor,
-  planValidation,
   policyIdentity,
   ValidationConfigurationError,
 } from "../../src/tasks/acceptance.ts";
@@ -170,119 +170,58 @@ test("an iteration scope records the checks that reported the failure and the fi
   });
 });
 
-test("a contained scope plans targeted iteration checks instead of the whole manifest", () => {
-  const planned = planValidation(
+test("an iteration scope lists only the blocking findings, leaving P2 and P3 as known issues", () => {
+  const failed = review("review", false, ["blocker"]);
+  const scope = iterationScopeFor(
     task({
-      iterationScope: {
-        head: "head-0",
-        generation: 0,
-        policyDigest: policyIdentity(defaultPolicy),
-        reproduces: ["lint"],
-        surfaces: ["service"],
-        findingIds: [],
-      },
+      reviews: [
+        {
+          ...failed,
+          findings: [
+            ...failed.findings,
+            { id: "nit", severity: "P2", verdict: "confirmed", description: "nit is minor" },
+            { id: "style", severity: "P3", verdict: "plausible", description: "style is minor" },
+          ],
+        },
+      ],
     }),
-    HEAD,
   );
 
-  expect(planned.escalation).toBeUndefined();
-  expect(planned.plan.contract).toBe("iteration");
-  expect(planned.plan.commands.map((entry) => entry.name)).toEqual(["lint"]);
+  expect(scope?.findingIds).toEqual(["blocker"]);
 });
 
-test("a scope recorded under a different policy identity escalates to the complete manifest", () => {
-  const planned = planValidation(
-    task({
-      iterationScope: {
-        head: "head-0",
-        generation: 0,
-        policyDigest: "other-policy",
-        reproduces: ["lint"],
-        surfaces: ["service"],
-        findingIds: [],
-      },
-    }),
-    HEAD,
-  );
+test("a finished fix round skips validation only when every check already passed at its HEAD", () => {
+  const reviewOnlyScope = {
+    head: "head-0",
+    generation: 0,
+    policyDigest: policyIdentity(defaultPolicy),
+    reproduces: [],
+    surfaces: [],
+    findingIds: ["finding-1"],
+  };
 
-  expect(planned.escalation).toBe("stale-identity");
-  expect(planned.plan.contract).toBe("final");
-});
-
-test("a reviewer rejecting a candidate whose checks all passed escalates as a disputed result", () => {
-  const planned = planValidation(
-    task({
-      iterationScope: {
-        head: "head-0",
-        generation: 0,
-        policyDigest: policyIdentity(defaultPolicy),
-        reproduces: [],
-        surfaces: [],
-        findingIds: ["finding-1"],
-      },
-    }),
-    HEAD,
-  );
-
-  expect(planned.escalation).toBe("disputed-result");
-  expect(planned.plan.contract).toBe("final");
-});
-
-test("a scope naming a check the manifest does not configure escalates as unknown impact", () => {
-  const planned = planValidation(
-    task({
-      iterationScope: {
-        head: "head-0",
-        generation: 0,
-        policyDigest: policyIdentity(defaultPolicy),
-        reproduces: ["lint", "retired-check"],
-        surfaces: ["service"],
-        findingIds: [],
-      },
-    }),
-    HEAD,
-  );
-
-  expect(planned.escalation).toBe("unknown-impact");
-  expect(planned.plan.contract).toBe("final");
-});
-
-test("a scope covering every configured check escalates as broad impact", () => {
-  const planned = planValidation(
-    task({
-      iterationScope: {
-        head: "head-0",
-        generation: 0,
-        policyDigest: policyIdentity(defaultPolicy),
-        reproduces: ["lint", "test"],
-        surfaces: ["service"],
-        findingIds: [],
-      },
-    }),
-    HEAD,
-  );
-
-  expect(planned.escalation).toBe("broad-impact");
-  expect(planned.plan.contract).toBe("final");
-});
-
-test("a candidate whose lenses all pass runs the final manifest rather than targeted checks", () => {
-  const planned = planValidation(
-    task({
-      iterationScope: {
-        head: "head-0",
-        generation: 0,
-        policyDigest: policyIdentity(defaultPolicy),
-        reproduces: ["lint"],
-        surfaces: ["service"],
-        findingIds: [],
-      },
-      reviews: [review("review")],
-    }),
-    HEAD,
-  );
-
-  expect(planned.plan.contract).toBe("final");
+  expect(canSkipValidation(task({ iterationScope: reviewOnlyScope }), HEAD)).toBe(false);
+  expect(
+    canSkipValidation(
+      task({
+        iterationScope: reviewOnlyScope,
+        validationEvidence: [evidence({ name: "lint", contract: "final" })],
+      }),
+      HEAD,
+    ),
+  ).toBe(false);
+  expect(
+    canSkipValidation(
+      task({
+        iterationScope: reviewOnlyScope,
+        validationEvidence: [
+          evidence({ name: "lint", contract: "final" }),
+          evidence({ name: "test", contract: "final" }),
+        ],
+      }),
+      HEAD,
+    ),
+  ).toBe(true);
 });
 
 test("passing iteration evidence never satisfies the final manifest", () => {

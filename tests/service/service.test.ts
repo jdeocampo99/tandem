@@ -4612,6 +4612,47 @@ test("awaiting-fixes below the budget resumes through one durable fix operation"
   );
 });
 
+test("a fix round carries only the blocking findings; P2 and P3 stay known issues", async () => {
+  const finding = (id: string, severity: "P1" | "P2" | "P3") => ({
+    id,
+    severity,
+    verdict: "confirmed" as const,
+    description: `${id} needs attention`,
+  });
+  await withFixture(
+    {
+      kind: "implementation",
+      stage: "awaiting-fixes",
+      taskEdits: {
+        reviewRound: 0,
+        reviewHead: "review-head",
+        reviews: [
+          {
+            lens: "review",
+            head: "review-head",
+            generation: 0,
+            pass: false,
+            findings: [finding("blocker", "P1"), finding("nit", "P2"), finding("style", "P3")],
+            summary: "one blocker",
+          },
+        ],
+      },
+      runner: { active: false, checkoutHead: "review-head" },
+    },
+    async ({ home, lease, endpoint, service }) => {
+      await seedTaskResources(home, lease, [endpoint], []);
+      await service.tick();
+
+      const runtime = (await readRuntime(home)).tasks[0];
+      const task = await service.get("task-1");
+      expect(task.iterationScope?.findingIds).toEqual(["blocker"]);
+      expect(runtime?.operation?.fixContext?.findings.map((entry) => entry.id)).toEqual([
+        "blocker",
+      ]);
+    },
+  );
+});
+
 test("awaiting-fixes whose carried-forward pane is already gone lands at implementing unblocked, not blocked", async () => {
   await withFixture(
     {

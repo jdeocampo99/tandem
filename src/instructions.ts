@@ -61,7 +61,7 @@ export const DRAFT_PR_BANNER =
 
 export const DRAFT_PR_FINAL_ACCEPTANCE: readonly string[] = [
   "Final acceptance stays pinned to the delivered code: successful pinned validation evidence bound to the current HEAD, one passing fresh independent read-only review at that same HEAD, and runner-owned required checks.",
-  "Unknown, stale, or failed evidence does not pass, and a targeted fix-time check never substitutes for the final gate.",
+  "Unknown, stale, or failed evidence does not pass.",
   "Publishing this draft as a finished pull request and deploying each remain separate explicit approvals. Tandem never merges a draft; once published, PR watch merges it after its checks pass.",
 ];
 

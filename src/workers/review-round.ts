@@ -8,7 +8,7 @@ import type {
 } from "../contracts.ts";
 import type { RequestUsageEvent } from "../runtime/usage.ts";
 import { providerSampleEvent } from "../runtime/usage-events.ts";
-import { planValidation, policyIdentity } from "../tasks/acceptance.ts";
+import { policyIdentity } from "../tasks/acceptance.ts";
 import type {
   ReviewAssistanceOutcome,
   ReviewAssistanceRuntime,
@@ -159,11 +159,10 @@ export async function classifyReviewRound(
   deps: ReviewClassificationDependencies,
   input: Readonly<{
     readonly task: TaskRecord;
-    readonly head: string;
     readonly facts: ReviewDiffFacts;
   }>,
 ): Promise<ClassifiedReviewRound> {
-  const { facts, head, task } = input;
+  const { facts, task } = input;
   const files = observeChangedFiles({
     changedFiles: facts.cumulative.changedFiles,
     patch: facts.cumulative.patch,
@@ -173,7 +172,6 @@ export async function classifyReviewRound(
     task,
     ledger: task.findingLedger ?? [],
     observations: facts,
-    escalation: planValidation(task, head).escalation,
   });
   const deterministic = reclassifyReviewLevel(
     task.reviewLevel,
