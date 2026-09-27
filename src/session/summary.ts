@@ -1,10 +1,5 @@
 import { basename } from "node:path";
-import {
-  type BoardView,
-  isRunningStage,
-  type RunningBoardRow,
-  renderBoard,
-} from "../board/view.ts";
+import { isBoardView, renderBoard } from "../board/view.ts";
 import {
   type AgentRole,
   LEGACY_EVIDENCE_CONTRACT,
@@ -928,33 +923,6 @@ function isMemoryShowResult(value: unknown): value is MemoryShowResult {
 function isPrWatchView(value: unknown): value is PrWatchView {
   const record = summaryRecord(value);
   return record !== undefined && typeof record.now === "string" && Array.isArray(record.rows);
-}
-
-function isRunningBoardRow(value: unknown): value is RunningBoardRow {
-  const record = summaryRecord(value);
-  return (
-    record !== undefined &&
-    typeof record.key === "string" &&
-    isRunningStage(record.cause) &&
-    typeof record.repoPath === "string" &&
-    typeof record.project === "string" &&
-    typeof record.mark === "string" &&
-    typeof record.name === "string" &&
-    typeof record.text === "string" &&
-    typeof record.since === "string"
-  );
-}
-
-function isBoardView(value: unknown): value is BoardView {
-  const record = summaryRecord(value);
-  return (
-    record !== undefined &&
-    typeof record.now === "string" &&
-    Array.isArray(record.needsYou) &&
-    Array.isArray(record.running) &&
-    record.running.every(isRunningBoardRow) &&
-    Array.isArray(record.pullRequests)
-  );
 }
 
 function isTaskArray(value: unknown): value is readonly TaskRecord[] {

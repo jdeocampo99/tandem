@@ -1,4 +1,5 @@
 import type { HerdrStatusReporter } from "../adapters/herdr-status.ts";
+import type { BoardView } from "../board/view.ts";
 import type { CatchUpView } from "../memory/workstream.ts";
 import type { TodoItem } from "../playbooks/progress.ts";
 import type { TaskMessageBatch } from "../tasks/communication-protocol.ts";
@@ -100,7 +101,7 @@ export type ReplyFor<E extends SessionEvent> = E extends { type: "toolCall" }
 export type SessionEffect =
   | Readonly<{
       type: "deliver";
-      source: "notification" | "prompt-route" | "stall-reminder";
+      source: "notification" | "prompt-route" | "stall-reminder" | "report-reminder";
       text: string;
       /** Delivered before `text`, never shown to the user. OMP sends it as a separate display:false message. */
       hidden?: Readonly<{ text: string; details?: unknown }>;
@@ -116,6 +117,18 @@ export type SessionEffect =
       type: "showCard";
       view: CatchUpView;
       text: string;
+    }>
+  | Readonly<{
+      /**
+       * A status board as its own chat message, drawn with the terminal board formatter where
+       * supported. `text` is the Markdown fallback; `view` drives the colored renderer.
+       */
+      type: "showStatus";
+      view: BoardView;
+      text: string;
+      details?: Readonly<Record<string, unknown>>;
+      timing: "followUp" | "nextTurn" | "aside";
+      triggerTurn: boolean;
     }>
   | Readonly<{ type: "promptAsUser"; text: string; deliverAs?: "aside" }>
   | Readonly<{ type: "notify"; text: string; level: "info" | "error" }>

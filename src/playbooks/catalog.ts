@@ -51,7 +51,7 @@ export const PLAYBOOKS: Readonly<Record<PlaybookId, Playbook>> = {
   "fix-round": {
     title: "fix round",
     steps: [
-      "Fix every finding, including P2 and P3",
+      "Fix every P0 and P1 finding; leave P2 and P3 as known issues",
       "Confirm each finding is gone",
       "Question the first fix's assumption for any repeat finding",
     ],

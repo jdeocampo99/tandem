@@ -296,6 +296,13 @@ export function routingPauseExplanation(pause: RaisedExecutionRoutingPause): str
   return ROUTING_PAUSE_EXPLANATIONS[pause.reason];
 }
 
+/** Whether a saved pause is one routing still raises, not a retired reason that never stands. */
+export function raisedRoutingPause(
+  pause: DurableExecutionRoutingPause,
+): pause is RaisedExecutionRoutingPause {
+  return isRaisedReason(pause.reason);
+}
+
 function isRaisedReason(reason: string): reason is ExecutionRoutingPauseReason {
   return (EXECUTION_ROUTING_PAUSE_REASONS as readonly string[]).includes(reason);
 }

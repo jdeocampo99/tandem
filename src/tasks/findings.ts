@@ -206,29 +206,51 @@ export function repeatedFindings(task: TaskRecord): readonly Finding[] {
 export const KEEP_FIXING_QUESTION_ID_PREFIX = "keep-fixing-";
 
 /**
- * The "Keep fixing?" question a task in `awaiting-fixes` must ask before another fix round: once
- * the fix-round budget is spent, or earlier when the review repeats a finding unchanged. A "yes"
- * already recorded at this generation settles the repeat; nothing is asked otherwise.
+ * What a task in `awaiting-fixes` must do before another fix round. It asks "Keep fixing?" once the
+ * fix-round budget is spent, or earlier when the review repeats a finding unchanged; a "yes" already
+ * recorded at this generation settles the repeat. A task may extend its budget only once, so when
+ * the rounds a "yes" added are spent too, it stops for the user instead of asking again.
+ * `undefined` means the next round may run.
  */
-export function keepFixingQuestion(task: TaskRecord): TaskQuestion | undefined {
+export type FixRoundGate =
+  | { readonly type: "ask"; readonly question: TaskQuestion }
+  | { readonly type: "stop"; readonly summary: string; readonly detail: string };
+
+export function fixRoundGate(task: TaskRecord): FixRoundGate | undefined {
   const budget = fixRoundBudget(task);
+  const spent = task.reviewRound >= budget;
+  if (spent && budgetExtended(task)) {
+    return {
+      type: "stop",
+      summary: `${taskName(task.objective)} used all ${budget} fix rounds. Take it over, publish it as-is, or cancel it.`,
+      detail: describeOpenFindings(task),
+    };
+  }
   const approved = (task.fixRoundGrants ?? []).some(
     (grant) => grant.reason === "user" && grant.generation === task.generation,
   );
   const repeated = approved ? undefined : repeatedFindings(task)[0];
-  if (task.reviewRound < budget && repeated === undefined) return undefined;
+  if (!spent && repeated === undefined) return undefined;
   const note =
     repeated === undefined
       ? `It used all ${budget} fix rounds`
       : `The same finding came back: ${repeated.description}`;
   return {
-    id: `${KEEP_FIXING_QUESTION_ID_PREFIX}${task.generation}`,
-    text: formatDecisionQuestion({
-      ask: `Keep fixing ${taskName(task.objective)}?`,
-      note: shortNote(note),
-    }),
-    recommendation: `Reply "yes" to allow more fix rounds on this same task and worktree, or "no" to leave it blocked. ${describeOpenFindings(task)}`,
+    type: "ask",
+    question: {
+      id: `${KEEP_FIXING_QUESTION_ID_PREFIX}${task.generation}`,
+      text: formatDecisionQuestion({
+        ask: `Keep fixing ${taskName(task.objective)}?`,
+        note: shortNote(note),
+      }),
+      recommendation: `Reply "yes" to allow more fix rounds on this same task and worktree, or "no" to leave it blocked. ${describeOpenFindings(task)}`,
+    },
   };
+}
+
+/** Whether a "yes" to "Keep fixing?" already added rounds; that happens at most once per task. */
+function budgetExtended(task: TaskRecord): boolean {
+  return (task.fixRoundGrants ?? []).some((grant) => grant.reason === "user" && grant.rounds > 0);
 }
 
 /**

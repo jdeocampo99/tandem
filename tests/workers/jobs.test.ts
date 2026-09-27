@@ -17,6 +17,7 @@ import {
   type WorkerTerminalJob,
 } from "../../src/workers/terminal.ts";
 import { registerWorkerTerminalExtension } from "../../src/workers/terminal-extension.ts";
+import { validationCommandLine } from "../../src/workers/validation-commands.ts";
 
 const MODEL = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
@@ -257,9 +258,16 @@ test("only submit_report delivers the result; conversation turns before and afte
     const { fixture: testFixture, terminalJob } = await startExtension(root, job);
     const end = testFixture.handlers.get("agent_end");
     const tool = testFixture.handlers.get("tool_call");
-    if (end === undefined || tool === undefined) throw new Error("missing worker handlers");
+    const input = testFixture.handlers.get("input");
+    if (end === undefined || tool === undefined || input === undefined) {
+      throw new Error("missing worker handlers");
+    }
     await end(
       agentEnd("Outcome: implemented\nlooks final but is only a reply", true),
+      testFixture.context,
+    );
+    await input(
+      { type: "input", text: "Rename that helper too.", source: "interactive" },
       testFixture.context,
     );
     await end(agentEnd("Sure, I will rename that helper next."), testFixture.context);
@@ -685,6 +693,29 @@ test("implementer setup runs in the worktree before OMP and a failure stops the 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("only an implementer job carries validation command lines", () => {
+  const validationCommands = ["bun run check", "bun test"];
+  const job = parseWorkerJob({ ...makeJob("/tmp/worktree"), validationCommands });
+  expect(job.validationCommands).toEqual(validationCommands);
+  expect(() =>
+    parseWorkerJob({ ...makeJob("/tmp/worktree", "scout"), validationCommands }),
+  ).toThrow(TypeError);
+  expect(() => parseWorkerJob({ ...makeJob("/tmp/worktree"), validationCommands: [""] })).toThrow(
+    TypeError,
+  );
+});
+
+test("a shell-string validation command is matched as typed", () => {
+  const command = {
+    name: "tests",
+    argv: ["/bin/sh", "-c", "bun test"],
+    surfaces: [],
+    timeoutMs: 1,
+  };
+  expect(validationCommandLine(command)).toBe("bun test");
+  expect(validationCommandLine({ ...command, argv: ["bun", "run", "lint"] })).toBe("bun run lint");
 });
 
 test("requires absolute paths and strict result fields at the wire boundary", () => {
