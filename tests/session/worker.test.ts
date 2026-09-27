@@ -4,6 +4,7 @@ import {
   idleAfterResult,
   implementerShellRefusal,
   mockupWriteDecision,
+  reportlessTurnEnd,
   reviewShellRefusal,
   reviewSummary,
   submittedReportText,
@@ -465,6 +466,45 @@ test("a stalled turn is stopped with a reminder, and a second stall fails the jo
   expect(worker.results[0]?.error).toBe(
     "worker stalled: no tool call for 5 minutes, again after a reminder",
   );
+});
+
+test("a turn Tandem started that ends without a report is reminded once, then fails", () => {
+  expect(reportlessTurnEnd({ humanTurn: false, reminded: false })).toBe("remind");
+  expect(reportlessTurnEnd({ humanTurn: false, reminded: true })).toBe("fail");
+  expect(reportlessTurnEnd({ humanTurn: true, reminded: false })).toBe("conversation");
+  expect(reportlessTurnEnd({ humanTurn: true, reminded: true })).toBe("conversation");
+});
+
+test("a scout that ends its turn without a report is reminded, then failed, never left idle", async () => {
+  // The farewell-email scout: it read its prior report, said it was already submitted, and
+  // stopped, leaving the task "researching" for hours with no result.
+  const worker = workerSession({ role: "scout" });
+  await worker.session.onSessionStart();
+  await worker.session.onAgentEnd({ willContinue: false, interrupted: false });
+  expect(worker.results).toHaveLength(0);
+  expect(worker.recording.effects.at(-1)).toMatchObject({
+    type: "deliver",
+    source: "report-reminder",
+    timing: "nextTurn",
+    triggerTurn: true,
+  });
+  await worker.session.onAgentEnd({ willContinue: false, interrupted: false });
+  expect(worker.results[0]).toMatchObject({
+    status: "failed",
+    error: "worker ended its turn without calling submit_report, again after a reminder",
+  });
+});
+
+test("a reply to the person at the pane is conversation, not a missing report", async () => {
+  const worker = workerSession({ role: "scout" });
+  await worker.session.onSessionStart();
+  for (let turn = 0; turn < 3; turn += 1) {
+    worker.session.onHumanInput();
+    await worker.session.onAgentEnd({ willContinue: false, interrupted: false });
+  }
+  expect(worker.results).toHaveLength(0);
+  expect(worker.recording.effects.filter((effect) => effect.type === "deliver")).toEqual([]);
+  expect(worker.states.at(-1)).toMatchObject({ phase: "idle", completed: false });
 });
 
 test("a background result waking a submitted worker is stopped, and the stop is no failure", async () => {

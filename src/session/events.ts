@@ -100,7 +100,7 @@ export type ReplyFor<E extends SessionEvent> = E extends { type: "toolCall" }
 export type SessionEffect =
   | Readonly<{
       type: "deliver";
-      source: "notification" | "prompt-route" | "stall-reminder";
+      source: "notification" | "prompt-route" | "stall-reminder" | "report-reminder";
       text: string;
       /** Delivered before `text`, never shown to the user. OMP sends it as a separate display:false message. */
       hidden?: Readonly<{ text: string; details?: unknown }>;

@@ -95,6 +95,18 @@ export function idleAfterResult(
   return { idleSince: settle ? undefined : idleSince, settle };
 }
 
+/**
+ * What a turn that ended without `submit_report` means. One the person at the pane started is
+ * conversation. One Tandem started (the brief, a steer, a reminder) gets one reminder; a second
+ * fails the job so central recovery restarts it or asks the user, instead of sitting idle unseen.
+ */
+export function reportlessTurnEnd(
+  input: Readonly<{ humanTurn: boolean; reminded: boolean }>,
+): "conversation" | "remind" | "fail" {
+  if (input.humanTurn) return "conversation";
+  return input.reminded ? "fail" : "remind";
+}
+
 const SEVERITY_ORDER: Readonly<Record<Finding["severity"], number>> = {
   P0: 0,
   P1: 1,
@@ -252,6 +264,7 @@ type ToolEnd = Extract<SessionEvent, { type: "toolEnd" }>;
 const TERMINAL_HEARTBEAT_MS = 1_000;
 const TERMINAL_POLL_MS = 250;
 const BUSY_AFTER_RESULT_TRACE_MS = 60_000;
+const REPORT_REMINDER = `Your turn ended without calling ${SUBMIT_REPORT_TOOL}, so Tandem has no report from this job. Reports earlier in this conversation belong to earlier jobs and do not count. Call ${SUBMIT_REPORT_TOOL} now; if you are stuck or need a decision, report that outcome.`;
 const STALL_REMINDER = `Tandem stopped your turn: you went ${STALLED_TURN_MINUTES} minutes without calling a tool. Do not wait on a background command; its result can be lost. Check its output directly, run commands in the foreground, or finish and call ${SUBMIT_REPORT_TOOL}.`;
 
 function isWithin(root: string, candidate: string): boolean {
@@ -291,6 +304,9 @@ export class WorkerSession {
   private lastActivityAt: number;
   private stallReminded = false;
   private stallAbortPending = false;
+  private reportReminded = false;
+  // Whether the person at the pane typed the message that started the current run.
+  private humanTurn = false;
   private idleSince: number | undefined;
   private tokenTally: WorkerTokenTally | undefined;
   private tallyWrites = Promise.resolve();
@@ -382,6 +398,11 @@ export class WorkerSession {
     }
   }
 
+  /** The person at the pane submitted a message. */
+  onHumanInput(): void {
+    this.humanTurn = true;
+  }
+
   onAgentStart(): void {
     this.deps.trace("agent_start", { resultPublished: this.resultPublished });
     this.markBusy();
@@ -447,6 +468,8 @@ export class WorkerSession {
       resultPublished: this.resultPublished,
     });
     this.agentActive = event.willContinue;
+    const humanTurn = this.humanTurn;
+    if (!event.willContinue) this.humanTurn = false;
     const resumingAfterStall = this.stallAbortPending;
     if (resumingAfterStall) {
       await this.remindAfterStall();
@@ -463,7 +486,7 @@ export class WorkerSession {
       this.deps.trace("agent_end_persisted", { phase: this.currentState.phase });
       await this.reportStatus();
     } else {
-      await this.settleTurn(event);
+      await this.settleTurn(event, humanTurn);
     }
     this.deps.trace("agent_end_done", { phase: this.currentState.phase });
   }
@@ -749,7 +772,7 @@ export class WorkerSession {
   }
 
   // The delegated result comes only from submit_report, so conversation turns never become it.
-  private async settleTurn(event: Omit<AgentEnd, "type">): Promise<void> {
+  private async settleTurn(event: Omit<AgentEnd, "type">, humanTurn: boolean): Promise<void> {
     if (this.pauseCommand !== undefined) {
       await this.persistState("paused", this.currentState.completed, this.pauseCommand.id);
       await this.reportStatus();
@@ -771,8 +794,28 @@ export class WorkerSession {
       await this.settle(this.failure(event.failure));
       return;
     }
+    const next = reportlessTurnEnd({ humanTurn, reminded: this.reportReminded });
+    this.deps.trace("reportless_turn_end", { next });
+    if (next === "fail") {
+      await this.settle(
+        this.failure(
+          `worker ended its turn without calling ${SUBMIT_REPORT_TOOL}, again after a reminder`,
+        ),
+      );
+      return;
+    }
     await this.persistState("idle", false);
     await this.reportStatus();
+    if (next === "remind") {
+      this.reportReminded = true;
+      await this.deps.host.perform({
+        type: "deliver",
+        source: "report-reminder",
+        text: REPORT_REMINDER,
+        timing: "nextTurn",
+        triggerTurn: true,
+      });
+    }
   }
 
   /**

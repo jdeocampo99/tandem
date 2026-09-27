@@ -3,9 +3,11 @@ import type { IsoTimestamp, RequestBriefRecord, TaskRecord, TaskStage } from "..
 import { type PrWatch, type PrWatchPoll, sameRef } from "../pr-watch/store.ts";
 import { elapsed, type PrWatchViewRow, pad, prWatchLines, prWatchView } from "../pr-watch/view.ts";
 import { awaitsApproval, requestApprovalState } from "../requests/brief.ts";
+import type { DurableExecutionRoutingPause } from "../runtime/schema.ts";
 import { isTerminalTask } from "../service/records.ts";
 import type { TimelineEvent } from "../tasks/timeline.ts";
 import { dollars, summarizeRollups, type TaskRollup, type TraceSummary } from "../tasks/trace.ts";
+import { raisedRoutingPause, routingPauseExplanation } from "../workers/execution-routing.ts";
 
 /** Task stages that wait on the user. */
 const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
@@ -26,6 +28,8 @@ export type BoardState = Readonly<{
   readonly projects: readonly string[];
   readonly tasks: readonly TaskRecord[];
   readonly briefs: readonly RequestBriefRecord[];
+  /** Saved routing questions; one for a task's current generation stops it until the user answers. */
+  readonly routingPauses: readonly DurableExecutionRoutingPause[];
   readonly watches: readonly PrWatch[];
   readonly poll: PrWatchPoll;
   /** Rollups of the tasks {@link finishedWithinWeek} accepted, across every project. */
@@ -56,8 +60,8 @@ export type WeekSummary = Pick<
 export type BoardRow = Readonly<{
   /** Stays the same while the row stands for the same thing, so a new arrival can be noticed. */
   readonly key: string;
-  /** What the row is: a brief, a task question, a pull request, or a task in this stage. */
-  readonly cause: "brief" | "question" | "pull-request" | TaskStage;
+  /** What the row is: a brief, a task or model question, a pull request, or a task in this stage. */
+  readonly cause: "brief" | "question" | "model-question" | "pull-request" | TaskStage;
   /** The project the row belongs to; absent for a pull request no project claims. */
   readonly repoPath?: string;
   readonly project: string;
@@ -95,13 +99,17 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
   const live = state.tasks.filter((task) => !isTerminalTask(task));
   const pullRequests = prWatchView(state.watches, state.poll, now, []);
   const red = pullRequests.rows.filter((row) => row.color === "red");
+  const needsYou = (task: TaskRecord) =>
+    taskNeedsYou(task) || modelQuestion(task, state.routingPauses) !== undefined;
   return {
     now,
     projects: state.projects.map((path) => basename(path)),
     ...(pullRequests.readAt === undefined ? {} : { checkedAt: pullRequests.readAt }),
     needsYou: [
       ...state.briefs.filter(awaitsApproval).map(briefRow),
-      ...live.filter(needsYou).map(taskNeedsYouRow),
+      ...live
+        .filter(needsYou)
+        .map((task) => taskNeedsYouRow(task, modelQuestion(task, state.routingPauses))),
       ...red.map((row) => pullRequestRow(row, state)),
     ],
     running: live
@@ -135,6 +143,7 @@ export function notifiesUser(row: BoardRow): boolean {
   return (
     row.cause === "brief" ||
     row.cause === "question" ||
+    row.cause === "model-question" ||
     row.cause === "pull-request" ||
     row.cause === "awaiting-approval" ||
     row.cause === "ready"
@@ -217,7 +226,7 @@ function rowText(row: BoardRow): string {
   return row.since === undefined ? row.text : `${row.text} · ${row.since}`;
 }
 
-function needsYou(task: TaskRecord): boolean {
+function taskNeedsYou(task: TaskRecord): boolean {
   return task.communication?.question !== undefined || NEEDS_YOU_STAGES.includes(task.stage);
 }
 
@@ -236,20 +245,50 @@ function briefRow(brief: RequestBriefRecord): BoardRow {
   };
 }
 
-function taskNeedsYouRow(task: TaskRecord): BoardRow {
-  const question = task.communication?.question;
-  const text =
-    question !== undefined
-      ? `question: ${question.text}`
-      : task.stage === "blocked"
-        ? `blocked: ${task.blockReason ?? "no reason recorded"}`
-        : (NEEDS_YOU_LABELS[task.stage] ?? task.stage);
+/**
+ * The routing question that stops a task from starting its next worker: nothing starts until the
+ * user answers, so a task still reading "researching" would hide it.
+ */
+function modelQuestion(
+  task: TaskRecord,
+  pauses: readonly DurableExecutionRoutingPause[],
+): Readonly<{ key: string; text: string }> | undefined {
+  const pause = pauses.find(
+    (entry) => entry.taskId === task.id && entry.generation === task.generation,
+  );
+  if (pause === undefined || !raisedRoutingPause(pause)) return undefined;
   return {
-    key: question === undefined ? `task:${task.id}:${task.stage}` : `question:${question.id}`,
-    cause: question === undefined ? task.stage : "question",
+    key: `model-question:${pause.decisionId}`,
+    text: `model question: keep ${pause.pinnedSelector}? ${routingPauseExplanation(pause)}`,
+  };
+}
+
+function taskNeedsYouRow(
+  task: TaskRecord,
+  model: Readonly<{ key: string; text: string }> | undefined,
+): BoardRow {
+  const question = task.communication?.question;
+  const reason: Pick<BoardRow, "key" | "cause" | "text"> =
+    question !== undefined
+      ? { key: `question:${question.id}`, cause: "question", text: `question: ${question.text}` }
+      : task.stage === "blocked"
+        ? {
+            key: `task:${task.id}:${task.stage}`,
+            cause: task.stage,
+            text: `blocked: ${task.blockReason ?? "no reason recorded"}`,
+          }
+        : model !== undefined
+          ? { key: model.key, cause: "model-question", text: model.text }
+          : {
+              key: `task:${task.id}:${task.stage}`,
+              cause: task.stage,
+              text: NEEDS_YOU_LABELS[task.stage] ?? task.stage,
+            };
+  return {
+    ...reason,
     ...taskIdentity(task),
     mark: "🙋",
-    text: shorten(text, TEXT_CHARS),
+    text: shorten(reason.text, TEXT_CHARS),
   };
 }
 

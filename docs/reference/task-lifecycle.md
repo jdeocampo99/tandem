@@ -195,6 +195,10 @@ Code: src/playbooks/ (`catalog.ts` steps, `selection.ts` choice, `classify.ts` t
 - The only result path is the `submit_report` tool, which writes the private result file. A settled
   `agent_end` without it is conversation, so human messages never become or overwrite the result;
   it still fails the job on provider error, abort, model substitution, or requested timeout.
+- A settled report-less `agent_end` of a run the person at the pane did not start (OMP `input`
+  from `interactive`) is a missing report, not conversation: the first gets one `report-reminder`
+  asking for `submit_report`; a second in the same job fails it as `worker ended its turn without
+  calling submit_report, again after a reminder`, which central recovery restarts or asks about.
 - The scheduler may consume a result while OMP stays open after checking job identity, generation,
   native PID, physical checkout, and a fresh terminal heartbeat. Terminal output is display only.
 - After completion or pause, follow-up turns are read-only (mutating tools blocked), except a

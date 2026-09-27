@@ -12,6 +12,7 @@ import {
 import type { RequestBriefContent } from "../../src/contracts.ts";
 import type { PrWatch } from "../../src/pr-watch/store.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
+import type { DurableExecutionRoutingPause } from "../../src/runtime/schema.ts";
 import { task } from "../session/fixtures.ts";
 
 const NOW = "2030-01-01T12:00:00.000Z";
@@ -57,6 +58,7 @@ function state(overrides: Partial<BoardState> = {}): BoardState {
     projects: ["/work/tandem", "/work/app"],
     tasks: [],
     briefs: [],
+    routingPauses: [],
     watches: [],
     poll: {},
     finishedThisWeek: [],
@@ -355,4 +357,60 @@ test("the one-line status leads with what needs you, then running work and pull 
 
   const paused = boardView(state({ tasks: [task({ id: "t1", stage: "paused" })] }), NOW);
   expect(renderStatusLine(paused)).toBe("✓ all quiet");
+});
+
+function routingPause(
+  overrides: Partial<DurableExecutionRoutingPause> = {},
+): DurableExecutionRoutingPause {
+  return {
+    schemaVersion: 1,
+    decisionId: "routing-1",
+    reason: "pinned-model-absent-from-catalogue",
+    taskId: "task-scout",
+    jobId: "job-2",
+    operationId: "op-2",
+    role: "scout",
+    generation: 3,
+    attempt: 9,
+    policyDigest: "digest",
+    inputHead: "head",
+    pinnedSelector: "openai-codex/gpt-6-luna",
+    pinnedThinking: "xhigh",
+    evidenceGaps: ["incumbent-absent-from-catalogue"],
+    enabledProviders: ["openai-codex"],
+    usageSource: "no-governing-request",
+    observedAt: NOW,
+    ...overrides,
+  };
+}
+
+test("a task stopped on a model question needs you instead of reading as researching", () => {
+  const scout = task({
+    id: "task-scout",
+    stage: "scouting",
+    generation: 3,
+    objective: "Research the farewell email",
+  });
+  const view = boardView(state({ tasks: [scout], routingPauses: [routingPause()] }), NOW);
+  expect(view.running).toEqual([]);
+  expect(view.needsYou).toMatchObject([
+    {
+      key: "model-question:routing-1",
+      cause: "model-question",
+      text: "model question: keep openai-codex/gpt-6-luna? That model isn't listed right now.",
+    },
+  ]);
+  expect(view.needsYou.every(notifiesUser)).toBe(true);
+});
+
+test("a model question from an older generation or a retired reason does not stop the task", () => {
+  const scout = task({ id: "task-scout", stage: "scouting", generation: 4 });
+  for (const pause of [
+    routingPause(),
+    routingPause({ generation: 4, reason: "premium-tier-requires-approval" }),
+  ]) {
+    const view = boardView(state({ tasks: [scout], routingPauses: [pause] }), NOW);
+    expect(view.needsYou).toEqual([]);
+    expect(view.running.map((row) => row.cause)).toEqual(["scouting"]);
+  }
 });
