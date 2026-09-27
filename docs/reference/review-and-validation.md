@@ -112,8 +112,9 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
 - `record-review` stores `pass` as "no P0 or P1 stands", ignoring the reviewer's flag. P0/P1
   (confirmed or plausible) blocks; P2/P3 never costs a fix round on its own (a round that a P0/P1 triggers also fixes them) and is listed
   in the ready message and the PR's `# Known issues`. A violated mandatory design rule is P1.
-- A spent fix-round budget asks `Keep fixing?` ([Task lifecycle](task-lifecycle.md#fix-rounds)).
-  Nothing retries without `yes`, auto-passes, or downgrades a blocker.
+- A spent fix-round budget asks `Keep fixing?` once per task; after that extension is spent the task
+  stops for the user ([Task lifecycle](task-lifecycle.md#fix-rounds)). Nothing retries without
+  `yes`, auto-passes, or downgrades a blocker.
 - Each finding carries the reviewer's `category` (`correctness`, `error-handling`, `security`,
   `tests`, `design`, `requirements`, `docs`) and `catchStage`, the earliest stage that should have
   caught it (`planning`, `implementation`, `validation`, `review`). They are fields of the review

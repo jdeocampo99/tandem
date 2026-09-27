@@ -10,10 +10,10 @@ import type {
 import {
   describeOpenFindings,
   fixRoundBudget,
+  fixRoundGate,
   isBlockingFinding,
   KEEP_FIXING_QUESTION_ID_PREFIX,
   keepFixingGrant,
-  keepFixingQuestion,
   ledgerBlockers,
   ledgerSuggestions,
   recordReviewFindings,
@@ -262,13 +262,18 @@ test("the open-findings details still explain an empty ledger", () => {
   expect(describeOpenFindings(taskWith([]))).toContain("No open blocker is recorded");
 });
 
+function askedQuestion(task: TaskRecord) {
+  const gate = fixRoundGate(task);
+  return gate?.type === "ask" ? gate.question : undefined;
+}
+
 test("a spent fix-round budget asks Keep fixing? instead of failing silently", () => {
-  const question = keepFixingQuestion(taskWith([]));
+  const question = askedQuestion(taskWith([]));
 
   expect(question?.id).toBe(`${KEEP_FIXING_QUESTION_ID_PREFIX}2`);
   expect(question?.text).toBe('Keep fixing "Bound the retry loop"? It used all 2 fix rounds.');
   expect(question?.recommendation).toContain('Reply "yes"');
-  expect(keepFixingQuestion(taskWith([], 1))).toBeUndefined();
+  expect(fixRoundGate(taskWith([], 1))).toBeUndefined();
 });
 
 test("a yes to a spent budget grants another full budget on the same task", () => {
@@ -276,7 +281,19 @@ test("a yes to a spent budget grants another full budget on the same task", () =
   const granted = { ...task, fixRoundGrants: [keepFixingGrant(task)] };
 
   expect(fixRoundBudget(granted)).toBe(4);
-  expect(keepFixingQuestion(granted)).toBeUndefined();
+  expect(fixRoundGate(granted)).toBeUndefined();
+});
+
+test("once the extra rounds from a yes are spent, the task stops instead of asking again", () => {
+  const task = taskWith([]);
+  const spent = { ...task, reviewRound: 4, fixRoundGrants: [keepFixingGrant(task)] };
+
+  expect(fixRoundGate(spent)).toEqual({
+    type: "stop",
+    summary:
+      '"Bound the retry loop" used all 4 fix rounds. Take it over, publish it as-is, or cancel it.',
+    detail: describeOpenFindings(spent),
+  });
 });
 
 test("a finding repeated unchanged after a fix round asks early and names it", () => {
@@ -290,12 +307,29 @@ test("a finding repeated unchanged after a fix round asks early and names it", (
   };
 
   expect(repeatedFindings(task).map((entry) => entry.id)).toEqual(["f-1"]);
-  expect(keepFixingQuestion(task)?.text).toBe(
+  expect(askedQuestion(task)?.text).toBe(
     'Keep fixing "Bound the retry loop"? The same finding came back: The retry loop drops the cancellation signal.',
   );
   const approved = { ...task, fixRoundGrants: [keepFixingGrant(task)] };
   expect(approved.fixRoundGrants[0]?.rounds).toBe(0);
-  expect(keepFixingQuestion(approved)).toBeUndefined();
+  expect(fixRoundGate(approved)).toBeUndefined();
+});
+
+test("a repeated finding after the budget was extended stops once those rounds are spent", () => {
+  const repeated = finding({ id: "f-1" });
+  const base = taskWith([]);
+  const task: TaskRecord = {
+    ...base,
+    reviewRound: 4,
+    fixRoundGrants: [{ generation: 1, rounds: 2, reason: "user" }],
+    reviews: [
+      review({ head: "head-1", generation: 1, findings: [repeated] }),
+      review({ head: "head-2", generation: 2, findings: [repeated] }),
+    ],
+  };
+
+  expect(fixRoundGate(task)?.type).toBe("stop");
+  expect(fixRoundGate({ ...task, reviewRound: 3 })?.type).toBe("ask");
 });
 
 test("a reworded finding is not a repeat, but any blocker at an unchanged HEAD is", () => {
