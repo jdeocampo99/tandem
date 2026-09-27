@@ -44,7 +44,7 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 
 | Section | Rows |
 | --- | --- |
-| Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked red. Always shown; "Nothing needs you." when empty. |
+| Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks stopped on a model (routing) question for their current generation, shown as `model question: keep <model>? <why>` instead of their running stage; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked red. Always shown; "Nothing needs you." when empty. |
 | Running | Tasks paused by the user, queued, researching, implementing, checking, in review, or fixing findings, with the time since the task was created. Left out when empty. |
 | PRs | Every other watched pull request, as PR watch's rows with `owner/repo#N`. Left out when empty. |
 | This week | One line for the 7 days before now, across every project: tasks whose timeline last moved them to completed or merged in that window, how many of those that went through review passed it the first time, and what those tasks cost. Left out when none finished. |
@@ -154,7 +154,7 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 - On each scheduler reconcile, a coordinator reads the board and keeps the keys of the "Needs you"
   rows that belong to its own project (a pull request belongs to its task's project, or to the
   checkout it was watched from) and that `notifiesUser` accepts: briefs awaiting approval, task
-  questions, red pull requests, and tasks awaiting approval or ready.
+  questions, model questions, red pull requests, and tasks awaiting approval or ready.
 - When keys appear that were not there on the last reconcile, it sends one
   `herdr notification show` for all of them, with Herdr's needs-input sound. One new row reads
   `Tandem: <name>` over `<reason> · prefix+t for status`; several read

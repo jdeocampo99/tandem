@@ -258,9 +258,16 @@ test("only submit_report delivers the result; conversation turns before and afte
     const { fixture: testFixture, terminalJob } = await startExtension(root, job);
     const end = testFixture.handlers.get("agent_end");
     const tool = testFixture.handlers.get("tool_call");
-    if (end === undefined || tool === undefined) throw new Error("missing worker handlers");
+    const input = testFixture.handlers.get("input");
+    if (end === undefined || tool === undefined || input === undefined) {
+      throw new Error("missing worker handlers");
+    }
     await end(
       agentEnd("Outcome: implemented\nlooks final but is only a reply", true),
+      testFixture.context,
+    );
+    await input(
+      { type: "input", text: "Rename that helper too.", source: "interactive" },
       testFixture.context,
     );
     await end(agentEnd("Sure, I will rename that helper next."), testFixture.context);
