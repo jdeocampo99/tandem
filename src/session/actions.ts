@@ -924,7 +924,7 @@ const THREAD_ENDING_ACTIONS: ReadonlySet<TandemAction["action"]> = new Set([
   "review-post",
 ]);
 
-/** What the `tandem` tool and `/tandem` command need from the running coordinator. */
+/** Dependencies for a Tandem tool call; command handlers consume a subset. */
 export type TandemCallDependencies = Readonly<{
   /** Read lazily, so a service that cannot start fails the call instead of the hook. */
   readonly service: () => TandemService;
@@ -1007,12 +1007,11 @@ async function showCatchUpCard(
 export async function runTandemCommand(
   args: string,
   cwd: string,
-  dependencies: Omit<TandemCallDependencies, "reconcile" | "closeThread">,
+  dependencies: Pick<TandemCallDependencies, "service" | "confirm" | "postAction">,
   host: Pick<SessionHost, "perform">,
 ): Promise<void> {
   try {
     const action = resolveCommandAction(parseTandemCommand(args), cwd);
-    dependencies.recordTurnAction(classifyCoordinatorTurnAction(action));
     const result = await executeTandemAction(action, dependencies.service(), {
       confirm: dependencies.confirm,
     });

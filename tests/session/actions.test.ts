@@ -1730,7 +1730,7 @@ test("a /tandem command shows results before post-action work, except for read-o
   // `.` is the coordinator's own checkout.
   expect(modelsFor).toEqual(["/repo"]);
   expect(order).toEqual(["notify", "postAction", "notify", "notify"]);
-  expect(turnActions).toEqual(["other", "trace"]);
+  expect(turnActions).toEqual([]);
   expect(recording.effects[0]).toMatchObject({ type: "notify", level: "info" });
   expect(recording.effects[1]).toMatchObject({ type: "notify", level: "error" });
   expect(recording.effects[1]?.type === "notify" ? recording.effects[1].text : "").toStartWith(
