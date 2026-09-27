@@ -54,6 +54,7 @@ import {
 import type { OperationRecords } from "./operation-records.ts";
 import { workerBriefContext } from "./prompts.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "./terminal-control.ts";
+import { validationCommandLine } from "./validation-commands.ts";
 
 /** Re-stamps a prepared job spec with the claim now launching it, after checking its identity. */
 async function refreshJobSpecClaim(job: DurableJob, claim: OperationClaim): Promise<void> {
@@ -117,6 +118,9 @@ function workerJobSpec(
       ? { setup: task.policy.config.setupCommands }
       : {}),
     ...(input.playbook === undefined ? {} : { playbookSteps: PLAYBOOKS[input.playbook].steps }),
+    ...(role === "implementer" && task.policy.config.validationCommands.length > 0
+      ? { validationCommands: task.policy.config.validationCommands.map(validationCommandLine) }
+      : {}),
     ...(prReview === undefined
       ? {}
       : {

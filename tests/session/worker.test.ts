@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { ToolCall, ToolKind } from "../../src/session/events.ts";
 import {
   idleAfterResult,
+  implementerShellRefusal,
   mockupWriteDecision,
   reviewShellRefusal,
   reviewSummary,
@@ -18,6 +19,7 @@ import type {
   WorkerTerminalState,
   WorkerTokenTally,
 } from "../../src/workers/terminal.ts";
+import { VALIDATION_COMMAND_REFUSAL } from "../../src/workers/validation-commands.ts";
 import { fakeSessionTime, recordingSessionHost } from "../evals/scenario.ts";
 
 function job(overrides: Partial<WorkerJob> = {}): WorkerJob {
@@ -238,6 +240,46 @@ test("a PR reviewer's shell is limited to read-only commands; other workers are 
   expect(reviewShellRefusal(true, bash())).toBe("bash needs a command");
   expect(reviewShellRefusal(false, bash("rm -rf src"))).toBeUndefined();
   expect(reviewShellRefusal(true, call("read"))).toBeUndefined();
+});
+
+test("an implementer may not run a pinned validation command; other shell calls still run", () => {
+  const bash = (command: string) => call("shell", { name: "bash", command });
+  const pinned = ["bun run check", "bun test", "bun run lint"];
+  for (const command of [
+    "bun test",
+    "bun run check && bun test && bun run lint",
+    "env -u NO_COLOR -u TANDEM_WORKER_JOB_PATH bun test",
+    "cd /tmp/worktree && CI=1  bun run lint 2>&1 | tail -20",
+  ]) {
+    expect(implementerShellRefusal(pinned, bash(command))).toBe(VALIDATION_COMMAND_REFUSAL);
+  }
+  for (const command of [
+    "bun test tests/session/worker.test.ts",
+    "bun run lint --write src/a.ts",
+    "git status --short",
+    "grep -rn test src",
+  ]) {
+    expect(implementerShellRefusal(pinned, bash(command))).toBeUndefined();
+  }
+  expect(implementerShellRefusal(undefined, bash("bun test"))).toBeUndefined();
+  expect(implementerShellRefusal(pinned, call("read"))).toBeUndefined();
+});
+
+test("a multi-step validation command is refused only when run whole", () => {
+  const bash = (command: string) => call("shell", { name: "bash", command });
+  const pinned = ["cd app && npm test"];
+  expect(implementerShellRefusal(pinned, bash("cd app && npm test"))).toBeString();
+  expect(implementerShellRefusal(pinned, bash("cd app && ls"))).toBeUndefined();
+});
+
+test("an implementer session refuses its pinned validation commands through the tool guard", () => {
+  const worker = workerSession({ validationCommands: ["bun test"] });
+  expect(
+    worker.session.guardToolCall(call("shell", { name: "bash", command: "bun test" })),
+  ).toEqual({ block: true, reason: VALIDATION_COMMAND_REFUSAL });
+  expect(
+    worker.session.guardToolCall(call("shell", { name: "bash", command: "git diff" })),
+  ).toEqual({ block: false });
 });
 
 test("the worker pane shows pause, then a pending answer, then work, then the settled outcome", () => {

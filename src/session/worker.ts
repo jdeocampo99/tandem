@@ -29,6 +29,7 @@ import {
   type WorkerTerminalState,
   type WorkerTokenTally,
 } from "../workers/terminal.ts";
+import { validationCommandRefusal } from "../workers/validation-commands.ts";
 import type {
   Cancel,
   SessionDeps,
@@ -208,6 +209,17 @@ export function reviewShellRefusal(prReview: boolean, call: ToolCall): string | 
     : readOnlyCommandRefusal(call.command);
 }
 
+/** Why an implementer's shell call is refused: it runs a pinned validation command itself. */
+export function implementerShellRefusal(
+  validationCommands: readonly string[] | undefined,
+  call: ToolCall,
+): string | undefined {
+  if (validationCommands === undefined || call.kind !== "shell" || call.command === undefined) {
+    return undefined;
+  }
+  return validationCommandRefusal(validationCommands, call.command);
+}
+
 /** What a worker session needs from the pane it runs in. */
 export type WorkerHost = Pick<SessionHost, "perform" | "paneState" | "assertSelectedModel">;
 
@@ -319,7 +331,9 @@ export class WorkerSession {
           completed: this.currentState.completed,
         },
         call.kind,
-      ) ?? reviewShellRefusal(this.job.prReview !== undefined, call);
+      ) ??
+      reviewShellRefusal(this.job.prReview !== undefined, call) ??
+      implementerShellRefusal(this.job.validationCommands, call);
     return refusal === undefined ? { block: false } : { block: true, reason: refusal };
   }
 

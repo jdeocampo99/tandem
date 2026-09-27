@@ -73,6 +73,12 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   cannot report a status, the submission goes through and the settle-time checkpoint check decides.
 - An implementer's `implemented` is also refused while any of its
   [playbook](task-lifecycle.md#playbooks) steps is not completed or abandoned in its `todo` list.
+- An implementer does not run the task's pinned validation commands; the validation worker runs
+  them after the report. Its job spec lists each command line (a shell string as typed, otherwise
+  its argv joined by spaces), and the worker extension's tool guard refuses a `bash` call that runs
+  one of them unchanged, alone or chained, ignoring leading `VAR=value`/`env` prefixes and
+  redirects (src/workers/validation-commands.ts). A command with other arguments, such as one test
+  file, still runs.
 - An invalid submission is a tool error naming the fix and never settles the job.
 
 ## Review briefs
