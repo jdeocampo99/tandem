@@ -200,12 +200,12 @@ const PRINCIPLE_RULES = `- Dead code in a file you're adding to: delete it first
 
 export const IMPLEMENTER_PRINCIPLES = `# Principles
 
-These rules apply to the files you edit and to the callers of anything you replace, even when that makes the change bigger than the brief describes. Don't change behavior unrelated to the task.
+These rules apply inside the code the task changes and the callers of anything you replace. Never change existing behavior the brief didn't ask for; name it in your report as a follow-up.
 ${PRINCIPLE_RULES}`;
 
 export const REVIEWER_PRINCIPLES = `# Principles
 
-The implementer follows these rules in the files it edits and in the callers of anything it replaces, even beyond what the brief describes. Report each violation there as a P2 finding that names the rule and the fix; leave other files alone.
+The implementer follows these rules inside the code the task changes and the callers of anything it replaces. Report each violation there as a P2 finding that names the rule and the fix; leave other files alone.
 ${PRINCIPLE_RULES}`;
 
 /**
@@ -253,7 +253,7 @@ const ROLE_INSTRUCTIONS: PromptRoleInstructions = {
   ],
   reviewer: [
     "You are a fresh reviewer with no implementer conversation. Stay read-only: use only read, grep, and glob, and do not write files.",
-    "Work the Principles rules call for beyond what the brief describes is in scope; judge it like the rest of the change, and report it only if it changes behavior unrelated to the task.",
+    "A change to existing behavior the brief didn't ask for is a P1 scope-creep finding. For a finding the report declines, accept it as P2 or name a realistic failure inside the task's scope.",
     "A user decision listed in the review brief settles its question; do not ask it again. If the user accepted a criterion no runner evidence can prove, treat it as satisfied by the user and do not fail the lens for missing runner evidence on it.",
   ],
   presentation: [
