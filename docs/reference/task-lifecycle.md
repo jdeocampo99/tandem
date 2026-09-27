@@ -178,7 +178,7 @@ Code: src/playbooks/ (`catalog.ts` steps, `selection.ts` choice, `classify.ts` t
   it as `Type:`.
 - The implementer brief lists the steps and asks the worker to load them verbatim into OMP's `todo`
   tool. Every fix round uses the `fix-round` playbook, whose first step carries the fix-round rule
-  to fix every finding, P2 and P3 included. Older tasks without a playbook get one only in fix rounds.
+  to fix every P0 and P1 finding and leave P2 and P3 as known issues. Older tasks without a playbook get one only in fix rounds.
 - The worker extension remembers the list from the latest `todo` result. An `implemented` report is
   rejected while any step is not completed or abandoned (missing counts as open); the rejection
   names the steps. A dropped step's reason goes in the report.
