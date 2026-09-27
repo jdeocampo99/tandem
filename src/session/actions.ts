@@ -134,6 +134,11 @@ export type TandemAction =
       readonly objective: string;
       readonly artifacts: readonly string[];
     }>
+  | Readonly<{
+      readonly action: "research-follow-up";
+      readonly taskId: string;
+      readonly question: string;
+    }>
   | Readonly<{ readonly action: "feedback"; readonly presentationId: string }>
   | Readonly<{ readonly action: "presentation-open"; readonly presentationId: string }>
   | Readonly<{ readonly action: "describe"; readonly taskId: string; readonly summary: PrSummary }>
@@ -671,6 +676,8 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       }),
       action.action,
     ),
+  "research-follow-up": async (action, service) =>
+    actionResult(await service.researchFollowUp(action.taskId, action.question), action.action),
   feedback: async (action, service, signal) =>
     actionResult(await service.feedback(action.presentationId, signal), action.action),
   "presentation-open": async (action, service) =>

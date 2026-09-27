@@ -1416,6 +1416,7 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
       return task;
     },
     present: unused,
+    researchFollowUp: unused,
     presentations: unused,
     feedback: unused,
     openPresentation: unused,
