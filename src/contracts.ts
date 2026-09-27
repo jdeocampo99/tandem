@@ -150,53 +150,13 @@ export type SetupCommand = {
   readonly timeoutMs: number;
 };
 
-/** How much review scrutiny a change is classified for, ordered from least to most. */
-export const REVIEW_LEVEL_ORDER = ["light", "standard", "deep"] as const;
+/** How much review a change gets: at `light` only a P0 finding blocks, at `standard` a P0 or P1. */
+export type ReviewLevel = "light" | "standard";
 
-export type ReviewLevel = (typeof REVIEW_LEVEL_ORDER)[number];
-
-/**
- * Change kinds that always force at least their own documented level, whatever the rest of the
- * diff shows. A floor is fixed: no classifier input, helper, or policy setting can lower it.
- */
-export const SAFETY_FLOOR_ORDER = [
-  "permissions-security",
-  "data-integrity",
-  "shared-contracts-concurrency",
-  "dependency-build-infra",
-] as const;
-
-export type SafetyFloor = (typeof SAFETY_FLOOR_ORDER)[number];
-
-/**
- * A depth recommendation a helper offered for the same change. In shadow mode it is recorded
- * beside the deterministic level for later comparison and never becomes the level that is used.
- */
-export type ReviewLevelAssistance = {
-  readonly mode: "shadow";
-  readonly recommendation: ReviewLevel | "unavailable";
-  readonly reason: string;
-  readonly requestIdentity: string;
-  readonly resultIdentity: string;
-};
-
-/** The durable classification of a task's change, with the reason and floors that produced it. */
+/** The level a task's latest review round was classified at, with the reason. */
 export type ReviewLevelRecord = {
   readonly level: ReviewLevel;
   readonly reason: string;
-  readonly floors: readonly SafetyFloor[];
-  readonly assistance?: ReviewLevelAssistance;
-};
-
-/**
- * Repository settings that decide whether a review level may change what actually runs. Every
- * field defaults to the value that reproduces the review behavior Tandem had before levels
- * existed, so a repository only opts in deliberately.
- */
-export type ReviewLevelPolicy = {
-  readonly deepScrutiny: boolean;
-  readonly jevAssistance: "off" | "shadow";
-  readonly sourceTransmission: boolean;
 };
 
 export type RepoPolicy = {
@@ -212,7 +172,15 @@ export type RepoPolicy = {
    */
   readonly maxWorkers?: number;
   readonly maxFixRounds: number;
-  readonly reviewLevels: ReviewLevelPolicy;
+  /**
+   * Only on a policy pinned before review-level settings were removed. Never read: it stays in
+   * place so that task's policy digest, and the evidence bound to it, still match.
+   */
+  readonly reviewLevels?: Readonly<{
+    readonly deepScrutiny: boolean;
+    readonly jevAssistance: "off" | "shadow";
+    readonly sourceTransmission: boolean;
+  }>;
   /**
    * `none` leaves Tandem's code standards and principles out of implementer and reviewer briefs, so
    * the repository's own guidance governs. Absent means Tandem's; it is never written as "tandem",

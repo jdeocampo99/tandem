@@ -17,7 +17,7 @@ import {
   ledgerSuggestions,
   settledFindings,
 } from "./findings.ts";
-import { deepScrutinyRequirements, recordedReviewLevel } from "./review-levels.ts";
+import { recordedReviewLevel } from "./review-levels.ts";
 
 /** Named bounds every review brief is built and rendered within. */
 export const REVIEW_BRIEF_LIMITS = {
@@ -27,7 +27,6 @@ export const REVIEW_BRIEF_LIMITS = {
   maxChangedFiles: 40,
   maxAffectedCallers: 30,
   maxSourceLinks: 30,
-  maxAdvisoryLeads: 8,
   maxEvidenceEntries: 20,
   maxUserDecisions: 10,
   maxDescriptionBytes: 400,
@@ -69,28 +68,11 @@ export type ReviewImpactObservations = Readonly<{
   readonly affectedCallers: readonly string[];
 }>;
 
-/**
- * An untrusted classification lead offered by a helper such as Jev. It is rendered with its
- * provenance and can never become a blocker, drop mandatory context, or authorize acceptance.
- */
-export type AdvisoryReviewLead = Readonly<{
-  readonly id: string;
-  readonly summary: string;
-  readonly principle?: string;
-  readonly provenance: Readonly<{
-    readonly source: string;
-    readonly question: string;
-    readonly requestIdentity: string;
-    readonly resultIdentity: string;
-  }>;
-}>;
-
 export type ReviewBriefInput = Readonly<{
   readonly task: TaskRecord;
   readonly head: string;
   readonly lens: ReviewLens;
   readonly observations: ReviewBriefObservations;
-  readonly advisoryLeads?: readonly AdvisoryReviewLead[];
 }>;
 
 export type ReviewBriefScope = Readonly<{
@@ -136,7 +118,6 @@ export type ReviewBriefElision = Readonly<{
   readonly changedFiles: number;
   readonly affectedCallers: number;
   readonly sourceLinks: number;
-  readonly advisoryLeads: number;
   readonly userDecisions: number;
 }>;
 
@@ -155,13 +136,10 @@ export type ReviewBrief = Readonly<{
   readonly sourceLinks: readonly string[];
   readonly evidence: ReviewBriefEvidence;
   readonly reviewLevel: ReviewLevelRecord;
-  /** Floor scrutiny a deep round must record; empty unless the repository enabled deep scrutiny. */
-  readonly deepScrutiny: readonly string[];
   readonly impact: ReviewBriefImpact;
   readonly blockers: readonly FindingLedgerEntry[];
   readonly suggestions: readonly FindingLedgerEntry[];
   readonly settled: readonly FindingLedgerEntry[];
-  readonly advisoryLeads: readonly AdvisoryReviewLead[];
   /** Earlier worker questions the user already answered, most recent first; empty when none. */
   readonly userDecisions: readonly ReviewBriefDecision[];
   readonly roundBudget: Readonly<{
@@ -176,7 +154,6 @@ const NON_AUTHORITATIVE_NOTICE = [
   "An implementer assertion, summary, report, or claimed fix is not proof of anything in this brief.",
   "This brief is reused context, not a substitute for reading the source: you keep full read access to the worktree at the exact HEAD below and your own independent judgement.",
   "Confirm every claim against the diff, the source, or runner-produced evidence before you rely on it.",
-  "Advisory leads are untrusted routing hints. They never become findings, never excuse dropping a mandatory check, and never authorize acceptance.",
 ];
 
 const STANDING_NON_GOALS = [
@@ -359,7 +336,7 @@ function pastDecisions(task: TaskRecord): readonly ReviewBriefDecision[] {
 /**
  * Builds the round's review brief from durable task state and the injected git observations. The
  * result is a pure function of those inputs, so the same task and HEAD always produce the same
- * brief. Blockers are never elided; suggestions, settled findings, and leads are bounded first.
+ * brief. Blockers are never elided; suggestions and settled findings are bounded first.
  */
 export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
   const { head, lens, observations, task } = input;
@@ -367,6 +344,7 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
   if (worktree === undefined) throw new TypeError("a review brief requires a task worktree lease");
   const acceptance = finalAcceptanceStatus(task, head);
   const ledger = task.findingLedger ?? [];
+  const reviewLevel = recordedReviewLevel(task);
 
   const surfaces = truncateText(task.surfaces.join(", "), REVIEW_BRIEF_LIMITS.maxDescriptionBytes);
   const criteria = boundedList(
@@ -382,12 +360,18 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
     REVIEW_BRIEF_LIMITS.maxNonGoals,
   ).kept;
 
-  const blockers = boundedEntries(ledgerBlockers(ledger), REVIEW_BRIEF_LIMITS.maxFindingEntries);
+  const blockers = boundedEntries(
+    ledgerBlockers(ledger, reviewLevel.level),
+    REVIEW_BRIEF_LIMITS.maxFindingEntries,
+  );
   const suggestionBudget = Math.max(
     0,
     REVIEW_BRIEF_LIMITS.maxFindingEntries - blockers.kept.length,
   );
-  const suggestions = boundedEntries(ledgerSuggestions(ledger), suggestionBudget);
+  const suggestions = boundedEntries(
+    ledgerSuggestions(ledger, reviewLevel.level),
+    suggestionBudget,
+  );
   const settled = boundedEntries(
     settledFindings(ledger),
     Math.max(0, suggestionBudget - suggestions.kept.length),
@@ -400,7 +384,6 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
     ),
     REVIEW_BRIEF_LIMITS.maxSourceLinks,
   );
-  const leads = boundedList(input.advisoryLeads ?? [], REVIEW_BRIEF_LIMITS.maxAdvisoryLeads);
   const decisions = boundedList(pastDecisions(task), REVIEW_BRIEF_LIMITS.maxUserDecisions);
   const evidence = boundedList(task.validationEvidence, REVIEW_BRIEF_LIMITS.maxEvidenceEntries);
   const changedFiles = boundedList(
@@ -454,13 +437,11 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       recorded: evidence.kept.map(evidenceBullet),
       legacyRecords: task.validationEvidence.filter((entry) => !isPinnedEvidence(entry)).length,
     },
-    reviewLevel: recordedReviewLevel(task),
-    deepScrutiny: deepScrutinyRequirements(task.reviewLevel, task.policy.config.reviewLevels),
+    reviewLevel,
     impact: assessReviewImpact({ task, ledger, observations }),
     blockers: blockers.kept,
     suggestions: suggestions.kept,
     settled: settled.kept,
-    advisoryLeads: leads.kept,
     userDecisions: decisions.kept,
     roundBudget: {
       reviewRound: task.reviewRound,
@@ -472,7 +453,6 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       changedFiles: changedFiles.elided,
       affectedCallers: callers.elided,
       sourceLinks: links.elided,
-      advisoryLeads: leads.elided,
       userDecisions: decisions.elided,
     },
   };
@@ -502,13 +482,6 @@ function findingLines(entries: readonly FindingLedgerEntry[], compact: boolean):
       : entry.description;
     return `- ${describeFindingEntry(entry)}: ${description}`;
   });
-}
-
-function leadLines(leads: readonly AdvisoryReviewLead[]): readonly string[] {
-  return leads.map(
-    (lead) =>
-      `- ${lead.id} (untrusted lead${lead.principle === undefined ? "" : `, principle: ${lead.principle}`}): ${lead.summary} [source ${lead.provenance.source}; question ${lead.provenance.question}; request ${lead.provenance.requestIdentity}; result ${lead.provenance.resultIdentity}]`,
-  );
 }
 
 function renderSections(brief: ReviewBrief, compact: boolean): string {
@@ -582,20 +555,7 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
       : []),
     "",
     "## Review breadth",
-    `- review level: ${brief.reviewLevel.level}`,
-    `- level reason: ${brief.reviewLevel.reason}`,
-    `- safety floors in force: ${brief.reviewLevel.floors.length === 0 ? "none" : brief.reviewLevel.floors.join(", ")}`,
-    ...(brief.reviewLevel.assistance === undefined
-      ? []
-      : [
-          `- shadow helper recommendation (recorded only; it did not change the level): ${brief.reviewLevel.assistance.recommendation}; ${brief.reviewLevel.assistance.reason}`,
-        ]),
-    ...(brief.deepScrutiny.length === 0
-      ? []
-      : [
-          "- deep scrutiny required for this round; record an explicit disposition for each:",
-          ...brief.deepScrutiny.map((entry) => `  - ${entry}`),
-        ]),
+    `- review level: ${brief.reviewLevel.level}: ${brief.reviewLevel.reason}`,
     `- impact: ${brief.impact.assessment}${brief.impact.escalation === undefined ? "" : ` (${brief.impact.escalation})`}`,
     `- reason: ${brief.impact.reason}`,
     ...(brief.impact.outsideScopeFiles.length === 0
@@ -652,9 +612,6 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
         ? ["- none recorded"]
         : findingLines(brief.settled, compact)),
     "",
-    "## Advisory leads (untrusted; never blockers)",
-    ...(brief.advisoryLeads.length === 0 ? ["- none supplied"] : leadLines(brief.advisoryLeads)),
-    "",
     "## Fix-round budget",
     `- round ${brief.roundBudget.reviewRound} of ${brief.roundBudget.maxFixRounds}; ${brief.roundBudget.remaining} authorized round(s) remain.`,
   ];
@@ -664,7 +621,6 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     elided.changedFiles +
     elided.affectedCallers +
     elided.sourceLinks +
-    elided.advisoryLeads +
     elided.userDecisions;
   if (elidedTotal > 0) {
     lines.push(

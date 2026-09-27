@@ -12,6 +12,7 @@ import {
   isAgentRole,
   type ModelSpec,
   type ReviewLens,
+  type ReviewLevel,
   type ReviewMode,
   type ReviewResult,
   type SetupCommand,
@@ -35,6 +36,8 @@ export type WorkerReviewContext = Readonly<{
   readonly lens: ReviewLens;
   /** Which review of the task this is, counting from 1; absent on jobs written before it existed. */
   readonly round?: number;
+  /** The round's review level; absent on jobs written before it existed, which read as standard. */
+  readonly level?: ReviewLevel;
 }>;
 
 export type WorkerJob = Readonly<{
@@ -274,7 +277,15 @@ function readReviewContext(value: unknown): WorkerReviewContext {
   }
   const round =
     value.round === undefined ? undefined : readPositiveInteger(value.round, "review.round");
-  return { head, lens: value.lens, ...(round === undefined ? {} : { round }) };
+  if (value.level !== undefined && value.level !== "light" && value.level !== "standard") {
+    throw new TypeError("review.level must be light or standard");
+  }
+  return {
+    head,
+    lens: value.lens,
+    ...(round === undefined ? {} : { round }),
+    ...(value.level === undefined ? {} : { level: value.level }),
+  };
 }
 
 function readWorkerCommunication(

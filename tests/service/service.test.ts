@@ -44,7 +44,6 @@ import type {
 } from "../../src/runtime/schema.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { taskFingerprint } from "../../src/service/records.ts";
-import { FINAL_REVIEW_LENSES } from "../../src/tasks/acceptance.ts";
 import {
   readTaskInbox,
   taskInboxPath,
@@ -56,15 +55,7 @@ import {
   RESEARCH_CONTINUATION_CLASSIFIER_VERSION,
   type ResearchContinuationRequest,
 } from "../../src/tasks/research-continuation-classifier.ts";
-import {
-  type ReviewAssistanceRuntime,
-  reviewAssistanceRuntime,
-} from "../../src/tasks/review-assistance.ts";
 import { REVIEW_BRIEF_LIMITS } from "../../src/tasks/review-brief.ts";
-import {
-  DEFAULT_REVIEW_LEVEL_POLICY,
-  requiredReviewLenses,
-} from "../../src/tasks/review-levels.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { readTimeline } from "../../src/tasks/timeline-store.ts";
 import { assertSourceUnchanged } from "../../src/workers/checkout.ts";
@@ -97,11 +88,6 @@ const policy: ResolvedPolicy = {
     ],
     setupCommands: [],
     maxFixRounds: 1,
-    reviewLevels: {
-      deepScrutiny: false,
-      jevAssistance: "off",
-      sourceTransmission: false,
-    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -588,6 +574,7 @@ type FixtureOptions = Readonly<{
     readonly requiredStages?: TaskRecord["requiredStages"];
     readonly reviewRound?: number;
     readonly reviews?: TaskRecord["reviews"];
+    readonly reviewLevel?: TaskRecord["reviewLevel"];
     readonly pullRequest?: TaskRecord["pullRequest"];
     readonly worktree?: WorktreeLease;
     readonly clearWorktree?: boolean;
@@ -598,7 +585,6 @@ type FixtureOptions = Readonly<{
   readonly projectRoots?: (home: string, repoPath: string) => readonly string[];
   /** Attach the fixture's worktree lease to the task record, as delivery paths require. */
   readonly attachLease?: boolean;
-  readonly reviewAssistance?: ReviewAssistanceRuntime;
 }>;
 
 type Fixture = Readonly<{
@@ -664,6 +650,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
         ...(edits?.requiredStages === undefined ? {} : { requiredStages: edits.requiredStages }),
         ...(edits?.reviewRound === undefined ? {} : { reviewRound: edits.reviewRound }),
         ...(edits?.reviews === undefined ? {} : { reviews: edits.reviews }),
+        ...(edits?.reviewLevel === undefined ? {} : { reviewLevel: edits.reviewLevel }),
         ...(edits?.pullRequest === undefined ? {} : { pullRequest: edits.pullRequest }),
         ...(edits?.worktree === undefined ? {} : { worktree: edits.worktree }),
       };
@@ -717,9 +704,6 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     ...(options.projectRoots === undefined
       ? {}
       : { projectRoots: options.projectRoots(home, repoPath) }),
-    ...(options.reviewAssistance === undefined
-      ? {}
-      : { reviewAssistance: options.reviewAssistance }),
   });
   return { home, task, lease, endpoint, run: runner.run, runnerState: runner.state, service };
 }
@@ -4133,30 +4117,23 @@ test("a launched review job receives a bounded deterministic review brief", asyn
       expect(brief).toContain("src/service/controller.ts");
       expect(brief).toContain("affected callers observed at HEAD: src/main.ts");
       expect(brief).toContain("## Evidence-backed blockers");
-      expect(brief).toContain("## Advisory leads (untrusted; never blockers)");
       expect(brief).toContain("## Fix-round budget");
       expect(brief).toContain("- review level: ");
     },
   );
 });
 
-test("the default policy launches one merged review lens and never calls the helper", async () => {
-  let evaluatorCalls = 0;
-  const assistance = reviewAssistanceRuntime({
-    apiKey: "would-be-used-if-opted-in",
-    timeoutMs: 1_000,
-    evaluate: async () => {
-      evaluatorCalls += 1;
-      throw new Error("the evaluator must not be called under the default policy");
-    },
-  });
+test("each review round launches one merged lens and reclassifies fresh, so a level can drop", async () => {
   await withFixture(
     {
       kind: "implementation",
       stage: "reviewing",
-      taskEdits: { reviewHead: "review-head", reviews: [] },
-      runner: { active: false, checkoutHead: "review-head" },
-      reviewAssistance: assistance,
+      taskEdits: {
+        reviewHead: "review-head",
+        reviews: [],
+        reviewLevel: { level: "standard", reason: "an earlier round changed 9 files" },
+      },
+      runner: { active: false, checkoutHead: "review-head", changedFiles: "src/a.ts\n" },
     },
     async ({ home, lease, service }) => {
       await seedTaskResources(home, lease, [endpointFor("implementer")], []);
@@ -4164,16 +4141,9 @@ test("the default policy launches one merged review lens and never calls the hel
       const launched = (await readRuntime(home)).tasks[0]?.jobs.at(-1);
       if (launched?.reviewLens === undefined) throw new Error("no review job was launched");
       expect(launched.reviewLens).toBe("review");
-
-      const persisted = await service.get("task-1");
-      expect(persisted.reviewLevel?.level).toBe("standard");
-      expect(persisted.reviewLevel?.reason.length).toBeGreaterThan(0);
-      expect(persisted.reviewLevel?.assistance).toBeUndefined();
-      expect(persisted.policy.config.reviewLevels).toEqual(DEFAULT_REVIEW_LEVEL_POLICY);
-      expect(requiredReviewLenses(persisted, "review-head")).toEqual(FINAL_REVIEW_LENSES);
+      expect((await service.get("task-1")).reviewLevel?.level).toBe("light");
     },
   );
-  expect(evaluatorCalls).toBe(0);
 });
 
 test("classification leaves a running task's pinned policy and model choices unchanged", async () => {

@@ -45,11 +45,6 @@ const REVIEW_POLICY: ResolvedPolicy = {
     validationCommands: [{ name: "smoke", argv: ["true"], surfaces: ["*"], timeoutMs: 1_000 }],
     setupCommands: [],
     maxFixRounds: 1,
-    reviewLevels: {
-      deepScrutiny: false,
-      jevAssistance: "off",
-      sourceTransmission: false,
-    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };

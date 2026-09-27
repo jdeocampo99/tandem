@@ -52,11 +52,6 @@ const policy: ResolvedPolicy = {
     ],
     setupCommands: [],
     maxFixRounds: 1,
-    reviewLevels: {
-      deepScrutiny: false,
-      jevAssistance: "off",
-      sourceTransmission: false,
-    },
   },
   guidance: {
     implementation: [],
@@ -739,7 +734,9 @@ test("carries finding identities and their status across review rounds", () => {
   );
   expect(task.findingLedger).toHaveLength(1);
   expect(task.findingLedger?.[0]?.status).toBe("unresolved");
-  expect(ledgerBlockers(task.findingLedger ?? []).map((entry) => entry.id)).toEqual(["finding-1"]);
+  expect(ledgerBlockers(task.findingLedger ?? [], "standard").map((entry) => entry.id)).toEqual([
+    "finding-1",
+  ]);
 
   task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
   expect(task.stage).toBe("awaiting-fixes");
@@ -774,7 +771,41 @@ test("carries finding identities and their status across review rounds", () => {
   expect(settled?.status).toBe("addressed");
   expect(settled?.raisedAt).toEqual({ head: "head-1", generation: 0, reviewRound: 0 });
   expect(settled?.statusAt).toEqual({ head: "head-2", generation: 1, reviewRound: 1 });
-  expect(ledgerBlockers(task.findingLedger ?? [])).toEqual([]);
+  expect(ledgerBlockers(task.findingLedger ?? [], "standard")).toEqual([]);
+});
+
+test("at the light level a P1 passes review as a known issue; at standard it blocks", () => {
+  const p1: Finding = {
+    id: "finding-1",
+    severity: "P1",
+    verdict: "confirmed",
+    description: "A narrow edge case is unhandled",
+  };
+  const reviewed = (level: "light" | "standard") => {
+    let task: TaskRecord = {
+      ...implementationToReviewing(),
+      reviewLevel: { level, reason: "classified for this test" },
+    };
+    task = transitionTask(
+      task,
+      { type: "record-review", review: { ...review("review", false), findings: [p1] } },
+      context(),
+    );
+    return transitionTask(
+      task,
+      { type: "finish-review", head: "head-1", generation: 0 },
+      context(),
+    );
+  };
+
+  const light = reviewed("light");
+  expect(light.reviews[0]?.pass).toBe(true);
+  expect(light.stage).toBe("ready");
+  expect(JSON.stringify(light.notifications)).toContain("P1: A narrow edge case is unhandled");
+
+  const standard = reviewed("standard");
+  expect(standard.reviews[0]?.pass).toBe(false);
+  expect(standard.stage).toBe("awaiting-fixes");
 });
 
 test("pause, resume, block, cancel, scout completion, and merge remain distinct", () => {

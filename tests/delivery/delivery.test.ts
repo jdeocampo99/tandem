@@ -53,11 +53,6 @@ const policyConfig: RepoPolicy = {
   ],
   setupCommands: [],
   maxFixRounds: 3,
-  reviewLevels: {
-    deepScrutiny: false,
-    jevAssistance: "off",
-    sourceTransmission: false,
-  },
 };
 
 const policy: ResolvedPolicy = {
@@ -774,14 +769,13 @@ test("a draft body reports review level, activity, blockers, and remaining check
   expect(body).not.toContain("audit");
 });
 
-test("a draft shows the task's recorded review level and its safety floors", () => {
+test("a draft shows the task's recorded review level and its reason", () => {
   const body = describeTaskDraftPr({
     task: {
       ...draftTask({ stage: "reviewing" }),
       reviewLevel: {
-        level: "deep",
-        reason: "the change touches the permission boundary",
-        floors: ["permissions-security"],
+        level: "standard",
+        reason: "it changes package.json, so P0 and P1 findings block",
       },
     },
     publishedHead: "head-1",
@@ -789,9 +783,8 @@ test("a draft shows the task's recorded review level and its safety floors", () 
     uncommittedChanges: false,
   });
 
-  expect(body).toContain("Review level: deep.");
-  expect(body).toContain("Reason: the change touches the permission boundary");
-  expect(body).toContain("safety floors: permissions-security");
+  expect(body).toContain("Review level: standard.");
+  expect(body).toContain("Reason: it changes package.json, so P0 and P1 findings block");
   expect(body).toContain("Whatever the level, the pinned repository policy requires");
 });
 

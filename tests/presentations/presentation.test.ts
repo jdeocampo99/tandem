@@ -42,11 +42,6 @@ const policy: ResolvedPolicy = {
     validationCommands: [],
     setupCommands: [],
     maxFixRounds: 3,
-    reviewLevels: {
-      deepScrutiny: false,
-      jevAssistance: "off",
-      sourceTransmission: false,
-    },
   } satisfies RepoPolicy,
   guidance: {
     implementation: [],

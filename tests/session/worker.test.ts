@@ -186,7 +186,6 @@ test("a clean review, or one from a job without a round, still reads plainly", (
   expect(reviewSummary(clean, undefined)).toBe("Review: approved, no findings.");
   const knownIssueOnly = {
     ...clean,
-    pass: false,
     findings: [
       { id: "f", severity: "P2" as const, verdict: "confirmed" as const, description: "Minor." },
     ],

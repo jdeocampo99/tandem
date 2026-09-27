@@ -10,7 +10,6 @@ import type {
 import { MANUAL_VERIFICATION_REVIEWER } from "../../src/instructions.ts";
 import { policyIdentity } from "../../src/tasks/acceptance.ts";
 import {
-  type AdvisoryReviewLead,
   buildReviewBrief,
   lastReviewedHead,
   REVIEW_BRIEF_LIMITS,
@@ -39,11 +38,6 @@ const policy: ResolvedPolicy = {
     ],
     setupCommands: [],
     maxFixRounds: 3,
-    reviewLevels: {
-      deepScrutiny: false,
-      jevAssistance: "off",
-      sourceTransmission: false,
-    },
   },
   guidance: {
     implementation: [],
@@ -416,31 +410,22 @@ test("a truncated incremental patch cannot bound the impact", () => {
   expect(rendered).toContain("Review the cumulative diff and the affected callers in full");
 });
 
-test("advisory leads are rendered with provenance as untrusted leads", () => {
-  const lead: AdvisoryReviewLead = {
-    id: "lead-1",
-    summary: "The changed function may hide an effect.",
-    principle: "Maximize Honesty",
-    provenance: {
-      source: "/jobs/diff.patch",
-      question: "does this change hide an effect?",
-      requestIdentity: "request-abc",
-      resultIdentity: "result-def",
-    },
-  };
+test("at the light level an open P1 is listed as a suggestion, not a blocker", () => {
   const brief = buildReviewBrief({
-    task: task(),
+    task: task({
+      findingLedger: [ledgerEntry({ id: "f-1" }), ledgerEntry({ id: "f-0", severity: "P0" })],
+      reviewLevel: { level: "light", reason: "2 changed file(s), so only P0 findings block" },
+    }),
     head: HEAD,
     lens: "review",
     observations: observations(),
-    advisoryLeads: [lead],
   });
 
-  expect(brief.advisoryLeads).toEqual([lead]);
-  const rendered = renderReviewBrief(brief);
-  expect(rendered).toContain("Advisory leads (untrusted; never blockers)");
-  expect(rendered).toContain("request request-abc");
-  expect(rendered).toContain("never become findings");
+  expect(brief.blockers.map((entry) => entry.id)).toEqual(["f-0"]);
+  expect(brief.suggestions.map((entry) => entry.id)).toEqual(["f-1"]);
+  expect(renderReviewBrief(brief)).toContain(
+    "- review level: light: 2 changed file(s), so only P0 findings block",
+  );
 });
 
 test("the brief bounds its lists and stays within the rendered byte limit", () => {

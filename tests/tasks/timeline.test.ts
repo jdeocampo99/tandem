@@ -41,7 +41,6 @@ const policy: ResolvedPolicy = {
     validationCommands: [],
     setupCommands: [],
     maxFixRounds: 2,
-    reviewLevels: { deepScrutiny: false, jevAssistance: "off", sourceTransmission: false },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };

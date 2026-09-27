@@ -7,6 +7,7 @@ import {
 } from "../adapters/herdr.ts";
 import type {
   BlockCause,
+  Clock,
   CommandRunner,
   Endpoint,
   IdFactory,
@@ -30,11 +31,12 @@ import {
   singleLine,
   workerCommand,
 } from "../service/records.ts";
+import { FINAL_REVIEW_LENSES } from "../tasks/acceptance.ts";
 import { taskInboxPath, workerReceiptPath } from "../tasks/communication-persistence.ts";
 import type { TaskEvent } from "../tasks/lifecycle.ts";
 import { requiredStagesOf } from "../tasks/required-stages.ts";
 import { buildReviewBrief, renderReviewBrief } from "../tasks/review-brief.ts";
-import { requiredReviewLenses } from "../tasks/review-levels.ts";
+import { classifyReviewLevel, recordedReviewLevel } from "../tasks/review-levels.ts";
 import type { ReservationResult } from "./admission.ts";
 import { isCleanAt } from "./checkout.ts";
 import { resolvedExecutionModel } from "./execution-routing.ts";
@@ -45,9 +47,6 @@ import type { OperationRecords } from "./operation-records.ts";
 import { reviewerBriefContext, reviewRoundPaths } from "./prompts.ts";
 import type { TaskReservations } from "./reservation.ts";
 import {
-  type ClassifiedReviewRound,
-  classifyReviewRound,
-  type ReviewClassificationDependencies,
   type ReviewDiffFacts,
   readReviewDiffFacts,
   reviewBriefObservations,
@@ -63,7 +62,6 @@ type ReviewRound = Readonly<{
   /** The task after this round's review level was recorded; the brief reads its ledger. */
   readonly leveledTask: TaskRecord;
   readonly facts: ReviewDiffFacts;
-  readonly classified: ClassifiedReviewRound;
   /** The worktree's changed diff, shown when reviewing the changes rather than an existing HEAD. */
   readonly changedDiff: string;
 }>;
@@ -86,7 +84,6 @@ async function writeReviewArtifacts(
         cumulativePatchPath: existingHead ? paths.cumulativePatchPath : paths.diffPath,
         incrementalPatchPath: paths.incrementalPatchPath,
       }),
-      advisoryLeads: round.classified.leads,
     }),
   );
   await writeTextAtomically(paths.diffPath, existingHead ? "" : round.changedDiff);
@@ -101,27 +98,27 @@ async function writeReviewArtifacts(
   return true;
 }
 
-export type ReviewStageDependencies = ReviewClassificationDependencies &
-  Readonly<{
-    readonly home: string;
-    readonly sessionId: string;
-    readonly parentWorkspaceId: string | undefined;
-    readonly run: CommandRunner;
-    readonly idFactory: IdFactory;
-    readonly workerPath: string;
-    readonly workerTimeoutMs: number | undefined;
-    readonly runtimeFor: (taskId: string) => Promise<RuntimeTaskState | undefined>;
-    readonly updateTask: (
-      taskId: string,
-      transform: (task: TaskRecord) => TaskRecord,
-    ) => Promise<TaskRecord>;
-    readonly transition: (taskId: string, event: TaskEvent) => Promise<TaskRecord>;
-    readonly blockTask: (taskId: string, reason: string, cause?: BlockCause) => Promise<TaskRecord>;
-    readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
-    readonly records: OperationRecords;
-    readonly launcher: JobLauncher;
-    readonly reservations: TaskReservations;
-  }>;
+export type ReviewStageDependencies = Readonly<{
+  readonly clock: Clock;
+  readonly home: string;
+  readonly sessionId: string;
+  readonly parentWorkspaceId: string | undefined;
+  readonly run: CommandRunner;
+  readonly idFactory: IdFactory;
+  readonly workerPath: string;
+  readonly workerTimeoutMs: number | undefined;
+  readonly runtimeFor: (taskId: string) => Promise<RuntimeTaskState | undefined>;
+  readonly updateTask: (
+    taskId: string,
+    transform: (task: TaskRecord) => TaskRecord,
+  ) => Promise<TaskRecord>;
+  readonly transition: (taskId: string, event: TaskEvent) => Promise<TaskRecord>;
+  readonly blockTask: (taskId: string, reason: string, cause?: BlockCause) => Promise<TaskRecord>;
+  readonly removeEndpoint: (taskId: string, paneId: string) => Promise<void>;
+  readonly records: OperationRecords;
+  readonly launcher: JobLauncher;
+  readonly reservations: TaskReservations;
+}>;
 
 /** Runs a task's review round: one fresh read-only reviewer per required lens, at the reviewed HEAD. */
 export class ReviewStage {
@@ -211,14 +208,12 @@ export class ReviewStage {
       repo: worktree.path,
       baseHead: worktree.baseHead,
     });
-    const classified = await classifyReviewRound(this.#deps, { task, facts });
-    const leveledTask = await this.recordReviewLevel(task, classified.record);
-    // Recorded above so the pull request still names the risk checks the change tripped.
+    const leveledTask = await this.recordReviewLevel(task, classifyReviewLevel(facts.cumulative));
     if (!requiredStagesOf(leveledTask).review) {
       await this.#deps.transition(task.id, { type: "skip-review", head });
       return undefined;
     }
-    const lens = requiredReviewLenses(leveledTask, head).find(
+    const lens = FINAL_REVIEW_LENSES.find(
       (candidate) =>
         !leveledTask.reviews.some(
           (review) =>
@@ -241,7 +236,6 @@ export class ReviewStage {
       lens,
       leveledTask,
       facts,
-      classified,
       changedDiff: checkout.diff,
     };
   }
@@ -484,7 +478,6 @@ export class ReviewStage {
       runtime,
       head,
       lens,
-      level: round.classified.record.level,
       reviewMode,
       paths,
       hasIncrementalPatch: round.facts.sinceLastReview !== undefined,
@@ -510,7 +503,12 @@ export class ReviewStage {
         ? {}
         : { execution: executionIdentity(this.#deps.home, operation) }),
       communication,
-      review: { head, lens, round: task.reviewRound + 1 },
+      review: {
+        head,
+        lens,
+        round: task.reviewRound + 1,
+        level: recordedReviewLevel(round.leveledTask).level,
+      },
       ...(this.#deps.workerTimeoutMs === undefined
         ? {}
         : { timeoutMs: this.#deps.workerTimeoutMs }),

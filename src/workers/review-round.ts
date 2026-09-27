@@ -1,34 +1,12 @@
 import { readDiffRange, readReferencingFiles } from "../adapters/git.ts";
-import type {
-  Clock,
-  CommandRunner,
-  IsoTimestamp,
-  ReviewLevelRecord,
-  TaskRecord,
-} from "../contracts.ts";
-import type { RequestUsageEvent } from "../runtime/usage.ts";
-import { providerSampleEvent } from "../runtime/usage-events.ts";
-import { policyIdentity } from "../tasks/acceptance.ts";
-import type {
-  ReviewAssistanceOutcome,
-  ReviewAssistanceRuntime,
-} from "../tasks/review-assistance.ts";
-import { requestReviewAssistance } from "../tasks/review-assistance.ts";
+import type { CommandRunner, TaskRecord } from "../contracts.ts";
 import {
-  type AdvisoryReviewLead,
-  assessReviewImpact,
   type DiffRange,
   lastReviewedHead,
   REVIEW_BRIEF_LIMITS,
   type ReviewBriefDiffReference,
   type ReviewBriefObservations,
 } from "../tasks/review-brief.ts";
-import {
-  assistedReviewLevel,
-  classifyReviewLevel,
-  observeChangedFiles,
-  reclassifyReviewLevel,
-} from "../tasks/review-levels.ts";
 
 /** One observed diff range, before a caller has chosen where its patch will be written. */
 type ReviewDiffFact = Readonly<{
@@ -45,19 +23,6 @@ export type ReviewDiffFacts = Readonly<{
   readonly cumulative: ReviewDiffFact;
   readonly sinceLastReview?: ReviewDiffFact;
   readonly affectedCallers: readonly string[];
-}>;
-
-/** The round's persisted classification and the untrusted leads passed to the brief. */
-export type ClassifiedReviewRound = Readonly<{
-  readonly record: ReviewLevelRecord;
-  readonly leads: readonly AdvisoryReviewLead[];
-}>;
-
-/** What classifying a round needs: the review helper, a clock, and the usage ledger's writer. */
-export type ReviewClassificationDependencies = Readonly<{
-  readonly reviewAssistance: ReviewAssistanceRuntime;
-  readonly clock: Clock;
-  readonly recordRequestUsage: (events: readonly RequestUsageEvent[]) => Promise<void>;
 }>;
 
 function diffReference(fact: ReviewDiffFact, patchPath: string): ReviewBriefDiffReference {
@@ -148,94 +113,4 @@ export async function readReviewDiffFacts(
     },
     affectedCallers,
   };
-}
-
-/**
- * Classifies the round from the observed diff, merges it into the recorded classification so a
- * level never drops, and asks the configured helper for a shadow depth recommendation and focus
- * flags.
- */
-export async function classifyReviewRound(
-  deps: ReviewClassificationDependencies,
-  input: Readonly<{
-    readonly task: TaskRecord;
-    readonly facts: ReviewDiffFacts;
-  }>,
-): Promise<ClassifiedReviewRound> {
-  const { facts, task } = input;
-  const files = observeChangedFiles({
-    changedFiles: facts.cumulative.changedFiles,
-    patch: facts.cumulative.patch,
-    truncated: facts.cumulative.truncated,
-  });
-  const impact = assessReviewImpact({
-    task,
-    ledger: task.findingLedger ?? [],
-    observations: facts,
-  });
-  const deterministic = reclassifyReviewLevel(
-    task.reviewLevel,
-    classifyReviewLevel({ files, affectedCallers: facts.affectedCallers, impact }),
-  );
-  const startedAt = deps.clock();
-  const assistance = await requestReviewAssistance(
-    deps.reviewAssistance,
-    task.policy.config.reviewLevels,
-    {
-      files,
-      affectedCallers: facts.affectedCallers,
-      deterministic,
-      impact: impact.assessment,
-      policyDigest: policyIdentity(task.policy),
-      source: `${facts.cumulative.range} diff ${facts.cumulative.fromRef}..${facts.cumulative.toRef}`,
-    },
-  );
-  await recordAssistanceSample(deps, task, assistance, startedAt, deps.clock());
-  if (assistance.identity === undefined) return { record: deterministic, leads: [] };
-  const assisted: ReviewLevelRecord = {
-    ...deterministic,
-    assistance: {
-      mode: "shadow",
-      recommendation: assistance.recommendation,
-      reason: assistance.reason,
-      requestIdentity: assistance.identity.request,
-      resultIdentity: assistance.resultIdentity ?? "unavailable",
-    },
-  };
-  return {
-    record: {
-      ...assisted,
-      level: assistedReviewLevel(assisted, task.policy.config.reviewLevels),
-    },
-    leads: assistance.leads,
-  };
-}
-
-/**
- * Accounts for the one provider call this review round may have made, under the request that
- * governs the task. A disabled, refused, or exactly cached round reached no provider and so has
- * nothing to account for; a repeated call under the same provider identity records once.
- */
-async function recordAssistanceSample(
-  deps: ReviewClassificationDependencies,
-  task: TaskRecord,
-  assistance: ReviewAssistanceOutcome,
-  startedAt: IsoTimestamp,
-  endedAt: IsoTimestamp,
-): Promise<void> {
-  const requestId = task.requestId;
-  if (requestId === undefined || assistance.usage === undefined) return;
-  if (assistance.identity === undefined) return;
-  const event = providerSampleEvent({
-    requestId,
-    workKind: "review",
-    usage: assistance.usage,
-    startedAt,
-    endedAt,
-    sampleIdentity: assistance.identity.request,
-    taskId: task.id,
-    generation: task.generation,
-    role: "reviewer",
-  });
-  if (event !== undefined) await deps.recordRequestUsage([event]);
 }

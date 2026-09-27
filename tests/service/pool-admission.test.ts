@@ -6,7 +6,6 @@ import {
   runtimeWithPoolAdmission,
   taskWithPoolAdmission,
 } from "../../src/service/pool-admission.ts";
-import { DEFAULT_REVIEW_LEVEL_POLICY } from "../../src/tasks/review-levels.ts";
 import { latestAdmissionWait, poolAdmissionWaitReason } from "../../src/workers/admission.ts";
 
 const NOW = "2026-09-24T00:00:00.000Z";
@@ -48,7 +47,6 @@ function task(stage: TaskStage, notifications: TaskRecord["notifications"] = [])
         validationCommands: [],
         setupCommands: [],
         maxFixRounds: 1,
-        reviewLevels: DEFAULT_REVIEW_LEVEL_POLICY,
       },
       guidance: { implementation: [], validation: [], review: [] },
     },

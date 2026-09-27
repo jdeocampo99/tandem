@@ -3,7 +3,6 @@ import type { Endpoint, TaskRecord, TaskStage, WorktreeLease } from "../../src/c
 import type { DurableJob, DurableReservation, RuntimeTaskState } from "../../src/runtime/schema.ts";
 import { alreadyStopped, heldTaskStep, liveTaskStep } from "../../src/service/reconcile-step.ts";
 import { durableOperation, makeDurableJob } from "../../src/service/records.ts";
-import { DEFAULT_REVIEW_LEVEL_POLICY } from "../../src/tasks/review-levels.ts";
 
 const NOW = "2026-09-24T00:00:00.000Z";
 
@@ -34,7 +33,6 @@ function task(stage: TaskStage): TaskRecord {
         validationCommands: [],
         setupCommands: [],
         maxFixRounds: 1,
-        reviewLevels: DEFAULT_REVIEW_LEVEL_POLICY,
       },
       guidance: { implementation: [], validation: [], review: [] },
     },

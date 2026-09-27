@@ -12,6 +12,7 @@ import type {
 } from "../contracts.ts";
 import { LEGACY_EVIDENCE_CONTRACT } from "../contracts.ts";
 import { failedChecks, isBlockingFinding } from "./findings.ts";
+import { recordedReviewLevel } from "./review-levels.ts";
 
 /** The one reviewer session the final acceptance manifest requires per round. */
 export const FINAL_REVIEW_LENSES: readonly ReviewLens[] = ["review"];
@@ -117,14 +118,17 @@ export function finalAcceptanceContract(task: TaskRecord, head: string): FinalAc
   };
 }
 
-/** The P0/P1 findings the failed review reported; P2/P3 stay known issues for the user. */
+/** The blocking findings the failed review reported; the rest stay known issues for the user. */
 function failingFindingIds(task: TaskRecord): readonly string[] {
+  const { level } = recordedReviewLevel(task);
   const ids: string[] = [];
   for (const review of task.reviews) {
     if (review.head !== task.reviewHead || review.generation !== task.generation || review.pass) {
       continue;
     }
-    for (const finding of review.findings) if (isBlockingFinding(finding)) ids.push(finding.id);
+    for (const finding of review.findings) {
+      if (isBlockingFinding(finding, level)) ids.push(finding.id);
+    }
   }
   return deduplicate(ids);
 }

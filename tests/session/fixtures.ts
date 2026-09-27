@@ -18,11 +18,6 @@ export const policyConfig: RepoPolicy = {
   validationCommands: [],
   setupCommands: [],
   maxFixRounds: 3,
-  reviewLevels: {
-    deepScrutiny: false,
-    jevAssistance: "off",
-    sourceTransmission: false,
-  },
 };
 
 export const policy: ResolvedPolicy = {

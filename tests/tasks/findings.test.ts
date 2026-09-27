@@ -39,11 +39,6 @@ const policy: ResolvedPolicy = {
     ],
     setupCommands: [],
     maxFixRounds: 2,
-    reviewLevels: {
-      deepScrutiny: false,
-      jevAssistance: "off",
-      sourceTransmission: false,
-    },
   },
   guidance: { implementation: [], validation: [], review: [] },
 };
@@ -104,11 +99,13 @@ function taskWith(
   };
 }
 
-test("only a P0 or P1 blocks; a P2 or P3 is a known issue", () => {
-  expect(isBlockingFinding({ severity: "P0" })).toBe(true);
-  expect(isBlockingFinding({ severity: "P1" })).toBe(true);
-  expect(isBlockingFinding({ severity: "P2" })).toBe(false);
-  expect(isBlockingFinding({ severity: "P3" })).toBe(false);
+test("at standard a P0 or P1 blocks; at light only a P0 does", () => {
+  expect(isBlockingFinding({ severity: "P0" }, "standard")).toBe(true);
+  expect(isBlockingFinding({ severity: "P1" }, "standard")).toBe(true);
+  expect(isBlockingFinding({ severity: "P2" }, "standard")).toBe(false);
+  expect(isBlockingFinding({ severity: "P3" }, "standard")).toBe(false);
+  expect(isBlockingFinding({ severity: "P0" }, "light")).toBe(true);
+  expect(isBlockingFinding({ severity: "P1" }, "light")).toBe(false);
 });
 
 test("a first review raises each finding as unresolved with a stable identity", () => {
@@ -139,7 +136,7 @@ test("a later review that stops reporting a finding settles it with the supporti
 
   expect(settledFindings(second).map((entry) => entry.id)).toEqual(["f-1"]);
   expect(second[0]?.statusAt).toEqual({ head: "head-2", generation: 1, reviewRound: 1 });
-  expect(ledgerBlockers(second)).toEqual([]);
+  expect(ledgerBlockers(second, "standard")).toEqual([]);
 });
 
 test("a settled finding reopens as regressed only when a later review reports it again", () => {
@@ -162,7 +159,7 @@ test("a settled finding reopens as regressed only when a later review reports it
   expect(reopened[0]?.status).toBe("regressed");
   expect(reopened[0]?.raisedAt.head).toBe("head-1");
   expect(reopened[0]?.statusAt.head).toBe("head-3");
-  expect(ledgerBlockers(reopened).map((entry) => entry.id)).toEqual(["f-1"]);
+  expect(ledgerBlockers(reopened, "standard").map((entry) => entry.id)).toEqual(["f-1"]);
 });
 
 test("a re-reported finding stays unresolved rather than being raised again", () => {
@@ -232,7 +229,7 @@ test("contradicting verdicts for one identity are recorded as disputed", () => {
   });
 
   expect(disputed[0]?.status).toBe("disputed");
-  expect(ledgerBlockers(disputed).map((entry) => entry.id)).toEqual(["f-1"]);
+  expect(ledgerBlockers(disputed, "standard").map((entry) => entry.id)).toEqual(["f-1"]);
 });
 
 test("a later merged review settles a finding raised under a legacy lens name", () => {
@@ -268,8 +265,8 @@ test("a P3 finding is carried as a suggestion rather than a blocker", () => {
     reviewRound: 0,
   });
 
-  expect(ledgerBlockers(ledger)).toEqual([]);
-  expect(ledgerSuggestions(ledger).map((entry) => entry.id)).toEqual(["f-3"]);
+  expect(ledgerBlockers(ledger, "standard")).toEqual([]);
+  expect(ledgerSuggestions(ledger, "standard").map((entry) => entry.id)).toEqual(["f-3"]);
 });
 
 test("the open-findings details name the remaining blockers and forbid a new task", () => {

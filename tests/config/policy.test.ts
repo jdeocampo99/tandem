@@ -362,60 +362,17 @@ test("a configured home inside the target repository fails closed without creati
   });
 });
 
-test("every review-level opt-in is off by default", () => {
-  expect(defaultPolicy().reviewLevels).toEqual({
-    deepScrutiny: false,
-    jevAssistance: "off",
-    sourceTransmission: false,
-  });
-  expect(parsePolicy({}).reviewLevels).toEqual(defaultPolicy().reviewLevels);
-});
-
-test("a repository can opt into each review-level setting explicitly", () => {
-  const parsed = parsePolicy({
-    reviewLevels: {
-      deepScrutiny: true,
-      jevAssistance: "shadow",
-      sourceTransmission: true,
-    },
-  });
-  expect(parsed.reviewLevels).toEqual({
-    deepScrutiny: true,
-    jevAssistance: "shadow",
-    sourceTransmission: true,
-  });
-  expect(parsePolicy({ reviewLevels: { deepScrutiny: true } }).reviewLevels).toEqual({
-    deepScrutiny: true,
-    jevAssistance: "off",
-    sourceTransmission: false,
-  });
-});
-
-test("review-level settings reject unknown keys, wrong types, and unsupported modes", () => {
-  expect(() => parsePolicy({ reviewLevels: { reduceEverything: true } })).toThrow(TypeError);
-  expect(() => parsePolicy({ reviewLevels: { deepScrutiny: "yes" } })).toThrow(TypeError);
-  expect(() => parsePolicy({ reviewLevels: { jevAssistance: "active" } })).toThrow(TypeError);
-  expect(() => parsePolicy({ reviewLevels: [] })).toThrow(TypeError);
-});
-
-test("a repository config that still sets reducedRouting still loads, ignoring it", () => {
-  const parsed = parsePolicy({ reviewLevels: { reducedRouting: true, deepScrutiny: true } });
-  expect(parsed.reviewLevels).toEqual({
-    deepScrutiny: true,
-    jevAssistance: "off",
-    sourceTransmission: false,
-  });
-});
-
-test("a repository config that still sets requestBudget or maxWorkers still loads, ignoring both", () => {
+test("a repository config that still sets requestBudget, maxWorkers, or reviewLevels still loads, ignoring them", () => {
   const parsed = parsePolicy({
     requestBudget: { capMicros: 5_000_000 },
     maxWorkers: 0,
+    reviewLevels: { deepScrutiny: true, jevAssistance: "shadow" },
     maxFixRounds: 3,
   });
   expect(parsed.maxFixRounds).toBe(3);
   expect(parsed).not.toHaveProperty("requestBudget");
   expect(parsed).not.toHaveProperty("maxWorkers");
+  expect(parsed).not.toHaveProperty("reviewLevels");
 });
 
 test("saved provider enablement is exposed through onboarding but never becomes part of the resolved policy", async () => {
@@ -528,7 +485,6 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
       "merging",
       "models",
       "repoPath",
-      "reviewLevels",
       "setupCommands",
       "standards",
       "validationCommands",

@@ -452,12 +452,18 @@ test("Tandem binds a submitted review to its job and derives pass from the findi
     { findings: [finding("P2"), finding("P3")], pass: true },
     { findings: [finding("P2"), finding("P1")], pass: false },
     { findings: [finding("P0")], pass: false },
+    { findings: [finding("P2"), finding("P1")], pass: true, level: "light" },
+    { findings: [finding("P0")], pass: false, level: "light" },
   ] as const;
   try {
     for (const value of cases) {
       const root = await mkdtemp(join(tmpdir(), "tandem-review-derived-"));
       try {
-        const job = makeJob(root, "reviewer");
+        const reviewer = makeJob(root, "reviewer");
+        const job =
+          "level" in value && reviewer.review !== undefined
+            ? { ...reviewer, review: { ...reviewer.review, level: value.level } }
+            : reviewer;
         const { fixture: f } = await startExtension(root, job);
         await submitReport(f, {
           outcome: "completed",

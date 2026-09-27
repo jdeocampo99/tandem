@@ -31,21 +31,15 @@ import {
   type ModelSpec,
   type Notification,
   type PullRequestMetadata,
-  REVIEW_LEVEL_ORDER,
   type RepoPolicy,
   type RequiredStages,
   type ResearchContinuation,
   type ResearchHandoff,
   type ResolvedGuidance,
   type ResolvedPolicy,
-  type ReviewLevel,
-  type ReviewLevelAssistance,
-  type ReviewLevelPolicy,
   type ReviewLevelRecord,
   type ReviewMode,
   type ReviewResult,
-  SAFETY_FLOOR_ORDER,
-  type SafetyFloor,
   type SetupCommand,
   type SkillInvocation,
   type StoredReviewLens,
@@ -67,7 +61,6 @@ import { parseTaskCommunication } from "./communication-protocol.ts";
 import { FINDING_STATUSES } from "./findings.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
-import { DEFAULT_REVIEW_LEVEL_POLICY } from "./review-levels.ts";
 import { checkLegacySkillInvocation, checkSkillInvocations } from "./skill-invocation.ts";
 import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
 
@@ -353,8 +346,9 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
   }
   // ponytail: a policy snapshot pinned before standing request budgets were removed may still
   // carry "requestBudget"; the key stays accepted here so that snapshot still decodes, but it is
-  // never read into the result below. "maxWorkers" from before the worker limit was removed is
-  // carried through unread instead, because the policy digest hashes it.
+  // never read into the result below. "maxWorkers" and "reviewLevels" from before the worker limit
+  // and review-level settings were removed are carried through unread instead, because the policy
+  // digest hashes them.
   assertExactKeys(
     value,
     [
@@ -430,7 +424,9 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       ? { maxWorkers: requiredInteger(value, "maxWorkers", source, 1) }
       : {}),
     maxFixRounds: requiredInteger(value, "maxFixRounds", source, 0),
-    reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`),
+    ...(Object.hasOwn(value, "reviewLevels")
+      ? { reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`) }
+      : {}),
     ...(Object.hasOwn(value, "standards") ? { standards: parseStandards(value, source) } : {}),
   };
 }
@@ -458,19 +454,17 @@ function parseSetupCommands(record: UnknownRecord, source: string): readonly Set
   });
 }
 
-/**
- * Reads the review-level opt-ins from a pinned policy. A record written before review levels
- * existed carries none, and it loads with every opt-in off, which is exactly the review behavior
- * that record was pinned under. A present but malformed section fails closed.
- */
 function parseStandards(record: UnknownRecord, source: string): "none" {
   const value = requiredValue(record, "standards", source);
   if (value !== "none") failState(`${source}.standards`, 'standards must be "none" when present');
   return value;
 }
 
-function parseReviewLevelPolicy(record: UnknownRecord, source: string): ReviewLevelPolicy {
-  if (!Object.hasOwn(record, "reviewLevels")) return { ...DEFAULT_REVIEW_LEVEL_POLICY };
+/** Carries a removed review-level settings section through unread, because the digest hashes it. */
+function parseReviewLevelPolicy(
+  record: UnknownRecord,
+  source: string,
+): NonNullable<RepoPolicy["reviewLevels"]> {
   const value = requiredValue(record, "reviewLevels", source);
   if (!isRecord(value)) {
     failState(source, "reviewLevels must be an object");
@@ -800,55 +794,20 @@ function parseIterationScope(value: unknown, source: string): IterationScope {
   };
 }
 
-function parseReviewLevelAssistance(value: unknown, source: string): ReviewLevelAssistance {
-  if (!isRecord(value)) {
-    failState(source, "review level assistance must be an object");
-  }
-  assertExactKeys(
-    value,
-    ["mode", "recommendation", "reason", "requestIdentity", "resultIdentity"],
-    source,
-  );
-  const recommendation = requiredText(value, "recommendation", source);
-  if (
-    recommendation !== "unavailable" &&
-    !REVIEW_LEVEL_ORDER.includes(recommendation as ReviewLevel)
-  ) {
-    failState(source, `unsupported assistance recommendation ${recommendation}`);
-  }
-  return {
-    mode: requiredEnum(value, "mode", ["shadow"] as const, source),
-    recommendation: recommendation as ReviewLevel | "unavailable",
-    reason: requiredText(value, "reason", source),
-    requestIdentity: requiredText(value, "requestIdentity", source),
-    resultIdentity: requiredText(value, "resultIdentity", source),
-  };
-}
-
-/** Parses a recorded classification. A present section must be complete and well formed. */
+/**
+ * Parses a recorded classification. A record from before levels were cut to two may say `deep`,
+ * which reads as `standard`, and may carry safety floors and a helper recommendation, which are
+ * dropped.
+ */
 function parseReviewLevelRecord(value: unknown, source: string): ReviewLevelRecord {
   if (!isRecord(value)) {
     failState(source, "review level must be an object");
   }
   assertExactKeys(value, ["level", "reason", "floors", "assistance"], source);
-  const floors = requiredTextArray(value, "floors", source);
-  for (const floor of floors) {
-    if (!SAFETY_FLOOR_ORDER.includes(floor as SafetyFloor)) {
-      failState(source, `unsupported safety floor ${floor}`);
-    }
-  }
-  const assistanceValue = Object.hasOwn(value, "assistance")
-    ? requiredValue(value, "assistance", source)
-    : undefined;
+  const level = requiredEnum(value, "level", ["light", "standard", "deep"] as const, source);
   return {
-    level: requiredEnum(value, "level", REVIEW_LEVEL_ORDER, source),
+    level: level === "deep" ? "standard" : level,
     reason: requiredText(value, "reason", source),
-    floors: floors as readonly SafetyFloor[],
-    ...(assistanceValue === undefined
-      ? {}
-      : {
-          assistance: parseReviewLevelAssistance(assistanceValue, `${source}.assistance`),
-        }),
   };
 }
 

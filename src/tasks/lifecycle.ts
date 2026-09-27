@@ -43,7 +43,7 @@ import {
 } from "./findings.ts";
 import { decideRequiredStages, requiredStagesOf } from "./required-stages.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
-import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
+import { recordedReviewLevel } from "./review-levels.ts";
 import { checkSkillInvocations } from "./skill-invocation.ts";
 
 export type TaskInput = Readonly<{
@@ -738,7 +738,7 @@ function reviewSummary(task: TaskRecord): string {
  */
 function readySummary(task: TaskRecord, head: string): string {
   const ready = `Ready: task ${task.id} passed review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}. Ready is not publication, merge, or deploy approval; each remains explicit.`;
-  const knownIssues = ledgerSuggestions(task.findingLedger ?? []);
+  const knownIssues = ledgerSuggestions(task.findingLedger ?? [], recordedReviewLevel(task).level);
   if (knownIssues.length === 0) return ready;
   return [
     ready,
@@ -811,7 +811,9 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
       })),
       ...(policy.config.maxWorkers === undefined ? {} : { maxWorkers: policy.config.maxWorkers }),
       maxFixRounds: policy.config.maxFixRounds,
-      reviewLevels: { ...policy.config.reviewLevels },
+      ...(policy.config.reviewLevels === undefined
+        ? {}
+        : { reviewLevels: { ...policy.config.reviewLevels } }),
     },
     guidance: {
       implementation: cloneGuidanceEntries(policy.guidance.implementation),
@@ -1116,8 +1118,12 @@ function recordReview(
     );
   }
   // The findings decide the outcome, not the reviewer's own pass flag: a review fails exactly
-  // when a P0 or P1 stands.
-  const review = { ...event.review, pass: !event.review.findings.some(isBlockingFinding) };
+  // when a blocking finding stands at the task's review level.
+  const { level } = recordedReviewLevel(task);
+  const review = {
+    ...event.review,
+    pass: !event.review.findings.some((finding) => isBlockingFinding(finding, level)),
+  };
   return commitTask(task, context.now, {
     reviews: [...task.reviews, review],
     findingLedger: recordReviewFindings({
@@ -1143,7 +1149,7 @@ function finishReview(
       "Review completion requires no failed validation for the current head",
     );
   }
-  const required = requiredReviewLenses(task, event.head);
+  const required = FINAL_REVIEW_LENSES;
   const current = activeReviews(task);
   if (required.some((lens) => !current.some((review) => review.lens === lens))) {
     throw new TaskTransitionError(

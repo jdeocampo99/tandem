@@ -60,8 +60,8 @@ decides them; the lifecycle and the review stage read the record and never re-de
 - `implementation-complete` goes to `validating` when validation is required (or straight to
   `reviewing` when every check already passed at that HEAD). With nothing required it goes
   straight to `ready`, recording `reviewSkippedHead` at that HEAD.
-- With review not required, the review stage records the review level (so the PR names any safety
-  floors the diff tripped) and applies `skip-review` instead of launching a reviewer.
+- With review not required, the review stage records the review level and applies `skip-review`
+  instead of launching a reviewer.
 - Tandem always pushes, once the required stages pass: a draft through its refresh, a published PR
   by pushing the ready HEAD to the task branch without forcing (see
   [delivery.md](delivery.md#follow-ups-on-an-open-pr)). Agents commit; they don't push.

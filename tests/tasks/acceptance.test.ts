@@ -37,11 +37,6 @@ function policyWith(commands: readonly ValidationCommand[]): ResolvedPolicy {
       validationCommands: commands,
       setupCommands: [],
       maxFixRounds: 3,
-      reviewLevels: {
-        deepScrutiny: false,
-        jevAssistance: "off",
-        sourceTransmission: false,
-      },
     },
     guidance: { implementation: [], validation: [], review: [] },
   };

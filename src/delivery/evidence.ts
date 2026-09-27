@@ -216,10 +216,8 @@ function acceptedValidation(task: TaskRecord, head: string): readonly string[] {
 }
 
 function skippedValidation(task: TaskRecord, head: string): readonly string[] {
-  const floors = task.reviewLevel?.floors ?? [];
   return [
     `Review was skipped at the user's request at HEAD ${head}.`,
-    ...(floors.length === 0 ? [] : [`Risk checks the change tripped: ${floors.join(", ")}.`]),
     ...passedValidation(task, head),
   ];
 }
@@ -289,7 +287,7 @@ function draftText(value: string): string {
 
 /**
  * Report the review level the task is actually recorded under, together with the classifier's own
- * reason and any safety floors, plus what the pinned policy demands at that level. Showing the
+ * reason, plus what the pinned policy demands at that level. Showing the
  * level is visibility only; it never changes the final gates below it.
  */
 export function pinnedReviewLevel(task: TaskRecord): ReviewLevelSummary {
@@ -298,11 +296,9 @@ export function pinnedReviewLevel(task: TaskRecord): ReviewLevelSummary {
     throw new TypeError("draft progress requires a pinned repository policy");
   }
   const recorded = recordedReviewLevel(task);
-  const floors =
-    recorded.floors.length === 0 ? "" : `; safety floors: ${recorded.floors.join(", ")}`;
   return {
     level: recorded.level,
-    reason: `${recorded.reason}${floors}`,
+    reason: recorded.reason,
     finalRequirements: `Whatever the level, the pinned repository policy requires review at final acceptance by a fresh read-only reviewer, ${config.validationCommands.length} pinned validation command(s), and at most ${config.maxFixRounds} bounded fix round(s).`,
   };
 }
