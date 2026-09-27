@@ -18,11 +18,16 @@ import type {
   ToolOutcome,
   UsageCounts,
 } from "../session/events.ts";
-import { copyAssetSchema, submitReportSchema } from "../session/tools.ts";
+import {
+  copyAssetSchema,
+  submitReportSchema,
+  submitResearchFollowUpSchema,
+} from "../session/tools.ts";
 import { type WorkerHost, WorkerSession } from "../session/worker.ts";
 import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import type { TranscriptRef } from "../tasks/timeline.ts";
 import { parseWorkerJob, persistWorkerResult, type WorkerJob } from "./jobs.ts";
+import { writeJsonAtomically } from "../runtime/persistence.ts";
 import {
   assertSelectedModel,
   expectedModelParts,
@@ -37,6 +42,7 @@ import {
   taskUsage,
   traceWorkerTurn,
   WORKER_JOB_PATH_ENV,
+  WORKER_RESEARCH_FOLLOW_UP_TOOL,
   writeWorkerTerminal,
   writeWorkerTokenTally,
 } from "./terminal.ts";
@@ -74,6 +80,7 @@ const OMP_TOOL_KINDS: ReadonlyMap<string, ToolKind> = new Map([
   ["task", "subagent"],
   ["todo", "todo"],
   [COPY_ASSET_TOOL, "copy-asset"],
+  [WORKER_RESEARCH_FOLLOW_UP_TOOL, "research-follow-up"],
 ]);
 
 /** A worker's OMP tool call as the kinds its guards match on. */
@@ -282,6 +289,8 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
       readCommand: () => readWorkerTerminalCommand(jobPath, job),
       writeState: (state) => writeWorkerTerminal(jobPath, state),
       writeTokenTally: (tally) => writeWorkerTokenTally(jobPath, tally),
+      submitResearchFollowUp: ({ decisionId, resultPath, answer }) =>
+        writeJsonAtomically(resultPath, { schemaVersion: 1, decisionId, answer }),
     },
     persistResult: (result) => {
       const transcript = pane.transcript();
@@ -343,6 +352,22 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
         pane.enter(ctx);
         const { from, name } = copyAssetSchema.parse(params);
         return ompToolResult(await session.copyAsset(from, name));
+      },
+    });
+  }
+  if (job.role === "scout") {
+    pi.registerTool({
+      name: WORKER_RESEARCH_FOLLOW_UP_TOOL,
+      label: "Submit research follow-up",
+      description:
+        "Submit the answer to the coordinator's focused research question, using the completed report and read-only inspection. Do not modify repository files.",
+      parameters: ompToolParameters(submitResearchFollowUpSchema),
+      strict: true,
+      approval: "read",
+      execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+        pane.enter(ctx);
+        const { answer } = submitResearchFollowUpSchema.parse(params);
+        return ompToolResult(await session.submitResearchFollowUp(answer));
       },
     });
   }

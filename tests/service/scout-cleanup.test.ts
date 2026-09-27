@@ -326,14 +326,15 @@ type Fixture = Readonly<{
 
 type FixtureOptions = Readonly<{
   readonly stage?: TaskRecord["stage"];
-  /** Defaults to report-only, so the settled scout has no implementation to keep its worktree for. */
   readonly disposition?: ResearchContinuationDisposition;
+  /** Cleanup mechanics run only after a completed scout has been explicitly stopped. */
+  readonly researchInterviewStatus?: "open" | "stopped";
   readonly world?: Partial<World>;
 }>;
 
 /**
  * Seeds one scout whose worker already finished: a report on disk, a consumed job, a held lease,
- * and a stopped pane. Cleanup is the only thing left to happen.
+ * and an idle pane. Completed fixtures are explicitly stopped unless a test asks to retain them.
  */
 async function settledScoutFixture(options: FixtureOptions = {}): Promise<Fixture> {
   const home = await mkdtemp(join(tmpdir(), "tandem-scout-cleanup-"));
@@ -371,7 +372,7 @@ async function settledScoutFixture(options: FixtureOptions = {}): Promise<Fixtur
       { now: TIMESTAMP, notificationId: "start-1" },
     ),
   );
-  const task = await store.update(started.id, started.revision, (current) =>
+  const transitioned = await store.update(started.id, started.revision, (current) =>
     stage === "completed"
       ? transitionTask(
           current,
@@ -396,6 +397,15 @@ async function settledScoutFixture(options: FixtureOptions = {}): Promise<Fixtur
               { now: TIMESTAMP, notificationId: "block-1" },
             ),
   );
+  const task =
+    stage === "completed" && options.researchInterviewStatus !== "open"
+      ? await store.update(transitioned.id, transitioned.revision, (current) => ({
+          ...current,
+          revision: current.revision + 1,
+          updatedAt: TIMESTAMP,
+          researchInterview: { schemaVersion: 1, status: "stopped", decisions: [] },
+        }))
+      : transitioned;
   await writeRuntimeState(runtimeFile(home), {
     schemaVersion: 1,
     tasks: [
@@ -453,10 +463,11 @@ async function readRuntime(home: string): Promise<RuntimeState> {
   return readRuntimeState(runtimeFile(home));
 }
 
-test("stage retention keeps blocked, paused, decision-waiting, and foreign work", () => {
+test("stage retention keeps open research interviews and unsettled scouts", () => {
   const base = { kind: "scout", reportPath: "/home/jobs/task-1/0/job-1/report.txt" } as const;
-  expect(decideScoutCleanupEligibility({ ...base, stage: "completed" })).toEqual({
-    kind: "eligible",
+  expect(decideScoutCleanupEligibility({ ...base, stage: "completed" })).toMatchObject({
+    kind: "retained",
+    reason: expect.stringContaining("interview is open"),
   });
   expect(decideScoutCleanupEligibility({ ...base, stage: "cancelled" })).toEqual({
     kind: "eligible",
@@ -475,6 +486,20 @@ test("stage retention keeps blocked, paused, decision-waiting, and foreign work"
       },
     }).kind,
   ).toBe("retained");
+  expect(
+    decideScoutCleanupEligibility({
+      ...base,
+      stage: "completed",
+      researchInterview: { schemaVersion: 1, status: "approved", decisions: [] },
+    }).kind,
+  ).toBe("retained");
+  expect(
+    decideScoutCleanupEligibility({
+      ...base,
+      stage: "completed",
+      researchInterview: { schemaVersion: 1, status: "stopped", decisions: [] },
+    }),
+  ).toEqual({ kind: "eligible" });
   expect(decideScoutCleanupEligibility({ kind: "implementation", stage: "completed" }).kind).toBe(
     "retained",
   );
@@ -538,12 +563,13 @@ test("unproven ownership is quarantined while transient failures stay retryable"
   expect(classifyCleanupFailure(new Error("herdr exited with code 1"))).toBe("pending");
 });
 
-test("a completed clean scout is released while its report and history survive", async () => {
+test("a completed, explicitly stopped scout releases its worktree while its report survives", async () => {
   await withFixture({}, async ({ home, world, service, lease, repoPath }) => {
     await service.tick();
 
     const task = await service.get("task-1");
     expect(task.stage).toBe("completed");
+    expect(task.researchInterview?.status).toBe("stopped");
     expect(task.cleanup?.status).toBe("released");
     expect(task.notifications.some((entry) => entry.message.includes("Scout report"))).toBe(true);
     expect(await readFile(task.reportPath ?? "", "utf8")).toContain("authentication boundary");
@@ -571,16 +597,15 @@ test("a completed clean scout is released while its report and history survive",
     expect(handoff?.excerpt).toContain("authentication boundary");
   });
 });
-
-test("a scout whose research leads to implementation keeps its pane and worktree", async () => {
+test("a completed scout's open interview retains its pane and workspace", async () => {
   await withFixture(
-    { disposition: "implementation-interview" },
+    { researchInterviewStatus: "open" },
     async ({ home, world, service, lease }) => {
       await service.tick();
 
       const task = await service.get("task-1");
       expect(task.cleanup?.status).toBe("retained");
-      expect(task.cleanup?.reason).toContain("mockups");
+      expect(task.cleanup?.reason).toContain("interview is open");
       expect(world.closedPanes).toEqual([]);
       expect(world.returnedLeases).toEqual([]);
       const runtime = (await readRuntime(home)).tasks[0];
@@ -590,36 +615,68 @@ test("a scout whose research leads to implementation keeps its pane and worktree
   );
 });
 
-test("a finished scout kept open for mockups is closed when building starts, keeping its worktree", async () => {
+test("a completed report retains its researcher even when disposition is report-only", async () => {
+  await withFixture(
+    { disposition: "report-only", researchInterviewStatus: "open" },
+    async ({ home, world, service, lease }) => {
+      await service.tick();
+
+      const task = await service.get("task-1");
+      expect(task.cleanup?.status).toBe("retained");
+      expect(task.cleanup?.reason).toContain("interview is open");
+      expect(world.closedPanes).toEqual([]);
+      expect(world.returnedLeases).toEqual([]);
+      const runtime = (await readRuntime(home)).tasks[0];
+      expect(runtime?.endpoints).toHaveLength(1);
+      expect(runtime?.worktree?.leaseId).toBe(lease.leaseId);
+    },
+  );
+});
+
+test("approving implementation closes the same scout session before adopting its workspace", async () => {
   await withFixture(
     {
       disposition: "implementation-interview",
+      researchInterviewStatus: "open",
       world: { paneActive: true, workerAcceptsClose: true },
     },
-    async ({ home, world, service, lease, run }) => {
+    async ({ home, world, service, lease, repoPath }) => {
       const job = scoutJob(home, endpointFor(), "consumed");
       await writeScoutTerminal(job, { phase: "idle", completed: true });
       await service.tick();
       expect(world.closedPanes).toEqual([]);
 
-      const stop = answerCloseRequests(job);
-      const store = createTaskStore({
-        directory: join(home, "tasks"),
-        clock: () => TIMESTAMP,
-        idFactory: () => "unused",
+      const implementation = await service.create({
+        repoPath,
+        kind: "implementation",
+        objective: "apply the scout findings",
+        acceptanceCriteria: ["the boundary is enforced"],
+        surfaces: ["service"],
+        researchTaskIds: ["task-1"],
       });
-      await closeFinishedScoutPanes(
-        { store, runtimePath: runtimeFile(home), run },
-        "task-1",
-      ).finally(stop);
+      await service.approve(implementation.id);
 
+      const stop = answerCloseRequests(job);
+      try {
+        await service.tick();
+      } finally {
+        stop();
+      }
+
+      const scout = await service.get("task-1");
+      const runtime = await readRuntime(home);
+      const scoutRuntime = runtime.tasks.find((entry) => entry.taskId === "task-1");
+      const implementationRuntime = runtime.tasks.find(
+        (entry) => entry.taskId === implementation.id,
+      );
+      expect(scout.researchInterview?.status).toBe("approved");
       expect(world.closedPanes).toEqual(["pane-1"]);
-      const runtime = (await readRuntime(home)).tasks[0];
-      expect(runtime?.endpoints).toEqual([]);
-      expect(runtime?.worktree?.leaseId).toBe(lease.leaseId);
-      const task = await service.get("task-1");
-      expect(task.endpoints ?? []).toEqual([]);
-      expect(task.cleanup?.status).toBe("retained");
+      expect(scout.endpoints ?? []).toEqual([]);
+      expect(scoutRuntime?.endpoints).toEqual([]);
+      expect(scoutRuntime?.worktree).toBeUndefined();
+      expect(implementationRuntime?.worktree?.leaseId).toBe(lease.leaseId);
+      expect(implementationRuntime?.worktree?.path).toBe(lease.path);
+      expect(world.returnedLeases).toEqual([]);
     },
   );
 });
@@ -811,7 +868,7 @@ test("a safely cancelled scout releases its pane and worktree", async () => {
   });
 });
 
-test("scout completion releases resources in the same pass that writes the report", async () => {
+test("scout completion retains its session and workspace in the pass that writes the report", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-scout-completion-"));
   const repoPath = join(home, "repo");
   const lease = leaseFor(home);
@@ -882,11 +939,15 @@ test("scout completion releases resources in the same pass that writes the repor
   try {
     await service.tick();
     const settled = await service.get("task-1");
-    expect(settled.stage).toBe("completed");
-    expect(settled.cleanup?.status).toBe("released");
+    expect(settled.researchInterview?.status).toBe("open");
+    expect(settled.cleanup?.status).toBe("retained");
+    expect(settled.cleanup?.reason).toContain("interview is open");
     expect(await readFile(settled.reportPath ?? "", "utf8")).toContain("authentication boundary");
-    expect(world.closedPanes).toEqual(["pane-1"]);
-    expect(world.returnedLeases).toEqual([lease.path]);
+    expect(world.closedPanes).toEqual([]);
+    expect(world.returnedLeases).toEqual([]);
+    const runtimeTask = (await readRuntime(home)).tasks[0];
+    expect(runtimeTask?.endpoints).toHaveLength(1);
+    expect(runtimeTask?.worktree?.path).toBe(lease.path);
   } finally {
     await service.shutdown();
     await rm(home, { recursive: true, force: true });

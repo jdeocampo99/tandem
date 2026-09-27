@@ -1,6 +1,11 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import type { HerdrAgentState } from "../adapters/herdr-status.ts";
-import type { Finding, ReviewResult, WorkerReceipt } from "../contracts.ts";
+import {
+  MAX_RESEARCH_DECISION_TEXT_BYTES,
+  type Finding,
+  type ReviewResult,
+  type WorkerReceipt,
+} from "../contracts.ts";
 import { openSteps, type TodoItem } from "../playbooks/progress.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
@@ -28,6 +33,7 @@ import {
   type WorkerTerminalCommand,
   type WorkerTerminalState,
   type WorkerTokenTally,
+  WORKER_RESEARCH_FOLLOW_UP_TOOL,
 } from "../workers/terminal.ts";
 import type {
   Cancel,
@@ -231,6 +237,12 @@ export type WorkerDeps = Pick<SessionDeps, "clock" | "timers" | "status"> &
     copyAsset(
       input: Readonly<{ cwd: string; artifactDir: string; from: string; name: string }>,
     ): Promise<string>;
+    /** Writes one answer for the active, completed-scout follow-up command. */
+    submitResearchFollowUp(input: Readonly<{
+      readonly decisionId: string;
+      readonly resultPath: string;
+      readonly answer: string;
+    }>): Promise<void>;
     trace(event: string, detail?: Readonly<Record<string, unknown>>): void;
   }>;
 
@@ -264,9 +276,11 @@ export class WorkerSession {
   private selfAborted = false;
   private pauseCommand: WorkerTerminalCommand | undefined;
   private closingCommand: WorkerTerminalCommand | undefined;
-  // The mockup turn in progress, and the last one that finished.
+  // The mockup and focused research turns in progress, plus the last settled command id.
   private mockupCommand: WorkerTerminalCommand | undefined;
-  private settledMockupId: string | undefined;
+  private researchFollowUpCommand: WorkerTerminalCommand | undefined;
+  private researchFollowUpSubmitted = false;
+  private settledCommandId: string | undefined;
   private writeQueue = Promise.resolve();
   private currentState: WorkerTerminalState;
   private cancelTimeout: Cancel | undefined;
@@ -309,6 +323,15 @@ export class WorkerSession {
       artifactDir: this.mockupArtifactDir(),
     });
     if (write !== undefined) return write;
+    if (call.kind === "research-follow-up") {
+      const request = this.researchFollowUpCommand?.researchFollowUp;
+      return this.job.role === "scout" && request !== undefined && !this.researchFollowUpSubmitted
+        ? { block: false }
+        : {
+            block: true,
+            reason: `${WORKER_RESEARCH_FOLLOW_UP_TOOL} only works during a focused research follow-up`,
+          };
+    }
     const refusal =
       workerToolRefusal(
         {
@@ -348,6 +371,36 @@ export class WorkerSession {
     }
   }
 
+  async submitResearchFollowUp(answer: string): Promise<ToolOutcome> {
+    const request = this.researchFollowUpCommand?.researchFollowUp;
+    if (
+      request === undefined ||
+      this.researchFollowUpSubmitted ||
+      typeof answer !== "string" ||
+      answer.trim().length === 0 ||
+      answer.includes("\0") ||
+      Buffer.byteLength(answer, "utf8") > MAX_RESEARCH_DECISION_TEXT_BYTES
+    ) {
+      return {
+        text: `${WORKER_RESEARCH_FOLLOW_UP_TOOL} needs one non-empty answer during the active research follow-up.`,
+        isError: true,
+      };
+    }
+    try {
+      await this.deps.submitResearchFollowUp({
+        decisionId: request.decisionId,
+        resultPath: request.resultPath,
+        answer,
+      });
+      this.researchFollowUpSubmitted = true;
+      return { text: "Research follow-up answer submitted.", isError: false };
+    } catch (error) {
+      return {
+        text: `${WORKER_RESEARCH_FOLLOW_UP_TOOL} failed: ${describeError(error)}`,
+        isError: true,
+      };
+    }
+  }
   async onSessionStart(): Promise<void> {
     this.deps.trace("session_start");
     await this.persistState("busy", false);
@@ -441,6 +494,10 @@ export class WorkerSession {
     if (event.willContinue || resumingAfterStall) {
       await this.persistState("busy", this.currentState.completed);
       await this.reportStatus();
+    } else if (this.researchFollowUpCommand !== undefined) {
+      if (this.researchFollowUpSubmitted) await this.settleResearchFollowUpTurn();
+      else await this.abandonResearchFollowUpTurn();
+      await this.reportStatus();
     } else if (this.mockupCommand !== undefined) {
       await this.settleMockupTurn();
       await this.reportStatus();
@@ -487,7 +544,7 @@ export class WorkerSession {
       completed,
       heartbeatAt: this.isoNow(),
       ...(commandId === undefined ? {} : { commandId }),
-      ...(this.settledMockupId === undefined ? {} : { settledCommandId: this.settledMockupId }),
+      ...(this.settledCommandId === undefined ? {} : { settledCommandId: this.settledCommandId }),
     };
   }
 
@@ -592,6 +649,14 @@ export class WorkerSession {
     this.deps.trace("idle_after_result");
     this.agentActive = false;
     // A mockup turn that never started or never ended cleanly still has to settle.
+    if (this.researchFollowUpCommand !== undefined) {
+      if (this.researchFollowUpSubmitted) {
+        void this.settleResearchFollowUpTurn().catch(() => this.abort());
+      } else {
+        void this.abandonResearchFollowUpTurn().catch(() => this.abort());
+      }
+      return;
+    }
     if (this.mockupCommand !== undefined) {
       void this.settleMockupTurn().catch(() => this.abort());
       return;
@@ -820,8 +885,9 @@ export class WorkerSession {
     if (
       request === undefined ||
       this.job.role !== "scout" ||
-      command.id === this.settledMockupId ||
+      command.id === this.settledCommandId ||
       this.mockupCommand !== undefined ||
+      this.researchFollowUpCommand !== undefined ||
       this.pauseCommand !== undefined ||
       this.closingCommand !== undefined ||
       !this.currentState.completed ||
@@ -840,9 +906,50 @@ export class WorkerSession {
 
   private async settleMockupTurn(): Promise<void> {
     if (this.mockupCommand === undefined) return;
-    this.settledMockupId = this.mockupCommand.id;
+    this.settledCommandId = this.mockupCommand.id;
     this.mockupCommand = undefined;
     await this.persistState(this.settledPhase(), true, this.pauseCommand?.id);
+  }
+
+  private async startResearchFollowUpTurn(command: WorkerTerminalCommand): Promise<void> {
+    const request = command.researchFollowUp;
+    if (
+      request === undefined ||
+      this.job.role !== "scout" ||
+      command.id === this.settledCommandId ||
+      this.researchFollowUpCommand !== undefined ||
+      this.mockupCommand !== undefined ||
+      this.pauseCommand !== undefined ||
+      this.closingCommand !== undefined ||
+      !this.currentState.completed ||
+      this.paneBusy()
+    ) {
+      return;
+    }
+    const brief = await this.deps.readFile(request.briefPath);
+    this.deps.trace("control", { action: "research-follow-up", phase: this.currentState.phase });
+    this.researchFollowUpCommand = command;
+    this.researchFollowUpSubmitted = false;
+    this.agentActive = true;
+    await this.persistState("busy", true, command.id);
+    await this.reportStatus();
+    await this.deps.host.perform({ type: "promptAsUser", text: brief });
+  }
+
+  private async settleResearchFollowUpTurn(): Promise<void> {
+    const command = this.researchFollowUpCommand;
+    if (command === undefined || !this.researchFollowUpSubmitted) return;
+    this.settledCommandId = command.id;
+    this.researchFollowUpCommand = undefined;
+    this.researchFollowUpSubmitted = false;
+    await this.persistState(this.settledPhase(), true, this.pauseCommand?.id);
+  }
+
+  private async abandonResearchFollowUpTurn(): Promise<void> {
+    if (this.researchFollowUpCommand === undefined) return;
+    this.researchFollowUpCommand = undefined;
+    this.researchFollowUpSubmitted = false;
+    await this.persistState(this.settledPhase(), true, undefined);
   }
 
   private async pollControl(): Promise<void> {
@@ -857,6 +964,10 @@ export class WorkerSession {
     const command = await this.deps.terminal.readCommand();
     if (command === undefined) return;
     if (command.id === this.currentState.commandId || command.id === this.pauseCommand?.id) return;
+    if (command.action === "research-follow-up") {
+      await this.startResearchFollowUpTurn(command);
+      return;
+    }
     if (command.action === "mockup") {
       await this.startMockupTurn(command);
       return;

@@ -79,6 +79,11 @@ export type TandemAction =
       readonly supersedes?: readonly string[] | undefined;
     }>
   | Readonly<{
+      readonly action: "research-follow-up";
+      readonly taskId: string;
+      readonly question: string;
+    }>
+  | Readonly<{
       readonly action: "answer";
       readonly taskId: string;
       readonly questionId: string;
@@ -120,7 +125,6 @@ export type TandemAction =
   | Readonly<{
       readonly action: "cancel";
       readonly taskId: string;
-      readonly reason?: string | undefined;
       readonly discard?: boolean | undefined;
     }>
   | Readonly<{
@@ -589,6 +593,11 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       }),
       action.action,
     ),
+  "research-follow-up": async (action, service) =>
+    actionResult(
+      await service.researchFollowUp({ taskId: action.taskId, question: action.question }),
+      action.action,
+    ),
   inspect: async (action, service) =>
     actionResult(await service.inspect(action.taskId), action.action),
   "delivery-preflight": async (action, service) =>
@@ -708,7 +717,16 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     for (const taskId of action.taskIds) {
       try {
         const task = await service.cleanup(taskId, input);
-        lines.push(`- ${taskName(task.objective)} (${taskId}): cleaned up`);
+        if (task.kind === "scout") {
+          const cleanup = task.cleanup;
+          lines.push(
+            cleanup?.status === "released"
+              ? `- ${taskName(task.objective)} (${taskId}): research stopped; clean workspace released`
+              : `- ${taskName(task.objective)} (${taskId}): research stopped; workspace ${cleanup?.status ?? "release not proven"}: ${cleanup?.reason ?? "resources remain retained"}`,
+          );
+        } else {
+          lines.push(`- ${taskName(task.objective)} (${taskId}): cleaned up`);
+        }
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         lines.push(`- ${taskId}: not cleaned up: ${reason}`);

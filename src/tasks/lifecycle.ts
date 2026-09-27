@@ -42,6 +42,11 @@ import {
 } from "./findings.ts";
 import { decideRequiredStages, requiredStagesOf } from "./required-stages.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
+import {
+  createResearchInterview,
+  finishResearchInterview,
+  researchInterviewFor,
+} from "./research-interview.ts";
 import { recordedReviewLevel, requiredReviewLenses } from "./review-levels.ts";
 import { checkSkillInvocations } from "./skill-invocation.ts";
 
@@ -1308,7 +1313,7 @@ function completeScoutReport(
   return commitWithNotification(
     task,
     context,
-    { stage: "completed", reportPath: event.reportPath },
+    { stage: "completed", reportPath: event.reportPath, researchInterview: createResearchInterview() },
     `Scout report completed for task ${task.id}`,
     "coordinator",
   );
@@ -1357,10 +1362,28 @@ function cancelTask(
       "Cancel reason must be non-empty when supplied",
     );
   }
+  const interview = researchInterviewFor(task);
+  const closedInterview =
+    interview?.status === "open"
+      ? finishResearchInterview(interview, "stopped", context.now)
+      : interview;
+  const cleanup =
+    task.kind === "scout" && task.cleanup?.status !== "quarantined"
+      ? {
+          schemaVersion: 1 as const,
+          status: "pending" as const,
+          reason: "scout was explicitly stopped; terminal and workspace cleanup is pending",
+          observedAt: context.now,
+        }
+      : undefined;
   return commitWithNotification(
     clearPreviousAndBlock(task),
     context,
-    { stage: "cancelled" },
+    {
+      stage: "cancelled",
+      ...(closedInterview === undefined ? {} : { researchInterview: closedInterview }),
+      ...(cleanup === undefined ? {} : { cleanup }),
+    },
     event.reason === undefined
       ? `Task ${task.id} cancelled`
       : `Task ${task.id} cancelled: ${event.reason}`,

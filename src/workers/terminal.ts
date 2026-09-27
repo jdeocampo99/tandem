@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { link, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { HerdrPaneInspection } from "../adapters/herdr.ts";
 import { isAgentRole } from "../contracts.ts";
 import { writeJsonAtomically } from "../runtime/persistence.ts";
@@ -12,6 +12,8 @@ export const WORKER_JOB_PATH_ENV = "TANDEM_WORKER_JOB_PATH";
 export const SUBMIT_REPORT_TOOL = "submit_report";
 /** A scout's only way to put a repository file (such as an image) next to its mockup. */
 export const COPY_ASSET_TOOL = "copy_asset";
+/** The scout's sole response channel for a focused post-report research turn. */
+export const WORKER_RESEARCH_FOLLOW_UP_TOOL = "submit_research_follow_up";
 const HEARTBEAT_MAX_AGE_MS = 30_000;
 const CONTROL_TIMEOUT_MS = 10_000;
 const CONTROL_POLL_MS = 50;
@@ -37,14 +39,19 @@ export type WorkerTerminalState = Readonly<{
   completed: boolean;
   heartbeatAt: string;
   commandId?: string;
-  /** The last mockup request whose turn has finished. */
+  /** The last follow-up request whose turn has finished, whether mockup or research. */
   settledCommandId?: string;
 }>;
 
-/** Asks a finished scout to draw or revise the mockup at `artifactDir` from the brief file. */
 export type WorkerMockupRequest = Readonly<{
   briefPath: string;
   artifactDir: string;
+}>;
+
+export type WorkerResearchFollowUpRequest = Readonly<{
+  decisionId: string;
+  briefPath: string;
+  resultPath: string;
 }>;
 
 export type WorkerTerminalCommand = Readonly<{
@@ -53,10 +60,12 @@ export type WorkerTerminalCommand = Readonly<{
   jobId: string;
   taskId: string;
   generation: number;
-  action: "pause" | "close" | "mockup";
+  action: "pause" | "close" | "mockup" | "research-follow-up";
   expiresAt: string;
   /** Present exactly when `action` is `mockup`. */
   mockup?: WorkerMockupRequest;
+  /** Present exactly when `action` is `research-follow-up`. */
+  researchFollowUp?: WorkerResearchFollowUpRequest;
 }>;
 
 type WorkerIdentity = Pick<WorkerJob, "id" | "taskId" | "generation">;
@@ -286,23 +295,41 @@ export async function writeWorkerTerminal(
 function absoluteText(value: unknown): value is string {
   return text(value) && isAbsolute(value);
 }
+function withinDirectory(directory: string, candidate: string): boolean {
+  const path = relative(resolve(directory), resolve(candidate));
+  return path.length > 0 && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
 
 function parseCommand(value: unknown, job: WorkerIdentity): WorkerTerminalCommand {
+  const researchFollowUpValid =
+    record(value) &&
+    record(value.researchFollowUp) &&
+    text(value.researchFollowUp.decisionId) &&
+    absoluteText(value.researchFollowUp.briefPath) &&
+    absoluteText(value.researchFollowUp.resultPath);
   if (
     !record(value) ||
     value.schemaVersion !== 1 ||
     !text(value.id) ||
-    (value.action !== "pause" && value.action !== "close" && value.action !== "mockup") ||
+    (value.action !== "pause" &&
+      value.action !== "close" &&
+      value.action !== "mockup" &&
+      value.action !== "research-follow-up") ||
     !timestamp(value.expiresAt) ||
     (value.action === "mockup") !== (value.mockup !== undefined) ||
     (value.mockup !== undefined &&
       (!record(value.mockup) ||
         !absoluteText(value.mockup.briefPath) ||
-        !absoluteText(value.mockup.artifactDir)))
+        !absoluteText(value.mockup.artifactDir))) ||
+    (value.action === "research-follow-up") !== (value.researchFollowUp !== undefined) ||
+    (value.researchFollowUp !== undefined && !researchFollowUpValid)
   ) {
     throw new TypeError("interactive worker terminal command is malformed");
   }
   assertIdentity(value, job);
+  if (value.action === "research-follow-up" && value.researchFollowUp?.decisionId !== value.id) {
+    throw new TypeError("research follow-up command identity is inconsistent");
+  }
   return value as WorkerTerminalCommand;
 }
 
@@ -313,6 +340,14 @@ export async function readWorkerTerminalCommand(
   const value = await readOptionalJson(commandPath(jobPath));
   if (value === undefined) return undefined;
   const command = parseCommand(value, job);
+  if (
+    command.action === "research-follow-up" &&
+    command.researchFollowUp !== undefined &&
+    (!withinDirectory(dirname(jobPath), command.researchFollowUp.briefPath) ||
+      !withinDirectory(dirname(jobPath), command.researchFollowUp.resultPath))
+  ) {
+    throw new Error("research follow-up files must stay in the worker job directory");
+  }
   return Date.parse(command.expiresAt) > Date.now() ? command : undefined;
 }
 
@@ -353,9 +388,56 @@ export async function requestWorkerMockup(
   );
 }
 
+/** Starts a focused read-only turn in the already completed scout's same OMP session. */
+export async function requestWorkerResearchFollowUp(
+  job: WorkerTerminalJob,
+  id: string,
+  request: WorkerResearchFollowUpRequest,
+  timeoutMs = CONTROL_TIMEOUT_MS,
+): Promise<void> {
+  if (
+    request.decisionId !== id ||
+    !withinDirectory(dirname(job.jobPath), request.briefPath) ||
+    !withinDirectory(dirname(job.jobPath), request.resultPath)
+  ) {
+    throw new TypeError("research follow-up files must match the decision and stay in its job directory");
+  }
+  const current = await readWorkerTerminal(job);
+  if (current?.commandId === id || current?.settledCommandId === id) return;
+  await publishCommand(
+    job,
+    { id, action: "research-follow-up", researchFollowUp: request },
+    (state) => state.commandId === id || state.settledCommandId === id,
+    timeoutMs,
+  );
+}
+
+/** Waits until the same worker session has submitted and settled this focused research turn. */
+export async function waitForWorkerResearchFollowUp(
+  job: WorkerTerminalJob,
+  id: string,
+  timeoutMs = 10 * 60_000,
+): Promise<void> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new TypeError("research follow-up timeout must be positive");
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const state = await readWorkerTerminal(job);
+    if (state?.settledCommandId === id) return;
+    if (state?.phase === "closed" || state?.phase === "closing" || state?.phase === "paused") {
+      throw new Error("research session stopped before submitting its follow-up answer");
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("research session has not settled the follow-up answer; its resources were retained");
+    }
+    await Bun.sleep(CONTROL_POLL_MS);
+  }
+}
+
 async function publishCommand(
   job: WorkerTerminalJob,
-  request: Pick<WorkerTerminalCommand, "id" | "action" | "mockup">,
+  request: Pick<WorkerTerminalCommand, "id" | "action" | "mockup" | "researchFollowUp">,
   acknowledged: (state: WorkerTerminalState, id: string) => boolean,
   timeoutMs: number,
 ): Promise<void> {
@@ -381,6 +463,9 @@ async function publishCommand(
     action: request.action,
     expiresAt: new Date(deadline).toISOString(),
     ...(request.mockup === undefined ? {} : { mockup: request.mockup }),
+    ...(request.researchFollowUp === undefined
+      ? {}
+      : { researchFollowUp: request.researchFollowUp }),
   };
   const temporary = `${path}.${command.id}.tmp`;
   try {

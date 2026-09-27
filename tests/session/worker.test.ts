@@ -48,6 +48,7 @@ function workerSession(
   const time = fakeSessionTime();
   const states: WorkerTerminalState[] = [];
   const results: WorkerResult[] = [];
+  const researchAnswers: { decisionId: string; resultPath: string; answer: string }[] = [];
   const tallies: WorkerTokenTally[] = [];
   const traces: string[] = [];
   const control: {
@@ -86,12 +87,26 @@ function workerSession(
     gitStatus: async () => "",
     readFile: async (path) => `contents of ${path}`,
     copyAsset: async (input) => `${input.artifactDir}/${input.name}`,
+    submitResearchFollowUp: async (answer) => {
+      researchAnswers.push(answer);
+    },
     trace: (event) => traces.push(event),
     ...depOverrides,
   };
   const session = new WorkerSession(deps);
   const aborts = () => recording.effects.filter((effect) => effect.type === "abort").length;
-  return { session, recording, time, states, results, tallies, traces, control, aborts };
+  return {
+    session,
+    recording,
+    time,
+    states,
+    results,
+    tallies,
+    traces,
+    control,
+    researchAnswers,
+    aborts,
+  };
 }
 
 async function settle(): Promise<void> {
@@ -577,4 +592,62 @@ test("an implementer cannot report done while a playbook step is open in its to-
   });
   const accepted = await worker.session.submitReport({ outcome: "implemented", report: "Done." });
   expect(accepted.isError).toBe(false);
+});
+test("a completed scout answers a focused question in the same read-only session", async () => {
+  const worker = workerSession({ role: "scout", generation: 2 });
+  await worker.session.onSessionStart();
+  await worker.session.submitReport({ outcome: "completed", report: "Original findings." });
+  await worker.session.onAgentEnd({ willContinue: false, interrupted: false });
+  expect(worker.results).toHaveLength(1);
+  expect(worker.session.guardToolCall(call("research-follow-up"))).toMatchObject({ block: true });
+
+  worker.control.command = {
+    schemaVersion: 1,
+    id: "decision-1",
+    jobId: "job-1",
+    taskId: "task-1",
+    generation: 2,
+    action: "research-follow-up",
+    expiresAt: "2030-01-01T00:10:00.000Z",
+    researchFollowUp: {
+      decisionId: "decision-1",
+      briefPath: "/tmp/job-1/research-brief.txt",
+      resultPath: "/tmp/job-1/research-result.json",
+    },
+  };
+  worker.time.advance(250);
+  await settle();
+
+  expect(worker.recording.effects.at(-1)).toEqual({
+    type: "promptAsUser",
+    text: "contents of /tmp/job-1/research-brief.txt",
+  });
+  expect(worker.session.guardToolCall(call("research-follow-up"))).toEqual({ block: false });
+  expect(worker.session.guardToolCall(call("write", { path: "src/app.ts" }))).toMatchObject({
+    block: true,
+  });
+  expect(await worker.session.submitResearchFollowUp("Keep the source workspace unchanged.")).toEqual({
+    text: "Research follow-up answer submitted.",
+    isError: false,
+  });
+  await worker.session.onAgentEnd({ willContinue: false, interrupted: false });
+
+  expect(worker.researchAnswers).toEqual([
+    {
+      decisionId: "decision-1",
+      resultPath: "/tmp/job-1/research-result.json",
+      answer: "Keep the source workspace unchanged.",
+    },
+  ]);
+  expect(worker.results).toHaveLength(1);
+  expect(worker.states.at(-1)).toMatchObject({
+    phase: "idle",
+    completed: true,
+    settledCommandId: "decision-1",
+  });
+  expect(worker.session.guardToolCall(call("research-follow-up"))).toMatchObject({ block: true });
+
+  worker.time.advance(250);
+  await settle();
+  expect(worker.recording.effects.filter((effect) => effect.type === "promptAsUser")).toHaveLength(1);
 });

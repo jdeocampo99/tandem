@@ -519,6 +519,33 @@ export type ResearchContinuation = {
   /** Why an unusable classifier outcome fell back; carried only when `selectedBy` is `fallback`. */
   readonly fallbackReason?: string;
 };
+export const RESEARCH_INTERVIEW_STATUSES = ["open", "approved", "stopped"] as const;
+export type ResearchInterviewStatus = (typeof RESEARCH_INTERVIEW_STATUSES)[number];
+
+export const PENDING_DECISION_STATUSES = ["pending", "answered", "withdrawn"] as const;
+export type PendingDecisionStatus = (typeof PENDING_DECISION_STATUSES)[number];
+export const MAX_RESEARCH_INTERVIEW_DECISIONS = 32;
+export const MAX_RESEARCH_DECISION_TEXT_BYTES = 4 * 1024;
+export const MAX_RESEARCH_INTERVIEW_BYTES = 32 * 1024;
+
+/** A coordinator decision's durable question and single terminal answer. */
+export type PendingDecision = Readonly<{
+  readonly id: string;
+  readonly question: string;
+  readonly recommendation?: string;
+  readonly status: PendingDecisionStatus;
+  readonly answer?: string;
+  readonly createdAt: IsoTimestamp;
+  readonly resolvedAt?: IsoTimestamp;
+}>;
+
+/** Interview state stored with research, independent of any question UI. */
+export type ResearchInterview = Readonly<{
+  readonly schemaVersion: 1;
+  readonly status: ResearchInterviewStatus;
+  readonly decisions: readonly PendingDecision[];
+}>;
+
 
 /**
  * How far automatic release of a terminal task's child pane and worktree got, and why it stopped
@@ -788,6 +815,8 @@ export type TaskRecord = {
   readonly findingLedger?: readonly FindingLedgerEntry[];
   readonly researchHandoffs?: readonly ResearchHandoff[];
   readonly researchContinuation?: ResearchContinuation;
+  /** The completed scout's retained session and durable interview decisions. */
+  readonly researchInterview?: ResearchInterview;
   readonly skills?: readonly SkillInvocation[];
   /** The job playbook pinned at creation for implementation tasks; absent on older tasks. */
   readonly playbook?: PlaybookId;

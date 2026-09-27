@@ -1,10 +1,10 @@
 import { readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
-import { closeEndpoint, showNotification } from "../adapters/herdr.ts";
+import { inspectEndpoint, closeEndpoint, showNotification } from "../adapters/herdr.ts";
 import type { OmpModelRecord } from "../adapters/omp.ts";
 import { listOmpMcpServers, listOmpModels } from "../adapters/omp.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
@@ -41,6 +41,7 @@ import {
   saveMergingChoice,
 } from "../config/repositories.ts";
 import { findSkills } from "../config/skills.ts";
+import { MAX_RESEARCH_DECISION_TEXT_BYTES } from "../contracts.ts";
 import type {
   AnswerTaskInput,
   BlockCause,
@@ -58,6 +59,13 @@ import type {
   TaskRecord,
   TaskTarget,
 } from "../contracts.ts";
+import {
+  answerPendingDecision,
+  finishResearchInterview,
+  openPendingDecision,
+  pendingResearchDecision,
+  researchInterviewFor,
+} from "../tasks/research-interview.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { openProject } from "../coordinator/open-project.ts";
 import { describeTaskPr, type PrSummary } from "../delivery/evidence.ts";
@@ -137,7 +145,12 @@ import {
   type RequestBriefView,
   RequestBriefWorkflow,
 } from "../requests/workflow.ts";
-import { activeRuntimeJob, presentationRuntime, taskRuntime } from "../runtime/activity.ts";
+import {
+  activeRuntimeJob,
+  presentationRuntime,
+  taskRuntime,
+  unreleasedReservation,
+} from "../runtime/activity.ts";
 import { withStateLock } from "../runtime/database.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import {
@@ -181,6 +194,11 @@ import {
   type ResearchContinuationClassifier,
   researchContinuationClassifier,
 } from "../tasks/research-continuation-classifier.ts";
+import { buildResearchContinuationBrief } from "../session/research-follow-up.ts";
+import {
+  createResearchFollowUpFiles,
+  readResearchFollowUpAnswer,
+} from "./research-session.ts";
 import {
   type ReviewAssistanceRuntime,
   reviewAssistanceConfig,
@@ -228,16 +246,25 @@ import {
   text,
   validateModelAssignments,
   workerRoleForTask,
+  reportPathFor,
 } from "./records.ts";
 import { RequestAccountingWorkflow } from "./request-accounting.ts";
 import { resolveResearchHandoffs } from "./research-handoffs.ts";
 import {
   releaseTerminalTaskResources,
   runCleanupCommands,
+  type TaskCleanupOutcome,
   type TerminalTaskCleanupOptions,
 } from "./scout-cleanup.ts";
+import { decideScoutWorktreeRelease, observeScoutCheckout } from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskCheckoutPath, taskSourcePath } from "./source.ts";
 import { pruneTranscripts, transcriptsToPrune } from "./transcript-pruning.ts";
+import {
+  liveWorkerTerminal,
+  requestWorkerResearchFollowUp,
+  waitForWorkerResearchFollowUp,
+  type WorkerTerminalJob,
+} from "../workers/terminal.ts";
 
 // ponytail: a fixed count of ready idle worktree copies per repository, removed first under disk
 // pressure. Size it from recent task starts if copies are too often missing or left unused.
@@ -407,6 +434,7 @@ export type TandemService = Readonly<{
   readonly tick: () => Promise<readonly TaskRecord[]>;
   readonly acknowledge: (id: string, notificationId: string) => Promise<TaskRecord>;
   readonly steer: (input: SteerTaskInput) => Promise<TaskCommunicationView>;
+  readonly researchFollowUp: (input: Readonly<{ readonly taskId: string; readonly question: string }>) => Promise<string>;
   readonly answer: (input: AnswerTaskInput) => Promise<TaskCommunicationView>;
   readonly messages: (taskId: string) => Promise<TaskCommunicationView>;
   readonly pause: (id: string, reason?: string) => Promise<TaskRecord>;
@@ -920,6 +948,7 @@ class TandemController {
       tick: () => this.tick(),
       acknowledge: (id, notificationId) => this.acknowledge(id, notificationId),
       steer: (input) => this.steer(input),
+      researchFollowUp: (input) => this.researchFollowUp(input),
       answer: (input) => this.answer(input),
       messages: (taskId) => this.messages(taskId),
       pause: (id, reason) => this.pause(id, reason),
@@ -1426,8 +1455,212 @@ class TandemController {
     return task;
   }
 
+  async researchFollowUp(input: Readonly<{ readonly taskId: string; readonly question: string }>): Promise<string> {
+    if (!isRecord(input)) throw new TypeError("research follow-up input must be an object");
+    const taskId = assertTaskId(input.taskId);
+    const question = text(input.question, "question");
+    if (Buffer.byteLength(question, "utf8") > MAX_RESEARCH_DECISION_TEXT_BYTES) {
+      throw new Error(`research follow-up question exceeds ${MAX_RESEARCH_DECISION_TEXT_BYTES} bytes`);
+    }
+    const requested = await this.get(taskId);
+    if (requested.kind !== "scout" || requested.stage !== "completed" || requested.reportPath === undefined) {
+      throw new Error(`Task ${taskId} is not a completed research session`);
+    }
+    const createdAt = this.#deps.clock();
+    const generatedId = singleLine(this.#deps.idFactory(), "decision id");
+    const reserved = await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      if (current?.kind !== "scout" || current.stage !== "completed" || current.reportPath === undefined) {
+        throw new Error(`Task ${taskId} is no longer an available completed research session`);
+      }
+      const interview = researchInterviewFor(current);
+      if (current.communication?.question !== undefined) {
+        throw new Error(`Task ${taskId} has an unanswered coordinator question`);
+      }
+      if (interview === undefined || interview.status !== "open") {
+        throw new Error(`Task ${taskId} research interview is not open`);
+      }
+      const nextInterview = openPendingDecision(interview, {
+        id: generatedId,
+        question,
+        createdAt,
+      });
+      const decision = nextInterview.decisions.find(
+        (entry) => entry.question === question && entry.status !== "withdrawn",
+      );
+      if (decision === undefined) throw new Error("research follow-up decision could not be recorded");
+      if (nextInterview === interview) return { task: current, decision };
+      const updated = await store.update(current.id, current.revision, (latest) => ({
+        ...latest,
+        revision: latest.revision + 1,
+        updatedAt: createdAt,
+        researchInterview: nextInterview,
+      }));
+      return { task: updated, decision };
+    });
+    if (reserved.decision.status === "answered") {
+      if (reserved.decision.answer === undefined) {
+        throw new Error(`answered research decision ${reserved.decision.id} has no durable answer`);
+      }
+      return reserved.decision.answer;
+    }
+
+    const state = await readRuntimeState(this.#deps.runtimePath);
+    if (state === undefined) throw new Error("research runtime state is unavailable; the session was retained");
+    const runtime = taskRuntime(state, taskId);
+    if (runtime === undefined) throw new Error("research runtime ownership is unavailable; the session was retained");
+    const handoffs = await resolveResearchHandoffs([taskId], {
+      home: this.#deps.home,
+      projectRepoPath: reserved.task.repoPath,
+      runtime: state,
+      store: this.#deps.store,
+    });
+    const handoff = handoffs[0];
+    if (handoff === undefined) throw new Error("research report provenance could not be established");
+    const durableJob = runtime.jobs.find(
+      (job) =>
+        job.kind === "worker" &&
+        job.role === "scout" &&
+        job.phase === "consumed" &&
+        job.taskId === taskId &&
+        job.generation === reserved.task.generation &&
+        resolve(reportPathFor(job.jobPath)) === resolve(handoff.reportPath),
+    );
+    const lease = runtime.worktree;
+    if (
+      durableJob === undefined ||
+      lease === undefined ||
+      lease.leaseHolder !== `${this.#deps.sessionId}:${taskId}` ||
+      lease.baseHead !== runtime.sourceCheckpoint.head ||
+      resolve(durableJob.cwd) !== resolve(lease.path)
+    ) {
+      throw new Error("research job and workspace lease ownership could not be proven; resources were retained");
+    }
+    const terminalJob: WorkerTerminalJob = {
+      id: durableJob.id,
+      taskId,
+      generation: durableJob.generation,
+      role: "scout",
+      cwd: durableJob.cwd,
+      jobPath: durableJob.jobPath,
+    };
+    const files = await createResearchFollowUpFiles({
+      home: this.#deps.home,
+      taskId,
+      jobPath: durableJob.jobPath,
+      decisionId: reserved.decision.id,
+      brief: buildResearchContinuationBrief({
+        question,
+        reportPath: handoff.reportPath,
+        reportDigest: handoff.reportDigest,
+        excerpt: handoff.excerpt,
+      }),
+    });
+    const existingAnswer = await readResearchFollowUpAnswer(files.resultPath, reserved.decision.id);
+    if (existingAnswer !== undefined) {
+      await this.recordResearchFollowUpAnswer(taskId, reserved.decision.id, existingAnswer);
+      return existingAnswer;
+    }
+    if (
+      runtime.endpointLaunch !== undefined ||
+      runtime.jobs.some(activeRuntimeJob) ||
+      unreleasedReservation(runtime.reservation)
+    ) {
+      throw new Error("research session still has an unresolved job or reservation; resources were retained");
+    }
+    const checkout = await observeScoutCheckout(this.#deps.run, lease.path);
+    const ownership = decideScoutWorktreeRelease({ lease, checkout });
+    if (ownership.kind !== "release") {
+      throw new Error(`research workspace is ${ownership.kind}: ${ownership.reason}; resources were retained`);
+    }
+    const endpoint = runtime.endpoints.find(
+      (entry) =>
+        durableJob.endpoint !== undefined &&
+        entry.sessionId === durableJob.endpoint.sessionId &&
+        entry.workspaceId === durableJob.endpoint.workspaceId &&
+        entry.tabId === durableJob.endpoint.tabId &&
+        entry.paneId === durableJob.endpoint.paneId,
+    );
+    if (endpoint === undefined || workerJobForEndpoint(runtime.jobs, endpoint)?.id !== durableJob.id) {
+      throw new Error("research session pane ownership could not be proven; resources were retained");
+    }
+    const inspection = await inspectEndpoint(this.#deps.run, {
+      endpoint,
+      cwd: durableJob.cwd,
+      job: terminalJob,
+    });
+    const terminal = await liveWorkerTerminal(inspection, terminalJob);
+    const idle =
+      terminal?.phase === "idle" &&
+      (terminal.commandId === undefined || terminal.commandId === reserved.decision.id);
+    const activeSameTurn =
+      terminal?.phase === "busy" && terminal.commandId === reserved.decision.id;
+    if (terminal?.completed !== true || (!idle && !activeSameTurn)) {
+      throw new Error("research session is not idle for this follow-up; its pane and workspace were retained");
+    }
+    const dispatch = await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      const interview = current?.kind === "scout" ? researchInterviewFor(current) : undefined;
+      const decision = interview?.decisions.find((entry) => entry.id === reserved.decision.id);
+      if (decision?.status === "answered") {
+        if (decision.answer === undefined) {
+          throw new Error(`answered research decision ${decision.id} has no durable answer`);
+        }
+        return { kind: "answered" as const, answer: decision.answer };
+      }
+      if (
+        current?.stage !== "completed" ||
+        interview?.status !== "open" ||
+        decision?.status !== "pending"
+      ) {
+        throw new Error("research follow-up decision is no longer pending; resources were retained");
+      }
+      await requestWorkerResearchFollowUp(terminalJob, reserved.decision.id, {
+        decisionId: reserved.decision.id,
+        briefPath: files.briefPath,
+        resultPath: files.resultPath,
+      });
+      return { kind: "dispatched" as const };
+    });
+    if (dispatch.kind === "answered") return dispatch.answer;
+    await waitForWorkerResearchFollowUp(terminalJob, reserved.decision.id);
+    const answer = await readResearchFollowUpAnswer(files.resultPath, reserved.decision.id);
+    if (answer === undefined) {
+      throw new Error("research session settled without an answer; its pending decision and resources were retained");
+    }
+    await this.recordResearchFollowUpAnswer(taskId, reserved.decision.id, answer);
+    return answer;
+  }
+
+  private async recordResearchFollowUpAnswer(
+    taskId: string,
+    decisionId: string,
+    answer: string,
+  ): Promise<void> {
+    await this.#deps.store.exclusive(async (store) => {
+      const task = await store.read(taskId);
+      if (task?.kind !== "scout") throw new Error(`Research task ${taskId} is unavailable`);
+      const interview = researchInterviewFor(task);
+      if (interview === undefined) throw new Error(`Research task ${taskId} has no interview state`);
+      const resolvedAt = this.#deps.clock();
+      const nextInterview = answerPendingDecision(interview, {
+        id: decisionId,
+        answer,
+        resolvedAt,
+      });
+      if (nextInterview === interview) return;
+      await store.update(task.id, task.revision, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        updatedAt: resolvedAt,
+        researchInterview: nextInterview,
+      }));
+    });
+  }
+
   async approve(id: string): Promise<TaskRecord> {
     const task = await this.get(id);
+    if (task.scopeApproved && task.stage !== "awaiting-approval") return task;
     const dispatch = await this.#requests.dispatchDecisionForTask(task);
     if (dispatch !== undefined && !dispatch.allowed) {
       throw new Error(`Task ${task.id} cannot be dispatched: ${dispatch.reason}`);
@@ -1440,7 +1673,53 @@ class TandemController {
       });
       assertSourceUnchanged(runtime.sourceCheckpoint, current);
     }
-    return this.transition(task.id, { type: "approve" });
+    if (task.kind !== "implementation" || (task.researchHandoffs?.length ?? 0) === 0) {
+      return this.transition(task.id, { type: "approve" });
+    }
+    const context = this.context();
+    const approved = await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(task.id);
+      if (current === undefined) throw new Error(`Task ${task.id} was not found`);
+      if (current.scopeApproved && current.stage !== "awaiting-approval") return current;
+      const nextTask = transitionTask(current, { type: "approve" }, context);
+      for (const handoff of current.researchHandoffs ?? []) {
+        const scout = await store.read(handoff.scoutTaskId);
+        if (scout?.kind !== "scout" || scout.stage !== "completed") {
+          throw new Error(`Research task ${handoff.scoutTaskId} is no longer a completed scout`);
+        }
+        const interview = researchInterviewFor(scout);
+        if (interview === undefined) {
+          throw new Error(`Research task ${scout.id} has no durable interview state`);
+        }
+        if (
+          interview.status === "approved" &&
+          scout.communication?.question === undefined
+        ) continue;
+        if (
+          interview.status !== "open" ||
+          pendingResearchDecision(interview) !== undefined ||
+          scout.communication?.question !== undefined
+        ) {
+          throw new Error(`Research task ${scout.id} still has an open or unanswered decision`);
+        }
+        const approvedInterview = finishResearchInterview(interview, "approved", context.now);
+        await store.update(scout.id, scout.revision, (latest) => ({
+          ...latest,
+          revision: latest.revision + 1,
+          updatedAt: context.now,
+          researchInterview: approvedInterview,
+          cleanup: {
+            schemaVersion: 1,
+            status: "retained",
+            reason: "research approved for implementation handoff",
+            observedAt: context.now,
+          },
+        }));
+      }
+      return store.update(current.id, current.revision, () => nextTask);
+    });
+    await this.#accounting.recordTerminalTransition(approved);
+    return approved;
   }
 
   async tick(): Promise<readonly TaskRecord[]> {
@@ -1814,12 +2093,71 @@ class TandemController {
     input: { readonly discard?: boolean; readonly destructiveApproval?: boolean } = {},
   ): Promise<TaskRecord> {
     const task = await this.get(id);
-    const runtime = await this.runtimeFor(task.id);
-    if (runtime === undefined) throw new Error(`Task ${task.id} has no durable runtime metadata`);
     const discard = input.discard === true;
     if (discard && input.destructiveApproval !== true) {
       throw new Error("destructive cleanup requires explicit destructiveApproval=true");
     }
+    if (task.kind === "scout") {
+      if (discard) throw new Error("scout research cleanup never discards an unproven worktree");
+      const stopped = await this.#deps.store.exclusive(async (store) => {
+        const current = await store.read(task.id);
+        if (current?.kind !== "scout") throw new Error(`Research task ${task.id} is unavailable`);
+        const interview = researchInterviewFor(current);
+        if (interview?.status === "approved") {
+          throw new Error(
+            `Research task ${task.id} was approved for implementation and cannot be stopped`,
+          );
+        }
+        const terminalScout = current.stage === "completed" || current.stage === "cancelled";
+        const closedInterview =
+          terminalScout && interview?.status === "open"
+            ? finishResearchInterview(interview, "stopped", this.#deps.clock())
+            : undefined;
+        const quarantined = current.cleanup?.status === "quarantined";
+        const needsCleanupRecord =
+          terminalScout &&
+          !quarantined &&
+          (current.cleanup === undefined || current.cleanup.status === "retained");
+        if (closedInterview === undefined && !needsCleanupRecord) return current;
+        const stoppedAt = this.#deps.clock();
+        const stopped = await store.update(current.id, current.revision, (latest) => ({
+          ...latest,
+          revision: latest.revision + 1,
+          updatedAt: stoppedAt,
+          ...(closedInterview === undefined ? {} : { researchInterview: closedInterview }),
+          cleanup:
+            current.cleanup?.status === "quarantined"
+              ? current.cleanup
+              : {
+                  schemaVersion: 1,
+                  status: "pending",
+                  reason: "research stop is awaiting terminal and workspace cleanup proof",
+                  observedAt: stoppedAt,
+                },
+        }));
+        return stopped;
+      });
+      if (stopped.cleanup?.status === "quarantined") return stopped;
+      const outcome = await this.cleanupTerminalTask(stopped);
+      if (outcome.status === "deferred") {
+        await this.#deps.store.exclusive(async (store) => {
+          const current = await store.read(stopped.id);
+          const cleanup = current?.kind === "scout" ? current.cleanup : undefined;
+          if (current === undefined || cleanup?.status !== "pending") return;
+          const observedAt = this.#deps.clock();
+          await store.update(current.id, current.revision, (latest) => ({
+            ...latest,
+            revision: latest.revision + 1,
+            updatedAt: observedAt,
+            cleanup: { ...cleanup, reason: outcome.reason, observedAt },
+          }));
+        });
+        throw new Error(`research resources were retained: ${outcome.reason}`);
+      }
+      return (await this.#deps.store.read(task.id)) ?? stopped;
+    }
+    const runtime = await this.runtimeFor(task.id);
+    if (runtime === undefined) throw new Error(`Task ${task.id} has no durable runtime metadata`);
     if (runtime.endpointLaunch !== undefined) {
       throw new Error(`cannot clean task ${task.id} while endpoint startup is unresolved`);
     }
@@ -2548,8 +2886,8 @@ class TandemController {
   private async cleanupTerminalTask(
     task: TaskRecord,
     options: TerminalTaskCleanupOptions = {},
-  ): Promise<void> {
-    await releaseTerminalTaskResources(
+  ): Promise<TaskCleanupOutcome> {
+    return releaseTerminalTaskResources(
       {
         home: this.#deps.home,
         store: this.#deps.store,

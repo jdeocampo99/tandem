@@ -764,6 +764,11 @@ test("pause, resume, block, cancel, scout completion, and merge remain distinct"
     { type: "scout-report-complete", reportPath: "/reports/scout.md", generation: 0 },
     context(),
   );
+  const cancelledScout = transitionTask(scout, { type: "cancel" }, context());
+  expect(cancelledScout.stage).toBe("cancelled");
+  expect(cancelledScout.researchInterview?.status).toBe("stopped");
+  expect(cancelledScout.cleanup?.status).toBe("pending");
+  expect(cancelledScout.cleanup?.reason).toContain("explicitly stopped");
   expect(scout.stage).toBe("completed");
   expect(scout.stage).not.toBe("ready");
 

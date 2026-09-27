@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import {
+  MAX_RESEARCH_DECISION_TEXT_BYTES,
   type AgentRole,
   FINDING_CATCH_STAGES,
   FINDING_CATEGORIES,
@@ -9,6 +10,13 @@ import { PINNABLE_PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 import { outcomesFor } from "../workers/protocol.ts";
 
+export const submitResearchFollowUpSchema = z.strictObject({
+  answer: z
+    .string()
+    .min(1)
+    .max(MAX_RESEARCH_DECISION_TEXT_BYTES)
+    .describe("The answer to the coordinator's focused research question, based on the report and read-only inspection."),
+});
 const pullRequestSummarySchema = z.strictObject({
   tldr: z.array(z.string()),
   what: z.array(z.string()),
@@ -129,6 +137,11 @@ export const tandemRequestSchema = z.strictObject({
       taskId: z.string(),
       text: z.string(),
       supersedes: z.array(z.string()).optional(),
+    }),
+    z.strictObject({
+      action: z.literal("research-follow-up"),
+      taskId: z.string(),
+      question: z.string().min(1),
     }),
     z.strictObject({
       action: z.literal("answer"),

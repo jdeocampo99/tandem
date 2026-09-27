@@ -3,7 +3,7 @@ import { LeaseSafetyError } from "../adapters/primitives.ts";
 import { acquireWorktree } from "../adapters/treehouse.ts";
 import type { Clock, CommandRunner, TaskRecord } from "../contracts.ts";
 import { preparePrReviewRun } from "../pr-review/run.ts";
-import { unreleasedReservation } from "../runtime/activity.ts";
+import { activeRuntimeJob, unreleasedReservation } from "../runtime/activity.ts";
 import type { RuntimeTaskState } from "../runtime/schema.ts";
 import { describeError } from "../service/records.ts";
 import {
@@ -13,6 +13,11 @@ import {
 } from "../service/scout-cleanup.ts";
 import { taskSourcePath } from "../service/source.ts";
 import type { TaskStore } from "../tasks/store.ts";
+import {
+  finishResearchInterview,
+  pendingResearchDecision,
+  researchInterviewFor,
+} from "../tasks/research-interview.ts";
 import type { ReservationResult } from "./admission.ts";
 import { assertSourceUnchanged, isCleanAt } from "./checkout.ts";
 import type { OperationClaim } from "./operation-claim.ts";
@@ -47,8 +52,18 @@ export class WorktreeLeases {
     reservation: ReservationResult,
     claim: OperationClaim,
   ): Promise<NonNullable<RuntimeTaskState["worktree"]> | undefined | "stopped"> {
-    const adoption =
-      runtime.worktree === undefined ? await this.adoptableScoutWorktree(task) : undefined;
+    let adoption: NonNullable<RuntimeTaskState["worktree"]> | undefined;
+    try {
+      adoption = runtime.worktree === undefined ? await this.adoptableScoutWorktree(task) : undefined;
+    } catch (error) {
+      await this.#deps.records.releaseAndBlock(task.id, reservation.reservation.id, claim, {
+        group: "lost-resource",
+        kind: "allocation-failed",
+        summary: "Tandem couldn't adopt the research workspace.",
+        detail: `research worktree handoff failed: ${describeError(error)}`,
+      });
+      return "stopped";
+    }
     if (runtime.worktree === undefined && adoption === undefined) {
       const poolReady = await this.#deps.records.withOperationEffect(
         task.id,
@@ -296,10 +311,8 @@ export class WorktreeLeases {
   }
 
   /**
-   * The worktree an implementation can take over from the scout of its first research handoff:
-   * the scout has settled, holds no pane or reservation, and its checkout is still clean on its
-   * own branch at its source commit. Anything else falls back to leasing a fresh worktree. A
-   * finished scout kept alive for mockups has its pane closed first, since building has started.
+   * Adopts the exact clean worktree named by the first research handoff. A cited handoff that
+   * cannot be closed and re-proved blocks implementation; it never silently gets a fresh lease.
    */
   private async adoptableScoutWorktree(
     task: TaskRecord,
@@ -307,30 +320,92 @@ export class WorktreeLeases {
     const scoutId =
       task.kind === "implementation" ? task.researchHandoffs?.[0]?.scoutTaskId : undefined;
     if (scoutId === undefined) return undefined;
-    try {
-      await closeFinishedScoutPanes(this.#deps, scoutId);
-    } catch {
-      // A pane that would not close keeps the scout's worktree; the implementation leases another.
+    let before = await this.#deps.getTask(scoutId);
+    if (
+      before.kind !== "scout" ||
+      before.stage !== "completed" ||
+      before.target?.repo !== task.target?.repo ||
+      before.communication?.question !== undefined
+    ) {
+      throw new Error(`research handoff ${scoutId} is not an available completed scout`);
     }
+    const interview = researchInterviewFor(before);
+    if (
+      interview?.status === "open" &&
+      task.scopeApproved &&
+      pendingResearchDecision(interview) === undefined
+    ) {
+      before = await this.#deps.store.exclusive(async (store) => {
+        const current = await store.read(scoutId);
+        if (
+          current?.kind !== "scout" ||
+          current.stage !== "completed" ||
+          current.target?.repo !== task.target?.repo
+        ) {
+          throw new Error(`research handoff ${scoutId} changed before approval recovery`);
+        }
+        const currentInterview = researchInterviewFor(current);
+        if (
+          currentInterview?.status === "approved" &&
+          current.communication?.question === undefined
+        ) {
+          return current;
+        }
+        if (
+          currentInterview?.status !== "open" ||
+          pendingResearchDecision(currentInterview) !== undefined ||
+          current.communication?.question !== undefined
+        ) {
+          throw new Error(`research handoff ${scoutId} has an unanswered question`);
+        }
+        const approvedAt = this.#deps.clock();
+        const approvedInterview = finishResearchInterview(currentInterview, "approved", approvedAt);
+        return store.update(current.id, current.revision, (latest) => ({
+          ...latest,
+          revision: latest.revision + 1,
+          updatedAt: approvedAt,
+          researchInterview: approvedInterview,
+          cleanup: {
+            schemaVersion: 1,
+            status: "retained",
+            reason: "research approved for implementation handoff",
+            observedAt: approvedAt,
+          },
+        }));
+      });
+    }
+    if (researchInterviewFor(before)?.status !== "approved") {
+      throw new Error(`research handoff ${scoutId} is not approved for implementation`);
+    }
+    await closeFinishedScoutPanes(this.#deps, scoutId);
     const [scout, runtime] = await Promise.all([
       this.#deps.getTask(scoutId),
       this.#deps.runtimeFor(scoutId),
     ]);
     const lease = runtime?.worktree;
     if (
-      scout.target?.repo !== task.target?.repo ||
+      scout.kind !== "scout" ||
       scout.stage !== "completed" ||
+      researchInterviewFor(scout)?.status !== "approved" ||
+      scout.communication?.question !== undefined ||
+      scout.target?.repo !== task.target?.repo ||
+      runtime === undefined ||
       lease === undefined ||
       lease.leaseHolder !== `${this.#deps.sessionId}:${scoutId}` ||
-      runtime === undefined ||
+      lease.baseHead !== runtime.sourceCheckpoint.head ||
       runtime.endpoints.length > 0 ||
+      (scout.endpoints?.length ?? 0) > 0 ||
       runtime.endpointLaunch !== undefined ||
+      runtime.jobs.some(activeRuntimeJob) ||
       unreleasedReservation(runtime.reservation)
     ) {
-      return undefined;
+      throw new Error(`research handoff ${scoutId} has not proven a stopped, owned session`);
     }
     const checkout = await observeScoutCheckout(this.#deps.run, lease.path);
-    if (checkout.status !== "observed") return undefined;
-    return decideScoutWorktreeRelease({ lease, checkout }).kind === "release" ? lease : undefined;
+    const decision = decideScoutWorktreeRelease({ lease, checkout });
+    if (decision.kind !== "release") {
+      throw new Error(`research handoff ${scoutId} workspace is ${decision.kind}: ${decision.reason}`);
+    }
+    return lease;
   }
 }

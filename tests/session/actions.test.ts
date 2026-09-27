@@ -17,6 +17,7 @@ import {
 } from "../../src/session/actions.ts";
 import type { SessionEffect } from "../../src/session/events.ts";
 import { buildDurableDigest, summarizeTandemActionValue } from "../../src/session/summary.ts";
+import { tandemRequestSchema } from "../../src/session/tools.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
 import { models, policyConfig, task } from "./fixtures.ts";
@@ -67,6 +68,43 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
   });
 });
 
+test("research-follow-up routes a read-only question without asking for approval", async () => {
+  const parsedRequest = tandemRequestSchema.parse({
+    request: {
+      action: "research-follow-up",
+      taskId: "scout-1",
+      question: "Which constraint changes the recommendation?",
+    },
+  });
+  expect(parsedRequest.request).toEqual({
+    action: "research-follow-up",
+    taskId: "scout-1",
+    question: "Which constraint changes the recommendation?",
+  });
+  const calls: unknown[] = [];
+  const service = {
+    researchFollowUp: async (input: unknown) => {
+      calls.push(input);
+      return "The report's constraint is the pinned source commit.";
+    },
+  } as unknown as TandemService;
+
+  const result = await executeTandemAction(
+    {
+      action: "research-follow-up",
+      taskId: "scout-1",
+      question: "Which constraint changes the recommendation?",
+    },
+    service,
+    { confirm: undefined },
+  );
+
+  expect(calls).toEqual([
+    { taskId: "scout-1", question: "Which constraint changes the recommendation?" },
+  ]);
+  expect(result.value).toBe("The report's constraint is the pinned source commit.");
+  expect(result.approved).toBeUndefined();
+});
 test("create forwards the named request so work can join one of several open requests", async () => {
   const createCalls: unknown[] = [];
   const service = {
@@ -898,9 +936,36 @@ test("scout summaries and the durable digest carry the post-research disposition
     notifications: unread,
   });
   expect(buildDurableDigest([legacyScout])).toContain("after research: ask-intent");
-  const quietScout = { ...legacyScout, notifications: [] };
+  const quietScout = {
+    ...legacyScout,
+    notifications: [],
+    researchInterview: { schemaVersion: 1, status: "stopped", decisions: [] },
+  };
   expect(buildDurableDigest([quietScout])).not.toContain("after research");
   expect(buildDurableDigest([task({ id: "implementation-task" })])).not.toContain("continuation:");
+});
+
+test("durable digest keeps stopped scouts with retained workspaces visible", () => {
+  const scout = task({
+    id: "stopped-dirty-scout",
+    kind: "scout",
+    stage: "completed",
+    notifications: [],
+    researchInterview: { schemaVersion: 1, status: "stopped", decisions: [] },
+    cleanup: {
+      schemaVersion: 1,
+      status: "retained",
+      reason: "checkout has local changes",
+      observedAt: "2030-01-01T00:00:00.000Z",
+    },
+  });
+  const digest = buildDurableDigest([scout]);
+
+  expect(digest).toContain("research interview: stopped");
+  expect(digest).toContain("cleanup: retained (checkout has local changes)");
+  expect(summarizeTandemActionValue("show", scout)).toContain(
+    "Cleanup: retained; checkout has local changes",
+  );
 });
 
 test("draft publication needs interactive human approval and never runs without it", async () => {

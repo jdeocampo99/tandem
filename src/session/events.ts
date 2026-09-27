@@ -29,6 +29,7 @@ export type ToolKind =
   | "subagent"
   | "copy-asset"
   | "todo"
+  | "research-follow-up"
   | "other";
 
 export type ToolCall = Readonly<{

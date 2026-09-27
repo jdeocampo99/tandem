@@ -36,6 +36,7 @@ import {
   type RequiredStages,
   type ResearchContinuation,
   type ResearchHandoff,
+  type ResearchInterview,
   type ResolvedGuidance,
   type ResolvedPolicy,
   type ReviewLevel,
@@ -58,8 +59,8 @@ import {
   type ValidationCommand,
   type ValidationContractName,
   type ValidationEvidence,
-  WORKSTREAM_NAME_PATTERN,
   type WorktreeLease,
+  WORKSTREAM_NAME_PATTERN,
 } from "../contracts.ts";
 import { PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import { type PrReviewState, parsePrReviewState } from "../pr-review/state.ts";
@@ -67,6 +68,7 @@ import { parseTaskCommunication } from "./communication-protocol.ts";
 import { FINDING_STATUSES } from "./findings.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
+import { checkResearchInterview } from "./research-interview.ts";
 import { DEFAULT_REVIEW_LEVEL_POLICY } from "./review-levels.ts";
 import { checkLegacySkillInvocation, checkSkillInvocations } from "./skill-invocation.ts";
 import { StateCorruptionError, StoreSerializationError } from "./store-errors.ts";
@@ -142,6 +144,7 @@ const TOP_LEVEL_KEYS = [
   "findingLedger",
   "researchHandoffs",
   "researchContinuation",
+  "researchInterview",
   "skills",
   "playbook",
   // Tasks created before Tandem looked skills up itself recorded one coordinator-written skill.
@@ -1003,6 +1006,22 @@ function parseResearchContinuation(
   return check.continuation;
 }
 
+function parseResearchInterview(
+  value: UnknownRecord,
+  kind: TaskKind,
+  source: string,
+): ResearchInterview | undefined {
+  const present = Object.hasOwn(value, "researchInterview");
+  if (kind !== "scout") {
+    if (present) failState(source, "only scout tasks may record a research interview");
+    return undefined;
+  }
+  if (!present) return undefined;
+  const check = checkResearchInterview(value.researchInterview);
+  if (!check.valid) failState(`${source}.researchInterview`, check.defect);
+  return check.interview;
+}
+
 export function parseTaskRecord(value: unknown, source = "task record"): TaskRecord {
   if (!isRecord(value)) {
     failState(source, "task record must be an object");
@@ -1128,6 +1147,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     failState(source, "only pr-review tasks may record a pull request to review");
   }
   const researchContinuation = parseResearchContinuation(value, kind, source);
+  const researchInterview = parseResearchInterview(value, kind, source);
   const taskBase = {
     schemaVersion: 1 as const,
     id,
@@ -1170,6 +1190,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
           ),
         }),
     ...(researchContinuation === undefined ? {} : { researchContinuation }),
+    ...(researchInterview === undefined ? {} : { researchInterview }),
     ...(skills === undefined ? {} : { skills }),
     ...(Object.hasOwn(value, "playbook")
       ? { playbook: requiredEnum(value, "playbook", PLAYBOOK_IDS, source) }

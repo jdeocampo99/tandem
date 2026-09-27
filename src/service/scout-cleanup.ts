@@ -45,6 +45,7 @@ import {
   type SupersededProof,
 } from "./superseded.ts";
 
+import { researchInterviewFor } from "../tasks/research-interview.ts";
 /** What one cleanup attempt settled on, including the attempts that deliberately changed nothing. */
 export type TaskCleanupOutcome = Readonly<{
   readonly taskId: string;
@@ -99,12 +100,15 @@ export type ScoutWorktreeDecision =
 /**
  * Decides from the durable task record alone whether a scout's child resources may be released.
  *
- * Blocked, paused, and decision-waiting scouts keep everything: their pane and checkout are the
- * evidence a coordinator needs to answer them. Only a settled scout with the report already
- * written, or one that was cancelled, is eligible.
+ * Blocked and paused scouts keep everything: their pane and checkout are evidence a coordinator
+ * needs to answer them. A completed report remains available until its research interview is
+ * explicitly stopped; cancellation is itself an explicit stop.
  */
 export function decideScoutCleanupEligibility(
-  task: Pick<TaskRecord, "kind" | "stage" | "reportPath" | "communication">,
+  task: Pick<
+    TaskRecord,
+    "kind" | "stage" | "reportPath" | "communication" | "researchInterview"
+  >,
 ): ScoutCleanupEligibility {
   if (task.kind !== "scout") {
     return { kind: "retained", reason: "task is not a scout" };
@@ -132,6 +136,16 @@ export function decideScoutCleanupEligibility(
   }
   if (task.reportPath === undefined) {
     return { kind: "retained", reason: "the completed scout has no durable report" };
+  }
+  const interview = researchInterviewFor(task);
+  if (interview?.status === "approved") {
+    return { kind: "retained", reason: "research approved for implementation handoff" };
+  }
+  if (interview?.status === "open") {
+    return {
+      kind: "retained",
+      reason: "the completed research interview is open; its session stays available until stopped",
+    };
   }
   return { kind: "eligible" };
 }
@@ -178,20 +192,6 @@ export function decideScoutWorktreeRelease(
   return { kind: "release", reason: "the scout worktree is clean and still on its source commit" };
 }
 
-/**
- * Whether a completed scout's clean worktree should wait for an implementation to adopt it rather
- * than return to the pool. Report-only research, and research never classified, releases as usual.
- */
-export function scoutLeadsToImplementation(
-  task: Pick<TaskRecord, "kind" | "stage" | "researchContinuation">,
-): boolean {
-  const disposition = task.researchContinuation?.disposition;
-  return (
-    task.kind === "scout" &&
-    task.stage === "completed" &&
-    (disposition === "ask-intent" || disposition === "implementation-interview")
-  );
-}
 
 /**
  * Sorts a cleanup failure into one that reconciliation may retry and one that must not be retried.
@@ -433,29 +433,6 @@ function hasBusyPresentation(state: RuntimeState, taskId: string): boolean {
   );
 }
 
-/**
- * Keeps a finished scout that leads to implementation fully alive: its pane stays open, so the
- * user's mockup requests and Lavish comments reach the agent that did the research, and its clean
- * worktree waits for the implementation to adopt. `undefined` means clean up as usual.
- */
-async function keepResearchAgent(
-  deps: TaskCleanupDependencies,
-  task: TaskRecord,
-  runtime: RuntimeTaskState,
-): Promise<TaskCleanupOutcome | undefined> {
-  const lease = runtime.worktree;
-  if (!scoutLeadsToImplementation(task) || lease === undefined) return undefined;
-  const checkout = await observeScoutCheckout(deps.run, lease.path);
-  if (checkout.status !== "observed") return undefined;
-  if (decideScoutWorktreeRelease({ lease, checkout }).kind !== "release") return undefined;
-  return recordCleanupAttempt(deps, task, {
-    closedPaneIds: [],
-    leaseReleased: false,
-    status: "retained",
-    reason:
-      "the research agent and its worktree stay for mockups and the implementation that follows",
-  });
-}
 
 /**
  * Closes a finished scout's pane once the implementation that follows it starts, so that
@@ -596,10 +573,6 @@ export async function releaseTerminalTaskResources(
         reason: eligibility.reason,
       });
     }
-    if (task.kind === "scout" && options.free === undefined) {
-      const kept = await keepResearchAgent(deps, task, runtime);
-      if (kept !== undefined) return kept;
-    }
 
     const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
     const panes = await closeOwnedPanes(deps.run, runtime, cwd);
@@ -644,18 +617,6 @@ export async function releaseTerminalTaskResources(
               reason: "the lease release contract proves an implementation worktree landed",
             } as const)
           : decideScoutWorktreeRelease({ lease, checkout });
-      if (
-        decision.kind === "release" &&
-        checkout?.status === "observed" &&
-        scoutLeadsToImplementation(task)
-      ) {
-        return recordCleanupAttempt(deps, task, {
-          closedPaneIds: panes.closedPaneIds,
-          leaseReleased: false,
-          status: "retained",
-          reason: "the scout worktree is kept for the implementation that follows this research",
-        });
-      }
       if (decision.kind !== "release") {
         return recordCleanupAttempt(deps, task, {
           closedPaneIds: panes.closedPaneIds,

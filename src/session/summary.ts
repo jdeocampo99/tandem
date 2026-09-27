@@ -23,6 +23,11 @@ import {
   checkResearchContinuation,
   researchContinuationFor,
 } from "../tasks/research-continuation.ts";
+import {
+  checkResearchInterview,
+  pendingResearchDecision,
+  researchInterviewFor,
+} from "../tasks/research-interview.ts";
 import type { TandemAction } from "./actions.ts";
 import { describeResearchDisposition } from "./research-follow-up.ts";
 
@@ -265,9 +270,27 @@ function summarizeTask(task: TaskRecord): string {
   }
   if (task.reportPath !== undefined)
     lines.push(`Report: ${compactText(task.reportPath, ACTION_SUMMARY_MAX_TEXT)}`);
+  if (task.cleanup !== undefined) {
+    lines.push(
+      `Cleanup: ${task.cleanup.status}; ${compactText(task.cleanup.reason, ACTION_SUMMARY_MAX_TEXT)}`,
+    );
+  }
   const continuation = researchContinuationFor(task);
   if (continuation !== undefined) {
     lines.push(`After research: ${describeResearchDisposition(continuation.disposition)}.`);
+  }
+  const interview = researchInterviewFor(task);
+  if (interview !== undefined) {
+    const pendingDecision = pendingResearchDecision(interview);
+    lines.push(
+      `Research interview: ${interview.status}${pendingDecision === undefined ? "" : `; pending ${compactText(pendingDecision.question, 140)}`}`,
+    );
+    const answer = interview.decisions.findLast((decision) => decision.status === "answered");
+    if (answer?.status === "answered") {
+      lines.push(
+        `Latest research answer: ${compactText(answer.question, 120)} — ${compactText(answer.answer, ACTION_SUMMARY_MAX_TEXT)}`,
+      );
+    }
   }
   if (task.pullRequest !== undefined) {
     lines.push(
@@ -290,10 +313,13 @@ function summarizeTaskList(action: TandemAction["action"], tasks: readonly TaskR
     const head = task.reviewHead === undefined ? "" : `; head: ${task.reviewHead}`;
     const report =
       task.reportPath === undefined ? "" : `; report: ${compactText(task.reportPath, 120)}`;
+    const interview = researchInterviewFor(task);
+    const research =
+      interview === undefined ? "" : `; research interview ${interview.status}`;
     lines.push(
       `- ${task.id}: ${task.stage}; ${compactText(task.objective, ACTION_SUMMARY_MAX_TEXT)}; ${
         task.scopeApproved ? "scope approved" : "scope pending"
-      }${pending > 0 ? `; ${pending} unread update(s)` : ""}${blocker}${head}${report}`,
+      }${pending > 0 ? `; ${pending} unread update(s)` : ""}${blocker}${head}${report}${research}`,
     );
   }
   if (tasks.length > ACTION_SUMMARY_MAX_ITEMS) {
@@ -865,6 +891,20 @@ function isTaskWorktree(value: unknown): value is NonNullable<TaskRecord["worktr
   );
 }
 
+function isTaskCleanup(value: unknown): value is NonNullable<TaskRecord["cleanup"]> {
+  const record = summaryRecord(value);
+  return (
+    record !== undefined &&
+    record.schemaVersion === 1 &&
+    (record.status === "released" ||
+      record.status === "retained" ||
+      record.status === "pending" ||
+      record.status === "quarantined") &&
+    typeof record.reason === "string" &&
+    typeof record.observedAt === "string" &&
+    Number.isFinite(Date.parse(record.observedAt))
+  );
+}
 function isTaskPullRequest(value: unknown): value is NonNullable<TaskRecord["pullRequest"]> {
   const record = summaryRecord(value);
   return (
@@ -907,6 +947,9 @@ function isTaskRecord(value: unknown): value is TaskRecord {
     (record.researchHandoffs === undefined || Array.isArray(record.researchHandoffs)) &&
     (record.researchContinuation === undefined ||
       checkResearchContinuation(record.researchContinuation).valid) &&
+    (record.researchInterview === undefined ||
+      (record.kind === "scout" && checkResearchInterview(record.researchInterview).valid)) &&
+    (record.cleanup === undefined || isTaskCleanup(record.cleanup)) &&
     (record.blockReason === undefined || typeof record.blockReason === "string") &&
     (record.pullRequest === undefined || isTaskPullRequest(record.pullRequest))
   );
@@ -1116,6 +1159,14 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
 function isQuietFinishedTask(task: TaskRecord): boolean {
   return (
     isTerminalTask(task) &&
+    !(
+      task.kind === "scout" &&
+      task.stage === "completed" &&
+      researchInterviewFor(task)?.status !== "stopped"
+    ) &&
+    task.cleanup?.status !== "retained" &&
+    task.cleanup?.status !== "pending" &&
+    task.cleanup?.status !== "quarantined" &&
     pendingCount(task) === 0 &&
     task.blockReason === undefined &&
     task.communication?.question === undefined
@@ -1144,11 +1195,15 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
       task.blockReason === undefined ? "" : `; blocker: ${compactText(task.blockReason)}`;
     const reportSuffix =
       task.reportPath === undefined ? "" : `; report: ${compactText(task.reportPath, 140)}`;
+    const cleanupSuffix =
+      task.cleanup === undefined || task.cleanup.status === "released"
+        ? ""
+        : `; cleanup: ${task.cleanup.status} (${compactText(task.cleanup.reason, 120)})`;
     const continuation = researchContinuationFor(task);
     const continuationSuffix =
       continuation === undefined ? "" : `; after research: ${continuation.disposition}`;
     lines.push(
-      `- ${task.id}: ${task.stage}; ${compactText(task.objective)}${notificationSuffix}${blockerSuffix}${reportSuffix}${continuationSuffix}`,
+      `- ${task.id}: ${task.stage}; ${compactText(task.objective)}${notificationSuffix}${blockerSuffix}${reportSuffix}${continuationSuffix}${cleanupSuffix}`,
     );
     const question = task.communication?.question;
     if (question !== undefined) {
@@ -1159,6 +1214,23 @@ export function buildDurableDigest(tasks: readonly TaskRecord[]): string {
         lines.push(
           `  recommendation: ${compactText(question.recommendation, MAX_TASK_MESSAGE_CHARS)}`,
         );
+    }
+    if (task.kind === "scout") {
+      const interview = researchInterviewFor(task);
+      const pendingDecision =
+        interview === undefined ? undefined : pendingResearchDecision(interview);
+      lines.push(`  research interview: ${interview?.status ?? "unavailable"}`);
+      if (pendingDecision !== undefined) {
+        lines.push(
+          `  pending research decision ${compactText(pendingDecision.id, 100)}: ${compactText(pendingDecision.question, MAX_TASK_MESSAGE_CHARS)}`,
+        );
+      }
+      const answer = interview?.decisions.findLast((decision) => decision.status === "answered");
+      if (answer?.status === "answered") {
+        lines.push(
+          `  latest research answer: ${compactText(answer.question, 120)} — ${compactText(answer.answer, MAX_TASK_MESSAGE_CHARS)}`,
+        );
+      }
     }
     if (!isTerminalTask(task)) {
       lines.push(

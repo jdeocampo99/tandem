@@ -3,10 +3,10 @@
 Task stages, approvals, fix rounds, post-research continuation, child terminals, and Herdr status.
 
 Code: src/tasks/lifecycle.ts, src/tasks/required-stages.ts, src/tasks/findings.ts, src/tasks/timeline.ts, src/tasks/timeline-store.ts,
-src/tasks/trace.ts, src/tasks/research-continuation.ts,
+src/tasks/trace.ts, src/tasks/research-continuation.ts, src/tasks/research-interview.ts,
 src/tasks/research-continuation-classifier.ts, src/session/research-follow-up.ts,
-src/service/source.ts, src/adapters/herdr.ts, src/adapters/herdr-status.ts,
-src/session/worker.ts, src/session/worker-steering.ts, src/workers/terminal-extension.ts
+src/service/research-session.ts, src/service/source.ts, src/adapters/herdr.ts, src/adapters/herdr-status.ts,
+src/session/worker.ts, src/session/worker-steering.ts, src/workers/terminal-extension.ts, src/workers/worktree-lease.ts
 
 ## Creation and source pinning
 
@@ -142,13 +142,47 @@ never permission. It does not set `scopeApproved` or create tasks. It is refused
 - Summaries and the durable digest print disposition and provenance, so it survives compaction.
 - The completed-scout notification is the only wake. Its text is derived from the persisted record
   after proving the report is readable, so it is identical after compaction, restart, or
-  replacement. An open `needs-decision` question is answered first (`answer-question`); a non-scout,
-  failed, blocked, cancelled, incomplete, stale-generation, or unreadable-report record gets
-  `disclose-blocker`. Otherwise the disposition picks the reply shape (see
-  src/session/research-follow-up.ts); no path widens scope.
-- After the user answers, an implementation task citing the scout in `researchTaskIds` is created
-  `awaiting-approval`, passes repository and report-provenance handoff validation, and launches only
-  after explicit approval. Research on an older commit still hands off, recording the scout's HEAD.
+  replacement. This disposition selects the initial response shape, never whether the completed
+  session or workspace may be released; the durable interview below owns that lifecycle.
+- An older task-level `communication.question` still uses the regular `answer-question` action.
+  New research clarifications use the focused research interview and do not open that question UI.
+- An implementation task citing a scout in `researchTaskIds` remains `awaiting-approval`. Explicit
+  approval records the research disposition and task approval together. Workspace adoption happens
+  only after the cited session is proven stopped and its exact checkout is clean.
+
+## Completed research interview
+
+A completed report is durable evidence, not proof that its OMP session or checkout can be released.
+A completed scout has a persisted `researchInterview` state: `open`, `approved`, or `stopped`,
+plus bounded decisions that are `pending`, `answered`, or `withdrawn`. A legacy completed scout
+without this field loads as `open`; absence never means approved or stopped.
+
+- Completion retains the scout job, terminal, and lease while the interview is open. `research-follow-up`
+  asks a focused question in that same idle OMP session. The follow-up receives the report evidence
+  and may only submit its answer; it cannot write repository files, create a report, or start a new
+  job or generation. The answer is recorded against a stable decision ID.
+- Repeating the same pending or answered question reuses its decision. If dispatch or result recovery
+  fails, the pending decision and workspace remain durable; a successful result can be recovered
+  from its decision-bound sidecar after a process restart. A different question creates a separate
+  bounded decision. Stopping withdraws any unanswered decision.
+- Creating an implementation that cites the report does not approve it. Explicit `approve` requires
+  no unanswered research decision and atomically approves the implementation scope and interview.
+  The implementation may adopt only the exact cited clean worktree after the scout pane, runtime
+  jobs, endpoint launch, lease owner, and checkout are all re-proven. If closure or ownership is
+  uncertain, implementation blocks and never falls back to a fresh workspace.
+- `cleanup` is the explicit stop action for an open interview. A proven clean scout pane and lease
+  may then be released; dirty, moved, unmerged, foreign, or uncertain resources stay retained or
+  quarantined with the recorded reason. Repeating cleanup rechecks retained resources after the
+  condition is resolved; quarantined ownership is never retried. The report and answered decisions
+  remain available. There is no question-panel lifecycle for this interview.
+- Summaries and the durable digest show interview status, pending question, latest answer, and any
+  retained cleanup reason, so stopping with dirty work does not make it disappear from coordinator
+  context.
+
+The state and sidecar boundaries are implemented in `src/tasks/research-interview.ts` and
+`src/service/research-session.ts`; same-session dispatch is in `src/session/worker.ts` and
+`src/workers/terminal-extension.ts`; approval, cleanup, and worktree adoption are in
+`src/service/controller.ts`, `src/service/scout-cleanup.ts`, and `src/workers/worktree-lease.ts`.
 
 ## Classifying the disposition
 
@@ -194,7 +228,9 @@ Code: src/playbooks/ (`catalog.ts` steps, `selection.ts` choice, `classify.ts` t
   native PID, physical checkout, and a fresh terminal heartbeat. Terminal output is display only.
 - After completion or pause, follow-up turns are read-only (mutating tools blocked), except a
   completed scout's mockup turn, which may write only inside its presentation's artifact directory
-  (see [delivery.md](delivery.md#presentations-and-lavish)). Reviewer conversations stay open after
+  (see [delivery.md](delivery.md#presentations-and-lavish)). The focused research interview is the
+  only other completed-scout turn: same OMP session, read-only checkout, and only its
+  `submit_research_follow_up` tool can record an answer. Reviewer conversations stay open after
   consumption.
 - A writer job reuses a pane only when the prior turn finished or paused and the session is idle with
   no queued messages or draft. Cooperative close freezes input, requests exit, and verifies process

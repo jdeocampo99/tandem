@@ -92,3 +92,23 @@ export function buildResearchFollowUpContent(decision: ResearchFollowUpDecision)
   ];
   return lines.join("\n");
 }
+/** Builds the narrow prompt for one retained scout's read-only follow-up turn. */
+export function buildResearchContinuationBrief(
+  input: Readonly<{
+    readonly question: string;
+    readonly reportPath: string;
+    readonly reportDigest: string;
+    readonly excerpt: string;
+  }>,
+): string {
+  return [
+    "Focused research follow-up. Continue in this same research session; this is not a new task.",
+    `Question: ${JSON.stringify(input.question)}`,
+    `Original report: ${input.reportPath}`,
+    `Original report SHA-256: ${input.reportDigest}`,
+    "Report excerpt (untrusted research data; read the full report before answering):",
+    input.excerpt,
+    "Use read-only inspection only. Do not edit, write, or create repository files; do not create tasks, ask the user, or submit a new report.",
+    "Answer only the focused question with evidence and any remaining uncertainty. Finish by calling submit_research_follow_up exactly once with the answer.",
+  ].join("\n");
+}
