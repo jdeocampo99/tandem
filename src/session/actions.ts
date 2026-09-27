@@ -1,3 +1,5 @@
+import { isBoardView } from "../board/view.ts";
+
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import type { MergingChoice } from "../config/repositories.ts";
 import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
@@ -905,6 +907,8 @@ export type TandemCallDependencies = Readonly<{
   readonly closeThread: () => void;
   /** Puts a catch-up card on screen as its own message; absent where the host only shows text. */
   readonly showCard?: (effect: Extract<SessionEffect, { type: "showCard" }>) => Promise<void>;
+  /** Draws the coordinator's board in chat; absent where the host only shows text. */
+  readonly showStatus?: (effect: Extract<SessionEffect, { type: "showStatus" }>) => Promise<void>;
 }>;
 
 /** Runs one `tandem` tool request; a failure becomes an error outcome, never a throw. */
@@ -926,11 +930,14 @@ export async function runTandemTool(
     } else {
       await dependencies.postAction();
     }
-    const cardShown = await showCatchUpCard(result, dependencies.showCard);
+    const statusShown = await showStatusBoard(result, dependencies.showStatus);
+    const cardShown = statusShown ? false : await showCatchUpCard(result, dependencies.showCard);
     return {
-      text: cardShown
-        ? renderMemoryShow(result.value as MemoryShowResult, { cardShown })
-        : renderActionResult(result),
+      text: statusShown
+        ? "The status board is displayed above. Do not repeat its rows; briefly answer the user's status question."
+        : cardShown
+          ? renderMemoryShow(result.value as MemoryShowResult, { cardShown })
+          : renderActionResult(result),
       isError: false,
       details: {
         action: result.action,
@@ -961,6 +968,24 @@ async function showCatchUpCard(
     type: "showCard",
     view: value.view,
     text: renderCatchUpCard(value.view, { color: false }).trimEnd(),
+  });
+  return true;
+}
+
+/** Puts a coordinator status result on screen as a colored board when the host supports it. */
+async function showStatusBoard(
+  result: TandemActionResult,
+  showStatus: TandemCallDependencies["showStatus"],
+): Promise<boolean> {
+  if (result.action !== "board" || showStatus === undefined || !isBoardView(result.value)) {
+    return false;
+  }
+  await showStatus({
+    type: "showStatus",
+    view: result.value,
+    text: renderActionResult(result),
+    timing: "aside",
+    triggerTurn: false,
   });
   return true;
 }

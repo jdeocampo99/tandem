@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { IsoTimestamp, RequestBriefRecord, TaskRecord, TaskStage } from "../contracts.ts";
 import { type PrWatch, type PrWatchPoll, sameRef } from "../pr-watch/store.ts";
-import { elapsed, type PrWatchViewRow, pad, prWatchLines, prWatchView } from "../pr-watch/view.ts";
+import { elapsed, PR_MARKS, type PrWatchViewRow, prWatchView } from "../pr-watch/view.ts";
 import { awaitsApproval, requestApprovalState } from "../requests/brief.ts";
 import { isTerminalTask } from "../service/records.ts";
 import type { TimelineEvent } from "../tasks/timeline.ts";
@@ -67,6 +67,117 @@ export type BoardRow = Readonly<{
   /** How long a running task has existed, like 12m. */
   readonly since?: string;
 }>;
+const BOARD_ROW_CAUSES = new Set<BoardRow["cause"]>([
+  "brief",
+  "question",
+  "pull-request",
+  "awaiting-approval",
+  "queued",
+  "scouting",
+  "implementing",
+  "validating",
+  "reviewing",
+  "awaiting-fixes",
+  "ready",
+  "paused",
+  "blocked",
+  "cancelled",
+  "completed",
+  "merged",
+]);
+const PR_WATCH_COLORS = new Set<PrWatchViewRow["color"]>([
+  "red",
+  "yellow",
+  "green",
+  "done",
+  "unwatched",
+]);
+
+/** Checks persisted board details before a chat renderer uses them. */
+export function isBoardView(value: unknown): value is BoardView {
+  const view = recordOf(value);
+  return (
+    view !== undefined &&
+    typeof view.now === "string" &&
+    Array.isArray(view.projects) &&
+    view.projects.every((project) => typeof project === "string") &&
+    (view.checkedAt === undefined || typeof view.checkedAt === "string") &&
+    Array.isArray(view.needsYou) &&
+    view.needsYou.every(isBoardRow) &&
+    Array.isArray(view.running) &&
+    view.running.every(isBoardRow) &&
+    Array.isArray(view.pullRequests) &&
+    view.pullRequests.every(isPrWatchViewRow) &&
+    isFiniteNumber(view.finished) &&
+    (view.week === undefined || isWeekSummary(view.week))
+  );
+}
+
+function isBoardRow(value: unknown): value is BoardRow {
+  const row = recordOf(value);
+  return (
+    row !== undefined &&
+    typeof row.key === "string" &&
+    typeof row.cause === "string" &&
+    BOARD_ROW_CAUSES.has(row.cause as BoardRow["cause"]) &&
+    (row.repoPath === undefined || typeof row.repoPath === "string") &&
+    typeof row.project === "string" &&
+    typeof row.mark === "string" &&
+    typeof row.name === "string" &&
+    typeof row.text === "string" &&
+    (row.since === undefined || typeof row.since === "string")
+  );
+}
+
+function isPrWatchViewRow(value: unknown): value is PrWatchViewRow {
+  const row = recordOf(value);
+  return (
+    row !== undefined &&
+    typeof row.repo === "string" &&
+    isFiniteNumber(row.number) &&
+    typeof row.branch === "string" &&
+    typeof row.url === "string" &&
+    typeof row.color === "string" &&
+    PR_WATCH_COLORS.has(row.color as PrWatchViewRow["color"]) &&
+    typeof row.checks === "string" &&
+    (row.checkCounts === undefined || isCheckCounts(row.checkCounts)) &&
+    typeof row.status === "string" &&
+    typeof row.note === "string" &&
+    (row.link === undefined || typeof row.link === "string")
+  );
+}
+
+function isCheckCounts(value: unknown): boolean {
+  const counts = recordOf(value);
+  return (
+    counts !== undefined &&
+    isFiniteNumber(counts.passed) &&
+    isFiniteNumber(counts.failed) &&
+    isFiniteNumber(counts.pending)
+  );
+}
+
+function isWeekSummary(value: unknown): value is WeekSummary {
+  const week = recordOf(value);
+  return (
+    week !== undefined &&
+    isFiniteNumber(week.tasks) &&
+    isFiniteNumber(week.reviewedTasks) &&
+    isFiniteNumber(week.firstPassReviews) &&
+    isFiniteNumber(week.costMicros) &&
+    isFiniteNumber(week.unpricedSamples)
+  );
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const NAME_CHARS = 30;
@@ -160,35 +271,76 @@ export function needsYouNotice(rows: readonly BoardRow[]): NeedsYouNotice {
 }
 
 /** Where the chat board points for the live view; setup.sh binds prefix+t in Herdr. */
-const LIVE_VIEW_HINT = "Live view: prefix+t in Herdr, or `tandem status --watch`";
+const LIVE_VIEW_HINT = "_Live view: `prefix+t` in Herdr, or `tandem status --watch`._";
 
-/** The board: header and sections, as "how's it going?" shows it in the chat. */
+/** The chat board: Markdown structure that remains readable without terminal colors or columns. */
 export function renderBoard(view: BoardView): string {
-  const header = [
-    `Projects: ${view.projects.length === 0 ? "none yet" : view.projects.join(", ")}`,
-    view.checkedAt === undefined
-      ? "PRs not checked yet"
-      : `PRs checked ${elapsed(view.checkedAt, view.now)} ago`,
-  ].join(" · ");
+  const projects = view.projects.length === 0 ? "none yet" : markdownText(view.projects.join(", "));
+  const checkedAt =
+    view.checkedAt === undefined ? "not checked yet" : `${elapsed(view.checkedAt, view.now)} ago`;
+  const header = `**Projects:** ${projects} · **PRs checked:** ${checkedAt}`;
   const sections = [
-    ["Needs you", ...(view.needsYou.length === 0 ? ["Nothing needs you."] : [])]
-      .concat(boardLines(view.needsYou))
-      .join("\n"),
-    ...(view.running.length === 0 ? [] : [["Running", ...boardLines(view.running)].join("\n")]),
+    [
+      `### 🙋 Needs you · ${view.needsYou.length}`,
+      ...(view.needsYou.length === 0 ? ["Nothing needs you."] : chatBoardLines(view.needsYou)),
+    ].join("\n"),
+    ...(view.running.length === 0
+      ? []
+      : [[`### 🔨 Running · ${view.running.length}`, ...chatBoardLines(view.running)].join("\n")]),
     ...(view.pullRequests.length === 0
       ? []
-      : [["PRs", ...prWatchLines(view.pullRequests, true)].join("\n")]),
-    ...(view.week === undefined ? [] : [weekLine(view.week)]),
+      : [
+          [
+            `### 🔀 Pull requests · ${view.pullRequests.length}`,
+            ...chatPullRequestLines(view.pullRequests),
+          ].join("\n"),
+        ]),
+    ...(view.week === undefined ? [] : [`### 📈 This week\n${weekLine(view.week)}`]),
     LIVE_VIEW_HINT,
   ];
-  return `${[header, ...sections].join("\n\n")}\n`;
+  return `## Tandem status\n\n${header}\n\n${sections.join("\n\n")}\n`;
 }
 
-/** Like "This week: 7 done · 5 of 7 passed review first time · $14.20". */
+function chatBoardLines(rows: readonly BoardRow[]): string[] {
+  return rows.map(
+    (row) =>
+      `- ${row.mark} **${markdownText(row.project)}** · **${markdownText(row.name)}** — ${markdownText(rowText(row))}`,
+  );
+}
+
+function chatPullRequestLines(rows: readonly PrWatchViewRow[]): string[] {
+  return rows.flatMap((row) => {
+    const note =
+      row.link === undefined ? row.note : [row.note, row.link].filter(Boolean).join(" → ");
+    const details = [row.checks, row.status, note]
+      .filter((value) => value.length > 0)
+      .map(markdownText)
+      .join(" · ");
+    return [
+      `- ${PR_MARKS[row.color]} **${markdownText(`${row.repo}#${row.number}`)}**${row.branch.length === 0 ? "" : ` — ${markdownText(row.branch)}`}`,
+      ...(details.length === 0 ? [] : [`  ${details}`]),
+    ];
+  });
+}
+
+function markdownText(value: string): string {
+  return value
+    .replace(/\s+/gu, " ")
+    .replaceAll("\\", "\\\\")
+    .replaceAll("`", "\\`")
+    .replaceAll("*", "\\*")
+    .replaceAll("_", "\\_")
+    .replaceAll("[", "\\[")
+    .replaceAll("]", "\\]")
+    .replaceAll("<", "\\<")
+    .replaceAll(">", "\\>");
+}
+
+/** Like "7 done · 5 of 7 passed review first time · $14.20". */
 function weekLine(week: WeekSummary): string {
   const unpriced = week.unpricedSamples === 0 ? "" : " + unpriced usage";
   return [
-    `This week: ${week.tasks} done`,
+    `${week.tasks} done`,
     ...(week.reviewedTasks === 0
       ? []
       : [`${week.firstPassReviews} of ${week.reviewedTasks} passed review first time`]),
@@ -200,17 +352,6 @@ function weekSummary(rollups: readonly TaskRollup[]): WeekSummary {
   const { tasks, reviewedTasks, firstPassReviews, costMicros, unpricedSamples } =
     summarizeRollups(rollups);
   return { tasks, reviewedTasks, firstPassReviews, costMicros, unpricedSamples };
-}
-
-/** Aligned rows, two spaces between columns. */
-function boardLines(rows: readonly BoardRow[]): string[] {
-  const width = (values: readonly string[]) =>
-    Math.max(0, ...values.map((value) => [...value].length));
-  const projectWidth = width(rows.map((row) => row.project));
-  const nameWidth = width(rows.map((row) => row.name));
-  return rows.map((row) =>
-    `${row.mark} ${[pad(row.project, projectWidth), pad(row.name, nameWidth), rowText(row)].join("  ")}`.trimEnd(),
-  );
 }
 
 function rowText(row: BoardRow): string {

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { renderStatus, renderStatusLine } from "../../src/board/terminal.ts";
+import { renderStatus, renderStatusBoard, renderStatusLine } from "../../src/board/terminal.ts";
 import {
   type BoardState,
   boardView,
@@ -140,7 +140,29 @@ test("status puts what needs you first, then running work and pull requests, the
       "",
     ].join("\n"),
   );
-  expect(renderBoard(view)).toContain("🔨 tandem  Fix the flaky login test  implementing · 12m");
+  expect(renderBoard(view)).toBe(
+    [
+      "## Tandem status",
+      "",
+      "**Projects:** tandem, app · **PRs checked:** 40s ago",
+      "",
+      "### 🙋 Needs you · 3",
+      "- 🙋 **tandem** · **Dark mode** — brief waiting for approval",
+      "- 🙋 **app** · **Refactor the cache** — question: Keep the old eviction order?",
+      "- 🔴 **app** · **acme/app#409 branch-409** — 🙋 test\\_cache\\_evict failed twice",
+      "",
+      "### 🔨 Running · 2",
+      "- 🔨 **tandem** · **Fix the flaky login test** — implementing · 12m",
+      "- ⏸️ **app** · **Dark mode tokens** — paused · 2h",
+      "",
+      "### 🔀 Pull requests · 1",
+      "- 🟢 **acme/app#420** — branch-420",
+      "  ⏳ 12/16 · ✅ approved",
+      "",
+      "_Live view: `prefix+t` in Herdr, or `tandem status --watch`._",
+      "",
+    ].join("\n"),
+  );
   expect(view.needsYou.map((row) => [row.key, row.repoPath])).toEqual([
     ["brief:req-1", "/work/tandem"],
     ["question:q-1", "/work/app"],
@@ -148,10 +170,37 @@ test("status puts what needs you first, then running work and pull requests, the
   ]);
 });
 
+test("chat status escapes Markdown in task content", () => {
+  const view = boardView(
+    state({
+      tasks: [
+        task({
+          id: "task-markdown",
+          repoPath: "/work/tandem",
+          stage: "implementing",
+          objective: "Ship **now**",
+        }),
+      ],
+    }),
+    NOW,
+  );
+  expect(renderBoard(view)).toContain("**Ship \\*\\*now\\*\\***");
+});
+
 test("an empty status says nothing needs you, that PR watch has not checked yet, and how to open a coordinator", () => {
   const view = boardView(state({ projects: [] }), NOW);
   expect(renderBoard(view)).toBe(
-    "Projects: none yet · PRs not checked yet\n\nNeeds you\nNothing needs you.\n\nLive view: prefix+t in Herdr, or `tandem status --watch`\n",
+    [
+      "## Tandem status",
+      "",
+      "**Projects:** none yet · **PRs checked:** not checked yet",
+      "",
+      "### 🙋 Needs you · 0",
+      "Nothing needs you.",
+      "",
+      "_Live view: `prefix+t` in Herdr, or `tandem status --watch`._",
+      "",
+    ].join("\n"),
   );
   const status = renderStatus(view, { code: "abc", coordinators: [] }, { color: false });
   expect(status).toStartWith(
@@ -192,6 +241,23 @@ test("on a terminal, status colors sections by meaning and cuts lines to the ter
   }
   expect(narrow).toContain(`NEEDS YOU 1 ${"─".repeat(18)}\n`);
   expect(narrow).toContain("🙋 tandem  Implement the requ…");
+});
+
+test("the chat board shares terminal sections without the terminal-only footer", () => {
+  const view = boardView(
+    state({ tasks: [task({ stage: "implementing", objective: "Implement status rendering" })] }),
+    NOW,
+  );
+  const colored = renderStatusBoard(view, { color: true, columns: 80 });
+  expect(colored).toContain("\x1b[1m\x1b[33mNEEDS YOU");
+  expect(colored).toContain("\x1b[36mimplementing\x1b[39m");
+  expect(colored).not.toContain("Tandem code:");
+  expect(colored).not.toContain("no coordinators open");
+
+  const narrow = renderStatusBoard(view, { color: false, columns: 30 });
+  for (const line of narrow.trimEnd().split("\n")) {
+    expect(Bun.stringWidth(line)).toBeLessThanOrEqual(30);
+  }
 });
 
 test("an abandoned brief leaves the board", () => {
@@ -301,8 +367,8 @@ test("the weekly line follows the PRs, counting finished tasks, first-pass revie
     }),
     NOW,
   );
-  expect(renderBoard(view).trimEnd().split("\n").at(-3)).toBe(
-    "This week: 3 done · 1 of 2 passed review first time · $14.20",
+  expect(renderBoard(view)).toContain(
+    "### 📈 This week\n3 done · 1 of 2 passed review first time · $14.20",
   );
   expect(renderBoard(boardView(state(), NOW))).not.toContain("This week");
 });

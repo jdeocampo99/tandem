@@ -1,5 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, MessageRenderer } from "@oh-my-pi/pi-coding-agent";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
+import { draw, renderStatusBoard, span } from "../board/terminal.ts";
+import { isBoardView } from "../board/view.ts";
 import { isCatchUpView, renderCatchUpCard } from "../memory/view.ts";
 import type { ApprovalDialog } from "../session/actions.ts";
 import type { SessionEffect, SessionHost, ToolCall, ToolKind } from "../session/events.ts";
@@ -16,6 +18,9 @@ const DELIVERY_MESSAGE_TYPE: Readonly<
 
 /** The custom message type a catch-up card is saved under; its renderer draws it in color. */
 export const CARD_MESSAGE_TYPE = "tandem-card";
+
+/** The custom message type for the board, rendered with terminal colors at chat width. */
+export const STATUS_MESSAGE_TYPE = "tandem-status";
 
 const OMP_TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   read: "read",
@@ -90,6 +95,38 @@ export const renderCardMessage: MessageRenderer = (message) => {
             .map((line) => ` ${line}`),
           "",
         ];
+        drawn = { width, lines };
+      }
+      return drawn.lines;
+    },
+    invalidate() {
+      drawn = undefined;
+    },
+  };
+};
+
+/** Draws a saved status message with the shared terminal board formatter. */
+export const renderStatusMessage: MessageRenderer = (message) => {
+  const details = message.details as { readonly view?: unknown } | undefined;
+  const view = details?.view;
+  if (!isBoardView(view)) return undefined;
+  const color = (process.env.NO_COLOR ?? "").length === 0;
+  let drawn: Readonly<{ width: number; lines: readonly string[] }> | undefined;
+  return {
+    render(width) {
+      if (drawn?.width !== width) {
+        const style = {
+          color,
+          columns: Math.max(1, width - 2),
+          // OMP sets this from the user's tui.hyperlinks setting and what the terminal supports.
+          links: TERMINAL.hyperlinks,
+        };
+        const board = renderStatusBoard(view, style).trimEnd();
+        const hint = draw(
+          [span("Live view: prefix+t in Herdr, or tandem status --watch", "dim")],
+          style,
+        );
+        const lines = ["", ...`${board}\n\n${hint}`.split("\n").map((line) => ` ${line}`), ""];
         drawn = { width, lines };
       }
       return drawn.lines;
@@ -182,6 +219,22 @@ async function performOmpEffect(
           attribution: "agent",
         },
         { deliverAs: "aside" },
+      );
+      return;
+    case "showStatus":
+      // The custom renderer uses `details.view`; `content` is a Markdown fallback for plain hosts.
+      pi.sendMessage(
+        {
+          customType: STATUS_MESSAGE_TYPE,
+          content: effect.text,
+          display: true,
+          details: { ...effect.details, view: effect.view },
+          attribution: "agent",
+        },
+        {
+          deliverAs: effect.timing,
+          ...(effect.triggerTurn ? { triggerTurn: true } : {}),
+        },
       );
       return;
     case "promptAsUser":

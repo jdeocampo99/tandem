@@ -18,10 +18,12 @@ import { coordinatorToolRefusal } from "../session/tool-guard.ts";
 import { tandemRequestSchema as tandemToolSchema } from "../session/tools.ts";
 import {
   CARD_MESSAGE_TYPE,
+  STATUS_MESSAGE_TYPE,
   ompApprovalDialog,
   ompSessionHost,
   ompToolCall,
   renderCardMessage,
+  renderStatusMessage,
 } from "./omp-host.ts";
 
 export type TandemOmpRegistrationDependencies = Readonly<{
@@ -48,6 +50,7 @@ export function registerTandemOmp(
   registerTandemTool(pi, dependencies);
   registerTandemCommand(pi, dependencies);
   pi.registerMessageRenderer(CARD_MESSAGE_TYPE, renderCardMessage);
+  pi.registerMessageRenderer(STATUS_MESSAGE_TYPE, renderStatusMessage);
 }
 
 function callDependencies(
@@ -128,6 +131,7 @@ function registerTandemTool(
         {
           ...callDependencies(ctx, dependencies),
           showCard: (effect) => ompSessionHost(pi, () => ctx).perform(effect),
+          showStatus: (effect) => ompSessionHost(pi, () => ctx).perform(effect),
         },
         signal,
       );
