@@ -16,8 +16,16 @@ import {
   runTandemTool,
   type TandemCallDependencies,
 } from "../../src/session/actions.ts";
-import type { SessionEffect } from "../../src/session/events.ts";
-import { buildDurableDigest, summarizeTandemActionValue } from "../../src/session/summary.ts";
+import type { CoordinatorTurnAction, SessionEffect } from "../../src/session/events.ts";
+import {
+  ACTION_FULL_RESULT_MAX_CHARS,
+  ACTION_RESULT_MAX_CHARS,
+  ACTION_TRACE_MAX_EVENTS,
+  buildDurableDigest,
+  summarizeTandemActionValue,
+} from "../../src/session/summary.ts";
+import type { StoredTimelineEvent } from "../../src/tasks/timeline.ts";
+import type { BoundedTaskTrace, TaskTrace } from "../../src/tasks/trace.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
 import { models, policyConfig, task } from "./fixtures.ts";
@@ -45,6 +53,9 @@ test("Tandem command parsing preserves quoted values and routes presentation fee
     taskId: "task-1",
     detail: "full",
   });
+  expect(parseTandemCommand("trace task-1")).toEqual({ action: "trace", taskId: "task-1" });
+  expect(() => parseTandemCommand("trace")).toThrow();
+  expect(() => parseTandemCommand("trace task-1 extra")).toThrow();
   expect(parseTandemCommand("presentations")).toEqual({ action: "presentations" });
   expect(parseTandemCommand("models")).toEqual({ action: "models", repoPath: "." });
   expect(parseTandemCommand("models /repo")).toEqual({ action: "models", repoPath: "/repo" });
@@ -1253,9 +1264,16 @@ test("the brief-approve prompt names the request by its goal, never its id or re
   ]);
 });
 
-function callDependencies(service: TandemService, followUps: string[]): TandemCallDependencies {
+function callDependencies(
+  service: TandemService,
+  followUps: string[],
+  turnActions: CoordinatorTurnAction[] = [],
+): TandemCallDependencies {
   return {
     service: () => service,
+    recordTurnAction: (action) => {
+      turnActions.push(action);
+    },
     confirm: undefined,
     reconcile: async () => {
       followUps.push("reconcile");
@@ -1269,25 +1287,20 @@ function callDependencies(service: TandemService, followUps: string[]): TandemCa
   };
 }
 
-test("the tandem tool reconciles after a tick and runs the post-action step after anything else", async () => {
+test("the tandem tool reconciles after ticks and runs post-action for ordinary actions", async () => {
   const followUps: string[] = [];
+  const turnActions: CoordinatorTurnAction[] = [];
   const service = {
     tick: async () => [],
     list: async () => [task()],
   } as unknown as TandemService;
+  const dependencies = callDependencies(service, followUps, turnActions);
 
-  const ticked = await runTandemTool(
-    { action: "tick" },
-    callDependencies(service, followUps),
-    undefined,
-  );
-  const listed = await runTandemTool(
-    { action: "list" },
-    callDependencies(service, followUps),
-    undefined,
-  );
+  const ticked = await runTandemTool({ action: "tick" }, dependencies, undefined);
+  const listed = await runTandemTool({ action: "list" }, dependencies, undefined);
 
   expect(followUps).toEqual(["reconcile", "postAction"]);
+  expect(turnActions).toEqual(["other", "other"]);
   expect(ticked).toEqual({
     text: summarizeTandemActionValue("tick", []),
     isError: false,
@@ -1295,6 +1308,209 @@ test("the tandem tool reconciles after a tick and runs the post-action step afte
   });
   expect(listed).toMatchObject({ isError: false, details: { action: "list" } });
   expect(listed.text).toContain("task-1");
+});
+
+test("trace reads are chronological and safe to repeat", async () => {
+  const trace: TaskTrace = {
+    events: [
+      {
+        type: "created",
+        taskId: "task-1",
+        at: "2030-01-01T00:00:00.000Z",
+        stage: "queued",
+        seq: 1,
+      },
+      {
+        type: "stage-changed",
+        taskId: "task-1",
+        at: "2030-01-01T00:01:00.000Z",
+        from: "queued",
+        to: "scouting",
+        seq: 2,
+      },
+    ],
+    unreadableEvents: 1,
+    rollup: {
+      taskId: "task-1",
+      firstPassReview: false,
+      fixRounds: 2,
+      blockedMs: 120_000,
+      cost: {
+        currency: "USD",
+        amountMicros: 1_234_567,
+        actualSamples: 1,
+        estimatedSamples: 2,
+        unavailableSamples: 3,
+      },
+    },
+  };
+  const traceCalls: string[] = [];
+  const followUps: string[] = [];
+  const turnActions: CoordinatorTurnAction[] = [];
+  const service = {
+    trace: async (taskId: string) => {
+      traceCalls.push(taskId);
+      return trace;
+    },
+  } as unknown as TandemService;
+  const dependencies = callDependencies(service, followUps, turnActions);
+  const action = { action: "trace" as const, taskId: "task-1" };
+
+  const first = await runTandemTool(action, dependencies, undefined);
+  const second = await runTandemTool(action, dependencies, undefined);
+
+  expect(first).toEqual(second);
+  expect(traceCalls).toEqual(["task-1", "task-1"]);
+  expect(followUps).toEqual([]);
+  expect(turnActions).toEqual(["trace", "trace"]);
+  expect(first.text).toContain("First review: needed fixes");
+  expect(first.text).toContain("Fix rounds: 2");
+  expect(first.text).toContain("Time blocked: 2m (120000 ms)");
+  expect(first.text).toContain("Cost: $1.23 (1 actual, 2 estimated, 3 unpriced)");
+  expect(first.text).toContain("1 unreadable");
+  expect(first.text.indexOf("created at queued")).toBeLessThan(
+    first.text.indexOf("queued -> scouting"),
+  );
+  expect(first.details).toMatchObject({
+    action: "trace",
+    value: {
+      events: trace.events,
+      unreadableEvents: 1,
+      omittedEvents: 0,
+      rollup: trace.rollup,
+    },
+  });
+});
+
+test("trace keeps the newest readable events and full rollup for long histories", async () => {
+  const events = Array.from({ length: 40 }, (_, index): StoredTimelineEvent => {
+    const seq = index + 1;
+    return {
+      type: "question-asked",
+      taskId: "task-1",
+      at: new Date(Date.UTC(2030, 0, 1, 0, 0, seq - 1)).toISOString(),
+      questionId: `question-${seq}`,
+      cause: `cause-${seq}`,
+      seq,
+    };
+  });
+  const trace: TaskTrace = {
+    events,
+    unreadableEvents: 2,
+    rollup: {
+      taskId: "task-1",
+      firstPassReview: true,
+      fixRounds: 4,
+      blockedMs: 123_456,
+      cost: {
+        currency: "USD",
+        amountMicros: 9_876_543,
+        actualSamples: 4,
+        estimatedSamples: 1,
+        unavailableSamples: 2,
+      },
+    },
+  };
+  const service = { trace: async () => trace } as unknown as TandemService;
+  const outcome = await runTandemTool(
+    { action: "trace", taskId: "task-1" },
+    callDependencies(service, []),
+    undefined,
+  );
+  const boundedTrace = (outcome.details as Readonly<{ value: BoundedTaskTrace }>).value;
+
+  expect(outcome.isError).toBe(false);
+  expect(outcome.text.length).toBeLessThanOrEqual(ACTION_RESULT_MAX_CHARS);
+  expect(outcome.text).toContain("First review: passed");
+  expect(outcome.text).toContain("Fix rounds: 4");
+  expect(outcome.text).toContain("Time blocked: 2m (123456 ms)");
+  expect(outcome.text).toContain("24 omitted; 2 unreadable");
+  expect(outcome.text.indexOf("question-25")).toBeLessThan(outcome.text.indexOf("question-40"));
+  expect(outcome.text).not.toContain("question-24");
+  expect(boundedTrace.events).toEqual(events.slice(-ACTION_TRACE_MAX_EVENTS));
+  expect(boundedTrace.omittedEvents).toBe(40 - ACTION_TRACE_MAX_EVENTS);
+  expect(boundedTrace.unreadableEvents).toBe(2);
+  expect(boundedTrace.rollup).toEqual(trace.rollup);
+  expect((JSON.stringify(boundedTrace) ?? "").length).toBeLessThanOrEqual(12_000);
+  expect((JSON.stringify(outcome.details) ?? "").length).toBeLessThanOrEqual(
+    ACTION_FULL_RESULT_MAX_CHARS,
+  );
+});
+
+test("trace never backfills older events past an oversized newest event", async () => {
+  const olderEvent: StoredTimelineEvent = {
+    type: "question-asked",
+    taskId: "task-1",
+    at: "2030-01-01T00:00:00.000Z",
+    questionId: "older-question",
+    seq: 1,
+  };
+  const newestEvent: StoredTimelineEvent = {
+    type: "fix-round",
+    taskId: "task-1",
+    at: "2030-01-01T00:01:00.000Z",
+    round: 2,
+    generation: 1,
+    findingIds: Array.from({ length: 5_000 }, (_, index) => `finding-${index}`),
+    seq: 2,
+  };
+  const trace: TaskTrace = {
+    events: [olderEvent, newestEvent],
+    unreadableEvents: 3,
+    rollup: {
+      taskId: "task-1",
+      firstPassReview: false,
+      fixRounds: 2,
+      blockedMs: 12_345,
+      cost: {
+        currency: "USD",
+        amountMicros: 987_654,
+        actualSamples: 2,
+        estimatedSamples: 1,
+        unavailableSamples: 3,
+      },
+    },
+  };
+  const service = { trace: async () => trace } as unknown as TandemService;
+  const outcome = await runTandemTool(
+    { action: "trace", taskId: "task-1" },
+    callDependencies(service, []),
+    undefined,
+  );
+  const boundedTrace = (outcome.details as Readonly<{ value: BoundedTaskTrace }>).value;
+
+  expect(outcome.isError).toBe(false);
+  expect(boundedTrace.events).toEqual([]);
+  expect(boundedTrace.omittedEvents).toBe(2);
+  expect(boundedTrace.unreadableEvents).toBe(3);
+  expect(boundedTrace.rollup).toEqual(trace.rollup);
+  expect(outcome.text).toContain("2 readable; showing 0 newest; 2 omitted; 3 unreadable");
+  expect(outcome.text).not.toContain("older-question");
+  expect((JSON.stringify(outcome.details) ?? "").length).toBeLessThanOrEqual(
+    ACTION_FULL_RESULT_MAX_CHARS,
+  );
+});
+
+test("a failed trace returns not-found details without reconciliation", async () => {
+  const followUps: string[] = [];
+  const service = {
+    trace: async () => {
+      throw new Error("Task foreign-task was not found");
+    },
+  } as unknown as TandemService;
+
+  expect(
+    await runTandemTool(
+      { action: "trace", taskId: "foreign-task" },
+      callDependencies(service, followUps),
+      undefined,
+    ),
+  ).toEqual({
+    text: "Tandem trace failed: Task foreign-task was not found",
+    isError: true,
+    details: { action: "trace" },
+  });
+  expect(followUps).toEqual([]);
 });
 
 test("finishing actions close the thread, but a refused approval does not", async () => {
@@ -1361,14 +1577,21 @@ test("a failed tool call becomes an error outcome naming the action", async () =
   expect(followUps).toEqual([]);
 });
 
-test("a /tandem command shows its result before the post-action step, and failures as errors", async () => {
+test("a /tandem command shows results before post-action work, except for read-only trace", async () => {
   const order: string[] = [];
+  const turnActions: CoordinatorTurnAction[] = [];
   const modelsFor: string[] = [];
+  const trace: TaskTrace = {
+    events: [],
+    unreadableEvents: 0,
+    rollup: { taskId: "task-1", fixRounds: 0, blockedMs: 0 },
+  };
   const service = {
     models: async (repoPath: string) => {
       modelsFor.push(repoPath);
       return { modelSettings: { configPath: "/m.json", configured: false }, availableModels: [] };
     },
+    trace: async () => trace,
   } as unknown as TandemService;
   const recording = recordingSessionHost();
   const host = {
@@ -1377,18 +1600,24 @@ test("a /tandem command shows its result before the post-action step, and failur
       await recording.host.perform(effect);
     },
   };
-  const dependencies = callDependencies(service, order);
+  const dependencies = callDependencies(service, order, turnActions);
 
   await runTandemCommand("models .", "/repo", dependencies, host);
   await runTandemCommand("unknown-command", "/repo", dependencies, host);
+  await runTandemCommand("trace task-1", "/repo", dependencies, host);
 
   // `.` is the coordinator's own checkout.
   expect(modelsFor).toEqual(["/repo"]);
-  expect(order).toEqual(["notify", "postAction", "notify"]);
+  expect(order).toEqual(["notify", "postAction", "notify", "notify"]);
+  expect(turnActions).toEqual([]);
   expect(recording.effects[0]).toMatchObject({ type: "notify", level: "info" });
   expect(recording.effects[1]).toMatchObject({ type: "notify", level: "error" });
   expect(recording.effects[1]?.type === "notify" ? recording.effects[1].text : "").toStartWith(
     "Tandem command failed: ",
+  );
+  expect(recording.effects[2]).toMatchObject({ type: "notify", level: "info" });
+  expect(recording.effects[2]?.type === "notify" ? recording.effects[2].text : "").toContain(
+    "Task task-1",
   );
 });
 

@@ -836,6 +836,8 @@ test("bound coordinators scope tasks by physical original identity and reject fo
     await symlink(other, originalAlias);
     expect(await service.list()).toEqual([]);
     await expect(service.get("task-a")).rejects.toThrow("Task task-a was not found");
+    await expect(service.trace("task-a")).rejects.toThrow("Task task-a was not found");
+    await expect(service.trace("task-b")).rejects.toThrow("Task task-b was not found");
     await expect(service.cancel("task-a")).rejects.toThrow("task task-a is missing");
     await expect(service.get("task-b")).rejects.toThrow("Task task-b was not found");
     await expect(service.cancel("task-b")).rejects.toThrow("task task-b is missing");

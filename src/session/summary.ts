@@ -23,6 +23,7 @@ import {
   checkResearchContinuation,
   researchContinuationFor,
 } from "../tasks/research-continuation.ts";
+import { type BoundedTaskTrace, renderBoundedTaskTrace } from "../tasks/trace.ts";
 import type { TandemAction } from "./actions.ts";
 import { describeResearchDisposition } from "./research-follow-up.ts";
 
@@ -32,6 +33,8 @@ export const DIGEST_MAX_CHARS = 8_000;
 export const ACTION_SUMMARY_MAX_TEXT = 220;
 export const ACTION_SUMMARY_MAX_ITEMS = 6;
 export const ACTION_RESULT_MAX_CHARS = 4_000;
+/** The structured trace retains only this many newest timeline events. */
+export const ACTION_TRACE_MAX_EVENTS = 16;
 /** A review with many comments runs long; it is still shown in full up to this bound. */
 const PR_REVIEW_RESULT_MAX_CHARS = 24_000;
 export const ACTION_FULL_RESULT_MAX_CHARS = 12_000;
@@ -1010,10 +1013,25 @@ function summarizePrReview(result: unknown): string {
   return boundedOutput(parts.join("\n"), PR_REVIEW_RESULT_MAX_CHARS);
 }
 
+function isBoundedTaskTrace(value: unknown): value is BoundedTaskTrace {
+  const record = summaryRecord(value);
+  return (
+    record !== undefined &&
+    Array.isArray(record.events) &&
+    summaryRecord(record.rollup) !== undefined &&
+    recordNumber(record, "omittedEvents") !== undefined
+  );
+}
+
 export function summarizeTandemActionValue(action: TandemAction["action"], value: unknown): string {
   if (action === "list" || action === "tick") {
     return isTaskArray(value)
       ? summarizeTaskList(action, value)
+      : boundedJson(value, ACTION_RESULT_MAX_CHARS);
+  }
+  if (action === "trace") {
+    return isBoundedTaskTrace(value)
+      ? renderBoundedTaskTrace(value, ACTION_RESULT_MAX_CHARS)
       : boundedJson(value, ACTION_RESULT_MAX_CHARS);
   }
   if (action === "onboard" || action === "setup") return summarizeOnboard(value, action);
