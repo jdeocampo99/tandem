@@ -17,7 +17,11 @@ a restart never has to rebuild workflow from chat.
    blockers surface as actionable coordinator notifications. Direct research takeover by the
    coordinator needs explicit user authorization.
 2. **Implementation needs approved scope.** The coordinator records concrete scope and waits for
-   explicit approval before dispatching an implementer.
+   explicit approval before dispatching an implementer. Before that it interviews the user in
+   rounds: one `ask` per round holding every decision the request and research report leave open,
+   each with a recommendation drawn from the report. Options beyond the request are labeled as such
+   with their concrete cost; facts go to research, never the user; a timed-out or auto-selected
+   answer is re-asked. The user confirms the settled decisions before the brief is drafted.
 3. **Validation is runner-owned.** Configured argv commands run against the exact task HEAD and
    produce durable evidence. A worker never claims a command ran unless the runner recorded it.
 4. **Review is independent.** The implementer is stopped while a fresh read-only reviewer examines

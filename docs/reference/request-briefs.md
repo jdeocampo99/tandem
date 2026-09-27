@@ -20,6 +20,9 @@ src/requests/plain-language.ts
   requires `summary` and a numbered `recommendedApproach`, but a brief saved before them has no
   summary and a one-paragraph approach, and `summary` joins the agreement digest only when present,
   so older briefs keep their digests and approval.
+- Key decisions hold only the user's interview answers and the request's own words. A research
+  recommendation the user has not agreed to is an open question, never a key decision or part of
+  the approach.
 - `acceptanceCriteria` is what validation or review can prove; `manualVerification` is what only a
   person can check. Tasks copy `manualVerification`; reviewers never judge it, implementers may
   report on it without blocking, and delivery renders it as an unticked PR checklist. It joins the
