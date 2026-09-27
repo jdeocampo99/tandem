@@ -36,6 +36,8 @@ export type BoardState = Readonly<{
   readonly poll: PrWatchPoll;
   /** Rollups of the tasks {@link finishedWithinWeek} accepted, across every project. */
   readonly finishedThisWeek: readonly TaskRollup[];
+  /** Task id to when its worker last made progress; tasks without a receipt are absent. */
+  readonly progressAt: ReadonlyMap<string, IsoTimestamp>;
 }>;
 
 export type BoardView = Readonly<{
@@ -204,6 +206,8 @@ export type RunningBoardRow = Omit<BoardRow, "cause" | "repoPath" | "since"> &
   }>;
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+/** A running task whose worker has made no progress for this long shows as idle. */
+const IDLE_MS = 5 * 60 * 1000;
 const NAME_CHARS = 30;
 const TEXT_CHARS = 80;
 
@@ -249,7 +253,7 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
     ],
     running: live
       .filter((task): task is RunningTaskRecord => !needsYou(task) && isRunningStage(task.stage))
-      .map((task) => runningRow(task, now)),
+      .map((task) => runningRow(task, now, state.progressAt.get(task.id))),
     pullRequests: pullRequests.rows.filter((row) => row.color !== "red"),
     finished: state.tasks.length - live.length,
     ...(state.finishedThisWeek.length === 0 ? {} : { week: weekSummary(state.finishedThisWeek) }),
@@ -462,7 +466,11 @@ function taskNeedsYouRow(
   };
 }
 
-function runningRow(task: RunningTaskRecord, now: IsoTimestamp): RunningBoardRow {
+function runningRow(
+  task: RunningTaskRecord,
+  now: IsoTimestamp,
+  progressAt: IsoTimestamp | undefined,
+): RunningBoardRow {
   const { mark, label } = RUNNING_LABELS[task.stage];
   return {
     key: `task:${task.id}:${task.stage}`,
@@ -471,7 +479,10 @@ function runningRow(task: RunningTaskRecord, now: IsoTimestamp): RunningBoardRow
     name: task.objective,
     mark,
     text: label,
-    since: elapsed(task.createdAt, now),
+    since:
+      progressAt !== undefined && Date.parse(now) - Date.parse(progressAt) > IDLE_MS
+        ? `idle ${elapsed(progressAt, now)}`
+        : elapsed(task.createdAt, now),
   };
 }
 
