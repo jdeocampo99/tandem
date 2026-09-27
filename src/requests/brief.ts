@@ -106,8 +106,13 @@ const LIST_FIELDS = [
 export const MAX_REQUEST_PLANNING_QUESTIONS = 8;
 const MAX_PLANNING_INTERVIEW_BYTES = 32 * 1024;
 const PLANNING_ANSWER_TEXT_FIELD = "planningAnswers";
+const RESERVED_OMP_ASK_OPTION_LABELS = new Set([
+  "Other (type your own)",
+  "Chat about this",
+  "Next →",
+]);
 
-/** Stages whose work is actually under way, and so must stop while a brief awaits reapproval. */
+/** Stages whose work must stop while its request cannot dispatch. */
 const PAUSABLE_STAGES: readonly TaskRecord["stage"][] = [
   "queued",
   "scouting",
@@ -246,6 +251,14 @@ export function checkedRequestPlanningInterview(value: unknown): RequestPlanning
     (questions.length === 0 || questions.some((question) => question.answer === undefined))
   ) {
     throw planningError("a complete interview must contain answered planning questions");
+  }
+  if (
+    record.status === "active" &&
+    questions.some(
+      (question, index) => index < questions.length - 1 && question.answer === undefined,
+    )
+  ) {
+    throw planningError("an active interview may leave only its final question unanswered");
   }
   const interview: RequestPlanningInterview = {
     schemaVersion: 1,
@@ -434,9 +447,13 @@ function checkedPlanningQuestion(value: unknown, field: string): RequestPlanning
     const description =
       choice.description === undefined
         ? undefined
-        : planningText(choice.description, `${field}.options[${index}].description`, 240);
+        : planningAskText(choice.description, `${field}.options[${index}].description`, 240);
+    const label = planningAskText(choice.label, `${field}.options[${index}].label`, 100);
+    if (RESERVED_OMP_ASK_OPTION_LABELS.has(label)) {
+      throw planningError(`${field}.options[${index}].label collides with an OMP reserved choice`);
+    }
     return {
-      label: planningText(choice.label, `${field}.options[${index}].label`, 100),
+      label,
       ...(description === undefined ? {} : { description }),
     };
   });
@@ -458,9 +475,9 @@ function checkedPlanningQuestion(value: unknown, field: string): RequestPlanning
     throw planningError(`${field}.answer must name one of its saved option labels`);
   }
   return {
-    id: planningText(record.id, `${field}.id`, 160),
-    context: planningText(record.context, `${field}.context`, 800),
-    question: planningText(record.question, `${field}.question`, 600),
+    id: planningAskText(record.id, `${field}.id`, 160),
+    context: planningAskText(record.context, `${field}.context`, 800),
+    question: planningAskText(record.question, `${field}.question`, 600),
     options,
     recommendedOption,
     ...(answer === undefined ? {} : { answer }),
@@ -482,6 +499,12 @@ function assertPlanningKeys(
   for (const key of Object.keys(record)) {
     if (!allowed.includes(key)) throw planningError(`${field} has no field ${key}`);
   }
+}
+
+function planningAskText(value: unknown, field: string, maximumBytes: number): string {
+  const text = planningText(value, field, maximumBytes);
+  if (text.includes("\r")) throw planningError(`${field} must not contain carriage returns`);
+  return text;
 }
 
 function planningText(value: unknown, field: string, maximumBytes: number): string {
@@ -756,12 +779,12 @@ export function decideRequestDispatch(record: RequestBriefRecord): RequestDispat
   };
 }
 
-/** The tasks a superseded brief must stop, named without touching any of them. */
-export function tasksAwaitingReapproval(
+/** The tasks a request prevents from dispatching, named without touching any of them. */
+export function tasksBlockedByRequest(
   record: RequestBriefRecord,
   tasks: readonly Pick<TaskRecord, "id" | "requestId" | "stage">[],
 ): readonly string[] {
-  if (requestApprovalState(record) !== "superseded") return [];
+  if (decideRequestDispatch(record).allowed) return [];
   return tasks
     .filter((task) => task.requestId === record.id && PAUSABLE_STAGES.includes(task.stage))
     .map((task) => task.id);

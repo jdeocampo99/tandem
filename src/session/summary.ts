@@ -13,6 +13,7 @@ import { type MemoryShowResult, renderMemoryShow } from "../memory/view.ts";
 import { CATCH_UP_MAX_CHARS } from "../memory/workstream.ts";
 import { PLAYBOOKS } from "../playbooks/catalog.ts";
 import { type PrWatchView, renderPrWatchView } from "../pr-watch/view.ts";
+import { checkedRequestPlanningInterview } from "../requests/brief.ts";
 import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import {
   REQUEST_RECEIPT_SCHEMA_VERSION,
@@ -979,45 +980,34 @@ function summarizeRequestBrief(value: unknown): string {
       `Paused until reapproved (${paused.length}): ${compactList(paused, ACTION_SUMMARY_MAX_ITEMS, 100)}`,
     );
   }
-  const interview = summaryRecord(record.planningInterview);
+  let interview: ReturnType<typeof checkedRequestPlanningInterview> | undefined;
+  if (record.planningInterview !== undefined) {
+    try {
+      interview = checkedRequestPlanningInterview(record.planningInterview);
+    } catch {
+      interview = undefined;
+    }
+  }
   if (interview !== undefined) {
-    const questions = Array.isArray(interview.questions) ? interview.questions : [];
-    const status = recordText(interview, "status") ?? "unknown";
-    lines.push(`Planning interview: ${status}; ${questions.length} saved question(s).`);
-    const pending = summaryRecord(questions.at(-1));
-    if (status === "active" && pending !== undefined && pending.answer === undefined) {
-      const id = recordText(pending, "id");
-      const context = recordText(pending, "context");
-      const questionText = recordText(pending, "question");
-      const options = Array.isArray(pending.options) ? pending.options : [];
-      const recommended = recordNumber(pending, "recommendedOption");
-      if (id !== undefined && context !== undefined && questionText !== undefined) {
-        lines.push(
-          `Resume the current question exactly, without adding another: ${JSON.stringify({
-            questions: [
-              {
-                id,
-                question: `${context}\n\n${questionText}`,
-                options,
-                recommended,
-              },
-            ],
-          })}`,
-        );
-      }
-    } else if (status === "active") {
+    const questions = interview.questions;
+    lines.push(`Planning interview: ${interview.status}; ${questions.length} saved question(s).`);
+    const pending = questions.at(-1);
+    if (interview.status === "active" && pending !== undefined && pending.answer === undefined) {
+      lines.push(
+        `Resume the current question exactly, without adding another: ${JSON.stringify(planningAskInput(pending))}`,
+      );
+    } else if (interview.status === "active") {
       lines.push("No question is pending; save the next question before asking it.");
     } else {
       lines.push(
         "The final scope still needs explicit user approval; a recommendation or timeout is not approval.",
       );
     }
-    for (const questionValue of questions) {
-      const question = summaryRecord(questionValue);
-      const answer = question === undefined ? undefined : summaryRecord(question.answer);
-      if (question === undefined || answer === undefined) continue;
+    for (const question of questions) {
+      const answer = question.answer;
+      if (answer === undefined) continue;
       lines.push(
-        `Saved answer to ${compactText(recordText(question, "question") ?? "planning question", 100)}: ${compactText(recordText(answer, "value") ?? "", 160)}${recordText(answer, "note") === undefined ? "" : `; note: ${compactText(recordText(answer, "note") ?? "", 80)}`}`,
+        `Saved answer to ${compactText(question.question, 100)}: ${compactText(answer.value, 160)}${answer.note === undefined ? "" : `; note: ${compactText(answer.note, 80)}`}`,
       );
     }
   }
@@ -1168,7 +1158,11 @@ function isQuietFinishedTask(task: TaskRecord): boolean {
   );
 }
 
-function appendPlanningInterviews(lines: string[], requests: readonly RequestBriefRecord[]): void {
+function appendPlanningInterviews(
+  lines: string[],
+  requests: readonly RequestBriefRecord[],
+  maximumCharacters: number,
+): void {
   const attention = requests.filter((record) => {
     const interview = record.planningInterview;
     if (interview === undefined || record.abandonedAt !== undefined) return false;
@@ -1180,36 +1174,62 @@ function appendPlanningInterviews(lines: string[], requests: readonly RequestBri
   });
   if (attention.length === 0) return;
   lines.push(`Planning interview(s) needing attention: ${attention.length}.`);
+
+  const entries: { id: string; lines: string[]; text: string }[] = [];
   for (const record of attention) {
     const interview = record.planningInterview;
     if (interview === undefined) continue;
-    lines.push(
+    const recordLines = [
       `- ${record.id}: ${compactText(record.draft.content.goal, 100)}; ${interview.status}.`,
-    );
+    ];
     for (const [index, question] of interview.questions.entries()) {
       if (question.answer !== undefined) {
-        lines.push(
+        recordLines.push(
           `  Saved decision ${index + 1}: ${compactText(question.question, 120)} → ${compactText(question.answer.value, 160)}${question.answer.note === undefined ? "" : `; note: ${compactText(question.answer.note, 100)}`}`,
         );
       }
     }
     if (interview.status === "complete") {
-      lines.push(
+      recordLines.push(
         "  Final scope is ready for review; request explicit confirmation, then use brief-approve. Never infer approval.",
       );
-      continue;
-    }
-    const pending = interview.questions.at(-1);
-    if (pending?.answer === undefined && pending !== undefined) {
-      lines.push(
-        `  Resume this saved question without changing it: ${JSON.stringify(planningAskInput(pending))}`,
-      );
     } else {
-      lines.push(
-        "  No question is pending. Save the next single planning question before asking, or complete only when the brief has no open questions.",
-      );
+      const pending = interview.questions.at(-1);
+      if (pending?.answer === undefined && pending !== undefined) {
+        recordLines.push(
+          `  Resume this saved question without changing it: ${JSON.stringify(planningAskInput(pending))}`,
+        );
+      } else {
+        recordLines.push(
+          "  No question is pending. Save the next single planning question before asking, or complete only when the brief has no open questions.",
+        );
+      }
+    }
+    entries.push({ id: record.id, lines: recordLines, text: recordLines.join("\n") });
+  }
+
+  const currentLength = lines.join("\n").length;
+  const allEntriesLength = entries.reduce((total, entry) => total + entry.text.length + 1, 0);
+  if (currentLength + allEntriesLength <= maximumCharacters) {
+    for (const entry of entries) lines.push(...entry.lines);
+    return;
+  }
+
+  const notice = (ids: readonly string[]) =>
+    `- ${ids.length} planning interview(s) exceed the digest budget; use brief-show for exact questions (${compactList(ids, 6, 60)}).`;
+  const allIds = entries.map((entry) => entry.id);
+  let available = maximumCharacters - currentLength - notice(allIds).length - 1;
+  const omitted: string[] = [];
+  for (const entry of entries) {
+    const entryLength = entry.text.length + 1;
+    if (entryLength <= available) {
+      lines.push(...entry.lines);
+      available -= entryLength;
+    } else {
+      omitted.push(entry.id);
     }
   }
+  lines.push(notice(omitted));
 }
 
 /**
@@ -1224,8 +1244,11 @@ export function buildDurableDigest(
   const lines = ["Tandem work right now:"];
   if (tasks.length === 0) lines.push("- No tasks.");
   else lines.push(`- ${tasks.length} task(s).`);
-  appendPlanningInterviews(lines, requests);
-  if (tasks.length === 0) return boundedOutput(lines.join("\n"), DIGEST_MAX_CHARS);
+  appendPlanningInterviews(lines, requests, DIGEST_MAX_CHARS);
+  const priority = lines.join("\n");
+  if (tasks.length === 0) return priority;
+
+  const taskLines: string[] = [];
   const ordered = prioritizeTasks(tasks);
   const active = ordered.filter((task) => !isQuietFinishedTask(task));
   const quiet = ordered.filter(isQuietFinishedTask);
@@ -1239,26 +1262,26 @@ export function buildDurableDigest(
     const continuation = researchContinuationFor(task);
     const continuationSuffix =
       continuation === undefined ? "" : `; after research: ${continuation.disposition}`;
-    lines.push(
+    taskLines.push(
       `- ${task.id}: ${task.stage}; ${compactText(task.objective)}${notificationSuffix}${blockerSuffix}${reportSuffix}${continuationSuffix}`,
     );
     const question = task.communication?.question;
     if (question !== undefined) {
-      lines.push(
+      taskLines.push(
         `  question ${compactText(question.id, 100)}: ${compactText(question.text, MAX_TASK_MESSAGE_CHARS)}`,
       );
       if (question.recommendation !== undefined)
-        lines.push(
+        taskLines.push(
           `  recommendation: ${compactText(question.recommendation, MAX_TASK_MESSAGE_CHARS)}`,
         );
     }
     if (!isTerminalTask(task)) {
-      lines.push(
+      taskLines.push(
         `  acceptance (${task.acceptanceCriteria.length}): ${compactList(task.acceptanceCriteria, 3, 110)}`,
       );
       const findings = currentReviewFindings(task);
       if (findings.length > 0) {
-        lines.push(
+        taskLines.push(
           `  findings (${findings.length}): ${findings
             .slice(0, 2)
             .map(
@@ -1271,12 +1294,14 @@ export function buildDurableDigest(
     }
   }
   if (active.length > DIGEST_MAX_TASKS)
-    lines.push(`- ${active.length - DIGEST_MAX_TASKS} more task(s) not shown.`);
+    taskLines.push(`- ${active.length - DIGEST_MAX_TASKS} more task(s) not shown.`);
   if (quiet.length > 0) {
     const named = quiet.map((task) => `${task.id} (${compactText(task.objective, 60)})`);
-    lines.push(
+    taskLines.push(
       `- Finished, nothing new (${quiet.length}): ${compactList(named, DIGEST_MAX_TASKS, 180)}`,
     );
   }
-  return boundedOutput(lines.join("\n"), DIGEST_MAX_CHARS);
+  const taskBudget = DIGEST_MAX_CHARS - priority.length - 1;
+  if (taskLines.length === 0 || taskBudget <= 0) return priority;
+  return `${priority}\n${boundedOutput(taskLines.join("\n"), taskBudget)}`;
 }

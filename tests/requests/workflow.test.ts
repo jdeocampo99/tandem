@@ -378,7 +378,12 @@ test("an active interview gates only its request and pauses stale work after a s
       researchTaskIds: ["scout-1"],
     });
     expect(active.approvalState).toBe("current");
-    expect(pauseCalls).toEqual([]);
+    expect(active.pausedTaskIds).toEqual(["task-owned"]);
+    expect(pauseCalls.map((call) => call.taskId)).toEqual(["task-owned"]);
+    setTasks([
+      { id: "task-owned", requestId: drafted.record.id, stage: "paused" } as TaskRecord,
+      { id: "task-other", requestId: "req-other", stage: "implementing" } as TaskRecord,
+    ]);
     await expect(
       workflow.dispatchDecisionForTask({ requestId: drafted.record.id }),
     ).resolves.toMatchObject({

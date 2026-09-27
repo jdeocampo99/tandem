@@ -29,7 +29,7 @@ import {
   requestBriefDigests,
   reviseRequestBriefRecord,
   singlePendingApprovalId,
-  tasksAwaitingReapproval,
+  tasksBlockedByRequest,
   withRequestReviewPane,
 } from "./brief.ts";
 import { renderRequestBriefMarkdown } from "./markdown.ts";
@@ -98,9 +98,8 @@ export class RequestBriefWorkflow {
   }
 
   /**
-   * Creates a request or advances its draft, then brings the owned projection up to date. An
-   * agreement change makes the prior approval non-current and pauses the work running under it
-   * before returning, so nothing keeps building against a brief the user has moved on from.
+   * Creates or revises a request, then projects its current draft. Work pauses whenever its request
+   * cannot dispatch, including while an active planning interview awaits a decision.
    *
    * A pause or pane failure leaves the new revision durable and propagates. Redrafting the same
    * content is a no-op on the record and retries the pause and the projection, so a refused pause
@@ -109,7 +108,7 @@ export class RequestBriefWorkflow {
   async draft(input: DraftRequestBriefInput): Promise<RequestBriefView> {
     const content = checkedRequestBriefContent(input.content);
     const created = await this.#draftRecord(input, content);
-    const pausedTaskIds = await this.#pauseWorkAwaitingReapproval(created);
+    const pausedTaskIds = await this.#pauseWorkForRequest(created);
     const projected = input.reviewPane ? await this.#project(created) : created;
     return this.#view(projected, pausedTaskIds);
   }
@@ -163,7 +162,7 @@ export class RequestBriefWorkflow {
         : await this.#deps.store.update(current.id, current.revision, (record) =>
             completeRequestPlanningInterview(record, this.#deps.clock()),
           );
-    const pausedTaskIds = await this.#pauseWorkAwaitingReapproval(completed);
+    const pausedTaskIds = await this.#pauseWorkForRequest(completed);
     return this.#view(completed, pausedTaskIds);
   }
 
@@ -232,6 +231,21 @@ export class RequestBriefWorkflow {
     return decision.allowed
       ? { allowed: true, reason: `approved brief revision ${decision.approvedRevision}` }
       : { allowed: false, reason: decision.reason };
+  }
+
+  /**
+   * Stops scheduler advancement for a request-bound task until its brief can dispatch.
+   * Pausing is ownership-safe through the injected task control.
+   */
+  async holdTaskForRequest(task: Pick<TaskRecord, "id" | "requestId" | "stage">): Promise<boolean> {
+    if (task.requestId === undefined) return false;
+    const record = await this.#require(task.requestId);
+    const decision = decideRequestDispatch(record);
+    if (decision.allowed) return false;
+    if (tasksBlockedByRequest(record, [task]).includes(task.id)) {
+      await this.#deps.pauseTask(task.id, this.#pauseReason(record));
+    }
+    return true;
   }
 
   /** Confirms a request exists before a task is bound to it, so no task points at nothing. */
@@ -318,17 +332,23 @@ export class RequestBriefWorkflow {
     });
   }
 
-  async #pauseWorkAwaitingReapproval(record: RequestBriefRecord): Promise<readonly string[]> {
-    const taskIds = tasksAwaitingReapproval(record, await this.#deps.listTasks());
+  async #pauseWorkForRequest(record: RequestBriefRecord): Promise<readonly string[]> {
+    const tasks = await this.#deps.listTasks();
+    const taskIds = tasksBlockedByRequest(record, tasks);
+    if (taskIds.length === 0 || decideRequestDispatch(record).allowed) return [];
     const paused: string[] = [];
     for (const taskId of taskIds) {
-      await this.#deps.pauseTask(
-        taskId,
-        `what was agreed for "${record.draft.content.goal}" changed after approval and needs reapproval`,
-      );
+      await this.#deps.pauseTask(taskId, this.#pauseReason(record));
       paused.push(taskId);
     }
     return paused;
+  }
+
+  #pauseReason(record: RequestBriefRecord): string {
+    const goal = record.draft.content.goal;
+    return record.planningInterview?.status === "active"
+      ? `Work on “${goal}” is paused until its planning interview is complete.`
+      : `Work on “${goal}” is paused until the current brief is approved.`;
   }
 
   async #project(record: RequestBriefRecord): Promise<RequestBriefRecord> {

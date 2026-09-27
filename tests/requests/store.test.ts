@@ -6,6 +6,7 @@ import type { Clock, IdFactory, RequestBriefContent } from "../../src/contracts.
 import {
   addRequestPlanningQuestion,
   approveRequestBriefRecord,
+  createRequestBriefRecord,
   recordRequestPlanningAnswer,
   reviseRequestBriefRecord,
 } from "../../src/requests/brief.ts";
@@ -154,6 +155,43 @@ test("a record whose id is not a request identity fails the read closed", () => 
       history: [],
     }),
   ).toThrow(/unsafe request id/u);
+});
+
+test("a stored active interview rejects an answered later question after an unanswered one", () => {
+  const record = createRequestBriefRecord(
+    { id: "req-order", repoPath: "/repo", content: content() },
+    NOW,
+  );
+  const malformed = {
+    ...record,
+    planningInterview: {
+      schemaVersion: 1,
+      status: "active",
+      researchTaskIds: ["scout-1"],
+      questions: [
+        {
+          id: "plan-1",
+          context: "First decision",
+          question: "Which path?",
+          options: [{ label: "Existing" }, { label: "New" }],
+          recommendedOption: 0,
+        },
+        {
+          id: "plan-2",
+          context: "Second decision",
+          question: "Which path?",
+          options: [{ label: "Existing" }, { label: "New" }],
+          recommendedOption: 0,
+          answer: { kind: "option", value: "Existing" },
+        },
+      ],
+    },
+  };
+
+  expect(() => parseRequestBriefRecord(malformed)).toThrow(StateCorruptionError);
+  expect(() => parseRequestBriefRecord(malformed)).toThrow(
+    /active interview may leave only its final question unanswered/u,
+  );
 });
 
 test("planning interview state and an explicit answer survive reopening the store", async () => {

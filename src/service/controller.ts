@@ -2363,6 +2363,11 @@ class TandemController {
       return;
     }
     const held = heldTaskStep(task, loadedRuntime);
+    if (held?.kind === "settle-stop-request" || held?.kind === "release-terminal-resources") {
+      await this.runHeldTaskStep(task, loadedRuntime, held);
+      return;
+    }
+    if (await this.#requests.holdTaskForRequest(task)) return;
     if (held !== undefined) {
       await this.runHeldTaskStep(task, loadedRuntime, held);
       return;

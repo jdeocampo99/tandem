@@ -1975,6 +1975,68 @@ test("approved task allocates a fresh endpoint and dispatches one worker", async
     expect(persisted.tasks[0]?.jobs[0]?.phase).toBe("running");
   });
 });
+test("an active planning interview blocks scheduler launch after an approved task resumes", async () => {
+  await withFixture(
+    { kind: "implementation", stage: "queued", attachLease: true },
+    async ({ home, task: fixtureTask, service, runnerState }) => {
+      const content = {
+        goal: "Make a compatibility decision before implementation continues",
+        scope: ["src"],
+        constraints: [],
+        nonGoals: [],
+        acceptanceCriteria: ["the approved compatibility contract is explicit"],
+        manualVerification: [],
+        recommendedApproach: "Preserve the current contract unless the user chooses otherwise",
+        keyDecisions: [],
+        openQuestions: ["Which compatibility contract should remain?"],
+        researchLinks: [],
+      };
+      const drafted = await service.draftRequestBrief({
+        repoPath: fixtureTask.repoPath,
+        content,
+        reviewPane: false,
+      });
+      const approved = await service.approveRequestBrief({
+        requestId: drafted.record.id,
+        briefRevision: drafted.record.draft.revision,
+        contentDigest: drafted.record.draft.contentDigest,
+      });
+      expect(approved.approvalState).toBe("current");
+
+      const store = createTaskStore({
+        directory: join(home, "tasks"),
+        clock: () => TIMESTAMP,
+        idFactory: () => "unused",
+      });
+      const current = await store.read(fixtureTask.id);
+      if (current === undefined) throw new Error("fixture task missing");
+      await store.update(current.id, current.revision, (record) => ({
+        ...record,
+        revision: record.revision + 1,
+        updatedAt: TIMESTAMP,
+        requestId: drafted.record.id,
+      }));
+      const interview = await service.draftRequestBrief({
+        repoPath: fixtureTask.repoPath,
+        requestId: drafted.record.id,
+        content,
+        reviewPane: false,
+        startPlanningInterview: true,
+        researchTaskIds: ["scout-1"],
+      });
+      expect(interview.approvalState).toBe("current");
+      expect(interview.pausedTaskIds).toEqual([fixtureTask.id]);
+
+      expect((await service.get(fixtureTask.id)).stage).toBe("paused");
+      expect((await service.resume(fixtureTask.id)).stage).toBe("queued");
+      await service.tick();
+
+      expect((await service.get(fixtureTask.id)).stage).toBe("paused");
+      expect(runnerState.launches).toBe(0);
+    },
+  );
+});
+
 async function approveWithWorktree(
   home: string,
   lease: WorktreeLease,

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { RequestBriefContent, RequestBriefRecord, TaskRecord } from "../../src/contracts.ts";
 import {
   abandonRequestBriefRecord,
+  addRequestPlanningQuestion,
   approveRequestBriefRecord,
   briefSkipsReview,
   checkedRequestBriefContent,
@@ -13,7 +14,7 @@ import {
   requestBriefDigests,
   reviseRequestBriefRecord,
   singlePendingApprovalId,
-  tasksAwaitingReapproval,
+  tasksBlockedByRequest,
 } from "../../src/requests/brief.ts";
 import { renderRequestBriefMarkdown } from "../../src/requests/markdown.ts";
 
@@ -39,6 +40,43 @@ function content(overrides: Partial<RequestBriefContent> = {}): RequestBriefCont
 function seeded(): RequestBriefRecord {
   return createRequestBriefRecord({ id: "req-1", repoPath: "/repo", content: content() }, NOW);
 }
+
+test("planning decisions exclude ask controls and carriage returns from persisted inputs", () => {
+  const active = createRequestBriefRecord(
+    {
+      id: "req-planning",
+      repoPath: "/repo",
+      content: content(),
+      planningInterview: {
+        schemaVersion: 1,
+        status: "active",
+        researchTaskIds: [],
+        questions: [],
+      },
+    },
+    NOW,
+  );
+  const input = (label: string) => ({
+    context: "Research found two paths.",
+    question: "Which path?",
+    options: [{ label: "Existing" }, { label }],
+    recommendedOption: 0,
+  });
+
+  for (const label of ["Other (type your own)", "Chat about this", "Next →"]) {
+    expect(() => addRequestPlanningQuestion(active, input(label), "plan-1", NOW)).toThrow(
+      RequestBriefError,
+    );
+  }
+  expect(() =>
+    addRequestPlanningQuestion(
+      active,
+      { ...input("New"), context: "Research found two paths.\r" },
+      "plan-2",
+      NOW,
+    ),
+  ).toThrow(RequestBriefError);
+});
 
 type BoundTask = Pick<TaskRecord, "id" | "requestId" | "stage">;
 
@@ -160,7 +198,7 @@ test("dispatch is refused until the current draft is approved and again once it 
   expect(decision.allowed === false ? decision.reason : "").toContain("needs reapproval");
 });
 
-test("only running work bound to a superseded brief is named for pausing", () => {
+test("only pausable work bound to a blocked request is named for pausing", () => {
   const record = seeded();
   const approved = approveRequestBriefRecord(
     record,
@@ -175,9 +213,19 @@ test("only running work bound to a superseded brief is named for pausing", () =>
     { id: "task-5", stage: "implementing" } satisfies BoundTask,
   ];
 
-  expect(tasksAwaitingReapproval(approved, tasks)).toEqual([]);
+  expect(tasksBlockedByRequest(approved, tasks)).toEqual([]);
+  const activeInterview = {
+    ...approved,
+    planningInterview: {
+      schemaVersion: 1 as const,
+      status: "active" as const,
+      researchTaskIds: [],
+      questions: [],
+    },
+  };
+  expect(tasksBlockedByRequest(activeInterview, tasks)).toEqual(["task-1"]);
   const superseded = reviseRequestBriefRecord(approved, content({ goal: "something else" }), LATER);
-  expect(tasksAwaitingReapproval(superseded, tasks)).toEqual(["task-1"]);
+  expect(tasksBlockedByRequest(superseded, tasks)).toEqual(["task-1"]);
 });
 
 test("brief content is validated at the boundary rather than stored as given", () => {

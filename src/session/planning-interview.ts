@@ -40,24 +40,33 @@ export function planningAskInput(question: RequestPlanningQuestion): PlanningAsk
   };
 }
 
-/** Correlates one saved pending question; unrelated asks pass only when none is pending. */
+/** Matches a saved question and blocks unmanaged asks while an interview is active. */
 export function planningAskCall(
   input: unknown,
   requests: readonly RequestBriefRecord[],
 ): PlanningAskCall {
+  const hasActiveInterview = requests.some(
+    (record) => record.abandonedAt === undefined && record.planningInterview?.status === "active",
+  );
   const hasPending = requests.some((record) => {
     const interview = record.planningInterview;
     const last = interview?.questions.at(-1);
-    return interview?.status === "active" && last !== undefined && last.answer === undefined;
+    return (
+      record.abandonedAt === undefined &&
+      interview?.status === "active" &&
+      last !== undefined &&
+      last.answer === undefined
+    );
   });
   const refuseUnmanaged = (): PlanningAskCall =>
-    hasPending
-      ? {
+    !hasActiveInterview
+      ? { kind: "unmanaged" }
+      : {
           kind: "refused",
-          reason:
-            "A saved planning question is pending; ask it exactly before asking anything else.",
-        }
-      : { kind: "unmanaged" };
+          reason: hasPending
+            ? "A saved planning question is pending; ask it exactly before asking anything else."
+            : "A planning interview is active without a pending question; save its next question or complete it before using OMP ask.",
+        };
   const questions = asRecord(input)?.questions;
   if (!Array.isArray(questions)) return refuseUnmanaged();
   const ids = questions.map((value) => asRecord(value)?.id).filter(isText);
@@ -78,6 +87,7 @@ export function planningAskCall(
   const interview = match.record.planningInterview;
   const pending = interview?.questions.at(-1);
   if (
+    match.record.abandonedAt !== undefined ||
     interview?.status !== "active" ||
     pending?.id !== match.question.id ||
     pending.answer !== undefined

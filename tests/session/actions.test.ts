@@ -23,7 +23,11 @@ import {
 } from "../../src/session/actions.ts";
 import type { SessionEffect } from "../../src/session/events.ts";
 import { planningAskInput } from "../../src/session/planning-interview.ts";
-import { buildDurableDigest, summarizeTandemActionValue } from "../../src/session/summary.ts";
+import {
+  DIGEST_MAX_CHARS,
+  buildDurableDigest,
+  summarizeTandemActionValue,
+} from "../../src/session/summary.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
 import { models, policyConfig, task } from "./fixtures.ts";
@@ -952,6 +956,12 @@ test("durable digest resumes the saved planning question and never promotes an a
   const activeDigest = buildDurableDigest([], [asked]);
   expect(activeDigest).toContain(JSON.stringify(planningAskInput(question)));
 
+  const briefSummary = summarizeTandemActionValue("brief-show", {
+    record: asked,
+    approvalState: "unapproved",
+    pausedTaskIds: [],
+  });
+  expect(briefSummary).toContain(JSON.stringify(planningAskInput(question)));
   const answered = recordRequestPlanningAnswer(
     asked,
     question.id,
@@ -977,6 +987,81 @@ test("durable digest resumes the saved planning question and never promotes an a
     "Final scope is ready for review; request explicit confirmation, then use brief-approve. Never infer approval.",
   );
   expect(completed.approval).toBeUndefined();
+});
+
+test("the durable digest keeps planning questions whole before task detail", () => {
+  const requests = Array.from({ length: 4 }, (_, index) => {
+    const record = createRequestBriefRecord(
+      {
+        id: `req-digest-${index}`,
+        repoPath: "/repo",
+        content: {
+          goal: `Keep decision ${index} durable`,
+          scope: ["src"],
+          constraints: [],
+          nonGoals: [],
+          acceptanceCriteria: ["the selected contract stays explicit"],
+          manualVerification: [],
+          recommendedApproach: "Preserve the durable answer",
+          keyDecisions: [],
+          openQuestions: [`Which path ${index}?`],
+          researchLinks: [],
+        },
+        planningInterview: {
+          schemaVersion: 1,
+          status: "active",
+          researchTaskIds: [`scout-${index}`],
+          questions: [],
+        },
+      },
+      "2030-01-01T00:00:00.000Z",
+    );
+    return addRequestPlanningQuestion(
+      record,
+      {
+        context: "c".repeat(800),
+        question: `q${index}${"q".repeat(598)}`,
+        options: [
+          { label: "Existing", description: "e".repeat(240) },
+          { label: "New", description: "n".repeat(240) },
+          { label: "Hybrid", description: "h".repeat(240) },
+        ],
+        recommendedOption: 0,
+      },
+      `plan-${index}`,
+      "2030-01-01T00:00:00.000Z",
+    );
+  });
+  const taskObjective = "Task detail must yield to complete planning decisions";
+  const digest = buildDurableDigest([task({ objective: taskObjective })], requests);
+  let included = 0;
+  let omitted = 0;
+  const includedQuestionPositions: number[] = [];
+
+  expect(digest.length).toBeLessThanOrEqual(DIGEST_MAX_CHARS);
+  expect(digest).toContain("brief-show for exact questions");
+  for (const [index, request] of requests.entries()) {
+    const question = request.planningInterview?.questions.at(-1);
+    if (question === undefined) throw new Error("planning question was not saved");
+    const payload = JSON.stringify(planningAskInput(question));
+    const position = digest.indexOf(payload);
+    if (position >= 0) {
+      included += 1;
+      includedQuestionPositions.push(position);
+    } else {
+      omitted += 1;
+      expect(digest).toContain(`req-digest-${index}`);
+      expect(digest).not.toContain(`q${index}${"q".repeat(40)}`);
+    }
+  }
+  expect(included).toBeGreaterThan(0);
+  expect(omitted).toBeGreaterThan(0);
+  const taskPosition = digest.indexOf(taskObjective);
+  if (taskPosition >= 0) {
+    for (const questionPosition of includedQuestionPositions) {
+      expect(questionPosition).toBeLessThan(taskPosition);
+    }
+  }
 });
 
 test("brief-question returns the exact ask payload for its saved request decision", async () => {

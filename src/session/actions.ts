@@ -17,6 +17,7 @@ import type { CreateTaskRequest, PullRequestInput, TandemService } from "../serv
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
 import type { SessionEffect, SessionHost, ToolOutcome } from "./events.ts";
+import { planningAskInput } from "./planning-interview.ts";
 import {
   ACTION_FULL_RESULT_MAX_CHARS,
   ACTION_RESULT_MAX_CHARS,
@@ -653,16 +654,7 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     return actionResult(
       {
         requestId: record.id,
-        askInput: {
-          questions: [
-            {
-              id: question.id,
-              question: `${question.context}\n\n${question.question}`,
-              options: question.options,
-              recommended: question.recommendedOption,
-            },
-          ],
-        },
+        askInput: planningAskInput(question),
       },
       action.action,
     );

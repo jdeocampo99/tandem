@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import type { RequestPlanningQuestion } from "../../src/contracts.ts";
-import { addRequestPlanningQuestion, createRequestBriefRecord } from "../../src/requests/brief.ts";
+import {
+  addRequestPlanningQuestion,
+  createRequestBriefRecord,
+  recordRequestPlanningAnswer,
+} from "../../src/requests/brief.ts";
 import {
   explicitPlanningAnswer,
   planningAskCall,
@@ -10,6 +14,7 @@ import {
 const NOW = "2030-01-01T00:00:00.000Z";
 
 function pendingInterview(): Readonly<{
+  readonly started: ReturnType<typeof createRequestBriefRecord>;
   readonly record: ReturnType<typeof createRequestBriefRecord>;
   readonly question: RequestPlanningQuestion;
 }> {
@@ -51,8 +56,22 @@ function pendingInterview(): Readonly<{
   );
   const question = record.planningInterview?.questions[0];
   if (question === undefined) throw new Error("planning question was not saved");
-  return { record, question };
+  return { started, record, question };
 }
+
+test("an active interview refuses unmatched asks before a question and after its answer", () => {
+  const { started, record, question } = pendingInterview();
+  const answered = recordRequestPlanningAnswer(
+    record,
+    question.id,
+    { kind: "option", value: "Existing" },
+    NOW,
+  ).record;
+  const staleAsk = planningAskInput(question);
+
+  expect(planningAskCall(staleAsk, [started])).toMatchObject({ kind: "refused" });
+  expect(planningAskCall(staleAsk, [answered])).toMatchObject({ kind: "refused" });
+});
 
 test("a pending decision accepts only its exact single saved ask call", () => {
   const { record, question } = pendingInterview();
