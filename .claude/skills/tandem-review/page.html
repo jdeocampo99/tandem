@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tandem health</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --card: #ffffff;
+    --text: #1c1c1e;
+    --muted: #6b6b70;
+    --border: #e4e4e1;
+    --accent: #3a6df0;
+    --accent-weak: #eaf0ff;
+    --green-bg: #e4f5e9;
+    --green-fg: #206b3c;
+    --amber-bg: #fdf1dc;
+    --amber-fg: #8a5a10;
+    --grey-bg: #ececea;
+    --grey-fg: #55555a;
+    --bar: #c9d6fb;
+    --bar-stripe: repeating-linear-gradient(45deg, #d8d8d5, #d8d8d5 6px, #ececea 6px, #ececea 12px);
+    --quote-bg: #f2f2f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --card: #202124;
+      --text: #ececec;
+      --muted: #9a9a9e;
+      --border: #34353a;
+      --accent: #7ea1ff;
+      --accent-weak: #202a44;
+      --green-bg: #163627;
+      --green-fg: #7fd9a0;
+      --amber-bg: #3a2d13;
+      --amber-fg: #e0b45e;
+      --grey-bg: #2b2c30;
+      --grey-fg: #b6b6ba;
+      --bar: #33417a;
+      --bar-stripe: repeating-linear-gradient(45deg, #35363a, #35363a 6px, #2b2c30 6px, #2b2c30 12px);
+      --quote-bg: #26272b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.45;
+  }
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 28px 16px 60px;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1rem; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .meta { margin: 0 0 10px; color: var(--muted); font-size: 0.9rem; }
+  .verdict { margin: 0 0 22px; font-size: 1.02rem; }
+  section { margin-bottom: 30px; }
+
+  .tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .tile {
+    flex: 1 1 130px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 12px 10px;
+    position: relative;
+  }
+  .tile .num { font-size: 1.5rem; font-weight: 650; }
+  .tile .label { font-size: 0.78rem; margin-top: 2px; }
+  .tile .caption { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+  .baseline-tag {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 0.6rem;
+    color: var(--muted);
+    background: var(--grey-bg);
+    padding: 1px 6px;
+    border-radius: 8px;
+  }
+
+  .problem-row { margin-bottom: 12px; }
+  .problem-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 0.9rem;
+  }
+  .problem-name { flex: 1; }
+  .you-badge {
+    display: inline-block;
+    font-size: 0.62rem;
+    color: var(--accent);
+    background: var(--accent-weak);
+    padding: 0 5px;
+    border-radius: 6px;
+    margin-left: 5px;
+    vertical-align: middle;
+  }
+  .problem-count { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bar-track { height: 7px; border-radius: 4px; background: var(--grey-bg); margin: 5px 0 4px; overflow: hidden; }
+  .bar-fill { height: 100%; background: var(--bar); border-radius: 4px; }
+  .bar-fill.striped { background: var(--bar-stripe); width: 34% !important; }
+  .tag {
+    display: inline-block;
+    font-size: 0.68rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+  .tag.fixed { background: var(--green-bg); color: var(--green-fg); }
+  .tag.incident { background: var(--grey-bg); color: var(--grey-fg); }
+  .tag.recurring { background: var(--amber-bg); color: var(--amber-fg); }
+  .muted-line { color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+  }
+  .card h3 { font-size: 0.98rem; margin: 0 0 5px; }
+  .card .facts { font-size: 0.8rem; color: var(--muted); margin-bottom: 8px; }
+  .card .note { font-size: 0.88rem; margin-bottom: 8px; }
+  blockquote {
+    margin: 0 0 10px;
+    padding: 6px 10px;
+    background: var(--quote-bg);
+    border-left: 3px solid var(--border);
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-style: italic;
+  }
+  .card-actions { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; align-items: center; }
+  .card-actions button {
+    font-size: 0.78rem;
+    padding: 5px 12px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .card-actions button.active-keep { background: var(--green-bg); color: var(--green-fg); border-color: transparent; }
+  .card-actions button.active-reject { background: var(--amber-bg); color: var(--amber-fg); border-color: transparent; }
+  .card-actions button.active-edit { background: var(--accent-weak); color: var(--accent); border-color: transparent; }
+  .card-actions .saved { font-size: 0.7rem; color: var(--muted); }
+  .edit-box { width: 100%; min-height: 54px; margin-top: 6px; font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical; }
+  .edit-box[hidden] { display: none; }
+  details.full-trace { font-size: 0.8rem; margin-top: 4px; }
+  details.full-trace summary { cursor: pointer; color: var(--muted); }
+  details.full-trace .trace-body { margin-top: 6px; color: var(--muted); }
+  details.full-trace dl { margin: 0; }
+  details.full-trace dt { font-weight: 600; color: var(--text); margin-top: 4px; }
+  details.full-trace dd { margin: 0 0 2px; }
+
+  details.collapsed-list {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 16px;
+    margin-bottom: 10px;
+  }
+  details.collapsed-list summary { cursor: pointer; font-size: 0.9rem; }
+  details.collapsed-list ul { margin: 8px 0 2px; padding-left: 18px; font-size: 0.85rem; }
+  details.collapsed-list li { margin-bottom: 5px; }
+  details.collapsed-list li .reason { color: var(--muted); }
+
+  footer { border-top: 1px solid var(--border); padding-top: 16px; }
+  footer button {
+    font-size: 0.82rem;
+    padding: 7px 14px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+  }
+  #export-area { width: 100%; min-height: 90px; margin-top: 8px; font: 0.75rem/1.4 monospace; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--text); }
+  #export-area[hidden] { display: none; }
+  #export-status { font-size: 0.72rem; color: var(--muted); margin-left: 8px; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+
+<script type="application/json" id="batch">__BATCH__</script>
+<script>
+(function () {
+  "use strict";
+  var STORE_KEY = "tandem-health-decisions-v1";
+  var payload = JSON.parse(document.getElementById("batch").textContent);
+  var batch = payload.batch;
+  var deltas = payload.deltas;
+  var app = document.getElementById("app");
+
+  function el(tag, className, text) {
+    var e = document.createElement(tag);
+    if (className) e.className = className;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+
+  function append(parent) {
+    for (var i = 1; i < arguments.length; i++) parent.appendChild(arguments[i]);
+    return parent;
+  }
+
+  function round(n) {
+    return Math.round(n);
+  }
+
+  function monthYear(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString("en-US", { month: "short", year: "numeric" });
+  }
+
+  // ---- header ----
+  var header = el("header");
+  append(header, el("h1", null, "Tandem health"));
+  var baseline = Object.keys(deltas).every(function (k) { return deltas[k].kind === "baseline"; });
+  var metaText = batch.taskCount + " tasks · " + monthYear(batch.ranAt) + " · " +
+    (baseline ? "first run (baseline)" : "since " + batch.since);
+  append(header, el("p", "meta", metaText));
+  append(header, el("p", "verdict", batch.verdict));
+  app.appendChild(header);
+
+  // ---- tiles ----
+  function tileBadge(delta) {
+    return el("span", "baseline-tag", delta.kind === "baseline" ? "baseline" : delta.text);
+  }
+  function tile(delta, num, label, caption) {
+    var t = el("div", "tile");
+    append(t, tileBadge(delta), el("div", "num", num), el("div", "label", label), el("div", "caption", caption));
+    return t;
+  }
+  var m = batch.metrics;
+  var tiles = el("section", "tiles");
+  var fp = m.firstPassReview;
+  var fpPct = fp.den === 0 ? null : round((fp.num / fp.den) * 100);
+  tiles.appendChild(
+    tile(deltas.firstPassReview, fpPct === null ? "—" : fpPct + "%", "First-pass review",
+      fp.num + " of " + fp.den + " passed round 1")
+  );
+  var totalRounds = round(m.fixRoundsPerTask * batch.taskCount);
+  tiles.appendChild(
+    tile(deltas.fixRoundsPerTask, m.fixRoundsPerTask.toFixed(1), "Fix rounds / task",
+      totalRounds + " rounds across " + batch.taskCount + " tasks")
+  );
+  tiles.appendChild(
+    tile(deltas.merged, String(m.merged.num), "Merged", "of " + m.merged.den + " implementation tasks")
+  );
+  tiles.appendChild(
+    tile(deltas.offScopeFiles, m.offScopeFiles === null ? "—" : String(m.offScopeFiles),
+      "Off-scope files", m.offScopeFiles === null ? "not measured yet" : "this batch")
+  );
+  var bn = m.briefNoRate;
+  tiles.appendChild(
+    tile(deltas.briefNoRate, bn === null ? "—" : round((bn.num / bn.den) * 100) + "%", "Brief “no” rate",
+      bn === null ? "not asked yet" : bn.num + " of " + bn.den + " briefs said no")
+  );
+  app.appendChild(tiles);
+
+  // ---- problems ----
+  var problemsSection = el("section", "problems");
+  append(problemsSection, el("h2", null, "Top problems"));
+  var maxCount = batch.problems.reduce(function (max, p) { return p.count !== null && p.count > max ? p.count : max; }, 0);
+  var tagClassByStatus = {
+    "new": "recurring",
+    "recurring": "recurring",
+    "fixed": "fixed",
+    "fix merged, unverified": "fixed",
+    "one incident": "incident",
+  };
+  batch.problems.slice(0, 5).forEach(function (p) {
+    var row = el("div", "problem-row");
+    var head = el("div", "problem-head");
+    var name = el("span", "problem-name", p.name);
+    if (p.source === "you") name.appendChild(el("span", "you-badge", "you"));
+    var count = el("span", "problem-count", p.count === null ? "user-reported" : String(p.count));
+    append(head, name, count);
+    var barTrack = el("div", "bar-track");
+    var fill = el("div", "bar-fill");
+    if (p.count === null) {
+      fill.classList.add("striped");
+    } else {
+      fill.style.width = (maxCount === 0 ? 0 : round((p.count / maxCount) * 100)) + "%";
+    }
+    barTrack.appendChild(fill);
+    var tag = el("span", "tag " + (tagClassByStatus[p.status] || "recurring"), p.note || p.status);
+    append(row, head, barTrack, tag);
+    problemsSection.appendChild(row);
+  });
+  if (batch.alsoSeen) problemsSection.appendChild(el("p", "muted-line", "Also seen once: " + batch.alsoSeen));
+  app.appendChild(problemsSection);
+
+  // ---- needs your call ----
+  var decisions = loadDecisions();
+  var cardsSection = el("section", "needs-call");
+  append(cardsSection, el("h2", null, "Needs your call"));
+  batch.cards.slice(0, 4).forEach(function (c) {
+    var card = el("div", "card");
+    card.setAttribute("data-task", c.taskId);
+    append(card, el("h3", null, c.title));
+    append(card, el("div", "facts", c.facts.join(" · ")));
+    append(card, el("div", "note", c.note));
+    var quote = el("blockquote", null, "“" + c.quote + "”");
+    card.appendChild(quote);
+
+    var actions = el("div", "card-actions");
+    ["keep", "reject", "edit"].forEach(function (action) {
+      var btn = el("button", null, action.charAt(0).toUpperCase() + action.slice(1));
+      btn.setAttribute("data-action", action);
+      actions.appendChild(btn);
+    });
+    var saved = el("span", "saved");
+    actions.appendChild(saved);
+    card.appendChild(actions);
+
+    var box = el("textarea", "edit-box");
+    box.hidden = true;
+    box.placeholder = "Add a note...";
+    card.appendChild(box);
+
+    var details = el("details", "full-trace");
+    var summary = el("summary", null, "▸ full trace");
+    details.appendChild(summary);
+    var body = el("div", "trace-body");
+    var dl = el("dl");
+    Object.keys(c.trace).forEach(function (key) {
+      append(dl, el("dt", null, key), el("dd", null, c.trace[key]));
+    });
+    body.appendChild(dl);
+    details.appendChild(body);
+    card.appendChild(details);
+
+    cardsSection.appendChild(card);
+    applyCardState(card, decisions);
+    wireCard(card, decisions);
+  });
+  app.appendChild(cardsSection);
+
+  // ---- no problem found ----
+  var noProblemDetails = el("details", "collapsed-list");
+  append(noProblemDetails, el("summary", null, "▸ " + batch.noProblem.length + " tasks with no problem found"));
+  var noProblemList = el("ul");
+  batch.noProblem.forEach(function (item) {
+    var li = el("li");
+    append(li, el("strong", null, item.title), document.createTextNode(" "), el("span", "reason", "— " + item.reason));
+    noProblemList.appendChild(li);
+  });
+  noProblemDetails.appendChild(noProblemList);
+  app.appendChild(noProblemDetails);
+
+  // ---- folded groups ----
+  batch.folded.forEach(function (group) {
+    var details = el("details", "collapsed-list");
+    append(details, el("summary", null, "▸ " + group.label));
+    var list = el("ul");
+    group.items.forEach(function (item) {
+      var li = el("li");
+      append(li, el("strong", null, item.title), document.createTextNode(" "), el("span", "reason", "— " + item.reason));
+      list.appendChild(li);
+    });
+    details.appendChild(list);
+    app.appendChild(details);
+  });
+
+  // ---- footer / export ----
+  var footer = el("footer");
+  var exportBtn = el("button", null, "Export decisions");
+  exportBtn.id = "export-btn";
+  var exportStatus = el("span", null, "");
+  exportStatus.id = "export-status";
+  var exportArea = el("textarea");
+  exportArea.id = "export-area";
+  exportArea.hidden = true;
+  exportArea.readOnly = true;
+  append(footer, exportBtn, exportStatus, exportArea);
+  app.appendChild(footer);
+
+  exportBtn.addEventListener("click", function () {
+    var json = JSON.stringify(loadDecisions(), null, 2);
+    exportArea.value = json;
+    exportArea.hidden = false;
+    try {
+      navigator.clipboard.writeText(json);
+      exportStatus.textContent = "copied to clipboard";
+    } catch (e) {
+      exportStatus.textContent = "shown below (copy failed)";
+    }
+  });
+
+  // ---- decision storage (per-viewer only; exported decisions become the next baseline) ----
+  function loadDecisions() {
+    try {
+      var raw = localStorage.getItem(STORE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveDecisions(d) {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(d));
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function applyCardState(card, decisions) {
+    var id = card.getAttribute("data-task");
+    var entry = decisions[id];
+    var buttons = card.querySelectorAll(".card-actions button");
+    buttons.forEach(function (b) {
+      b.classList.remove("active-keep", "active-reject", "active-edit");
+    });
+    var savedEl = card.querySelector(".saved");
+    var box = card.querySelector(".edit-box");
+    if (!entry) {
+      if (savedEl) savedEl.textContent = "";
+      return;
+    }
+    if (entry.decision === "keep") {
+      card.querySelector('[data-action="keep"]').classList.add("active-keep");
+    } else if (entry.decision === "reject") {
+      card.querySelector('[data-action="reject"]').classList.add("active-reject");
+    } else if (entry.decision === "edit") {
+      card.querySelector('[data-action="edit"]').classList.add("active-edit");
+      if (box) {
+        box.hidden = false;
+        box.value = entry.note || "";
+      }
+    }
+    if (savedEl) savedEl.textContent = entry.decision ? "saved" : "";
+  }
+
+  function wireCard(card, decisions) {
+    var id = card.getAttribute("data-task");
+    var box = card.querySelector(".edit-box");
+    card.querySelectorAll(".card-actions button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var action = btn.getAttribute("data-action");
+        if (action === "edit") {
+          box.hidden = !box.hidden;
+          decisions[id] = { decision: "edit", note: box.value || "" };
+        } else {
+          box.hidden = true;
+          decisions[id] = { decision: action, note: (decisions[id] && decisions[id].note) || "" };
+        }
+        saveDecisions(decisions);
+        applyCardState(card, decisions);
+      });
+    });
+    if (box) {
+      box.addEventListener("input", function () {
+        decisions[id] = { decision: "edit", note: box.value };
+        saveDecisions(decisions);
+      });
+    }
+  }
+})();
+</script>
+
+</body>
+</html>
