@@ -24,7 +24,7 @@ import {
   openPresentation,
   pollPresentation,
 } from "../../src/adapters/lavish.ts";
-import { buildOmpArgv, listOmpModels, validateModel } from "../../src/adapters/omp.ts";
+import { listOmpModels, validateModel } from "../../src/adapters/omp.ts";
 import {
   AdapterProtocolError,
   ApprovalRequiredError,
@@ -200,25 +200,10 @@ test("refuses a split that lands outside the anchor's tab", async () => {
   ).rejects.toBeInstanceOf(EndpointOwnershipError);
 });
 
-test("sanitizes task branches and builds the exact OMP invocation", () => {
+test("sanitizes task branches", () => {
   expect(sanitizeTaskBranchName("  Fix: pane / ownership  ")).toBe("tandem/Fix-pane-ownership");
-  expect(
-    buildOmpArgv({
-      model: { model: "openai-codex/gpt-5.6-luna", thinking: "max" },
-      prompt: "Implement the approved scope.",
-    }),
-  ).toEqual([
-    "omp",
-    "--model",
-    "openai-codex/gpt-5.6-luna",
-    "--thinking",
-    "max",
-    "--no-prewalk",
-    "--no-extensions",
-    "--no-title",
-    "Implement the approved scope.",
-  ]);
 });
+
 test("labels name the task by its short title", () => {
   expect(
     taskWorkspaceLabel({ title: "fix paid access", objective: "Investigate why paid users…" }),

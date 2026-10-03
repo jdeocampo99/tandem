@@ -63,11 +63,6 @@ export type ValidateModelInput = Readonly<{
   model: ModelSpec;
 }>;
 
-export type OmpArgvInput = Readonly<{
-  model: ModelSpec;
-  prompt?: string;
-}>;
-
 function optionalBoolean(
   value: unknown,
   field: string,
@@ -305,25 +300,6 @@ export async function validateModel(
     );
   }
   return observed;
-}
-
-export function buildOmpArgv(input: OmpArgvInput): readonly string[] {
-  checkedText(input.model.model, "model.model");
-  if (!isThinkingLevel(input.model.thinking)) {
-    throw new TypeError(`unsupported model thinking level ${input.model.thinking}`);
-  }
-  const argv = [
-    "omp",
-    "--model",
-    input.model.model,
-    "--thinking",
-    input.model.thinking,
-    "--no-prewalk",
-    "--no-extensions",
-    "--no-title",
-  ];
-  if (input.prompt !== undefined) argv.push(input.prompt);
-  return argv;
 }
 
 /** Names of the MCP servers OMP would load in this checkout, from project and user config. */
