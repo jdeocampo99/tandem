@@ -1,4 +1,3 @@
-import { validateModel } from "../adapters/omp.ts";
 import type { TandemBoundaryEnvironment, TandemEnvironmentSource } from "../config/environment.ts";
 import type { CommandRequest, CommandResult, CommandRunner, ModelSpec } from "../contracts.ts";
 import {
@@ -10,6 +9,7 @@ import {
 import { renestWorkspaces } from "../coordinator/renest.ts";
 import { restartCoordinator } from "../coordinator/restart.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
+import { validateModel } from "../harness/omp/adapter.ts";
 import type { TandemService } from "../service/controller.ts";
 import {
   type CliCommand,

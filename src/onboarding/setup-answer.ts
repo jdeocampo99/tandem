@@ -1,6 +1,6 @@
-import type { OmpModelRecord } from "../adapters/omp.ts";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import { type AgentRole, MODEL_ROLE_ORDER, type ModelSpec, THINKING_LEVELS } from "../contracts.ts";
+import type { OmpModelRecord } from "../harness/omp/adapter.ts";
 import { SETUP_ROLE_COPY } from "./setup-view.ts";
 
 /**

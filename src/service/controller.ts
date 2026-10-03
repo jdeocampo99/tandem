@@ -5,8 +5,6 @@ import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
 import { closeEndpoint, showNotification } from "../adapters/herdr.ts";
-import type { OmpModelRecord } from "../adapters/omp.ts";
-import { listOmpMcpServers, listOmpModels } from "../adapters/omp.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
 import { readBoard } from "../board/read.ts";
@@ -67,6 +65,8 @@ import {
   publishReviewedTask,
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
+import type { OmpModelRecord } from "../harness/omp/adapter.ts";
+import { listOmpMcpServers, listOmpModels } from "../harness/omp/adapter.ts";
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
 import type { MemoryShowResult } from "../memory/view.ts";
 import type { OnboardingFacts } from "../onboarding/checklist.ts";

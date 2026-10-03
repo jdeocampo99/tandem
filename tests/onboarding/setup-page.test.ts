@@ -2,9 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { OmpModelRecord } from "../../src/adapters/omp.ts";
 import type { HomeSettings } from "../../src/config/home-settings.ts";
 import type { CommandRequest, CommandResult } from "../../src/contracts.ts";
+import type { OmpModelRecord } from "../../src/harness/omp/adapter.ts";
 import { type SetupPageDependencies, SetupPageWorkflow } from "../../src/onboarding/setup-page.ts";
 import { findCheckoutsByName } from "../../src/repos/locate.ts";
 

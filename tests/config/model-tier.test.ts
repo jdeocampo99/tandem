@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import type { OmpIncludedAllowance, OmpModelRecord } from "../../src/adapters/omp.ts";
 import {
   compareModelTier,
   lookupModelTierEvidence,
   type ModelTierEvidence,
 } from "../../src/config/model-tier.ts";
 import type { ThinkingLevel } from "../../src/contracts.ts";
+import type { OmpIncludedAllowance, OmpModelRecord } from "../../src/harness/omp/adapter.ts";
 
 type CatalogueOverrides = Readonly<{
   readonly thinking?: readonly ThinkingLevel[];

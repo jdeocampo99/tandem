@@ -43,7 +43,7 @@ import {
   retireCoordinatorWorkspace,
 } from "./workspace.ts";
 
-const DEFAULT_COORDINATOR_CONFIG = "worker-config.yml";
+const DEFAULT_COORDINATOR_CONFIG = "harness/omp/worker-config.yml";
 const HERDR_READY_ATTEMPTS = 40;
 const HERDR_READY_DELAY_MS = 250;
 /** How long a coordinator shell Herdr just restored gets to finish starting before it counts as busy. */
@@ -169,7 +169,7 @@ export function coordinatorFiles(
   options: CliOptions,
 ): Readonly<{ extensionPath: string; configPath: string }> {
   const sourceDirectory = dirname(fileURLToPath(import.meta.url));
-  const defaultExtensionPath = join(sourceDirectory, "..", "extension.ts");
+  const defaultExtensionPath = join(sourceDirectory, "..", "harness", "omp", "extension.ts");
   const defaultConfigPath = join(sourceDirectory, "..", DEFAULT_COORDINATOR_CONFIG);
   const extensionPath = options.extensionPath ?? defaultExtensionPath;
   const configPath = options.configPath ?? defaultConfigPath;

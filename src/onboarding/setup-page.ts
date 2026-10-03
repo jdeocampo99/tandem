@@ -1,10 +1,10 @@
 import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { endPresentation, listenPresentation, openPresentation } from "../adapters/lavish.ts";
-import type { OmpModelRecord } from "../adapters/omp.ts";
 import type { HomeSettings, SelfImprovementMode } from "../config/home-settings.ts";
 import type { ModelSettings } from "../config/models.ts";
 import type { Clock, CommandResult, CommandRunner, IdFactory, RepoPolicy } from "../contracts.ts";
+import type { OmpModelRecord } from "../harness/omp/adapter.ts";
 import { describeLavishFailure, type LavishOpenFailure } from "../report/publish.ts";
 import { expandHome, findCheckoutsByName, listCheckouts } from "../repos/locate.ts";
 import { writeJsonAtomically } from "../runtime/persistence.ts";

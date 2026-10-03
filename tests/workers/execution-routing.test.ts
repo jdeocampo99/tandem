@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { OmpIncludedAllowance, OmpModelRecord } from "../../src/adapters/omp.ts";
 import type { ModelSpec, ThinkingLevel } from "../../src/contracts.ts";
+import type { OmpIncludedAllowance, OmpModelRecord } from "../../src/harness/omp/adapter.ts";
 import type { DurableExecutionRouting } from "../../src/runtime/schema.ts";
 import {
   authorizeExecutionModel,

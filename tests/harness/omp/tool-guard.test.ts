@@ -1,15 +1,15 @@
 import { expect, test } from "bun:test";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { ompToolCall } from "../../src/extension/omp-host.ts";
-import { registerTandemOmp } from "../../src/extension/registration.ts";
-import type { TandemService } from "../../src/service/controller.ts";
-import type { ToolCall } from "../../src/session/events.ts";
+import { ompToolCall } from "../../../src/harness/omp/host.ts";
+import { registerTandemOmp } from "../../../src/harness/omp/registration.ts";
+import type { TandemService } from "../../../src/service/controller.ts";
+import type { ToolCall } from "../../../src/session/events.ts";
 import {
   COORDINATOR_RESEARCH_RUNNING_REFUSAL,
   COORDINATOR_TOOL_REFUSAL,
   type CoordinatorToolPolicy,
   coordinatorToolRefusal,
-} from "../../src/session/tool-guard.ts";
+} from "../../../src/session/tool-guard.ts";
 
 function policy(overrides: Partial<CoordinatorToolPolicy> = {}): CoordinatorToolPolicy {
   return {

@@ -20,8 +20,12 @@ import {
   withScenario,
 } from "./scenario.ts";
 
-const EXTENSION_PATH = fileURLToPath(new URL("../../src/extension.ts", import.meta.url));
-const CONFIG_PATH = fileURLToPath(new URL("../../src/worker-config.yml", import.meta.url));
+const EXTENSION_PATH = fileURLToPath(
+  new URL("../../src/harness/omp/extension.ts", import.meta.url),
+);
+const CONFIG_PATH = fileURLToPath(
+  new URL("../../src/harness/omp/worker-config.yml", import.meta.url),
+);
 
 type RehomeCall = Readonly<{ readonly parentWorkspaceId: string }>;
 

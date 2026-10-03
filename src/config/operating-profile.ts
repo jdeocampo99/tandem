@@ -1,10 +1,10 @@
-import type { OmpModelRecord } from "../adapters/omp.ts";
 import {
   type AgentRole,
   MODEL_ROLE_ORDER,
   type ModelSpec,
   type ThinkingLevel,
 } from "../contracts.ts";
+import type { OmpModelRecord } from "../harness/omp/adapter.ts";
 
 /**
  * Target thinking level per role for the Balanced profile. This mirrors the intent behind the

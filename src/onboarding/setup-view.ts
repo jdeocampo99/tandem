@@ -1,5 +1,4 @@
 import { basename } from "node:path";
-import type { OmpModelRecord } from "../adapters/omp.ts";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import {
   type AgentRole,
@@ -10,6 +9,7 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "../contracts.ts";
+import type { OmpModelRecord } from "../harness/omp/adapter.ts";
 import type { SetupPageDraft } from "./setup-answer.ts";
 
 /**

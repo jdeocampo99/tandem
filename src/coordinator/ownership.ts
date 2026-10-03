@@ -22,11 +22,12 @@ import { readCoordinatorRecord } from "./registry.ts";
 const LEGACY_COORDINATOR_SESSION_DIRECTORY = "coordinator-sessions";
 export const COORDINATOR_SCRIPT_DIRECTORY = "coordinator-scripts";
 const LEGACY_COORDINATOR_REPOSITORY_KEY_LENGTH = 24;
-const COORDINATOR_EXTENSION_PATH = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "extension.ts",
-);
+const SOURCE_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+/** Coordinators launched before the OMP code moved under harness/omp/ still name the old path. */
+const COORDINATOR_EXTENSION_PATHS = [
+  join(SOURCE_DIRECTORY, "harness", "omp", "extension.ts"),
+  join(SOURCE_DIRECTORY, "extension.ts"),
+] as const;
 
 export type SnapshotPane = Readonly<{
   readonly workspaceId: string;
@@ -191,7 +192,7 @@ async function legacyInvocationMatch(
   argv: readonly string[],
   repoPath: string,
   sessionDirectory: string,
-  extensionPath: string,
+  extensionPaths: ReadonlySet<string>,
 ): Promise<"match" | "no-match" | "unknown"> {
   const normalized = normalizeOmpCommand(argv);
   if (normalized === undefined) return "unknown";
@@ -199,7 +200,7 @@ async function legacyInvocationMatch(
   if (!extension.present) return "no-match";
   if (extension.value === undefined) return "unknown";
   const actualExtension = await canonicalPath(extension.value, "coordinator extension");
-  if (actualExtension !== extensionPath) return "no-match";
+  if (!extensionPaths.has(actualExtension)) return "no-match";
 
   const cwd = commandOption(normalized, "--cwd");
   const session = commandOption(normalized, "--session-dir");
@@ -268,7 +269,11 @@ async function findUnrecordedCoordinator(
     );
   }
   const panes = parseSnapshotPanes(snapshot.stdout);
-  const extensionPath = await canonicalPath(COORDINATOR_EXTENSION_PATH, "coordinator extension");
+  const extensionPaths = new Set(
+    await Promise.all(
+      COORDINATOR_EXTENSION_PATHS.map((path) => canonicalPath(path, "coordinator extension")),
+    ),
+  );
   const sessionDirectory = await canonicalPath(
     legacySessionDirectory(home, repoPath),
     "coordinator session directory",
@@ -301,7 +306,7 @@ async function findUnrecordedCoordinator(
         process.argv,
         repoPath,
         sessionDirectory,
-        extensionPath,
+        extensionPaths,
       );
       if (match === "unknown") {
         throw ownershipFailure(

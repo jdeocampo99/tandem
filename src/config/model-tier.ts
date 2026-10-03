@@ -8,8 +8,8 @@
  * explicitly instead of filling the gap with zero.
  */
 
-import type { OmpIncludedAllowance, OmpModelRecord } from "../adapters/omp.ts";
 import type { ModelSpec, ThinkingLevel } from "../contracts.ts";
+import type { OmpIncludedAllowance, OmpModelRecord } from "../harness/omp/adapter.ts";
 
 /** Why one model's catalogue entry cannot supply tier evidence at all. */
 export type ModelCatalogueGap =

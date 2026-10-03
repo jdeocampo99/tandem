@@ -5,7 +5,7 @@ import type { CommandRequest } from "./contracts.ts";
 import { readTaskInbox } from "./tasks/communication-persistence.ts";
 import { formatTaskMessages } from "./tasks/communication-protocol.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
-import { WORKER_CONTROL_ENV } from "./worker-control.ts";
+import { WORKER_CONTROL_ENV } from "./workers/control-protocol.ts";
 import {
   claimExecutionStart,
   type ExecutionAdmission,
@@ -56,8 +56,12 @@ const IMPLEMENTER_TOOLS = [
   SUBMIT_REPORT_TOOL,
 ] as const;
 const PRESENTATION_TOOLS = ["read", "grep", "glob", "write", "edit", SUBMIT_REPORT_TOOL] as const;
-const WORKER_CONFIG_PATH = fileURLToPath(new URL("./worker-config.yml", import.meta.url));
-const WORKER_CONTROL_PATH = fileURLToPath(new URL("./worker-control.ts", import.meta.url));
+const WORKER_CONFIG_PATH = fileURLToPath(
+  new URL("./harness/omp/worker-config.yml", import.meta.url),
+);
+const WORKER_CONTROL_PATH = fileURLToPath(
+  new URL("./harness/omp/worker-control.ts", import.meta.url),
+);
 
 async function promptWithInitialCommunication(job: WorkerJob): Promise<string> {
   if (job.communication === undefined) return job.prompt;

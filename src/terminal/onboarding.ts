@@ -1,4 +1,3 @@
-import type { OmpModelRecord } from "../adapters/omp.ts";
 import { jevGateway } from "../adapters/typesafe.ts";
 import { type JevSetting, parseModelAssignments } from "../config/models.ts";
 import {
@@ -15,6 +14,7 @@ import {
   type ModelSpec,
   type RepoPolicy,
 } from "../contracts.ts";
+import type { OmpModelRecord } from "../harness/omp/adapter.ts";
 
 export type TerminalSelection = Readonly<{
   readonly choices: readonly Readonly<{

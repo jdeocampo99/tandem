@@ -1,5 +1,4 @@
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { OmpModelRecord } from "../adapters/omp.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
   Clock,
@@ -13,6 +12,7 @@ import type {
   TaskRecord,
 } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
+import type { OmpModelRecord } from "../harness/omp/adapter.ts";
 import { type AgentBriefReview, buildAgentBrief } from "../instructions.ts";
 import { workstreamName } from "../memory/workstream.ts";
 import type { PlaybookId } from "../playbooks/catalog.ts";

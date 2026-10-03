@@ -1,5 +1,4 @@
 import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
-import type { CommandRequest, CommandRunner, ModelSpec, ThinkingLevel } from "../contracts.ts";
 import {
   AdapterProtocolError,
   checkedPath,
@@ -10,7 +9,8 @@ import {
   requiredRecord,
   requiredString,
   runChecked,
-} from "./primitives.ts";
+} from "../../adapters/primitives.ts";
+import type { CommandRequest, CommandRunner, ModelSpec, ThinkingLevel } from "../../contracts.ts";
 
 const THINKING_LEVELS: Readonly<Record<string, true>> = {
   off: true,
@@ -301,6 +301,8 @@ export async function validateModel(
   }
   return observed;
 }
+
+export const OMP_INSTALL_COMMAND = "bun install -g @oh-my-pi/pi-coding-agent";
 
 /** Names of the MCP servers OMP would load in this checkout, from project and user config. */
 export async function listOmpMcpServers(cwd: string): Promise<readonly string[]> {

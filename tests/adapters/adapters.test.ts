@@ -24,7 +24,6 @@ import {
   openPresentation,
   pollPresentation,
 } from "../../src/adapters/lavish.ts";
-import { listOmpModels, validateModel } from "../../src/adapters/omp.ts";
 import {
   AdapterProtocolError,
   ApprovalRequiredError,
@@ -47,6 +46,7 @@ import type {
   Endpoint,
   WorktreeLease,
 } from "../../src/contracts.ts";
+import { listOmpModels, validateModel } from "../../src/harness/omp/adapter.ts";
 
 function result(stdout = "", code = 0, stderr = ""): CommandResult {
   return { code, stdout, stderr };

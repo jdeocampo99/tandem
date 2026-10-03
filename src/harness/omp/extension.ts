@@ -1,39 +1,39 @@
 import { realpath } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@oh-my-pi/pi-coding-agent";
-import { runCommand } from "./adapters/commands.ts";
-import { openWelcomePopup } from "./adapters/herdr.ts";
-import { createHerdrStatusReporter } from "./adapters/herdr-status.ts";
+import { runCommand } from "../../adapters/commands.ts";
+import { openWelcomePopup } from "../../adapters/herdr.ts";
+import { createHerdrStatusReporter } from "../../adapters/herdr-status.ts";
 import {
   environmentForContext,
   processEnvironmentSnapshot,
   type TandemBoundaryEnvironment,
   type TandemEnvironmentSource,
-} from "./config/environment.ts";
-import type { CommandRunner } from "./contracts.ts";
-import { refreshCoordinatorSourceUnlocked } from "./coordinator/source.ts";
-import { isTandemCheckout } from "./coordinator/tandem-checkout.ts";
-import { ompSessionHost, ompToolCall } from "./extension/omp-host.ts";
-import { registerTandemOmp } from "./extension/registration.ts";
-import { type PlaybookClassifier, playbookClassifier } from "./playbooks/classify.ts";
-import { type BriefLanguageChecker, briefLanguageChecker } from "./requests/plain-language.ts";
-import { appendCoordinatorUsage } from "./runtime/usage-ledger.ts";
-import { type IssueDraftChecker, issueDraftChecker } from "./self-improvement/issue-draft.ts";
+} from "../../config/environment.ts";
+import type { CommandRunner } from "../../contracts.ts";
+import { refreshCoordinatorSourceUnlocked } from "../../coordinator/source.ts";
+import { isTandemCheckout } from "../../coordinator/tandem-checkout.ts";
+import { type PlaybookClassifier, playbookClassifier } from "../../playbooks/classify.ts";
+import { type BriefLanguageChecker, briefLanguageChecker } from "../../requests/plain-language.ts";
+import { appendCoordinatorUsage } from "../../runtime/usage-ledger.ts";
+import { type IssueDraftChecker, issueDraftChecker } from "../../self-improvement/issue-draft.ts";
 import {
   createTandemService,
   type TandemService,
   type TandemServiceOptions,
-} from "./service/controller.ts";
-import { coordinatorCompactTokens } from "./session/compaction.ts";
-import { CoordinatorSession } from "./session/coordinator.ts";
-import { readResearchReport } from "./session/notifications.ts";
-import type { CoordinatorMessage } from "./session/onboarding-guide.ts";
-import { promptRoutingConfig } from "./session/prompt-routing.ts";
+} from "../../service/controller.ts";
+import { coordinatorCompactTokens } from "../../session/compaction.ts";
+import { CoordinatorSession } from "../../session/coordinator.ts";
+import { readResearchReport } from "../../session/notifications.ts";
+import type { CoordinatorMessage } from "../../session/onboarding-guide.ts";
+import { promptRoutingConfig } from "../../session/prompt-routing.ts";
 import {
   type ResearchContinuationClassifier,
   researchContinuationClassifier,
   researchContinuationClassifierConfig,
-} from "./tasks/research-continuation-classifier.ts";
-import { replyUsage } from "./workers/terminal.ts";
+} from "../../tasks/research-continuation-classifier.ts";
+import { replyUsage } from "../../workers/terminal.ts";
+import { ompSessionHost, ompToolCall } from "./host.ts";
+import { registerTandemOmp } from "./registration.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
 

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { OmpModelRecord } from "../../src/adapters/omp.ts";
+import type { OmpModelRecord } from "../../src/harness/omp/adapter.ts";
 import {
   checkSetupAnswer,
   parseSetupAnswer,

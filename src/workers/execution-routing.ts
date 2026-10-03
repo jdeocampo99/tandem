@@ -19,7 +19,6 @@
  */
 
 import { createHash } from "node:crypto";
-import type { OmpModelRecord } from "../adapters/omp.ts";
 import {
   catalogueCostTotal,
   compareModelTier,
@@ -33,6 +32,7 @@ import {
   modelTierEvidence,
 } from "../config/model-tier.ts";
 import type { IsoTimestamp, ModelSpec } from "../contracts.ts";
+import type { OmpModelRecord } from "../harness/omp/adapter.ts";
 import {
   type DurableExecutionRouting,
   type DurableExecutionRoutingPause,

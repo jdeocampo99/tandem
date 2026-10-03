@@ -1,16 +1,16 @@
 import { expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { renderStatusBoard } from "../../src/board/terminal.ts";
-import type { BoardView } from "../../src/board/view.ts";
+import { renderStatusBoard } from "../../../src/board/terminal.ts";
+import type { BoardView } from "../../../src/board/view.ts";
 import {
   CARD_MESSAGE_TYPE,
   ompSessionHost,
   renderCardMessage,
   renderStatusMessage,
   STATUS_MESSAGE_TYPE,
-} from "../../src/extension/omp-host.ts";
-import { renderCatchUpCard } from "../../src/memory/view.ts";
-import type { CatchUpView } from "../../src/memory/workstream.ts";
+} from "../../../src/harness/omp/host.ts";
+import { renderCatchUpCard } from "../../../src/memory/view.ts";
+import type { CatchUpView } from "../../../src/memory/workstream.ts";
 
 const VIEW: CatchUpView = {
   name: "tia",

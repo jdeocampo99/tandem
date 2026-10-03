@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import type { OmpModelRecord } from "../../src/adapters/omp.ts";
 import { discoveredProviders, resolveBalancedProfile } from "../../src/config/operating-profile.ts";
 import { MODEL_ROLE_ORDER } from "../../src/contracts.ts";
+import type { OmpModelRecord } from "../../src/harness/omp/adapter.ts";
 
 function model(
   overrides: Partial<OmpModelRecord> & Pick<OmpModelRecord, "selector">,

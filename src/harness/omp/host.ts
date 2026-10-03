@@ -1,11 +1,11 @@
 import type { ExtensionAPI, ExtensionContext, MessageRenderer } from "@oh-my-pi/pi-coding-agent";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
-import { draw, renderStatusBoard, span } from "../board/terminal.ts";
-import { isBoardView } from "../board/view.ts";
-import { isCatchUpView, renderCatchUpCard } from "../memory/view.ts";
-import type { ApprovalDialog } from "../session/actions.ts";
-import type { SessionEffect, SessionHost, ToolCall, ToolKind } from "../session/events.ts";
-import { assertSelectedModel, expectedModelParts } from "../workers/protocol.ts";
+import { draw, renderStatusBoard, span } from "../../board/terminal.ts";
+import { isBoardView } from "../../board/view.ts";
+import { isCatchUpView, renderCatchUpCard } from "../../memory/view.ts";
+import type { ApprovalDialog } from "../../session/actions.ts";
+import type { SessionEffect, SessionHost, ToolCall, ToolKind } from "../../session/events.ts";
+import { assertSelectedModel, expectedModelParts } from "../../workers/protocol.ts";
 
 /** The custom message type each delivered message is saved under in the OMP session. */
 const DELIVERY_MESSAGE_TYPE: Readonly<

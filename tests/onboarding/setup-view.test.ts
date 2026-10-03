@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { OmpModelRecord } from "../../src/adapters/omp.ts";
 import type { RepoPolicy } from "../../src/contracts.ts";
+import type { OmpModelRecord } from "../../src/harness/omp/adapter.ts";
 import { renderSetupHtml } from "../../src/onboarding/setup-render.ts";
 import { buildSetupView, type SetupViewInput } from "../../src/onboarding/setup-view.ts";
 

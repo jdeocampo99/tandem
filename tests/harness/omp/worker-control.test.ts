@@ -3,22 +3,25 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { TaskCommunication, WorkerReceipt } from "../../src/contracts.ts";
-import { readWorkerReceipt, writeTaskInbox } from "../../src/tasks/communication-persistence.ts";
+import type { TaskCommunication, WorkerReceipt } from "../../../src/contracts.ts";
+import {
+  contextWithTaskMessages,
+  newestTaskMarker,
+} from "../../../src/harness/omp/task-messages.ts";
+import workerControlExtension from "../../../src/harness/omp/worker-control.ts";
+import { readWorkerReceipt, writeTaskInbox } from "../../../src/tasks/communication-persistence.ts";
 import {
   appendTaskMessage,
   formatTaskMessages,
   taskInbox,
-} from "../../src/tasks/communication-protocol.ts";
-import workerControlExtension, { WORKER_CONTROL_ENV } from "../../src/worker-control.ts";
+} from "../../../src/tasks/communication-protocol.ts";
 import {
   atLeastAsNewBatch,
-  contextWithTaskMessages,
   inboxMessageBatch,
-  newestTaskMarker,
   touchedReceipt,
-} from "../../src/workers/control-protocol.ts";
-import { readWorkerTerminal, WORKER_JOB_PATH_ENV } from "../../src/workers/terminal.ts";
+  WORKER_CONTROL_ENV,
+} from "../../../src/workers/control-protocol.ts";
+import { readWorkerTerminal, WORKER_JOB_PATH_ENV } from "../../../src/workers/terminal.ts";
 
 type Handler = (event: unknown, context: unknown) => unknown | Promise<unknown>;
 

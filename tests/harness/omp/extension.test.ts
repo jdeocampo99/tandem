@@ -3,12 +3,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, zod } from "@oh-my-pi/pi-coding-agent";
-import { resolveTandemEnvironment } from "../../src/config/environment.ts";
-import type { CommandRunner, TaskRecord } from "../../src/contracts.ts";
-import { createTandemExtension } from "../../src/extension.ts";
-import type { TandemService } from "../../src/service/controller.ts";
-import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";
-import { task } from "../session/fixtures.ts";
+import { resolveTandemEnvironment } from "../../../src/config/environment.ts";
+import type { CommandRunner, TaskRecord } from "../../../src/contracts.ts";
+import { createTandemExtension } from "../../../src/harness/omp/extension.ts";
+import type { TandemService } from "../../../src/service/controller.ts";
+import { StoreLockTimeoutError } from "../../../src/tasks/store-errors.ts";
+import { task } from "../../session/fixtures.ts";
 
 test("environment resolution applies explicit boundary values and ignores unrelated variables", () => {
   const environment = resolveTandemEnvironment(
