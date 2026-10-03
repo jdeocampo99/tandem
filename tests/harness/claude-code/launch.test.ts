@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   chooseConversation,
   claudeCodeHarness,
+  claudeTranscriptPath,
   parseConversationPointer,
 } from "../../../src/harness/claude-code/launch.ts";
 import { sidecarSocketPath } from "../../../src/harness/claude-code/socket.ts";
@@ -18,6 +19,9 @@ const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
 const OTHER_ID = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
 const DIRECTORY = "/home/coordinator-sessions/abc";
 const POINTER = join(DIRECTORY, "claude-code-conversation");
+const CWD = "/pool/coordinator";
+/** Claude Code's own record of the conversation, which exists once a first prompt was sent. */
+const TRANSCRIPT = claudeTranscriptPath(CWD, ID);
 
 function coordinatorSpec(overrides: Partial<LaunchSpec> = {}): LaunchSpec {
   return {
@@ -45,6 +49,8 @@ type FakeIo = LaunchIo & {
   readonly reads: string[];
   readonly writes: Array<readonly [string, string]>;
   readonly probes: string[];
+  /** The paths whose existence was checked. */
+  readonly checks: string[];
 };
 
 function fakeIo(
@@ -58,16 +64,22 @@ function fakeIo(
   const reads: string[] = [];
   const writes: Array<readonly [string, string]> = [];
   const probes: string[] = [];
+  const checks: string[] = [];
   return {
     reads,
     writes,
     probes,
+    checks,
     readText: async (path) => {
       reads.push(path);
       return options.files?.[path];
     },
     writeText: async (path, text) => {
       writes.push([path, text]);
+    },
+    exists: async (path) => {
+      checks.push(path);
+      return options.files?.[path] !== undefined;
     },
     newId: () => OTHER_ID,
     answersHealth: async (socket) => {
@@ -179,7 +191,7 @@ test("a worker runs unattended with its role's tools, its model, and its brief",
 test("a worker with no conversation directory gets a new id and keeps none", async () => {
   const io = fakeIo({ healthyAfter: 0 });
   const conversation = await claudeCodeHarness.conversation(
-    { home: "/home", directory: undefined, resume: true },
+    { home: "/home", directory: undefined, resume: true, cwd: CWD },
     io,
   );
   expect(conversation).toEqual({
@@ -208,9 +220,25 @@ test("Claude Code exits on a second Ctrl-D", () => {
 
 test("resuming continues the recorded conversation; anything else starts a new one", () => {
   const newId = () => OTHER_ID;
-  expect(chooseConversation(ID, true, newId)).toEqual({ id: ID, resume: true });
+  const saved = { id: ID, saved: true };
+  expect(chooseConversation(saved, true, newId)).toEqual({ id: ID, resume: true });
   expect(chooseConversation(undefined, true, newId)).toEqual({ id: OTHER_ID, resume: false });
-  expect(chooseConversation(ID, false, newId)).toEqual({ id: OTHER_ID, resume: false });
+  expect(chooseConversation(saved, false, newId)).toEqual({ id: OTHER_ID, resume: false });
+});
+
+test("a recorded conversation Claude Code never saved starts again under the same id", () => {
+  // The person quit before their first message, so there is nothing to resume; the id stays
+  // valid for --session-id, and the record stays true.
+  expect(chooseConversation({ id: ID, saved: false }, true, () => OTHER_ID)).toEqual({
+    id: ID,
+    resume: false,
+  });
+});
+
+test("a conversation lives under Claude Code's config directory, in a folder named for its cwd", () => {
+  expect(claudeTranscriptPath("/private/var/folders/4c/zx_y/T/repo.1aCA", ID, "/cfg")).toBe(
+    `/cfg/projects/-private-var-folders-4c-zx-y-T-repo-1aCA/${ID}.jsonl`,
+  );
 });
 
 test("a pointer holding anything but a conversation id fails closed with a way out", () => {
@@ -221,10 +249,10 @@ test("a pointer holding anything but a conversation id fails closed with a way o
 });
 
 test("a launch reads the pointer only to resume, and starts fresh when there is none", async () => {
-  const recorded = fakeIo({ files: { [POINTER]: `${ID}\n` } });
+  const recorded = fakeIo({ files: { [POINTER]: `${ID}\n`, [TRANSCRIPT]: "" } });
   expect(
     await claudeCodeHarness.conversation(
-      { home: "/home", directory: DIRECTORY, resume: true },
+      { home: "/home", directory: DIRECTORY, resume: true, cwd: CWD },
       recorded,
     ),
   ).toEqual({
@@ -233,11 +261,12 @@ test("a launch reads the pointer only to resume, and starts fresh when there is 
     resume: true,
     id: ID,
   });
+  expect(recorded.checks).toEqual([TRANSCRIPT]);
 
-  const fresh = fakeIo({ files: { [POINTER]: `${ID}\n` } });
+  const fresh = fakeIo({ files: { [POINTER]: `${ID}\n`, [TRANSCRIPT]: "" } });
   expect(
     await claudeCodeHarness.conversation(
-      { home: "/home", directory: DIRECTORY, resume: false },
+      { home: "/home", directory: DIRECTORY, resume: false, cwd: CWD },
       fresh,
     ),
   ).toEqual({
@@ -247,11 +276,12 @@ test("a launch reads the pointer only to resume, and starts fresh when there is 
     id: OTHER_ID,
   });
   expect(fresh.reads).toEqual([]);
+  expect(fresh.checks).toEqual([]);
 
   const missing = fakeIo();
   expect(
     await claudeCodeHarness.conversation(
-      { home: "/home", directory: DIRECTORY, resume: true },
+      { home: "/home", directory: DIRECTORY, resume: true, cwd: CWD },
       missing,
     ),
   ).toMatchObject({
@@ -261,10 +291,24 @@ test("a launch reads the pointer only to resume, and starts fresh when there is 
   expect(missing.writes).toEqual([]);
 });
 
+test("a resume of a conversation Claude Code never saved runs --session-id with the recorded id", async () => {
+  // Seen live on 2.1.289: `claude --resume <id>` of a conversation quit before its first message
+  // printed "No conversation found with session ID" and exited, and the launch failed 30 s later
+  // blaming trust. The same id starts fresh instead.
+  const io = fakeIo({ files: { [POINTER]: `${ID}\n` } });
+  const conversation = await claudeCodeHarness.conversation(
+    { home: "/home", directory: DIRECTORY, resume: true, cwd: CWD },
+    io,
+  );
+  expect(conversation).toEqual({ kind: "saved", directory: DIRECTORY, resume: false, id: ID });
+  expect(io.checks).toEqual([TRANSCRIPT]);
+  expect(claudeCodeHarness.command(coordinatorSpec({ conversation }))).toContain("--session-id");
+});
+
 test("a home too long for the sidecar's socket is refused before the coordinator starts", async () => {
   await expect(
     claudeCodeHarness.conversation(
-      { home: `/${"h".repeat(100)}`, directory: DIRECTORY, resume: false },
+      { home: `/${"h".repeat(100)}`, directory: DIRECTORY, resume: false, cwd: CWD },
       fakeIo(),
     ),
   ).rejects.toThrow("use a shorter Tandem home");

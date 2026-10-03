@@ -122,7 +122,7 @@ never import either harness's `launch.ts`; Biome enforces it.
 | `launchEnvironment` (every agent) | none | `DISABLE_GROWTHBOOK=1` |
 | `clearedEnvironment` (every agent) | none | Claude Code's nested-session variables (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, its session, bridge, and messaging ids, `CLAUDE_PID`) |
 | `exitKeys` | `ctrl+d` | `ctrl+d ctrl+d`: the first only asks "Press Ctrl-D again to exit" |
-| `conversation` | the directory as asked; none without one | the recorded id or a new one (below), always |
+| `conversation` | the directory as asked; none without one | the recorded id or a new one (below), always; resumed only when Claude Code saved it |
 | `awaitReady` | resolves at once | waits for the sidecar (below) |
 | `command(spec)` | coordinator and workers | coordinator and workers |
 | `sameCommand` | ignores `--continue` | `--session-id X` and `--resume X` match |
@@ -130,9 +130,9 @@ never import either harness's `launch.ts`; Biome enforces it.
 | `listModels`, `validateModel` | `omp models --json` | the fixed catalogue, no command run |
 | `listMcpServers` | OMP's servers | none (`--strict-mcp-config`) |
 
-Coordinator and worker launch hand the harness a `LaunchIo` (read and write a file, new id, ask a
-socket for `/health`, sleep, a monotonic clock; `launchIo` in src/harness/launch-io.ts), so each
-harness's decisions are tested without real effects.
+Coordinator and worker launch hand the harness a `LaunchIo` (read and write a file, whether a file
+exists, new id, ask a socket for `/health`, sleep, a monotonic clock; `launchIo` in
+src/harness/launch-io.ts), so each harness's decisions are tested without real effects.
 The CLI's `--extension` and `--config` confirm the coordinator files with those names; naming one
 for a Claude Code coordinator, which loads neither, is refused. `doctor` checks each file by its
 name. Only src/harness/omp/ and tests/harness/omp/ may import `@oh-my-pi/*`.
@@ -174,6 +174,15 @@ with no file it starts a fresh conversation. A file holding anything but a UUID 
 says to run `tandem --fresh`. The pane's "press Enter to start it again" command names the same id
 with `--resume`. The id is chosen before the command is built (`chooseConversation` is pure), and
 the file is written only after the ready wait proves Claude Code started on that id.
+
+Claude Code saves a conversation only once its first prompt is sent, as
+`<config dir>/projects/<cwd with every character outside [A-Za-z0-9] as ->/<id>.jsonl` under
+`CLAUDE_CONFIG_DIR` or `~/.claude` (`claudeTranscriptPath`; checked on 2.1.289). `--resume <id>`
+of an id with no such file prints "No conversation found with session ID" and exits, which left
+the launch to fail 30 s later blaming trust (seen live after quitting a coordinator before typing
+anything). So a resume first checks that file (`LaunchIo.exists`): recorded but never saved, the
+same id runs with `--session-id`, which Claude Code accepts, and the record stays true; the person
+sees a fresh conversation, which is all there was.
 
 **Ready wait.** The adapter starts the sidecar as Claude Code's session starts, so launch polls
 `GET /health` on `sidecarSocketPath(home, id)` every 250 ms. The first answer means Claude Code
@@ -231,7 +240,8 @@ only read-only commands; the tool guard below enforces both.
 - **Conversation.** Every Claude Code worker names its conversation, because its sidecar's socket
   is named by it. A job with a `sessionDirectory` (a scout or implementer Tandem may continue)
   keeps the id in `<directory>/claude-code-conversation` once its sidecar answers, and a later
-  launch resumes it with `--resume`; a job without one gets a new id each launch.
+  launch resumes it with `--resume` (or `--session-id`, when Claude Code never saved it, as for
+  the coordinator); a job without one gets a new id each launch.
 - **Ready wait.** `runWorkerJob` runs the ready wait beside Claude Code, as direct coordinator
   launch does. After 30 s with no sidecar it stops Claude Code (SIGTERM through the run's abort
   signal) and fails the job with the same plain-English reason, ending "so Tandem stopped this

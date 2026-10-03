@@ -103,6 +103,7 @@ export type LaunchIo = Readonly<{
   /** The file's text, or undefined when it does not exist. */
   readText(path: string): Promise<string | undefined>;
   writeText(path: string, text: string): Promise<void>;
+  exists(path: string): Promise<boolean>;
   newId(): string;
   /** Whether something answers `GET /health` on this unix socket. */
   answersHealth(socket: string): Promise<boolean>;
@@ -141,11 +142,11 @@ export type Harness = Readonly<{
   exitKeys: readonly string[];
   /**
    * The conversation a launch names, from what an earlier launch kept in `directory`; OMP keeps
-   * none without a directory. Refuses, before anything starts, a launch that could never get ready
-   * under `home`.
+   * none without a directory. `cwd` is where the agent runs, which is where its harness keeps the
+   * conversation. Refuses, before anything starts, a launch that could never get ready under `home`.
    */
   conversation(
-    launch: Readonly<{ home: string; directory: string | undefined; resume: boolean }>,
+    launch: Readonly<{ home: string; directory: string | undefined; resume: boolean; cwd: string }>,
     io: LaunchIo,
   ): Promise<Conversation>;
   /**

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { LaunchIo } from "./contract.ts";
 
@@ -17,7 +17,8 @@ function isMissing(error: unknown): boolean {
 
 /** The real effects a launch lends its harness; tests replace the ones they script. */
 export function launchIo(
-  overrides: Pick<LaunchIo, "sleep"> & Partial<Pick<LaunchIo, "newId" | "answersHealth" | "now">>,
+  overrides: Pick<LaunchIo, "sleep"> &
+    Partial<Pick<LaunchIo, "exists" | "newId" | "answersHealth" | "now">>,
 ): LaunchIo {
   return {
     readText: async (path) => {
@@ -32,6 +33,13 @@ export function launchIo(
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
       await writeFile(path, text, { encoding: "utf8", mode: 0o600 });
     },
+    exists:
+      overrides.exists ??
+      ((path) =>
+        access(path).then(
+          () => true,
+          () => false,
+        )),
     newId: overrides.newId ?? randomUUID,
     answersHealth: overrides.answersHealth ?? answersHealth,
     sleep: overrides.sleep,

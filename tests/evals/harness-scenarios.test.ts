@@ -105,10 +105,20 @@ function claudeCodeRequest(world: ScenarioWorld): CoordinatorLaunchRequest {
   };
 }
 
-/** A clock the ready wait's sleeps move, and a sidecar that answers when `ready` says so. */
+type FakeClaudeCode = Readonly<{
+  ready: boolean;
+  probes: string[];
+  /** Claude Code saved the conversation (a first prompt was sent); absent means it did. */
+  saved?: boolean;
+}>;
+
+/**
+ * A clock the ready wait's sleeps move, a sidecar that answers when `ready` says so, and a
+ * Claude Code that saved the conversation unless `saved` says otherwise.
+ */
 function claudeCodeDependencies(
   world: ScenarioWorld,
-  sidecar: Readonly<{ ready: boolean; probes: string[] }>,
+  sidecar: FakeClaudeCode,
 ): CoordinatorLaunchDependencies {
   let clock = 0;
   return {
@@ -125,6 +135,7 @@ function claudeCodeDependencies(
       sidecar.probes.push(socket);
       return sidecar.ready;
     },
+    exists: async () => sidecar.saved ?? true,
     processEnvironment: {},
   };
 }
@@ -177,6 +188,28 @@ test("a Claude Code coordinator starts a conversation, waits for its sidecar, an
     expect(second.command).toContain("--resume");
     expect(conversationOf(second.command)).toBe(id);
     expect(world.paneIsPresent(first.paneId ?? "")).toBe(false);
+  });
+});
+
+test("a Claude Code coordinator quit before its first message starts again under the same id", async () => {
+  await withScenario({}, async (world) => {
+    const sidecar = { ready: true, probes: [] as string[], saved: false };
+    const first = await launchCoordinator(
+      claudeCodeRequest(world),
+      claudeCodeDependencies(world, sidecar),
+    );
+    const id = conversationOf(first.command);
+
+    const second = await restartCoordinator(
+      claudeCodeRequest(world),
+      claudeCodeDependencies(world, sidecar),
+    );
+    expect(second.restarted).toBe(true);
+    // Claude Code has nothing to resume, so --resume would print "No conversation found" and
+    // exit; the same id starts fresh instead and the record keeps naming it.
+    expect(second.command).toContain("--session-id");
+    expect(second.command).not.toContain("--resume");
+    expect(conversationOf(second.command)).toBe(id);
   });
 });
 

@@ -132,6 +132,8 @@ export type CoordinatorLaunchDependencies = Readonly<{
   readonly newId?: () => string;
   /** Whether a unix socket answers `GET /health`; defaults to asking it. */
   readonly answersHealth?: (socket: string) => Promise<boolean>;
+  /** Whether a file exists, which tells a saved Claude Code conversation from one never saved. */
+  readonly exists?: (path: string) => Promise<boolean>;
   /** Milliseconds on a monotonic clock, for the ready wait; defaults to `performance.now`. */
   readonly now?: () => number;
   /** Checks the files and model a new coordinator needs on the harness it would launch on. */
@@ -856,6 +858,7 @@ function coordinatorLaunchIo(dependencies: CoordinatorLaunchDependencies): Launc
     ...(dependencies.answersHealth === undefined
       ? {}
       : { answersHealth: dependencies.answersHealth }),
+    ...(dependencies.exists === undefined ? {} : { exists: dependencies.exists }),
     ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
   });
 }
@@ -948,7 +951,12 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   const coordinatorCwd = worktree.path;
   const harness = harnessFor(harnessOf(request.model));
   const conversation = await harness.conversation(
-    { home: paths.home, directory: paths.sessionDirectory, resume: request.continueSession },
+    {
+      home: paths.home,
+      directory: paths.sessionDirectory,
+      resume: request.continueSession,
+      cwd: coordinatorCwd,
+    },
     coordinatorLaunchIo(dependencies),
   );
   // Every harness keeps a coordinator's conversation, which always has a directory.

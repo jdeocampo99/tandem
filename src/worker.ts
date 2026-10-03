@@ -258,7 +258,7 @@ export async function runWorkerJob(
     const home =
       options.home ?? environmentForContext({}, { cwd: job.cwd, sessionId: "tandem" }).home;
     const conversation = await harness.conversation(
-      { home, directory: job.sessionDirectory, resume: true },
+      { home, directory: job.sessionDirectory, resume: true, cwd: job.cwd },
       io,
     );
     const request = buildWorkerCommand(harness, job, prompt, absoluteJobPath, conversation);
