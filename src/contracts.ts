@@ -1,3 +1,4 @@
+import type { HarnessName } from "./harness/contract.ts";
 import type { PlaybookId } from "./playbooks/catalog.ts";
 import type { PrReviewState } from "./pr-review/state.ts";
 
@@ -187,6 +188,11 @@ export type RepoPolicy = {
    * so policies pinned before this setting keep their digest.
    */
   readonly standards?: "none";
+  /**
+   * The harness this policy's agents run on. Absent means OMP; it is never written as "omp", so
+   * policies pinned before this setting keep their digest. Read it with `policyHarness`.
+   */
+  readonly harness?: HarnessName;
 };
 
 export type GuidanceProvenance = {

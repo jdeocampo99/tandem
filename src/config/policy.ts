@@ -6,6 +6,7 @@ import type {
   ValidationCommand,
 } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
+import { DEFAULT_HARNESS, type HarnessName, parseHarnessName } from "../harness/contract.ts";
 import {
   assertKnownKeys,
   cloneChannels,
@@ -38,6 +39,7 @@ const POLICY_KEYS: Readonly<Record<string, true>> = {
   maxFixRounds: true,
   reviewLevels: true,
   standards: true,
+  harness: true,
   requestBudget: true,
 };
 
@@ -245,6 +247,7 @@ export function copyPolicy(policy: PolicyBase): RepoPolicy {
     })),
     maxFixRounds: policy.maxFixRounds,
     ...(policy.standards === undefined ? {} : { standards: policy.standards }),
+    ...(policy.harness === undefined ? {} : { harness: policy.harness }),
   };
 }
 
@@ -298,6 +301,7 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     ? readPositiveInteger(input.maxFixRounds, "maxFixRounds")
     : base.maxFixRounds;
   const standards = hasKey(input, "standards") ? readStandards(input.standards) : base.standards;
+  const harness = hasKey(input, "harness") ? readHarness(input.harness) : base.harness;
 
   return {
     version: 1,
@@ -308,7 +312,18 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     setupCommands,
     maxFixRounds,
     ...(standards === undefined ? {} : { standards }),
+    ...(harness === undefined ? {} : { harness }),
   };
+}
+
+/** The harness a policy's agents run on. */
+export function policyHarness(policy: RepoPolicy): HarnessName {
+  return policy.harness ?? DEFAULT_HARNESS;
+}
+
+function readHarness(value: unknown): HarnessName | undefined {
+  const harness = parseHarnessName(value, "harness");
+  return harness === DEFAULT_HARNESS ? undefined : harness;
 }
 
 function readStandards(value: unknown): "none" | undefined {

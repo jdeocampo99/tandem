@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { writeModelSettings } from "../../src/config/models.ts";
-import { defaultPolicy, parsePolicy } from "../../src/config/policy.ts";
+import { defaultPolicy, parsePolicy, policyHarness } from "../../src/config/policy.ts";
 import {
   onboardRepo,
   readCleanupCommands,
@@ -22,6 +22,7 @@ import {
   resolveRepoPolicy,
   saveMergingChoice,
 } from "../../src/config/repositories.ts";
+import { DEFAULT_HARNESS, parseHarnessName } from "../../src/harness/contract.ts";
 
 type PolicyFixture = Readonly<{
   root: string;
@@ -184,6 +185,18 @@ test("standards defaults to Tandem's and is pinned only when turned off", () => 
   expect("standards" in parsePolicy({ standards: "tandem" })).toBe(false);
   expect(parsePolicy({ standards: "none" }).standards).toBe("none");
   expect(() => parsePolicy({ standards: "strict" })).toThrow(TypeError);
+});
+
+test("harness defaults to OMP and is pinned only when it names another harness", () => {
+  expect("harness" in parsePolicy({})).toBe(false);
+  expect("harness" in parsePolicy({ harness: "omp" })).toBe(false);
+  expect(policyHarness(parsePolicy({}))).toBe(DEFAULT_HARNESS);
+  expect(policyHarness(parsePolicy({ harness: "claude-code" }))).toBe(
+    parseHarnessName("claude-code", "harness"),
+  );
+  expect(() => parsePolicy({ harness: "codex" })).toThrow(
+    'harness must be "omp" or "claude-code", not "codex"',
+  );
 });
 
 test("parsePolicy rejects unknown keys, invalid pins, invalid limits, and unsafe file references", () => {
@@ -479,6 +492,7 @@ test("every commented-out setting in a new settings.toml is valid once uncomment
     const settings = Bun.TOML.parse(enabled) as Record<string, unknown>;
     expect(Object.keys(settings).sort()).toEqual([
       "cleanupCommands",
+      "harness",
       "instructionFiles",
       "instructions",
       "maxFixRounds",
