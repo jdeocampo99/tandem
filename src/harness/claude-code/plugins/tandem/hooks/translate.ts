@@ -258,3 +258,11 @@ export function compactionInstructions(
 export function endsSidecar(reason: string): boolean {
   return reason !== "clear" && reason !== "resume";
 }
+
+/**
+ * The rows `$.ui.log` draws for one shown text. Claude Code draws a newline inside a log row as a
+ * replacement character, so each line gets its own row and blank lines are dropped.
+ */
+export function logLines(text: string): readonly string[] {
+  return text.split("\n").filter((line) => line.trim().length > 0);
+}

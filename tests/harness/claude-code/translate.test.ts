@@ -6,6 +6,7 @@ import {
   endsSidecar,
   isOwnPrompt,
   LineReader,
+  logLines,
   promptHandled,
   sidecarArgv,
   stopBlock,
@@ -178,4 +179,12 @@ test("stop, compaction, and session end follow the sidecar's replies", () => {
   expect(endsSidecar("prompt_input_exit")).toBe(true);
   expect(endsSidecar("clear")).toBe(false);
   expect(endsSidecar("resume")).toBe(false);
+});
+
+test("a shown text becomes one log row per line, without blank rows", () => {
+  expect(logLines("Scout finished.\n\n- first finding\n- second finding\n")).toEqual([
+    "Scout finished.",
+    "- first finding",
+    "- second finding",
+  ]);
 });

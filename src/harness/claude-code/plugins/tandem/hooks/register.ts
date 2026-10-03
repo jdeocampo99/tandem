@@ -19,6 +19,7 @@ import {
   endsSidecar,
   isOwnPrompt,
   LineReader,
+  logLines,
   promptHandled,
   sidecarArgv,
   stopBlock,
@@ -130,7 +131,7 @@ async function perform($: Api, line: string): Promise<void> {
       void $.prompt.submit({ text: effect.text, asUser: true });
       return;
     case "log":
-      $.ui.log(effect.text);
+      for (const row of logLines(effect.text)) $.ui.log(row);
       return;
     case "toast":
       $.ui.toast(effect.text);
