@@ -16,7 +16,7 @@ import type {
   ReviewMode,
   TaskRecord,
 } from "../contracts.ts";
-import { harnessOf } from "../harness/resolve.ts";
+import { harnessOf } from "../harness/contract.ts";
 import { isDeadReviewFailure, unresolvedReviewFailure } from "../recovery/central-review.ts";
 import { writeJsonAtomically, writeTextAtomically } from "../runtime/persistence.ts";
 import type { DurableJob, RuntimeTaskState } from "../runtime/schema.ts";

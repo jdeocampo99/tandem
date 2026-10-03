@@ -1,18 +1,9 @@
 import type { AgentRole, ModelSpec } from "../contracts.ts";
-import { CLAUDE_CODE_PROVIDER } from "./claude-code/models.ts";
-import {
-  DEFAULT_HARNESS,
-  type Harness,
-  type HarnessName,
-  type KnownHarness,
-  parseHarnessName,
-} from "./contract.ts";
+import { type Harness, type HarnessName, harnessOf, type KnownHarness } from "./contract.ts";
 import { ompHarness } from "./omp/launch.ts";
 
 /** Thrown when a role's model runs in a harness Tandem knows but cannot run yet. */
 export class HarnessUnavailableError extends Error {}
-
-const CLAUDE_CODE = parseHarnessName("claude-code", "harness");
 
 /** Each known harness, or undefined while Tandem can't run it yet. */
 const RUNNABLE: Readonly<Record<KnownHarness, Harness | undefined>> = {
@@ -23,14 +14,6 @@ const RUNNABLE: Readonly<Record<KnownHarness, Harness | undefined>> = {
 function runnable(name: HarnessName): Harness | undefined {
   const known: KnownHarness = name;
   return RUNNABLE[known];
-}
-
-/**
- * The one place a model becomes a harness: a `claude-code/<model>` selector runs in Claude Code,
- * and every other selector, or no model at all (the harness's own default), runs in OMP.
- */
-export function harnessOf(model: ModelSpec | undefined): HarnessName {
-  return model?.model.startsWith(`${CLAUDE_CODE_PROVIDER}/`) ? CLAUDE_CODE : DEFAULT_HARNESS;
 }
 
 /** The one place a harness name becomes the harness that launches and recognizes its agents. */

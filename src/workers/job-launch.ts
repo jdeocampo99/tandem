@@ -9,7 +9,7 @@ import type {
   IdFactory,
   TaskRecord,
 } from "../contracts.ts";
-import { harnessOf } from "../harness/resolve.ts";
+import { harnessOf } from "../harness/contract.ts";
 import { PLAYBOOKS, type PlaybookId } from "../playbooks/catalog.ts";
 import { playbookForRun } from "../playbooks/selection.ts";
 import { buildPrReviewBrief } from "../pr-review/brief.ts";

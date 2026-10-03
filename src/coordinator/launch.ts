@@ -15,8 +15,8 @@ import type {
   ModelSpec,
   WorktreeLease,
 } from "../contracts.ts";
-import type { Harness } from "../harness/contract.ts";
-import { harnessFor, harnessOf } from "../harness/resolve.ts";
+import { type Harness, harnessOf } from "../harness/contract.ts";
+import { harnessFor } from "../harness/resolve.ts";
 import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal/cli-arguments.ts";
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";

@@ -1,4 +1,5 @@
 import type { AgentRole, CommandRunner, ModelSpec, ThinkingLevel } from "../contracts.ts";
+import { CLAUDE_CODE_PROVIDER } from "./claude-code/models.ts";
 
 const HARNESS_NAMES = ["omp", "claude-code"] as const;
 declare const harnessNameBrand: unique symbol;
@@ -19,6 +20,16 @@ export function parseHarnessName(value: unknown, field: string): HarnessName {
 
 /** What every model outside Claude Code runs in, and what anything saved without a harness ran in. */
 export const DEFAULT_HARNESS: HarnessName = parseHarnessName("omp", "harness");
+
+const CLAUDE_CODE: HarnessName = parseHarnessName("claude-code", "harness");
+
+/**
+ * The one place a model becomes a harness: a `claude-code/<model>` selector runs in Claude Code,
+ * and every other selector, or no model at all (the harness's own default), runs in OMP.
+ */
+export function harnessOf(model: ModelSpec | undefined): HarnessName {
+  return model?.model.startsWith(`${CLAUDE_CODE_PROVIDER}/`) ? CLAUDE_CODE : DEFAULT_HARNESS;
+}
 
 /**
  * What one request on this model draws from a subscription's included allowance, in the

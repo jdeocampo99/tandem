@@ -1,12 +1,7 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_HARNESS, parseHarnessName } from "../../src/harness/contract.ts";
+import { DEFAULT_HARNESS, harnessOf, parseHarnessName } from "../../src/harness/contract.ts";
 import { ompHarness } from "../../src/harness/omp/launch.ts";
-import {
-  HarnessUnavailableError,
-  harnessFor,
-  harnessForRole,
-  harnessOf,
-} from "../../src/harness/resolve.ts";
+import { HarnessUnavailableError, harnessFor, harnessForRole } from "../../src/harness/resolve.ts";
 
 test("only a claude-code/ selector runs in Claude Code; everything else, and no model, runs in OMP", () => {
   expect(harnessOf(undefined)).toBe(DEFAULT_HARNESS);
