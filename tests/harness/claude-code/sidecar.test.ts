@@ -11,7 +11,8 @@ import {
   type SidecarEvent,
   type SidecarLine,
 } from "../../../src/harness/claude-code/protocol.ts";
-import { claimSocket, sidecarSocketPath } from "../../../src/harness/claude-code/sidecar.ts";
+import { claimSocket } from "../../../src/harness/claude-code/sidecar.ts";
+import { sidecarSocketPath } from "../../../src/harness/claude-code/socket.ts";
 
 const SIDECAR = join(TANDEM_CHECKOUT, "src", "harness", "claude-code", "sidecar.ts");
 

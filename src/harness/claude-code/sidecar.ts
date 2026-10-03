@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
 import { mkdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { environmentForContext } from "../../config/environment.ts";
@@ -13,9 +12,8 @@ import {
   SIDECAR_PROTOCOL_VERSION,
   type SidecarLine,
 } from "./protocol.ts";
+import { sidecarSocketPath } from "./socket.ts";
 
-/** macOS limits a unix socket path to 104 bytes, including the terminating NUL. */
-const MAX_SOCKET_PATH_BYTES = 103;
 /** How long a new sidecar waits for the one it replaces (a mod reload) to let go of the socket. */
 const CLAIM_WAIT_MS = 3_000;
 const CLAIM_POLL_MS = 100;
@@ -43,18 +41,6 @@ export function parseSidecarArgs(argv: readonly string[]): SidecarArgs {
   }
   if (sessionId === undefined || sessionId.length === 0) throw new Error("--session is required");
   return { role, sessionId };
-}
-
-/** One short socket per session under the home; the session id is hashed to keep it short. */
-export function sidecarSocketPath(home: string, sessionId: string): string {
-  const name = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
-  const path = join(home, "sidecars", `${name}.sock`);
-  if (Buffer.byteLength(path) > MAX_SOCKET_PATH_BYTES) {
-    throw new Error(
-      `the sidecar socket path ${path} is longer than the ${MAX_SOCKET_PATH_BYTES} bytes macOS allows; use a shorter Tandem home`,
-    );
-  }
-  return path;
 }
 
 async function answers(socket: string): Promise<boolean> {
