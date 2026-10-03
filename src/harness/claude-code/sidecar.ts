@@ -17,6 +17,8 @@ import { sidecarSocketPath } from "./socket.ts";
 /** How long a new sidecar waits for the one it replaces (a mod reload) to let go of the socket. */
 const CLAIM_WAIT_MS = 3_000;
 const CLAIM_POLL_MS = 100;
+/** How often the sidecar checks that the Claude Code process that started it is still alive. */
+const PARENT_POLL_MS = 1_000;
 
 export type SidecarArgs = Readonly<{ role: "coordinator"; sessionId: string }>;
 
@@ -169,8 +171,8 @@ const timers: SessionDeps["timers"] = {
 };
 
 /**
- * Runs one Claude Code session's sidecar until SIGTERM, SIGHUP, stdin closing, or a `shutdown`
- * event, then stops listening, removes its socket, and shuts the session down.
+ * Runs one Claude Code session's sidecar until SIGTERM, SIGHUP, its parent exiting, or a
+ * `shutdown` event, then stops listening, removes its socket, and shuts the session down.
  */
 async function main(): Promise<void> {
   // Stdout carries only protocol lines; anything else the core prints goes to stderr.
@@ -241,8 +243,11 @@ async function main(): Promise<void> {
   for (const signal of ["SIGTERM", "SIGHUP"] as const) process.removeAllListeners(signal);
   process.on("SIGTERM", () => void stop());
   process.on("SIGHUP", () => void stop());
-  process.stdin.on("end", () => void stop());
-  process.stdin.resume();
+  // `$.process.spawn` closes stdin from the start, so a dead Claude Code shows only as a new parent.
+  const parent = process.ppid;
+  setInterval(() => {
+    if (process.ppid !== parent) void stop();
+  }, PARENT_POLL_MS).unref();
   writeLine({ type: "ready", protocol: SIDECAR_PROTOCOL_VERSION, socket, pid: process.pid });
 }
 

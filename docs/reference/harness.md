@@ -210,7 +210,8 @@ coordinator this way; step 6 adds workers.
 - **Ready.** The first stdout line is `{"type":"ready","protocol":1,"socket":...,"pid":...}`, or
   `{"type":"fatal","protocol":1,"reason":...}` and exit 1 when startup fails. The mod refuses a
   ready line from another protocol version.
-- **Stop.** SIGTERM, SIGHUP, stdin closing, or a `shutdown` event: the sidecar refuses every
+- **Stop.** SIGTERM, SIGHUP, its parent exiting (checked every second; `$.process.spawn` closes
+  stdin from the start, so stdin cannot signal it), or a `shutdown` event: the sidecar refuses every
   unanswered question, stops listening, removes the socket only if it is still its own (same
   inode), shuts the session down, and exits 0. It takes SIGTERM and SIGHUP over from OMP's
   postmortem module, which the service loads through the OMP launch harness and which would exit
