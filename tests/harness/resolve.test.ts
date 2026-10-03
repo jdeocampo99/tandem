@@ -1,8 +1,14 @@
 import { expect, test } from "bun:test";
+import type { CommandRunner } from "../../src/contracts.ts";
 import { claudeCodeHarness } from "../../src/harness/claude-code/launch.ts";
 import { DEFAULT_HARNESS, harnessOf, parseHarnessName } from "../../src/harness/contract.ts";
 import { ompHarness } from "../../src/harness/omp/launch.ts";
-import { catalogueHarness, coordinatorHarnesses, harnessFor } from "../../src/harness/resolve.ts";
+import {
+  catalogueHarness,
+  coordinatorHarnesses,
+  harnessFor,
+  runnableModels,
+} from "../../src/harness/resolve.ts";
 
 const CLAUDE_CODE = parseHarnessName("claude-code", "harness");
 
@@ -36,4 +42,28 @@ test("an unknown harness name is refused where it is read", () => {
     'harness must be "omp" or "claude-code", not "codex"',
   );
   expect(() => parseHarnessName(undefined, "record.harness")).toThrow(TypeError);
+});
+
+test("a role may run on any OMP-listed model or any Claude Code model", async () => {
+  const run: CommandRunner = async () => ({
+    code: 0,
+    stdout: JSON.stringify({
+      models: [
+        {
+          provider: "openai-codex",
+          id: "gpt-5.5",
+          selector: "openai-codex/gpt-5.5",
+          thinking: ["low"],
+        },
+      ],
+    }),
+    stderr: "",
+  });
+  expect((await runnableModels(run, "/repo")).map((model) => model.selector)).toEqual([
+    "openai-codex/gpt-5.5",
+    "claude-code/fable",
+    "claude-code/opus",
+    "claude-code/sonnet",
+    "claude-code/haiku",
+  ]);
 });

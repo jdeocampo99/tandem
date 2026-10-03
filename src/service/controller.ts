@@ -65,9 +65,8 @@ import {
   publishReviewedTask,
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
-import { CLAUDE_CODE_MODELS } from "../harness/claude-code/models.ts";
 import type { ModelRecord } from "../harness/contract.ts";
-import { catalogueHarness } from "../harness/resolve.ts";
+import { catalogueHarness, runnableModels } from "../harness/resolve.ts";
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
 import type { MemoryShowResult } from "../memory/view.ts";
 import type { OnboardingFacts } from "../onboarding/checklist.ts";
@@ -1091,7 +1090,7 @@ class TandemController {
       const settings = await readModelSettings({ repoPath: cwd, home: this.#deps.home });
       return {
         status: "read",
-        models: await catalogueHarness().listModels(this.#deps.run, cwd),
+        models: await runnableModels(this.#deps.run, cwd),
         enabledProviders: settings.enabledProviders,
         readAt: this.#deps.clock(),
       };
@@ -1171,8 +1170,7 @@ class TandemController {
     if (!isRecord(input)) throw new TypeError("configureModels input must be an object");
     const source = await mapTaskSource(this.#deps.run, input.repoPath, this.#deps.sourceWorkspace);
     const models = parseModelAssignments(input.models);
-    const ompModels = await catalogueHarness().listModels(this.#deps.run, source.checkoutPath);
-    validateModelAssignments(models, [...ompModels, ...CLAUDE_CODE_MODELS]);
+    validateModelAssignments(models, await runnableModels(this.#deps.run, source.checkoutPath));
 
     return writeModelSettings({
       repoPath: source.repoPath,
