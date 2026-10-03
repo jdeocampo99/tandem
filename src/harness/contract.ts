@@ -1,5 +1,25 @@
 import type { AgentRole, CommandRunner, ModelSpec, ThinkingLevel } from "../contracts.ts";
 
+const HARNESS_NAMES = ["omp", "claude-code"] as const;
+declare const harnessNameBrand: unique symbol;
+
+export type KnownHarness = (typeof HARNESS_NAMES)[number];
+/** The agent program a project's coordinator and child agents run on. Parse it with `parseHarnessName`. */
+export type HarnessName = KnownHarness & { readonly [harnessNameBrand]: true };
+
+/** Reads a harness name from settings or a saved record; anything else is refused. */
+export function parseHarnessName(value: unknown, field: string): HarnessName {
+  if (typeof value === "string" && (HARNESS_NAMES as readonly string[]).includes(value)) {
+    return value as HarnessName;
+  }
+  throw new TypeError(
+    `${field} must be ${HARNESS_NAMES.map((name) => JSON.stringify(name)).join(" or ")}, not ${JSON.stringify(value)}`,
+  );
+}
+
+/** What a project runs on when its settings name no harness, and what anything saved without one ran on. */
+export const DEFAULT_HARNESS: HarnessName = parseHarnessName("omp", "harness");
+
 /**
  * What one request on this model draws from a subscription's included allowance, in the
  * provider's own units. It carries no currency: an included draw is quota consumption, and
@@ -56,16 +76,10 @@ export type AgentProcess = Readonly<{
 /** Whether a live process is a coordinator Tandem launched for this repository without a record. */
 export type UnrecordedCoordinatorMatch = "match" | "no-match" | "unknown";
 
-export type Capabilities = Readonly<{
-  proactiveCompaction: boolean;
-  hiddenMessages: boolean;
-  streamingProgress: boolean;
-  perActionApproval: boolean;
-}>;
-
 /** The launch port: everything coordinator and worker launch needs to know about one harness. */
 export type Harness = Readonly<{
-  capabilities: Capabilities;
+  /** The program every command this harness builds starts with. */
+  executable: string;
   /** Files the coordinator command loads, checked before launch. */
   coordinatorFiles: Readonly<{ extensionPath: string; configPath: string }>;
   command(spec: LaunchSpec): readonly string[];

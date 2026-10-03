@@ -216,12 +216,7 @@ function processNeedle(recorded: readonly string[]): string | undefined {
 }
 
 export const ompHarness: Harness = {
-  capabilities: {
-    proactiveCompaction: true,
-    hiddenMessages: true,
-    streamingProgress: true,
-    perActionApproval: true,
-  },
+  executable: "omp",
   coordinatorFiles: { extensionPath: COORDINATOR_EXTENSION_PATH, configPath: CONFIG_PATH },
   command: (spec) =>
     spec.agent === "coordinator" ? coordinatorCommand(spec) : workerCommand(spec),
