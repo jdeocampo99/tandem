@@ -164,6 +164,11 @@ Contracts the parser does not make obvious:
   principles (`src/instructions.ts`) out of implementer and reviewer briefs and the review brief's
   mandatory principles, so the repository's own guidance governs. It is pinned only when `"none"`,
   so policies pinned before the setting keep their digest.
+- `harness` is `"omp"` (default) or `"claude-code"`, the agent program the project's coordinator
+  and agents run on; any other value refuses the file. Like `standards`, it is pinned only when not
+  `"omp"`, so policies pinned before the setting keep their digest and load as OMP. Claude Code
+  cannot run yet: launch and workers refuse it with a plain-English message. See
+  [harness.md](harness.md).
 - Legacy keys `requestBudget`, `maxWorkers`, and `reviewLevels` decode but are ignored. A task
   pinned with `reviewLevels` carries it unread so its policy digest still matches.
 - Existing valid settings are preserved; an invalid file (bad TOML or JSON, unknown fields, wrong
