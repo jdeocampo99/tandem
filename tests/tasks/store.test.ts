@@ -939,6 +939,30 @@ test("a record written before setup commands existed loads with none", async () 
   });
 });
 
+test("a reloaded task keeps the policy digest Tandem pinned before harnesses came from models", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "digest-pinned" });
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("the record did not reload");
+    expect(policyIdentity(reloaded.policy)).toBe(
+      "a4465e91847c68d4bae71a5d7e048581ff89991ca64f3c1945233e30a8139a81",
+    );
+  });
+});
+
+test("a stored policy naming a harness is refused like any unknown key", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "harness-key" });
+    rewritePayload(directory, created.id, (payload) => {
+      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
+      policyValue.config = { ...policyValue.config, harness: "omp" };
+    });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
 test("a record pinned with standards none keeps it and its digest across reloads", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);

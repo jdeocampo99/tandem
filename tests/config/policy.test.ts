@@ -188,6 +188,7 @@ test("standards defaults to Tandem's and is pinned only when turned off", () => 
 
 test("parsePolicy rejects unknown keys, invalid pins, invalid limits, and unsafe file references", () => {
   expect(() => parsePolicy({ unexpected: true })).toThrow(TypeError);
+  expect(() => parsePolicy({ harness: "omp" })).toThrow(TypeError);
   expect(() => parsePolicy({ models: { scout: { model: "gpt-5.6-luna" } } })).toThrow(TypeError);
   expect(() => parsePolicy({ models: { scout: { thinking: "turbo" } } })).toThrow(TypeError);
   expect(() => parsePolicy({ maxFixRounds: -1 })).toThrow(TypeError);

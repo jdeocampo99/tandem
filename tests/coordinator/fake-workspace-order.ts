@@ -9,6 +9,7 @@ import type {
   ResolvedPolicy,
 } from "../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
+import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 
@@ -110,6 +111,7 @@ export async function saveCoordinator(
       leaseHolder: "coordinator",
       leasedAt: "2030-01-02T03:04:05.000Z",
     },
+    harness: DEFAULT_HARNESS,
     command: ["omp"],
   });
 }

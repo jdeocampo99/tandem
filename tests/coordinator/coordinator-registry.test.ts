@@ -21,6 +21,8 @@ import {
   refreshCoordinatorSource,
   resolveCoordinatorSourceHead,
 } from "../../src/coordinator/source.ts";
+import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { HarnessUnavailableError } from "../../src/harness/resolve.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { RuntimeTaskState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
@@ -360,6 +362,7 @@ async function fixture(): Promise<RegistryFixture> {
       leaseHolder: `coordinator-${paneId}`,
       leasedAt: "2030-01-02T03:04:05.000Z",
     },
+    harness: DEFAULT_HARNESS,
     command: ["omp", "--model", "openai-codex/gpt-5.6-luna", "--thinking", "max"],
   });
   return {
@@ -493,6 +496,79 @@ test("reuses a coordinator only after pane, cwd, and native OMP command proof", 
       ["herdr", "--session", "tandem", "pane", "get", "pane-a"],
       ["herdr", "--session", "tandem", "pane", "process-info", "--pane", "pane-a"],
     ]);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+/** Rewrites a saved record as a build from before harness choice wrote it, or with another harness. */
+async function rewriteRecordHarness(
+  home: string,
+  record: CoordinatorRecord,
+  harness: string | undefined,
+): Promise<void> {
+  const path = recordFile(home, record.endpoint.sessionId, record.repoPath);
+  const { harness: _saved, ...stored } = JSON.parse(await readFile(path, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  await writeFile(
+    path,
+    `${JSON.stringify(harness === undefined ? stored : { ...stored, harness })}\n`,
+    "utf8",
+  );
+}
+
+test("reconnects to a coordinator whose record predates harness choice as OMP", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    await rewriteRecordHarness(values.home, values.recordA, undefined);
+    const nativeCommand = [
+      "bun",
+      join(values.root, ".bun", "bin", "omp"),
+      ...values.recordA.command.slice(1),
+    ];
+    const runner = scriptedRunner([
+      result(panePayload(values.recordA)),
+      result(
+        processPayload(values.recordA, [
+          {
+            pid: 1234,
+            name: "bun",
+            argv: nativeCommand,
+            argv0: "bun",
+            cmdline: nativeCommand.join(" "),
+          },
+        ]),
+      ),
+    ]);
+
+    const found = await findRunningCoordinator(runner.run, {
+      home: values.home,
+      sessionId: "tandem",
+      repoPath: values.repoA,
+    });
+    expect(found?.harness).toBe(DEFAULT_HARNESS);
+    expect(found).toEqual(values.recordA);
+  } finally {
+    await cleanup(values.root);
+  }
+});
+
+test("refuses a coordinator record naming an unknown or unavailable harness", async () => {
+  const values = await fixture();
+  try {
+    await saveCoordinatorRecord(values.home, values.recordA);
+    const lookup = { home: values.home, sessionId: "tandem", repoPath: values.repoA };
+    await rewriteRecordHarness(values.home, values.recordA, "codex");
+    await expect(findRunningCoordinator(scriptedRunner([]).run, lookup)).rejects.toThrow(
+      /harness must be "omp" or "claude-code", not "codex"/u,
+    );
+    await rewriteRecordHarness(values.home, values.recordA, "claude-code");
+    await expect(findRunningCoordinator(scriptedRunner([]).run, lookup)).rejects.toThrow(
+      HarnessUnavailableError,
+    );
   } finally {
     await cleanup(values.root);
   }

@@ -1,4 +1,35 @@
 import type { AgentRole, CommandRunner, ModelSpec, ThinkingLevel } from "../contracts.ts";
+import { CLAUDE_CODE_PROVIDER } from "./claude-code/models.ts";
+
+const HARNESS_NAMES = ["omp", "claude-code"] as const;
+declare const harnessNameBrand: unique symbol;
+
+export type KnownHarness = (typeof HARNESS_NAMES)[number];
+/** The agent program one agent runs in, decided by its model. Parse it with `parseHarnessName`. */
+export type HarnessName = KnownHarness & { readonly [harnessNameBrand]: true };
+
+/** Reads a harness name from a saved record or job; anything else is refused. */
+export function parseHarnessName(value: unknown, field: string): HarnessName {
+  if (typeof value === "string" && (HARNESS_NAMES as readonly string[]).includes(value)) {
+    return value as HarnessName;
+  }
+  throw new TypeError(
+    `${field} must be ${HARNESS_NAMES.map((name) => JSON.stringify(name)).join(" or ")}, not ${JSON.stringify(value)}`,
+  );
+}
+
+/** What every model outside Claude Code runs in, and what anything saved without a harness ran in. */
+export const DEFAULT_HARNESS: HarnessName = parseHarnessName("omp", "harness");
+
+const CLAUDE_CODE: HarnessName = parseHarnessName("claude-code", "harness");
+
+/**
+ * The one place a model becomes a harness: a `claude-code/<model>` selector runs in Claude Code,
+ * and every other selector, or no model at all (the harness's own default), runs in OMP.
+ */
+export function harnessOf(model: ModelSpec | undefined): HarnessName {
+  return model?.model.startsWith(`${CLAUDE_CODE_PROVIDER}/`) ? CLAUDE_CODE : DEFAULT_HARNESS;
+}
 
 /**
  * What one request on this model draws from a subscription's included allowance, in the
@@ -56,16 +87,10 @@ export type AgentProcess = Readonly<{
 /** Whether a live process is a coordinator Tandem launched for this repository without a record. */
 export type UnrecordedCoordinatorMatch = "match" | "no-match" | "unknown";
 
-export type Capabilities = Readonly<{
-  proactiveCompaction: boolean;
-  hiddenMessages: boolean;
-  streamingProgress: boolean;
-  perActionApproval: boolean;
-}>;
-
 /** The launch port: everything coordinator and worker launch needs to know about one harness. */
 export type Harness = Readonly<{
-  capabilities: Capabilities;
+  /** The program every command this harness builds starts with. */
+  executable: string;
   /** Files the coordinator command loads, checked before launch. */
   coordinatorFiles: Readonly<{ extensionPath: string; configPath: string }>;
   command(spec: LaunchSpec): readonly string[];

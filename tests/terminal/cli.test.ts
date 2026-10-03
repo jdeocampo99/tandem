@@ -14,6 +14,7 @@ import {
 } from "../../src/coordinator/launch.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
+import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import {
   type CliApplication,
@@ -668,6 +669,68 @@ test("CLI launches a clean coordinator while preserving dirty original source id
   }
 });
 
+test("CLI refuses a new Claude Code coordinator before checking files or starting anything", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-cli-claude-code-")));
+  try {
+    const repo = join(root, "repo");
+    const poolRoot = join(root, "coordinator-pool");
+    const cleanRepo = join(poolRoot, "coordinator-worktree");
+    await mkdir(repo, { recursive: true });
+    const base = defaultPolicy();
+    const policy = {
+      ...base,
+      models: { ...base.models, coordinator: { model: "claude-code/opus", thinking: "high" } },
+    };
+    const service = {
+      onboard: async () => ({ policy, modelSettings: { configured: true } }),
+      shutdown: async () => undefined,
+    } as unknown as TandemService;
+    const runner = coordinatorRunner({ repo, poolRoot, cleanRepo, model: base.models.coordinator });
+    const effects: unknown[] = [];
+    const application = createCliApplication({
+      cwd: root,
+      service,
+      processEnvironment: {},
+      statPath: async (path) => {
+        effects.push(path);
+        throw new Error("no file may be checked");
+      },
+      run: runner.run,
+      runInteractive: async (request) => {
+        effects.push(request);
+        return 0;
+      },
+      startPersistent: async (request) => {
+        effects.push(request);
+        return undefined;
+      },
+    });
+
+    const launch = application.invoke(
+      parseCliArgs([
+        "launch",
+        "--home",
+        join(root, "home"),
+        "--pool-root",
+        poolRoot,
+        "--session",
+        "s",
+        "--repo",
+        repo,
+      ]),
+    );
+
+    await expect(launch).rejects.toThrow(
+      "The coordinator's model is claude-code/opus, which runs in Claude Code. Tandem can't run Claude Code yet. Pick a model from another provider for this role with `tandem configure`.",
+    );
+    expect(effects).toEqual([]);
+    expect(runner.calls.map((call) => call.argv[0])).not.toContain("omp");
+    expect(runner.calls.map((call) => call.argv[0])).not.toContain("treehouse");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("CLI reports a failed direct coordinator child as a nonzero outcome", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-cli-failed-launch-"));
   try {
@@ -1048,6 +1111,158 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+const CLAUDE_CODE_COORDINATOR = { model: "claude-code/opus", thinking: "high" } as const;
+
+/** Launches a coordinator on OMP in a fresh temporary world, as models.json had it before. */
+async function withRunningOmpCoordinator(
+  prefix: string,
+  body: (
+    world: Readonly<{
+      request: CoordinatorLaunchRequest;
+      recordedCommand: readonly string[];
+      fixturePath: string;
+      runner: () => ReturnType<typeof coordinatorRunner>;
+    }>,
+  ) => Promise<void>,
+): Promise<void> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), prefix)));
+  try {
+    const repo = join(root, "repo");
+    const home = join(root, "coordinator-home");
+    const poolRoot = join(root, "coordinator-pool");
+    const cleanRepo = join(poolRoot, "coordinator-worktree");
+    await mkdir(repo, { recursive: true });
+    await mkdir(cleanRepo, { recursive: true });
+    await writeOmpProbe(root);
+    const fixturePath = `${root}:/usr/bin:/bin`;
+    const model = defaultPolicy().models.coordinator;
+    const sessionKey = createHash("sha256").update(repo).digest("hex").slice(0, 24);
+    const recordedCommand = buildCoordinatorArgv({
+      cwd: cleanRepo,
+      model,
+      continueSession: true,
+      sessionDirectory: join(home, "coordinator-sessions", sessionKey),
+    });
+    const runnerInput = {
+      repo,
+      poolRoot,
+      cleanRepo,
+      model,
+      recordedCommand,
+      herdrEnvironment: { PATH: fixturePath },
+    };
+    const request: CoordinatorLaunchRequest = {
+      cwd: repo,
+      repo,
+      sourceRepo: cleanRepo,
+      home,
+      poolRoot,
+      sessionId: "recorded-harness-session",
+      model,
+      continueSession: true,
+      headless: true,
+      noAttach: false,
+    };
+    await launchCoordinator(request, {
+      run: coordinatorRunner({ ...runnerInput, startServer: true }).run,
+      startPersistent: async () => undefined,
+      runInteractive: async () => {
+        throw new Error("the first launch uses a Herdr workspace");
+      },
+      sleep: async () => undefined,
+      processEnvironment: {},
+    });
+    await body({
+      request,
+      recordedCommand,
+      fixturePath,
+      runner: () => coordinatorRunner(runnerInput),
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test("CLI reconnects to a running OMP coordinator after models.json moves the coordinator to Claude Code", async () => {
+  await withRunningOmpCoordinator(
+    "tandem-cli-recorded-harness-",
+    async ({ request, recordedCommand, fixturePath, runner }) => {
+      const base = defaultPolicy();
+      const policy = { ...base, models: { ...base.models, coordinator: CLAUDE_CODE_COORDINATOR } };
+      const service = {
+        onboard: async () => ({ policy, modelSettings: { configured: true } }),
+        shutdown: async () => undefined,
+      } as unknown as TandemService;
+      const application = createCliApplication({
+        cwd: request.cwd,
+        service,
+        processEnvironment: {},
+        statPath: async () => {
+          throw new Error("reconnect checks no coordinator files");
+        },
+        run: runner().run,
+        startPersistent: async () => {
+          throw new Error("reconnect must not start another Herdr server");
+        },
+        runInteractive: async () => {
+          throw new Error("reconnect must not launch a second coordinator");
+        },
+      });
+
+      const result = await withProcessEnvironment({ PATH: fixturePath }, () =>
+        application.invoke(
+          parseCliArgs([
+            "launch",
+            "--home",
+            request.home,
+            "--pool-root",
+            request.poolRoot,
+            "--session",
+            request.sessionId,
+            "--repo",
+            request.repo,
+            "--headless",
+          ]),
+        ),
+      );
+
+      expect(result.value).toMatchObject({
+        reused: true,
+        repoPath: request.repo,
+        command: recordedCommand,
+      });
+    },
+  );
+});
+
+test("restartCoordinator refuses a Claude Code replacement before closing the running OMP coordinator", async () => {
+  await withRunningOmpCoordinator(
+    "tandem-cli-restart-harness-",
+    async ({ request, fixturePath, runner }) => {
+      const observed = runner();
+      const restart = withProcessEnvironment({ PATH: fixturePath }, () =>
+        restartCoordinator(
+          { ...request, model: CLAUDE_CODE_COORDINATOR },
+          {
+            run: observed.run,
+            startPersistent: async () => {
+              throw new Error("a refused restart starts nothing");
+            },
+            runInteractive: async () => {
+              throw new Error("a refused restart launches nothing");
+            },
+            sleep: async () => undefined,
+            processEnvironment: {},
+          },
+        ),
+      );
+
+      await expect(restart).rejects.toThrow("runs in Claude Code");
+      expect(observed.calls.some((call) => call.argv.includes("close"))).toBe(false);
+    },
+  );
 });
 
 test("launchCoordinator retires the old generated workspace label before replacing it and retries after a rename failure", async () => {

@@ -19,6 +19,7 @@ import {
   type StoredReviewLens,
   type ThinkingLevel,
 } from "../contracts.ts";
+import { DEFAULT_HARNESS, type HarnessName, parseHarnessName } from "../harness/contract.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import type { TranscriptRef } from "../tasks/timeline.ts";
 import type { ExecutionIdentity } from "./execution-gate.ts";
@@ -47,6 +48,8 @@ export type WorkerJob = Readonly<{
   readonly generation: number;
   readonly role: WorkerRole;
   readonly cwd: string;
+  /** The harness `model` runs in; jobs written before it existed ran on OMP. */
+  readonly harness: HarnessName;
   readonly model: ModelSpec;
   readonly prompt: string;
   readonly resultPath: string;
@@ -421,6 +424,8 @@ export function parseWorkerJob(value: unknown): WorkerJob {
   }
   const role = value.role;
   const cwd = readAbsolutePath(value.cwd, "cwd");
+  const harness =
+    value.harness === undefined ? DEFAULT_HARNESS : parseHarnessName(value.harness, "harness");
   const model = readModel(value.model);
   const prompt = readNonEmptyText(value.prompt, "prompt");
   const resultPath = readAbsolutePath(value.resultPath, "resultPath");
@@ -466,6 +471,7 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     generation,
     role,
     cwd,
+    harness,
     model,
     prompt,
     resultPath,

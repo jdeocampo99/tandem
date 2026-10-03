@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import type { PrReviewState } from "../../src/pr-review/state.ts";
 import { createTask } from "../../src/tasks/lifecycle.ts";
 import { parseTaskRecord } from "../../src/tasks/store-codec.ts";
@@ -49,6 +50,7 @@ const job: WorkerJob = {
   generation: 0,
   role: "scout",
   cwd: "/work/review",
+  harness: DEFAULT_HARNESS,
   model: { model: "test/review", thinking: "high" },
   prompt: "review",
   resultPath: "/tmp/result.json",

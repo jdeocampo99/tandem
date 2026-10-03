@@ -16,6 +16,7 @@ import {
   listCoordinatorQuarantineRecords,
 } from "../../src/coordinator/resources.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
+import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import {
   FIRST_HEAD,
   fakePool,
@@ -109,6 +110,7 @@ function previousRecord(
   return {
     schemaVersion: 1 as const,
     repoPath: "/repo",
+    harness: DEFAULT_HARNESS,
     endpoint: {
       sessionId: SESSION_ID,
       workspaceId: "workspace-a",

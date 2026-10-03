@@ -2,6 +2,7 @@ import { expect, setSystemTime, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { registerWorkerTerminalExtension } from "../../src/harness/omp/terminal-extension.ts";
 import { runWorkerJob } from "../../src/worker.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
@@ -106,6 +107,7 @@ function makeJob(root: string, role: WorkerJob["role"] = "implementer"): WorkerJ
     generation: 3,
     role,
     cwd: root,
+    harness: DEFAULT_HARNESS,
     model: { model: "openai-codex/gpt-5.6-luna", thinking: "max" as const },
     prompt: "Complete the approved worker brief.",
     resultPath: join(root, "result.json"),
@@ -696,6 +698,49 @@ test("implementer setup runs in the worktree before OMP and a failure stops the 
     expect(result.status).toBe("failed");
     expect(result.error).toContain('worktree setup command "install"');
     expect(() => parseWorkerJob({ ...makeJob(root, "scout"), setup })).toThrow(TypeError);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a job written before harness choice runs on OMP and an unknown harness is refused", () => {
+  const { harness: _harness, ...legacy } = makeJob("/tmp/worktree");
+  expect(parseWorkerJob(legacy).harness).toBe(DEFAULT_HARNESS);
+  expect(() => parseWorkerJob({ ...legacy, harness: "codex" })).toThrow(
+    'harness must be "omp" or "claude-code", not "codex"',
+  );
+});
+
+test("a Claude Code job fails closed before running setup or any agent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-worker-harness-"));
+  try {
+    const job = {
+      ...makeJob(root),
+      harness: "claude-code",
+      model: { model: "claude-code/sonnet", thinking: "high" },
+      setup: [{ name: "install", argv: ["bun", "install"], timeoutMs: 5_000 }],
+      execution: {
+        schemaVersion: 1 as const,
+        home: root,
+        operationId: "operation-1",
+        fencingRevision: 1,
+        claimOwner: "test-owner",
+      },
+    };
+    const jobPath = join(root, "job.json");
+    await writeFile(jobPath, `${JSON.stringify(job)}\n`, { mode: 0o600 });
+    const calls: unknown[] = [];
+    const result = await runWorkerJob(jobPath, {
+      run: async (request) => {
+        calls.push(request);
+        return 0;
+      },
+      now: () => "2030-01-02T03:04:05.000Z",
+      executionGate: async () => ({ admitted: true }),
+    });
+    expect(calls).toEqual([]);
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("Tandem can't run Claude Code yet");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

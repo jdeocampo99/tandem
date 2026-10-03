@@ -9,7 +9,7 @@ import {
 import { renestWorkspaces } from "../coordinator/renest.ts";
 import { restartCoordinator } from "../coordinator/restart.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
-import { ompHarness } from "../harness/omp/launch.ts";
+import { harnessForRole } from "../harness/resolve.ts";
 import type { TandemService } from "../service/controller.ts";
 import {
   type CliCommand,
@@ -108,9 +108,6 @@ async function onboardWithConsent(context: CliCommandContext): Promise<CliComman
 async function launch(context: CliCommandContext): Promise<CliCommandOutcome> {
   const { invocation, environment, capabilities } = context;
   const { run, statPath } = capabilities;
-  const files = coordinatorFiles(invocation.options);
-  await verifyRegularPath(statPath, files.extensionPath, "extensionPath");
-  await verifyRegularPath(statPath, files.configPath, "configPath");
   const onboarded = await context.service().onboard(environment.repo, false);
   // The Tandem coordinator is where models get chosen, so until then it runs OMP's own default.
   const ompDefault =
@@ -121,9 +118,14 @@ async function launch(context: CliCommandContext): Promise<CliCommandOutcome> {
   const model = ompDefault
     ? undefined
     : modelForPolicy(onboarded.policy.models.coordinator, invocation.options);
-  if (model !== undefined) await ompHarness.validateModel(run, environment.repo, model);
   const launchDependencies: CoordinatorLaunchDependencies = {
     run,
+    checkNewCoordinator: async (harness, newModel) => {
+      const files = coordinatorFiles(harness, invocation.options);
+      await verifyRegularPath(statPath, files.extensionPath, "extensionPath");
+      await verifyRegularPath(statPath, files.configPath, "configPath");
+      if (newModel !== undefined) await harness.validateModel(run, environment.repo, newModel);
+    },
     startPersistent: capabilities.startPersistent,
     runInteractive: capabilities.runInteractive,
     sleep: capabilities.sleep,
@@ -168,37 +170,42 @@ async function runDoctorCheck(
 async function doctor(context: CliCommandContext): Promise<CliCommandOutcome> {
   const { invocation, environment } = context;
   const { run, statPath } = context.capabilities;
-  const files = coordinatorFiles(invocation.options);
+  const service = context.service();
+  let policyModel: ModelSpec | undefined;
+  const policyCheck = await runDoctorCheck("policy", async () => {
+    const onboarded = await service.onboard(environment.repo, false);
+    policyModel = modelForPolicy(onboarded.policy.models.coordinator, invocation.options);
+    return onboarded.existingConfig
+      ? `using ${onboarded.configPath}`
+      : `proposal available at ${onboarded.configPath}`;
+  });
+  const coordinatorModel = (): ModelSpec => {
+    if (policyModel === undefined)
+      throw new Error("policy check did not produce coordinator model");
+    return policyModel;
+  };
+  const coordinatorHarness = () => harnessForRole("coordinator", coordinatorModel());
   const checks: DoctorCheck[] = [];
   checks.push(
     await runDoctorCheck("extension", async () => {
+      const files = coordinatorFiles(coordinatorHarness(), invocation.options);
       await verifyRegularPath(statPath, files.extensionPath, "extensionPath");
       return files.extensionPath;
     }),
   );
   checks.push(
     await runDoctorCheck("config", async () => {
+      const files = coordinatorFiles(coordinatorHarness(), invocation.options);
       await verifyRegularPath(statPath, files.configPath, "configPath");
       return files.configPath;
     }),
   );
-  const service = context.service();
-  let policyModel: ModelSpec | undefined;
-  checks.push(
-    await runDoctorCheck("policy", async () => {
-      const onboarded = await service.onboard(environment.repo, false);
-      policyModel = modelForPolicy(onboarded.policy.models.coordinator, invocation.options);
-      return onboarded.existingConfig
-        ? `using ${onboarded.configPath}`
-        : `proposal available at ${onboarded.configPath}`;
-    }),
-  );
+  checks.push(policyCheck);
   checks.push(
     await runDoctorCheck("omp-model", async () => {
-      if (policyModel === undefined)
-        throw new Error("policy check did not produce coordinator model");
-      const observed = await ompHarness.validateModel(run, environment.repo, policyModel);
-      return `${observed.selector} supports ${policyModel.thinking}`;
+      const model = coordinatorModel();
+      const observed = await coordinatorHarness().validateModel(run, environment.repo, model);
+      return `${observed.selector} supports ${model.thinking}`;
     }),
   );
   checks.push(

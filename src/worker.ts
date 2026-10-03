@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { CommandRequest } from "./contracts.ts";
-import type { AgentKind } from "./harness/contract.ts";
-import { ompHarness } from "./harness/omp/launch.ts";
+import type { AgentKind, Harness } from "./harness/contract.ts";
+import { harnessFor } from "./harness/resolve.ts";
 import { readTaskInbox } from "./tasks/communication-persistence.ts";
 import { formatTaskMessages } from "./tasks/communication-protocol.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
@@ -73,10 +73,15 @@ function workerEnvironment(job: WorkerJob, jobPath: string): Readonly<Record<str
   return environment;
 }
 
-function buildWorkerCommand(job: WorkerJob, prompt: string, jobPath: string): CommandRequest {
+function buildWorkerCommand(
+  harness: Harness,
+  job: WorkerJob,
+  prompt: string,
+  jobPath: string,
+): CommandRequest {
   const environment = workerEnvironment(job, jobPath);
   return {
-    argv: ompHarness.command({
+    argv: harness.command({
       agent: agentForJob(job),
       cwd: job.cwd,
       model: job.model,
@@ -187,9 +192,10 @@ export async function runWorkerJob(
   const run = options.run ?? defaultRunInteractive;
   let childExit: number;
   try {
+    const harness = harnessFor(job.harness);
     await runSetup(job, run);
     const prompt = await promptWithInitialCommunication(job);
-    childExit = await run(buildWorkerCommand(job, prompt, absoluteJobPath));
+    childExit = await run(buildWorkerCommand(harness, job, prompt, absoluteJobPath));
   } catch (error) {
     const completed = await existingResult(job);
     if (completed !== undefined) return completed;

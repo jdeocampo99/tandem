@@ -8,7 +8,8 @@ src/config/environment.ts, src/coordinator/launch.ts, src/coordinator/ownership.
 src/coordinator/registry.ts, src/coordinator/record.ts, src/coordinator/lock.ts,
 src/coordinator/exclusivity.ts, src/coordinator/resources.ts, src/coordinator/workspace.ts,
 src/coordinator/restart.ts, src/coordinator/reset.ts, src/coordinator/source.ts,
-src/coordinator/renest.ts, src/harness/contract.ts (the launch port), src/harness/omp/launch.ts.
+src/coordinator/renest.ts, src/harness/contract.ts (the launch port), src/harness/resolve.ts,
+src/harness/omp/launch.ts.
 Tests: tests/coordinator/, tests/harness/omp/launch.test.ts, tests/terminal/main.test.ts.
 
 ## Setting resolution
@@ -190,8 +191,17 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   Reset still refuses to close such a pane, because it is no longer Tandem's.
 - A pre-registry coordinator without a clean lease record is never adopted or duplicated; launch
   refuses and tells the user to stop it and relaunch (`legacyCoordinatorGuidance` in ownership.ts).
+- Each record names the coordinator's `harness` (see [harness.md](harness.md)); a record saved
+  before that field is OMP. Only a new coordinator takes its harness from its model
+  (`harnessOf`), and launch refuses it before checking files or starting anything when Tandem
+  cannot run that harness. A running coordinator keeps its recorded harness, so `tandem`
+  reconnects to it even after `models.json` names a model in another harness. `--restart` and
+  `tandem update` check the replacement's harness before closing the running coordinator.
+  Reconnect, restart, reset, and `tandem fix` match processes with the recorded harness, and a
+  record whose `command[0]` is not that harness's executable, or whose harness is unknown, is
+  unreadable.
 - Commands and processes are matched through the launch port (`Harness` in
-  src/harness/contract.ts). Recorded ownership compares the live argv with the recorded command,
+  src/harness/contract.ts, resolved by `harnessFor`). Recorded ownership compares the live argv with the recorded command,
   so a coordinator launched before the OMP code moved under src/harness/omp/ still matches its
   record, which names the old src/extension.ts. The unrecorded check accepts both extension paths.
   Its pane's "press Enter to start it again" offer reruns the recorded command with the old path,
