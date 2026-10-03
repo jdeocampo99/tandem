@@ -11,6 +11,7 @@ import {
   runChecked,
 } from "../../adapters/primitives.ts";
 import type { CommandRequest, CommandRunner, ModelSpec, ThinkingLevel } from "../../contracts.ts";
+import type { IncludedAllowance, ModelRecord } from "../contract.ts";
 
 const THINKING_LEVELS: Readonly<Record<string, true>> = {
   off: true,
@@ -26,33 +27,6 @@ const THINKING_LEVELS: Readonly<Record<string, true>> = {
 function isThinkingLevel(value: string): value is ThinkingLevel {
   return THINKING_LEVELS[value] === true;
 }
-
-/**
- * What one request on this model draws from a subscription's included allowance, in the
- * provider's own units. It carries no currency: an included draw is quota consumption, and
- * pricing it would invent a charge the provider never billed.
- */
-export type OmpIncludedAllowance = Readonly<{
-  plan: string;
-  unit: string;
-  unitsPerRequest: number;
-}>;
-
-export type OmpModelRecord = Readonly<{
-  selector: string;
-  id: string;
-  provider: string;
-  thinking: readonly ThinkingLevel[];
-  name?: string;
-  reasoning?: boolean;
-  contextWindow?: number;
-  /** Descriptive catalogue pricing; it is evidence about the model, not this account's rate. */
-  cost?: Readonly<{
-    input: number;
-    output: number;
-  }>;
-  includedAllowance?: OmpIncludedAllowance;
-}>;
 
 export type OmpModelListInput = Readonly<{
   cwd: string;
@@ -118,7 +92,7 @@ function optionalIncludedAllowance(
   field: string,
   operation: string,
   response: string,
-): OmpIncludedAllowance | undefined {
+): IncludedAllowance | undefined {
   if (value === undefined || value === null) return undefined;
   const allowance = requiredRecord(value, field, operation, response);
   const unitsPerRequest = optionalNumber(
@@ -175,7 +149,7 @@ function parseModelRecord(
   index: number,
   operation: string,
   response: string,
-): OmpModelRecord {
+): ModelRecord {
   const record = requiredRecord(value, `models[${index}]`, operation, response);
   const selector = requiredString(
     record.selector,
@@ -229,7 +203,7 @@ function parseModelRecord(
   };
 }
 
-function parseModelListing(response: string): readonly OmpModelRecord[] {
+function parseModelListing(response: string): readonly ModelRecord[] {
   const operation = "omp model listing";
   const parsed = parseJson(response, operation);
   const root = requiredRecord(parsed, "response", operation, response);
@@ -240,7 +214,7 @@ function parseModelListing(response: string): readonly OmpModelRecord[] {
 }
 
 type OmpModelListingResult = Readonly<{
-  readonly models: readonly OmpModelRecord[];
+  readonly models: readonly ModelRecord[];
   readonly response: string;
 }>;
 
@@ -262,14 +236,14 @@ async function readOmpModelListing(
 export async function listOmpModels(
   run: CommandRunner,
   input: OmpModelListInput,
-): Promise<readonly OmpModelRecord[]> {
+): Promise<readonly ModelRecord[]> {
   return (await readOmpModelListing(run, input)).models;
 }
 
 export async function validateModel(
   run: CommandRunner,
   input: ValidateModelInput,
-): Promise<OmpModelRecord> {
+): Promise<ModelRecord> {
   const model = input.model;
   checkedText(model.model, "model.model");
   if (!isThinkingLevel(model.thinking)) {

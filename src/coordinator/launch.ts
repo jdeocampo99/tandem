@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import { quoteShellCommand } from "../adapters/commands.ts";
 import { readCheckpoint } from "../adapters/git.ts";
 import { readHerdrStatus } from "../adapters/herdr.ts";
@@ -16,6 +15,7 @@ import type {
   ModelSpec,
   WorktreeLease,
 } from "../contracts.ts";
+import { ompHarness } from "../harness/omp/launch.ts";
 import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal/cli-arguments.ts";
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
@@ -43,13 +43,10 @@ import {
   retireCoordinatorWorkspace,
 } from "./workspace.ts";
 
-const DEFAULT_COORDINATOR_CONFIG = "harness/omp/worker-config.yml";
 const HERDR_READY_ATTEMPTS = 40;
 const HERDR_READY_DELAY_MS = 250;
 /** How long a coordinator shell Herdr just restored gets to finish starting before it counts as busy. */
 const RESTORED_SHELL_ATTEMPTS = 20;
-// No grep or glob: searching the repository is a scout's job, not the coordinator's.
-const COORDINATOR_TOOLS = ["read", "ask", "tandem"] as const;
 
 function defaultClock(): string {
   return new Date().toISOString();
@@ -59,10 +56,8 @@ export type CoordinatorLaunchInput = Readonly<{
   readonly cwd: string;
   /** Unset runs OMP's own default model: the Tandem coordinator before any model is chosen. */
   readonly model: ModelSpec | undefined;
-  readonly configPath: string;
-  readonly extensionPath: string;
   readonly continueSession?: boolean;
-  readonly sessionDirectory?: string;
+  readonly sessionDirectory: string;
   readonly prompt?: string;
 }>;
 
@@ -76,8 +71,6 @@ export type CoordinatorLaunchRequest = Readonly<{
   readonly sessionId: string;
   /** Unset runs OMP's own default model: the Tandem coordinator before any model is chosen. */
   readonly model: ModelSpec | undefined;
-  readonly configPath: string;
-  readonly extensionPath: string;
   readonly continueSession: boolean;
   readonly headless: boolean;
   readonly noAttach: boolean;
@@ -129,58 +122,42 @@ export type CoordinatorLaunchDependencies = Readonly<{
     }>,
   ) => Promise<readonly string[]>;
 }>;
+/** Checks caller-supplied launch values, then builds the coordinator command. */
 export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly string[] {
-  const cwd = checkLaunchPath(input.cwd, "cwd");
-  const configPath = checkLaunchPath(input.configPath, "configPath");
-  const extensionPath = checkLaunchPath(input.extensionPath, "extensionPath");
-  const model =
-    input.model === undefined
-      ? []
-      : [
-          "--model",
-          checkLaunchText(input.model.model, "model.model"),
-          "--thinking",
-          parseThinking(input.model.thinking),
-        ];
-  const argv = [
-    "omp",
-    ...model,
-    "--config",
-    configPath,
-    "--no-extensions",
-    "--extension",
-    extensionPath,
-    "--tools",
-    COORDINATOR_TOOLS.join(","),
-    "--cwd",
-    cwd,
-    "--no-prewalk",
-    "--no-title",
-  ];
-  if (input.continueSession === true) argv.push("--continue");
-  if (input.sessionDirectory !== undefined) {
-    argv.push("--session-dir", checkLaunchPath(input.sessionDirectory, "sessionDirectory"));
-  }
-  if (input.prompt !== undefined) argv.push(checkLaunchText(input.prompt, "prompt"));
-  return argv;
+  return ompHarness.command({
+    agent: "coordinator",
+    cwd: checkLaunchPath(input.cwd, "cwd"),
+    model:
+      input.model === undefined
+        ? undefined
+        : {
+            model: checkLaunchText(input.model.model, "model.model"),
+            thinking: parseThinking(input.model.thinking),
+          },
+    conversation: {
+      kind: "saved",
+      directory: checkLaunchPath(input.sessionDirectory, "sessionDirectory"),
+      resume: input.continueSession === true,
+    },
+    ...(input.prompt === undefined ? {} : { prompt: checkLaunchText(input.prompt, "prompt") }),
+  });
 }
 
+/** The coordinator's checked-in files; the CLI may name them only to confirm them. */
 export function coordinatorFiles(
   options: CliOptions,
 ): Readonly<{ extensionPath: string; configPath: string }> {
-  const sourceDirectory = dirname(fileURLToPath(import.meta.url));
-  const defaultExtensionPath = join(sourceDirectory, "..", "harness", "omp", "extension.ts");
-  const defaultConfigPath = join(sourceDirectory, "..", DEFAULT_COORDINATOR_CONFIG);
-  const extensionPath = options.extensionPath ?? defaultExtensionPath;
-  const configPath = options.configPath ?? defaultConfigPath;
-  if (resolve(extensionPath) !== resolve(defaultExtensionPath)) {
+  const defaults = ompHarness.coordinatorFiles;
+  const extensionPath = options.extensionPath ?? defaults.extensionPath;
+  const configPath = options.configPath ?? defaults.configPath;
+  if (resolve(extensionPath) !== resolve(defaults.extensionPath)) {
     throw new CliUsageError(
-      `coordinator extension must be Tandem's checked-in extension at ${defaultExtensionPath}`,
+      `coordinator extension must be Tandem's checked-in extension at ${defaults.extensionPath}`,
     );
   }
-  if (resolve(configPath) !== resolve(defaultConfigPath)) {
+  if (resolve(configPath) !== resolve(defaults.configPath)) {
     throw new CliUsageError(
-      `coordinator config must be the checked-in fallback-disabled config at ${defaultConfigPath}`,
+      `coordinator config must be the checked-in fallback-disabled config at ${defaults.configPath}`,
     );
   }
   return { extensionPath, configPath };
@@ -657,8 +634,6 @@ export async function launchCoordinatorUnlocked(
   buildCoordinatorArgv({
     cwd: request.cwd,
     model: request.model,
-    configPath: request.configPath,
-    extensionPath: request.extensionPath,
     continueSession: request.continueSession,
     sessionDirectory: paths.sessionDirectory,
     ...(request.prompt === undefined ? {} : { prompt: request.prompt }),
@@ -808,8 +783,6 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   const argv = buildCoordinatorArgv({
     cwd: coordinatorCwd,
     model: request.model,
-    configPath: request.configPath,
-    extensionPath: request.extensionPath,
     continueSession: request.continueSession,
     sessionDirectory: paths.sessionDirectory,
     ...(request.prompt === undefined ? {} : { prompt: request.prompt }),
@@ -906,8 +879,6 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   const resumeArgv = buildCoordinatorArgv({
     cwd: coordinatorCwd,
     model: request.model,
-    configPath: request.configPath,
-    extensionPath: request.extensionPath,
     continueSession: true,
     sessionDirectory: paths.sessionDirectory,
   });

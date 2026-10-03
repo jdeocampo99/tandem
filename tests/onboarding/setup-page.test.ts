@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { HomeSettings } from "../../src/config/home-settings.ts";
 import type { CommandRequest, CommandResult } from "../../src/contracts.ts";
-import type { OmpModelRecord } from "../../src/harness/omp/adapter.ts";
+import type { ModelRecord } from "../../src/harness/contract.ts";
 import { type SetupPageDependencies, SetupPageWorkflow } from "../../src/onboarding/setup-page.ts";
 import { findCheckoutsByName } from "../../src/repos/locate.ts";
 
-const catalogue: readonly OmpModelRecord[] = [
+const catalogue: readonly ModelRecord[] = [
   {
     selector: "anthropic/opus",
     id: "opus",
@@ -40,7 +40,7 @@ async function machine(
     picker?: (code: string, outside: string) => CommandResult | Error;
     failScan?: boolean;
     savedRoots?: (code: string, outside: string) => string[];
-    availableModels?: readonly OmpModelRecord[];
+    availableModels?: readonly ModelRecord[];
   }> = {},
 ) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-setup-")));
@@ -251,7 +251,7 @@ test("a valid answer is stored for one Save and saved in order", async () => {
 });
 
 test("approved mixed-model choices enable only the providers used by those models", async () => {
-  const availableModels: readonly OmpModelRecord[] = [
+  const availableModels: readonly ModelRecord[] = [
     ...catalogue,
     { selector: "openai/gpt", id: "gpt", provider: "openai", thinking: ["high"] },
     { selector: "google/gemini", id: "gemini", provider: "google", thinking: ["high"] },

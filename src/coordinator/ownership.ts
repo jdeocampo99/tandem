@@ -1,9 +1,9 @@
 import { lstat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
 import { AdapterCommandError, EndpointOwnershipError } from "../adapters/primitives.ts";
 import type { CommandRequest, CommandRunner, Endpoint } from "../contracts.ts";
+import { ompHarness } from "../harness/omp/launch.ts";
 import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
@@ -22,13 +22,6 @@ import { readCoordinatorRecord } from "./registry.ts";
 const LEGACY_COORDINATOR_SESSION_DIRECTORY = "coordinator-sessions";
 export const COORDINATOR_SCRIPT_DIRECTORY = "coordinator-scripts";
 const LEGACY_COORDINATOR_REPOSITORY_KEY_LENGTH = 24;
-const SOURCE_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-/** Coordinators launched before the OMP code moved under harness/omp/ still name the old path. */
-const COORDINATOR_EXTENSION_PATHS = [
-  join(SOURCE_DIRECTORY, "harness", "omp", "extension.ts"),
-  join(SOURCE_DIRECTORY, "extension.ts"),
-] as const;
-
 export type SnapshotPane = Readonly<{
   readonly workspaceId: string;
   readonly tabId: string;
@@ -40,17 +33,6 @@ export type FindRunningCoordinatorInput = Readonly<{
   readonly sessionId: string;
   readonly repoPath: string;
 }>;
-export function sameCommand(left: readonly string[], right: readonly string[]): boolean {
-  const normalizedLeft = normalizeOmpCommand(left);
-  const normalizedRight = normalizeOmpCommand(right);
-  return (
-    normalizedLeft !== undefined &&
-    normalizedRight !== undefined &&
-    normalizedLeft.length === normalizedRight.length &&
-    normalizedLeft.every((value, index) => value === normalizedRight[index])
-  );
-}
-
 function nativeErrorCode(value: string): string | undefined {
   try {
     const parsed: unknown = JSON.parse(value);
@@ -124,44 +106,9 @@ function parseSnapshotPanes(value: string): readonly SnapshotPane[] {
   });
 }
 
-type CommandOption = Readonly<{
-  readonly present: boolean;
-  readonly value: string | undefined;
-}>;
-
-function commandOption(argv: readonly string[], option: string): CommandOption {
-  let value: string | undefined;
-  let present = false;
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] !== option) continue;
-    if (present || index + 1 >= argv.length || argv[index + 1]?.startsWith("--") === true) {
-      return { present: true, value: undefined };
-    }
-    present = true;
-    value = argv[index + 1];
-    index += 1;
-  }
-  return { present, value };
-}
 function basename(value: string): string {
   const slash = value.lastIndexOf("/");
   return (slash === -1 ? value : value.slice(slash + 1)).replace(/^-/, "").toLowerCase();
-}
-
-function ompLauncherIndex(argv: readonly string[]): number | undefined {
-  if (basename(argv[0] ?? "") === "omp") return 0;
-  if (basename(argv[0] ?? "") !== "bun") return undefined;
-  if (basename(argv[1] ?? "") === "omp") return 1;
-  if (basename(argv[1] ?? "") === "bun" && basename(argv[2] ?? "") === "omp") return 2;
-  return undefined;
-}
-
-/** `--continue` only resumes the saved conversation, so it never distinguishes one coordinator. */
-function normalizeOmpCommand(argv: readonly string[]): readonly string[] | undefined {
-  const launcherIndex = ompLauncherIndex(argv);
-  return launcherIndex === undefined
-    ? undefined
-    : ["omp", ...argv.slice(launcherIndex + 1).filter((value) => value !== "--continue")];
 }
 
 /** The launch script Tandem writes, which waits in the pane after its coordinator exits. */
@@ -173,54 +120,6 @@ function isCoordinatorBootstrap(argv: readonly string[]): boolean {
     basename(dirname(script)) === COORDINATOR_SCRIPT_DIRECTORY &&
     /^coordinator-[0-9a-f]{16}-[0-9a-f]{16}-[0-9a-f]{16}\.sh$/u.test(basename(script))
   );
-}
-
-function processLooksLikeOmp(process: {
-  readonly name: string;
-  readonly argv: readonly string[];
-  readonly argv0: string | undefined;
-}): boolean {
-  return (
-    normalizeOmpCommand(process.argv) !== undefined ||
-    [process.name, process.argv0]
-      .filter((value): value is string => value !== undefined)
-      .some((value) => basename(value) === "omp")
-  );
-}
-
-async function legacyInvocationMatch(
-  argv: readonly string[],
-  repoPath: string,
-  sessionDirectory: string,
-  extensionPaths: ReadonlySet<string>,
-): Promise<"match" | "no-match" | "unknown"> {
-  const normalized = normalizeOmpCommand(argv);
-  if (normalized === undefined) return "unknown";
-  const extension = commandOption(normalized, "--extension");
-  if (!extension.present) return "no-match";
-  if (extension.value === undefined) return "unknown";
-  const actualExtension = await canonicalPath(extension.value, "coordinator extension");
-  if (!extensionPaths.has(actualExtension)) return "no-match";
-
-  const cwd = commandOption(normalized, "--cwd");
-  const session = commandOption(normalized, "--session-dir");
-  if (
-    (cwd.present && cwd.value === undefined) ||
-    (session.present && session.value === undefined)
-  ) {
-    return "unknown";
-  }
-  if (!cwd.present && !session.present) return "no-match";
-  if (cwd.value !== undefined && (await canonicalPath(cwd.value, "coordinator cwd")) === repoPath) {
-    return "match";
-  }
-  if (
-    session.value !== undefined &&
-    (await canonicalPath(session.value, "coordinator session directory")) === sessionDirectory
-  ) {
-    return "match";
-  }
-  return "no-match";
 }
 
 function legacySessionDirectory(home: string, repoPath: string): string {
@@ -269,11 +168,6 @@ async function findUnrecordedCoordinator(
     );
   }
   const panes = parseSnapshotPanes(snapshot.stdout);
-  const extensionPaths = new Set(
-    await Promise.all(
-      COORDINATOR_EXTENSION_PATHS.map((path) => canonicalPath(path, "coordinator extension")),
-    ),
-  );
   const sessionDirectory = await canonicalPath(
     legacySessionDirectory(home, repoPath),
     "coordinator session directory",
@@ -296,18 +190,16 @@ async function findUnrecordedCoordinator(
     }
     if (!inspection.activeWorker) continue;
     for (const process of inspection.processInfo.foregroundProcesses) {
-      if (!processLooksLikeOmp(process)) continue;
+      if (!ompHarness.looksLikeAgent(process)) continue;
       if (process.argv.length === 0) {
         throw ownershipFailure(
           `active OMP process in pane ${JSON.stringify(pane.paneId)} did not expose argv for legacy identity proof`,
         );
       }
-      const match = await legacyInvocationMatch(
-        process.argv,
+      const match = await ompHarness.matchUnrecordedCoordinator(process.argv, {
         repoPath,
         sessionDirectory,
-        extensionPaths,
-      );
+      });
       if (match === "unknown") {
         throw ownershipFailure(
           `active OMP process in pane ${JSON.stringify(pane.paneId)} exposed an unverifiable Tandem invocation`,
@@ -357,8 +249,8 @@ async function liveCoordinatorProcess(
   run: CommandRunner,
   record: CoordinatorRecord,
 ): Promise<string | undefined> {
-  const sessionDirectory = commandOption(record.command, "--session-dir").value;
-  if (sessionDirectory === undefined) return "unknown";
+  const needle = ompHarness.processNeedle(record.command);
+  if (needle === undefined) return "unknown";
   const request: CommandRequest = {
     argv: ["ps", "-axww", "-o", "pid=,command="],
     cwd: record.worktree.path,
@@ -366,7 +258,6 @@ async function liveCoordinatorProcess(
   const result = await run(request);
   if (result.code !== 0) throw new AdapterCommandError("ps", request, result);
   // ponytail: substring match on the joined command line; over-matching only fails closed.
-  const needle = `--session-dir ${sessionDirectory}`;
   const line = result.stdout.split("\n").find((entry) => entry.includes(needle));
   return line?.trim().split(/\s+/u)[0];
 }
@@ -424,7 +315,7 @@ async function findOwnedCoordinator(
   }
 
   const matchingProcesses = inspection.processInfo.foregroundProcesses.filter((process) =>
-    sameCommand(process.argv, record.command),
+    ompHarness.sameCommand(process.argv, record.command),
   );
   if (matchingProcesses.length > 1) {
     throw ownershipFailure(

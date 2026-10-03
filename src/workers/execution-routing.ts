@@ -32,7 +32,7 @@ import {
   modelTierEvidence,
 } from "../config/model-tier.ts";
 import type { IsoTimestamp, ModelSpec } from "../contracts.ts";
-import type { OmpModelRecord } from "../harness/omp/adapter.ts";
+import type { ModelRecord } from "../harness/contract.ts";
 import {
   type DurableExecutionRouting,
   type DurableExecutionRoutingPause,
@@ -57,7 +57,7 @@ export type ModelCatalogueUnavailableReason =
 export type ModelCatalogueSnapshot =
   | Readonly<{
       readonly status: "read";
-      readonly models: readonly OmpModelRecord[];
+      readonly models: readonly ModelRecord[];
       /** Providers explicitly approved for spending; catalogue discovery alone never adds one. */
       readonly enabledProviders: readonly string[];
       readonly readAt: IsoTimestamp;

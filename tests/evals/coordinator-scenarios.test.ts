@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { chmod, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { RequestBriefContent } from "../../src/contracts.ts";
 import type {
   CoordinatorLaunchDependencies,
@@ -20,13 +19,6 @@ import {
   withScenario,
 } from "./scenario.ts";
 
-const EXTENSION_PATH = fileURLToPath(
-  new URL("../../src/harness/omp/extension.ts", import.meta.url),
-);
-const CONFIG_PATH = fileURLToPath(
-  new URL("../../src/harness/omp/worker-config.yml", import.meta.url),
-);
-
 type RehomeCall = Readonly<{ readonly parentWorkspaceId: string }>;
 
 function launchRequest(world: ScenarioWorld): CoordinatorLaunchRequest {
@@ -37,8 +29,6 @@ function launchRequest(world: ScenarioWorld): CoordinatorLaunchRequest {
     poolRoot: world.poolRoot,
     sessionId: world.sessionId,
     model: { model: "scenario/coordinator", thinking: "low" },
-    configPath: CONFIG_PATH,
-    extensionPath: EXTENSION_PATH,
     continueSession: true,
     headless: true,
     noAttach: true,

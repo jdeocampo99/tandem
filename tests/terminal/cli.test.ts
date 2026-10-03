@@ -428,41 +428,6 @@ test("communication CLI syntax keeps repeatable supersedes and exact answer fiel
   expect(() => parseCliArgs(["messages", "task-1"])).toThrow("accepts at most");
 });
 
-test("buildCoordinatorArgv disables discovery and exposes only coordinator read/interview plus Tandem", () => {
-  const argv = buildCoordinatorArgv({
-    cwd: "/repo",
-    model: { model: "openai-codex/gpt-6-astra", thinking: "high" },
-    configPath: "/tandem/src/worker-config.yml",
-    extensionPath: "/tandem/src/extension.ts",
-    continueSession: true,
-  });
-
-  expect(argv).toContain("--no-extensions");
-  expect(argv).toContain("--extension");
-  expect(argv).toContain("/tandem/src/extension.ts");
-  expect(argv).toContain("--config");
-  expect(argv).toContain("/tandem/src/worker-config.yml");
-  expect(argv).toContain("--tools");
-  expect(argv).toContain("read,ask,tandem");
-  expect(argv).toContain("--continue");
-  expect(argv).not.toContain("--no-session");
-  expect(argv).not.toContain("write");
-  expect(argv).not.toContain("bash");
-  expect(argv).not.toContain("eval");
-});
-
-test("buildCoordinatorArgv leaves the model to OMP when none is given", () => {
-  const argv = buildCoordinatorArgv({
-    cwd: "/tandem",
-    model: undefined,
-    configPath: "/tandem/src/worker-config.yml",
-    extensionPath: "/tandem/src/extension.ts",
-  });
-  expect(argv).not.toContain("--model");
-  expect(argv).not.toContain("--thinking");
-  expect(argv).toContain("read,ask,tandem");
-});
-
 test("CLI approval refusal fails closed and never reaches the service", async () => {
   let serviceCreated = false;
   const dependencies: CliDependencies = {
@@ -802,8 +767,6 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
       poolRoot,
       sessionId: "pane-session",
       model,
-      configPath: "/tandem/src/worker-config.yml",
-      extensionPath: "/tandem/src/extension.ts",
       continueSession: true,
       headless: true,
       noAttach: false,
@@ -813,8 +776,6 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
     const recordedCommand = buildCoordinatorArgv({
       cwd: cleanRepo,
       model: request.model,
-      configPath: request.configPath,
-      extensionPath: request.extensionPath,
       continueSession: request.continueSession,
       sessionDirectory: join(home, "coordinator-sessions", sessionKey),
     });
@@ -1025,8 +986,6 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
       poolRoot,
       sessionId: "reconnect-session",
       model,
-      configPath: "/tandem/src/worker-config.yml",
-      extensionPath: "/tandem/src/extension.ts",
       continueSession: true,
       headless: true,
       noAttach: false,
@@ -1035,8 +994,6 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
     const recordedCommand = buildCoordinatorArgv({
       cwd: cleanRepo,
       model,
-      configPath: "/tandem/src/worker-config.yml",
-      extensionPath: "/tandem/src/extension.ts",
       continueSession: true,
       sessionDirectory: join(home, "coordinator-sessions", sessionKey),
     });
@@ -1112,8 +1069,6 @@ test("launchCoordinator retires the old generated workspace label before replaci
       poolRoot,
       sessionId: "retire-session",
       model,
-      configPath: "/tandem/src/worker-config.yml",
-      extensionPath: "/tandem/src/extension.ts",
       continueSession: true,
       headless: true,
       noAttach: false,
@@ -1122,8 +1077,6 @@ test("launchCoordinator retires the old generated workspace label before replaci
     const recordedCommand = buildCoordinatorArgv({
       cwd: cleanRepo,
       model,
-      configPath: request.configPath,
-      extensionPath: request.extensionPath,
       continueSession: true,
       sessionDirectory: join(home, "coordinator-sessions", sessionKey),
     });
@@ -1342,8 +1295,6 @@ test("launchCoordinator rejects an unsafe reused coordinator lease without clean
           poolRoot,
           sessionId,
           model: defaultPolicy().models.coordinator,
-          configPath: "/tandem/src/worker-config.yml",
-          extensionPath: "/tandem/src/extension.ts",
           continueSession: false,
           headless: true,
           noAttach: false,

@@ -9,7 +9,7 @@ import {
 import { renestWorkspaces } from "../coordinator/renest.ts";
 import { restartCoordinator } from "../coordinator/restart.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
-import { validateModel } from "../harness/omp/adapter.ts";
+import { ompHarness } from "../harness/omp/launch.ts";
 import type { TandemService } from "../service/controller.ts";
 import {
   type CliCommand,
@@ -121,7 +121,7 @@ async function launch(context: CliCommandContext): Promise<CliCommandOutcome> {
   const model = ompDefault
     ? undefined
     : modelForPolicy(onboarded.policy.models.coordinator, invocation.options);
-  if (model !== undefined) await validateModel(run, { cwd: environment.repo, model });
+  if (model !== undefined) await ompHarness.validateModel(run, environment.repo, model);
   const launchDependencies: CoordinatorLaunchDependencies = {
     run,
     startPersistent: capabilities.startPersistent,
@@ -138,8 +138,6 @@ async function launch(context: CliCommandContext): Promise<CliCommandOutcome> {
     poolRoot: environment.poolRoot,
     sessionId: environment.sessionId,
     model,
-    configPath: files.configPath,
-    extensionPath: files.extensionPath,
     continueSession: invocation.options.continueSession,
     headless: invocation.options.headless,
     noAttach: invocation.options.noAttach,
@@ -199,7 +197,7 @@ async function doctor(context: CliCommandContext): Promise<CliCommandOutcome> {
     await runDoctorCheck("omp-model", async () => {
       if (policyModel === undefined)
         throw new Error("policy check did not produce coordinator model");
-      const observed = await validateModel(run, { cwd: environment.repo, model: policyModel });
+      const observed = await ompHarness.validateModel(run, environment.repo, policyModel);
       return `${observed.selector} supports ${policyModel.thinking}`;
     }),
   );

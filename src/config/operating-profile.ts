@@ -4,7 +4,7 @@ import {
   type ModelSpec,
   type ThinkingLevel,
 } from "../contracts.ts";
-import type { OmpModelRecord } from "../harness/omp/adapter.ts";
+import type { ModelRecord } from "../harness/contract.ts";
 
 /**
  * Target thinking level per role for the Balanced profile. This mirrors the intent behind the
@@ -66,13 +66,13 @@ export type BalancedProfileProposal =
     }>;
 
 export type ResolveBalancedProfileInput = Readonly<{
-  readonly catalogue: readonly OmpModelRecord[];
+  readonly catalogue: readonly ModelRecord[];
   /** Providers explicitly approved for spending; catalogue presence alone never authorizes selection. */
   readonly enabledProviders: ReadonlySet<string>;
 }>;
 
 /** Returns the distinct providers an OMP catalogue listing discovered, sorted for stable display. */
-export function discoveredProviders(catalogue: readonly OmpModelRecord[]): readonly string[] {
+export function discoveredProviders(catalogue: readonly ModelRecord[]): readonly string[] {
   return [...new Set(catalogue.map((entry) => entry.provider))].sort();
 }
 
@@ -109,7 +109,7 @@ type BalancedRoleOutcome =
 
 function resolveBalancedRole(
   role: AgentRole,
-  catalogue: readonly OmpModelRecord[],
+  catalogue: readonly ModelRecord[],
   enabledProviders: ReadonlySet<string>,
 ): BalancedRoleOutcome {
   if (enabledProviders.size === 0) {
@@ -155,8 +155,8 @@ function unresolvedRole(
 }
 
 function hasExplicitReasoningEvidence(
-  candidate: OmpModelRecord,
-): candidate is OmpModelRecord & Readonly<{ reasoning: boolean }> {
+  candidate: ModelRecord,
+): candidate is ModelRecord & Readonly<{ reasoning: boolean }> {
   return candidate.reasoning !== undefined;
 }
 
@@ -165,14 +165,14 @@ function hasExplicitReasoningEvidence(
  * reported cost, then selector text, so the same catalogue always yields the same choice.
  */
 function pickBestCandidate(
-  candidates: readonly (OmpModelRecord & Readonly<{ reasoning: boolean }>)[],
-): OmpModelRecord & Readonly<{ reasoning: boolean }> {
+  candidates: readonly (ModelRecord & Readonly<{ reasoning: boolean }>)[],
+): ModelRecord & Readonly<{ reasoning: boolean }> {
   const [best] = [...candidates].sort(compareBalancedCandidates);
   if (best === undefined) throw new Error("pickBestCandidate requires at least one candidate");
   return best;
 }
 
-function compareBalancedCandidates(a: OmpModelRecord, b: OmpModelRecord): number {
+function compareBalancedCandidates(a: ModelRecord, b: ModelRecord): number {
   const contextDelta = (b.contextWindow ?? -1) - (a.contextWindow ?? -1);
   if (contextDelta !== 0) return contextDelta;
   const costDelta = totalCost(a) - totalCost(b);
@@ -180,7 +180,7 @@ function compareBalancedCandidates(a: OmpModelRecord, b: OmpModelRecord): number
   return a.selector < b.selector ? -1 : a.selector > b.selector ? 1 : 0;
 }
 
-function totalCost(candidate: OmpModelRecord): number {
+function totalCost(candidate: ModelRecord): number {
   return candidate.cost === undefined
     ? Number.POSITIVE_INFINITY
     : candidate.cost.input + candidate.cost.output;
@@ -188,7 +188,7 @@ function totalCost(candidate: OmpModelRecord): number {
 
 function buildRoleProposal(
   role: AgentRole,
-  candidate: OmpModelRecord & Readonly<{ reasoning: boolean }>,
+  candidate: ModelRecord & Readonly<{ reasoning: boolean }>,
   thinking: ThinkingLevel,
 ): BalancedRoleProposal {
   const evidence: BalancedRoleEvidence = {

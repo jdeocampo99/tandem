@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { OmpModelRecord } from "../../src/harness/omp/adapter.ts";
+import type { ModelRecord } from "../../src/harness/contract.ts";
 import {
   checkSetupAnswer,
   parseSetupAnswer,
@@ -14,7 +14,7 @@ import {
   setupProviders,
 } from "../../src/onboarding/setup-answer.ts";
 
-const catalogue: readonly OmpModelRecord[] = [
+const catalogue: readonly ModelRecord[] = [
   {
     selector: "anthropic/opus",
     id: "opus",
@@ -228,7 +228,7 @@ test("selected models authorize only their providers, regardless of the rest of 
   const available = [
     ...catalogue,
     { selector: "google/gemini", id: "gemini", provider: "google", thinking: ["high"] },
-  ] satisfies readonly OmpModelRecord[];
+  ] satisfies readonly ModelRecord[];
   expect(checkSetupAnswer(value, { ...facts, catalogue: available })).toEqual([]);
   expect(setupProviders(value, available)).toEqual(["anthropic", "openai"]);
 });

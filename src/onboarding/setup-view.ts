@@ -9,7 +9,7 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "../contracts.ts";
-import type { OmpModelRecord } from "../harness/omp/adapter.ts";
+import type { ModelRecord } from "../harness/contract.ts";
 import type { SetupPageDraft } from "./setup-answer.ts";
 
 /**
@@ -95,7 +95,7 @@ export type SetupViewInput = Readonly<{
   generatedAt: IsoTimestamp;
   /** The user's home folder, shown as `~`. */
   homeFolder: string;
-  catalogue: readonly OmpModelRecord[];
+  catalogue: readonly ModelRecord[];
   savedModels?: RepoPolicy["models"];
   searchedFolders: readonly string[];
   pendingFolders?: readonly string[];
@@ -191,7 +191,7 @@ export function buildSetupView(input: SetupViewInput): SetupView {
   };
 }
 
-function setupModel(record: OmpModelRecord): SetupModel {
+function setupModel(record: ModelRecord): SetupModel {
   return {
     selector: record.selector,
     name: record.name ?? record.id,

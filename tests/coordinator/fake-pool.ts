@@ -26,6 +26,7 @@ export type FakeLease = {
 };
 
 export type FakePane = {
+  sessionId: string;
   paneId: string;
   tabId: string;
   workspaceId: string;
@@ -82,9 +83,10 @@ async function bootstrappedCommand(paneRunCommand: string): Promise<readonly str
 
 /**
  * A fake Herdr, Treehouse, and repository world for coordinator tests: one repository, one
- * pool, and whatever panes, workspaces, and leases the code under test creates. Herdr session
- * ids are not partitioned here, so a pane one session created stays visible to another
- * session's inspection, which is what the one-coordinator-per-repository tests observe.
+ * pool, and whatever panes, workspaces, and leases the code under test creates. Like Herdr, a
+ * session snapshot lists only that session's panes, but a pane one session created stays
+ * visible to another session's direct pane inspection, which is what the
+ * one-coordinator-per-repository tests observe.
  */
 export function fakePool(input: PoolInput): Pool {
   const calls: CommandRequest[] = [];
@@ -230,12 +232,14 @@ export function fakePool(input: PoolInput): Pool {
           result: {
             type: "session_snapshot",
             snapshot: {
-              panes: [...panes.values()].map((pane) => ({
-                workspace_id: pane.workspaceId,
-                tab_id: pane.tabId,
-                pane_id: pane.paneId,
-                agent_status: pane.omp === undefined ? "idle" : "working",
-              })),
+              panes: [...panes.values()]
+                .filter((pane) => pane.sessionId === argv[2])
+                .map((pane) => ({
+                  workspace_id: pane.workspaceId,
+                  tab_id: pane.tabId,
+                  pane_id: pane.paneId,
+                  agent_status: pane.omp === undefined ? "idle" : "working",
+                })),
             },
           },
         }),
@@ -252,6 +256,7 @@ export function fakePool(input: PoolInput): Pool {
         const tabId = `tab-${identities}`;
         workspaces.set(workspaceId, argv[argv.indexOf("--label") + 1] ?? "");
         panes.set(paneId, {
+          sessionId: argv[2] ?? "",
           paneId,
           tabId,
           workspaceId,

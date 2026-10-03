@@ -65,8 +65,8 @@ import {
   publishReviewedTask,
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
-import type { OmpModelRecord } from "../harness/omp/adapter.ts";
-import { listOmpMcpServers, listOmpModels } from "../harness/omp/adapter.ts";
+import type { ModelRecord } from "../harness/contract.ts";
+import { ompHarness } from "../harness/omp/launch.ts";
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
 import type { MemoryShowResult } from "../memory/view.ts";
 import type { OnboardingFacts } from "../onboarding/checklist.ts";
@@ -276,7 +276,7 @@ type PrReviewTaskRequest = Omit<CreateTaskRequest, "kind"> &
   Readonly<{ readonly kind: "pr-review"; readonly prReview: PrReviewState }>;
 export type ModelOptionsResult = Readonly<{
   readonly modelSettings: ModelSettings;
-  readonly availableModels: readonly OmpModelRecord[];
+  readonly availableModels: readonly ModelRecord[];
   /** Providers the OMP catalogue discovered; discovery alone never authorizes spending. */
   readonly discoveredProviders: readonly string[];
   /** The Balanced profile resolved from `modelSettings.enabledProviders` against this catalogue. */
@@ -882,7 +882,7 @@ class TandemController {
     return {
       onboard: (repoPath, write, commands) => this.onboard(repoPath, write, commands),
       setupOnboard: (repoPath, write, commands) => this.setupOnboard(repoPath, write, commands),
-      mcpServers: (repoPath) => listOmpMcpServers(repoPath),
+      mcpServers: (repoPath) => ompHarness.listMcpServers(repoPath),
       findRepo: (name) => this.findRepo(name),
       saveProjectRoots: (roots) =>
         saveProjectRoots(
@@ -1090,7 +1090,7 @@ class TandemController {
       const settings = await readModelSettings({ repoPath: cwd, home: this.#deps.home });
       return {
         status: "read",
-        models: await listOmpModels(this.#deps.run, { cwd }),
+        models: await ompHarness.listModels(this.#deps.run, cwd),
         enabledProviders: settings.enabledProviders,
         readAt: this.#deps.clock(),
       };
@@ -1105,7 +1105,7 @@ class TandemController {
       repoPath: source.repoPath,
       home: this.#deps.home,
     });
-    const availableModels = await listOmpModels(this.#deps.run, { cwd: source.checkoutPath });
+    const availableModels = await ompHarness.listModels(this.#deps.run, source.checkoutPath);
     return {
       modelSettings,
       availableModels,
@@ -1167,7 +1167,7 @@ class TandemController {
     if (!isRecord(input)) throw new TypeError("configureModels input must be an object");
     const source = await mapTaskSource(this.#deps.run, input.repoPath, this.#deps.sourceWorkspace);
     const models = parseModelAssignments(input.models);
-    const availableModels = await listOmpModels(this.#deps.run, { cwd: source.checkoutPath });
+    const availableModels = await ompHarness.listModels(this.#deps.run, source.checkoutPath);
     validateModelAssignments(models, availableModels);
 
     return writeModelSettings({

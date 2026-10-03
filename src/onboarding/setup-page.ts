@@ -4,7 +4,7 @@ import { endPresentation, listenPresentation, openPresentation } from "../adapte
 import type { HomeSettings, SelfImprovementMode } from "../config/home-settings.ts";
 import type { ModelSettings } from "../config/models.ts";
 import type { Clock, CommandResult, CommandRunner, IdFactory, RepoPolicy } from "../contracts.ts";
-import type { OmpModelRecord } from "../harness/omp/adapter.ts";
+import type { ModelRecord } from "../harness/contract.ts";
 import { describeLavishFailure, type LavishOpenFailure } from "../report/publish.ts";
 import { expandHome, findCheckoutsByName, listCheckouts } from "../repos/locate.ts";
 import { writeJsonAtomically } from "../runtime/persistence.ts";
@@ -46,9 +46,7 @@ export type SetupPageDependencies = Readonly<{
   idFactory: IdFactory;
   models: (
     repoPath: string,
-  ) => Promise<
-    Readonly<{ availableModels: readonly OmpModelRecord[]; modelSettings: ModelSettings }>
-  >;
+  ) => Promise<Readonly<{ availableModels: readonly ModelRecord[]; modelSettings: ModelSettings }>>;
   roots: () => Promise<readonly string[]>;
   homeSettings: () => Promise<HomeSettings>;
   registeredProjects: () => Promise<readonly string[]>;
@@ -103,7 +101,7 @@ type StoredAnswer = Readonly<{
 
 /** Everything the page and the answer checks read, in one pass. */
 type SetupFacts = Readonly<{
-  catalogue: readonly OmpModelRecord[];
+  catalogue: readonly ModelRecord[];
   modelSettings: ModelSettings;
   settings: HomeSettings;
   roots: readonly string[];

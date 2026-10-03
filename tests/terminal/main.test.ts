@@ -8,7 +8,7 @@ import { runCommand } from "../../src/adapters/commands.ts";
 import { onboardRepo } from "../../src/config/repositories.ts";
 import type { CommandRequest, CommandResult, ModelSpec, RepoPolicy } from "../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
-import type { OmpModelRecord } from "../../src/harness/omp/adapter.ts";
+import type { ModelRecord } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import { parseReportSince, parseTerminalArgs } from "../../src/terminal/arguments.ts";
@@ -19,7 +19,7 @@ import { fakeSidebar, saveCoordinator, seedTasks } from "../coordinator/fake-wor
 
 const roles = ["coordinator", "scout", "implementer", "reviewer", "presentation"] as const;
 
-function catalogue(): readonly OmpModelRecord[] {
+function catalogue(): readonly ModelRecord[] {
   return [
     {
       selector: "test/model",
@@ -31,7 +31,7 @@ function catalogue(): readonly OmpModelRecord[] {
 }
 
 /** A catalogue with explicit reasoning evidence, so Balanced can resolve every role from it. */
-function balancedCatalogue(): readonly OmpModelRecord[] {
+function balancedCatalogue(): readonly ModelRecord[] {
   return [
     {
       selector: "acme/balanced",
@@ -47,7 +47,7 @@ function onboardingService(
   options: Readonly<{
     existingConfig: boolean;
     configured: boolean;
-    catalogue?: readonly OmpModelRecord[];
+    catalogue?: readonly ModelRecord[];
     enabledProviders?: readonly string[];
   }>,
 ): {

@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import { type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
 import { AdapterCommandError, EndpointOwnershipError } from "../adapters/primitives.ts";
 import type { CommandRequest, CommandRunner, Endpoint } from "../contracts.ts";
+import { ompHarness } from "../harness/omp/launch.ts";
 import {
   type CoordinatorLaunchDependencies,
   type CoordinatorLaunchRequest,
@@ -15,7 +16,6 @@ import {
   findRestartCoordinator,
   findRunningCoordinator,
   parseJson,
-  sameCommand,
 } from "./ownership.ts";
 import { resolveCoordinatorSourceHead } from "./source.ts";
 
@@ -53,7 +53,7 @@ async function closeSupersededPane(
     );
   }
   const matches = inspection.processInfo.foregroundProcesses.filter((process) =>
-    sameCommand(process.argv, command),
+    ompHarness.sameCommand(process.argv, command),
   );
   if (inspection.activeWorker) {
     if (matches.length !== 1) {
