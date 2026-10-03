@@ -117,7 +117,17 @@ const TOOLS: Readonly<Record<AgentKind, readonly string[]>> = {
   scout: ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Agent", "Write", "Edit"],
   reviewer: ["Read", "Grep", "Glob"],
   "pr-reviewer": ["Read", "Grep", "Glob", "Bash"],
-  implementer: ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "TodoWrite"],
+  implementer: [
+    "Read",
+    "Grep",
+    "Glob",
+    "Edit",
+    "Write",
+    "Bash",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskList",
+  ],
   presentation: ["Read", "Grep", "Glob", "Write", "Edit"],
 };
 

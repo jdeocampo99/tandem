@@ -30,6 +30,7 @@ import {
   stopBlock,
   TurnLedger,
   toolContext,
+  toolEndEvent,
   toolRefusal,
   turnContext,
   turnEndEvent,
@@ -310,7 +311,7 @@ export const register: Register = (on) => {
     if (refusal !== undefined) return { deny: refusal };
     await exchange($, { type: "toolStart", call });
     const result = await next(e);
-    const context = toolContext(await exchange($, { type: "toolEnd", call }));
+    const context = toolContext(await exchange($, toolEndEvent(call, result.result)));
     if (result.deny !== undefined || context.length === 0) return result;
     return { ...result, context: [...(result.context ?? []), ...context] };
   }).catch(async () => ({ deny: "Tandem's tool check failed, so this tool call did not run." }));

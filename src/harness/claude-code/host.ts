@@ -92,7 +92,10 @@ const CLAUDE_CODE_TOOL_KINDS: ReadonlyMap<string, ToolKind> = new Map([
   ["AskUserQuestion", "ask"],
   ["Task", "subagent"],
   ["Agent", "subagent"],
-  ["TodoWrite", "todo"],
+  ["TaskCreate", "todo"],
+  ["TaskUpdate", "todo"],
+  ["TaskList", "todo"],
+  ["TaskGet", "todo"],
   [`${claudeCodeMcpToolPrefix("tandem")}${COPY_ASSET_TOOL}`, "copy-asset"],
   [`${claudeCodeMcpToolPrefix("tandem")}${SUBMIT_REPORT_TOOL}`, "other"],
 ]);
@@ -130,17 +133,41 @@ export function claudeCodeMcpToolPrefix(server: string): string {
   return `mcp__${server}__`;
 }
 
-/** The to-do list a `TodoWrite` call sets; Claude Code's list is the whole of it each time. */
-export function claudeCodeTodos(call: WireToolCall): readonly TodoItem[] | undefined {
-  if (call.name !== "TodoWrite" || !Array.isArray(call.input.todos)) return undefined;
-  const items: TodoItem[] = [];
-  for (const item of call.input.todos as unknown[]) {
-    if (typeof item !== "object" || item === null) return undefined;
-    const { content, status } = item as Readonly<Record<string, unknown>>;
-    if (typeof content !== "string" || typeof status !== "string") return undefined;
-    items.push({ content, status });
+function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+/**
+ * The worker's to-do list, built up from Claude Code's task tools: `TaskCreate` adds an item
+ * (its id is in the result) and `TaskUpdate` changes one. Deleting an item is how a worker drops
+ * a step that does not apply, so it reads as OMP's `abandoned`.
+ */
+export class ClaudeCodeTodoList {
+  private readonly items = new Map<string, { content: string; status: string }>();
+
+  /** The list after this call, or undefined when the call is not a to-do change. */
+  apply(call: WireToolCall, result: unknown): readonly TodoItem[] | undefined {
+    if (call.name === "TaskCreate") {
+      const id = record(record(result)?.task)?.id;
+      const subject = call.input.subject;
+      if (typeof id !== "string" || typeof subject !== "string") return undefined;
+      this.items.set(id, { content: subject, status: "pending" });
+      return this.list();
+    }
+    if (call.name !== "TaskUpdate") return undefined;
+    const item = this.items.get(String(call.input.taskId));
+    if (item === undefined) return undefined;
+    const { subject, status } = call.input;
+    if (typeof subject === "string") item.content = subject;
+    if (typeof status === "string") item.status = status === "deleted" ? "abandoned" : status;
+    return this.list();
   }
-  return items;
+
+  private list(): readonly TodoItem[] {
+    return [...this.items.values()].map((item) => ({ ...item }));
+  }
 }
 
 export function claudeCodeUsage(usage: WireUsage): ReplyUsage {

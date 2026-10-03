@@ -14,8 +14,8 @@ import {
 import type { SessionBinding, SessionHookEvent } from "./coordinator.ts";
 import {
   type ClaudeCodePane,
+  ClaudeCodeTodoList,
   claudeCodeMcpToolPrefix,
-  claudeCodeTodos,
   claudeCodeToolCall,
   claudeCodeUsage,
 } from "./host.ts";
@@ -83,6 +83,7 @@ async function runPluginTool(parts: WorkerParts, event: PluginToolEvent): Promis
  */
 export function claudeCodeWorker(pane: ClaudeCodePane, parts: WorkerParts): SessionBinding {
   const { job, session, steering, trace } = parts;
+  const todoList = new ClaudeCodeTodoList();
 
   async function handle(event: SessionHookEvent): Promise<HookReply> {
     pane.observe(event);
@@ -123,7 +124,7 @@ export function claudeCodeWorker(pane: ClaudeCodePane, parts: WorkerParts): Sess
       }
       case "toolEnd": {
         const call = claudeCodeToolCall(event.call);
-        const todos = claudeCodeTodos(event.call);
+        const todos = todoList.apply(event.call, event.result);
         session.onToolEnd({ call, ...(todos === undefined ? {} : { todos }) });
         steering?.recordActivity("idle", call.name);
         const steer = await steering?.takePending();

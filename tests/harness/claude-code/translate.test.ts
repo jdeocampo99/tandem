@@ -18,6 +18,7 @@ import {
   stopBlock,
   TurnLedger,
   toolContext,
+  toolEndEvent,
   toolRefusal,
   turnEndEvent,
   userPromptEvent,
@@ -232,4 +233,15 @@ test("a shown text becomes one log row per line, without blank rows", () => {
     "- first finding",
     "- second finding",
   ]);
+});
+
+test("a tool's result goes to the sidecar only for a new to-do item, whose id it carries", () => {
+  const create = { id: "c", name: "TaskCreate", input: { subject: "Step" } };
+  expect(toolEndEvent(create, { task: { id: "1" } })).toEqual({
+    type: "toolEnd",
+    call: create,
+    result: { task: { id: "1" } },
+  });
+  const read = { id: "r", name: "Read", input: { file_path: "a.ts" } };
+  expect(toolEndEvent(read, "file text")).toEqual({ type: "toolEnd", call: read });
 });

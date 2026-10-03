@@ -169,7 +169,9 @@ test("a worker runs unattended with its role's tools, its model, and its brief",
   };
   expect(tools("reviewer")).toBe("Read,Grep,Glob");
   expect(tools("pr-reviewer")).toBe("Read,Grep,Glob,Bash");
-  expect(tools("implementer")).toBe("Read,Grep,Glob,Edit,Write,Bash,TodoWrite");
+  expect(tools("implementer")).toBe(
+    "Read,Grep,Glob,Edit,Write,Bash,TaskCreate,TaskUpdate,TaskList",
+  );
   expect(tools("presentation")).toBe("Read,Grep,Glob,Write,Edit");
   expect(claudeCodeHarness.command(coordinatorSpec())).not.toContain("--permission-mode");
 });

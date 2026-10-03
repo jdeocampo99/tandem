@@ -32,7 +32,7 @@ function inboxWith(count: number): TaskInbox {
 }
 
 /** A Claude Code worker over a real session and steering, with fake files and clocks. */
-async function worker(role: WorkerJob["role"] = "scout") {
+async function worker(role: WorkerJob["role"] = "scout", extra: Partial<WorkerJob> = {}) {
   const time = fakeSessionTime();
   const lines: SidecarLine[] = [];
   const pane = new ClaudeCodePane({
@@ -58,6 +58,7 @@ async function worker(role: WorkerJob["role"] = "scout") {
     model: { model: "claude-code/sonnet", thinking: "low" },
     prompt: BRIEF,
     resultPath: "/tmp/result.json",
+    ...extra,
   } as WorkerJob;
   const session = new WorkerSession({
     host: pane.host,
@@ -287,4 +288,31 @@ test("an implementer's edits stop once its report is in, as on OMP", async () =>
     block: true,
     reason: "worker terminal is paused or completed; mutating tools are disabled",
   });
+});
+
+test("an implementer's playbook steps count as done once Claude Code's task tools mark them", async () => {
+  const { binding, files } = await worker("implementer", { playbookSteps: ["Write the test"] });
+  await binding.handle({ type: "agentStart", prompt: BRIEF });
+  const report = {
+    type: "pluginTool",
+    id: "r",
+    name: "submit_report",
+    input: { outcome: "implemented", report: "Done." },
+  } as const;
+  expect(await binding.handle(report)).toMatchObject({
+    isError: true,
+    text: expect.stringContaining("Write the test"),
+  });
+  const create = {
+    id: "c",
+    name: "TaskCreate",
+    input: { subject: "Write the test", description: "Write the test" },
+  };
+  await binding.handle({ type: "toolStart", call: create });
+  await binding.handle({ type: "toolEnd", call: create, result: { task: { id: "1" } } });
+  const done = { id: "u", name: "TaskUpdate", input: { taskId: "1", status: "completed" } };
+  await binding.handle({ type: "toolStart", call: done });
+  await binding.handle({ type: "toolEnd", call: done });
+  expect(await binding.handle(report)).toMatchObject({ isError: false });
+  expect(files.results).toHaveLength(1);
 });

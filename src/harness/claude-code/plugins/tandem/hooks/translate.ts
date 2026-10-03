@@ -166,6 +166,15 @@ export function pluginToolEvent(call: ToolCallFields, name: string): HookEvent {
   return { type: "pluginTool", id: call.tool_use_id ?? call.tool, name, input: toolInput(call) };
 }
 
+/** The tools whose result the sidecar reads: a new to-do item's id comes only in its result. */
+const RESULTS_READ: ReadonlySet<string> = new Set(["TaskCreate"]);
+
+export function toolEndEvent(call: WireToolCall, result: unknown): HookEvent {
+  return RESULTS_READ.has(call.name) && result !== undefined
+    ? { type: "toolEnd", call, result }
+    : { type: "toolEnd", call };
+}
+
 /** What the model reads after a tool's result; nothing when Tandem refused or failed. */
 export function toolContext(reply: HookReply): readonly string[] {
   return reply.type === "toolContext" ? reply.context : [];

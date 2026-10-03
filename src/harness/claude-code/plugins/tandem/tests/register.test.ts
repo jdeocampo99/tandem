@@ -84,6 +84,16 @@ function sidecar(
 
 const start = { surface: "terminal", isInteractive: true, cwd: "/work" } as const;
 
+type Engine = Parameters<TestBody>[0];
+
+/**
+ * Calls one of the mod's own tools. Claude Code types `$.tool.call` from the tools the last real
+ * session registered, and which those are depends on whether it ran a coordinator or a worker.
+ */
+function callOwnTool($: Engine, input: Readonly<Record<string, unknown>>) {
+  return $.tool.call(input as unknown as Parameters<Engine["tool"]["call"]>[0]);
+}
+
 test("the session starts the sidecar beside the plugin and reports the running model", async ($, on) => {
   const { posted, spawned } = sidecar(on, () => DONE);
   await $.session.start(start);
@@ -103,7 +113,7 @@ test("the session registers exactly the tools the sidecar's ready line lists", a
   });
   await $.session.start(start);
   expect(registered).toEqual([report]);
-  expect(await $.tool.call({ tool: "mcp__tandem__tandem", request: {} })).toMatchObject({
+  expect(await callOwnTool($, { tool: "mcp__tandem__tandem", request: {} })).toMatchObject({
     deny: expect.stringContaining("did not run"),
   });
   expect(ran).toBe(0);
@@ -210,7 +220,9 @@ test("a sidecar that fails to start is reported, and its tools stay off", async 
     "Tandem could not start (TANDEM_HOME is not set). Its tools are turned off in this conversation.",
   ]);
   expect(registered).toEqual([]);
-  expect(await $.tool.call({ tool: "mcp__tandem__tandem", request: { action: "list" } })).toEqual({
+  expect(
+    await callOwnTool($, { tool: "mcp__tandem__tandem", request: { action: "list" } }),
+  ).toEqual({
     deny: "Tandem could not check this tool call, so it did not run: Tandem's sidecar is not running",
   });
   expect(posted).toEqual([]);
@@ -233,7 +245,7 @@ test("a tandem call that needs approval asks the person, then answers with the r
     return { result: { answers: { [question]: "Allow" } } };
   });
   await $.session.start(start);
-  const result = await $.tool.call({
+  const result = await callOwnTool($, {
     tool: "mcp__tandem__tandem",
     tool_use_id: "toolu_9",
     request: { action: "publish", taskId: "T-1" },

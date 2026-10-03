@@ -49,7 +49,8 @@ export type SidecarEvent =
   /** A call to one of the tools the ready line listed; `input` is parsed by the sidecar. */
   | Readonly<{ type: "pluginTool"; id: string; name: string; input: unknown }>
   | Readonly<{ type: "toolStart"; call: WireToolCall }>
-  | Readonly<{ type: "toolEnd"; call: WireToolCall }>
+  /** `result` is the tool's own record, sent only for tools whose result Tandem reads. */
+  | Readonly<{ type: "toolEnd"; call: WireToolCall; result?: unknown }>
   /** `contextTokens` is the context size `$.session.usage()` reported after the turn. */
   | Readonly<{ type: "turnEnd"; usage?: WireUsage; contextTokens?: number }>
   /** `prompt` is the text the run began with (`turn.start`), `answer` its final text. */
@@ -252,9 +253,15 @@ function eventFrom(value: unknown): SidecarEvent {
       return { type };
     case "toolCall":
     case "toolStart":
-    case "toolEnd":
       shape("call");
       return { type, call: toolCall(record, "call", where) };
+    case "toolEnd":
+      shape("call", "result");
+      return {
+        type,
+        call: toolCall(record, "call", where),
+        ...(record.result === undefined ? {} : { result: record.result }),
+      };
     case "pluginTool":
       shape("id", "name", "input");
       return {

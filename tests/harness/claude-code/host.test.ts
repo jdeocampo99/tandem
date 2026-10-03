@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import {
   ClaudeCodePane,
+  ClaudeCodeTodoList,
   claudeCodeEffect,
-  claudeCodeTodos,
   claudeCodeToolCall,
   UNSUPPORTED_EFFECTS,
 } from "../../../src/harness/claude-code/host.ts";
@@ -74,7 +74,7 @@ test("Claude Code tools become the kinds the core's guards read", () => {
   });
   expect(claudeCodeToolCall({ id: "5", name: "Mystery", input: {} }).kind).toBe("other");
   const kinds = Object.fromEntries(
-    ["Edit", "Write", "NotebookEdit", "Agent", "TodoWrite", "Glob"].map((name) => [
+    ["Edit", "Write", "NotebookEdit", "Agent", "TaskCreate", "TaskUpdate", "Glob"].map((name) => [
       name,
       claudeCodeToolCall({ id: "6", name, input: {} }).kind,
     ]),
@@ -84,7 +84,8 @@ test("Claude Code tools become the kinds the core's guards read", () => {
     Write: "write",
     NotebookEdit: "edit",
     Agent: "subagent",
-    TodoWrite: "todo",
+    TaskCreate: "todo",
+    TaskUpdate: "todo",
     Glob: "search",
   });
   expect(claudeCodeToolCall({ id: "7", name: "mcp__tandem__copy_asset", input: {} }).kind).toBe(
@@ -95,19 +96,34 @@ test("Claude Code tools become the kinds the core's guards read", () => {
   );
 });
 
-test("a TodoWrite call sets the whole to-do list; anything else sets none", () => {
-  const todos = [
-    { content: "Read the brief", status: "completed", activeForm: "Reading" },
-    { content: "Run the tests", status: "pending", activeForm: "Running" },
-  ];
-  expect(claudeCodeTodos({ id: "1", name: "TodoWrite", input: { todos } })).toEqual([
+test("the to-do list follows Claude Code's task tools, and a deleted step is abandoned", () => {
+  const todos = new ClaudeCodeTodoList();
+  const create = (id: string, subject: string) =>
+    todos.apply(
+      { id: `c-${id}`, name: "TaskCreate", input: { subject, description: subject } },
+      { task: { id, subject } },
+    );
+  expect(create("1", "Read the brief")).toEqual([{ content: "Read the brief", status: "pending" }]);
+  create("2", "Run the tests");
+  expect(
+    todos.apply({ id: "u-1", name: "TaskUpdate", input: { taskId: "1", status: "completed" } }, {}),
+  ).toEqual([
     { content: "Read the brief", status: "completed" },
     { content: "Run the tests", status: "pending" },
   ]);
-  expect(claudeCodeTodos({ id: "2", name: "TodoWrite", input: { todos: [{ content: 1 }] } })).toBe(
+  expect(
+    todos.apply({ id: "u-2", name: "TaskUpdate", input: { taskId: "2", status: "deleted" } }, {}),
+  ).toEqual([
+    { content: "Read the brief", status: "completed" },
+    { content: "Run the tests", status: "abandoned" },
+  ]);
+  expect(
+    todos.apply({ id: "u-3", name: "TaskUpdate", input: { taskId: "9", status: "completed" } }, {}),
+  ).toBeUndefined();
+  expect(todos.apply({ id: "c-3", name: "TaskCreate", input: { subject: "x" } }, {})).toBe(
     undefined,
   );
-  expect(claudeCodeTodos({ id: "3", name: "Edit", input: { todos } })).toBeUndefined();
+  expect(todos.apply({ id: "r", name: "Read", input: {} }, {})).toBeUndefined();
 });
 
 function pane(confirm: (title: string, message: string) => Promise<boolean> = async () => false) {
